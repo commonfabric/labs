@@ -192,6 +192,157 @@ type CalculatorRequest = {
     });
   });
 
+  describe("synthetic nodes a cell read prints its type through", () => {
+    // The type printer hands the node-based analyzer these forms for a
+    // pattern-scope cell read whose type contains `unknown`: `Readonly<{…}>`
+    // (an alias reference), a tuple, an intersection, a parenthesized type.
+    // Each used to fall to the accept-anything fallback or, for a library
+    // alias, to the alias's UNINSTANTIATED declared type — an empty object.
+    // The alias rules apply only to the default library's aliases, resolved
+    // in the source file's scope, so the tests carry a source file.
+    const f = ts.factory;
+    const unknownNode = () =>
+      f.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
+    const stringNode = () =>
+      f.createKeywordTypeNode(ts.SyntaxKind.StringKeyword);
+    const literal = (members: [string, ts.TypeNode, boolean?][]) =>
+      f.createTypeLiteralNode(
+        members.map(([name, type, optional]) =>
+          f.createPropertySignature(
+            undefined,
+            f.createIdentifier(name),
+            optional ? f.createToken(ts.SyntaxKind.QuestionToken) : undefined,
+            type,
+          )
+        ),
+      );
+    const alias = (name: string, ...args: ts.TypeNode[]) =>
+      f.createTypeReferenceNode(f.createIdentifier(name), args);
+    const generate = async (node: ts.TypeNode) => {
+      const { checker, sourceFile } = await createTestProgram(
+        "type Dummy = unknown;",
+      );
+      const { $schema: _schema, ...schema } = new SchemaGenerator()
+        .generateSchemaFromSyntheticTypeNode(
+          node,
+          checker,
+          undefined,
+          undefined,
+          sourceFile,
+        ) as Record<string, unknown>;
+      return schema;
+    };
+
+    it("applies `Readonly<{…}>` to the object it wraps", async () => {
+      expect(
+        await generate(
+          alias(
+            "Readonly",
+            literal([["topic", unknownNode()], ["title", stringNode()]]),
+          ),
+        ),
+      ).toEqual({
+        type: "object",
+        properties: { topic: { type: "unknown" }, title: { type: "string" } },
+        required: ["topic", "title"],
+      });
+    });
+
+    it("applies `Partial`, `Required`, `Pick` and `Omit` structurally", async () => {
+      const shape = () =>
+        literal([["a", unknownNode()], ["b", stringNode(), true]]);
+      expect(await generate(alias("Partial", shape()))).toEqual({
+        type: "object",
+        properties: { a: { type: "unknown" }, b: { type: "string" } },
+      });
+      expect(await generate(alias("Required", shape()))).toEqual({
+        type: "object",
+        properties: { a: { type: "unknown" }, b: { type: "string" } },
+        required: ["a", "b"],
+      });
+      const key = (text: string) =>
+        f.createLiteralTypeNode(f.createStringLiteral(text));
+      expect(await generate(alias("Pick", shape(), key("a")))).toEqual({
+        type: "object",
+        properties: { a: { type: "unknown" } },
+        required: ["a"],
+      });
+      expect(await generate(alias("Omit", shape(), key("a")))).toEqual({
+        type: "object",
+        properties: { b: { type: "string" } },
+      });
+    });
+
+    it("applies `Record` and `Array` to their arguments", async () => {
+      expect(await generate(alias("Record", stringNode(), unknownNode())))
+        .toEqual({
+          type: "object",
+          properties: {},
+          additionalProperties: { type: "unknown" },
+        });
+      expect(await generate(alias("ReadonlyArray", unknownNode()))).toEqual({
+        type: "array",
+        items: { type: "unknown" },
+      });
+    });
+
+    it("lowers a tuple to an array of its element union, deduplicated", async () => {
+      expect(
+        await generate(f.createTupleTypeNode([unknownNode(), stringNode()])),
+      )
+        .toEqual({
+          type: "array",
+          items: { anyOf: [{ type: "unknown" }, { type: "string" }] },
+        });
+      expect(
+        await generate(f.createTupleTypeNode([unknownNode(), unknownNode()])),
+      )
+        .toEqual({ type: "array", items: { type: "unknown" } });
+    });
+
+    it("merges an intersection of object types and unwraps parentheses", async () => {
+      expect(
+        await generate(
+          f.createIntersectionTypeNode([
+            literal([["a", unknownNode()]]),
+            literal([["b", stringNode()]]),
+          ]),
+        ),
+      ).toEqual({
+        type: "object",
+        properties: { a: { type: "unknown" }, b: { type: "string" } },
+        required: ["a", "b"],
+      });
+      expect(
+        await generate(
+          f.createParenthesizedType(f.createArrayTypeNode(unknownNode())),
+        ),
+      ).toEqual({ type: "array", items: { type: "unknown" } });
+    });
+
+    it("leaves an authored alias of a library name to the general path", async () => {
+      // A module, so the authored alias shadows the library's rather than
+      // colliding with it as a script-level redeclaration would.
+      const { checker, sourceFile } = await createTestProgram(
+        "export {};\ntype Record<K extends string, V> = { authored: true };",
+      );
+      const { $schema: _schema, ...schema } = new SchemaGenerator()
+        .generateSchemaFromSyntheticTypeNode(
+          alias("Record", stringNode(), unknownNode()),
+          checker,
+          undefined,
+          undefined,
+          sourceFile,
+        ) as Record<string, unknown>;
+      // The authored alias resolves from scope to its own declared type.
+      expect(schema).toEqual({
+        type: "object",
+        properties: { authored: { type: "boolean", enum: [true] } },
+        required: ["authored"],
+      });
+    });
+  });
+
   describe("synthetic type literals", () => {
     it("preserves numeric literal property names", async () => {
       const generator = new SchemaGenerator();

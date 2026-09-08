@@ -16,7 +16,10 @@ import { PrimitiveFormatter } from "./formatters/primitive-formatter.ts";
 import { ObjectFormatter } from "./formatters/object-formatter.ts";
 import { ArrayFormatter } from "./formatters/array-formatter.ts";
 import { CommonFabricFormatter } from "./formatters/common-fabric-formatter.ts";
-import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
+import {
+  isDefaultLibrarySourceFile,
+  NativeTypeFormatter,
+} from "./formatters/native-type-formatter.ts";
 import { UnionFormatter } from "./formatters/union-formatter.ts";
 import { IntersectionFormatter } from "./formatters/intersection-formatter.ts";
 import {
@@ -30,6 +33,60 @@ import {
 } from "./type-utils.ts";
 import { attachDocTags, extractDocFromType } from "./doc-utils.ts";
 import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
+
+/**
+ * The default library's generic aliases the node-based analyzer applies
+ * structurally (see `#analyzeLibraryAliasReference`). A cell read prints its
+ * type through `Readonly<…>`; the others are what authored types reach for.
+ */
+const LIBRARY_ALIAS_NAMES = new Set([
+  "Readonly",
+  "Partial",
+  "Required",
+  "Pick",
+  "Omit",
+  "NonNullable",
+  "Array",
+  "ReadonlyArray",
+  "Record",
+]);
+
+/** Whether a schema is an object schema the alias rules can rewrite. */
+function isObjectSchema(
+  schema: MutableJSONSchema,
+): schema is MutableJSONSchemaObj & { type: "object" } {
+  return isObjectOrArray(schema) && schema.type === "object";
+}
+
+/**
+ * The string keys a `Pick`/`Omit`/`Record` key argument names: a string
+ * literal or a union of them. Anything else (a `keyof`, a `string`) is not a
+ * key list, and the caller falls back to the general path.
+ */
+function literalKeys(node: ts.TypeNode): Set<string> | undefined {
+  const members = ts.isUnionTypeNode(node) ? node.types : [node];
+  const keys = new Set<string>();
+  for (const member of members) {
+    if (!ts.isLiteralTypeNode(member) || !ts.isStringLiteral(member.literal)) {
+      return undefined;
+    }
+    keys.add(member.literal.text);
+  }
+  return keys;
+}
+
+/** Schemas deduplicated by structure, first occurrence kept. */
+function dedupeSchemas(schemas: MutableJSONSchema[]): MutableJSONSchema[] {
+  const seen = new Set<string>();
+  const unique: MutableJSONSchema[] = [];
+  for (const schema of schemas) {
+    const key = JSON.stringify(schema);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    unique.push(schema);
+  }
+  return unique;
+}
 
 /**
  * Main schema generator that uses a chain of formatters
@@ -794,6 +851,91 @@ export class SchemaGenerator {
       return this.#analyzeTypeNodeStructure(typeNode.type, checker, context);
     }
 
+    // A parenthesized node carries exactly the shape it wraps.
+    if (ts.isParenthesizedTypeNode(typeNode)) {
+      return this.#analyzeTypeNodeStructure(typeNode.type, checker, context);
+    }
+
+    // A tuple lowers the way the type-based path lowers one: an array whose
+    // items accept any of the elements, structure and arity dropped
+    // (tuple-emission.test.ts pins that choice). A rest element contributes
+    // its array's items. Without this branch a tuple fell through to the
+    // accept-anything fallback, so a tuple of `unknown` — reference-only
+    // slots — read as a request for everything.
+    if (ts.isTupleTypeNode(typeNode)) {
+      const elementSchemas: MutableJSONSchema[] = [];
+      for (const element of typeNode.elements) {
+        const rest = ts.isRestTypeNode(element) ||
+          (ts.isNamedTupleMember(element) &&
+            element.dotDotDotToken !== undefined);
+        const inner = ts.isNamedTupleMember(element) ||
+            ts.isRestTypeNode(element) || ts.isOptionalTypeNode(element)
+          ? element.type
+          : element;
+        const schema = this.#analyzeChildNode(inner, checker, context);
+        elementSchemas.push(
+          rest && isObjectOrArray(schema) && schema.type === "array" &&
+            schema.items !== undefined
+            ? schema.items as MutableJSONSchema
+            : schema,
+        );
+      }
+      const unique = dedupeSchemas(elementSchemas);
+      if (unique.some((schema) => schema === true)) {
+        return { type: "array", items: true };
+      }
+      const items: MutableJSONSchema = unique.length === 0
+        ? false
+        : unique.length === 1
+        ? unique[0]!
+        : { anyOf: unique as MutableJSONSchemaObj[] };
+      return { type: "array", items };
+    }
+
+    // An intersection of object types merges the way IntersectionFormatter
+    // merges one: properties unioned with the first definition kept on a
+    // clash, `required` unioned. A constituent that accepts anything widens
+    // the whole; one that is not an object schema is skipped, as the
+    // type-based merge skips it.
+    if (ts.isIntersectionTypeNode(typeNode)) {
+      const properties: Record<string, MutableJSONSchema> = {};
+      const required = new Set<string>();
+      let additionalProperties: MutableJSONSchema | undefined;
+      let sawObject = false;
+      for (const member of typeNode.types) {
+        const schema = this.#analyzeChildNode(member, checker, context);
+        if (schema === true) return true;
+        if (!isObjectSchema(schema)) continue;
+        sawObject = true;
+        for (
+          const [key, value] of Object.entries(
+            (schema.properties ?? {}) as Record<string, MutableJSONSchema>,
+          )
+        ) {
+          if (!(key in properties)) properties[key] = value;
+        }
+        if (Array.isArray(schema.required)) {
+          for (const key of schema.required) {
+            if (typeof key === "string") required.add(key);
+          }
+        }
+        if (
+          additionalProperties === undefined &&
+          schema.additionalProperties !== undefined
+        ) {
+          additionalProperties = schema
+            .additionalProperties as MutableJSONSchema;
+        }
+      }
+      if (!sawObject) return true;
+      const merged: MutableJSONSchemaObj = { type: "object", properties };
+      if (required.size > 0) merged.required = [...required];
+      if (additionalProperties !== undefined) {
+        merged.additionalProperties = additionalProperties;
+      }
+      return merged;
+    }
+
     // Handle ArrayTypeNode (e.g., number[], string[])
     if (ts.isArrayTypeNode(typeNode)) {
       const elementType = typeRegistry?.get(typeNode.elementType) ??
@@ -857,6 +999,13 @@ export class SchemaGenerator {
         return this.formatChildType(wrapperType, context, typeNode);
       }
 
+      const applied = this.#analyzeLibraryAliasReference(
+        typeNode,
+        checker,
+        context,
+      );
+      if (applied !== undefined) return applied;
+
       const resolved = this.#resolveTypeReferenceFromScope(
         typeNode,
         checker,
@@ -913,6 +1062,190 @@ export class SchemaGenerator {
     return true;
   }
 
+  /**
+   * Analyze a child node the way the array branch analyzes an element: from
+   * its registered Type when the registry has a reliable one, from the node
+   * otherwise. `formatChildType` makes that choice.
+   */
+  #analyzeChildNode(
+    node: ts.TypeNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    const type = context.typeRegistry?.get(node) ??
+      checker.getTypeFromTypeNode(node);
+    return this.formatChildType(type, context, node);
+  }
+
+  /**
+   * The source file whose scope a synthetic reference resolves in: the
+   * generation context's, else the one the node or its context node belongs
+   * to. A synthetic node built outside any file has none.
+   */
+  #scopeSourceFile(
+    typeNode: ts.TypeNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+  ): ts.SourceFile | undefined {
+    const checkerWithProgram = checker as ts.TypeChecker & {
+      getProgram?: () => ts.Program;
+    };
+    const sourceFromContext = context.sourceFile ??
+      (context.sourceFileName
+        ? checkerWithProgram.getProgram?.().getSourceFile(
+          context.sourceFileName,
+        )
+        : undefined);
+    return sourceFromContext ??
+      context.typeNode?.getSourceFile?.() ??
+      typeNode.getSourceFile?.();
+  }
+
+  /**
+   * Whether `name`, as seen from the reference's scope, is declared by the
+   * default library — so an authored type alias of the same name is never
+   * mistaken for the library's.
+   */
+  #isLibraryDeclaredName(
+    typeNode: ts.TypeReferenceNode,
+    name: ts.Identifier,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+  ): boolean {
+    let symbol = checker.getSymbolAtLocation(name);
+    if (!symbol) {
+      const scope = this.#scopeSourceFile(typeNode, checker, context);
+      if (!scope) return false;
+      symbol = checker.getSymbolsInScope(scope, ts.SymbolFlags.Type).find((
+        candidate,
+      ) => candidate.name === name.text);
+    }
+    if (!symbol) return false;
+    if (symbol.flags & ts.SymbolFlags.Alias) {
+      symbol = checker.getAliasedSymbol(symbol);
+    }
+    return symbol.declarations?.some((declaration) =>
+      isDefaultLibrarySourceFile(declaration.getSourceFile(), checker)
+    ) ?? false;
+  }
+
+  /**
+   * A reference to one of the default library's generic aliases, with its
+   * type arguments applied structurally. The general path resolves such a
+   * reference by name to the alias's UNINSTANTIATED declared type — a mapped
+   * type over an unbound parameter — which reads as an empty object and drops
+   * every member the arguments carried. A cell read prints its type through
+   * `Readonly<{…}>`, so that was the fate of every pattern-scope read of an
+   * object type this analyzer was handed. Each alias is applied the way the
+   * type-based path applies it; a reference the rules cannot express
+   * (a computed key set, an unsupported arity) returns `undefined` and takes
+   * the general path.
+   */
+  #analyzeLibraryAliasReference(
+    typeNode: ts.TypeReferenceNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+  ): MutableJSONSchema | undefined {
+    if (!ts.isIdentifier(typeNode.typeName)) return undefined;
+    const name = typeNode.typeName.text;
+    if (!LIBRARY_ALIAS_NAMES.has(name)) return undefined;
+    const args = typeNode.typeArguments;
+    if (args === undefined || args.length === 0) return undefined;
+    if (
+      !this.#isLibraryDeclaredName(
+        typeNode,
+        typeNode.typeName,
+        checker,
+        context,
+      )
+    ) {
+      return undefined;
+    }
+    const first = args[0]!;
+    const second = args[1];
+    const analyze = (node: ts.TypeNode) =>
+      this.#analyzeChildNode(node, checker, context);
+    switch (name) {
+      case "Readonly":
+        return analyze(first);
+      case "Array":
+      case "ReadonlyArray":
+        return { type: "array", items: analyze(first) };
+      case "NonNullable": {
+        const schema = analyze(first);
+        if (!isObjectOrArray(schema) || !Array.isArray(schema.anyOf)) {
+          return schema;
+        }
+        const kept = (schema.anyOf as MutableJSONSchema[]).filter((arm) =>
+          !(isObjectOrArray(arm) &&
+            (arm.type === "null" || arm.type === "undefined"))
+        );
+        if (kept.length === 0) return false;
+        if (kept.length === 1) return kept[0]!;
+        return { ...schema, anyOf: kept as MutableJSONSchemaObj[] };
+      }
+      case "Partial": {
+        const schema = analyze(first);
+        if (!isObjectSchema(schema)) return schema;
+        const { required: _required, ...rest } = schema;
+        return rest;
+      }
+      case "Required": {
+        const schema = analyze(first);
+        if (!isObjectSchema(schema) || !isObjectOrArray(schema.properties)) {
+          return schema;
+        }
+        return { ...schema, required: Object.keys(schema.properties) };
+      }
+      case "Pick":
+      case "Omit": {
+        if (second === undefined) return undefined;
+        const keys = literalKeys(second);
+        if (keys === undefined) return undefined;
+        const schema = analyze(first);
+        if (!isObjectSchema(schema) || !isObjectOrArray(schema.properties)) {
+          return schema;
+        }
+        const keep = (key: string) =>
+          name === "Pick" ? keys.has(key) : !keys.has(key);
+        const properties = Object.fromEntries(
+          Object.entries(schema.properties).filter(([key]) => keep(key)),
+        );
+        const required = Array.isArray(schema.required)
+          ? schema.required.filter((key): key is string =>
+            typeof key === "string" && keep(key)
+          )
+          : [];
+        const { required: _required, ...rest } = schema;
+        return required.length > 0
+          ? { ...rest, properties, required }
+          : { ...rest, properties };
+      }
+      case "Record": {
+        if (second === undefined) return undefined;
+        const value = analyze(second);
+        if (
+          first.kind === ts.SyntaxKind.StringKeyword ||
+          first.kind === ts.SyntaxKind.NumberKeyword
+        ) {
+          return {
+            type: "object",
+            properties: {},
+            additionalProperties: value,
+          };
+        }
+        const keys = literalKeys(first);
+        if (keys === undefined) return undefined;
+        return {
+          type: "object",
+          properties: Object.fromEntries([...keys].map((key) => [key, value])),
+          required: [...keys],
+        };
+      }
+    }
+    return undefined;
+  }
+
   #resolveTypeReferenceFromScope(
     typeNode: ts.TypeReferenceNode,
     checker: ts.TypeChecker,
@@ -930,18 +1263,7 @@ export class SchemaGenerator {
       }
     }
 
-    const checkerWithProgram = checker as ts.TypeChecker & {
-      getProgram?: () => ts.Program;
-    };
-    const sourceFromContext = context.sourceFile ??
-      (context.sourceFileName
-        ? checkerWithProgram.getProgram?.().getSourceFile(
-          context.sourceFileName,
-        )
-        : undefined);
-    const scopeNode = sourceFromContext ??
-      context.typeNode?.getSourceFile?.() ??
-      typeNode.getSourceFile?.();
+    const scopeNode = this.#scopeSourceFile(typeNode, checker, context);
     if (!scopeNode) return undefined;
 
     const candidates = checker.getSymbolsInScope(
