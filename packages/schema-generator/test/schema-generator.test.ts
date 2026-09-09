@@ -2,7 +2,11 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 import { SchemaGenerator } from "../src/schema-generator.ts";
-import { createTestProgram, getTypeFromCode } from "./utils.ts";
+import {
+  createTestProgram,
+  createTestProgramFromFiles,
+  getTypeFromCode,
+} from "./utils.ts";
 
 /**
  * A mirror of the `FabricValuePlus` family and the `FabricExecPlainObject`
@@ -345,6 +349,190 @@ type CalculatorRequest = {
           f.createParenthesizedType(f.createArrayTypeNode(unknownNode())),
         ),
       ).toEqual({ type: "array", items: { type: "unknown" } });
+    });
+
+    it("applies `NonNullable` by dropping the null and undefined arms", async () => {
+      const object = () => literal([["a", unknownNode()]]);
+      const nullNode = () => f.createLiteralTypeNode(f.createNull());
+      const undefinedNode = () =>
+        f.createKeywordTypeNode(ts.SyntaxKind.UndefinedKeyword);
+      // One arm left: that arm, unwrapped.
+      expect(
+        await generate(
+          alias(
+            "NonNullable",
+            f.createUnionTypeNode([object(), nullNode(), undefinedNode()]),
+          ),
+        ),
+      ).toEqual({
+        type: "object",
+        properties: { a: { type: "unknown" } },
+        required: ["a"],
+      });
+      // Several arms left: the union of them.
+      expect(
+        await generate(
+          alias(
+            "NonNullable",
+            f.createUnionTypeNode([object(), stringNode(), nullNode()]),
+          ),
+        ),
+      ).toEqual({
+        anyOf: [
+          {
+            type: "object",
+            properties: { a: { type: "unknown" } },
+            required: ["a"],
+          },
+          { type: "string" },
+        ],
+      });
+      // Nothing left: nothing accepted.
+      expect(
+        await generate(
+          alias(
+            "NonNullable",
+            f.createUnionTypeNode([nullNode(), undefinedNode()]),
+          ),
+        ),
+      ).toEqual({});
+      // Not a union: unchanged.
+      expect(await generate(alias("NonNullable", stringNode()))).toEqual({
+        type: "string",
+      });
+    });
+
+    it("applies `Array` and `Record` with literal keys", async () => {
+      expect(await generate(alias("Array", unknownNode()))).toEqual({
+        type: "array",
+        items: { type: "unknown" },
+      });
+      const key = (text: string) =>
+        f.createLiteralTypeNode(f.createStringLiteral(text));
+      expect(
+        await generate(
+          alias(
+            "Record",
+            f.createUnionTypeNode([key("a"), key("b")]),
+            unknownNode(),
+          ),
+        ),
+      ).toEqual({
+        type: "object",
+        properties: { a: { type: "unknown" }, b: { type: "unknown" } },
+        required: ["a", "b"],
+      });
+      expect(
+        await generate(
+          alias(
+            "Omit",
+            literal([["a", unknownNode()], ["b", stringNode()], [
+              "c",
+              stringNode(),
+            ]]),
+            f.createUnionTypeNode([key("a"), key("b")]),
+          ),
+        ),
+      ).toEqual({
+        type: "object",
+        properties: { c: { type: "string" } },
+        required: ["c"],
+      });
+    });
+
+    it("leaves a non-object argument to Partial, Required and Pick unchanged", async () => {
+      const key = f.createLiteralTypeNode(f.createStringLiteral("length"));
+      expect(await generate(alias("Partial", stringNode()))).toEqual({
+        type: "string",
+      });
+      expect(await generate(alias("Required", stringNode()))).toEqual({
+        type: "string",
+      });
+      expect(await generate(alias("Pick", stringNode(), key))).toEqual({
+        type: "string",
+      });
+    });
+
+    it("leaves a reference the rules cannot express to the general path", async () => {
+      // The general path resolves the library alias by name to its
+      // uninstantiated declared type, which reads as an empty object; that
+      // is what these fall back to, rather than a wrong application.
+      const shape = () => literal([["a", unknownNode()], ["b", stringNode()]]);
+      const generalObject = { type: "object", properties: {} };
+      // A key set the rules cannot enumerate.
+      expect(
+        await generate(
+          alias(
+            "Pick",
+            shape(),
+            f.createTypeOperatorNode(ts.SyntaxKind.KeyOfKeyword, shape()),
+          ),
+        ),
+      ).toEqual(generalObject);
+      // Too few arguments.
+      expect(await generate(alias("Pick", shape()))).toEqual(generalObject);
+      expect(await generate(alias("Record", stringNode()))).toEqual(
+        generalObject,
+      );
+      // A key type that is not a string, number, or literal list.
+      expect(
+        await generate(
+          alias(
+            "Record",
+            f.createKeywordTypeNode(ts.SyntaxKind.SymbolKeyword),
+            unknownNode(),
+          ),
+        ),
+      ).toEqual(generalObject);
+      // No arguments at all.
+      expect(await generate(alias("Array"))).toEqual({
+        type: "array",
+        items: {},
+      });
+    });
+
+    it("cannot apply a library alias without a scope to resolve the name in", async () => {
+      // No source file, so the name cannot be resolved to a library
+      // declaration; the reference falls through to the accept-anything
+      // fallback, as it did before the alias rules.
+      const { checker } = await getTypeFromCode(
+        "type Dummy = unknown;",
+        "Dummy",
+      );
+      expect(
+        new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+          alias("Readonly", literal([["a", unknownNode()]])),
+          checker,
+        ),
+      ).toBe(true);
+    });
+
+    it("leaves an imported shadow of a library name to the general path", async () => {
+      // The name is resolved lexically, so an import alias shadows the
+      // library's declaration the way it does for the checker.
+      const { checker, sourceFile } = await createTestProgramFromFiles(
+        {
+          "/other.ts": "export type Readonly<T> = { shadow: true };",
+          "/main.ts": "import type { Readonly } from './other.ts';\n" +
+            "export type Keep = Readonly<{ a: 1 }>;",
+        },
+        "/main.ts",
+      );
+      const { $schema: _schema, ...schema } = new SchemaGenerator()
+        .generateSchemaFromSyntheticTypeNode(
+          alias("Readonly", literal([["a", unknownNode()]])),
+          checker,
+          undefined,
+          undefined,
+          sourceFile,
+        ) as Record<string, unknown>;
+      expect(schema).not.toEqual({
+        type: "object",
+        properties: { a: { type: "unknown" } },
+        required: ["a"],
+      });
+      expect((schema.properties as Record<string, unknown> | undefined)?.a)
+        .toBeUndefined();
     });
 
     it("leaves an authored alias of a library name to the general path", async () => {

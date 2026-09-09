@@ -1116,9 +1116,16 @@ export class SchemaGenerator {
     if (!symbol) {
       const scope = this.#scopeSourceFile(typeNode, checker, context);
       if (!scope) return false;
-      symbol = checker.getSymbolsInScope(scope, ts.SymbolFlags.Type).find((
-        candidate,
-      ) => candidate.name === name.text);
+      // Lexical resolution, so an authored or imported declaration of the
+      // same name shadows the library's the way it does for the checker.
+      // (`getSymbolsInScope` lists every visible symbol, globals included,
+      // in no order that honors shadowing.)
+      symbol = checker.resolveName(
+        name.text,
+        scope,
+        ts.SymbolFlags.Type,
+        false,
+      );
     }
     if (!symbol) return false;
     if (symbol.flags & ts.SymbolFlags.Alias) {
