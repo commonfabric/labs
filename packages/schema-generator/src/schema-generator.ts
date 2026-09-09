@@ -16,10 +16,8 @@ import { PrimitiveFormatter } from "./formatters/primitive-formatter.ts";
 import { ObjectFormatter } from "./formatters/object-formatter.ts";
 import { ArrayFormatter } from "./formatters/array-formatter.ts";
 import { CommonFabricFormatter } from "./formatters/common-fabric-formatter.ts";
-import {
-  isDefaultLibrarySourceFile,
-  NativeTypeFormatter,
-} from "./formatters/native-type-formatter.ts";
+import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
+import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
 import { UnionFormatter } from "./formatters/union-formatter.ts";
 import { IntersectionFormatter } from "./formatters/intersection-formatter.ts";
 import {
@@ -996,6 +994,9 @@ export class SchemaGenerator {
         writerIdentityForSourceFile: options.writerIdentityForSourceFile,
       }),
       ...(options?.onDiagnostic && { onDiagnostic: options.onDiagnostic }),
+      ...(options?.isDefaultLibrarySourceFile && {
+        isDefaultLibrarySourceFile: options.isDefaultLibrarySourceFile,
+      }),
       ...(schemaHints && { schemaHints }),
     };
 
@@ -2156,7 +2157,7 @@ export class SchemaGenerator {
   ): boolean {
     const symbol = this.#resolveTypeName(typeNode, name, checker, context);
     return symbol?.declarations?.some((declaration) =>
-      isDefaultLibrarySourceFile(declaration.getSourceFile(), checker)
+      isDefaultLibrarySourceFile(declaration.getSourceFile(), context)
     ) ?? false;
   }
 

@@ -63,6 +63,14 @@ export interface SchemaGenerationOptions {
   readonly writerIdentityForSourceFile?: (
     fileName: string,
   ) => WriterSourceIdentity;
+
+  /**
+   * The program's own word on whether a source file is a default library
+   * (`program.isSourceFileDefaultLibrary`). The transformer supplies it; a
+   * generator running without a program falls back to file names
+   * (`typescript/default-library.ts`).
+   */
+  readonly isDefaultLibrarySourceFile?: (sourceFile: ts.SourceFile) => boolean;
 }
 
 /**
@@ -135,6 +143,8 @@ export interface GenerationContext {
   writerIdentityForSourceFile?: (
     fileName: string,
   ) => WriterSourceIdentity;
+  /** The program's word on default-library membership, when supplied. */
+  isDefaultLibrarySourceFile?: (sourceFile: ts.SourceFile) => boolean;
 
   /** Schema hints for overriding default behavior (keyed by TypeNode) */
   schemaHints?: SchemaHints;

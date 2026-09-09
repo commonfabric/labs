@@ -2,6 +2,7 @@ import ts from "typescript";
 import type { MutableJSONSchema } from "@commonfabric/api";
 import { fabricPrimitiveClassesByName } from "@commonfabric/data-model/fabric-primitives";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
+import { isDefaultLibrarySourceFile } from "../typescript/default-library.ts";
 
 const NATIVE_TYPE_SCHEMAS: Record<string, MutableJSONSchema> = {
   // This schema is embedded in the code, so we can have simpler links.
@@ -108,27 +109,6 @@ const LIB_DECLARED_NATIVE_TYPES = new Set([
   "BigInt64Array",
   "BigUint64Array",
 ]);
-
-/**
- * Whether `sourceFile` is one of the default library's declaration files, by
- * the names the libraries are shipped under (`lib.*.d.ts`, the bare
- * `es20xx.d.ts` / `dom.d.ts` / `jsx.d.ts` this repository bundles, Node's
- * `@types`).
- */
-export function isDefaultLibrarySourceFile(
-  sourceFile: ts.SourceFile,
-  _checker: ts.TypeChecker,
-): boolean {
-  // A TypeChecker cannot reach its Program, so the program's own
-  // `isSourceFileDefaultLibrary` is out of reach here and the file's name
-  // decides. (The transformer, which holds the program, asks it directly.)
-  const fileName = sourceFile.fileName;
-  return fileName === "lib.d.ts" ||
-    fileName.endsWith("/lib.d.ts") ||
-    /(^|\/)lib\.[^/]+\.d\.ts$/i.test(fileName) ||
-    /(^|\/)(es\d+(?:\.[^/]+)?|dom|jsx)\.d\.ts$/i.test(fileName) ||
-    /(^|[\\/])node_modules[\\/]@types[\\/]node[\\/]/.test(fileName);
-}
 
 /**
  * Formatter that replaces specific types with a manually specified schema
@@ -276,10 +256,7 @@ export class NativeTypeFormatter implements TypeFormatter {
   ): boolean {
     const symbol = NativeTypeFormatter.#getTypeSymbol(type);
     return symbol?.declarations?.some((declaration) =>
-      isDefaultLibrarySourceFile(
-        declaration.getSourceFile(),
-        context.typeChecker,
-      )
+      isDefaultLibrarySourceFile(declaration.getSourceFile(), context)
     ) ?? false;
   }
 
