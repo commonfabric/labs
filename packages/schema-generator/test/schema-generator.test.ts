@@ -222,18 +222,21 @@ type CalculatorRequest = {
       );
     const alias = (name: string, ...args: ts.TypeNode[]) =>
       f.createTypeReferenceNode(f.createIdentifier(name), args);
+    // A boolean schema comes back as it is: `false` and `true` must stay
+    // apart for an assertion that nothing is accepted to mean it.
     const generate = async (node: ts.TypeNode) => {
       const { checker, sourceFile } = await createTestProgram(
         "type Dummy = unknown;",
       );
-      const { $schema: _schema, ...schema } = new SchemaGenerator()
-        .generateSchemaFromSyntheticTypeNode(
-          node,
-          checker,
-          undefined,
-          undefined,
-          sourceFile,
-        ) as Record<string, unknown>;
+      const result = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        node,
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+      );
+      if (typeof result === "boolean") return result;
+      const { $schema: _schema, ...schema } = result as Record<string, unknown>;
       return schema;
     };
 
@@ -395,7 +398,7 @@ type CalculatorRequest = {
             f.createUnionTypeNode([nullNode(), undefinedNode()]),
           ),
         ),
-      ).toEqual({});
+      ).toBe(false);
       // Not a union: unchanged.
       expect(await generate(alias("NonNullable", stringNode()))).toEqual({
         type: "string",
@@ -545,6 +548,13 @@ type CalculatorRequest = {
       "type Maybe = { x?: unknown; y?: string };",
       "type Nullable = string | null | undefined;",
       "type Both = string | number | null;",
+      'type Lit = "a" | "b" | null;',
+      'type A = { payload: unknown; kind: "a"; left: string };',
+      'type B = { payload: unknown; kind: "b"; right: number };',
+      "type Either = A | B;",
+      'type Nested = Either | { payload: unknown; kind: "c" };',
+      'type Correlated = { first: "a"; second: 1 } | { first: "b"; second: 2 };',
+      "type Loose = { x?: unknown; y: string } | { x: unknown; y?: string };",
     ].join("\n");
     const generateNamed = async (node: ts.TypeNode) => {
       const { checker, sourceFile } = await createTestProgram(NAMED);
@@ -646,6 +656,135 @@ type CalculatorRequest = {
       expect(result.$defs).toEqual({ Foo: foo });
     });
 
+    it("applies `Pick` and `Omit` to the surface a union's arms share", async () => {
+      // `keyof (A | B)` is the keys both arms have, so the view is one object
+      // over them — not a view per arm, which would keep `left` or `right`
+      // and require one of them.
+      const key = (text: string) =>
+        f.createLiteralTypeNode(f.createStringLiteral(text));
+      const payloadOnly = {
+        type: "object",
+        properties: { payload: { type: "unknown" } },
+        required: ["payload"],
+      };
+      expect(
+        ((await generateNamed(
+          alias(
+            "Omit",
+            f.createUnionTypeNode([alias("A"), alias("B")]),
+            key("kind"),
+          ),
+        )) as { schema: unknown }).schema,
+      ).toEqual(payloadOnly);
+      expect(
+        ((await generateNamed(alias("Omit", alias("Either"), key("kind")))) as {
+          schema: unknown;
+        }).schema,
+      ).toEqual(payloadOnly);
+      // A union nested through references is flattened to its arms.
+      expect(
+        ((await generateNamed(alias("Omit", alias("Nested"), key("kind")))) as {
+          schema: unknown;
+        }).schema,
+      ).toEqual(payloadOnly);
+      // A shared property accepts what any arm's does, so values two arms
+      // pair may mix, as `Pick<Correlated, …>` lets them.
+      expect(
+        ((await generateNamed(
+          alias(
+            "Pick",
+            alias("Correlated"),
+            f.createUnionTypeNode([key("first"), key("second")]),
+          ),
+        )) as { schema: unknown }).schema,
+      ).toEqual({
+        type: "object",
+        properties: {
+          first: {
+            anyOf: [
+              { type: "string", enum: ["a"] },
+              { type: "string", enum: ["b"] },
+            ],
+          },
+          second: {
+            anyOf: [
+              { type: "number", enum: [1] },
+              { type: "number", enum: [2] },
+            ],
+          },
+        },
+        required: ["first", "second"],
+      });
+      // Required only where every arm requires it.
+      expect(
+        ((await generateNamed(
+          alias(
+            "Pick",
+            alias("Loose"),
+            f.createUnionTypeNode([key("x"), key("y")]),
+          ),
+        )) as { schema: unknown }).schema,
+      ).toEqual({
+        type: "object",
+        properties: { x: { type: "unknown" }, y: { type: "string" } },
+      });
+      // The definitions the view read stay as they were.
+      const result = (await generateNamed(
+        literal([["a", alias("Omit", alias("Either"), key("kind"))], [
+          "b",
+          alias("Either"),
+        ]]),
+      )) as { schema: unknown; $defs: Record<string, unknown> };
+      expect(result.schema).toEqual({
+        type: "object",
+        properties: { a: payloadOnly, b: { $ref: "#/$defs/Either" } },
+        required: ["a", "b"],
+      });
+      expect(result.$defs).toEqual({
+        Either: { anyOf: [{ $ref: "#/$defs/A" }, { $ref: "#/$defs/B" }] },
+        A: {
+          type: "object",
+          properties: {
+            payload: { type: "unknown" },
+            kind: { type: "string", enum: ["a"] },
+            left: { type: "string" },
+          },
+          required: ["payload", "kind", "left"],
+        },
+        B: {
+          type: "object",
+          properties: {
+            payload: { type: "unknown" },
+            kind: { type: "string", enum: ["b"] },
+            right: { type: "number" },
+          },
+          required: ["payload", "kind", "right"],
+        },
+      });
+    });
+
+    it("leaves a union view the rules cannot express to the general path", async () => {
+      // A `Pick` of a key one arm lacks is a program the checker rejects; a
+      // union with an arm that is no object has no shared surface to view.
+      const key = (text: string) =>
+        f.createLiteralTypeNode(f.createStringLiteral(text));
+      const generalObject = { type: "object", properties: {} };
+      expect(
+        ((await generateNamed(alias("Pick", alias("Either"), key("left")))) as {
+          schema: unknown;
+        }).schema,
+      ).toEqual(generalObject);
+      expect(
+        ((await generateNamed(
+          alias(
+            "Omit",
+            f.createUnionTypeNode([alias("A"), stringNode()]),
+            key("kind"),
+          ),
+        )) as { schema: unknown }).schema,
+      ).toEqual(generalObject);
+    });
+
     it("merges named constituents of an intersection through their references", async () => {
       expect(
         ((await generateNamed(
@@ -706,6 +845,28 @@ type CalculatorRequest = {
       ).toEqual({ type: ["number", "string"] });
     });
 
+    it("applies `NonNullable` to an enum, leaving the definition as it was", async () => {
+      // A named union of literals and `null` is one definition with an
+      // `enum`; the view loses the `null`, the definition read beside it
+      // keeps it.
+      const result = (await generateNamed(
+        literal([["a", alias("NonNullable", alias("Lit"))], [
+          "b",
+          alias("Lit"),
+        ]]),
+      )) as { schema: unknown; $defs: Record<string, unknown> };
+      expect(result.schema).toEqual({
+        type: "object",
+        properties: { a: { enum: ["a", "b"] }, b: { $ref: "#/$defs/Lit" } },
+        required: ["a", "b"],
+      });
+      expect(result.$defs).toEqual({ Lit: { enum: ["a", "b", null] } });
+      // A definition with nothing to remove is still read by reference.
+      expect(
+        await generateNamed(alias("NonNullable", alias("Foo"))),
+      ).toEqual({ schema: { $ref: "#/$defs/Foo" }, $defs: { Foo: foo } });
+    });
+
     it("leaves a schema that accepts no nullish value as it came", async () => {
       // Nothing to remove: the input comes back as it was — accept-anything,
       // a union with no nullish arm, a schema with no `type` to filter.
@@ -716,7 +877,7 @@ type CalculatorRequest = {
             f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword),
           ),
         ),
-      ).toEqual({});
+      ).toBe(true);
       expect(
         await generate(
           alias(

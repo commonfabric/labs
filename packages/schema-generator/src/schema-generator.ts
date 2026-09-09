@@ -83,9 +83,12 @@ function resolveLocalRef(
 /**
  * `transform` applied to every object schema `schema` denotes: the schema
  * itself, the definition a local reference names, or each arm of a union of
- * them. The object handed to `transform` is a copy with its own `properties`
- * map, so a mapped view (`Partial<Foo>`) never alters the `Foo` every other
- * consumer reads. A schema that denotes no object is returned as it came.
+ * them — the aliases that map over `keyof T` of each arm (`Partial`,
+ * `Required`) distribute over a union, `Partial<A | B>` being
+ * `Partial<A> | Partial<B>`. The object handed to `transform` is a copy with
+ * its own `properties` map, so a mapped view (`Partial<Foo>`) never alters
+ * the `Foo` every other consumer reads. A schema that denotes no object is
+ * returned as it came.
  */
 function mapObjectSchemas(
   schema: MutableJSONSchema,
@@ -111,11 +114,86 @@ function mapObjectSchemas(
 }
 
 /**
+ * The schemas a union denotes, one per arm, read through local references
+ * and flattened through nested unions; a schema that is no union is its own
+ * single arm. The arms are the shared objects they are — see
+ * `resolveLocalRef`.
+ */
+function unionArms(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+): MutableJSONSchema[] {
+  const resolved = resolveLocalRef(schema, context);
+  if (isObjectOrArray(resolved) && Array.isArray(resolved.anyOf)) {
+    return (resolved.anyOf as MutableJSONSchema[]).flatMap((arm) =>
+      unionArms(arm, context)
+    );
+  }
+  return [resolved];
+}
+
+/**
+ * `Pick`/`Omit` applied to `schema`: the object it denotes with only the
+ * selected properties. These aliases map over `keyof T`, and the keys of a
+ * union are the keys every arm has, so a union does not distribute the way
+ * `Partial` does: its view is one object over the surface the arms share,
+ * each property accepting what any arm's does and required only where every
+ * arm requires it. `Omit<A | B, "kind">` therefore keeps neither arm's own
+ * members, and a `Pick` of two correlated arms no longer pairs their values.
+ * A lone arm that is no object is returned as it came; a union with such an
+ * arm, or a `Pick` naming a key some arm lacks (a program the type checker
+ * rejects), has no view here and is `undefined`.
+ */
+function pickedView(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+  selection: { pick: Set<string> } | { omit: Set<string> },
+): MutableJSONSchema | undefined {
+  const arms = unionArms(schema, context);
+  if (arms.length === 1 && !isObjectSchema(arms[0]!)) return schema;
+  const objects = arms.filter(isObjectSchema);
+  if (objects.length !== arms.length) return undefined;
+  const propertiesOf = (
+    object: MutableJSONSchemaObj,
+  ): Record<string, MutableJSONSchema> =>
+    isObjectOrArray(object.properties)
+      ? object.properties as Record<string, MutableJSONSchema>
+      : {};
+  const shared = Object.keys(propertiesOf(objects[0]!)).filter((key) =>
+    objects.every((object) => key in propertiesOf(object))
+  );
+  if (
+    "pick" in selection &&
+    ![...selection.pick].every((key) => shared.includes(key))
+  ) {
+    return undefined;
+  }
+  const keys = shared.filter((key) =>
+    "pick" in selection ? selection.pick.has(key) : !selection.omit.has(key)
+  );
+  const properties = Object.fromEntries(
+    keys.map((key) => [
+      key,
+      unionOfSchemas(objects.map((object) => propertiesOf(object)[key]!)),
+    ]),
+  );
+  const required = keys.filter((key) =>
+    objects.every((object) =>
+      Array.isArray(object.required) && object.required.includes(key)
+    )
+  );
+  return required.length > 0
+    ? { type: "object", properties, required }
+    : { type: "object", properties };
+}
+
+/**
  * `schema` with `null` and `undefined` removed from what it accepts, the way
  * `NonNullable<T>` removes them from `T`: a direct nullish schema becomes
- * `false`; an array-valued `type` loses those entries; a union loses those
- * arms; a local reference is followed to its definition. A schema that
- * accepted neither is returned as it came, reference and all.
+ * `false`; an array-valued `type` loses those entries, an `enum` those
+ * values; a union loses those arms; a local reference is followed to its
+ * definition. A schema that accepted neither is returned as it came,
+ * reference and all.
  */
 function withoutNullish(
   schema: MutableJSONSchema,
@@ -143,13 +221,26 @@ function withoutNullish(
     : typeof resolved.type === "string"
     ? [resolved.type]
     : undefined;
-  if (types === undefined) return schema;
-  const kept = types.filter((type) => type !== "null" && type !== "undefined");
-  if (kept.length === types.length) return schema;
-  if (kept.length === 0) return false;
+  const values = Array.isArray(resolved.enum) ? resolved.enum : undefined;
+  const keptTypes = types?.filter((type) =>
+    type !== "null" && type !== "undefined"
+  );
+  const keptValues = values?.filter((value) =>
+    value !== null && value !== undefined
+  );
+  if (
+    keptTypes?.length === types?.length &&
+    keptValues?.length === values?.length
+  ) {
+    return schema;
+  }
+  if (keptTypes?.length === 0 || keptValues?.length === 0) return false;
   return {
     ...resolved,
-    type: (kept.length === 1 ? kept[0]! : kept) as SchemaType,
+    ...(keptTypes === undefined ? {} : {
+      type: (keptTypes.length === 1 ? keptTypes[0]! : keptTypes) as SchemaType,
+    }),
+    ...(keptValues === undefined ? {} : { enum: keptValues }),
   };
 }
 
@@ -181,6 +272,19 @@ function dedupeSchemas(schemas: MutableJSONSchema[]): MutableJSONSchema[] {
     unique.push(schema);
   }
   return unique;
+}
+
+/**
+ * The schema of a union whose arms have these schemas: an arm accepting
+ * anything makes the whole accept anything, arms accepting nothing drop out,
+ * duplicates fold, and a lone survivor stands alone.
+ */
+function unionOfSchemas(schemas: MutableJSONSchema[]): MutableJSONSchema {
+  if (schemas.some((schema) => schema === true)) return true;
+  const unique = dedupeSchemas(schemas.filter((schema) => schema !== false));
+  if (unique.length === 0) return false;
+  if (unique.length === 1) return unique[0]!;
+  return { anyOf: unique as MutableJSONSchemaObj[] };
 }
 
 /**
@@ -982,16 +1086,7 @@ export class SchemaGenerator {
         // type-based path admits it into the items union; so does this one.
         if (optional) elementSchemas.push({ type: "undefined" });
       }
-      const unique = dedupeSchemas(elementSchemas);
-      if (unique.some((schema) => schema === true)) {
-        return { type: "array", items: true };
-      }
-      const items: MutableJSONSchema = unique.length === 0
-        ? false
-        : unique.length === 1
-        ? unique[0]!
-        : { anyOf: unique as MutableJSONSchemaObj[] };
-      return { type: "array", items };
+      return { type: "array", items: unionOfSchemas(elementSchemas) };
     }
 
     // An intersection of object types merges the way IntersectionFormatter
@@ -1309,24 +1404,11 @@ export class SchemaGenerator {
         if (second === undefined) return undefined;
         const keys = literalKeys(second);
         if (keys === undefined) return undefined;
-        const keep = (key: string) =>
-          name === "Pick" ? keys.has(key) : !keys.has(key);
-        return mapObjectSchemas(analyze(first), context, (object) => {
-          const properties = Object.fromEntries(
-            Object.entries(object.properties ?? {}).filter(([key]) =>
-              keep(key)
-            ),
-          );
-          const required = Array.isArray(object.required)
-            ? object.required.filter((key): key is string =>
-              typeof key === "string" && keep(key)
-            )
-            : [];
-          const { required: _required, ...rest } = object;
-          return required.length > 0
-            ? { ...rest, properties, required }
-            : { ...rest, properties };
-        });
+        return pickedView(
+          analyze(first),
+          context,
+          name === "Pick" ? { pick: keys } : { omit: keys },
+        );
       }
       case "Record": {
         if (second === undefined) return undefined;

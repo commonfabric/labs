@@ -111,13 +111,21 @@ A cell read of an object type prints as `Readonly<{…}>`, and the general
 name-resolution path resolves that alias to its *uninstantiated* declared
 type — a mapped type over an unbound parameter — which reads as an empty
 object with every member dropped. The alias rules exist so such a read keeps
-its declared members, `unknown` ones included. A mapped view (`Partial<Foo>`,
-`Pick<Foo, "x">`) is derived on a copy of the definition its argument refers
-to, arm by arm for a union; the shared `Foo` definition other consumers read
-is untouched. `NonNullable` removes `null` and `undefined` from a direct
-schema (to `false`), an array-valued `type`, a union's arms, or a referenced
-definition. The synthetic alias, tuple, intersection, and shadowing cases in
-`test/schema-generator.test.ts` pin all of this.
+its declared members, `unknown` ones included. A mapped view is derived on
+a copy of the definition its argument refers to; the shared `Foo` definition
+other consumers read is untouched. `Partial<Foo>` and `Required<Foo>` map
+over each arm's own keys and so distribute over a union, arm by arm. `Pick`
+and `Omit` map over `keyof T`, and the keys of a union are the keys every arm
+has, so `Pick<A | B, K>` and `Omit<A | B, K>` are one object over the surface
+the arms share: a property accepts what any arm's does and is required only
+where every arm requires it, so `Omit<A | B, "kind">` keeps neither arm's own
+members and a `Pick` of correlated arms no longer pairs their values. A
+`Pick` naming a key some arm lacks, or a union with an arm that is no object,
+keeps the general path. `NonNullable` removes `null` and `undefined` from a
+direct schema (to `false`), an array-valued `type`, an `enum`'s values, a
+union's arms, or a referenced definition. The synthetic alias, tuple,
+intersection, and shadowing cases in `test/schema-generator.test.ts` pin all
+of this.
 
 **Observed node/type divergence — literal encodings.** The node path emits
 `const` (`{ type: "string", const: "x" }`); the type path emits
