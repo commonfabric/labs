@@ -12,7 +12,8 @@ import { type Default, pattern, type Writable } from "commonfabric";
 export default pattern<
   {
     entry: Writable<{ topic: unknown; title: string } | Default<{ topic: null; title: "" }>>;
-    lookup: Writable<Record<string, unknown> | Default<{}>>;
+    // deno-lint-ignore ban-types
+    lookup: Writable<Record<string, unknown>>;
     pair: Writable<[unknown, string] | Default<[null, ""]>>;
   },
   { titleLength: number; keyCount: number; pairLength: number }

@@ -76,8 +76,8 @@ const __cfLift_2 = __cfHelpers.lift<{
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema);
 const __cfLift_3 = __cfHelpers.lift<{
-    lookup: Writable<Record<string, unknown> | Default<{}>>;
-}, Readonly<{} | Record<string, unknown>>>(({ lookup }) => lookup.get(), {
+    lookup: __cfHelpers.Writable<Record<string, unknown>>;
+}, Readonly<Record<string, unknown>>>(({ lookup }) => lookup.get(), {
     type: "object",
     properties: {
         lookup: {
@@ -86,39 +86,28 @@ const __cfLift_3 = __cfHelpers.lift<{
             additionalProperties: {
                 type: "unknown"
             },
-            "default": {},
             asCell: ["readonly"]
         }
     },
     required: ["lookup"]
 } as const satisfies __cfHelpers.JSONSchema, {
-    anyOf: [{
-            type: "object",
-            properties: {}
-        }, {
+    type: "object",
+    properties: {},
+    additionalProperties: {
+        type: "unknown"
+    }
+} as const satisfies __cfHelpers.JSONSchema);
+const __cfLift_4 = __cfHelpers.lift<{
+    lookupView: Readonly<Record<string, unknown>>;
+}, number>(({ lookupView }) => Object.keys(lookupView).length, {
+    type: "object",
+    properties: {
+        lookupView: {
             type: "object",
             properties: {},
             additionalProperties: {
                 type: "unknown"
             }
-        }]
-} as const satisfies __cfHelpers.JSONSchema);
-const __cfLift_4 = __cfHelpers.lift<{
-    lookupView: Readonly<{}> | Readonly<Record<string, unknown>>;
-}, number>(({ lookupView }) => Object.keys(lookupView).length, {
-    type: "object",
-    properties: {
-        lookupView: {
-            anyOf: [{
-                    type: "object",
-                    properties: {}
-                }, {
-                    type: "object",
-                    properties: {},
-                    additionalProperties: {
-                        type: "unknown"
-                    }
-                }]
         }
     },
     required: ["lookupView"]
@@ -218,7 +207,6 @@ export default pattern((__cf_pattern_input) => {
             additionalProperties: {
                 type: "unknown"
             },
-            "default": {},
             asCell: ["cell"]
         },
         pair: {

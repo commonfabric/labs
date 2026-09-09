@@ -286,6 +286,33 @@ type CalculatorRequest = {
       });
     });
 
+    it("applies `Readonly<…>` over a union, arm by arm", async () => {
+      // The shape a cell typed `Record<string, unknown> | Default<{}>` reads
+      // back as: the empty-object default arm does not collapse into the
+      // record, so the alias wraps a union. Built here as nodes, since `{}`
+      // as source is banned by lint.
+      expect(
+        await generate(
+          alias(
+            "Readonly",
+            f.createUnionTypeNode([
+              f.createTypeLiteralNode([]),
+              alias("Record", stringNode(), unknownNode()),
+            ]),
+          ),
+        ),
+      ).toEqual({
+        anyOf: [
+          { type: "object", properties: {} },
+          {
+            type: "object",
+            properties: {},
+            additionalProperties: { type: "unknown" },
+          },
+        ],
+      });
+    });
+
     it("lowers a tuple to an array of its element union, deduplicated", async () => {
       expect(
         await generate(f.createTupleTypeNode([unknownNode(), stringNode()])),
