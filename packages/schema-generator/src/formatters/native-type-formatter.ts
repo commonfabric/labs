@@ -117,21 +117,18 @@ const LIB_DECLARED_NATIVE_TYPES = new Set([
  * for referencing embedded schema definitions.
  */
 /**
- * Whether `sourceFile` is one of the default library's declaration files —
- * by the program's own word when the checker exposes it, else by the names
- * the libraries are shipped under (`lib.*.d.ts`, the bare `es20xx.d.ts` /
- * `dom.d.ts` / `jsx.d.ts` this repository bundles, Node's `@types`).
+ * Whether `sourceFile` is one of the default library's declaration files, by
+ * the names the libraries are shipped under (`lib.*.d.ts`, the bare
+ * `es20xx.d.ts` / `dom.d.ts` / `jsx.d.ts` this repository bundles, Node's
+ * `@types`).
  */
 export function isDefaultLibrarySourceFile(
   sourceFile: ts.SourceFile,
-  checker: ts.TypeChecker,
+  _checker: ts.TypeChecker,
 ): boolean {
-  const program = (checker as ts.TypeChecker & {
-    getProgram?: () => ts.Program;
-  }).getProgram?.();
-  if (program?.isSourceFileDefaultLibrary(sourceFile)) {
-    return true;
-  }
+  // A TypeChecker cannot reach its Program, so the program's own
+  // `isSourceFileDefaultLibrary` is out of reach here and the file's name
+  // decides. (The transformer, which holds the program, asks it directly.)
   const fileName = sourceFile.fileName;
   return fileName === "lib.d.ts" ||
     fileName.endsWith("/lib.d.ts") ||

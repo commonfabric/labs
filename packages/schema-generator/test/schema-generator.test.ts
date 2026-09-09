@@ -535,6 +535,257 @@ type CalculatorRequest = {
         .toBeUndefined();
     });
 
+    // Named authored types analyze to a reference into the definitions, so
+    // the rules must read the shape behind the reference — and must not alter
+    // that shared definition while deriving a view of it.
+    const NAMED = [
+      "export {};",
+      "type Foo = { x: unknown; y: string };",
+      "type Bar = { z: number };",
+      "type Maybe = { x?: unknown; y?: string };",
+      "type Nullable = string | null | undefined;",
+      "type Both = string | number | null;",
+    ].join("\n");
+    const generateNamed = async (node: ts.TypeNode) => {
+      const { checker, sourceFile } = await createTestProgram(NAMED);
+      const result = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        node,
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+      );
+      if (typeof result !== "object" || result === null) return result;
+      const { $schema: _schema, $defs, ...schema } = result as Record<
+        string,
+        unknown
+      >;
+      return { schema, $defs };
+    };
+    const foo = {
+      type: "object",
+      properties: { x: { type: "unknown" }, y: { type: "string" } },
+      required: ["x", "y"],
+    };
+
+    it("applies a mapped alias to the definition a named type refers to", async () => {
+      // The view is inline; a definition nothing references is not emitted.
+      expect(
+        ((await generateNamed(alias("Partial", alias("Foo")))) as {
+          schema: unknown;
+        }).schema,
+      ).toEqual({
+        type: "object",
+        properties: { x: { type: "unknown" }, y: { type: "string" } },
+      });
+      expect(
+        ((await generateNamed(alias("Required", alias("Maybe")))) as {
+          schema: unknown;
+        }).schema,
+      ).toEqual({
+        type: "object",
+        properties: { x: { type: "unknown" }, y: { type: "string" } },
+        required: ["x", "y"],
+      });
+      const key = (text: string) =>
+        f.createLiteralTypeNode(f.createStringLiteral(text));
+      expect(
+        ((await generateNamed(alias("Pick", alias("Foo"), key("x")))) as {
+          schema: unknown;
+        }).schema,
+      ).toEqual({
+        type: "object",
+        properties: { x: { type: "unknown" } },
+        required: ["x"],
+      });
+      expect(
+        ((await generateNamed(alias("Omit", alias("Foo"), key("y")))) as {
+          schema: unknown;
+        }).schema,
+      ).toEqual({
+        type: "object",
+        properties: { x: { type: "unknown" } },
+        required: ["x"],
+      });
+    });
+
+    it("applies a mapped alias to each arm of a union", async () => {
+      expect(
+        await generate(
+          alias(
+            "Partial",
+            f.createUnionTypeNode([
+              literal([["x", unknownNode()]]),
+              literal([["y", unknownNode()]]),
+            ]),
+          ),
+        ),
+      ).toEqual({
+        anyOf: [
+          { type: "object", properties: { x: { type: "unknown" } } },
+          { type: "object", properties: { y: { type: "unknown" } } },
+        ],
+      });
+    });
+
+    it("derives a mapped view without altering the shared definition", async () => {
+      const result = (await generateNamed(
+        literal([["a", alias("Partial", alias("Foo"))], ["b", alias("Foo")]]),
+      )) as { schema: Record<string, unknown>; $defs: Record<string, unknown> };
+      expect(result.schema).toEqual({
+        type: "object",
+        properties: {
+          a: {
+            type: "object",
+            properties: { x: { type: "unknown" }, y: { type: "string" } },
+          },
+          b: { $ref: "#/$defs/Foo" },
+        },
+        required: ["a", "b"],
+      });
+      expect(result.$defs).toEqual({ Foo: foo });
+    });
+
+    it("merges named constituents of an intersection through their references", async () => {
+      expect(
+        ((await generateNamed(
+          f.createIntersectionTypeNode([
+            alias("Foo"),
+            literal([["extra", unknownNode()]]),
+          ]),
+        )) as { schema: unknown }).schema,
+      ).toEqual({
+        type: "object",
+        properties: {
+          x: { type: "unknown" },
+          y: { type: "string" },
+          extra: { type: "unknown" },
+        },
+        required: ["x", "y", "extra"],
+      });
+      expect(
+        ((await generateNamed(
+          f.createIntersectionTypeNode([alias("Foo"), alias("Bar")]),
+        )) as { schema: unknown }).schema,
+      ).toEqual({
+        type: "object",
+        properties: {
+          x: { type: "unknown" },
+          y: { type: "string" },
+          z: { type: "number" },
+        },
+        required: ["x", "y", "z"],
+      });
+    });
+
+    it("applies `NonNullable` to direct, array-typed, and referenced nullish forms", async () => {
+      const { checker, sourceFile } = await createTestProgram(NAMED);
+      const direct = (node: ts.TypeNode) =>
+        new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+          alias("NonNullable", node),
+          checker,
+          undefined,
+          undefined,
+          sourceFile,
+        );
+      expect(direct(f.createLiteralTypeNode(f.createNull()))).toBe(false);
+      expect(direct(f.createKeywordTypeNode(ts.SyntaxKind.UndefinedKeyword)))
+        .toBe(false);
+      // `string | null | undefined` as a named type is one definition with an
+      // array-valued `type`; the nullish entries go, the string stays.
+      expect(
+        ((await generateNamed(alias("NonNullable", alias("Nullable")))) as {
+          schema: unknown;
+        }).schema,
+      ).toEqual({ type: "string" });
+      // Two survivors keep the array form.
+      expect(
+        ((await generateNamed(alias("NonNullable", alias("Both")))) as {
+          schema: unknown;
+        }).schema,
+      ).toEqual({ type: ["number", "string"] });
+    });
+
+    it("leaves a schema that accepts no nullish value as it came", async () => {
+      // Nothing to remove: the input comes back as it was — accept-anything,
+      // a union with no nullish arm, a schema with no `type` to filter.
+      expect(
+        await generate(
+          alias(
+            "NonNullable",
+            f.createKeywordTypeNode(ts.SyntaxKind.AnyKeyword),
+          ),
+        ),
+      ).toEqual({});
+      expect(
+        await generate(
+          alias(
+            "NonNullable",
+            f.createUnionTypeNode([
+              literal([["a", unknownNode()]]),
+              stringNode(),
+            ]),
+          ),
+        ),
+      ).toEqual({
+        anyOf: [
+          {
+            type: "object",
+            properties: { a: { type: "unknown" } },
+            required: ["a"],
+          },
+          { type: "string" },
+        ],
+      });
+      expect(
+        await generate(
+          alias(
+            "NonNullable",
+            f.createKeywordTypeNode(ts.SyntaxKind.VoidKeyword),
+          ),
+        ),
+      ).toEqual({ asCell: ["opaque"] });
+    });
+
+    it("admits `undefined` for an optional tuple element, in either spelling", async () => {
+      const expected = {
+        type: "array",
+        items: {
+          anyOf: [{ type: "string" }, { type: "number" }, {
+            type: "undefined",
+          }],
+        },
+      };
+      expect(
+        await generate(
+          f.createTupleTypeNode([
+            stringNode(),
+            f.createOptionalTypeNode(
+              f.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword),
+            ),
+          ]),
+        ),
+      ).toEqual(expected);
+      expect(
+        await generate(
+          f.createTupleTypeNode([
+            f.createNamedTupleMember(
+              undefined,
+              f.createIdentifier("a"),
+              undefined,
+              stringNode(),
+            ),
+            f.createNamedTupleMember(
+              undefined,
+              f.createIdentifier("b"),
+              f.createToken(ts.SyntaxKind.QuestionToken),
+              f.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword),
+            ),
+          ]),
+        ),
+      ).toEqual(expected);
+    });
+
     it("leaves an authored alias of a library name to the general path", async () => {
       // A module, so the authored alias shadows the library's rather than
       // colliding with it as a script-level redeclaration would.

@@ -83,12 +83,20 @@ triggers are documented in the ts-transformers behavior spec §12.
 `src/schema-generator.ts`) handles: `TypeLiteral` nodes (properties
 with `questionToken` optionality; string/number index signatures →
 `additionalProperties`, first non-undefined wins, no JSDoc),
-`readonly` type-operator nodes (analyze the wrapped type), `ArrayTypeNode`,
-unions (`true` member short-circuits, `false`
-members filtered, singletons unwrapped), literal nodes
-`TypeReference` nodes (wrapper detection first, then a
-scope-based name-resolution fallback for unbindable synthetic references via
-`checker.getSymbolsInScope` — plus a `Date`-by-name
+`readonly` type-operator nodes (analyze the wrapped type), parenthesized
+nodes (unwrapped), `ArrayTypeNode`, tuples (an array of the element union,
+`undefined` admitted for an optional element, a rest element contributing its
+items — the same lossy form as the type path), intersections of object types
+(merged as `IntersectionFormatter` merges them, a named constituent read
+through its reference), unions (`true` member short-circuits, `false`
+members filtered, singletons unwrapped), literal nodes,
+`TypeReference` nodes (wrapper detection first; then the default library's
+generic aliases — `Readonly`, `Partial`, `Required`, `Pick`, `Omit`,
+`NonNullable`, `Array`, `ReadonlyArray`, `Record` — applied structurally to
+their arguments when the name resolves lexically (`checker.resolveName`) to a
+library declaration, so an authored or imported shadow of the name keeps the
+general path; then a scope-based name-resolution fallback for unbindable
+synthetic references via `checker.getSymbolsInScope` — plus a `Date`-by-name
 special case), keyword types, and a final
 resolve-else-`true` fallback.
 
@@ -98,6 +106,18 @@ In particular, `readonly unknown[]` emits
 `{ type: "array", items: { type: "unknown" } }`, preserving the element's
 reference-only semantics. The synthetic readonly array cases in
 `test/schema-generator.test.ts` cover unknown, string, and object elements.
+
+A cell read of an object type prints as `Readonly<{…}>`, and the general
+name-resolution path resolves that alias to its *uninstantiated* declared
+type — a mapped type over an unbound parameter — which reads as an empty
+object with every member dropped. The alias rules exist so such a read keeps
+its declared members, `unknown` ones included. A mapped view (`Partial<Foo>`,
+`Pick<Foo, "x">`) is derived on a copy of the definition its argument refers
+to, arm by arm for a union; the shared `Foo` definition other consumers read
+is untouched. `NonNullable` removes `null` and `undefined` from a direct
+schema (to `false`), an array-valued `type`, a union's arms, or a referenced
+definition. The synthetic alias, tuple, intersection, and shadowing cases in
+`test/schema-generator.test.ts` pin all of this.
 
 **Observed node/type divergence — literal encodings.** The node path emits
 `const` (`{ type: "string", const: "x" }`); the type path emits
