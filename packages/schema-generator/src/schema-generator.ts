@@ -123,16 +123,48 @@ function mapArms(
 
 /**
  * The index signature an object schema carries, as the schema every key it
- * covers has — `additionalProperties` when that is a schema or `true` — or
- * `undefined` for an object closed to unnamed keys.
+ * covers has: `additionalProperties` when present — a schema, `true`, or
+ * `false` for a `never`-valued signature, which still covers every key —
+ * and `undefined` for an object closed to unnamed keys, for which this
+ * generator writes no `additionalProperties` at all.
  */
 function indexSignatureOf(
   object: MutableJSONSchemaObj,
 ): MutableJSONSchema | undefined {
-  const additional = object.additionalProperties;
-  return additional === true || isObjectOrArray(additional)
-    ? additional as MutableJSONSchema
-    : undefined;
+  return object.additionalProperties as MutableJSONSchema | undefined;
+}
+
+/** An object or array arm as `Partial<T>` maps it. */
+function partialArm(
+  arm: MutableJSONSchemaObj & { type: "object" | "array" },
+): MutableJSONSchema {
+  if (arm.type === "array") {
+    return {
+      ...arm,
+      items: unionOfSchemas([
+        (arm.items as MutableJSONSchema | undefined) ?? true,
+        { type: "undefined" },
+      ]),
+    };
+  }
+  const { required: _required, ...rest } = arm;
+  return rest;
+}
+
+/** An object or array arm as `Required<T>` maps it. */
+function requiredArm(
+  arm: MutableJSONSchemaObj & { type: "object" | "array" },
+  context: GenerationContext,
+): MutableJSONSchema {
+  if (arm.type === "array") {
+    return arm.items === undefined ? arm : {
+      ...arm,
+      items: withoutUndefined(arm.items as MutableJSONSchema, context),
+    };
+  }
+  return isObjectOrArray(arm.properties)
+    ? { ...arm, required: Object.keys(arm.properties) }
+    : arm;
 }
 
 /**
@@ -227,6 +259,9 @@ function pickedView(
     ? { type: "object", properties, required }
     : { type: "object", properties };
 }
+
+/** The alias declarations already opened on one path — see `#openTypeNode`. */
+type OpenedAliases = ReadonlySet<ts.TypeAliasDeclaration>;
 
 type NullishName = "null" | "undefined";
 const NULLISH: ReadonlySet<NullishName> = new Set(["null", "undefined"]);
@@ -1142,7 +1177,13 @@ export class SchemaGenerator {
     // accept-anything fallback, so a tuple of `unknown` — reference-only
     // slots — read as a request for everything.
     if (ts.isTupleTypeNode(typeNode)) {
-      return this.#lowerTuple(typeNode, checker, context, "authored");
+      return this.#lowerTuple(
+        typeNode,
+        checker,
+        context,
+        "authored",
+        new Set(),
+      );
     }
 
     // An intersection of object types merges the way IntersectionFormatter
@@ -1337,21 +1378,37 @@ export class SchemaGenerator {
   }
 
   /**
-   * A tuple lowered to an array of its element union: an element's schema
-   * as `#analyzeChildNode` gives it; a rest element's array — a named
-   * tuple's read through its reference — contributing its items; an
-   * optional element admitting `undefined` as well, since an omitted one
-   * reads as `undefined` and the type-based path admits it into the items
-   * union. Under `"required"` the tuple is lowered as `Required<T>` sees it:
-   * an optional element is made plain and, like a rest element's items,
-   * loses `undefined` from its own type, while a plain element keeps an
-   * authored `undefined`.
+   * A tuple lowered to an array of its element union — see `#tupleItems`.
    */
   #lowerTuple(
     tuple: ts.TupleTypeNode,
     checker: ts.TypeChecker,
     context: GenerationContext,
     mode: "authored" | "required",
+    opened: OpenedAliases,
+  ): MutableJSONSchema {
+    return {
+      type: "array",
+      items: this.#tupleItems(tuple, checker, context, mode, opened),
+    };
+  }
+
+  /**
+   * The union of a tuple's elements: an element's schema as
+   * `#analyzeChildNode` gives it; a rest element contributing what lies
+   * behind it (`#restItems`); an optional element admitting `undefined` as
+   * well, since an omitted one reads as `undefined` and the type-based path
+   * admits it into the items union. Under `"required"` the tuple is read as
+   * `Required<T>` reads it: an optional element is made plain and loses
+   * `undefined` from its own type, while a plain element keeps an authored
+   * `undefined`.
+   */
+  #tupleItems(
+    tuple: ts.TupleTypeNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+    mode: "authored" | "required",
+    opened: OpenedAliases,
   ): MutableJSONSchema {
     const elementSchemas: MutableJSONSchema[] = [];
     for (const element of tuple.elements) {
@@ -1365,43 +1422,122 @@ export class SchemaGenerator {
           ts.isRestTypeNode(element) || ts.isOptionalTypeNode(element)
         ? element.type
         : element;
-      let schema = this.#analyzeChildNode(inner, checker, context);
       if (rest) {
-        const array = resolveLocalRef(schema, context);
-        if (isArraySchema(array) && array.items !== undefined) {
-          schema = array.items as MutableJSONSchema;
-        }
+        elementSchemas.push(
+          ...this.#restItems(inner, checker, context, mode, opened),
+        );
+        continue;
       }
-      if (mode === "required" && (optional || rest)) {
-        schema = withoutUndefined(schema, context);
-      }
-      elementSchemas.push(schema);
+      const schema = this.#analyzeChildNode(inner, checker, context);
+      elementSchemas.push(
+        optional && mode === "required"
+          ? withoutUndefined(schema, context)
+          : schema,
+      );
       if (optional && mode === "authored") {
         elementSchemas.push({ type: "undefined" });
       }
     }
-    return { type: "array", items: unionOfSchemas(elementSchemas) };
+    return unionOfSchemas(elementSchemas);
   }
 
   /**
-   * The tuple type node `node` denotes, through parentheses, a `readonly`
-   * operator, and a reference to a non-generic alias declared as one; or
-   * `undefined` when `node` denotes no tuple the rules can open — a generic
-   * alias, an imported or unresolvable name, an array.
+   * What a rest element spreads into a tuple. A spread tuple — opened
+   * through parentheses, `readonly`, and aliases — expands into its own
+   * elements, each keeping its own optionality under `"required"`, and a
+   * union of them into each member's. Anything else is an array: its
+   * items, read through a reference and a union of arrays, and, under
+   * `"required"`, without `undefined`, as an array's elements count as
+   * optional.
    */
-  #tupleNodeOf(
+  #restItems(
     node: ts.TypeNode,
     checker: ts.TypeChecker,
     context: GenerationContext,
-  ): ts.TupleTypeNode | undefined {
+    mode: "authored" | "required",
+    opened: OpenedAliases,
+  ): MutableJSONSchema[] {
+    const behind = this.#openTypeNode(node, checker, context, opened);
+    if (ts.isUnionTypeNode(behind.node)) {
+      return behind.node.types.flatMap((member) =>
+        this.#restItems(member, checker, context, mode, behind.opened)
+      );
+    }
+    if (ts.isTupleTypeNode(behind.node)) {
+      return [
+        this.#tupleItems(behind.node, checker, context, mode, behind.opened),
+      ];
+    }
+    return unionArms(this.#analyzeChildNode(node, checker, context), context)
+      .map((arm) => {
+        const items = isArraySchema(arm) && arm.items !== undefined
+          ? arm.items as MutableJSONSchema
+          : arm;
+        return mode === "required" ? withoutUndefined(items, context) : items;
+      });
+  }
+
+  /**
+   * `Required<T>` applied to `node`. The node is read rather than its
+   * schema wherever the schema has already lost what `Required` acts on:
+   * a tuple's element optionality, which a union or a spread would
+   * otherwise carry into the positionless items form. So a union is viewed
+   * member by member and a tuple is lowered under `"required"`, aliases
+   * opened along the way; anything else maps its schema's arms.
+   */
+  #requiredView(
+    node: ts.TypeNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+    opened: OpenedAliases,
+  ): MutableJSONSchema {
+    const behind = this.#openTypeNode(node, checker, context, opened);
+    if (ts.isUnionTypeNode(behind.node)) {
+      return unionOfSchemas(
+        behind.node.types.map((member) =>
+          this.#requiredView(member, checker, context, behind.opened)
+        ),
+      );
+    }
+    if (ts.isTupleTypeNode(behind.node)) {
+      return this.#lowerTuple(
+        behind.node,
+        checker,
+        context,
+        "required",
+        behind.opened,
+      );
+    }
+    return mapArms(
+      this.#analyzeChildNode(node, checker, context),
+      context,
+      (arm) => requiredArm(arm, context),
+    );
+  }
+
+  /**
+   * The type node behind `node`: parentheses and `readonly` stripped, and a
+   * reference to a non-generic alias replaced by what the alias declares,
+   * followed as far as it goes, so a spread or a union member is read as the
+   * checker reads it. `opened` names the aliases already on this path; one
+   * met again is left as the reference it is, so a circular alias — an
+   * error the checker reports — cannot send this in a loop. A node the
+   * rules cannot open (a generic alias, an imported or unresolvable name) is
+   * returned as it came.
+   */
+  #openTypeNode(
+    node: ts.TypeNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+    opened: OpenedAliases,
+  ): { node: ts.TypeNode; opened: OpenedAliases } {
     const unwrapped = unwrapTypeNode(node);
-    if (ts.isTupleTypeNode(unwrapped)) return unwrapped;
     if (
       !ts.isTypeReferenceNode(unwrapped) ||
       !ts.isIdentifier(unwrapped.typeName) ||
       unwrapped.typeArguments !== undefined
     ) {
-      return undefined;
+      return { node: unwrapped, opened };
     }
     const declaration = this.#resolveTypeName(
       unwrapped,
@@ -1409,11 +1545,18 @@ export class SchemaGenerator {
       checker,
       context,
     )?.declarations?.find(ts.isTypeAliasDeclaration);
-    if (declaration === undefined || declaration.typeParameters !== undefined) {
-      return undefined;
+    if (
+      declaration === undefined || declaration.typeParameters !== undefined ||
+      opened.has(declaration)
+    ) {
+      return { node: unwrapped, opened };
     }
-    const declared = unwrapTypeNode(declaration.type);
-    return ts.isTupleTypeNode(declared) ? declared : undefined;
+    return this.#openTypeNode(
+      declaration.type,
+      checker,
+      context,
+      new Set([...opened, declaration]),
+    );
   }
 
   /**
@@ -1537,39 +1680,9 @@ export class SchemaGenerator {
       case "Partial":
         // An array's elements count as optional, so each admits `undefined`;
         // a tuple's do the same, every element made optional.
-        return mapArms(analyze(first), context, (arm) => {
-          if (arm.type === "array") {
-            return {
-              ...arm,
-              items: unionOfSchemas([
-                (arm.items as MutableJSONSchema | undefined) ?? true,
-                { type: "undefined" },
-              ]),
-            };
-          }
-          const { required: _required, ...rest } = arm;
-          return rest;
-        });
-      case "Required": {
-        // A tuple is lowered from its node, which still tells an optional
-        // element's `undefined` from an authored one; an array's elements
-        // count as optional and lose `undefined`.
-        const tuple = this.#tupleNodeOf(first, checker, context);
-        if (tuple !== undefined) {
-          return this.#lowerTuple(tuple, checker, context, "required");
-        }
-        return mapArms(analyze(first), context, (arm) => {
-          if (arm.type === "array") {
-            return arm.items === undefined ? arm : {
-              ...arm,
-              items: withoutUndefined(arm.items as MutableJSONSchema, context),
-            };
-          }
-          return isObjectOrArray(arm.properties)
-            ? { ...arm, required: Object.keys(arm.properties) }
-            : arm;
-        });
-      }
+        return mapArms(analyze(first), context, partialArm);
+      case "Required":
+        return this.#requiredView(first, checker, context, new Set());
       case "Pick":
       case "Omit": {
         if (second === undefined) return undefined;

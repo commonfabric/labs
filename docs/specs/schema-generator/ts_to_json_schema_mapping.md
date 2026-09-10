@@ -85,8 +85,9 @@ with `questionToken` optionality; string/number index signatures →
 `additionalProperties`, first non-undefined wins, no JSDoc),
 `readonly` type-operator nodes (analyze the wrapped type), parenthesized
 nodes (unwrapped), `ArrayTypeNode`, tuples (an array of the element union,
-`undefined` admitted for an optional element, a rest element contributing its
-array's items, a named tuple's read through its reference — the same lossy
+`undefined` admitted for an optional element, a rest element contributing
+what lies behind it: a spread tuple's elements, each member's for a union of
+tuples, else an array's items read through a reference — the same lossy
 form as the type path), intersections of object types
 (merged as `IntersectionFormatter` merges them, a named constituent read
 through its reference), unions (`true` member short-circuits, `false`
@@ -117,21 +118,26 @@ a copy of the definition its argument refers to; the shared `Foo` definition
 other consumers read is untouched. `Partial<Foo>` and `Required<Foo>` map
 over each arm's own keys and so distribute over a union, arm by arm; on an
 array they map the elements, which count as optional: `Partial` admits
-`undefined` into the items, `Required` removes it. A tuple under `Required`
-is lowered from its node — through parentheses, `readonly`, and a reference
-to a non-generic alias declared as one — so an optional element's
-`undefined` goes while a plain element's authored `undefined` stays; a tuple
-the rules cannot open that way is treated as an array. `Pick` and `Omit` map
+`undefined` into the items, `Required` removes it. `Required` reads its
+argument node wherever the schema has already lost the optionality it acts
+on: a union is viewed member by member, a tuple is lowered from its node,
+and a spread tuple expands into its own elements — aliases opened along the
+way, through parentheses and `readonly`, a circular one only once — so an
+optional element's `undefined` goes while a plain element's authored
+`undefined` stays, spread or in a union alike; a tuple the rules cannot
+open that way (a generic alias) is treated as an array. `Pick` and `Omit` map
 over `keyof T`, and the keys of a union are the keys every arm has, so
 `Pick<A | B, K>` and `Omit<A | B, K>` are one object over the surface the
 arms share: a property accepts what any arm's does and is required only
 where every arm that names it requires it, so `Omit<A | B, "kind">` keeps
 neither arm's own members and a `Pick` of correlated arms no longer pairs
-their values. An index signature (`additionalProperties`) covers every key:
-a key an arm has only through one takes the signature's schema and casts no
-vote on being required, and an `Omit` from a surface every arm covers that
-way keeps just the signature, the named members dissolving into it as they
-do in `keyof T`. A `Pick` naming a key some arm lacks, or a union with an
+their values. An index signature (`additionalProperties`, present — a
+schema, `true`, or `false` for a `never`-valued one, which covers every key
+just the same; a closed object carries none) covers every key: a key an arm
+has only through one takes the signature's schema and casts no vote on
+being required, and an `Omit` from a surface every arm covers that way
+keeps just the signature, the named members dissolving into it as they do
+in `keyof T`. A `Pick` naming a key some arm lacks, or a union with an
 arm that is no object, keeps the general path. Unions these rules build —
 a tuple's items, a shared property, a merged signature — fold equal arms by
 value-model equality (`dedupeByValueEqual`), flatten a bare nested union,

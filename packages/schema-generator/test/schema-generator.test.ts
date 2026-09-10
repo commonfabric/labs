@@ -565,6 +565,10 @@ type CalculatorRequest = {
       "type ExplicitU = [string | undefined];",
       "type RO = readonly [string, number?];",
       "type Gen<T> = [T?];",
+      "type Never = Record<string, never>;",
+      "type Tail = [string | undefined];",
+      "type TU = [Foo, string | undefined] | [number];",
+      "type Loop = [string] | Loop;",
     ].join("\n");
     const generateNamed = async (node: ts.TypeNode) => {
       const { checker, sourceFile } = await createTestProgram(NAMED);
@@ -900,10 +904,11 @@ type CalculatorRequest = {
       });
     });
 
-    it("opens a rest element's array through its reference", async () => {
-      // A named tuple analyzes to a reference; the rest element contributes
-      // the items behind it, an optional element's `undefined` included.
-      // A rest element's own union of elements lies flat in the items.
+    it("opens a rest element's tuple through its reference", async () => {
+      // A named tuple is opened to its declaration and spread element by
+      // element, an optional element's `undefined` included, rather than
+      // contributed as the reference it analyzes to. A rest element's own
+      // union of elements lies flat in the items.
       const schemaOf = async (node: ts.TypeNode) =>
         ((await generateNamed(node)) as { schema: unknown }).schema;
       expect(
@@ -916,7 +921,11 @@ type CalculatorRequest = {
       ).toEqual({
         type: "array",
         items: {
-          anyOf: [{ $ref: "#/$defs/Foo" }, { type: ["number", "string"] }],
+          anyOf: [
+            { $ref: "#/$defs/Foo" },
+            { type: "string" },
+            { type: "number" },
+          ],
         },
       });
       expect(
@@ -931,7 +940,9 @@ type CalculatorRequest = {
         items: {
           anyOf: [
             { $ref: "#/$defs/Foo" },
-            { type: ["number", "string", "undefined"] },
+            { type: "string" },
+            { type: "number" },
+            { type: "undefined" },
           ],
         },
       });
@@ -1136,6 +1147,228 @@ type CalculatorRequest = {
       expect(
         await schemaOf(alias("Required", alias("Gen", stringNode()))),
       ).toEqual({ type: "array", items: {} });
+    });
+
+    it("keeps a never-valued signature's key surface", async () => {
+      // `additionalProperties: false` is a `never`-valued index signature —
+      // this generator writes nothing for a closed object — and its keys
+      // are still keys: picked, they hold nothing; omitted from, the
+      // signature stays; beside a named arm, the name and its requirement
+      // survive.
+      const key = (text: string) =>
+        f.createLiteralTypeNode(f.createStringLiteral(text));
+      const schemaOf = async (node: ts.TypeNode) =>
+        ((await generateNamed(node)) as { schema: unknown }).schema;
+      const topicOnly = {
+        type: "object",
+        properties: { topic: { type: "unknown" } },
+        required: ["topic"],
+      };
+      expect(
+        await schemaOf(
+          alias(
+            "Pick",
+            f.createUnionTypeNode([
+              alias("Never"),
+              literal([["topic", unknownNode()]]),
+            ]),
+            key("topic"),
+          ),
+        ),
+      ).toEqual(topicOnly);
+      expect(
+        await schemaOf(
+          alias(
+            "Omit",
+            f.createUnionTypeNode([
+              alias("Never"),
+              literal([["topic", unknownNode()]]),
+            ]),
+            key("unused"),
+          ),
+        ),
+      ).toEqual(topicOnly);
+      expect(await schemaOf(alias("Pick", alias("Never"), key("x")))).toEqual({
+        type: "object",
+        properties: { x: false },
+        required: ["x"],
+      });
+      expect(await schemaOf(alias("Omit", alias("Never"), key("x")))).toEqual({
+        type: "object",
+        properties: {},
+        additionalProperties: false,
+      });
+      // `keyof (Foo | Never)` is Foo's keys; omitting them all leaves `{}`.
+      expect(
+        await schemaOf(
+          alias(
+            "Omit",
+            f.createUnionTypeNode([alias("Foo"), alias("Never")]),
+            f.createUnionTypeNode([key("x"), key("y")]),
+          ),
+        ),
+      ).toEqual({ type: "object", properties: {} });
+    });
+
+    it("keeps an authored `undefined` through a spread and a union under `Required`", async () => {
+      // A spread tuple expands into its own elements, each with its own
+      // optionality; a union is viewed member by member. Neither turns a
+      // plain element's authored `undefined` into optionality to remove.
+      const schemaOf = async (node: ts.TypeNode) =>
+        ((await generateNamed(node)) as { schema: unknown }).schema;
+      const undefinedNode = () =>
+        f.createKeywordTypeNode(ts.SyntaxKind.UndefinedKeyword);
+      const numberNode = () =>
+        f.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword);
+      const fooThenTail = {
+        type: "array",
+        items: {
+          anyOf: [{ $ref: "#/$defs/Foo" }, { type: ["string", "undefined"] }],
+        },
+      };
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              alias("Foo"),
+              f.createRestTypeNode(alias("Tail")),
+            ]),
+          ),
+        ),
+      ).toEqual(fooThenTail);
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              alias("Foo"),
+              f.createRestTypeNode(
+                f.createTupleTypeNode([
+                  f.createUnionTypeNode([stringNode(), undefinedNode()]),
+                ]),
+              ),
+            ]),
+          ),
+        ),
+      ).toEqual({
+        type: "array",
+        items: {
+          anyOf: [
+            { $ref: "#/$defs/Foo" },
+            { type: "string" },
+            { type: "undefined" },
+          ],
+        },
+      });
+      const fooThenTailOrNumber = {
+        anyOf: [fooThenTail, { type: "array", items: { type: "number" } }],
+      };
+      expect(await schemaOf(alias("Required", alias("TU")))).toEqual(
+        fooThenTailOrNumber,
+      );
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createUnionTypeNode([
+              f.createTupleTypeNode([
+                alias("Foo"),
+                f.createUnionTypeNode([stringNode(), undefinedNode()]),
+              ]),
+              f.createTupleTypeNode([numberNode()]),
+            ]),
+          ),
+        ),
+      ).toEqual({
+        anyOf: [
+          {
+            type: "array",
+            items: {
+              anyOf: [
+                { $ref: "#/$defs/Foo" },
+                { type: "string" },
+                { type: "undefined" },
+              ],
+            },
+          },
+          { type: "array", items: { type: "number" } },
+        ],
+      });
+      // Optionality, spread or in a union, still goes.
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              alias("Foo"),
+              f.createRestTypeNode(alias("OptPair")),
+            ]),
+          ),
+        ),
+      ).toEqual({
+        type: "array",
+        items: {
+          anyOf: [
+            { $ref: "#/$defs/Foo" },
+            { type: "string" },
+            { type: "number" },
+          ],
+        },
+      });
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createUnionTypeNode([
+              f.createTupleTypeNode([f.createOptionalTypeNode(alias("Foo"))]),
+              f.createTupleTypeNode([f.createOptionalTypeNode(numberNode())]),
+            ]),
+          ),
+        ),
+      ).toEqual({
+        anyOf: [
+          { type: "array", items: { $ref: "#/$defs/Foo" } },
+          { type: "array", items: { type: "number" } },
+        ],
+      });
+      // A circular alias — an error the checker reports — is opened once;
+      // met again it is the reference it is, which the checker types as
+      // anything.
+      expect(await generateNamed(alias("Required", alias("Loop")))).toBe(true);
+    });
+
+    it("opens a rest element over a union of tuples", async () => {
+      // `[Foo, ...(Tail | [number])]` is a union of tuples to the checker;
+      // in the positionless items form, each tuple's elements lie flat.
+      const schemaOf = async (node: ts.TypeNode) =>
+        ((await generateNamed(node)) as { schema: unknown }).schema;
+      expect(
+        await schemaOf(
+          f.createTupleTypeNode([
+            alias("Foo"),
+            f.createRestTypeNode(
+              f.createParenthesizedType(
+                f.createUnionTypeNode([
+                  alias("Tail"),
+                  f.createTupleTypeNode([
+                    f.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword),
+                  ]),
+                ]),
+              ),
+            ),
+          ]),
+        ),
+      ).toEqual({
+        type: "array",
+        items: {
+          anyOf: [
+            { $ref: "#/$defs/Foo" },
+            { type: ["string", "undefined"] },
+            { type: "number" },
+          ],
+        },
+      });
     });
 
     it("folds equal arms by value, whatever their key order", async () => {
