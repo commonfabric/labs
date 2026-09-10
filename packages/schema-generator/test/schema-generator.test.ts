@@ -555,6 +555,16 @@ type CalculatorRequest = {
       'type Nested = Either | { payload: unknown; kind: "c" };',
       'type Correlated = { first: "a"; second: 1 } | { first: "b"; second: 2 };',
       "type Loose = { x?: unknown; y: string } | { x: unknown; y?: string };",
+      "type Rec = Record<string, string>;",
+      "type RecU = Record<string, unknown>;",
+      "type RecO = Record<string, { topic: unknown }>;",
+      "type XOpt = { x?: unknown; y: string };",
+      "type Mixed = { x: unknown; y: string; [k: string]: unknown };",
+      "type Pair = [string, number];",
+      "type OptPair = [string, number?];",
+      "type ExplicitU = [string | undefined];",
+      "type RO = readonly [string, number?];",
+      "type Gen<T> = [T?];",
     ].join("\n");
     const generateNamed = async (node: ts.TypeNode) => {
       const { checker, sourceFile } = await createTestProgram(NAMED);
@@ -783,6 +793,372 @@ type CalculatorRequest = {
           ),
         )) as { schema: unknown }).schema,
       ).toEqual(generalObject);
+    });
+
+    it("keeps an index signature through `Pick` and `Omit`", async () => {
+      // An index signature covers every key: a `Pick` of a key it covers
+      // takes its schema, an `Omit` from a surface it covers keeps only the
+      // signature — the named members fall inside it, as in `keyof T`.
+      const key = (text: string) =>
+        f.createLiteralTypeNode(f.createStringLiteral(text));
+      const schemaOf = async (node: ts.TypeNode) =>
+        ((await generateNamed(node)) as { schema: unknown }).schema;
+      expect(await schemaOf(alias("Omit", alias("Rec"), key("x")))).toEqual({
+        type: "object",
+        properties: {},
+        additionalProperties: { type: "string" },
+      });
+      expect(await schemaOf(alias("Pick", alias("RecU"), key("x")))).toEqual({
+        type: "object",
+        properties: { x: { type: "unknown" } },
+        required: ["x"],
+      });
+      expect(await schemaOf(alias("Omit", alias("RecO"), key("x")))).toEqual({
+        type: "object",
+        properties: {},
+        additionalProperties: {
+          type: "object",
+          properties: { topic: { type: "unknown" } },
+          required: ["topic"],
+        },
+      });
+      expect(await schemaOf(alias("Omit", alias("Mixed"), key("z")))).toEqual({
+        type: "object",
+        properties: {},
+        additionalProperties: { type: "unknown" },
+      });
+      expect(await schemaOf(alias("Pick", alias("Mixed"), key("x")))).toEqual({
+        type: "object",
+        properties: { x: { type: "unknown" } },
+        required: ["x"],
+      });
+    });
+
+    it("reads a union's shared surface through an indexed arm", async () => {
+      // A key an arm covers only by its signature takes the signature's
+      // schema there and casts no vote on being required; the arms that
+      // name it decide that. `unknown` stays beside the other arm's schema,
+      // as it does in every union this path builds.
+      const key = (text: string) =>
+        f.createLiteralTypeNode(f.createStringLiteral(text));
+      const schemaOf = async (node: ts.TypeNode) =>
+        ((await generateNamed(node)) as { schema: unknown }).schema;
+      const stringOrUnknown = {
+        anyOf: [{ type: "string" }, { type: "unknown" }],
+      };
+      expect(
+        await schemaOf(
+          alias(
+            "Omit",
+            f.createUnionTypeNode([alias("Foo"), alias("RecU")]),
+            key("z"),
+          ),
+        ),
+      ).toEqual({
+        type: "object",
+        properties: { x: { type: "unknown" }, y: stringOrUnknown },
+        required: ["x", "y"],
+      });
+      expect(
+        await schemaOf(
+          alias(
+            "Pick",
+            f.createUnionTypeNode([alias("Rec"), alias("Foo")]),
+            key("x"),
+          ),
+        ),
+      ).toEqual({
+        type: "object",
+        properties: { x: stringOrUnknown },
+        required: ["x"],
+      });
+      expect(
+        await schemaOf(
+          alias(
+            "Omit",
+            f.createUnionTypeNode([alias("XOpt"), alias("RecU")]),
+            key("z"),
+          ),
+        ),
+      ).toEqual({
+        type: "object",
+        properties: { x: { type: "unknown" }, y: stringOrUnknown },
+        required: ["y"],
+      });
+      expect(
+        await schemaOf(
+          alias(
+            "Omit",
+            f.createUnionTypeNode([alias("Rec"), alias("RecU")]),
+            key("x"),
+          ),
+        ),
+      ).toEqual({
+        type: "object",
+        properties: {},
+        additionalProperties: stringOrUnknown,
+      });
+    });
+
+    it("opens a rest element's array through its reference", async () => {
+      // A named tuple analyzes to a reference; the rest element contributes
+      // the items behind it, an optional element's `undefined` included.
+      // A rest element's own union of elements lies flat in the items.
+      const schemaOf = async (node: ts.TypeNode) =>
+        ((await generateNamed(node)) as { schema: unknown }).schema;
+      expect(
+        await schemaOf(
+          f.createTupleTypeNode([
+            alias("Foo"),
+            f.createRestTypeNode(alias("Pair")),
+          ]),
+        ),
+      ).toEqual({
+        type: "array",
+        items: {
+          anyOf: [{ $ref: "#/$defs/Foo" }, { type: ["number", "string"] }],
+        },
+      });
+      expect(
+        await schemaOf(
+          f.createTupleTypeNode([
+            alias("Foo"),
+            f.createRestTypeNode(alias("OptPair")),
+          ]),
+        ),
+      ).toEqual({
+        type: "array",
+        items: {
+          anyOf: [
+            { $ref: "#/$defs/Foo" },
+            { type: ["number", "string", "undefined"] },
+          ],
+        },
+      });
+      expect(
+        await schemaOf(
+          f.createTupleTypeNode([
+            alias("Foo"),
+            f.createRestTypeNode(
+              f.createArrayTypeNode(
+                f.createParenthesizedType(
+                  f.createUnionTypeNode([
+                    stringNode(),
+                    f.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword),
+                  ]),
+                ),
+              ),
+            ),
+          ]),
+        ),
+      ).toEqual({
+        type: "array",
+        items: {
+          anyOf: [
+            { $ref: "#/$defs/Foo" },
+            { type: "string" },
+            { type: "number" },
+          ],
+        },
+      });
+    });
+
+    it("applies `Partial` and `Required` to an array's elements", async () => {
+      // An array's elements count as optional: `Partial` admits `undefined`
+      // into them, `Required` removes it — and only it.
+      const schemaOf = async (node: ts.TypeNode) =>
+        ((await generateNamed(node)) as { schema: unknown }).schema;
+      const undefinedNode = () =>
+        f.createKeywordTypeNode(ts.SyntaxKind.UndefinedKeyword);
+      const fooOrUndefined = {
+        type: "array",
+        items: { anyOf: [{ $ref: "#/$defs/Foo" }, { type: "undefined" }] },
+      };
+      expect(
+        await schemaOf(alias("Partial", f.createArrayTypeNode(alias("Foo")))),
+      ).toEqual(fooOrUndefined);
+      expect(
+        await schemaOf(
+          alias(
+            "Partial",
+            f.createTypeOperatorNode(
+              ts.SyntaxKind.ReadonlyKeyword,
+              f.createArrayTypeNode(alias("Foo")),
+            ),
+          ),
+        ),
+      ).toEqual(fooOrUndefined);
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createArrayTypeNode(
+              f.createParenthesizedType(
+                f.createUnionTypeNode([alias("Foo"), undefinedNode()]),
+              ),
+            ),
+          ),
+        ),
+      ).toEqual({ type: "array", items: { $ref: "#/$defs/Foo" } });
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createArrayTypeNode(
+              f.createParenthesizedType(
+                f.createUnionTypeNode([
+                  alias("Foo"),
+                  f.createLiteralTypeNode(f.createNull()),
+                  undefinedNode(),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      ).toEqual({
+        type: "array",
+        items: { anyOf: [{ $ref: "#/$defs/Foo" }, { type: "null" }] },
+      });
+      // Nothing to remove, an interface rather than an alias to open.
+      expect(
+        await schemaOf(alias("Required", alias("Array", stringNode()))),
+      ).toEqual({ type: "array", items: { type: "string" } });
+      // Distributes, an arm of each kind.
+      expect(
+        await schemaOf(
+          alias(
+            "Partial",
+            f.createUnionTypeNode([
+              f.createArrayTypeNode(alias("Foo")),
+              alias("Foo"),
+            ]),
+          ),
+        ),
+      ).toEqual({
+        anyOf: [
+          fooOrUndefined,
+          {
+            type: "object",
+            properties: { x: { type: "unknown" }, y: { type: "string" } },
+          },
+        ],
+      });
+    });
+
+    it("lowers a tuple under `Required` from its node", async () => {
+      // Only the node still tells an optional element's `undefined` from an
+      // authored one: the optional element loses both, the plain element
+      // keeps what it authored, a rest element's items lose `undefined`. The
+      // node is reached through parentheses, `readonly`, and a reference to
+      // a non-generic alias declared as a tuple.
+      const schemaOf = async (node: ts.TypeNode) =>
+        ((await generateNamed(node)) as { schema: unknown }).schema;
+      const undefinedNode = () =>
+        f.createKeywordTypeNode(ts.SyntaxKind.UndefinedKeyword);
+      const numberNode = () =>
+        f.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword);
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([f.createOptionalTypeNode(alias("Foo"))]),
+          ),
+        ),
+      ).toEqual({ type: "array", items: { $ref: "#/$defs/Foo" } });
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              f.createOptionalTypeNode(
+                f.createParenthesizedType(
+                  f.createUnionTypeNode([stringNode(), undefinedNode()]),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ).toEqual({ type: "array", items: { type: "string" } });
+      expect(await schemaOf(alias("Required", alias("ExplicitU")))).toEqual({
+        type: "array",
+        items: { type: ["string", "undefined"] },
+      });
+      const stringOrNumber = {
+        type: "array",
+        items: { anyOf: [{ type: "string" }, { type: "number" }] },
+      };
+      expect(await schemaOf(alias("Required", alias("OptPair")))).toEqual(
+        stringOrNumber,
+      );
+      expect(await schemaOf(alias("Required", alias("RO")))).toEqual(
+        stringOrNumber,
+      );
+      expect(
+        await schemaOf(
+          alias("Required", f.createParenthesizedType(alias("OptPair"))),
+        ),
+      ).toEqual(stringOrNumber);
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              stringNode(),
+              f.createOptionalTypeNode(numberNode()),
+              f.createRestTypeNode(
+                f.createArrayTypeNode(
+                  f.createParenthesizedType(
+                    f.createUnionTypeNode([
+                      f.createKeywordTypeNode(ts.SyntaxKind.BooleanKeyword),
+                      undefinedNode(),
+                    ]),
+                  ),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ).toEqual({
+        type: "array",
+        items: {
+          anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }],
+        },
+      });
+      // `Partial` needs no node: every element admits `undefined`.
+      expect(await schemaOf(alias("Partial", alias("Pair")))).toEqual({
+        type: "array",
+        items: {
+          anyOf: [{ type: ["number", "string"] }, { type: "undefined" }],
+        },
+      });
+      // A generic alias is not opened; the general path reads its
+      // uninstantiated declaration, as it does for any generic reference.
+      expect(
+        await schemaOf(alias("Required", alias("Gen", stringNode()))),
+      ).toEqual({ type: "array", items: {} });
+    });
+
+    it("folds equal arms by value, whatever their key order", async () => {
+      // Two elements that are the same object type spelled with their
+      // members in a different order are one arm, as every union this
+      // package builds folds them. (Optional members, so no `required`
+      // list: that is an array, and an array's order is part of its value.)
+      const schemaOf = async (node: ts.TypeNode) =>
+        ((await generateNamed(node)) as { schema: unknown }).schema;
+      expect(
+        await schemaOf(
+          f.createTupleTypeNode([
+            literal([["a", unknownNode(), true], ["b", stringNode(), true]]),
+            literal([["b", stringNode(), true], ["a", unknownNode(), true]]),
+          ]),
+        ),
+      ).toEqual({
+        type: "array",
+        items: {
+          type: "object",
+          properties: { a: { type: "unknown" }, b: { type: "string" } },
+        },
+      });
     });
 
     it("merges named constituents of an intersection through their references", async () => {

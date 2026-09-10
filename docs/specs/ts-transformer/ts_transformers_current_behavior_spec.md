@@ -2109,8 +2109,9 @@ Special path:
 - the node-based generator also applies the default library's generic
   aliases (`Readonly`, `Partial`, `Required`, `Pick`, `Omit`, `NonNullable`,
   `Array`, `ReadonlyArray`, `Record`) to their arguments, lowers a tuple to an
-  array of its element union (`undefined` admitted for an optional element),
-  merges an intersection of object types, and unwraps parentheses. A
+  array of its element union (`undefined` admitted for an optional element, a
+  rest element contributing its array's items), merges an intersection of
+  object types, and unwraps parentheses. A
   pattern-scope `.get()` on a `Cell<{ topic: unknown; title: string }>`
   lowers to a lift with result type `Readonly<{ topic: unknown; title:
   string }>` and a result schema that keeps both members; a tuple view of
