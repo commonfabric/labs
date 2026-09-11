@@ -416,6 +416,16 @@ export const startSessionCommand = handler<void, {
 // The pattern
 //
 
+/** The ids of the sources the connector runs whose driver can start a
+ * session, for the start's own check. */
+const configuredSourcesOf = lift((
+  { index }: { index?: StartableSourcesView },
+): string[] =>
+  (index?.sources ?? []).flatMap((source) =>
+    source?.id && source.capabilities?.startSession === true ? [source.id] : []
+  )
+);
+
 export default pattern<WorkbenchInput, WorkbenchOutput>(
   (
     {

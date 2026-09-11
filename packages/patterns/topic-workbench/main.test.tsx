@@ -262,6 +262,7 @@ export default pattern(() => {
       ) === JSON.stringify([
         { label: "claude  (claude-agent-sdk)", value: "claude" },
         { label: "acp-lab  (acp)", value: "acp-lab" },
+        { label: "gemini  (acp, not on this Mac)", value: "gemini" },
       ]) &&
     findNode(
         wb[UI],

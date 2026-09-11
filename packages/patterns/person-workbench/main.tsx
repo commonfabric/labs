@@ -27,6 +27,7 @@ import {
   type SessionIndexView,
   type SessionRow,
   sessionRowsOf,
+  type ShownHarness,
   sourceOptionsOf,
 } from "../topic-workbench/main.tsx";
 import type {
@@ -99,6 +100,10 @@ export interface PersonWorkbenchInput {
   attached?: Writable<Attachment[] | Default<[]>>;
   /** The command queue the connector's host binds for this piece. */
   commands?: Writable<CommandValue[] | Default<[]>>;
+  /** The permission mode a started session's first turn runs under. */
+  startMode?: string | Default<"">;
+  /** Harnesses listed in the picker that no configured source backs. */
+  harnessesShown?: ShownHarness[] | Default<[]>;
 }
 
 export interface PersonWorkbenchOutput {
@@ -297,15 +302,20 @@ export const startWorkstreamSession = handler<void, {
   spawnRoot: Writable<string>;
   spawnSource: Writable<string>;
   sourceOptions: CheckoutOption[];
+  configuredSources: string[];
   kickoff: string;
   ownerDid: string;
   card: WorkstreamCard | undefined;
+  startMode: string;
 }>((_, state) => {
   const sourceId = (state.spawnSource.get() || state.sourceOptions[0]?.value ||
     "").trim();
   if (!state.ownerDid || !sourceId || !state.card || !state.kickoff.trim()) {
     return;
   }
+  // A harness shown for display has no source to run it; starting is a no-op.
+  if (!state.configuredSources.includes(sourceId)) return;
+  const mode = state.startMode.trim();
   const nativeSessionId = mintSessionId();
   const createdAt = new Date().toISOString();
   const cwd = state.spawnRoot.get().trim();
@@ -322,6 +332,7 @@ export const startWorkstreamSession = handler<void, {
       text: state.kickoff,
       ...(cwd ? { cwd } : {}),
       title,
+      ...(mode ? { mode } : {}),
     },
   }));
   state.attached.set([
@@ -338,8 +349,25 @@ export const startWorkstreamSession = handler<void, {
 
 // ===== The pattern =====
 
+/** The ids of the sources the connector runs, for the start's own check. */
+const configuredSourcesOf = lift((
+  { index }: { index?: SessionIndexView },
+): string[] =>
+  (index?.sources ?? []).flatMap((source) => source?.id ? [source.id] : [])
+);
+
 export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
-  ({ snapshot, person, sessions, attached, commands }) => {
+  (
+    {
+      snapshot,
+      person,
+      sessions,
+      attached,
+      commands,
+      startMode,
+      harnessesShown,
+    },
+  ) => {
     const spawnPrompt = new Writable.perSession("");
     const spawnRoot = new Writable.perSession("");
     const spawnSource = new Writable.perSession("");
@@ -358,7 +386,12 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
     const workstreamOptions = workstreamOptionsOf({ cards });
     const card = pickedOf({ cards, picked: spawnWorkstream });
     const kickoff = kickoffOf({ prompt: spawnPrompt, card });
-    const sourceOptions = sourceOptionsOf({ index: sessions });
+    const sourceOptions = sourceOptionsOf({
+      index: sessions,
+      shown: harnessesShown,
+    });
+    const configuredSources = configuredSourcesOf({ index: sessions });
+    const mode = startMode ?? "";
     const checkoutOptions = checkoutOptionsOf({ index: sessions });
     const ownerDid = sessions?.ownerDid ?? "";
     const personName = computed(() => personRef?.name ?? (person ?? "").trim());
@@ -374,9 +407,11 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
       spawnRoot,
       spawnSource,
       sourceOptions,
+      configuredSources,
       kickoff,
       ownerDid,
       card,
+      startMode: mode,
     });
 
     const attach = action<AttachEvent>(
