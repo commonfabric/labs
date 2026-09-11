@@ -283,7 +283,8 @@ const kickoffOf = lift((
   ].join("\n\n");
 });
 
-const shellQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
+export const shellQuote = (s: string): string =>
+  `'${s.replace(/'/g, `'\\''`)}'`;
 
 /** The command to paste until the connector can start a session itself. */
 const spawnCommandOf = lift((
