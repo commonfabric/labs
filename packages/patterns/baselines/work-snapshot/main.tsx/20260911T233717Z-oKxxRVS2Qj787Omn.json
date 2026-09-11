@@ -1,0 +1,700 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "PersonRef": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "did": {
+            "type": "string"
+          },
+          "login": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "Pin": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "topic",
+              "pr"
+            ]
+          },
+          "pinnedAt": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "workstreamId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workstreamId",
+          "kind",
+          "url",
+          "title",
+          "pinnedAt"
+        ],
+        "type": "object"
+      },
+      "PullRequestRef": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "headRef": {
+            "type": "string"
+          },
+          "mergedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "number": {
+            "type": "number"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "open",
+              "draft",
+              "merged",
+              "closed"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo",
+          "number",
+          "title",
+          "state",
+          "url",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "Rename": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "renamedAt": {
+            "type": "number"
+          },
+          "workstreamId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workstreamId",
+          "name",
+          "renamedAt"
+        ],
+        "type": "object"
+      },
+      "TopicRef": {
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "commentCount": {
+            "type": "number"
+          },
+          "lastActivityAt": {
+            "type": "number"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "url"
+        ],
+        "type": "object"
+      },
+      "WorkSnapshot": {
+        "properties": {
+          "generatedAt": {
+            "type": "string"
+          },
+          "people": {
+            "items": {
+              "$ref": "#/$defs/PersonRef"
+            },
+            "type": "array"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "schema": {
+            "enum": [
+              "commonfabric.work-snapshot"
+            ],
+            "type": "string"
+          },
+          "window": {
+            "properties": {
+              "since": {
+                "type": "string"
+              },
+              "until": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "since",
+              "until"
+            ],
+            "type": "object"
+          },
+          "workstreams": {
+            "items": {
+              "$ref": "#/$defs/Workstream"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema",
+          "repository",
+          "window",
+          "generatedAt",
+          "people",
+          "workstreams"
+        ],
+        "type": "object"
+      },
+      "Workstream": {
+        "properties": {
+          "id": {
+            "description": "Stable across snapshots; the synthesis feeds the previous one back.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "people": {
+            "description": "Logins or names, as the people list spells them.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "prs": {
+            "items": {
+              "$ref": "#/$defs/PullRequestRef"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "topics": {
+            "items": {
+              "$ref": "#/$defs/TopicRef"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "summary",
+          "people",
+          "topics",
+          "prs"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "pins": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Pin"
+        },
+        "type": "array"
+      },
+      "renames": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Rename"
+        },
+        "type": "array"
+      },
+      "snapshot": {
+        "$ref": "#/$defs/WorkSnapshot",
+        "asCell": [
+          "cell"
+        ],
+        "default": {
+          "generatedAt": "",
+          "people": [],
+          "repository": "",
+          "schema": "commonfabric.work-snapshot",
+          "window": {
+            "since": "",
+            "until": ""
+          },
+          "workstreams": []
+        }
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "work-snapshot/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "PersonRef": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "did": {
+            "type": "string"
+          },
+          "login": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "Pin": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "topic",
+              "pr"
+            ]
+          },
+          "pinnedAt": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "workstreamId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workstreamId",
+          "kind",
+          "url",
+          "title",
+          "pinnedAt"
+        ],
+        "type": "object"
+      },
+      "PinEvent": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "topic",
+              "pr"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "workstreamId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workstreamId",
+          "kind",
+          "url"
+        ],
+        "type": "object"
+      },
+      "PublishEvent": {
+        "properties": {
+          "snapshot": {
+            "$ref": "#/$defs/WorkSnapshot"
+          }
+        },
+        "required": [
+          "snapshot"
+        ],
+        "type": "object"
+      },
+      "PullRequestRef": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "headRef": {
+            "type": "string"
+          },
+          "mergedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "number": {
+            "type": "number"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "open",
+              "draft",
+              "merged",
+              "closed"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo",
+          "number",
+          "title",
+          "state",
+          "url",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "Rename": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "renamedAt": {
+            "type": "number"
+          },
+          "workstreamId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workstreamId",
+          "name",
+          "renamedAt"
+        ],
+        "type": "object"
+      },
+      "RenameEvent": {
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "workstreamId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workstreamId",
+          "name"
+        ],
+        "type": "object"
+      },
+      "TopicRef": {
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "commentCount": {
+            "type": "number"
+          },
+          "lastActivityAt": {
+            "type": "number"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "url"
+        ],
+        "type": "object"
+      },
+      "UnpinEvent": {
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "workstreamId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workstreamId",
+          "url"
+        ],
+        "type": "object"
+      },
+      "WorkSnapshot": {
+        "properties": {
+          "generatedAt": {
+            "type": "string"
+          },
+          "people": {
+            "items": {
+              "$ref": "#/$defs/PersonRef"
+            },
+            "type": "array"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "schema": {
+            "enum": [
+              "commonfabric.work-snapshot"
+            ],
+            "type": "string"
+          },
+          "window": {
+            "properties": {
+              "since": {
+                "type": "string"
+              },
+              "until": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "since",
+              "until"
+            ],
+            "type": "object"
+          },
+          "workstreams": {
+            "items": {
+              "$ref": "#/$defs/Workstream"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema",
+          "repository",
+          "window",
+          "generatedAt",
+          "people",
+          "workstreams"
+        ],
+        "type": "object"
+      },
+      "Workstream": {
+        "properties": {
+          "id": {
+            "description": "Stable across snapshots; the synthesis feeds the previous one back.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "people": {
+            "description": "Logins or names, as the people list spells them.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "prs": {
+            "items": {
+              "$ref": "#/$defs/PullRequestRef"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "topics": {
+            "items": {
+              "$ref": "#/$defs/TopicRef"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "summary",
+          "people",
+          "topics",
+          "prs"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "generatedAt": {
+        "type": "string"
+      },
+      "people": {
+        "items": {
+          "$ref": "#/$defs/PersonRef"
+        },
+        "type": "array"
+      },
+      "pin": {
+        "$ref": "#/$defs/PinEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Pin a topic or pull request to a workstream. Idempotent by URL."
+      },
+      "pins": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Pin"
+        },
+        "type": "array"
+      },
+      "publish": {
+        "$ref": "#/$defs/PublishEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Replace the snapshot whole. Pins and renames stay."
+      },
+      "rename": {
+        "$ref": "#/$defs/RenameEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Give a workstream a name of the people's choosing."
+      },
+      "renames": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Rename"
+        },
+        "type": "array"
+      },
+      "repository": {
+        "type": "string"
+      },
+      "snapshot": {
+        "$ref": "#/$defs/WorkSnapshot",
+        "default": {
+          "generatedAt": "",
+          "people": [],
+          "repository": "",
+          "schema": "commonfabric.work-snapshot",
+          "window": {
+            "since": "",
+            "until": ""
+          },
+          "workstreams": []
+        }
+      },
+      "unpin": {
+        "$ref": "#/$defs/UnpinEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Drop a pin."
+      },
+      "workstreams": {
+        "description": "The snapshot's workstreams with every pin and rename applied.",
+        "items": {
+          "$ref": "#/$defs/Workstream"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "snapshot",
+      "pins",
+      "renames",
+      "repository",
+      "generatedAt",
+      "people",
+      "workstreams",
+      "publish",
+      "pin",
+      "unpin",
+      "rename",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

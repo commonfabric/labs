@@ -1,0 +1,610 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Attachment": {
+        "properties": {
+          "attachedAt": {
+            "type": "number"
+          },
+          "nativeSessionId": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "workstreamId": {
+            "description": "The workstream the session was attached under, where one applies.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sourceId",
+          "nativeSessionId",
+          "title",
+          "attachedAt"
+        ],
+        "type": "object"
+      },
+      "CheckoutEntry": {
+        "properties": {
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "type": "object"
+      },
+      "SessionEntry": {
+        "properties": {
+          "active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "archived": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gitBranch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gitRepo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gitWorktreeRoot": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "nativeSessionId": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          },
+          "syncStatus": {
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "sourceId",
+          "nativeSessionId",
+          "title",
+          "cwd",
+          "gitRepo",
+          "gitBranch",
+          "gitWorktreeRoot",
+          "updatedAt",
+          "active",
+          "archived",
+          "syncStatus"
+        ],
+        "type": "object"
+      },
+      "SessionIndexView": {
+        "properties": {
+          "checkouts": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "undefined"
+                },
+                {
+                  "$ref": "#/$defs/CheckoutEntry"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "ownerDid": {
+            "description": "The connector owner's DID; every command the workbench sends names it.",
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "sessions": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "undefined"
+                },
+                {
+                  "$ref": "#/$defs/SessionEntry"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "undefined"
+                },
+                {
+                  "$ref": "#/$defs/SourceEntry"
+                }
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema",
+          "sessions"
+        ],
+        "type": "object"
+      },
+      "ShownHarness": {
+        "properties": {
+          "driver": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "driver"
+        ],
+        "type": "object"
+      },
+      "SourceEntry": {
+        "properties": {
+          "driver": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "driver"
+        ],
+        "type": "object"
+      },
+      "TopicLinkView": {
+        "properties": {
+          "addedAt": {
+            "type": "number"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "removedAt": {
+            "type": "number"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "url"
+        ],
+        "type": "object"
+      },
+      "TopicView": {
+        "properties": {
+          "body": {
+            "default": "",
+            "type": "string"
+          },
+          "commentCount": {
+            "default": 0,
+            "type": [
+              "number",
+              "undefined"
+            ]
+          },
+          "createdBy": {
+            "default": {
+              "kind": "person",
+              "name": ""
+            },
+            "properties": {
+              "avatar": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "kind",
+              "name"
+            ],
+            "type": "object"
+          },
+          "lastActivityAt": {
+            "default": 0,
+            "type": [
+              "number",
+              "undefined"
+            ]
+          },
+          "links": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/TopicLinkView"
+            },
+            "type": "array"
+          },
+          "shortName": {
+            "type": "string"
+          },
+          "title": {
+            "default": "",
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "body",
+          "commentCount",
+          "lastActivityAt",
+          "links"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "attached": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "Sessions attached to the topic, the workbench's own durable record.",
+        "items": {
+          "$ref": "#/$defs/Attachment"
+        },
+        "type": "array"
+      },
+      "commands": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "The command queue the connector's host binds for this piece. Absent until\nthe host has linked it; a start sent before then reaches nothing.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "harnessesShown": {
+        "default": [],
+        "description": "Harnesses to list in the picker beside the connector's sources, for a\nmachine that shows a harness it does not run. Picking one starts nothing.",
+        "items": {
+          "$ref": "#/$defs/ShownHarness"
+        },
+        "type": "array"
+      },
+      "sessions": {
+        "$ref": "#/$defs/SessionIndexView",
+        "description": "The agents connector's complete session index for this person."
+      },
+      "startMode": {
+        "default": "",
+        "description": "The permission mode a started session's first turn runs under, one the\ndriver advertises. Empty leaves the driver's default, which cannot pass a\ntool or network approval headlessly.",
+        "type": "string"
+      },
+      "topic": {
+        "$ref": "#/$defs/TopicView",
+        "description": "The topic this workbench is about, linked from the board's topic piece."
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "topic-workbench/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AttachEvent": {
+        "properties": {
+          "nativeSessionId": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          },
+          "title": {
+            "description": "The title as known at attach time; the live title comes from the index.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sourceId",
+          "nativeSessionId"
+        ],
+        "type": "object"
+      },
+      "Attachment": {
+        "properties": {
+          "attachedAt": {
+            "type": "number"
+          },
+          "nativeSessionId": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "workstreamId": {
+            "description": "The workstream the session was attached under, where one applies.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sourceId",
+          "nativeSessionId",
+          "title",
+          "attachedAt"
+        ],
+        "type": "object"
+      },
+      "DetachEvent": {
+        "properties": {
+          "nativeSessionId": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sourceId",
+          "nativeSessionId"
+        ],
+        "type": "object"
+      },
+      "SessionRow": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "attached": {
+            "type": "boolean"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "gitBranch": {
+            "type": "string"
+          },
+          "gitRepo": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "nativeSessionId": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "sourceId",
+          "nativeSessionId",
+          "title",
+          "cwd",
+          "gitBranch",
+          "gitRepo",
+          "updatedAt",
+          "active",
+          "attached"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "attach": {
+        "$ref": "#/$defs/AttachEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Attach a session by provider identity. Idempotent."
+      },
+      "attached": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Attachment"
+        },
+        "type": "array"
+      },
+      "attachedSessions": {
+        "items": {
+          "$ref": "#/$defs/SessionRow"
+        },
+        "type": "array"
+      },
+      "commandAuthorization": {
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/topic-workbench/main.tsx",
+              "moduleIdentity": "fbTeU5F8Q2hrt14q7-56ApSMd4Kv-HUd3MuvDMp08Ww",
+              "path": [
+                "startSessionCommand"
+              ]
+            }
+          }
+        },
+        "type": "boolean"
+      },
+      "detach": {
+        "$ref": "#/$defs/DetachEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Detach a session by provider identity."
+      },
+      "kickoff": {
+        "description": "The prompt as it will be sent: the person's words, then the topic's\ncontext and links.",
+        "type": "string"
+      },
+      "recentSessions": {
+        "items": {
+          "$ref": "#/$defs/SessionRow"
+        },
+        "type": "array"
+      },
+      "relatedSessions": {
+        "items": {
+          "$ref": "#/$defs/SessionRow"
+        },
+        "type": "array"
+      },
+      "spawnCommand": {
+        "type": "string"
+      },
+      "spawnPrompt": {
+        "type": "string"
+      },
+      "spawnRoot": {
+        "type": "string"
+      },
+      "spawnSource": {
+        "type": "string"
+      },
+      "startSession": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Start a session for the topic: sends the connector a `start` command\ncarrying the kickoff prompt, the picked checkout, and the topic's name as\nthe session title, and attaches the new session at once.",
+        "tier": "wrapper"
+      }
+    },
+    "required": [
+      "attached",
+      "attachedSessions",
+      "relatedSessions",
+      "recentSessions",
+      "spawnCommand",
+      "kickoff",
+      "spawnPrompt",
+      "spawnRoot",
+      "spawnSource",
+      "attach",
+      "detach",
+      "startSession",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

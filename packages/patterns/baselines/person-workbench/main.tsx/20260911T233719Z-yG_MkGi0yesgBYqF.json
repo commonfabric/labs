@@ -1,0 +1,829 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Attachment": {
+        "properties": {
+          "attachedAt": {
+            "type": "number"
+          },
+          "nativeSessionId": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "workstreamId": {
+            "description": "The workstream the session was attached under, where one applies.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sourceId",
+          "nativeSessionId",
+          "title",
+          "attachedAt"
+        ],
+        "type": "object"
+      },
+      "CheckoutEntry": {
+        "properties": {
+          "branch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "commit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "root": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "root"
+        ],
+        "type": "object"
+      },
+      "PersonRef": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "did": {
+            "type": "string"
+          },
+          "login": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "PullRequestRef": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "headRef": {
+            "type": "string"
+          },
+          "mergedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "number": {
+            "type": "number"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "open",
+              "draft",
+              "merged",
+              "closed"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo",
+          "number",
+          "title",
+          "state",
+          "url",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "SessionEntry": {
+        "properties": {
+          "active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "archived": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "cwd": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gitBranch": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gitRepo": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "gitWorktreeRoot": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "nativeSessionId": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          },
+          "syncStatus": {
+            "type": "string"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "updatedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "sourceId",
+          "nativeSessionId",
+          "title",
+          "cwd",
+          "gitRepo",
+          "gitBranch",
+          "gitWorktreeRoot",
+          "updatedAt",
+          "active",
+          "archived",
+          "syncStatus"
+        ],
+        "type": "object"
+      },
+      "SessionIndexView": {
+        "properties": {
+          "checkouts": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "undefined"
+                },
+                {
+                  "$ref": "#/$defs/CheckoutEntry"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "generatedAt": {
+            "type": "string"
+          },
+          "ownerDid": {
+            "description": "The connector owner's DID; every command the workbench sends names it.",
+            "type": "string"
+          },
+          "schema": {
+            "type": "string"
+          },
+          "sessions": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "undefined"
+                },
+                {
+                  "$ref": "#/$defs/SessionEntry"
+                }
+              ]
+            },
+            "type": "array"
+          },
+          "sources": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "undefined"
+                },
+                {
+                  "$ref": "#/$defs/SourceEntry"
+                }
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "schema",
+          "sessions"
+        ],
+        "type": "object"
+      },
+      "ShownHarness": {
+        "properties": {
+          "driver": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "driver"
+        ],
+        "type": "object"
+      },
+      "SnapshotView": {
+        "properties": {
+          "generatedAt": {
+            "default": "",
+            "type": "string"
+          },
+          "people": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/PersonRef"
+            },
+            "type": "array"
+          },
+          "repository": {
+            "default": "",
+            "type": "string"
+          },
+          "workstreams": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/Workstream"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "repository",
+          "generatedAt",
+          "people",
+          "workstreams"
+        ],
+        "type": "object"
+      },
+      "SourceEntry": {
+        "properties": {
+          "driver": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "driver"
+        ],
+        "type": "object"
+      },
+      "TopicRef": {
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "commentCount": {
+            "type": "number"
+          },
+          "lastActivityAt": {
+            "type": "number"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "url"
+        ],
+        "type": "object"
+      },
+      "Workstream": {
+        "properties": {
+          "id": {
+            "description": "Stable across snapshots; the synthesis feeds the previous one back.",
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "people": {
+            "description": "Logins or names, as the people list spells them.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "prs": {
+            "items": {
+              "$ref": "#/$defs/PullRequestRef"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "topics": {
+            "items": {
+              "$ref": "#/$defs/TopicRef"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "summary",
+          "people",
+          "topics",
+          "prs"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "attached": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "Sessions attached to workstreams, this piece's own record.",
+        "items": {
+          "$ref": "#/$defs/Attachment"
+        },
+        "type": "array"
+      },
+      "commands": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "The command queue the connector's host binds for this piece.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "harnessesShown": {
+        "default": [],
+        "description": "Harnesses listed in the picker that no configured source backs.",
+        "items": {
+          "$ref": "#/$defs/ShownHarness"
+        },
+        "type": "array"
+      },
+      "person": {
+        "default": "",
+        "description": "Whose work to show: a login or a name from the snapshot's people.",
+        "type": "string"
+      },
+      "sessions": {
+        "$ref": "#/$defs/SessionIndexView",
+        "description": "The agents connector's complete session index for the viewer."
+      },
+      "snapshot": {
+        "$ref": "#/$defs/SnapshotView",
+        "description": "The work-snapshot piece, linked whole."
+      },
+      "startMode": {
+        "default": "",
+        "description": "The permission mode a started session's first turn runs under.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "person-workbench/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AttachEvent": {
+        "properties": {
+          "nativeSessionId": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "workstreamId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sourceId",
+          "nativeSessionId"
+        ],
+        "type": "object"
+      },
+      "Attachment": {
+        "properties": {
+          "attachedAt": {
+            "type": "number"
+          },
+          "nativeSessionId": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "workstreamId": {
+            "description": "The workstream the session was attached under, where one applies.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "sourceId",
+          "nativeSessionId",
+          "title",
+          "attachedAt"
+        ],
+        "type": "object"
+      },
+      "DetachEvent": {
+        "properties": {
+          "nativeSessionId": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sourceId",
+          "nativeSessionId"
+        ],
+        "type": "object"
+      },
+      "PullRequestRef": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "headRef": {
+            "type": "string"
+          },
+          "mergedAt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "number": {
+            "type": "number"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "state": {
+            "enum": [
+              "open",
+              "draft",
+              "merged",
+              "closed"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "repo",
+          "number",
+          "title",
+          "state",
+          "url",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
+      "SessionRow": {
+        "properties": {
+          "active": {
+            "type": "boolean"
+          },
+          "attached": {
+            "type": "boolean"
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "gitBranch": {
+            "type": "string"
+          },
+          "gitRepo": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "nativeSessionId": {
+            "type": "string"
+          },
+          "sourceId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "sourceId",
+          "nativeSessionId",
+          "title",
+          "cwd",
+          "gitBranch",
+          "gitRepo",
+          "updatedAt",
+          "active",
+          "attached"
+        ],
+        "type": "object"
+      },
+      "TopicRef": {
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "commentCount": {
+            "type": "number"
+          },
+          "lastActivityAt": {
+            "type": "number"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "url"
+        ],
+        "type": "object"
+      },
+      "WorkstreamCard": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "mergedCount": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "openCount": {
+            "type": "number"
+          },
+          "people": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "prs": {
+            "items": {
+              "$ref": "#/$defs/PullRequestRef"
+            },
+            "type": "array"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/$defs/SessionRow"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "topics": {
+            "items": {
+              "$ref": "#/$defs/TopicRef"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "summary",
+          "people",
+          "topics",
+          "prs",
+          "openCount",
+          "mergedCount",
+          "sessions"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "attach": {
+        "$ref": "#/$defs/AttachEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "attached": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Attachment"
+        },
+        "type": "array"
+      },
+      "commandAuthorization": {
+        "ifc": {
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/person-workbench/main.tsx",
+              "moduleIdentity": "m52PKNyyja4F5Redt5uPX3FZADkUz8Nteeugc7W6ogo",
+              "path": [
+                "startWorkstreamSession"
+              ]
+            }
+          }
+        },
+        "type": "boolean"
+      },
+      "detach": {
+        "$ref": "#/$defs/DetachEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "kickoff": {
+        "type": "string"
+      },
+      "personName": {
+        "type": "string"
+      },
+      "recentSessions": {
+        "items": {
+          "$ref": "#/$defs/SessionRow"
+        },
+        "type": "array"
+      },
+      "spawnPrompt": {
+        "type": "string"
+      },
+      "spawnRoot": {
+        "type": "string"
+      },
+      "spawnSource": {
+        "type": "string"
+      },
+      "spawnWorkstream": {
+        "type": "string"
+      },
+      "startSession": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Start a session for the picked workstream.",
+        "tier": "wrapper"
+      },
+      "workstreams": {
+        "items": {
+          "$ref": "#/$defs/WorkstreamCard"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "personName",
+      "workstreams",
+      "attached",
+      "recentSessions",
+      "kickoff",
+      "spawnPrompt",
+      "spawnRoot",
+      "spawnSource",
+      "spawnWorkstream",
+      "attach",
+      "detach",
+      "startSession",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}
