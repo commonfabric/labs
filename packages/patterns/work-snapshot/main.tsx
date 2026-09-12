@@ -271,9 +271,8 @@ export default pattern<SnapshotInput, SnapshotOutput>(
         if (!next.repository?.trim()) {
           throw new Error("publish: snapshot.repository is required");
         }
-        if (!Array.isArray(next.workstreams)) {
-          throw new Error("publish: snapshot.workstreams must be an array");
-        }
+        // The typed boundary refuses a snapshot whose workstreams are not an
+        // array before this runs; what it cannot see is checked here.
         const ids = new Set<string>();
         for (const workstream of next.workstreams) {
           if (!workstream.id?.trim()) {

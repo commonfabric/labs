@@ -1,7 +1,8 @@
 /**
  * Pattern test for the work snapshot: publish replaces the snapshot whole and
  * validates its shape, a pin adds a pull request the job did not place, a
- * rename shows in the derived workstreams, and both survive the next publish.
+ * rename shows in the derived workstreams, both survive the next publish, and
+ * publish, pin, and rename refuse what they cannot trust and change nothing.
  */
 import {
   action,
@@ -55,6 +56,19 @@ const second: WorkSnapshot = {
     summary: "The board loads in 4.5 s; the residual is naming waves.",
   }],
 };
+
+/** Snapshots publish refuses: a foreign schema, a blank repository, a
+ * workstream without an id, and two workstreams sharing one; workstreams that
+ * are not an array are refused at the typed boundary before the verb runs.
+ * Assembled by patching, since no literal carries those shapes under the
+ * snapshot's type. */
+const MALFORMED: WorkSnapshot[] = [
+  { schema: "not-a-snapshot" },
+  { repository: "  " },
+  { workstreams: "none" },
+  { workstreams: [{ ...second.workstreams[0], id: "" }] },
+  { workstreams: [second.workstreams[0], second.workstreams[0]] },
+].map((patch) => Object.assign({}, second, patch));
 
 export default pattern(() => {
   const snapshot = new Writable<WorkSnapshot | Default<WorkSnapshot>>({
@@ -128,9 +142,35 @@ export default pattern(() => {
     piece.workstreams[0]?.prs.length === 1 && pins.get().length === 0
   );
 
+  // publish refuses each malformed snapshot and leaves the piece as it was.
+  const action_publish_refused = action(() => {
+    for (const snapshot of MALFORMED) piece.publish.send({ snapshot });
+  });
+  const assert_publish_refused = assert(() =>
+    piece.generatedAt === "2026-09-12T06:00:00.000Z" &&
+    piece.workstreams.length === 1 &&
+    piece.workstreams[0]?.prs.length === 1
+  );
+
+  // pin and rename refuse a call missing what they key by.
+  const action_pin_rename_refused = action(() => {
+    piece.pin.send({
+      workstreamId: "",
+      kind: "pr",
+      url: "https://github.com/commontoolsinc/labs/pull/1",
+    });
+    piece.rename.send({ workstreamId: "board-load", name: "  " });
+  });
+  const assert_pin_rename_refused = assert(() =>
+    pins.get().length === 0 && piece.workstreams[0]?.name === "Board load"
+  );
+
   return {
     [NAME]: "Work snapshot test",
     [UI]: piece[UI],
+    // The seven refused calls above each throw inside their verb, which the
+    // runner reports as runtime errors; exactly seven are expected.
+    expectRuntimeErrors: 7,
     [TESTS]: [
       { assertion: assert_empty },
       { action: action_publish },
@@ -142,6 +182,10 @@ export default pattern(() => {
       { assertion: assert_republished },
       { action: action_unpin },
       { assertion: assert_unpinned },
+      { action: action_publish_refused },
+      { assertion: assert_publish_refused },
+      { action: action_pin_rename_refused },
+      { assertion: assert_pin_rename_refused },
     ],
   };
 });
