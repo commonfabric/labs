@@ -2,8 +2,12 @@
  * Pattern test for the person workbench: the person's workstreams come from
  * the snapshot by login, each carrying its topics, pull requests, and counts;
  * attach records a session under the picked workstream; the kickoff carries
- * the workstream's context and links; and a start sends the connector one
- * `start` command titled after the workstream and attaches its session there.
+ * the workstream's context and links; a start sends the connector one
+ * `start` command titled after the workstream and attaches its session there;
+ * the rail's own buttons attach a session under the picked workstream and
+ * take it back out; a second attach records nothing; the detach verb removes
+ * a session; a snapshot with no workstreams gives nothing to start; and a verb
+ * call without both ids is refused.
  */
 import {
   action,
@@ -15,12 +19,52 @@ import {
   UI,
   Writable,
 } from "commonfabric";
+import {
+  childNodes,
+  findNode,
+  hasExactText,
+  hasText,
+  propsOf,
+} from "../test/vnode-helpers.ts";
 import type {
   Attachment,
   CommandValue,
   SessionIndexView,
 } from "../topic-workbench/main.tsx";
 import PersonWorkbench, { type SnapshotView } from "./main.tsx";
+
+type ClickStream = { send: (event: Record<string, never>) => void };
+
+const isButton = (label: string) => (candidate: unknown): boolean =>
+  propsOf(candidate)?.onClick !== undefined &&
+  hasExactText(candidate, label);
+
+/** The innermost node the predicate accepts: the row itself rather than
+ * every container that also carries the row's text. */
+const innermost = (
+  node: unknown,
+  accept: (node: unknown) => boolean,
+): unknown => {
+  for (const child of childNodes(node)) {
+    const hit = innermost(child, accept);
+    if (hit !== undefined) return hit;
+  }
+  return accept(node) ? node : undefined;
+};
+
+/** Click the button labelled `label` in the row whose text carries `rowText`. */
+const clickInRow = (root: unknown, rowText: string, label: string): void => {
+  const row = innermost(
+    root,
+    (candidate) =>
+      hasText(candidate, rowText) &&
+      findNode(candidate, isButton(label)) !== undefined,
+  );
+  const onClick = propsOf(findNode(row, isButton(label)))?.onClick;
+  if (typeof onClick === "object" && onClick !== null && "send" in onClick) {
+    (onClick as ClickStream).send({});
+  }
+};
 
 /** The first queued command, decoded; `null` when the queue is empty. */
 // deno-lint-ignore no-explicit-any
@@ -93,6 +137,18 @@ export default pattern(() => {
       active: false,
       archived: false,
       syncStatus: "complete",
+    }, {
+      sourceId: "claude",
+      nativeSessionId: "bbb",
+      title: "something for later",
+      cwd: "/w/labs",
+      gitRepo: null,
+      gitBranch: "feature",
+      gitWorktreeRoot: null,
+      updatedAt: "2026-09-08T11:00:00.000Z",
+      active: false,
+      archived: false,
+      syncStatus: "complete",
     }],
     checkouts: [{ root: "/w/labs", branch: "main" }],
   });
@@ -114,7 +170,7 @@ export default pattern(() => {
     wb.workstreams[0]?.openCount === 1 &&
     wb.workstreams[0]?.mergedCount === 1 &&
     wb.workstreams[0]?.sessions.length === 0 &&
-    wb.recentSessions.length === 1
+    wb.recentSessions.length === 2
   );
 
   const action_attach = action(() => {
@@ -127,7 +183,8 @@ export default pattern(() => {
   const assert_attached = assert(() =>
     wb.workstreams[0]?.sessions.length === 1 &&
     wb.workstreams[0]?.sessions[0]?.title === "an earlier session" &&
-    wb.recentSessions.length === 0
+    wb.recentSessions.length === 1 &&
+    wb.recentSessions[0]?.nativeSessionId === "bbb"
   );
 
   const action_compose = action(() => {
@@ -167,9 +224,82 @@ export default pattern(() => {
     attached.get()[1]?.workstreamId === "board-load"
   );
 
+  // The rail's Attach button files the session under the picked workstream
+  // (the first card when none is picked); Detach on the card's row takes it
+  // back out.
+  const action_click_attach = action(() => {
+    clickInRow(wb[UI], "something for later", "Attach");
+  });
+  const assert_clicked_attached = assert(() =>
+    wb.workstreams[0]?.sessions.length === 3 &&
+    wb.workstreams[0]?.sessions[2]?.nativeSessionId === "bbb" &&
+    wb.recentSessions.length === 0
+  );
+  const action_click_detach = action(() => {
+    clickInRow(wb[UI], "something for later", "Detach");
+  });
+  const assert_clicked_detached = assert(() =>
+    wb.workstreams[0]?.sessions.length === 2 &&
+    wb.recentSessions.length === 1 &&
+    wb.recentSessions[0]?.nativeSessionId === "bbb"
+  );
+
+  // A second attach of the same session records nothing; the detach verb
+  // removes it.
+  const action_attach_again = action(() => {
+    wb.attach.send({
+      sourceId: "claude",
+      nativeSessionId: "aaa",
+      workstreamId: "board-load",
+    });
+  });
+  const assert_attached_once = assert(() =>
+    wb.workstreams[0]?.sessions.length === 2
+  );
+  const action_detach = action(() => {
+    wb.detach.send({ sourceId: "claude", nativeSessionId: "aaa" });
+  });
+  const assert_detached = assert(() =>
+    wb.workstreams[0]?.sessions.length === 1 &&
+    wb.recentSessions.length === 2
+  );
+
+  // A snapshot with no workstreams gives the person no card to start from,
+  // so a start sends nothing.
+  const nobodysCommands = new Writable<CommandValue[] | Default<[]>>([]);
+  const nobody = PersonWorkbench({
+    snapshot: new Writable<SnapshotView>({
+      repository: "",
+      generatedAt: "",
+      people: [],
+      workstreams: [],
+    }),
+    person: "nobody",
+    sessions: index,
+    attached: new Writable<Attachment[] | Default<[]>>([]),
+    commands: nobodysCommands,
+  });
+  const action_start_without_card = action(() => {
+    nobody.startSession.send();
+  });
+  const assert_nothing_started = assert(() =>
+    nobody.workstreams.length === 0 && nobodysCommands.get().length === 0
+  );
+
+  // A verb call without both ids is refused and changes nothing.
+  const action_attach_without_ids = action(() => {
+    wb.attach.send({ sourceId: "", nativeSessionId: "" });
+  });
+  const assert_attach_refused = assert(() =>
+    wb.workstreams[0]?.sessions.length === 1
+  );
+
   return {
     [NAME]: "Person workbench test",
     [UI]: wb[UI],
+    // The refused attach above throws inside the verb, which the runner
+    // reports as a runtime error; exactly one is expected.
+    expectRuntimeErrors: 1,
     [TESTS]: [
       { assertion: assert_person },
       { render: wb[UI] },
@@ -179,6 +309,20 @@ export default pattern(() => {
       { assertion: assert_kickoff },
       { action: action_start },
       { assertion: assert_started },
+      { render: wb[UI] },
+      { action: action_click_attach },
+      { assertion: assert_clicked_attached },
+      { render: wb[UI] },
+      { action: action_click_detach },
+      { assertion: assert_clicked_detached },
+      { action: action_attach_again },
+      { assertion: assert_attached_once },
+      { action: action_detach },
+      { assertion: assert_detached },
+      { action: action_start_without_card },
+      { assertion: assert_nothing_started },
+      { action: action_attach_without_ids },
+      { assertion: assert_attach_refused },
     ],
   };
 });
