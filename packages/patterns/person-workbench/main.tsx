@@ -146,15 +146,18 @@ const personOf = lift((
 });
 
 /** The person's workstreams, with the viewer's attached sessions joined in.
- * With no person named, every workstream shows. */
+ * With no person named, every workstream shows; a name the snapshot's people
+ * do not carry shows none, so a stale or mistyped name is not everyone's. */
 const cardsOf = lift((
-  { workstreams, person, rows, attached }: {
+  { workstreams, person, named, rows, attached }: {
     workstreams?: Workstream[] | Default<[]>;
     person: PersonRef | undefined;
+    named: string;
     rows: SessionRow[];
     attached: Attachment[] | Default<[]>;
   },
 ): WorkstreamCard[] => {
+  if (person === undefined && normalize(named)) return [];
   const names = new Set(
     [person?.login, person?.name].flatMap((n) => n ? [normalize(n)] : []),
   );
@@ -250,6 +253,10 @@ const stateColor = (
 
 // ===== Handlers (browser) =====
 
+/** The key an attachment's record lives under: one per session. */
+const attachmentKey = (sourceId: string, nativeSessionId: string): string =>
+  JSON.stringify([sourceId, nativeSessionId]);
+
 const attachToPicked = handler<void, {
   attached: Writable<Attachment[] | Default<[]>>;
   spawnWorkstream: Writable<string>;
@@ -260,35 +267,43 @@ const attachToPicked = handler<void, {
 }>((_, state) => {
   const workstreamId = state.spawnWorkstream.get().trim() ||
     state.fallbackWorkstream;
-  const current = state.attached.get();
-  if (
-    current.some((a) =>
-      a.sourceId === state.sourceId &&
-      a.nativeSessionId === state.nativeSessionId
-    )
-  ) return;
-  state.attached.set([
-    ...current,
-    {
+  // A keyed record and an add-if-absent membership, so two viewers attaching
+  // at once both land; the record is written only when empty, so attaching
+  // a session again keeps its first workstream.
+  const record = state.attached.elementById(
+    attachmentKey(state.sourceId, state.nativeSessionId),
+  );
+  if (record.get() === undefined) {
+    record.set({
       sourceId: state.sourceId,
       nativeSessionId: state.nativeSessionId,
       title: state.title,
       attachedAt: Date.now(),
       ...(workstreamId ? { workstreamId } : {}),
-    },
-  ]);
+    });
+  }
+  state.attached.addUnique(record);
 });
+
+/** Drops a session's attachment and clears its record, so a later attach of
+ * the same session starts fresh rather than reviving this one. */
+const dropAttachment = (
+  attached: Writable<Attachment[] | Default<[]>>,
+  sourceId: string,
+  nativeSessionId: string,
+): void => {
+  const key = attachmentKey(sourceId, nativeSessionId);
+  attached.removeByValue(attached.elementById(key));
+  const record: Writable<Attachment | undefined> = attached.elementById(key);
+  record.set(undefined);
+};
 
 const detachRow = handler<void, {
   attached: Writable<Attachment[] | Default<[]>>;
   sourceId: string;
   nativeSessionId: string;
 }>((_, { attached, sourceId, nativeSessionId }) => {
-  attached.set(
-    attached.get().filter((a) =>
-      !(a.sourceId === sourceId && a.nativeSessionId === nativeSessionId)
-    ),
-  );
+  dropAttachment(attached, sourceId, nativeSessionId);
 });
 
 /**
@@ -335,16 +350,17 @@ export const startWorkstreamSession = handler<void, {
       ...(mode ? { mode } : {}),
     },
   }));
-  state.attached.set([
-    ...state.attached.get(),
-    {
-      sourceId,
-      nativeSessionId,
-      title,
-      attachedAt: Date.now(),
-      workstreamId: state.card.id,
-    },
-  ]);
+  const record = state.attached.elementById(
+    attachmentKey(sourceId, nativeSessionId),
+  );
+  record.set({
+    sourceId,
+    nativeSessionId,
+    title,
+    attachedAt: Date.now(),
+    workstreamId: state.card.id,
+  });
+  state.attached.addUnique(record);
 });
 
 // ===== The pattern =====
@@ -373,11 +389,13 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
     const spawnSource = new Writable.perSession("");
     const spawnWorkstream = new Writable.perSession("");
 
+    const named = person ?? "";
     const personRef = personOf({ people: snapshot?.people, person });
     const rows = sessionRowsOf({ index: sessions, attached });
     const cards = cardsOf({
       workstreams: snapshot?.workstreams,
       person: personRef,
+      named,
       rows,
       attached,
     });
@@ -395,6 +413,11 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
     const checkoutOptions = checkoutOptionsOf({ index: sessions });
     const ownerDid = sessions?.ownerDid ?? "";
     const personName = computed(() => personRef?.name ?? (person ?? "").trim());
+    const emptyNote = computed(() =>
+      personRef === undefined && (person ?? "").trim()
+        ? `No one named ${(person ?? "").trim()} is in the current snapshot.`
+        : "No workstreams name this person in the current snapshot."
+    );
     const fallbackWorkstream = computed(() => cards[0]?.id ?? "");
     const repository = snapshot?.repository ?? "";
     const generatedAt = snapshot?.generatedAt ?? "";
@@ -421,15 +444,9 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
         if (!source || !native) {
           throw new Error("attach: sourceId and nativeSessionId are required");
         }
-        const current = attached.get();
-        if (
-          current.some((a) =>
-            a.sourceId === source && a.nativeSessionId === native
-          )
-        ) return;
-        attached.set([
-          ...current,
-          {
+        const record = attached.elementById(attachmentKey(source, native));
+        if (record.get() === undefined) {
+          record.set({
             sourceId: source,
             nativeSessionId: native,
             title: (title ?? "").trim(),
@@ -437,16 +454,17 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
             ...(workstreamId?.trim()
               ? { workstreamId: workstreamId.trim() }
               : {}),
-          },
-        ]);
+          });
+        }
+        attached.addUnique(record);
       },
     );
 
     const detach = action<DetachEvent>(({ sourceId, nativeSessionId }) => {
-      attached.set(
-        attached.get().filter((a) =>
-          !(a.sourceId === sourceId && a.nativeSessionId === nativeSessionId)
-        ),
+      dropAttachment(
+        attached,
+        (sourceId ?? "").trim(),
+        (nativeSessionId ?? "").trim(),
       );
     });
 
@@ -472,7 +490,7 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
               <cf-text variant="caption" tone="muted">
                 {hasCards
                   ? `${cards.length} workstreams · ${attachedSessions.length} sessions attached · synthesized ${generatedAt}`
-                  : "No workstreams name this person in the current snapshot."}
+                  : emptyNote}
               </cf-text>
             </cf-vstack>
 

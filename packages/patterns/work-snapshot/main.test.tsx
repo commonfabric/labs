@@ -1,8 +1,11 @@
 /**
  * Pattern test for the work snapshot: publish replaces the snapshot whole and
- * validates its shape, a pin adds a pull request the job did not place, a
- * rename shows in the derived workstreams, both survive the next publish, and
- * publish, pin, and rename refuse what they cannot trust and change nothing.
+ * validates its shape, a pin adds a pull request the job did not place (a
+ * repeated pin changes nothing, and a pinned merged pull request stays
+ * merged), a rename shows in the derived workstreams, both survive the next
+ * publish, publish, pin, and rename refuse what they cannot trust (a link
+ * that is not http(s) among them) and change nothing, and a stored link that
+ * is not http(s) renders as text rather than an anchor.
  */
 import {
   action,
@@ -14,6 +17,7 @@ import {
   UI,
   Writable,
 } from "commonfabric";
+import { findNode, hasText, propValue } from "../test/vnode-helpers.ts";
 import Snapshot, {
   type Pin,
   type Rename,
@@ -68,7 +72,23 @@ const MALFORMED: WorkSnapshot[] = [
   { workstreams: "none" },
   { workstreams: [{ ...second.workstreams[0], id: "" }] },
   { workstreams: [second.workstreams[0], second.workstreams[0]] },
+  {
+    workstreams: [{
+      ...second.workstreams[0],
+      topics: [{ title: "Unsafe", url: "javascript:alert(1)" }],
+    }],
+  },
 ].map((patch) => Object.assign({}, second, patch));
+
+/** A snapshot as an earlier writer could have stored it, carrying a link the
+ * publish guard now refuses. */
+const LEGACY: WorkSnapshot = {
+  ...second,
+  workstreams: [{
+    ...second.workstreams[0],
+    topics: [{ title: "Legacy link", url: "javascript:alert(1)" }],
+  }],
+};
 
 export default pattern(() => {
   const snapshot = new Writable<WorkSnapshot | Default<WorkSnapshot>>({
@@ -105,20 +125,32 @@ export default pattern(() => {
       url: "https://github.com/commontoolsinc/labs/pull/6844",
       title: "Flip the server-execution default back to ON",
     });
-    // A second pin of the same URL is a no-op.
+    // A second pin of the same URL changes nothing, not even the title.
     piece.pin.send({
       workstreamId: "board-load",
       kind: "pr",
       url: "https://github.com/commontoolsinc/labs/pull/6844",
     });
+    // A pinned merged pull request stays merged rather than counting open.
+    piece.pin.send({
+      workstreamId: "board-load",
+      kind: "pr",
+      url: "https://github.com/commontoolsinc/labs/pull/7380",
+      title: "a start command",
+      state: "merged",
+    });
     piece.rename.send({ workstreamId: "board-load", name: "Board load" });
   });
   const assert_pinned = assert(() =>
     piece.workstreams[0]?.name === "Board load" &&
-    piece.workstreams[0]?.prs.length === 2 &&
+    piece.workstreams[0]?.prs.length === 3 &&
     piece.workstreams[0]?.prs[1]?.number === 6844 &&
     piece.workstreams[0]?.prs[1]?.repo === "commontoolsinc/labs" &&
-    pins.get().length === 1
+    piece.workstreams[0]?.prs[1]?.state === "open" &&
+    piece.workstreams[0]?.prs[2]?.number === 7380 &&
+    piece.workstreams[0]?.prs[2]?.state === "merged" &&
+    pins.get().length === 2 &&
+    pins.get()[0]?.title === "Flip the server-execution default back to ON"
   );
 
   // The next snapshot replaces the job's part; the pin and rename stay.
@@ -129,7 +161,7 @@ export default pattern(() => {
     piece.generatedAt === "2026-09-12T06:00:00.000Z" &&
     piece.workstreams[0]?.summary.startsWith("The board loads") &&
     piece.workstreams[0]?.name === "Board load" &&
-    piece.workstreams[0]?.prs.length === 2
+    piece.workstreams[0]?.prs.length === 3
   );
 
   const action_unpin = action(() => {
@@ -139,7 +171,9 @@ export default pattern(() => {
     });
   });
   const assert_unpinned = assert(() =>
-    piece.workstreams[0]?.prs.length === 1 && pins.get().length === 0
+    piece.workstreams[0]?.prs.length === 2 &&
+    piece.workstreams[0]?.prs[1]?.number === 7380 &&
+    pins.get().length === 1
   );
 
   // publish refuses each malformed snapshot and leaves the piece as it was.
@@ -149,28 +183,46 @@ export default pattern(() => {
   const assert_publish_refused = assert(() =>
     piece.generatedAt === "2026-09-12T06:00:00.000Z" &&
     piece.workstreams.length === 1 &&
-    piece.workstreams[0]?.prs.length === 1
+    piece.workstreams[0]?.prs.length === 2
   );
 
-  // pin and rename refuse a call missing what they key by.
+  // pin and rename refuse a call missing what they key by, and pin refuses a
+  // link that is not http(s).
   const action_pin_rename_refused = action(() => {
     piece.pin.send({
       workstreamId: "",
       kind: "pr",
       url: "https://github.com/commontoolsinc/labs/pull/1",
     });
+    piece.pin.send({
+      workstreamId: "board-load",
+      kind: "topic",
+      url: "javascript:alert(1)",
+      title: "Unsafe",
+    });
     piece.rename.send({ workstreamId: "board-load", name: "  " });
   });
   const assert_pin_rename_refused = assert(() =>
-    pins.get().length === 0 && piece.workstreams[0]?.name === "Board load"
+    pins.get().length === 1 && piece.workstreams[0]?.name === "Board load"
+  );
+
+  // A stored link the guard would refuse renders as text, not an anchor.
+  const action_store_legacy = action(() => {
+    snapshot.set(LEGACY);
+  });
+  const assert_legacy_rendered_as_text = assert(() =>
+    findNode(
+        piece[UI],
+        (node) => propValue(node, "href") === "javascript:alert(1)",
+      ) === undefined && hasText(piece[UI], "Legacy link")
   );
 
   return {
     [NAME]: "Work snapshot test",
     [UI]: piece[UI],
-    // The seven refused calls above each throw inside their verb, which the
-    // runner reports as runtime errors; exactly seven are expected.
-    expectRuntimeErrors: 7,
+    // The nine refused calls above each throw inside their verb, which the
+    // runner reports as runtime errors; exactly nine are expected.
+    expectRuntimeErrors: 9,
     [TESTS]: [
       { assertion: assert_empty },
       { action: action_publish },
@@ -186,6 +238,8 @@ export default pattern(() => {
       { assertion: assert_publish_refused },
       { action: action_pin_rename_refused },
       { assertion: assert_pin_rename_refused },
+      { action: action_store_legacy },
+      { assertion: assert_legacy_rendered_as_text },
     ],
   };
 });

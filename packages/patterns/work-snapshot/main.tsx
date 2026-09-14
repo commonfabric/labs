@@ -10,7 +10,7 @@ import {
   Writable,
 } from "commonfabric";
 
-import { TOPICS_THEME, whenLabel } from "../topics/topic.tsx";
+import { isSafeLinkUrl, TOPICS_THEME, whenLabel } from "../topics/topic.tsx";
 
 // ===== What this is =====
 //
@@ -19,7 +19,9 @@ import { TOPICS_THEME, whenLabel } from "../topics/topic.tsx";
 // topics it holds, and the pull requests that make it up. The job replaces
 // the snapshot whole through `publish`; people pin and rename through their
 // own verbs, and those records survive the next snapshot because they live
-// beside it, keyed by workstream id.
+// beside it, keyed by workstream id. A pin is a keyed record and a rename an
+// appended one, written with the mergeable methods, so two people pinning or
+// renaming at once both land.
 //
 // The piece is the shared substrate two surfaces read: a team dashboard
 // over every workstream, and a person's own lens over the workstreams that
@@ -93,6 +95,8 @@ export interface Pin {
   kind: "topic" | "pr";
   url: string;
   title: string;
+  /** A pinned pull request's state as the pinner knew it; open otherwise. */
+  state?: PullRequestRef["state"];
   pinnedAt: number;
 }
 
@@ -118,6 +122,8 @@ export interface PinEvent {
   kind: "topic" | "pr";
   url: string;
   title?: string;
+  /** For a pull request: its state, so a merged one is not counted open. */
+  state?: PullRequestRef["state"];
 }
 
 export interface UnpinEvent {
@@ -151,7 +157,8 @@ export interface SnapshotOutput {
   workstreams: Workstream[];
   /** Replace the snapshot whole. Pins and renames stay. */
   publish: Stream<PublishEvent, PublishResult>;
-  /** Pin a topic or pull request to a workstream. Idempotent by URL. */
+  /** Pin a topic or pull request to a workstream: one pin per URL per
+   * workstream, so pinning it again changes nothing. The URL must be http(s). */
   pin: Stream<PinEvent>;
   /** Drop a pin. */
   unpin: Stream<UnpinEvent>;
@@ -197,7 +204,7 @@ const workstreamsOf = lift((
         repo: repoOfPullRequestUrl(p.url),
         number: numberOfPullRequestUrl(p.url),
         title: p.title,
-        state: "open",
+        state: p.state ?? "open",
         url: p.url,
         updatedAt: new Date(p.pinnedAt).toISOString(),
       }));
@@ -219,6 +226,10 @@ const numberOfPullRequestUrl = (url: string): number => {
   const match = url.match(/\/pull\/(\d+)/);
   return match ? Number(match[1]) : 0;
 };
+
+/** The key a pin's record lives under: one per URL per workstream. */
+const pinKey = (workstreamId: string, url: string): string =>
+  JSON.stringify([workstreamId, url]);
 
 const stateColor = (
   state: PullRequestRef["state"],
@@ -284,6 +295,13 @@ export default pattern<SnapshotInput, SnapshotOutput>(
             );
           }
           ids.add(workstream.id);
+          for (const link of [...workstream.topics, ...workstream.prs]) {
+            if (!isSafeLinkUrl(link.url)) {
+              throw new Error(
+                `publish: workstream ${workstream.id} carries a link that is not http(s)`,
+              );
+            }
+          }
         }
         snapshot.set(next);
         return {
@@ -293,34 +311,41 @@ export default pattern<SnapshotInput, SnapshotOutput>(
       },
     );
 
-    const pin = action<PinEvent>(({ workstreamId, kind, url, title }) => {
-      const id = (workstreamId ?? "").trim();
-      const target = (url ?? "").trim();
-      if (!id || !target || (kind !== "topic" && kind !== "pr")) {
-        throw new Error("pin: workstreamId, kind, and url are required");
-      }
-      const current = pins.get();
-      if (current.some((p) => p.workstreamId === id && p.url === target)) {
-        return;
-      }
-      pins.set([
-        ...current,
-        {
-          workstreamId: id,
-          kind,
-          url: target,
-          title: (title ?? "").trim() || target,
-          pinnedAt: Date.now(),
-        },
-      ]);
-    });
+    const pin = action<PinEvent>(
+      ({ workstreamId, kind, url, title, state }) => {
+        const id = (workstreamId ?? "").trim();
+        const target = (url ?? "").trim();
+        if (!id || !target || (kind !== "topic" && kind !== "pr")) {
+          throw new Error("pin: workstreamId, kind, and url are required");
+        }
+        if (!isSafeLinkUrl(target)) {
+          throw new Error("pin: url must be http(s)");
+        }
+        // The record is keyed, so two people pinning at once both land, and
+        // membership is a server-side add-if-absent. The record is written
+        // only when empty, so pinning again keeps the first title and time.
+        const record = pins.elementById(pinKey(id, target));
+        if (record.get() === undefined) {
+          record.set({
+            workstreamId: id,
+            kind,
+            url: target,
+            title: (title ?? "").trim() || target,
+            ...(kind === "pr" && state ? { state } : {}),
+            pinnedAt: Date.now(),
+          });
+        }
+        pins.addUnique(record);
+      },
+    );
 
     const unpin = action<UnpinEvent>(({ workstreamId, url }) => {
-      pins.set(
-        pins.get().filter((p) =>
-          !(p.workstreamId === workstreamId && p.url === url)
-        ),
-      );
+      const key = pinKey((workstreamId ?? "").trim(), (url ?? "").trim());
+      pins.removeByValue(pins.elementById(key));
+      // The record outlives its membership; cleared, a later pin of the same
+      // URL starts fresh rather than reviving this one.
+      const record: Writable<Pin | undefined> = pins.elementById(key);
+      record.set(undefined);
     });
 
     const rename = action<RenameEvent>(({ workstreamId, name }) => {
@@ -329,10 +354,8 @@ export default pattern<SnapshotInput, SnapshotOutput>(
       if (!id || !next) {
         throw new Error("rename: workstreamId and name are required");
       }
-      renames.set([
-        ...renames.get(),
-        { workstreamId: id, name: next, renamedAt: Date.now() },
-      ]);
+      // Appended, never rewritten; the newest rename names the workstream.
+      renames.push({ workstreamId: id, name: next, renamedAt: Date.now() });
     });
 
     return {
@@ -371,14 +394,25 @@ export default pattern<SnapshotInput, SnapshotOutput>(
                     </cf-text>
                     {workstream.topics.map((topic) => (
                       <cf-hstack gap="2" align="center" data-topic-row="">
-                        <a
-                          href={topic.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          style="color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;"
-                        >
-                          {topic.title}
-                        </a>
+                        {isSafeLinkUrl(topic.url)
+                          ? (
+                            <a
+                              href={topic.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              style="color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;"
+                            >
+                              {topic.title}
+                            </a>
+                          )
+                          : (
+                            <cf-text
+                              tone="muted"
+                              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;"
+                            >
+                              {topic.title}
+                            </cf-text>
+                          )}
                         <cf-text variant="caption" tone="muted">
                           {topic.lastActivityAt
                             ? whenLabel(topic.lastActivityAt)
@@ -394,14 +428,25 @@ export default pattern<SnapshotInput, SnapshotOutput>(
                         <cf-badge size="xs" color={stateColor(pr.state)}>
                           {pr.state}
                         </cf-badge>
-                        <a
-                          href={pr.url}
-                          target="_blank"
-                          rel="noreferrer"
-                          style="color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;"
-                        >
-                          #{pr.number} {pr.title}
-                        </a>
+                        {isSafeLinkUrl(pr.url)
+                          ? (
+                            <a
+                              href={pr.url}
+                              target="_blank"
+                              rel="noreferrer"
+                              style="color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;"
+                            >
+                              #{pr.number} {pr.title}
+                            </a>
+                          )
+                          : (
+                            <cf-text
+                              tone="muted"
+                              style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;"
+                            >
+                              #{pr.number} {pr.title}
+                            </cf-text>
+                          )}
                         <cf-text variant="caption" tone="muted">
                           {pr.updatedAt.slice(0, 10)}
                         </cf-text>

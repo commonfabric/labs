@@ -6,8 +6,9 @@
  * `start` command titled after the workstream and attaches its session there;
  * the rail's own buttons attach a session under the picked workstream and
  * take it back out; a second attach records nothing; the detach verb removes
- * a session; a snapshot with no workstreams gives nothing to start; and a verb
- * call without both ids is refused.
+ * a session; a snapshot with no workstreams gives nothing to start; a verb
+ * call without both ids is refused; and a name the snapshot does not carry
+ * shows no workstreams rather than everyone's.
  */
 import {
   action,
@@ -161,6 +162,21 @@ export default pattern(() => {
     attached,
     commands,
   });
+  // A name the snapshot's people do not carry: nothing shows, not everything.
+  const stranger = PersonWorkbench({
+    snapshot,
+    person: "nobody",
+    sessions: index,
+    attached: new Writable<Attachment[] | Default<[]>>([]),
+    commands: new Writable<CommandValue[] | Default<[]>>([]),
+  });
+  const assert_stranger = assert(() =>
+    stranger.personName === "nobody" && stranger.workstreams.length === 0 &&
+    hasText(
+      stranger[UI],
+      "No one named nobody is in the current snapshot.",
+    )
+  );
 
   const assert_person = assert(() =>
     wb[NAME] === "Berni's work" &&
@@ -301,6 +317,7 @@ export default pattern(() => {
     // reports as a runtime error; exactly one is expected.
     expectRuntimeErrors: 1,
     [TESTS]: [
+      { assertion: assert_stranger },
       { assertion: assert_person },
       { render: wb[UI] },
       { action: action_attach },
