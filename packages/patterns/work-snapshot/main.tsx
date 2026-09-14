@@ -283,7 +283,12 @@ export default pattern<SnapshotInput, SnapshotOutput>(
     const hasSnapshot = header.hasSnapshot;
 
     const publish = action<PublishEvent, PublishResult>(
-      ({ snapshot: next }) => {
+      (event) => {
+        // A snapshot the typed boundary cannot read (workstreams that are
+        // not an array, say) reaches the verb as no event at all; it is
+        // refused here by name, and what the boundary admits is checked
+        // below.
+        const next = event?.snapshot;
         if (!next || next.schema !== WORK_SNAPSHOT_SCHEMA) {
           throw new Error(
             `publish: snapshot.schema must be ${WORK_SNAPSHOT_SCHEMA}`,
@@ -292,8 +297,6 @@ export default pattern<SnapshotInput, SnapshotOutput>(
         if (!next.repository?.trim()) {
           throw new Error("publish: snapshot.repository is required");
         }
-        // The typed boundary refuses a snapshot whose workstreams are not an
-        // array before this runs; what it cannot see is checked here.
         const ids = new Set<string>();
         for (const workstream of next.workstreams) {
           if (!workstream.id?.trim()) {

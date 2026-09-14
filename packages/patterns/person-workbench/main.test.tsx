@@ -7,8 +7,12 @@
  * the rail's own buttons attach a session under the picked workstream and
  * take it back out; a second attach records nothing; the detach verb removes
  * a session; a snapshot with no workstreams gives nothing to start; a verb
- * call without both ids is refused; and a name the snapshot does not carry
- * shows no workstreams rather than everyone's.
+ * call without both ids is refused; a name the snapshot does not carry shows
+ * no workstreams rather than everyone's; a start is pending until the index
+ * carries its session (with no queue it stays pending and can be dismissed);
+ * the workstream picker steers the kickoff, the start, and the rail's
+ * Attach; and an attachment whose workstream a later snapshot drops keeps a
+ * place with Detach.
  */
 import {
   action,
@@ -31,6 +35,7 @@ import {
 import type {
   Attachment,
   CommandValue,
+  PendingStart,
   SessionIndexView,
   StartableSourcesView,
 } from "../topic-workbench/main.tsx";
@@ -173,12 +178,14 @@ export default pattern(() => {
   });
   const attached = new Writable<Attachment[] | Default<[]>>([]);
   const commands = new Writable<CommandValue[] | Default<[]>>([]);
+  const pendingStarts = new Writable<PendingStart[] | Default<[]>>([]);
   const wb = PersonWorkbench({
     snapshot,
     person: "seefeldb",
     sessions: index,
     attached,
     commands,
+    pendingStarts,
   });
   // A name the snapshot's people do not carry: nothing shows, not everything.
   const stranger = PersonWorkbench({
@@ -254,6 +261,8 @@ export default pattern(() => {
     )
   );
 
+  // A start sends the command and records a pending start for the picked
+  // workstream; nothing is attached until the index carries the session.
   const action_start = action(() => {
     wb.startSession.send();
   });
@@ -265,10 +274,169 @@ export default pattern(() => {
     firstCommand(commands.get())?.payload?.cwd === "/w/labs" &&
     firstCommand(commands.get())?.payload?.title === "Board-load performance" &&
     firstCommand(commands.get())?.payload?.text === wb.kickoff &&
-    wb.workstreams[0]?.sessions.length === 2 &&
-    wb.workstreams[0]?.sessions[1]?.nativeSessionId ===
+    wb.workstreams[0]?.sessions.length === 1 &&
+    wb.pendingStarts.length === 1 &&
+    wb.pendingStarts[0]?.nativeSessionId ===
       firstCommand(commands.get())?.nativeSessionId &&
-    attached.get()[1]?.workstreamId === "board-load"
+    wb.pendingStarts[0]?.workstreamId === "board-load" &&
+    attached.get().length === 1 &&
+    hasText(wb[UI], "Starting · 1")
+  );
+  // The connector publishes the session: the start joins the workstream.
+  const action_confirm_start = action(() => {
+    const started = firstCommand(commands.get())?.nativeSessionId ?? "";
+    const current = index.get();
+    index.set({
+      ...current,
+      sessions: [
+        ...current.sessions,
+        {
+          sourceId: "claude",
+          nativeSessionId: started,
+          title: "Board-load performance",
+          cwd: "/w/labs",
+          gitRepo: null,
+          gitBranch: "main",
+          gitWorktreeRoot: null,
+          updatedAt: "2026-09-08T13:00:00.000Z",
+          active: true,
+          archived: false,
+          syncStatus: "complete",
+        },
+      ],
+    });
+  });
+  const assert_start_confirmed = assert(() =>
+    wb.pendingStarts.length === 0 &&
+    wb.workstreams[0]?.sessions.length === 2 &&
+    wb.workstreams[0]?.sessions.some((s) =>
+      s.nativeSessionId === firstCommand(commands.get())?.nativeSessionId &&
+      s.gitBranch === "main"
+    ) &&
+    wb.recentSessions.every((row) =>
+      row.nativeSessionId !== firstCommand(commands.get())?.nativeSessionId
+    )
+  );
+
+  // With no queue bound, a start records nothing as attached: it stays
+  // pending, and Dismiss clears it.
+  const noQueuePending = new Writable<PendingStart[] | Default<[]>>([]);
+  const noQueue = PersonWorkbench({
+    snapshot,
+    person: "seefeldb",
+    sessions: index,
+    attached: new Writable<Attachment[] | Default<[]>>([]),
+    pendingStarts: noQueuePending,
+  });
+  const action_start_without_queue = action(() => {
+    noQueue.spawnPrompt.set("Start without a queue.");
+    noQueue.startSession.send();
+  });
+  const assert_start_without_queue_pending = assert(() =>
+    noQueue.workstreams[0]?.sessions.length === 0 &&
+    noQueue.pendingStarts.length === 1 &&
+    noQueuePending.get().length === 1
+  );
+  const action_dismiss_start = action(() => {
+    clickInRow(noQueue[UI], "Board-load performance", "Dismiss");
+  });
+  const assert_start_dismissed = assert(() =>
+    noQueue.pendingStarts.length === 0 && noQueuePending.get().length === 0
+  );
+
+  // The workstream picker: a person with two workstreams picks the second,
+  // and the kickoff, the start's title, and the rail's Attach follow it.
+  const pickerAttached = new Writable<Attachment[] | Default<[]>>([]);
+  const pickerCommands = new Writable<CommandValue[] | Default<[]>>([]);
+  const picker = PersonWorkbench({
+    snapshot,
+    person: "mathpirate",
+    sessions: index,
+    attached: pickerAttached,
+    commands: pickerCommands,
+    pendingStarts: new Writable<PendingStart[] | Default<[]>>([]),
+  });
+  const action_pick_second = action(() => {
+    picker.spawnWorkstream.set("cfc-dials");
+    picker.startSession.send();
+    clickInRow(picker[UI], "an earlier session", "Attach");
+  });
+  const assert_picked_second = assert(() =>
+    picker.workstreams.length === 2 &&
+    picker.kickoff.startsWith('Work on "CFC dials".') &&
+    firstCommand(pickerCommands.get())?.payload?.title === "CFC dials" &&
+    picker.pendingStarts[0]?.workstreamId === "cfc-dials" &&
+    pickerAttached.get().find((a) => a.nativeSessionId === "aaa")
+        ?.workstreamId === "cfc-dials" &&
+    picker.workstreams[1]?.sessions.length === 1
+  );
+
+  // An attachment whose workstream a later snapshot drops keeps a place of
+  // its own, with Detach, rather than vanishing from every list.
+  const orphanSnapshot = new Writable<SnapshotView>({
+    repository: "commontoolsinc/labs",
+    generatedAt: "2026-09-11T20:00:00.000Z",
+    people: [{ name: "Gideon", login: "mathpirate" }],
+    workstreams: ["a", "b"].map((id) => ({
+      id,
+      name: `Stream ${id}`,
+      summary: "s",
+      people: ["mathpirate"],
+      topics: [],
+      prs: [],
+    })),
+  });
+  const orphanAttached = new Writable<Attachment[] | Default<[]>>([]);
+  const orphan = PersonWorkbench({
+    snapshot: orphanSnapshot,
+    person: "mathpirate",
+    sessions: index,
+    attached: orphanAttached,
+    commands: new Writable<CommandValue[] | Default<[]>>([]),
+    pendingStarts: new Writable<PendingStart[] | Default<[]>>([]),
+  });
+  const action_attach_under_b = action(() => {
+    orphan.attach.send({
+      sourceId: "claude",
+      nativeSessionId: "aaa",
+      workstreamId: "b",
+    });
+  });
+  const assert_attached_under_b = assert(() =>
+    orphan.workstreams.length === 2 &&
+    orphan.workstreams[1]?.sessions.length === 1 &&
+    orphan.orphanedSessions.length === 0
+  );
+  const action_drop_workstream_b = action(() => {
+    orphanSnapshot.set({
+      ...orphanSnapshot.get(),
+      generatedAt: "2026-09-12T06:00:00.000Z",
+      workstreams: [{
+        id: "a",
+        name: "Stream a",
+        summary: "s",
+        people: ["mathpirate"],
+        topics: [],
+        prs: [],
+      }],
+    });
+  });
+  const assert_orphaned_with_detach = assert(() =>
+    orphan.workstreams.length === 1 &&
+    orphan.workstreams[0]?.sessions.length === 0 &&
+    orphan.orphanedSessions.length === 1 &&
+    orphan.orphanedSessions[0]?.nativeSessionId === "aaa" &&
+    orphan.attachedSessions.length === 1 &&
+    orphan.recentSessions.every((row) => row.nativeSessionId !== "aaa") &&
+    hasText(orphan[UI], "Attached to work no longer shown")
+  );
+  const action_detach_orphan = action(() => {
+    clickInRow(orphan[UI], "an earlier session", "Detach");
+  });
+  const assert_orphan_detached = assert(() =>
+    orphan.orphanedSessions.length === 0 &&
+    orphanAttached.get().length === 0 &&
+    orphan.recentSessions.some((row) => row.nativeSessionId === "aaa")
   );
 
   // The rail's Attach button files the session under the picked workstream
@@ -279,7 +447,7 @@ export default pattern(() => {
   });
   const assert_clicked_attached = assert(() =>
     wb.workstreams[0]?.sessions.length === 3 &&
-    wb.workstreams[0]?.sessions[2]?.nativeSessionId === "bbb" &&
+    wb.workstreams[0]?.sessions.some((s) => s.nativeSessionId === "bbb") &&
     wb.recentSessions.length === 0
   );
   const action_click_detach = action(() => {
@@ -372,7 +540,11 @@ export default pattern(() => {
 
   // A verb call without both ids is refused and changes nothing.
   const action_attach_without_ids = action(() => {
-    wb.attach.send({ sourceId: "", nativeSessionId: "" });
+    wb.attach.send({
+      sourceId: "",
+      nativeSessionId: "",
+      workstreamId: "board-load",
+    });
   });
   const assert_attach_refused = assert(() =>
     wb.workstreams[0]?.sessions.length === 1
@@ -396,6 +568,8 @@ export default pattern(() => {
       { assertion: assert_kickoff },
       { action: action_start },
       { assertion: assert_started },
+      { action: action_confirm_start },
+      { assertion: assert_start_confirmed },
       { render: wb[UI] },
       { action: action_click_attach },
       { assertion: assert_clicked_attached },
@@ -416,6 +590,20 @@ export default pattern(() => {
       { assertion: assert_stale_pick_resolved },
       { action: action_attach_unknown_workstream },
       { assertion: assert_unknown_workstream_refused },
+      { action: action_start_without_queue },
+      { assertion: assert_start_without_queue_pending },
+      { render: noQueue[UI] },
+      { action: action_dismiss_start },
+      { assertion: assert_start_dismissed },
+      { action: action_pick_second },
+      { assertion: assert_picked_second },
+      { action: action_attach_under_b },
+      { assertion: assert_attached_under_b },
+      { action: action_drop_workstream_b },
+      { render: orphan[UI] },
+      { assertion: assert_orphaned_with_detach },
+      { action: action_detach_orphan },
+      { assertion: assert_orphan_detached },
     ],
   };
 });

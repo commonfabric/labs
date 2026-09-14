@@ -283,8 +283,7 @@ const kickoffOf = lift((
   ].join("\n\n");
 });
 
-export const shellQuote = (s: string): string =>
-  `'${s.replace(/'/g, `'\\''`)}'`;
+const shellQuote = (s: string): string => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /** The command to paste until the connector can start a session itself. */
 const spawnCommandOf = lift((
@@ -418,7 +417,7 @@ export const startSessionCommand = handler<void, {
 
 /** The ids of the sources the connector runs whose driver can start a
  * session, for the start's own check. */
-const configuredSourcesOf = lift((
+export const configuredSourcesOf = lift((
   { index }: { index?: StartableSourcesView },
 ): string[] =>
   (index?.sources ?? []).flatMap((source) =>

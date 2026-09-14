@@ -23,18 +23,31 @@ import {
 import {
   attachedRowsOf,
   type Attachment,
+  attachmentKey,
+  attachmentsOf,
   captionOf,
   type CheckoutOption,
   checkoutOptionsOf,
   type CommandValue,
+  configuredSourcesOf,
+  confirmedStartsOf,
+  dropAttachment,
+  dropPendingStart,
   mintSessionId,
+  type PendingStart,
   recentRowsOf,
+  recordAttachment,
+  recordPendingStart,
   type SessionIndexView,
+  sessionKey,
   type SessionRow,
   sessionRowsOf,
   type ShownHarness,
   sourceOptionsOf,
   type StartableSourcesView,
+  startCommandValue,
+  startSourceOf,
+  unconfirmedStartsOf,
 } from "../topic-workbench/main.tsx";
 import type {
   PersonRef,
@@ -106,6 +119,9 @@ export interface PersonWorkbenchInput {
   attached?: Writable<Attachment[] | Default<[]>>;
   /** The command queue the connector's host binds for this piece. */
   commands?: Writable<CommandValue[] | Default<[]>>;
+  /** Starts sent and not yet confirmed by the index, this piece's own
+   * record. */
+  pendingStarts?: Writable<PendingStart[] | Default<[]>>;
   /** The permission mode a started session's first turn runs under. */
   startMode?: string | Default<"">;
   /** Harnesses listed in the picker that no configured source backs. */
@@ -118,6 +134,12 @@ export interface PersonWorkbenchOutput {
   personName: string;
   workstreams: WorkstreamCard[];
   attached: Attachment[] | Default<[]>;
+  /** Every attached session, the confirmed starts among them. */
+  attachedSessions: SessionRow[];
+  /** Attached sessions whose workstream the workbench no longer shows. */
+  orphanedSessions: SessionRow[];
+  /** Starts the index has not confirmed yet. */
+  pendingStarts: PendingStart[];
   recentSessions: SessionRow[];
   kickoff: string;
   spawnPrompt: PerSession<Writable<string>>;
@@ -171,7 +193,7 @@ const cardsOf = lift((
   const attachedByWorkstream = new Map<string, SessionRow[]>();
   for (const a of attached) {
     if (!a.workstreamId) continue;
-    const key = `${a.sourceId}/${a.nativeSessionId}`;
+    const key = sessionKey(a.sourceId, a.nativeSessionId);
     const row = rowsByKey.get(key) ?? {
       key,
       sourceId: a.sourceId,
@@ -209,6 +231,25 @@ const cardsOf = lift((
 const workstreamOptionsOf = lift((
   { cards }: { cards: WorkstreamCard[] },
 ): CheckoutOption[] => cards.map((c) => ({ label: c.name, value: c.id })));
+
+/** Attached sessions no card shows: their workstream was dropped or renamed
+ * by a later snapshot, or the person no longer belongs to it. They keep a
+ * place of their own with Detach, so an attachment never becomes
+ * unreachable. */
+const orphanedRowsOf = lift((
+  { attachedRows, attached, cards }: {
+    attachedRows: SessionRow[];
+    attached: Attachment[];
+    cards: WorkstreamCard[];
+  },
+): SessionRow[] => {
+  const shown = new Set(cards.map((c) => c.id));
+  const orphanKeys = new Set(
+    attached.filter((a) => !a.workstreamId || !shown.has(a.workstreamId))
+      .map((a) => sessionKey(a.sourceId, a.nativeSessionId)),
+  );
+  return attachedRows.filter((row) => orphanKeys.has(row.key));
+});
 
 /** The workstream the composer targets: the picked one, else the first. */
 const pickedOf = lift((
@@ -263,25 +304,6 @@ const stateColor = (
 
 // ===== Handlers (browser) =====
 
-/** The key an attachment's record lives under: one per session. */
-const attachmentKey = (sourceId: string, nativeSessionId: string): string =>
-  JSON.stringify([sourceId, nativeSessionId]);
-
-/** Records an attachment when none is there and adds it to the list: a
- * keyed record and an add-if-absent membership, so two viewers attaching at
- * once both land; the record is written only when empty, so attaching a
- * session again keeps its first workstream. */
-const recordAttachment = (
-  attached: Writable<Attachment[] | Default<[]>>,
-  attachment: Attachment,
-): void => {
-  const record = attached.elementById(
-    attachmentKey(attachment.sourceId, attachment.nativeSessionId),
-  );
-  if (record.get() === undefined) record.set(attachment);
-  attached.addUnique(record);
-};
-
 /** Attaches a rail row under the composer's resolved workstream card: the
  * picked one, else the first. With no card (the person has no workstreams)
  * there is nothing to file it under, so nothing is recorded; a record with
@@ -329,35 +351,35 @@ const attachVerb = handler<AttachEvent, {
   });
 });
 
-/** Drops a session's attachment and clears its record, so a later attach of
- * the same session starts fresh rather than reviving this one. */
-const dropAttachment = (
-  attached: Writable<Attachment[] | Default<[]>>,
-  sourceId: string,
-  nativeSessionId: string,
-): void => {
-  const key = attachmentKey(sourceId, nativeSessionId);
-  attached.removeByValue(attached.elementById(key));
-  const record: Writable<Attachment | undefined> = attached.elementById(key);
-  record.set(undefined);
-};
-
 const detachRow = handler<void, {
   attached: Writable<Attachment[] | Default<[]>>;
+  pendingStarts: Writable<PendingStart[] | Default<[]>>;
   sourceId: string;
   nativeSessionId: string;
-}>((_, { attached, sourceId, nativeSessionId }) => {
+}>((_, { attached, pendingStarts, sourceId, nativeSessionId }) => {
+  // A confirmed start is attached through its pending record; detaching
+  // drops whichever record the session has.
   dropAttachment(attached, sourceId, nativeSessionId);
+  dropPendingStart(pendingStarts, sourceId, nativeSessionId);
+});
+
+const dismissStart = handler<void, {
+  pendingStarts: Writable<PendingStart[] | Default<[]>>;
+  sourceId: string;
+  nativeSessionId: string;
+}>((_, { pendingStarts, sourceId, nativeSessionId }) => {
+  dropPendingStart(pendingStarts, sourceId, nativeSessionId);
 });
 
 /**
- * Sends the connector a `start` command for the picked workstream and
- * attaches the session it names under that workstream. Exported because the
- * connector's host binds this piece's queue to this handler by name.
+ * Sends the connector a `start` command for the picked workstream and records
+ * the start as pending for that workstream; it counts as attached once the
+ * index carries the session. Exported because the connector's host binds this
+ * piece's queue to this handler by name.
  */
 export const startWorkstreamSession = handler<void, {
   commands: Writable<CommandValue[] | Default<[]>>;
-  attached: Writable<Attachment[] | Default<[]>>;
+  pendingStarts: Writable<PendingStart[] | Default<[]>>;
   spawnRoot: Writable<string>;
   spawnSource: Writable<string>;
   sourceOptions: CheckoutOption[];
@@ -367,57 +389,44 @@ export const startWorkstreamSession = handler<void, {
   card: WorkstreamCard | undefined;
   startMode: string;
 }>((_, state) => {
-  const sourceId = (state.spawnSource.get() || state.sourceOptions[0]?.value ||
-    "").trim();
+  // A harness shown for display has no source to run it, and a configured
+  // source whose driver cannot start is no harness for this either; a picker
+  // value naming one (or a stale choice) starts nothing.
+  const sourceId = startSourceOf(
+    state.spawnSource.get(),
+    state.sourceOptions,
+    state.configuredSources,
+  );
   if (!state.ownerDid || !sourceId || !state.card || !state.kickoff.trim()) {
     return;
   }
-  // A harness shown for display has no source to run it; starting is a no-op.
-  if (!state.configuredSources.includes(sourceId)) return;
-  const mode = state.startMode.trim();
   const nativeSessionId = mintSessionId();
-  const createdAt = new Date().toISOString();
-  const cwd = state.spawnRoot.get().trim();
   const title = state.card.name;
-  state.commands.push(JSON.stringify({
-    schema: "commonfabric.agent-connector.command",
+  const command = startCommandValue({
     ownerDid: state.ownerDid,
-    id: `person-workbench:${createdAt}:${nativeSessionId.slice(0, 8)}`,
-    createdAt,
+    idPrefix: "person-workbench",
     sourceId,
     nativeSessionId,
-    type: "start",
-    payload: {
-      text: state.kickoff,
-      ...(cwd ? { cwd } : {}),
-      title,
-      ...(mode ? { mode } : {}),
-    },
-  }));
-  const record = state.attached.elementById(
-    attachmentKey(sourceId, nativeSessionId),
-  );
-  record.set({
+    text: state.kickoff,
+    cwd: state.spawnRoot.get().trim(),
+    title,
+    mode: state.startMode.trim(),
+  });
+  state.commands.push(command.value);
+  // Pending, not attached: nothing here knows whether a queue took the
+  // command or the connector accepted it. The start shows as starting until
+  // the index carries the session, and can be dismissed if it never does.
+  recordPendingStart(state.pendingStarts, {
+    commandId: command.id,
     sourceId,
     nativeSessionId,
     title,
-    attachedAt: Date.now(),
+    startedAt: Date.now(),
     workstreamId: state.card.id,
   });
-  state.attached.addUnique(record);
 });
 
 // ===== The pattern =====
-
-/** The ids of the sources the connector runs whose driver can start a
- * session, for the start's own check. */
-const configuredSourcesOf = lift((
-  { index }: { index?: StartableSourcesView },
-): string[] =>
-  (index?.sources ?? []).flatMap((source) =>
-    source?.id && source.capabilities?.startSession === true ? [source.id] : []
-  )
-);
 
 /** The ids of the workstreams the workbench shows, for the attach verb. */
 const workstreamIdsOf = lift((
@@ -432,6 +441,7 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
       sessions,
       attached,
       commands,
+      pendingStarts,
       startMode,
       harnessesShown,
     },
@@ -443,16 +453,30 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
 
     const named = person ?? "";
     const personRef = personOf({ people: snapshot?.people, person });
-    const rows = sessionRowsOf({ index: sessions, attached });
+    const confirmedStarts = confirmedStartsOf({
+      pending: pendingStarts,
+      index: sessions,
+    });
+    const attachments = attachmentsOf({ attached, confirmed: confirmedStarts });
+    const startingSessions = unconfirmedStartsOf({
+      pending: pendingStarts,
+      index: sessions,
+    });
+    const rows = sessionRowsOf({ index: sessions, attached: attachments });
     const cards = cardsOf({
       workstreams: snapshot?.workstreams,
       person: personRef,
       named,
       rows,
-      attached,
+      attached: attachments,
     });
     const recentSessions = recentRowsOf({ rows, limit: 8 });
-    const attachedSessions = attachedRowsOf({ attached, rows });
+    const attachedSessions = attachedRowsOf({ attached: attachments, rows });
+    const orphanedSessions = orphanedRowsOf({
+      attachedRows: attachedSessions,
+      attached: attachments,
+      cards,
+    });
     const workstreamOptions = workstreamOptionsOf({ cards });
     const card = pickedOf({ cards, picked: spawnWorkstream });
     const kickoff = kickoffOf({ prompt: spawnPrompt, card });
@@ -475,10 +499,17 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
     const generatedAt = snapshot?.generatedAt ?? "";
     const hasCards = cards.length > 0;
     const hasRecent = recentSessions.length > 0;
+    const hasOrphans = orphanedSessions.length > 0;
+    const hasStarting = startingSessions.length > 0;
+    const startModeNote = computed(() =>
+      mode.trim()
+        ? ` The first turn runs under the "${mode.trim()}" permission mode; the kickoff below is exactly what it receives.`
+        : ""
+    );
 
     const startSession = startWorkstreamSession({
       commands,
-      attached,
+      pendingStarts,
       spawnRoot,
       spawnSource,
       sourceOptions,
@@ -492,11 +523,10 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
     const attach = attachVerb({ attached, workstreamIds });
 
     const detach = action<DetachEvent>(({ sourceId, nativeSessionId }) => {
-      dropAttachment(
-        attached,
-        (sourceId ?? "").trim(),
-        (nativeSessionId ?? "").trim(),
-      );
+      const source = (sourceId ?? "").trim();
+      const native = (nativeSessionId ?? "").trim();
+      dropAttachment(attached, source, native);
+      dropPendingStart(pendingStarts, source, native);
     });
 
     return {
@@ -624,6 +654,7 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
                               data-detach=""
                               onClick={detachRow({
                                 attached,
+                                pendingStarts,
                                 sourceId: row.sourceId,
                                 nativeSessionId: row.nativeSessionId,
                               })}
@@ -635,6 +666,57 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
                       </cf-vstack>
                     </cf-card>
                   ))}
+                  {hasOrphans
+                    ? (
+                      <cf-card data-orphaned="">
+                        <cf-vstack gap="2">
+                          <cf-heading level={5}>
+                            Attached to work no longer shown
+                          </cf-heading>
+                          <cf-text variant="caption" tone="muted">
+                            {`${orphanedSessions.length} sessions attached under a workstream this snapshot no longer lists for you.`}
+                          </cf-text>
+                          {orphanedSessions.map((row) => (
+                            <cf-hstack
+                              gap="2"
+                              align="center"
+                              data-orphan-row=""
+                            >
+                              <cf-vstack gap="0" style="flex: 1; min-width: 0;">
+                                <cf-text
+                                  block
+                                  truncate
+                                  style="font-weight: 600;"
+                                >
+                                  {row.title || "(untitled session)"}
+                                </cf-text>
+                                <cf-text
+                                  variant="caption"
+                                  tone="muted"
+                                  truncate
+                                >
+                                  {captionOf(row)}
+                                </cf-text>
+                              </cf-vstack>
+                              <cf-button
+                                variant="ghost"
+                                size="sm"
+                                data-detach=""
+                                onClick={detachRow({
+                                  attached,
+                                  pendingStarts,
+                                  sourceId: row.sourceId,
+                                  nativeSessionId: row.nativeSessionId,
+                                })}
+                              >
+                                Detach
+                              </cf-button>
+                            </cf-hstack>
+                          ))}
+                        </cf-vstack>
+                      </cf-card>
+                    )
+                    : null}
                 </cf-vstack>
 
                 {/* ── Right: the next session ── */}
@@ -682,10 +764,60 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
                           Start
                         </cf-button>
                         <cf-text variant="caption" tone="muted">
-                          Runs the first turn on this Mac through the connector
-                          and attaches the session to the workstream.
+                          Runs the first turn on this Mac through the connector;
+                          the start shows below as starting until the connector
+                          publishes the session, then joins the workstream.
+                          {startModeNote}
                         </cf-text>
                       </cf-hstack>
+                      {hasStarting
+                        ? (
+                          <cf-vstack gap="2" data-starting="">
+                            <cf-text variant="caption" tone="muted">
+                              Starting · {startingSessions.length}
+                            </cf-text>
+                            {startingSessions.map((start) => (
+                              <cf-hstack
+                                gap="2"
+                                align="center"
+                                data-starting-row=""
+                              >
+                                <cf-vstack
+                                  gap="0"
+                                  style="flex: 1; min-width: 0;"
+                                >
+                                  <cf-text
+                                    block
+                                    truncate
+                                    style="font-weight: 600;"
+                                  >
+                                    {start.title || "(untitled session)"}
+                                  </cf-text>
+                                  <cf-text
+                                    variant="caption"
+                                    tone="muted"
+                                    truncate
+                                  >
+                                    {`${start.sourceId} · sent to the connector; joins the workstream when the session appears in the index`}
+                                  </cf-text>
+                                </cf-vstack>
+                                <cf-button
+                                  variant="ghost"
+                                  size="sm"
+                                  data-dismiss=""
+                                  onClick={dismissStart({
+                                    pendingStarts,
+                                    sourceId: start.sourceId,
+                                    nativeSessionId: start.nativeSessionId,
+                                  })}
+                                >
+                                  Dismiss
+                                </cf-button>
+                              </cf-hstack>
+                            ))}
+                          </cf-vstack>
+                        )
+                        : null}
                       <cf-field label="Kickoff prompt, as it will be sent">
                         <cf-text
                           block
@@ -776,6 +908,9 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
       personName,
       workstreams: cards,
       attached,
+      attachedSessions,
+      orphanedSessions,
+      pendingStarts: startingSessions,
       recentSessions,
       kickoff,
       spawnPrompt,

@@ -63,7 +63,7 @@ const second: WorkSnapshot = {
 
 /** Snapshots publish refuses: a foreign schema, a blank repository, a
  * workstream without an id, and two workstreams sharing one; workstreams that
- * are not an array are refused at the typed boundary before the verb runs.
+ * are not an array reach the verb as no event at all, which it refuses too.
  * Assembled by patching, since no literal carries those shapes under the
  * snapshot's type. */
 const MALFORMED: WorkSnapshot[] = [
@@ -195,6 +195,7 @@ export default pattern(() => {
       workstreamId: "",
       kind: "pr",
       url: "https://github.com/commontoolsinc/labs/pull/1",
+      state: "open",
     });
     piece.pin.send({
       workstreamId: "board-load",
