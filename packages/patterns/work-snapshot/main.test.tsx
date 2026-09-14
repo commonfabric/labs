@@ -124,12 +124,14 @@ export default pattern(() => {
       kind: "pr",
       url: "https://github.com/commontoolsinc/labs/pull/6844",
       title: "Flip the server-execution default back to ON",
+      state: "open",
     });
     // A second pin of the same URL changes nothing, not even the title.
     piece.pin.send({
       workstreamId: "board-load",
       kind: "pr",
       url: "https://github.com/commontoolsinc/labs/pull/6844",
+      state: "open",
     });
     // A pinned merged pull request stays merged rather than counting open.
     piece.pin.send({
@@ -187,7 +189,7 @@ export default pattern(() => {
   );
 
   // pin and rename refuse a call missing what they key by, and pin refuses a
-  // link that is not http(s).
+  // link that is not http(s) and a pull request without its state.
   const action_pin_rename_refused = action(() => {
     piece.pin.send({
       workstreamId: "",
@@ -199,6 +201,14 @@ export default pattern(() => {
       kind: "topic",
       url: "javascript:alert(1)",
       title: "Unsafe",
+    });
+    // A pull request pin without its state is refused: its state decides
+    // whether it counts as open.
+    piece.pin.send({
+      workstreamId: "board-load",
+      kind: "pr",
+      url: "https://github.com/commontoolsinc/labs/pull/2",
+      title: "Stateless",
     });
     piece.rename.send({ workstreamId: "board-load", name: "  " });
   });
@@ -220,9 +230,9 @@ export default pattern(() => {
   return {
     [NAME]: "Work snapshot test",
     [UI]: piece[UI],
-    // The nine refused calls above each throw inside their verb, which the
-    // runner reports as runtime errors; exactly nine are expected.
-    expectRuntimeErrors: 9,
+    // The ten refused calls above each throw inside their verb, which the
+    // runner reports as runtime errors; exactly ten are expected.
+    expectRuntimeErrors: 10,
     [TESTS]: [
       { assertion: assert_empty },
       { action: action_publish },

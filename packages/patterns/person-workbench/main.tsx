@@ -14,7 +14,12 @@ import {
   WriteAuthorizedBy,
 } from "commonfabric";
 
-import { snippet, TOPICS_THEME, whenLabel } from "../topics/topic.tsx";
+import {
+  isSafeLinkUrl,
+  snippet,
+  TOPICS_THEME,
+  whenLabel,
+} from "../topics/topic.tsx";
 import {
   attachedRowsOf,
   type Attachment,
@@ -29,6 +34,7 @@ import {
   sessionRowsOf,
   type ShownHarness,
   sourceOptionsOf,
+  type StartableSourcesView,
 } from "../topic-workbench/main.tsx";
 import type {
   PersonRef,
@@ -226,10 +232,14 @@ const kickoffOf = lift((
     .filter((p) => p.state === "open" || p.state === "draft")
     .slice(0, 8)
     .map((p) => `- PR #${p.number}, "${p.title}", ${p.state}`);
+  // Only links that are http(s) go into a prompt; a stored link that is not
+  // renders as text and is not repeated here.
   const links = [
-    ...card.topics.slice(0, 6).map((t) => `- ${t.url}`),
-    ...card.prs.filter((p) => p.state === "open" || p.state === "draft")
-      .slice(0, 8).map((p) => `- ${p.url}`),
+    ...card.topics.slice(0, 6).filter((t) => isSafeLinkUrl(t.url))
+      .map((t) => `- ${t.url}`),
+    ...card.prs.filter((p) =>
+      (p.state === "open" || p.state === "draft") && isSafeLinkUrl(p.url)
+    ).slice(0, 8).map((p) => `- ${p.url}`),
   ];
   return [
     head,
@@ -257,32 +267,66 @@ const stateColor = (
 const attachmentKey = (sourceId: string, nativeSessionId: string): string =>
   JSON.stringify([sourceId, nativeSessionId]);
 
+/** Records an attachment when none is there and adds it to the list: a
+ * keyed record and an add-if-absent membership, so two viewers attaching at
+ * once both land; the record is written only when empty, so attaching a
+ * session again keeps its first workstream. */
+const recordAttachment = (
+  attached: Writable<Attachment[] | Default<[]>>,
+  attachment: Attachment,
+): void => {
+  const record = attached.elementById(
+    attachmentKey(attachment.sourceId, attachment.nativeSessionId),
+  );
+  if (record.get() === undefined) record.set(attachment);
+  attached.addUnique(record);
+};
+
+/** Attaches a rail row under the composer's resolved workstream card: the
+ * picked one, else the first. With no card (the person has no workstreams)
+ * there is nothing to file it under, so nothing is recorded; a record with
+ * no reachable card would show nowhere and could not be detached. */
 const attachToPicked = handler<void, {
   attached: Writable<Attachment[] | Default<[]>>;
-  spawnWorkstream: Writable<string>;
-  fallbackWorkstream: string;
+  card: WorkstreamCard | undefined;
   sourceId: string;
   nativeSessionId: string;
   title: string;
 }>((_, state) => {
-  const workstreamId = state.spawnWorkstream.get().trim() ||
-    state.fallbackWorkstream;
-  // A keyed record and an add-if-absent membership, so two viewers attaching
-  // at once both land; the record is written only when empty, so attaching
-  // a session again keeps its first workstream.
-  const record = state.attached.elementById(
-    attachmentKey(state.sourceId, state.nativeSessionId),
-  );
-  if (record.get() === undefined) {
-    record.set({
-      sourceId: state.sourceId,
-      nativeSessionId: state.nativeSessionId,
-      title: state.title,
-      attachedAt: Date.now(),
-      ...(workstreamId ? { workstreamId } : {}),
-    });
+  if (!state.card) return;
+  recordAttachment(state.attached, {
+    sourceId: state.sourceId,
+    nativeSessionId: state.nativeSessionId,
+    title: state.title,
+    attachedAt: Date.now(),
+    workstreamId: state.card.id,
+  });
+});
+
+/** The headless attach: a session files itself under one of the person's
+ * workstreams, which must be one the workbench shows. */
+const attachVerb = handler<AttachEvent, {
+  attached: Writable<Attachment[] | Default<[]>>;
+  workstreamIds: string[];
+}>(({ sourceId, nativeSessionId, workstreamId, title }, state) => {
+  const source = (sourceId ?? "").trim();
+  const native = (nativeSessionId ?? "").trim();
+  if (!source || !native) {
+    throw new Error("attach: sourceId and nativeSessionId are required");
   }
-  state.attached.addUnique(record);
+  const workstream = (workstreamId ?? "").trim();
+  if (!workstream || !state.workstreamIds.includes(workstream)) {
+    throw new Error(
+      "attach: workstreamId must name one of this person's workstreams",
+    );
+  }
+  recordAttachment(state.attached, {
+    sourceId: source,
+    nativeSessionId: native,
+    title: (title ?? "").trim(),
+    attachedAt: Date.now(),
+    workstreamId: workstream,
+  });
 });
 
 /** Drops a session's attachment and clears its record, so a later attach of
@@ -365,12 +409,20 @@ export const startWorkstreamSession = handler<void, {
 
 // ===== The pattern =====
 
-/** The ids of the sources the connector runs, for the start's own check. */
+/** The ids of the sources the connector runs whose driver can start a
+ * session, for the start's own check. */
 const configuredSourcesOf = lift((
-  { index }: { index?: SessionIndexView },
+  { index }: { index?: StartableSourcesView },
 ): string[] =>
-  (index?.sources ?? []).flatMap((source) => source?.id ? [source.id] : [])
+  (index?.sources ?? []).flatMap((source) =>
+    source?.id && source.capabilities?.startSession === true ? [source.id] : []
+  )
 );
+
+/** The ids of the workstreams the workbench shows, for the attach verb. */
+const workstreamIdsOf = lift((
+  { cards }: { cards: WorkstreamCard[] },
+): string[] => cards.map((card) => card.id));
 
 export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
   (
@@ -418,7 +470,7 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
         ? `No one named ${(person ?? "").trim()} is in the current snapshot.`
         : "No workstreams name this person in the current snapshot."
     );
-    const fallbackWorkstream = computed(() => cards[0]?.id ?? "");
+    const workstreamIds = workstreamIdsOf({ cards });
     const repository = snapshot?.repository ?? "";
     const generatedAt = snapshot?.generatedAt ?? "";
     const hasCards = cards.length > 0;
@@ -437,28 +489,7 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
       startMode: mode,
     });
 
-    const attach = action<AttachEvent>(
-      ({ sourceId, nativeSessionId, workstreamId, title }) => {
-        const source = (sourceId ?? "").trim();
-        const native = (nativeSessionId ?? "").trim();
-        if (!source || !native) {
-          throw new Error("attach: sourceId and nativeSessionId are required");
-        }
-        const record = attached.elementById(attachmentKey(source, native));
-        if (record.get() === undefined) {
-          record.set({
-            sourceId: source,
-            nativeSessionId: native,
-            title: (title ?? "").trim(),
-            attachedAt: Date.now(),
-            ...(workstreamId?.trim()
-              ? { workstreamId: workstreamId.trim() }
-              : {}),
-          });
-        }
-        attached.addUnique(record);
-      },
-    );
+    const attach = attachVerb({ attached, workstreamIds });
 
     const detach = action<DetachEvent>(({ sourceId, nativeSessionId }) => {
       dropAttachment(
@@ -511,14 +542,25 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
                         {c.topics.map((topic) => (
                           <cf-hstack gap="2" align="center" data-topic-row="">
                             <cf-badge size="xs" color="neutral">topic</cf-badge>
-                            <a
-                              href={topic.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              style="color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;"
-                            >
-                              {topic.title}
-                            </a>
+                            {isSafeLinkUrl(topic.url)
+                              ? (
+                                <a
+                                  href={topic.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  style="color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;"
+                                >
+                                  {topic.title}
+                                </a>
+                              )
+                              : (
+                                <cf-text
+                                  tone="muted"
+                                  style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;"
+                                >
+                                  {topic.title}
+                                </cf-text>
+                              )}
                             <cf-text variant="caption" tone="muted">
                               {topic.lastActivityAt
                                 ? whenLabel(topic.lastActivityAt)
@@ -531,14 +573,25 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
                             <cf-badge size="xs" color={stateColor(pr.state)}>
                               {pr.state}
                             </cf-badge>
-                            <a
-                              href={pr.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              style="color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;"
-                            >
-                              #{pr.number} {pr.title}
-                            </a>
+                            {isSafeLinkUrl(pr.url)
+                              ? (
+                                <a
+                                  href={pr.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  style="color: inherit; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;"
+                                >
+                                  #{pr.number} {pr.title}
+                                </a>
+                              )
+                              : (
+                                <cf-text
+                                  tone="muted"
+                                  style="overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1;"
+                                >
+                                  #{pr.number} {pr.title}
+                                </cf-text>
+                              )}
                             <cf-text variant="caption" tone="muted">
                               {pr.updatedAt.slice(0, 10)}
                             </cf-text>
@@ -691,10 +744,10 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
                                   variant="secondary"
                                   size="sm"
                                   data-attach=""
+                                  disabled={computed(() => !hasCards)}
                                   onClick={attachToPicked({
                                     attached,
-                                    spawnWorkstream,
-                                    fallbackWorkstream,
+                                    card,
                                     sourceId: row.sourceId,
                                     nativeSessionId: row.nativeSessionId,
                                     title: row.title,

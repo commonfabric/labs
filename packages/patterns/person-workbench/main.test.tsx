@@ -26,11 +26,13 @@ import {
   hasExactText,
   hasText,
   propsOf,
+  propValue,
 } from "../test/vnode-helpers.ts";
 import type {
   Attachment,
   CommandValue,
   SessionIndexView,
+  StartableSourcesView,
 } from "../topic-workbench/main.tsx";
 import PersonWorkbench, { type SnapshotView } from "./main.tsx";
 
@@ -91,6 +93,10 @@ export default pattern(() => {
           url: "https://estuary.example/of:fid1:topic",
           summary: "The board loads in 4.5 s; the residual is naming waves.",
           lastActivityAt: 1_700_000_000_000,
+        }, {
+          // Stored by a producer without the snapshot's guard: text, no anchor.
+          title: "Legacy topic",
+          url: "javascript:alert(1)",
         }],
         prs: [
           {
@@ -110,6 +116,14 @@ export default pattern(() => {
             updatedAt: "2026-09-03T00:00:00.000Z",
             mergedAt: "2026-09-03T00:00:00.000Z",
           },
+          {
+            repo: "commontoolsinc/labs",
+            number: 1,
+            title: "Legacy pull",
+            state: "closed",
+            url: "javascript:alert(2)",
+            updatedAt: "2026-09-01T00:00:00.000Z",
+          },
         ],
       },
       {
@@ -122,10 +136,14 @@ export default pattern(() => {
       },
     ],
   });
-  const index = new Writable<SessionIndexView>({
+  const index = new Writable<SessionIndexView & StartableSourcesView>({
     schema: "commonfabric.agent-connector.session-index",
     ownerDid: "did:key:owner",
-    sources: [{ id: "claude", driver: "claude-agent-sdk" }],
+    sources: [{
+      id: "claude",
+      driver: "claude-agent-sdk",
+      capabilities: { startSession: true },
+    }],
     sessions: [{
       sourceId: "claude",
       nativeSessionId: "aaa",
@@ -176,6 +194,19 @@ export default pattern(() => {
       stranger[UI],
       "No one named nobody is in the current snapshot.",
     )
+  );
+
+  // A stored link that is not http(s) renders as text with no anchor, and
+  // the kickoff does not repeat it.
+  const assert_links_safe = assert(() =>
+    findNode(
+        wb[UI],
+        (node) =>
+          propValue(node, "href") === "javascript:alert(1)" ||
+          propValue(node, "href") === "javascript:alert(2)",
+      ) === undefined &&
+    hasText(wb[UI], "Legacy topic") && hasText(wb[UI], "Legacy pull") &&
+    !wb.kickoff.includes("javascript:")
   );
 
   const assert_person = assert(() =>
@@ -283,6 +314,7 @@ export default pattern(() => {
   // A snapshot with no workstreams gives the person no card to start from,
   // so a start sends nothing.
   const nobodysCommands = new Writable<CommandValue[] | Default<[]>>([]);
+  const nobodysAttached = new Writable<Attachment[] | Default<[]>>([]);
   const nobody = PersonWorkbench({
     snapshot: new Writable<SnapshotView>({
       repository: "",
@@ -292,7 +324,7 @@ export default pattern(() => {
     }),
     person: "nobody",
     sessions: index,
-    attached: new Writable<Attachment[] | Default<[]>>([]),
+    attached: nobodysAttached,
     commands: nobodysCommands,
   });
   const action_start_without_card = action(() => {
@@ -300,6 +332,42 @@ export default pattern(() => {
   });
   const assert_nothing_started = assert(() =>
     nobody.workstreams.length === 0 && nobodysCommands.get().length === 0
+  );
+  // With no workstream to file under, the rail's Attach is disabled and the
+  // verb refuses: a record no card reaches would show nowhere.
+  const action_attach_without_card = action(() => {
+    nobody.attach.send({
+      sourceId: "claude",
+      nativeSessionId: "aaa",
+      workstreamId: "board-load",
+    });
+  });
+  const assert_attach_without_card_refused = assert(() =>
+    nobodysAttached.get().length === 0 &&
+    propValue(findNode(nobody[UI], isButton("Attach")), "disabled") === true
+  );
+
+  // A stale pick names no visible workstream: the rail files the row under
+  // the resolved card (the first), and the verb refuses the unknown id.
+  const action_attach_stale_pick = action(() => {
+    wb.spawnWorkstream.set("gone");
+    clickInRow(wb[UI], "something for later", "Attach");
+  });
+  const assert_stale_pick_resolved = assert(() =>
+    attached.get().find((a) => a.nativeSessionId === "bbb")?.workstreamId ===
+      "board-load" &&
+    wb.workstreams[0]?.sessions.some((s) => s.nativeSessionId === "bbb") ===
+      true
+  );
+  const action_attach_unknown_workstream = action(() => {
+    wb.attach.send({
+      sourceId: "claude",
+      nativeSessionId: "ccc",
+      workstreamId: "gone",
+    });
+  });
+  const assert_unknown_workstream_refused = assert(() =>
+    attached.get().every((a) => a.nativeSessionId !== "ccc")
   );
 
   // A verb call without both ids is refused and changes nothing.
@@ -313,13 +381,15 @@ export default pattern(() => {
   return {
     [NAME]: "Person workbench test",
     [UI]: wb[UI],
-    // The refused attach above throws inside the verb, which the runner
-    // reports as a runtime error; exactly one is expected.
-    expectRuntimeErrors: 1,
+    // The three refused attaches above (no ids, no card, an unknown
+    // workstream) each throw inside the verb, which the runner reports as
+    // runtime errors; exactly three are expected.
+    expectRuntimeErrors: 3,
     [TESTS]: [
       { assertion: assert_stranger },
       { assertion: assert_person },
       { render: wb[UI] },
+      { assertion: assert_links_safe },
       { action: action_attach },
       { assertion: assert_attached },
       { action: action_compose },
@@ -340,6 +410,12 @@ export default pattern(() => {
       { assertion: assert_nothing_started },
       { action: action_attach_without_ids },
       { assertion: assert_attach_refused },
+      { action: action_attach_without_card },
+      { assertion: assert_attach_without_card_refused },
+      { action: action_attach_stale_pick },
+      { assertion: assert_stale_pick_resolved },
+      { action: action_attach_unknown_workstream },
+      { assertion: assert_unknown_workstream_refused },
     ],
   };
 });

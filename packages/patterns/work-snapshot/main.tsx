@@ -122,9 +122,17 @@ export interface PinEvent {
   kind: "topic" | "pr";
   url: string;
   title?: string;
-  /** For a pull request: its state, so a merged one is not counted open. */
+  /** A pull request's state, required for a pull request pin so a merged or
+   * closed one is not counted open; not read for a topic. */
   state?: PullRequestRef["state"];
 }
+
+const PULL_REQUEST_STATES: ReadonlySet<string> = new Set([
+  "open",
+  "draft",
+  "merged",
+  "closed",
+]);
 
 export interface UnpinEvent {
   workstreamId: string;
@@ -204,6 +212,8 @@ const workstreamsOf = lift((
         repo: repoOfPullRequestUrl(p.url),
         number: numberOfPullRequestUrl(p.url),
         title: p.title,
+        // The verb requires a state for a pull request pin; a record without
+        // one predates that rule.
         state: p.state ?? "open",
         url: p.url,
         updatedAt: new Date(p.pinnedAt).toISOString(),
@@ -320,6 +330,11 @@ export default pattern<SnapshotInput, SnapshotOutput>(
         }
         if (!isSafeLinkUrl(target)) {
           throw new Error("pin: url must be http(s)");
+        }
+        if (kind === "pr" && !PULL_REQUEST_STATES.has(state ?? "")) {
+          throw new Error(
+            "pin: a pull request pin needs its state (open, draft, merged, or closed)",
+          );
         }
         // The record is keyed, so two people pinning at once both land, and
         // membership is a server-side add-if-absent. The record is written
