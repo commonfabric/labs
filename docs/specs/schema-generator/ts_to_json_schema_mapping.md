@@ -120,12 +120,16 @@ over each arm's own keys and so distribute over a union, arm by arm; on an
 array they map the elements, which count as optional: `Partial` admits
 `undefined` into the items, `Required` removes it. `Required` reads its
 argument node wherever the schema has already lost the optionality it acts
-on: a union is viewed member by member, a tuple is lowered from its node,
-and a spread tuple expands into its own elements — aliases opened along the
-way, through parentheses and `readonly`, a circular one only once — so an
-optional element's `undefined` goes while a plain element's authored
-`undefined` stays, spread or in a union alike; a tuple the rules cannot
-open that way (a generic alias) is treated as an array. `Pick` and `Omit` map
+on: a union is viewed member by member, and a tuple's slots are read as the
+checker reads them — spreads expanded, a spread over a union of tuples one
+alternative per member, an optional slot that a required slot follows made
+required with `undefined` in what it holds, and the library's `Readonly`,
+`NonNullable`, `Required`, and `Partial` opened onto the slots they wrap,
+the last two applied there — aliases opened along the way, through
+parentheses and `readonly`, a circular one only once. An optional or rest
+slot then loses `undefined` while a required slot keeps it, authored or
+normalized in, spread, wrapped, or in a union alike; a tuple the rules
+cannot open that way (a generic alias) is treated as an array. `Pick` and `Omit` map
 over `keyof T`, and the keys of a union are the keys every arm has, so
 `Pick<A | B, K>` and `Omit<A | B, K>` are one object over the surface the
 arms share: a property accepts what any arm's does and is required only

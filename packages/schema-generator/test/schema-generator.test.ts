@@ -1338,6 +1338,272 @@ type CalculatorRequest = {
       expect(await generateNamed(alias("Required", alias("Loop")))).toBe(true);
     });
 
+    it("normalizes tuple optionality after expanding spreads, before `Required`", async () => {
+      // The checker makes an optional slot that a required slot follows
+      // required, `undefined` in what it holds; `Required` then keeps that
+      // `undefined`. A slot followed only by optional or rest slots stays
+      // optional and loses it.
+      const schemaOf = async (node: ts.TypeNode) =>
+        ((await generateNamed(node)) as { schema: unknown }).schema;
+      const numberNode = () =>
+        f.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword);
+      const fooUndefinedNumber = {
+        type: "array",
+        items: {
+          anyOf: [
+            { $ref: "#/$defs/Foo" },
+            { type: "undefined" },
+            { type: "number" },
+          ],
+        },
+      };
+      const fooNumber = {
+        type: "array",
+        items: { anyOf: [{ $ref: "#/$defs/Foo" }, { type: "number" }] },
+      };
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              f.createOptionalTypeNode(alias("Foo")),
+              f.createRestTypeNode(f.createTupleTypeNode([numberNode()])),
+            ]),
+          ),
+        ),
+      ).toEqual(fooUndefinedNumber);
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              f.createRestTypeNode(
+                f.createTupleTypeNode([f.createOptionalTypeNode(alias("Foo"))]),
+              ),
+              numberNode(),
+            ]),
+          ),
+        ),
+      ).toEqual(fooUndefinedNumber);
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              f.createOptionalTypeNode(alias("Foo")),
+              f.createRestTypeNode(f.createArrayTypeNode(numberNode())),
+            ]),
+          ),
+        ),
+      ).toEqual(fooNumber);
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              f.createOptionalTypeNode(alias("Foo")),
+              f.createRestTypeNode(
+                f.createTupleTypeNode([f.createOptionalTypeNode(numberNode())]),
+              ),
+            ]),
+          ),
+        ),
+      ).toEqual(fooNumber);
+      const fooUndefinedTail = {
+        type: "array",
+        items: {
+          anyOf: [
+            { $ref: "#/$defs/Foo" },
+            { type: "undefined" },
+            { type: ["string", "undefined"] },
+          ],
+        },
+      };
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              f.createOptionalTypeNode(alias("Foo")),
+              f.createRestTypeNode(alias("Tail")),
+            ]),
+          ),
+        ),
+      ).toEqual(fooUndefinedTail);
+      // One alternative keeps the slot optional, the other makes it
+      // required; the items form holds both.
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              f.createOptionalTypeNode(alias("Foo")),
+              f.createRestTypeNode(
+                f.createParenthesizedType(
+                  f.createUnionTypeNode([
+                    alias("Tail"),
+                    f.createTupleTypeNode([]),
+                  ]),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ).toEqual(fooUndefinedTail);
+      // As authored, the normalized slot reads the same as an optional one.
+      expect(
+        await schemaOf(
+          f.createTupleTypeNode([
+            f.createOptionalTypeNode(alias("Foo")),
+            numberNode(),
+          ]),
+        ),
+      ).toEqual(fooUndefinedNumber);
+    });
+
+    it("keeps a tuple's slots through the library's wrappers under `Required`", async () => {
+      // `Readonly`, `NonNullable`, `Required`, and `Partial` are opened onto
+      // the slots they wrap — the last two applied there — so the outer
+      // `Required` still sees which `undefined` is authored.
+      const schemaOf = async (node: ts.TypeNode) =>
+        ((await generateNamed(node)) as { schema: unknown }).schema;
+      const undefinedNode = () =>
+        f.createKeywordTypeNode(ts.SyntaxKind.UndefinedKeyword);
+      const numberNode = () =>
+        f.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword);
+      const fooStringOrUndefined = () =>
+        f.createTupleTypeNode([
+          alias("Foo"),
+          f.createUnionTypeNode([stringNode(), undefinedNode()]),
+        ]);
+      const keptUndefined = {
+        type: "array",
+        items: {
+          anyOf: [
+            { $ref: "#/$defs/Foo" },
+            { type: "string" },
+            { type: "undefined" },
+          ],
+        },
+      };
+      for (const wrapper of ["Readonly", "Required", "NonNullable"]) {
+        expect(
+          await schemaOf(
+            alias("Required", alias(wrapper, fooStringOrUndefined())),
+          ),
+        ).toEqual(keptUndefined);
+      }
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              alias("Foo"),
+              f.createRestTypeNode(
+                alias(
+                  "Readonly",
+                  f.createTupleTypeNode([
+                    f.createUnionTypeNode([stringNode(), undefinedNode()]),
+                  ]),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ).toEqual(keptUndefined);
+      // `Partial` makes every slot optional, so `Required` strips them all.
+      expect(
+        await schemaOf(
+          alias("Required", alias("Partial", fooStringOrUndefined())),
+        ),
+      ).toEqual({
+        type: "array",
+        items: { anyOf: [{ $ref: "#/$defs/Foo" }, { type: "string" }] },
+      });
+      const fooUndefinedNumber = {
+        type: "array",
+        items: {
+          anyOf: [
+            { $ref: "#/$defs/Foo" },
+            { type: "undefined" },
+            { type: "number" },
+          ],
+        },
+      };
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            alias(
+              "Readonly",
+              f.createTupleTypeNode([
+                f.createOptionalTypeNode(alias("Foo")),
+                numberNode(),
+              ]),
+            ),
+          ),
+        ),
+      ).toEqual(fooUndefinedNumber);
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              f.createRestTypeNode(
+                alias("Partial", f.createTupleTypeNode([alias("Foo")])),
+              ),
+              numberNode(),
+            ]),
+          ),
+        ),
+      ).toEqual(fooUndefinedNumber);
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              f.createRestTypeNode(
+                alias(
+                  "Partial",
+                  f.createTupleTypeNode([
+                    alias("Foo"),
+                    f.createRestTypeNode(f.createArrayTypeNode(numberNode())),
+                  ]),
+                ),
+              ),
+              stringNode(),
+            ]),
+          ),
+        ),
+      ).toEqual({
+        type: "array",
+        items: {
+          anyOf: [
+            { $ref: "#/$defs/Foo" },
+            { type: "undefined" },
+            { type: "number" },
+            { type: "string" },
+          ],
+        },
+      });
+    });
+
+    it("spreads what a rest element names when it is no array", async () => {
+      // A rest element over a non-array type is a program the checker
+      // rejects; this path contributes what it names rather than nothing.
+      expect(
+        ((await generateNamed(
+          f.createTupleTypeNode([
+            alias("Foo"),
+            f.createRestTypeNode(stringNode()),
+          ]),
+        )) as { schema: unknown }).schema,
+      ).toEqual({
+        type: "array",
+        items: { anyOf: [{ $ref: "#/$defs/Foo" }, { type: "string" }] },
+      });
+    });
+
     it("opens a rest element over a union of tuples", async () => {
       // `[Foo, ...(Tail | [number])]` is a union of tuples to the checker;
       // in the positionless items form, each tuple's elements lie flat.

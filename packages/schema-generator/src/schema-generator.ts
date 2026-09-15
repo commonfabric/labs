@@ -263,6 +263,89 @@ function pickedView(
 /** The alias declarations already opened on one path — see `#openTypeNode`. */
 type OpenedAliases = ReadonlySet<ts.TypeAliasDeclaration>;
 
+/** One slot of a tuple as the checker sees it once spreads are expanded. */
+type TupleSlot = {
+  kind: "required" | "optional" | "rest";
+  schema: MutableJSONSchema;
+};
+
+/**
+ * A tuple's slots as the checker normalizes them: an optional slot that a
+ * required slot follows is required, `undefined` added to what it holds,
+ * since a value filling the later slot has to spell the earlier one out.
+ */
+function normalizeTuple(slots: TupleSlot[]): TupleSlot[] {
+  const lastRequired = slots.findLastIndex((slot) => slot.kind === "required");
+  return slots.map((slot, index) =>
+    slot.kind === "optional" && index < lastRequired
+      ? {
+        kind: "required",
+        schema: unionOfSchemas([slot.schema, { type: "undefined" }]),
+      }
+      : slot
+  );
+}
+
+/**
+ * A tuple's slots as `Required<T>` leaves them: no slot optional, and
+ * `undefined` gone from what an optional or a rest slot held — those count
+ * as optional — while a required slot keeps an authored `undefined`.
+ */
+function requiredSlots(
+  slots: TupleSlot[],
+  context: GenerationContext,
+): TupleSlot[] {
+  return slots.map((slot) =>
+    slot.kind === "required" ? slot : {
+      kind: slot.kind === "rest" ? "rest" : "required",
+      schema: withoutUndefined(slot.schema, context),
+    }
+  );
+}
+
+/**
+ * A tuple's slots as `Partial<T>` leaves them: every slot optional, a rest
+ * slot's elements admitting `undefined`.
+ */
+function partialSlots(slots: TupleSlot[]): TupleSlot[] {
+  return slots.map((slot) =>
+    slot.kind === "rest"
+      ? {
+        kind: "rest",
+        schema: unionOfSchemas([slot.schema, { type: "undefined" }]),
+      }
+      : { kind: "optional", schema: slot.schema }
+  );
+}
+
+/**
+ * What a schema spread into a tuple contributes: an array's items, held in
+ * a rest slot — or, for a schema that is no array (a program the checker
+ * rejects), the schema itself.
+ */
+function restSlot(schema: MutableJSONSchema): TupleSlot {
+  if (isArraySchema(schema) && schema.items !== undefined) {
+    return { kind: "rest", schema: schema.items as MutableJSONSchema };
+  }
+  return { kind: "rest", schema };
+}
+
+/**
+ * The positionless items schema of tuples with these slots, one list per
+ * alternative: every slot's schema, an optional slot admitting `undefined`
+ * as well, since an omitted one reads as `undefined` and the type-based
+ * path admits it into the items union.
+ */
+function tupleItems(alternatives: TupleSlot[][]): MutableJSONSchema {
+  return unionOfSchemas(
+    alternatives.flat().map((slot) =>
+      slot.kind === "optional"
+        ? unionOfSchemas([slot.schema, { type: "undefined" }])
+        : slot.schema
+    ),
+  );
+}
+
 type NullishName = "null" | "undefined";
 const NULLISH: ReadonlySet<NullishName> = new Set(["null", "undefined"]);
 const UNDEFINED_ONLY: ReadonlySet<NullishName> = new Set(["undefined"]);
@@ -1177,13 +1260,12 @@ export class SchemaGenerator {
     // accept-anything fallback, so a tuple of `unknown` — reference-only
     // slots — read as a request for everything.
     if (ts.isTupleTypeNode(typeNode)) {
-      return this.#lowerTuple(
-        typeNode,
-        checker,
-        context,
-        "authored",
-        new Set(),
-      );
+      return {
+        type: "array",
+        items: tupleItems(
+          this.#slotsOfTupleNode(typeNode, checker, context, new Set()),
+        ),
+      };
     }
 
     // An intersection of object types merges the way IntersectionFormatter
@@ -1378,39 +1460,74 @@ export class SchemaGenerator {
   }
 
   /**
-   * A tuple lowered to an array of its element union — see `#tupleItems`.
+   * The slots of the tuples `node` denotes, one list per alternative — a
+   * union of tuples, spread or wrapped, has several — or `undefined` when
+   * `node` denotes no tuple these rules can read: an array, an object, a
+   * generic alias. `node` is opened through parentheses, `readonly`, and
+   * aliases, and through the default library's `Readonly`, `NonNullable`,
+   * `Required`, and `Partial`, the last two applied to the slots they wrap,
+   * so the optionality an outer `Required` acts on survives any composition
+   * of them.
    */
-  #lowerTuple(
-    tuple: ts.TupleTypeNode,
+  #tupleSlots(
+    node: ts.TypeNode,
     checker: ts.TypeChecker,
     context: GenerationContext,
-    mode: "authored" | "required",
     opened: OpenedAliases,
-  ): MutableJSONSchema {
-    return {
-      type: "array",
-      items: this.#tupleItems(tuple, checker, context, mode, opened),
-    };
+  ): TupleSlot[][] | undefined {
+    const behind = this.#openTypeNode(node, checker, context, opened);
+    const target = behind.node;
+    if (ts.isUnionTypeNode(target)) {
+      const members = target.types.map((member) =>
+        this.#tupleSlots(member, checker, context, behind.opened)
+      );
+      return members.every((member) => member !== undefined)
+        ? (members as TupleSlot[][][]).flat()
+        : undefined;
+    }
+    if (ts.isTupleTypeNode(target)) {
+      return this.#slotsOfTupleNode(target, checker, context, behind.opened);
+    }
+    if (
+      ts.isTypeReferenceNode(target) && ts.isIdentifier(target.typeName) &&
+      target.typeArguments?.length === 1 &&
+      this.#isLibraryDeclaredName(target, target.typeName, checker, context)
+    ) {
+      const wrapped = () =>
+        this.#tupleSlots(
+          target.typeArguments![0]!,
+          checker,
+          context,
+          behind.opened,
+        );
+      switch (target.typeName.text) {
+        case "Readonly":
+        case "NonNullable":
+          return wrapped();
+        case "Required":
+          return wrapped()?.map((slots) => requiredSlots(slots, context));
+        case "Partial":
+          return wrapped()?.map(partialSlots);
+      }
+    }
+    return undefined;
   }
 
   /**
-   * The union of a tuple's elements: an element's schema as
-   * `#analyzeChildNode` gives it; a rest element contributing what lies
-   * behind it (`#restItems`); an optional element admitting `undefined` as
-   * well, since an omitted one reads as `undefined` and the type-based path
-   * admits it into the items union. Under `"required"` the tuple is read as
-   * `Required<T>` reads it: an optional element is made plain and loses
-   * `undefined` from its own type, while a plain element keeps an authored
-   * `undefined`.
+   * The slots of a tuple type node, one list per alternative: a spread
+   * tuple's slots inlined, each with its own optionality, a spread over a
+   * union of tuples multiplying the alternatives; anything else spread
+   * being an array, a rest slot holding its items, read through a reference
+   * and a union of arrays; then each alternative normalized as the checker
+   * normalizes a tuple.
    */
-  #tupleItems(
+  #slotsOfTupleNode(
     tuple: ts.TupleTypeNode,
     checker: ts.TypeChecker,
     context: GenerationContext,
-    mode: "authored" | "required",
     opened: OpenedAliases,
-  ): MutableJSONSchema {
-    const elementSchemas: MutableJSONSchema[] = [];
+  ): TupleSlot[][] {
+    let alternatives: TupleSlot[][] = [[]];
     for (const element of tuple.elements) {
       const rest = ts.isRestTypeNode(element) ||
         (ts.isNamedTupleMember(element) &&
@@ -1422,68 +1539,28 @@ export class SchemaGenerator {
           ts.isRestTypeNode(element) || ts.isOptionalTypeNode(element)
         ? element.type
         : element;
-      if (rest) {
-        elementSchemas.push(
-          ...this.#restItems(inner, checker, context, mode, opened),
-        );
-        continue;
-      }
-      const schema = this.#analyzeChildNode(inner, checker, context);
-      elementSchemas.push(
-        optional && mode === "required"
-          ? withoutUndefined(schema, context)
-          : schema,
-      );
-      if (optional && mode === "authored") {
-        elementSchemas.push({ type: "undefined" });
-      }
-    }
-    return unionOfSchemas(elementSchemas);
-  }
-
-  /**
-   * What a rest element spreads into a tuple. A spread tuple — opened
-   * through parentheses, `readonly`, and aliases — expands into its own
-   * elements, each keeping its own optionality under `"required"`, and a
-   * union of them into each member's. Anything else is an array: its
-   * items, read through a reference and a union of arrays, and, under
-   * `"required"`, without `undefined`, as an array's elements count as
-   * optional.
-   */
-  #restItems(
-    node: ts.TypeNode,
-    checker: ts.TypeChecker,
-    context: GenerationContext,
-    mode: "authored" | "required",
-    opened: OpenedAliases,
-  ): MutableJSONSchema[] {
-    const behind = this.#openTypeNode(node, checker, context, opened);
-    if (ts.isUnionTypeNode(behind.node)) {
-      return behind.node.types.flatMap((member) =>
-        this.#restItems(member, checker, context, mode, behind.opened)
+      const contributions: TupleSlot[][] = rest
+        ? this.#tupleSlots(inner, checker, context, opened) ??
+          unionArms(this.#analyzeChildNode(inner, checker, context), context)
+            .map((arm) => [restSlot(arm)])
+        : [[{
+          kind: optional ? "optional" : "required",
+          schema: this.#analyzeChildNode(inner, checker, context),
+        }]];
+      alternatives = alternatives.flatMap((prefix) =>
+        contributions.map((slots) => [...prefix, ...slots])
       );
     }
-    if (ts.isTupleTypeNode(behind.node)) {
-      return [
-        this.#tupleItems(behind.node, checker, context, mode, behind.opened),
-      ];
-    }
-    return unionArms(this.#analyzeChildNode(node, checker, context), context)
-      .map((arm) => {
-        const items = isArraySchema(arm) && arm.items !== undefined
-          ? arm.items as MutableJSONSchema
-          : arm;
-        return mode === "required" ? withoutUndefined(items, context) : items;
-      });
+    return alternatives.map(normalizeTuple);
   }
 
   /**
    * `Required<T>` applied to `node`. The node is read rather than its
-   * schema wherever the schema has already lost what `Required` acts on:
-   * a tuple's element optionality, which a union or a spread would
-   * otherwise carry into the positionless items form. So a union is viewed
-   * member by member and a tuple is lowered under `"required"`, aliases
-   * opened along the way; anything else maps its schema's arms.
+   * schema wherever the schema has already lost what `Required` acts on: a
+   * tuple's slot optionality, which the positionless items form drops. So
+   * a union is viewed member by member, and a tuple's slots are read
+   * (`#tupleSlots`) and made required; anything else maps its schema's
+   * arms.
    */
   #requiredView(
     node: ts.TypeNode,
@@ -1499,14 +1576,14 @@ export class SchemaGenerator {
         ),
       );
     }
-    if (ts.isTupleTypeNode(behind.node)) {
-      return this.#lowerTuple(
-        behind.node,
-        checker,
-        context,
-        "required",
-        behind.opened,
-      );
+    const slots = this.#tupleSlots(node, checker, context, opened);
+    if (slots !== undefined) {
+      return {
+        type: "array",
+        items: tupleItems(
+          slots.map((alternative) => requiredSlots(alternative, context)),
+        ),
+      };
     }
     return mapArms(
       this.#analyzeChildNode(node, checker, context),
