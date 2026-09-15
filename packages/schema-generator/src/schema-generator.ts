@@ -319,6 +319,26 @@ function partialSlots(slots: TupleSlot[]): TupleSlot[] {
 }
 
 /**
+ * The default library's aliases that map a type without changing whether it
+ * is a tuple, and distribute over a union: what `#requiredView` peels to
+ * reach the tuple or union they wrap.
+ */
+const LIBRARY_WRAPPER_NAMES = new Set([
+  "Readonly",
+  "NonNullable",
+  "Required",
+  "Partial",
+]);
+
+/** Whether a type node is `null` or `undefined`, what `NonNullable` removes. */
+function isNullishTypeNode(node: ts.TypeNode): boolean {
+  return node.kind === ts.SyntaxKind.UndefinedKeyword ||
+    node.kind === ts.SyntaxKind.NullKeyword ||
+    (ts.isLiteralTypeNode(node) &&
+      node.literal.kind === ts.SyntaxKind.NullKeyword);
+}
+
+/**
  * What a schema spread into a tuple contributes: an array's items, held in
  * a rest slot — or, for a schema that is no array (a program the checker
  * rejects), the schema itself.
@@ -1465,22 +1485,26 @@ export class SchemaGenerator {
    * `node` denotes no tuple these rules can read: an array, an object, a
    * generic alias. `node` is opened through parentheses, `readonly`, and
    * aliases, and through the default library's `Readonly`, `NonNullable`,
-   * `Required`, and `Partial`, the last two applied to the slots they wrap,
-   * so the optionality an outer `Required` acts on survives any composition
-   * of them.
+   * `Required`, and `Partial` — `NonNullable` dropping a union's `null` and
+   * `undefined` members (`nonNullable`), the last two applied to the slots
+   * they wrap — so the optionality an outer `Required` acts on survives any
+   * composition of them.
    */
   #tupleSlots(
     node: ts.TypeNode,
     checker: ts.TypeChecker,
     context: GenerationContext,
     opened: OpenedAliases,
+    nonNullable = false,
   ): TupleSlot[][] | undefined {
     const behind = this.#openTypeNode(node, checker, context, opened);
     const target = behind.node;
     if (ts.isUnionTypeNode(target)) {
-      const members = target.types.map((member) =>
-        this.#tupleSlots(member, checker, context, behind.opened)
-      );
+      const members = target.types
+        .filter((member) => !(nonNullable && isNullishTypeNode(member)))
+        .map((member) =>
+          this.#tupleSlots(member, checker, context, behind.opened, nonNullable)
+        );
       return members.every((member) => member !== undefined)
         ? (members as TupleSlot[][][]).flat()
         : undefined;
@@ -1493,17 +1517,19 @@ export class SchemaGenerator {
       target.typeArguments?.length === 1 &&
       this.#isLibraryDeclaredName(target, target.typeName, checker, context)
     ) {
-      const wrapped = () =>
+      const wrapped = (dropNullish = nonNullable) =>
         this.#tupleSlots(
           target.typeArguments![0]!,
           checker,
           context,
           behind.opened,
+          dropNullish,
         );
       switch (target.typeName.text) {
         case "Readonly":
-        case "NonNullable":
           return wrapped();
+        case "NonNullable":
+          return wrapped(true);
         case "Required":
           return wrapped()?.map((slots) => requiredSlots(slots, context));
         case "Partial":
@@ -1576,6 +1602,31 @@ export class SchemaGenerator {
         ),
       );
     }
+    const peeled = this.#peelLibraryWrappers(node, checker, context, opened);
+    if (peeled.wrappers.length > 0 && ts.isUnionTypeNode(peeled.core)) {
+      // The wrappers distribute over the union, `NonNullable` dropping its
+      // `null` and `undefined` members; each member is viewed wrapped as
+      // the whole was, so a tuple beside an object keeps its slots.
+      const dropNullish = peeled.wrappers.some((wrapper) =>
+        (wrapper.typeName as ts.Identifier).text === "NonNullable"
+      );
+      return unionOfSchemas(
+        peeled.core.types
+          .filter((member) => !(dropNullish && isNullishTypeNode(member)))
+          .map((member) =>
+            this.#requiredView(
+              peeled.wrappers.reduceRight<ts.TypeNode>(
+                (inner, wrapper) =>
+                  ts.factory.createTypeReferenceNode(wrapper.typeName, [inner]),
+                member,
+              ),
+              checker,
+              context,
+              peeled.opened,
+            )
+          ),
+      );
+    }
     const slots = this.#tupleSlots(node, checker, context, opened);
     if (slots !== undefined) {
       return {
@@ -1590,6 +1641,43 @@ export class SchemaGenerator {
       context,
       (arm) => requiredArm(arm, context),
     );
+  }
+
+  /**
+   * `node` with the library's wrappers (`LIBRARY_WRAPPER_NAMES`) peeled off
+   * the outside, outermost first, down to the `core` they wrap, aliases
+   * opened along the way.
+   */
+  #peelLibraryWrappers(
+    node: ts.TypeNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+    opened: OpenedAliases,
+  ): {
+    wrappers: ts.TypeReferenceNode[];
+    core: ts.TypeNode;
+    opened: OpenedAliases;
+  } {
+    const wrappers: ts.TypeReferenceNode[] = [];
+    let behind = this.#openTypeNode(node, checker, context, opened);
+    for (;;) {
+      const target = behind.node;
+      if (
+        !ts.isTypeReferenceNode(target) || !ts.isIdentifier(target.typeName) ||
+        target.typeArguments?.length !== 1 ||
+        !LIBRARY_WRAPPER_NAMES.has(target.typeName.text) ||
+        !this.#isLibraryDeclaredName(target, target.typeName, checker, context)
+      ) {
+        return { wrappers, core: target, opened: behind.opened };
+      }
+      wrappers.push(target);
+      behind = this.#openTypeNode(
+        target.typeArguments[0]!,
+        checker,
+        context,
+        behind.opened,
+      );
+    }
   }
 
   /**

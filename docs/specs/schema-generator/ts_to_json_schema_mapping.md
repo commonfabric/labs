@@ -125,7 +125,10 @@ checker reads them — spreads expanded, a spread over a union of tuples one
 alternative per member, an optional slot that a required slot follows made
 required with `undefined` in what it holds, and the library's `Readonly`,
 `NonNullable`, `Required`, and `Partial` opened onto the slots they wrap,
-the last two applied there — aliases opened along the way, through
+`NonNullable` dropping a union's `null` and `undefined` members first and
+the last two applied there; the wrappers distribute over a union, so a
+tuple beside an object under them keeps its slots — aliases opened along
+the way, through
 parentheses and `readonly`, a circular one only once. An optional or rest
 slot then loses `undefined` while a required slot keeps it, authored or
 normalized in, spread, wrapped, or in a union alike; a tuple the rules

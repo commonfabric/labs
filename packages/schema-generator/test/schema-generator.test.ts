@@ -569,6 +569,7 @@ type CalculatorRequest = {
       "type Tail = [string | undefined];",
       "type TU = [Foo, string | undefined] | [number];",
       "type Loop = [string] | Loop;",
+      "type MaybeTuple = [Foo, string | undefined] | null | undefined;",
     ].join("\n");
     const generateNamed = async (node: ts.TypeNode) => {
       const { checker, sourceFile } = await createTestProgram(NAMED);
@@ -1601,6 +1602,155 @@ type CalculatorRequest = {
       ).toEqual({
         type: "array",
         items: { anyOf: [{ $ref: "#/$defs/Foo" }, { type: "string" }] },
+      });
+    });
+
+    it("distributes the library's wrappers over a union under `Required`", async () => {
+      // The wrappers distribute over a union, `NonNullable` dropping its
+      // `null` and `undefined` members, so each member is viewed wrapped as
+      // the whole was: a tuple beside `null`, or beside an object, keeps
+      // its slots, and only `NonNullable` removes the `null`.
+      const schemaOf = async (node: ts.TypeNode) =>
+        ((await generateNamed(node)) as { schema: unknown }).schema;
+      const undefinedNode = () =>
+        f.createKeywordTypeNode(ts.SyntaxKind.UndefinedKeyword);
+      const nullNode = () => f.createLiteralTypeNode(f.createNull());
+      const fooStringOrUndefined = () =>
+        f.createTupleTypeNode([
+          alias("Foo"),
+          f.createUnionTypeNode([stringNode(), undefinedNode()]),
+        ]);
+      const keptUndefined = {
+        type: "array",
+        items: {
+          anyOf: [
+            { $ref: "#/$defs/Foo" },
+            { type: "string" },
+            { type: "undefined" },
+          ],
+        },
+      };
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            alias(
+              "NonNullable",
+              f.createUnionTypeNode([fooStringOrUndefined(), nullNode()]),
+            ),
+          ),
+        ),
+      ).toEqual(keptUndefined);
+      expect(
+        await schemaOf(
+          alias("Required", alias("NonNullable", alias("MaybeTuple"))),
+        ),
+      ).toEqual({
+        type: "array",
+        items: {
+          anyOf: [{ $ref: "#/$defs/Foo" }, { type: ["string", "undefined"] }],
+        },
+      });
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            alias(
+              "Readonly",
+              alias(
+                "NonNullable",
+                f.createUnionTypeNode([
+                  fooStringOrUndefined(),
+                  undefinedNode(),
+                ]),
+              ),
+            ),
+          ),
+        ),
+      ).toEqual(keptUndefined);
+      // Optionality still goes.
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            alias(
+              "NonNullable",
+              f.createUnionTypeNode([
+                f.createTupleTypeNode([f.createOptionalTypeNode(alias("Foo"))]),
+                nullNode(),
+              ]),
+            ),
+          ),
+        ),
+      ).toEqual({ type: "array", items: { $ref: "#/$defs/Foo" } });
+      // A tuple beside an object: each viewed on its own.
+      const fooRequired = {
+        type: "object",
+        properties: { x: { type: "unknown" }, y: { type: "string" } },
+        required: ["x", "y"],
+      };
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            alias(
+              "NonNullable",
+              f.createUnionTypeNode([fooStringOrUndefined(), alias("Foo")]),
+            ),
+          ),
+        ),
+      ).toEqual({ anyOf: [keptUndefined, fooRequired] });
+      // Nested wrappers, `Partial` applied to the tuple's slots, and a
+      // `null` that only `NonNullable` would remove.
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            alias(
+              "Readonly",
+              f.createUnionTypeNode([
+                alias(
+                  "Partial",
+                  f.createUnionTypeNode([fooStringOrUndefined(), alias("Foo")]),
+                ),
+                nullNode(),
+              ]),
+            ),
+          ),
+        ),
+      ).toEqual({
+        anyOf: [
+          {
+            type: "array",
+            items: { anyOf: [{ $ref: "#/$defs/Foo" }, { type: "string" }] },
+          },
+          fooRequired,
+          { type: "null" },
+        ],
+      });
+      // Two objects: distributed, each made required.
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            alias(
+              "Readonly",
+              f.createUnionTypeNode([
+                alias("Foo"),
+                literal([["a", stringNode(), true]]),
+              ]),
+            ),
+          ),
+        ),
+      ).toEqual({
+        anyOf: [
+          fooRequired,
+          {
+            type: "object",
+            properties: { a: { type: "string" } },
+            required: ["a"],
+          },
+        ],
       });
     });
 
