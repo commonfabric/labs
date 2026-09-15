@@ -236,17 +236,20 @@ const workstreamsOf = lift((
       .map((p) => ({ title: p.title, url: p.url }));
     const pinnedPrs: PullRequestRef[] = ownPins
       .filter((p) => p.kind === "pr" && !prUrls.has(p.url))
-      .map((p) => ({
+      .map((p) => {
         // The verb takes only a URL that parses; a stored one that does not
         // shows with no repository and the number 0 rather than vanishing.
-        repo: parsePullRequestUrl(p.url)?.repo ?? "",
-        number: parsePullRequestUrl(p.url)?.number ?? 0,
-        title: p.title,
-        // A pull request pin names its state; a record with none counts open.
-        state: p.state ?? "open",
-        url: p.url,
-        updatedAt: new Date(p.pinnedAt).toISOString(),
-      }));
+        const parsed = parsePullRequestUrl(p.url);
+        return {
+          repo: parsed?.repo ?? "",
+          number: parsed?.number ?? 0,
+          title: p.title,
+          // A pull request pin names its state; a record with none counts open.
+          state: p.state ?? "open",
+          url: p.url,
+          updatedAt: new Date(p.pinnedAt).toISOString(),
+        };
+      });
     return {
       ...workstream,
       name: latestName.get(workstream.id)?.name ?? workstream.name,
@@ -276,7 +279,7 @@ const orphanedOverlayOf = lift((
 /** The repository and number a GitHub pull request URL names, or nothing for
  * a URL that is not one: `https://github.com/<owner>/<repo>/pull/<number>`,
  * with or without a trailing path such as `/files`. */
-export const parsePullRequestUrl = (
+const parsePullRequestUrl = (
   url: string,
 ): { repo: string; number: number } | undefined => {
   const match = url.trim().match(
@@ -285,7 +288,11 @@ export const parsePullRequestUrl = (
   return match ? { repo: match[1], number: Number(match[2]) } : undefined;
 };
 
-/** The key a pin's record lives under: one per URL per workstream. */
+/** The key a pin's record lives under: one per URL per workstream. A key
+ * this piece alone defines is spelled as a JSON array, which needs no
+ * escaping rule of its own; a key another contract defines, the connector's
+ * session key in `workbench/sessions.ts`, is spelled the way that contract
+ * spells it. */
 const pinKey = (workstreamId: string, url: string): string =>
   JSON.stringify([workstreamId, url]);
 

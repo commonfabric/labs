@@ -52,6 +52,7 @@ import {
   recentRowsOf,
   recordAttachment,
   recordStart,
+  rowFromAttachment,
   sessionDotColor,
   type SessionIndexView,
   sessionKey,
@@ -67,6 +68,7 @@ import {
   mintSessionId,
   sourceOptionsOf,
   startBlockerOf,
+  startBlockerReason,
   startCommandValue,
   startSourceOf,
   withdrawStart,
@@ -250,19 +252,8 @@ const cardsOf = lift((
   const attachedByWorkstream = new Map<string, SessionRow[]>();
   for (const a of attached) {
     if (!a.workstreamId) continue;
-    const key = sessionKey(a.sourceId, a.nativeSessionId);
-    const row = rowsByKey.get(key) ?? {
-      key,
-      sourceId: a.sourceId,
-      nativeSessionId: a.nativeSessionId,
-      title: a.title,
-      cwd: "",
-      gitBranch: "",
-      gitRepo: "",
-      updatedAt: "",
-      active: false,
-      attached: true,
-    };
+    const row = rowsByKey.get(sessionKey(a.sourceId, a.nativeSessionId)) ??
+      rowFromAttachment(a);
     const own = attachedByWorkstream.get(a.workstreamId) ?? [];
     own.push(row);
     attachedByWorkstream.set(a.workstreamId, own);
@@ -454,18 +445,23 @@ export const startWorkstreamSession = handler<void, {
     withdrawStart(state.commands, state.starts, state.withdraw);
     return;
   }
-  // A harness shown for display has no source to run it, and a configured
-  // source whose driver cannot start is no harness for this either; a picker
-  // value naming one (or a stale choice) starts nothing. The Start control is
-  // disabled on the same checks, with the reason.
+  // The same predicate that disables the control: a click that slips past a
+  // stale rendering starts nothing.
+  const picked = state.spawnSource.get();
+  const blocked = startBlockerReason({
+    ownerDid: state.ownerDid,
+    picked,
+    options: state.sourceOptions,
+    startable: state.configuredSources,
+    kickoff: state.kickoff,
+    hasSubject: state.card !== undefined,
+  });
+  if (blocked || state.card === undefined) return;
   const sourceId = startSourceOf(
-    state.spawnSource.get(),
+    picked,
     state.sourceOptions,
     state.configuredSources,
   );
-  if (!state.ownerDid || !sourceId || !state.card || !state.kickoff.trim()) {
-    return;
-  }
   const nativeSessionId = mintSessionId();
   const title = state.card.name;
   const command = startCommandValue({
@@ -571,16 +567,15 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
         ? ` The first turn runs under the "${mode.trim()}" permission mode; the kickoff below is exactly what it receives.`
         : ""
     );
-    const sharedBlocker = startBlockerOf({
+    const hasSubject = computed(() => card !== undefined);
+    const startBlocker = startBlockerOf({
       ownerDid,
       picked: spawnSource,
       options: sourceOptions,
       startable: configuredSources,
       kickoff,
+      hasSubject,
     });
-    const startBlocker = computed(() =>
-      card === undefined ? "No workstream to start from." : sharedBlocker
-    );
     const canStart = isEmptyText({ text: startBlocker });
 
     // The one handler the queue accepts writes from, bound here for Start
