@@ -1,18 +1,22 @@
 /**
  * Pattern test for the person workbench: the person's workstreams come from
- * the snapshot by login, each carrying its topics, pull requests, and counts;
- * attach records a session under the picked workstream; the kickoff carries
- * the workstream's context and links; a start sends the connector one
- * `start` command titled after the workstream and attaches its session there;
- * the rail's own buttons attach a session under the picked workstream and
- * take it back out; a second attach records nothing; the detach verb removes
- * a session; a snapshot with no workstreams gives nothing to start; a verb
+ * the snapshot by login, each carrying its topics, pull requests, and counts
+ * (a draft pull request counts as open); attach records a session under the
+ * picked workstream and returns whether the record was new; the kickoff
+ * carries the workstream's context and links; a start sends the connector one
+ * `start` command titled after the workstream and records it until the index
+ * carries its session, which then joins the workstream; Detach on a started
+ * session drops its record; a second start is withdrawn, taking its command
+ * out of the queue; the rail's own buttons attach a session under the picked
+ * workstream and take it back out, and a disabled Attach records nothing;
+ * a second attach records nothing; the detach verb removes a session; a
+ * snapshot with no workstreams leaves Start disabled with its reason; a verb
  * call without both ids is refused; a name the snapshot does not carry shows
- * no workstreams rather than everyone's; a start is pending until the index
- * carries its session (with no queue it stays pending and can be dismissed);
- * the workstream picker steers the kickoff, the start, and the rail's
- * Attach; and an attachment whose workstream a later snapshot drops keeps a
- * place with Detach.
+ * no workstreams rather than everyone's; with no queue a start stays starting
+ * and can be withdrawn; the workstream picker steers the kickoff, the start,
+ * and the rail's Attach; an attachment whose workstream a later snapshot
+ * drops, or that names none, keeps a place with Detach; and an index that is
+ * not the complete bucket is called out.
  */
 import {
   action,
@@ -25,125 +29,123 @@ import {
   Writable,
 } from "commonfabric";
 import {
-  childNodes,
+  clickInRow,
   findNode,
-  hasExactText,
+  findNodeByProp,
   hasText,
-  propsOf,
+  isButton,
   propValue,
 } from "../test/vnode-helpers.ts";
 import type {
   Attachment,
   CommandValue,
-  PendingStart,
+  IndexBucketView,
   SessionIndexView,
+  SessionStart,
   StartableSourcesView,
-} from "../topic-workbench/main.tsx";
+} from "../workbench/sessions.ts";
+import {
+  WORK_SNAPSHOT_SCHEMA,
+  type WorkSnapshot,
+} from "../work-snapshot/main.tsx";
 import PersonWorkbench, { type SnapshotView } from "./main.tsx";
 
-type ClickStream = { send: (event: Record<string, never>) => void };
-
-const isButton = (label: string) => (candidate: unknown): boolean =>
-  propsOf(candidate)?.onClick !== undefined &&
-  hasExactText(candidate, label);
-
-/** The innermost node the predicate accepts: the row itself rather than
- * every container that also carries the row's text. */
-const innermost = (
-  node: unknown,
-  accept: (node: unknown) => boolean,
-): unknown => {
-  for (const child of childNodes(node)) {
-    const hit = innermost(child, accept);
-    if (hit !== undefined) return hit;
-  }
-  return accept(node) ? node : undefined;
-};
-
-/** Click the button labelled `label` in the row whose text carries `rowText`. */
-const clickInRow = (root: unknown, rowText: string, label: string): void => {
-  const row = innermost(
-    root,
-    (candidate) =>
-      hasText(candidate, rowText) &&
-      findNode(candidate, isButton(label)) !== undefined,
-  );
-  const onClick = propsOf(findNode(row, isButton(label)))?.onClick;
-  if (typeof onClick === "object" && onClick !== null && "send" in onClick) {
-    (onClick as ClickStream).send({});
-  }
-};
+type IndexFixture = SessionIndexView & StartableSourcesView & IndexBucketView;
 
 /** The first queued command, decoded; `null` when the queue is empty. */
 // deno-lint-ignore no-explicit-any
 const firstCommand = (queued: readonly CommandValue[]): any =>
   JSON.parse(queued[0] ?? "null");
 
+/** The last queued command, decoded; `null` when the queue is empty. */
+// deno-lint-ignore no-explicit-any
+const lastCommand = (queued: readonly CommandValue[]): any =>
+  JSON.parse(queued[queued.length - 1] ?? "null");
+
+/** Whether the Start control is disabled, as the rendered tree has it. */
+const startDisabled = (root: unknown): boolean =>
+  propValue(findNode(root, isButton("Start")), "disabled") === true;
+
+// The snapshot as the work-snapshot piece publishes it, fields this piece
+// does not read included; the dashboard reads it through its own view.
+const SNAPSHOT: WorkSnapshot = {
+  schema: WORK_SNAPSHOT_SCHEMA,
+  repository: "commontoolsinc/labs",
+  window: { since: "2026-08-28", until: "2026-09-11" },
+  generatedAt: "2026-09-11T20:00:00.000Z",
+  people: [
+    { name: "Berni", login: "seefeldb" },
+    { name: "Gideon", login: "mathpirate" },
+  ],
+  workstreams: [
+    {
+      id: "board-load",
+      name: "Board-load performance",
+      summary: "Making the Topics board fast enough to live in.",
+      people: ["seefeldb", "mathpirate"],
+      topics: [{
+        title: "Board-load pre-sync follow-ups",
+        url: "https://estuary.example/of:fid1:topic",
+        summary: "The board loads in 4.5 s; the residual is naming waves.",
+        lastActivityAt: 1_700_000_000_000,
+      }, {
+        // Stored by a producer without the snapshot's guard: text, no anchor.
+        title: "Legacy topic",
+        url: "javascript:alert(1)",
+      }],
+      prs: [
+        {
+          repo: "commontoolsinc/labs",
+          number: 6844,
+          title: "Flip the server-execution default back to ON",
+          state: "open",
+          url: "https://github.com/commontoolsinc/labs/pull/6844",
+          updatedAt: "2026-09-08T00:00:00.000Z",
+        },
+        {
+          repo: "commontoolsinc/labs",
+          number: 6785,
+          title: "keep a corpus's decoded documents resident",
+          state: "merged",
+          url: "https://github.com/commontoolsinc/labs/pull/6785",
+          updatedAt: "2026-09-03T00:00:00.000Z",
+          mergedAt: "2026-09-03T00:00:00.000Z",
+        },
+        {
+          repo: "commontoolsinc/labs",
+          number: 1,
+          title: "Legacy pull",
+          state: "closed",
+          url: "javascript:alert(2)",
+          updatedAt: "2026-09-01T00:00:00.000Z",
+        },
+        {
+          repo: "commontoolsinc/labs",
+          number: 6900,
+          title: "A draft, counted as open",
+          state: "draft",
+          url: "https://github.com/commontoolsinc/labs/pull/6900",
+          updatedAt: "2026-09-09T00:00:00.000Z",
+        },
+      ],
+    },
+    {
+      id: "cfc-dials",
+      name: "CFC dials",
+      summary: "Turning the dials on by default.",
+      people: ["mathpirate"],
+      topics: [],
+      prs: [],
+    },
+  ],
+};
+
 export default pattern(() => {
-  const snapshot = new Writable<SnapshotView>({
-    repository: "commontoolsinc/labs",
-    generatedAt: "2026-09-11T20:00:00.000Z",
-    people: [
-      { name: "Berni", login: "seefeldb" },
-      { name: "Gideon", login: "mathpirate" },
-    ],
-    workstreams: [
-      {
-        id: "board-load",
-        name: "Board-load performance",
-        summary: "Making the Topics board fast enough to live in.",
-        people: ["seefeldb", "mathpirate"],
-        topics: [{
-          title: "Board-load pre-sync follow-ups",
-          url: "https://estuary.example/of:fid1:topic",
-          summary: "The board loads in 4.5 s; the residual is naming waves.",
-          lastActivityAt: 1_700_000_000_000,
-        }, {
-          // Stored by a producer without the snapshot's guard: text, no anchor.
-          title: "Legacy topic",
-          url: "javascript:alert(1)",
-        }],
-        prs: [
-          {
-            repo: "commontoolsinc/labs",
-            number: 6844,
-            title: "Flip the server-execution default back to ON",
-            state: "open",
-            url: "https://github.com/commontoolsinc/labs/pull/6844",
-            updatedAt: "2026-09-08T00:00:00.000Z",
-          },
-          {
-            repo: "commontoolsinc/labs",
-            number: 6785,
-            title: "keep a corpus's decoded documents resident",
-            state: "merged",
-            url: "https://github.com/commontoolsinc/labs/pull/6785",
-            updatedAt: "2026-09-03T00:00:00.000Z",
-            mergedAt: "2026-09-03T00:00:00.000Z",
-          },
-          {
-            repo: "commontoolsinc/labs",
-            number: 1,
-            title: "Legacy pull",
-            state: "closed",
-            url: "javascript:alert(2)",
-            updatedAt: "2026-09-01T00:00:00.000Z",
-          },
-        ],
-      },
-      {
-        id: "cfc-dials",
-        name: "CFC dials",
-        summary: "Turning the dials on by default.",
-        people: ["mathpirate"],
-        topics: [],
-        prs: [],
-      },
-    ],
-  });
-  const index = new Writable<SessionIndexView & StartableSourcesView>({
+  const snapshot = new Writable<SnapshotView>(SNAPSHOT);
+  const index = new Writable<IndexFixture>({
     schema: "commonfabric.agent-connector.session-index",
     ownerDid: "did:key:owner",
+    bucket: "all",
     sources: [{
       id: "claude",
       driver: "claude-agent-sdk",
@@ -178,14 +180,14 @@ export default pattern(() => {
   });
   const attached = new Writable<Attachment[] | Default<[]>>([]);
   const commands = new Writable<CommandValue[] | Default<[]>>([]);
-  const pendingStarts = new Writable<PendingStart[] | Default<[]>>([]);
+  const starts = new Writable<SessionStart[] | Default<[]>>([]);
   const wb = PersonWorkbench({
     snapshot,
     person: "seefeldb",
     sessions: index,
     attached,
     commands,
-    pendingStarts,
+    starts,
   });
   // A name the snapshot's people do not carry: nothing shows, not everything.
   const stranger = PersonWorkbench({
@@ -221,10 +223,13 @@ export default pattern(() => {
     wb.personName === "Berni" &&
     wb.workstreams.length === 1 &&
     wb.workstreams[0]?.id === "board-load" &&
-    wb.workstreams[0]?.openCount === 1 &&
+    wb.workstreams[0]?.openCount === 2 &&
     wb.workstreams[0]?.mergedCount === 1 &&
     wb.workstreams[0]?.sessions.length === 0 &&
-    wb.recentSessions.length === 2
+    wb.recentSessions.length === 2 &&
+    wb.startBlocker === "" &&
+    !startDisabled(wb[UI]) &&
+    findNodeByProp(wb[UI], "data-index-note", "") === undefined
   );
 
   const action_attach = action(() => {
@@ -255,6 +260,7 @@ export default pattern(() => {
     wb.kickoff.includes(
       '- PR #6844, "Flip the server-execution default back to ON", open',
     ) &&
+    wb.kickoff.includes('- PR #6900, "A draft, counted as open", draft') &&
     !wb.kickoff.includes("#6785") &&
     wb.kickoff.includes(
       "Links:\n- https://estuary.example/of:fid1:topic\n- https://github.com/commontoolsinc/labs/pull/6844",
@@ -275,10 +281,10 @@ export default pattern(() => {
     firstCommand(commands.get())?.payload?.title === "Board-load performance" &&
     firstCommand(commands.get())?.payload?.text === wb.kickoff &&
     wb.workstreams[0]?.sessions.length === 1 &&
-    wb.pendingStarts.length === 1 &&
-    wb.pendingStarts[0]?.nativeSessionId ===
+    wb.startingSessions.length === 1 &&
+    wb.startingSessions[0]?.nativeSessionId ===
       firstCommand(commands.get())?.nativeSessionId &&
-    wb.pendingStarts[0]?.workstreamId === "board-load" &&
+    wb.startingSessions[0]?.workstreamId === "board-load" &&
     attached.get().length === 1 &&
     hasText(wb[UI], "Starting · 1")
   );
@@ -307,7 +313,7 @@ export default pattern(() => {
     });
   });
   const assert_start_confirmed = assert(() =>
-    wb.pendingStarts.length === 0 &&
+    wb.startingSessions.length === 0 &&
     wb.workstreams[0]?.sessions.length === 2 &&
     wb.workstreams[0]?.sessions.some((s) =>
       s.nativeSessionId === firstCommand(commands.get())?.nativeSessionId &&
@@ -318,15 +324,48 @@ export default pattern(() => {
     )
   );
 
+  // Detach on a started session, through its card's row, drops the start's
+  // record as well.
+  const action_detach_started = action(() => {
+    clickInRow(wb[UI], "Board-load performance", "Detach");
+  });
+  const assert_started_detached = assert(() =>
+    wb.workstreams[0]?.sessions.length === 1 &&
+    wb.workstreams[0]?.sessions[0]?.nativeSessionId === "aaa" &&
+    starts.get().length === 0
+  );
+
+  // A second start, withdrawn before the connector takes it: only its
+  // command leaves the queue, and the record goes with it.
+  const action_start_again = action(() => {
+    wb.startSession.send();
+  });
+  const assert_second_start_pending = assert(() =>
+    commands.get().length === 2 &&
+    wb.startingSessions.length === 1 &&
+    wb.startingSessions[0]?.commandId === lastCommand(commands.get())?.id &&
+    hasText(wb[UI], "Withdraw takes the command out of the queue")
+  );
+  const action_withdraw = action(() => {
+    clickInRow(wb[UI], "Board-load performance", "Withdraw");
+  });
+  const assert_withdrawn = assert(() =>
+    commands.get().length === 1 &&
+    firstCommand(commands.get())?.payload?.title ===
+      "Board-load performance" &&
+    wb.startingSessions.length === 0 &&
+    starts.get().length === 0
+  );
+
   // With no queue bound, a start records nothing as attached: it stays
-  // pending, and Dismiss clears it.
-  const noQueuePending = new Writable<PendingStart[] | Default<[]>>([]);
+  // starting, and Withdraw clears it with nothing to take back.
+  const noQueueStarts = new Writable<SessionStart[] | Default<[]>>([]);
   const noQueue = PersonWorkbench({
     snapshot,
     person: "seefeldb",
     sessions: index,
     attached: new Writable<Attachment[] | Default<[]>>([]),
-    pendingStarts: noQueuePending,
+    starts: noQueueStarts,
   });
   const action_start_without_queue = action(() => {
     noQueue.spawnPrompt.set("Start without a queue.");
@@ -334,14 +373,14 @@ export default pattern(() => {
   });
   const assert_start_without_queue_pending = assert(() =>
     noQueue.workstreams[0]?.sessions.length === 0 &&
-    noQueue.pendingStarts.length === 1 &&
-    noQueuePending.get().length === 1
+    noQueue.startingSessions.length === 1 &&
+    noQueueStarts.get().length === 1
   );
-  const action_dismiss_start = action(() => {
-    clickInRow(noQueue[UI], "Board-load performance", "Dismiss");
+  const action_withdraw_without_queue = action(() => {
+    clickInRow(noQueue[UI], "Board-load performance", "Withdraw");
   });
-  const assert_start_dismissed = assert(() =>
-    noQueue.pendingStarts.length === 0 && noQueuePending.get().length === 0
+  const assert_withdrawn_without_queue = assert(() =>
+    noQueue.startingSessions.length === 0 && noQueueStarts.get().length === 0
   );
 
   // The workstream picker: a person with two workstreams picks the second,
@@ -354,7 +393,7 @@ export default pattern(() => {
     sessions: index,
     attached: pickerAttached,
     commands: pickerCommands,
-    pendingStarts: new Writable<PendingStart[] | Default<[]>>([]),
+    starts: new Writable<SessionStart[] | Default<[]>>([]),
   });
   const action_pick_second = action(() => {
     picker.spawnWorkstream.set("cfc-dials");
@@ -365,7 +404,7 @@ export default pattern(() => {
     picker.workstreams.length === 2 &&
     picker.kickoff.startsWith('Work on "CFC dials".') &&
     firstCommand(pickerCommands.get())?.payload?.title === "CFC dials" &&
-    picker.pendingStarts[0]?.workstreamId === "cfc-dials" &&
+    picker.startingSessions[0]?.workstreamId === "cfc-dials" &&
     pickerAttached.get().find((a) => a.nativeSessionId === "aaa")
         ?.workstreamId === "cfc-dials" &&
     picker.workstreams[1]?.sessions.length === 1
@@ -393,7 +432,7 @@ export default pattern(() => {
     sessions: index,
     attached: orphanAttached,
     commands: new Writable<CommandValue[] | Default<[]>>([]),
-    pendingStarts: new Writable<PendingStart[] | Default<[]>>([]),
+    starts: new Writable<SessionStart[] | Default<[]>>([]),
   });
   const action_attach_under_b = action(() => {
     orphan.attach.send({
@@ -438,6 +477,39 @@ export default pattern(() => {
     orphanAttached.get().length === 0 &&
     orphan.recentSessions.some((row) => row.nativeSessionId === "aaa")
   );
+  // A record that names no workstream at all (written by another workbench
+  // over the same record) is orphaned the same way.
+  const action_seed_unfiled = action(() => {
+    orphanAttached.set([{
+      sourceId: "claude",
+      nativeSessionId: "bbb",
+      title: "filed nowhere",
+      attachedAt: 1,
+    }]);
+  });
+  const assert_unfiled_orphaned = assert(() =>
+    orphan.orphanedSessions.length === 1 &&
+    orphan.orphanedSessions[0]?.nativeSessionId === "bbb"
+  );
+
+  // The connector's recent bucket rather than its complete index earns a
+  // caution beside the rail.
+  const recentBucket = PersonWorkbench({
+    snapshot,
+    person: "seefeldb",
+    sessions: new Writable<IndexFixture>({
+      schema: "commonfabric.agent-connector.session-index",
+      ownerDid: "did:key:owner",
+      bucket: "recent",
+      sessions: [],
+    }),
+  });
+  const assert_recent_bucket_noted = assert(() =>
+    hasText(
+      findNodeByProp(recentBucket[UI], "data-index-note", ""),
+      "the connector's recent bucket",
+    )
+  );
 
   // The rail's Attach button files the session under the picked workstream
   // (the first card when none is picked); Detach on the card's row takes it
@@ -446,17 +518,19 @@ export default pattern(() => {
     clickInRow(wb[UI], "something for later", "Attach");
   });
   const assert_clicked_attached = assert(() =>
-    wb.workstreams[0]?.sessions.length === 3 &&
+    wb.workstreams[0]?.sessions.length === 2 &&
     wb.workstreams[0]?.sessions.some((s) => s.nativeSessionId === "bbb") &&
-    wb.recentSessions.length === 0
+    // The detached start's session is the one row left in the rail.
+    wb.recentSessions.length === 1 &&
+    wb.recentSessions.every((row) => row.nativeSessionId !== "bbb")
   );
   const action_click_detach = action(() => {
     clickInRow(wb[UI], "something for later", "Detach");
   });
   const assert_clicked_detached = assert(() =>
-    wb.workstreams[0]?.sessions.length === 2 &&
-    wb.recentSessions.length === 1 &&
-    wb.recentSessions[0]?.nativeSessionId === "bbb"
+    wb.workstreams[0]?.sessions.length === 1 &&
+    wb.recentSessions.length === 2 &&
+    wb.recentSessions.some((row) => row.nativeSessionId === "bbb")
   );
 
   // A second attach of the same session records nothing; the detach verb
@@ -469,14 +543,14 @@ export default pattern(() => {
     });
   });
   const assert_attached_once = assert(() =>
-    wb.workstreams[0]?.sessions.length === 2
+    wb.workstreams[0]?.sessions.length === 1
   );
   const action_detach = action(() => {
     wb.detach.send({ sourceId: "claude", nativeSessionId: "aaa" });
   });
   const assert_detached = assert(() =>
-    wb.workstreams[0]?.sessions.length === 1 &&
-    wb.recentSessions.length === 2
+    wb.workstreams[0]?.sessions.length === 0 &&
+    wb.recentSessions.length === 3
   );
 
   // A snapshot with no workstreams gives the person no card to start from,
@@ -499,7 +573,10 @@ export default pattern(() => {
     nobody.startSession.send();
   });
   const assert_nothing_started = assert(() =>
-    nobody.workstreams.length === 0 && nobodysCommands.get().length === 0
+    nobody.workstreams.length === 0 && nobodysCommands.get().length === 0 &&
+    nobody.startBlocker === "No workstream to start from." &&
+    startDisabled(nobody[UI]) &&
+    hasText(nobody[UI], "No workstream to start from.")
   );
   // With no workstream to file under, the rail's Attach is disabled and the
   // verb refuses: a record no card reaches would show nowhere.
@@ -509,6 +586,9 @@ export default pattern(() => {
       nativeSessionId: "aaa",
       workstreamId: "board-load",
     });
+  });
+  const action_click_attach_without_card = action(() => {
+    clickInRow(nobody[UI], "an earlier session", "Attach");
   });
   const assert_attach_without_card_refused = assert(() =>
     nobodysAttached.get().length === 0 &&
@@ -527,6 +607,9 @@ export default pattern(() => {
     wb.workstreams[0]?.sessions.some((s) => s.nativeSessionId === "bbb") ===
       true
   );
+  const action_detach_stale_pick = action(() => {
+    wb.detach.send({ sourceId: "claude", nativeSessionId: "bbb" });
+  });
   const action_attach_unknown_workstream = action(() => {
     wb.attach.send({
       sourceId: "claude",
@@ -547,7 +630,7 @@ export default pattern(() => {
     });
   });
   const assert_attach_refused = assert(() =>
-    wb.workstreams[0]?.sessions.length === 1
+    wb.workstreams[0]?.sessions.length === 0
   );
 
   return {
@@ -571,6 +654,14 @@ export default pattern(() => {
       { action: action_confirm_start },
       { assertion: assert_start_confirmed },
       { render: wb[UI] },
+      { action: action_detach_started },
+      { assertion: assert_started_detached },
+      { action: action_start_again },
+      { render: wb[UI] },
+      { assertion: assert_second_start_pending },
+      { action: action_withdraw },
+      { assertion: assert_withdrawn },
+      { render: wb[UI] },
       { action: action_click_attach },
       { assertion: assert_clicked_attached },
       { render: wb[UI] },
@@ -585,16 +676,19 @@ export default pattern(() => {
       { action: action_attach_without_ids },
       { assertion: assert_attach_refused },
       { action: action_attach_without_card },
+      { render: nobody[UI] },
+      { action: action_click_attach_without_card },
       { assertion: assert_attach_without_card_refused },
       { action: action_attach_stale_pick },
       { assertion: assert_stale_pick_resolved },
+      { action: action_detach_stale_pick },
       { action: action_attach_unknown_workstream },
       { assertion: assert_unknown_workstream_refused },
       { action: action_start_without_queue },
       { assertion: assert_start_without_queue_pending },
       { render: noQueue[UI] },
-      { action: action_dismiss_start },
-      { assertion: assert_start_dismissed },
+      { action: action_withdraw_without_queue },
+      { assertion: assert_withdrawn_without_queue },
       { action: action_pick_second },
       { assertion: assert_picked_second },
       { action: action_attach_under_b },
@@ -604,6 +698,10 @@ export default pattern(() => {
       { assertion: assert_orphaned_with_detach },
       { action: action_detach_orphan },
       { assertion: assert_orphan_detached },
+      { action: action_seed_unfiled },
+      { assertion: assert_unfiled_orphaned },
+      { render: recentBucket[UI] },
+      { assertion: assert_recent_bucket_noted },
     ],
   };
 });

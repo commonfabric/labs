@@ -2,10 +2,13 @@
  * Pattern test for the work snapshot: publish replaces the snapshot whole and
  * validates its shape, a pin adds a pull request the job did not place (a
  * repeated pin changes nothing, and a pinned merged pull request stays
- * merged), a rename shows in the derived workstreams, both survive the next
- * publish, publish, pin, and rename refuse what they cannot trust (a link
- * that is not http(s) among them) and change nothing, and a stored link that
- * is not http(s) renders as text rather than an anchor.
+ * merged), the newest rename names the workstream, both survive the next
+ * publish, unpin clears the record so a later pin of the same URL starts
+ * fresh, a pin and a rename whose workstream a later snapshot drops are
+ * listed as orphaned and return with it, publish, pin, and rename refuse what
+ * they cannot trust (a link that is not http(s) and a workstream the snapshot
+ * lacks among them) and change nothing, and a stored link that is not http(s)
+ * renders as text rather than an anchor.
  */
 import {
   action,
@@ -73,12 +76,23 @@ const MALFORMED: WorkSnapshot[] = [
   { workstreams: [{ ...second.workstreams[0], id: "" }] },
   { workstreams: [second.workstreams[0], second.workstreams[0]] },
   {
+    // Its own generatedAt: were the link guard gone, this snapshot would
+    // land and the piece would show this time.
+    generatedAt: "2026-09-13T00:00:00.000Z",
     workstreams: [{
       ...second.workstreams[0],
       topics: [{ title: "Unsafe", url: "javascript:alert(1)" }],
     }],
   },
 ].map((patch) => Object.assign({}, second, patch));
+
+/** A later snapshot that carries a different workstream, so pins and renames
+ * on the first one are orphaned. */
+const THIRD: WorkSnapshot = {
+  ...second,
+  generatedAt: "2026-09-14T06:00:00.000Z",
+  workstreams: [{ ...second.workstreams[0], id: "other", name: "Other" }],
+};
 
 /** A snapshot as an earlier writer could have stored it, carrying a link the
  * publish guard now refuses. */
@@ -141,10 +155,13 @@ export default pattern(() => {
       title: "a start command",
       state: "merged",
     });
+    // Two renames; the newest names the workstream.
+    piece.rename.send({ workstreamId: "board-load", name: "Board loading" });
     piece.rename.send({ workstreamId: "board-load", name: "Board load" });
   });
   const assert_pinned = assert(() =>
     piece.workstreams[0]?.name === "Board load" &&
+    renames.get().length === 2 &&
     piece.workstreams[0]?.prs.length === 3 &&
     piece.workstreams[0]?.prs[1]?.number === 6844 &&
     piece.workstreams[0]?.prs[1]?.repo === "commontoolsinc/labs" &&
@@ -177,6 +194,48 @@ export default pattern(() => {
     piece.workstreams[0]?.prs[1]?.number === 7380 &&
     pins.get().length === 1
   );
+  const action_repin = action(() => {
+    piece.pin.send({
+      workstreamId: "board-load",
+      kind: "pr",
+      url: "https://github.com/commontoolsinc/labs/pull/6844",
+      title: "Flipped, and merged since",
+      state: "merged",
+    });
+  });
+  const assert_repinned_fresh = assert(() =>
+    piece.workstreams[0]?.prs.length === 3 &&
+    piece.workstreams[0]?.prs[2]?.number === 6844 &&
+    piece.workstreams[0]?.prs[2]?.title === "Flipped, and merged since" &&
+    piece.workstreams[0]?.prs[2]?.state === "merged" &&
+    pins.get().length === 2
+  );
+
+  // A snapshot that drops the workstream leaves its pins and rename listed
+  // as orphaned rather than lost; the next one that carries it brings them
+  // back.
+  const action_publish_other = action(() => {
+    piece.publish.send({ snapshot: THIRD });
+  });
+  const assert_orphaned_overlay = assert(() =>
+    piece.workstreams.length === 1 &&
+    piece.workstreams[0]?.id === "other" &&
+    piece.workstreams[0]?.prs.length === 1 &&
+    piece.orphanedPins.length === 2 &&
+    piece.orphanedRenames.length === 2 &&
+    hasText(piece[UI], "Pinned or renamed on work no longer shown") &&
+    hasText(piece[UI], "workstream board-load · https://github.com") &&
+    hasText(piece[UI], 'workstream board-load renamed "Board load"')
+  );
+  const action_publish_second_again = action(() => {
+    piece.publish.send({ snapshot: second });
+  });
+  const assert_overlay_returns = assert(() =>
+    piece.orphanedPins.length === 0 &&
+    piece.orphanedRenames.length === 0 &&
+    piece.workstreams[0]?.name === "Board load" &&
+    piece.workstreams[0]?.prs.length === 3
+  );
 
   // publish refuses each malformed snapshot and leaves the piece as it was.
   const action_publish_refused = action(() => {
@@ -185,12 +244,21 @@ export default pattern(() => {
   const assert_publish_refused = assert(() =>
     piece.generatedAt === "2026-09-12T06:00:00.000Z" &&
     piece.workstreams.length === 1 &&
-    piece.workstreams[0]?.prs.length === 2
+    piece.workstreams[0]?.prs.length === 3
   );
 
-  // pin and rename refuse a call missing what they key by, and pin refuses a
-  // link that is not http(s) and a pull request without its state.
+  // pin and rename refuse a call missing what they key by or naming a
+  // workstream the snapshot lacks, and pin refuses a link that is not http(s)
+  // and a pull request without its state.
   const action_pin_rename_refused = action(() => {
+    piece.pin.send({
+      workstreamId: "typo",
+      kind: "pr",
+      url: "https://github.com/commontoolsinc/labs/pull/3",
+      title: "pinned to a typo",
+      state: "open",
+    });
+    piece.rename.send({ workstreamId: "typo", name: "Renamed typo" });
     piece.pin.send({
       workstreamId: "",
       kind: "pr",
@@ -214,7 +282,9 @@ export default pattern(() => {
     piece.rename.send({ workstreamId: "board-load", name: "  " });
   });
   const assert_pin_rename_refused = assert(() =>
-    pins.get().length === 1 && piece.workstreams[0]?.name === "Board load"
+    pins.get().length === 2 && renames.get().length === 2 &&
+    piece.workstreams[0]?.name === "Board load" &&
+    piece.orphanedPins.length === 0 && piece.orphanedRenames.length === 0
   );
 
   // A stored link the guard would refuse renders as text, not an anchor.
@@ -231,9 +301,9 @@ export default pattern(() => {
   return {
     [NAME]: "Work snapshot test",
     [UI]: piece[UI],
-    // The ten refused calls above each throw inside their verb, which the
-    // runner reports as runtime errors; exactly ten are expected.
-    expectRuntimeErrors: 10,
+    // The twelve refused calls above each throw inside their verb, which the
+    // runner reports as runtime errors; exactly twelve are expected.
+    expectRuntimeErrors: 12,
     [TESTS]: [
       { assertion: assert_empty },
       { action: action_publish },
@@ -245,6 +315,13 @@ export default pattern(() => {
       { assertion: assert_republished },
       { action: action_unpin },
       { assertion: assert_unpinned },
+      { action: action_repin },
+      { assertion: assert_repinned_fresh },
+      { action: action_publish_other },
+      { render: piece[UI] },
+      { assertion: assert_orphaned_overlay },
+      { action: action_publish_second_again },
+      { assertion: assert_overlay_returns },
       { action: action_publish_refused },
       { assertion: assert_publish_refused },
       { action: action_pin_rename_refused },

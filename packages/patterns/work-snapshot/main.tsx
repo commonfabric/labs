@@ -1,5 +1,23 @@
+/**
+ * A work snapshot: one repository's workstreams over a window of time, as a
+ * synthesis job writes them. Each workstream names the people in it, the
+ * topics it holds, and the pull requests that make it up. The job replaces
+ * the snapshot whole through `publish`; people pin and rename through their
+ * own verbs, and those records survive the next snapshot because they live
+ * beside it, keyed by workstream id. A pin is a keyed record and a rename an
+ * appended one, written with the mergeable methods, so two people pinning or
+ * renaming at once both land. A pin or a rename names a workstream the
+ * snapshot carries; one whose workstream a later snapshot drops keeps a place
+ * in the derived outputs, so `unpin` stays reachable.
+ *
+ * The piece is the shared substrate two surfaces read: a team dashboard
+ * over every workstream, and a person's own lens over the workstreams that
+ * name them.
+ */
+
 import {
   action,
+  computed,
   Default,
   lift,
   NAME,
@@ -12,22 +30,9 @@ import {
 
 import { isSafeLinkUrl, TOPICS_THEME, whenLabel } from "../topics/topic.tsx";
 
-// ===== What this is =====
 //
-// A work snapshot: one repository's workstreams over a window of time, as a
-// synthesis job writes them. Each workstream names the people in it, the
-// topics it holds, and the pull requests that make it up. The job replaces
-// the snapshot whole through `publish`; people pin and rename through their
-// own verbs, and those records survive the next snapshot because they live
-// beside it, keyed by workstream id. A pin is a keyed record and a rename an
-// appended one, written with the mergeable methods, so two people pinning or
-// renaming at once both land.
+// The snapshot, as the job writes it
 //
-// The piece is the shared substrate two surfaces read: a team dashboard
-// over every workstream, and a person's own lens over the workstreams that
-// name them.
-
-// ===== The snapshot, as the job writes it =====
 
 export interface PersonRef {
   name: string;
@@ -88,7 +93,9 @@ const EMPTY_SNAPSHOT: WorkSnapshot = {
   workstreams: [],
 };
 
-// ===== What people add on top =====
+//
+// What people add on top
+//
 
 export interface Pin {
   workstreamId: string;
@@ -106,7 +113,9 @@ export interface Rename {
   renamedAt: number;
 }
 
-// ===== Verbs =====
+//
+// Verbs
+//
 
 export interface PublishEvent {
   snapshot: WorkSnapshot;
@@ -144,7 +153,9 @@ export interface RenameEvent {
   name: string;
 }
 
-// ===== Inputs and outputs =====
+//
+// Inputs and outputs
+//
 
 export interface SnapshotInput {
   snapshot?: Writable<WorkSnapshot | Default<typeof EMPTY_SNAPSHOT>>;
@@ -163,18 +174,25 @@ export interface SnapshotOutput {
   people: PersonRef[];
   /** The snapshot's workstreams with every pin and rename applied. */
   workstreams: Workstream[];
+  /** Pins whose workstream the snapshot no longer carries. */
+  orphanedPins: Pin[];
+  /** Renames whose workstream the snapshot no longer carries. */
+  orphanedRenames: Rename[];
   /** Replace the snapshot whole. Pins and renames stay. */
   publish: Stream<PublishEvent, PublishResult>;
-  /** Pin a topic or pull request to a workstream: one pin per URL per
-   * workstream, so pinning it again changes nothing. The URL must be http(s). */
+  /** Pin a topic or pull request to a workstream the snapshot carries: one
+   * pin per URL per workstream, so pinning it again changes nothing. The URL
+   * must be http(s). */
   pin: Stream<PinEvent>;
   /** Drop a pin. */
   unpin: Stream<UnpinEvent>;
-  /** Give a workstream a name of the people's choosing. */
+  /** Give a workstream the snapshot carries a name of the people's choosing. */
   rename: Stream<RenameEvent>;
 }
 
-// ===== Derivations =====
+//
+// Derivations
+//
 
 /** The workstreams as people see them: renamed where a rename says so, and
  * carrying every pinned topic and pull request the job did not place. Pins
@@ -212,8 +230,7 @@ const workstreamsOf = lift((
         repo: repoOfPullRequestUrl(p.url),
         number: numberOfPullRequestUrl(p.url),
         title: p.title,
-        // The verb requires a state for a pull request pin; a record without
-        // one predates that rule.
+        // A pull request pin names its state; a record with none counts open.
         state: p.state ?? "open",
         url: p.url,
         updatedAt: new Date(p.pinnedAt).toISOString(),
@@ -225,6 +242,23 @@ const workstreamsOf = lift((
       prs: [...workstream.prs, ...pinnedPrs],
     };
   });
+});
+
+/** Pins and renames keyed to a workstream the snapshot does not carry: a
+ * later snapshot dropped it, or its id changed. Listed so they stay visible
+ * and `unpin` stays reachable by workstream id and URL. */
+const orphanedOverlayOf = lift((
+  { snapshot, pins, renames }: {
+    snapshot: WorkSnapshot;
+    pins: Pin[];
+    renames: Rename[];
+  },
+): { pins: Pin[]; renames: Rename[] } => {
+  const carried = new Set(snapshot.workstreams.map((w) => w.id));
+  return {
+    pins: pins.filter((p) => !carried.has(p.workstreamId)),
+    renames: renames.filter((r) => !carried.has(r.workstreamId)),
+  };
 });
 
 const repoOfPullRequestUrl = (url: string): string => {
@@ -271,11 +305,19 @@ const headerOf = lift((
   hasSnapshot: (snapshot.repository ?? "").trim().length > 0,
 }));
 
-// ===== The pattern =====
+//
+// The pattern
+//
 
 export default pattern<SnapshotInput, SnapshotOutput>(
   ({ snapshot, pins, renames }) => {
     const workstreams = workstreamsOf({ snapshot, pins, renames });
+    const orphaned = orphanedOverlayOf({ snapshot, pins, renames });
+    const orphanedPins = orphaned.pins;
+    const orphanedRenames = orphaned.renames;
+    const hasOrphans = computed(() =>
+      orphanedPins.length + orphanedRenames.length > 0
+    );
     const header = headerOf({ snapshot });
     const repository = header.repository;
     const generatedAt = header.generatedAt;
@@ -339,6 +381,11 @@ export default pattern<SnapshotInput, SnapshotOutput>(
             "pin: a pull request pin needs its state (open, draft, merged, or closed)",
           );
         }
+        if (!snapshot.get().workstreams.some((w) => w.id === id)) {
+          throw new Error(
+            `pin: workstreamId must name a workstream the snapshot carries, not ${id}`,
+          );
+        }
         // The record is keyed, so two people pinning at once both land, and
         // membership is a server-side add-if-absent. The record is written
         // only when empty, so pinning again keeps the first title and time.
@@ -371,6 +418,11 @@ export default pattern<SnapshotInput, SnapshotOutput>(
       const next = (name ?? "").trim();
       if (!id || !next) {
         throw new Error("rename: workstreamId and name are required");
+      }
+      if (!snapshot.get().workstreams.some((w) => w.id === id)) {
+        throw new Error(
+          `rename: workstreamId must name a workstream the snapshot carries, not ${id}`,
+        );
       }
       // Appended, never rewritten; the newest rename names the workstream.
       renames.push({ workstreamId: id, name: next, renamedAt: Date.now() });
@@ -473,6 +525,31 @@ export default pattern<SnapshotInput, SnapshotOutput>(
                   </cf-vstack>
                 </cf-card>
               ))}
+              {hasOrphans
+                ? (
+                  <cf-card data-orphaned="">
+                    <cf-vstack gap="2">
+                      <cf-heading level={5}>
+                        Pinned or renamed on work no longer shown
+                      </cf-heading>
+                      <cf-text variant="caption" tone="muted">
+                        The snapshot no longer carries these workstreams; a pin
+                        is dropped with `unpin`, by workstream id and URL.
+                      </cf-text>
+                      {orphanedPins.map((pin) => (
+                        <cf-text block data-orphan-pin="">
+                          {`${pin.kind} · ${pin.title} · workstream ${pin.workstreamId} · ${pin.url}`}
+                        </cf-text>
+                      ))}
+                      {orphanedRenames.map((rename) => (
+                        <cf-text block data-orphan-rename="">
+                          {`workstream ${rename.workstreamId} renamed "${rename.name}"`}
+                        </cf-text>
+                      ))}
+                    </cf-vstack>
+                  </cf-card>
+                )
+                : null}
             </cf-vstack>
           </cf-screen>
         </cf-theme>
@@ -484,6 +561,8 @@ export default pattern<SnapshotInput, SnapshotOutput>(
       generatedAt,
       people,
       workstreams,
+      orphanedPins,
+      orphanedRenames,
       publish,
       pin,
       unpin,
