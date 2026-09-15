@@ -6,8 +6,9 @@
  * publish, unpin clears the record so a later pin of the same URL starts
  * fresh, a pin and a rename whose workstream a later snapshot drops are
  * listed as orphaned and return with it, publish, pin, and rename refuse what
- * they cannot trust (a link that is not http(s) and a workstream the snapshot
- * lacks among them) and change nothing, and a stored link that is not http(s)
+ * they cannot trust (a link that is not http(s), a pull request pin that is
+ * not a GitHub pull request URL, a padded workstream id, and a workstream the
+ * snapshot lacks among them) and change nothing, and a stored link that is not http(s)
  * renders as text rather than an anchor.
  */
 import {
@@ -23,10 +24,29 @@ import {
 import { findNode, hasText, propValue } from "../test/vnode-helpers.ts";
 import Snapshot, {
   type Pin,
+  type PullRequestPinEvent,
   type Rename,
   WORK_SNAPSHOT_SCHEMA,
   type WorkSnapshot,
 } from "./main.tsx";
+
+/** A pin as a caller outside the type could spell it: the type requires a
+ * pull request pin's state, the boundary does not enforce it, so the verb's
+ * own check is reached through this looser shape. */
+interface LoosePinEvent {
+  workstreamId: string;
+  kind: string;
+  url: string;
+  title?: string;
+  state?: string;
+}
+
+const STATELESS_PIN: LoosePinEvent = {
+  workstreamId: "board-load",
+  kind: "pr",
+  url: "https://github.com/commontoolsinc/labs/pull/2",
+  title: "Stateless",
+};
 
 const first: WorkSnapshot = {
   schema: WORK_SNAPSHOT_SCHEMA,
@@ -65,7 +85,8 @@ const second: WorkSnapshot = {
 };
 
 /** Snapshots publish refuses: a foreign schema, a blank repository, a
- * workstream without an id, and two workstreams sharing one; workstreams that
+ * workstream without an id, two workstreams sharing one, an id with
+ * surrounding whitespace, and two ids differing only by it; workstreams that
  * are not an array reach the verb as no event at all, which it refuses too.
  * Assembled by patching, since no literal carries those shapes under the
  * snapshot's type. */
@@ -75,6 +96,15 @@ const MALFORMED: WorkSnapshot[] = [
   { workstreams: "none" },
   { workstreams: [{ ...second.workstreams[0], id: "" }] },
   { workstreams: [second.workstreams[0], second.workstreams[0]] },
+  // Padded: an id pins and renames could never name, and one that would
+  // pass as distinct from its trimmed twin.
+  { workstreams: [{ ...second.workstreams[0], id: " board-load " }] },
+  {
+    workstreams: [
+      second.workstreams[0],
+      { ...second.workstreams[0], id: " board-load " },
+    ],
+  },
   {
     // Its own generatedAt: were the link guard gone, this snapshot would
     // land and the piece would show this time.
@@ -105,7 +135,7 @@ const LEGACY: WorkSnapshot = {
 };
 
 export default pattern(() => {
-  const snapshot = new Writable<WorkSnapshot | Default<WorkSnapshot>>({
+  const snapshot = new Writable<WorkSnapshot>({
     schema: WORK_SNAPSHOT_SCHEMA,
     repository: "",
     window: { since: "", until: "" },
@@ -273,11 +303,15 @@ export default pattern(() => {
     });
     // A pull request pin without its state is refused: its state decides
     // whether it counts as open.
+    piece.pin.send(STATELESS_PIN as PullRequestPinEvent);
+    // A pull request pin whose URL is not a GitHub pull request is refused,
+    // http(s) though it is: there is no repository and number to read.
     piece.pin.send({
       workstreamId: "board-load",
       kind: "pr",
-      url: "https://github.com/commontoolsinc/labs/pull/2",
-      title: "Stateless",
+      url: "https://example.com/not-a-pr",
+      title: "Not a pull request",
+      state: "open",
     });
     piece.rename.send({ workstreamId: "board-load", name: "  " });
   });
@@ -301,9 +335,9 @@ export default pattern(() => {
   return {
     [NAME]: "Work snapshot test",
     [UI]: piece[UI],
-    // The twelve refused calls above each throw inside their verb, which the
-    // runner reports as runtime errors; exactly twelve are expected.
-    expectRuntimeErrors: 12,
+    // The fifteen refused calls above each throw inside their verb, which the
+    // runner reports as runtime errors; exactly fifteen are expected.
+    expectRuntimeErrors: 15,
     [TESTS]: [
       { assertion: assert_empty },
       { action: action_publish },

@@ -500,12 +500,14 @@
             "type": "string"
           },
           "workstreamId": {
+            "description": "One of the person's workstreams, as the workbench shows them.",
             "type": "string"
           }
         },
         "required": [
           "sourceId",
-          "nativeSessionId"
+          "nativeSessionId",
+          "workstreamId"
         ],
         "type": "object"
       },
@@ -767,7 +769,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/person-workbench/main.tsx",
-              "moduleIdentity": "bn9nfgBCBJI29dfDI6Ce052GzHEhLwyQVnqWNdKHfj0",
+              "moduleIdentity": "5NEPvAz8fOXz7VyxXqI7N-nUq3rl3NJSEletYlvNT2o",
               "path": [
                 "startWorkstreamSession"
               ]

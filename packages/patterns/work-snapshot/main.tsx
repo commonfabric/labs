@@ -126,15 +126,25 @@ export interface PublishResult {
   generatedAt: string;
 }
 
-export interface PinEvent {
+/** A topic pin: any http(s) URL. */
+export interface TopicPinEvent {
   workstreamId: string;
-  kind: "topic" | "pr";
+  kind: "topic";
   url: string;
   title?: string;
-  /** A pull request's state, required for a pull request pin so a merged or
-   * closed one is not counted open; not read for a topic. */
-  state?: PullRequestRef["state"];
 }
+
+/** A pull request pin: a GitHub pull request URL, and the pull request's
+ * state, so a merged or closed one is not counted open. */
+export interface PullRequestPinEvent {
+  workstreamId: string;
+  kind: "pr";
+  url: string;
+  title?: string;
+  state: PullRequestRef["state"];
+}
+
+export type PinEvent = TopicPinEvent | PullRequestPinEvent;
 
 const PULL_REQUEST_STATES: ReadonlySet<string> = new Set([
   "open",
@@ -182,7 +192,7 @@ export interface SnapshotOutput {
   publish: Stream<PublishEvent, PublishResult>;
   /** Pin a topic or pull request to a workstream the snapshot carries: one
    * pin per URL per workstream, so pinning it again changes nothing. The URL
-   * must be http(s). */
+   * must be http(s), and a pull request's a GitHub pull request URL. */
   pin: Stream<PinEvent>;
   /** Drop a pin. */
   unpin: Stream<UnpinEvent>;
@@ -227,8 +237,10 @@ const workstreamsOf = lift((
     const pinnedPrs: PullRequestRef[] = ownPins
       .filter((p) => p.kind === "pr" && !prUrls.has(p.url))
       .map((p) => ({
-        repo: repoOfPullRequestUrl(p.url),
-        number: numberOfPullRequestUrl(p.url),
+        // The verb takes only a URL that parses; a stored one that does not
+        // shows with no repository and the number 0 rather than vanishing.
+        repo: parsePullRequestUrl(p.url)?.repo ?? "",
+        number: parsePullRequestUrl(p.url)?.number ?? 0,
         title: p.title,
         // A pull request pin names its state; a record with none counts open.
         state: p.state ?? "open",
@@ -261,14 +273,16 @@ const orphanedOverlayOf = lift((
   };
 });
 
-const repoOfPullRequestUrl = (url: string): string => {
-  const match = url.match(/github\.com\/([^/]+\/[^/]+)\/pull\/\d+/);
-  return match ? match[1] : "";
-};
-
-const numberOfPullRequestUrl = (url: string): number => {
-  const match = url.match(/\/pull\/(\d+)/);
-  return match ? Number(match[1]) : 0;
+/** The repository and number a GitHub pull request URL names, or nothing for
+ * a URL that is not one: `https://github.com/<owner>/<repo>/pull/<number>`,
+ * with or without a trailing path such as `/files`. */
+export const parsePullRequestUrl = (
+  url: string,
+): { repo: string; number: number } | undefined => {
+  const match = url.trim().match(
+    /^https:\/\/github\.com\/([\w.-]+\/[\w.-]+)\/pull\/(\d+)(?:[/?#]|$)/,
+  );
+  return match ? { repo: match[1], number: Number(match[2]) } : undefined;
 };
 
 /** The key a pin's record lives under: one per URL per workstream. */
@@ -344,6 +358,14 @@ export default pattern<SnapshotInput, SnapshotOutput>(
           if (!workstream.id?.trim()) {
             throw new Error("publish: every workstream needs an id");
           }
+          // An id is what pins and renames name; one with surrounding
+          // whitespace could never be named, and two differing only by it
+          // would pass as distinct.
+          if (workstream.id !== workstream.id.trim()) {
+            throw new Error(
+              `publish: workstream id "${workstream.id}" carries surrounding whitespace`,
+            );
+          }
           if (ids.has(workstream.id)) {
             throw new Error(
               `publish: duplicate workstream id ${workstream.id}`,
@@ -367,7 +389,11 @@ export default pattern<SnapshotInput, SnapshotOutput>(
     );
 
     const pin = action<PinEvent>(
-      ({ workstreamId, kind, url, title, state }) => {
+      (event) => {
+        const { workstreamId, kind, url, title } = event;
+        // The typed boundary does not enforce string literals, so a pull
+        // request pin's state is checked here as well as by the type.
+        const state = event.kind === "pr" ? event.state : undefined;
         const id = (workstreamId ?? "").trim();
         const target = (url ?? "").trim();
         if (!id || !target || (kind !== "topic" && kind !== "pr")) {
@@ -379,6 +405,11 @@ export default pattern<SnapshotInput, SnapshotOutput>(
         if (kind === "pr" && !PULL_REQUEST_STATES.has(state ?? "")) {
           throw new Error(
             "pin: a pull request pin needs its state (open, draft, merged, or closed)",
+          );
+        }
+        if (kind === "pr" && parsePullRequestUrl(target) === undefined) {
+          throw new Error(
+            "pin: a pull request pin's url must be a GitHub pull request URL",
           );
         }
         if (!snapshot.get().workstreams.some((w) => w.id === id)) {

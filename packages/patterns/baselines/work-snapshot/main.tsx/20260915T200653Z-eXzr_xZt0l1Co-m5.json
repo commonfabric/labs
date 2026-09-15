@@ -357,15 +357,35 @@
         "type": "object"
       },
       "PinEvent": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/TopicPinEvent"
+          },
+          {
+            "$ref": "#/$defs/PullRequestPinEvent"
+          }
+        ]
+      },
+      "PublishEvent": {
+        "properties": {
+          "snapshot": {
+            "$ref": "#/$defs/WorkSnapshot"
+          }
+        },
+        "required": [
+          "snapshot"
+        ],
+        "type": "object"
+      },
+      "PullRequestPinEvent": {
         "properties": {
           "kind": {
             "enum": [
-              "topic",
               "pr"
-            ]
+            ],
+            "type": "string"
           },
           "state": {
-            "description": "A pull request's state, required for a pull request pin so a merged or\nclosed one is not counted open; not read for a topic.",
             "enum": [
               "open",
               "draft",
@@ -386,18 +406,8 @@
         "required": [
           "workstreamId",
           "kind",
-          "url"
-        ],
-        "type": "object"
-      },
-      "PublishEvent": {
-        "properties": {
-          "snapshot": {
-            "$ref": "#/$defs/WorkSnapshot"
-          }
-        },
-        "required": [
-          "snapshot"
+          "url",
+          "state"
         ],
         "type": "object"
       },
@@ -484,6 +494,31 @@
         "required": [
           "workstreamId",
           "name"
+        ],
+        "type": "object"
+      },
+      "TopicPinEvent": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "topic"
+            ],
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          },
+          "workstreamId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "workstreamId",
+          "kind",
+          "url"
         ],
         "type": "object"
       },
@@ -659,7 +694,7 @@
         "asCell": [
           "stream"
         ],
-        "description": "Pin a topic or pull request to a workstream the snapshot carries: one\npin per URL per workstream, so pinning it again changes nothing. The URL\nmust be http(s)."
+        "description": "Pin a topic or pull request to a workstream the snapshot carries: one\npin per URL per workstream, so pinning it again changes nothing. The URL\nmust be http(s), and a pull request's a GitHub pull request URL."
       },
       "pins": {
         "default": [],

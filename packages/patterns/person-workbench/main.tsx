@@ -145,7 +145,8 @@ export interface WorkstreamCard {
 export interface AttachEvent {
   sourceId: string;
   nativeSessionId: string;
-  workstreamId?: string;
+  /** One of the person's workstreams, as the workbench shows them. */
+  workstreamId: string;
   title?: string;
 }
 
