@@ -111,6 +111,9 @@ interface IndexEntry {
   updatedAt: string | null;
   archived: boolean | null;
   active: boolean | null;
+  /** The id a `start` command named, when this session is the one that
+   * start produced under another id (a desktop start). */
+  startedAs?: string;
   capabilities: Record<string, unknown>;
   recentMessages?: NormalizedMessage[];
   manifest: Cell<unknown>;
@@ -702,6 +705,9 @@ function asIndex(
       !isNullableString(session.updatedAt) ||
       !isNullableBoolean(session.archived) ||
       !isNullableBoolean(session.active) ||
+      (session.startedAs !== undefined &&
+        (typeof session.startedAs !== "string" ||
+          session.startedAs.length === 0)) ||
       !isRecord(session.capabilities) ||
       (session.recentMessages !== undefined &&
         !Array.isArray(session.recentMessages)) ||
@@ -894,6 +900,9 @@ async function publishSessionGraph(
       updatedAt: prepared.summary.updatedAt,
       archived: prepared.summary.archived,
       active: prepared.summary.active,
+      ...(prepared.summary.startedAs
+        ? { startedAs: prepared.summary.startedAs }
+        : {}),
       capabilities: {},
       recentMessages: recentSessionMessages(prepared.normalizedMessages),
       manifest,
