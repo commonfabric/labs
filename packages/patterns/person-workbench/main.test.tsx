@@ -6,8 +6,11 @@
  * carries the workstream's context and links; a start sends the connector one
  * `start` command titled after the workstream and records it until the index
  * carries its session, which then joins the workstream; Detach on a started
- * session drops its record; a second start is withdrawn, taking its command
- * out of the queue; the rail's own buttons attach a session under the picked
+ * session drops its record (a second click while the start is unconfirmed
+ * sends nothing, the words a start sent clear from the composer, and Start is
+ * free again once the index confirms the session or the start is withdrawn;
+ * a pending start blocks only its own workstream); a second start is
+ * withdrawn, taking its command out of the queue; the rail's own buttons attach a session under the picked
  * workstream and take it back out, and a disabled Attach records nothing;
  * a second attach records nothing; the detach verb removes a session; a
  * snapshot with no workstreams leaves Start disabled with its reason; a verb
@@ -279,14 +282,30 @@ export default pattern(() => {
     firstCommand(commands.get())?.sourceId === "claude" &&
     firstCommand(commands.get())?.payload?.cwd === "/w/labs" &&
     firstCommand(commands.get())?.payload?.title === "Board-load performance" &&
-    firstCommand(commands.get())?.payload?.text === wb.kickoff &&
+    (firstCommand(commands.get())?.payload?.text ?? "").startsWith(
+      "Re-run the pinned ablation.",
+    ) &&
     wb.workstreams[0]?.sessions.length === 1 &&
     wb.startingSessions.length === 1 &&
     wb.startingSessions[0]?.nativeSessionId ===
       firstCommand(commands.get())?.nativeSessionId &&
     wb.startingSessions[0]?.workstreamId === "board-load" &&
     attached.get().length === 1 &&
-    hasText(wb[UI], "Starting · 1")
+    hasText(wb[UI], "Starting · 1") &&
+    // The composer answers at once: the sent words clear, and Start is
+    // disabled with the start it waits on.
+    wb.spawnPrompt.get() === "" &&
+    wb.startBlocker.startsWith('Starting "Board-load performance"') &&
+    startDisabled(wb[UI])
+  );
+  // A second click while the start is unconfirmed sends nothing: one start
+  // at a time per workstream.
+  const action_start_twice = action(() => {
+    wb.startSession.send();
+  });
+  const assert_start_once = assert(() =>
+    commands.get().length === 1 && starts.get().length === 1 &&
+    wb.startingSessions.length === 1
   );
   // The connector publishes the session: the start joins the workstream.
   const action_confirm_start = action(() => {
@@ -321,7 +340,8 @@ export default pattern(() => {
     ) &&
     wb.recentSessions.every((row) =>
       row.nativeSessionId !== firstCommand(commands.get())?.nativeSessionId
-    )
+    ) &&
+    wb.startBlocker === ""
   );
 
   // Detach on a started session, through its card's row, drops the start's
@@ -354,7 +374,8 @@ export default pattern(() => {
     firstCommand(commands.get())?.payload?.title ===
       "Board-load performance" &&
     wb.startingSessions.length === 0 &&
-    starts.get().length === 0
+    starts.get().length === 0 &&
+    wb.startBlocker === ""
   );
 
   // With no queue bound, a start records nothing as attached: it stays
@@ -374,13 +395,16 @@ export default pattern(() => {
   const assert_start_without_queue_pending = assert(() =>
     noQueue.workstreams[0]?.sessions.length === 0 &&
     noQueue.startingSessions.length === 1 &&
-    noQueueStarts.get().length === 1
+    noQueueStarts.get().length === 1 &&
+    noQueue.spawnPrompt.get() === "" &&
+    noQueue.startBlocker.startsWith('Starting "Board-load performance"')
   );
   const action_withdraw_without_queue = action(() => {
     clickInRow(noQueue[UI], "Board-load performance", "Withdraw");
   });
   const assert_withdrawn_without_queue = assert(() =>
-    noQueue.startingSessions.length === 0 && noQueueStarts.get().length === 0
+    noQueue.startingSessions.length === 0 &&
+    noQueueStarts.get().length === 0 && noQueue.startBlocker === ""
   );
 
   // The workstream picker: a person with two workstreams picks the second,
@@ -408,6 +432,21 @@ export default pattern(() => {
     pickerAttached.get().find((a) => a.nativeSessionId === "aaa")
         ?.workstreamId === "cfc-dials" &&
     picker.workstreams[1]?.sessions.length === 1
+  );
+  // One start at a time per workstream: with the CFC dials start unconfirmed,
+  // the first workstream can still start, and the picked one says why not.
+  const action_pick_first_while_pending = action(() => {
+    picker.spawnWorkstream.set("board-load");
+  });
+  const assert_first_can_start = assert(() =>
+    picker.startBlocker === "" && !startDisabled(picker[UI])
+  );
+  const action_pick_second_while_pending = action(() => {
+    picker.spawnWorkstream.set("cfc-dials");
+  });
+  const assert_second_blocked = assert(() =>
+    picker.startBlocker.startsWith('Starting "CFC dials"') &&
+    startDisabled(picker[UI])
   );
 
   // An attachment whose workstream a later snapshot drops keeps a place of
@@ -651,6 +690,8 @@ export default pattern(() => {
       { assertion: assert_kickoff },
       { action: action_start },
       { assertion: assert_started },
+      { action: action_start_twice },
+      { assertion: assert_start_once },
       { action: action_confirm_start },
       { assertion: assert_start_confirmed },
       { render: wb[UI] },
@@ -691,6 +732,12 @@ export default pattern(() => {
       { assertion: assert_withdrawn_without_queue },
       { action: action_pick_second },
       { assertion: assert_picked_second },
+      { action: action_pick_first_while_pending },
+      { render: picker[UI] },
+      { assertion: assert_first_can_start },
+      { action: action_pick_second_while_pending },
+      { render: picker[UI] },
+      { assertion: assert_second_blocked },
       { action: action_attach_under_b },
       { assertion: assert_attached_under_b },
       { action: action_drop_workstream_b },

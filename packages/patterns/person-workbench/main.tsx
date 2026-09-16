@@ -10,7 +10,9 @@
  * piece's records; a start goes out through a queue the connector's host
  * binds to this pattern's own handler, and one the index has not confirmed
  * can be withdrawn through the same handler. What this shares with the topic
- * workbench lives in `../workbench/`.
+ * workbench lives in `../workbench/`. One start at a time per workstream:
+ * while a start for the picked workstream is unconfirmed, Start is disabled
+ * with the reason, and the words a start sent clear from the composer.
  */
 
 import {
@@ -66,6 +68,7 @@ import {
   checkoutOptionsOf,
   configuredSourcesOf,
   mintSessionId,
+  pendingStartOf,
   sourceOptionsOf,
   startBlockerOf,
   startBlockerReason,
@@ -434,12 +437,18 @@ export const startWorkstreamSession = handler<void, {
   starts: Writable<SessionStart[] | Default<[]>>;
   spawnRoot: Writable<string>;
   spawnSource: Writable<string>;
+  /** The person's words, cleared once a start has sent them. */
+  spawnPrompt: Writable<string>;
   sourceOptions: CheckoutOption[];
   configuredSources: string[];
   kickoff: string;
   ownerDid: string;
   card: WorkstreamCard | undefined;
   startMode: string;
+  /** The title of a start for the picked workstream the index has not
+   * confirmed, or "": one start at a time per workstream, so a second click
+   * while the first is on its way sends nothing. */
+  pending: string;
   /** Bound on a Withdraw control: the id of the command to take back. The
    * start's own fields are then not read. */
   withdraw?: string;
@@ -458,6 +467,7 @@ export const startWorkstreamSession = handler<void, {
     startable: state.configuredSources,
     kickoff: state.kickoff,
     hasSubject: state.card !== undefined,
+    pending: state.pending,
   });
   if (blocked || state.card === undefined) return;
   const sourceId = startSourceOf(
@@ -489,6 +499,9 @@ export const startWorkstreamSession = handler<void, {
     startedAt: Date.now(),
     workstreamId: state.card.id,
   });
+  // The words went with the start; the composer is ready for the next one,
+  // and Start stays disabled until this one is confirmed or withdrawn.
+  state.spawnPrompt.set("");
 });
 
 //
@@ -541,6 +554,11 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
     const workstreamOptions = workstreamOptionsOf({ cards });
     const card = pickedOf({ cards, picked: spawnWorkstream });
     const kickoff = kickoffOf({ prompt: spawnPrompt, card });
+    const pickedWorkstreamId = computed(() => card?.id ?? "");
+    const pendingStart = pendingStartOf({
+      starting: startingSessions,
+      workstreamId: pickedWorkstreamId,
+    });
     const sourceOptions = sourceOptionsOf({
       index: sessions,
       shown: harnessesShown,
@@ -578,6 +596,7 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
       startable: configuredSources,
       kickoff,
       hasSubject,
+      pending: pendingStart,
     });
     const canStart = isEmptyText({ text: startBlocker });
 
@@ -590,10 +609,12 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
       spawnSource,
       sourceOptions,
       configuredSources,
+      spawnPrompt,
       kickoff,
       ownerDid,
       card,
       startMode: mode,
+      pending: pendingStart,
     });
 
     const attach = attachVerb({ attached, workstreamIds });
@@ -894,10 +915,12 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
                                     spawnSource,
                                     sourceOptions,
                                     configuredSources,
+                                    spawnPrompt,
                                     kickoff,
                                     ownerDid,
                                     card,
                                     startMode: mode,
+                                    pending: pendingStart,
                                     withdraw: start.commandId,
                                   })}
                                 >
