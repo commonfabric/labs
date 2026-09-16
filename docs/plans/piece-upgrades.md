@@ -57,11 +57,17 @@ A fourth party, verbs and their callers, is the subject of
 a rollout, old and new code write the same state at once. One measured board
 update left the two writing to the same space at 96% of commits.
 
-The three parties are different problems. The piece's own state has exactly one
-writer, the piece, so what it holds is knowable. A consumer's contract is a
-promise the piece made to code it cannot see. A producer's contract is a
-promise made to the piece by code it does not control. One instrument, schema
-comparison, is used for all three today, and that is the root of the trouble.
+The three parties are different problems. The piece's own state is written by
+code that reads the piece's own schema: its own pattern, and a consumer holding
+a writable handle into it, which the write-back proof holds to that schema. Two
+writers escape that: a raw cell write (`cf cell set`, `setRawUntyped`), which
+reads no schema, and a client still running an older version of the pattern,
+which reads an older one. So the state is knowable up to those two, and the
+design has to say what it does about each (D2, and proposal T3). A consumer's
+contract is a promise the piece made to code it cannot see. A producer's
+contract is a promise made to the piece by code it does not control. One
+instrument, schema comparison, is used for all three today, and that is the
+root of the trouble.
 
 ## What the design rests on
 
@@ -82,7 +88,17 @@ These are measured, not assumed. Each names where it was measured.
    written" is not a property the runtime provides, and a proof that assumes
    it is unsound. TypeScript's excess-property check covers object literals
    only; a value passed through a variable, a spread, or a cast carries
-   whatever it carries.
+   whatever it carries. Two things bound what such a value can do, both
+   measured by a second probe that stored `shortName: 42` under a pattern
+   later declaring `shortName?: string`. At upgrade time, setup validation
+   refuses a readable wrong-typed value ("value does not match type string"),
+   and the global flag does not waive it. After the upgrade, a wrong-typed
+   value at an optional declared path reads as absent: a lift over the rows
+   and a typed read of the result both returned the row without `shortName`.
+   So an optional typed demand over an undeclared field is safe in effect,
+   which is the position the retained-link proof's author takes: the field's
+   present wrong-typed value is left off the read, and the result is what it
+   would be had the field not been there.
 3. **Every entry of a stored list is its own document, with no schema of its
    own.** The same probe showed this for `push` and for `set([...])` alike.
    The retained-link check therefore sees a piece's own list entries as
@@ -134,7 +150,10 @@ These are measured, not assumed. Each names where it was measured.
    only writer, and after the update its new code is the only writer. The
    right operation is code that converts version N to N+1. Compatibility is the
    trivial migration, not a property to prove. No schema-subset proof runs over
-   a piece's own state.
+   a piece's own state. What replaces the proof is not trust in a single
+   writer but two checks that look at values rather than schemas: setup
+   validates what is stored (fact 5), and the writer-version guard (D2) keeps
+   an older writer from adding to it afterward.
 - **P2. Contracts between pieces are checked three times, at different
    strengths.** A demand is proved against the producer's declared contract, a
    universal claim over what the producer promises; the values currently
@@ -233,9 +252,18 @@ situations do not fit that bound, and each has a form:
   explicit.
 - **A migration that belongs to the collection and reaches every member.**
   `backfillNames` in the naming arc was one. Over a large collection such a
-  step is **resumable**: it returns "more" with a cursor kept in the piece's
-  own state, the transaction commits the slice, and the sweep fires it again.
-  Rare, and the one place the step contract grows.
+  step is **resumable**: it returns "more" with a cursor, the transaction
+  commits the slice, and the sweep fires it again. This is the one place the
+  unit above is not one transaction, and it needs its own rules, which are
+  these. The first slice's transaction writes an in-progress marker beside the
+  version, holding the step's identifier and the cursor; the last slice's
+  transaction clears it, stamps the new version, and switches the code. While
+  the marker is set the document is at the old version, and the writer guard
+  (D2) refuses writes from every version, old and new alike, so no writer of
+  either shape lands on a half-migrated document. The piece is unavailable for
+  writes for the span of its slices, which is the cost of not fitting one
+  transaction, and the marker is what makes the span visible and resumable
+  after a crash. Rare, and the one place the step contract grows.
 
 **Proposal for Mike (M1).** The three triggers, with the sweep's budget an
 operator setting. The alternative at either end — every piece at deploy, or
@@ -303,7 +331,11 @@ it should not run at all over own entries; if it keeps running in the interim,
 it runs with the evolution policy on, the same as the pattern check. This one
 change removes 258 of the 302 overrides in the Topics rollout and the
 `authorName` workaround. The fallback is Robin's; the policy flag it passes is
-Bernhard's.
+Bernhard's. Robin's position, on the Topics refusals: the fields do not satisfy
+the constraint the proof states, but they match in the way that matters, since
+a wrong-typed value at an optional path is left off the read, and that is
+accepted. Fact 2 measures the read behavior that position rests on. What
+remains for Bernhard is the checker-side change.
 
 ### D4. Cross-piece links are proved against declarations and checked twice more
 
@@ -313,14 +345,17 @@ policy on: a new optional typed demand over an undeclared producer field is
 accepted. Fact 2 says the proof cannot guarantee that field's type, so two
 more checks bound what the proof cannot:
 
-- The values currently linked are validated at setup (fact 5).
-- A typed read validates what arrives.
+- The values currently linked are validated at setup (fact 5), and a readable
+  wrong-typed value refuses the update, flag or no flag.
+- A typed read of an optional declared path drops a wrong-typed value and
+  reads it as absent (fact 2). For an optional demand this is the whole of the
+  reader-side check the lifecycle spec asks for, and it exists.
 
-**Proposal for Bernhard (R2).** What a typed read does today with a wrong-typed
-value at a declared path. The probe showed only that an undeclared field is
-stripped. If a wrong-typed value passes through, the reader-side check the
-lifecycle spec marks as required is not there, and D4 rests on building it.
-If the read fails or the value is dropped, D4 rests on what exists.
+**Proposal for Bernhard (R2).** What a typed read does with a wrong-typed
+value at a **required** declared path, which the probes did not measure. For
+an optional path the answer is measured above. If a required path's read
+fails or drops the record, D4 rests on what exists; if the value passes
+through, that one case still needs the reader-side check.
 
 On the producer side, when a piece's published contract changes, the runtime
 enumerates the consumers that link into it, within the horizon the
