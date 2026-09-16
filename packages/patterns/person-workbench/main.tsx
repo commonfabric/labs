@@ -95,14 +95,17 @@ export interface TopicView {
   lastActivityAt?: number;
 }
 
-/** A pull request as a card shows it. The state is read as a string: the
- * typed boundary does not enforce string literals, and a state this piece
- * does not know renders as neither open nor merged rather than voiding the
- * row. */
+/** A pull request as a card shows it. The state is the snapshot's own
+ * literal union: the link-time schema check proves the linked snapshot's
+ * contract against this view field by field, and a plain `string` here
+ * cannot be proved against a producer field that is an enum with no declared
+ * type, so `cf piece link` refuses the snapshot. The typed boundary does not
+ * enforce the literals at runtime, and a state this piece does not know still
+ * renders as neither open nor merged rather than voiding the row. */
 export interface PullRequestView {
   number: number;
   title: string;
-  state: string;
+  state: "open" | "draft" | "merged" | "closed";
   url: string;
   updatedAt: string;
 }

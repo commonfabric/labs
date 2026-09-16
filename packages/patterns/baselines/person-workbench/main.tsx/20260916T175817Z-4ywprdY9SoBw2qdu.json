@@ -79,7 +79,12 @@
             "type": "number"
           },
           "state": {
-            "type": "string"
+            "enum": [
+              "open",
+              "draft",
+              "merged",
+              "closed"
+            ]
           },
           "title": {
             "type": "string"
@@ -559,7 +564,12 @@
             "type": "number"
           },
           "state": {
-            "type": "string"
+            "enum": [
+              "open",
+              "draft",
+              "merged",
+              "closed"
+            ]
           },
           "title": {
             "type": "string"
@@ -769,7 +779,7 @@
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
               "file": "/packages/patterns/person-workbench/main.tsx",
-              "moduleIdentity": "reObOe_P7pyHYF-aOxH0A0JWMh4KYn-7UezNYGNBfRs",
+              "moduleIdentity": "1ne3E1uCJw0exCBsKntGRHtXs-ToYS7YXexaxm81HIg",
               "path": [
                 "startWorkstreamSession"
               ]
