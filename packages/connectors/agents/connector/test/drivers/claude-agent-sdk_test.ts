@@ -1462,6 +1462,45 @@ Deno.test("Claude driver starts a session on the desktop: opens the app's link w
   assertEquals(again?.startedAs, NEW_SESSION_ID);
   assertEquals(again?.title, "my own title");
 
+  // The same start sent again (the person closed the app's New session UI,
+  // or declined its folder, and clicked Start once more): the session the
+  // app then makes pairs with the newest start, not the earlier one the
+  // workbench may have withdrawn since.
+  now += 60_000;
+  const earlier = "44444444-4444-4444-8444-444444444444";
+  const latest = "55555555-5555-4555-8555-555555555555";
+  assertEquals(
+    (await driver.startSession(earlier, {
+      text,
+      surface: "desktop",
+      title: "topic #7: the workbench",
+    })).status,
+    "succeeded",
+  );
+  now += 30_000;
+  assertEquals(
+    (await driver.startSession(latest, {
+      text,
+      surface: "desktop",
+      title: "topic #7: the workbench",
+    })).status,
+    "succeeded",
+  );
+  now += 30_000;
+  const resent = "66666666-6666-4666-8666-666666666666";
+  listed.push({
+    sessionId: resent,
+    summary: listedPrompt,
+    firstPrompt: listedPrompt,
+    cwd: "/work/labs",
+    lastModified: now,
+    createdAt: now,
+  });
+  const afterResend = (await driver.listSessions()).sessions.find((s) =>
+    s.nativeSessionId === resent
+  );
+  assertEquals(afterResend?.startedAs, latest);
+
   // A start the person never sends is forgotten after a day: a matching
   // session made later is not paired with it.
   const stale = "3f1a3c0e-9d2b-4c7a-8e5f-0123456789ab";

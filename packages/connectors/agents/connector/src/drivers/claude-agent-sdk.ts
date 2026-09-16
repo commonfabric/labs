@@ -700,14 +700,20 @@ export class ClaudeAgentSdkDriver implements AgentDriver {
   /**
    * Pairs each desktop start with the session the app made for it: one in
    * the start's directory, created after the start was sent, opening with
-   * the start's text. Known to this process only: a host restarted before
-   * the person sent the prompt no longer pairs them, and the session then
-   * shows as one the person started by hand.
+   * the start's text. The latest start claims a session first: a person who
+   * sends the same start again (after closing the app's New session UI, or
+   * declining its folder) is waiting on the newest one, and the workbench
+   * may have withdrawn the earlier record. Known to this process only: a
+   * host restarted before the person sent the prompt no longer pairs them,
+   * and the session then shows as one the person started by hand.
    */
   #reconcileDesktopStarts(sessions: ClaudeSessionInfo[]): void {
     if (this.#desktopStarts.size === 0) return;
     const now = this.#desktop.now();
-    for (const [startedAs, start] of this.#desktopStarts) {
+    const newestFirst = [...this.#desktopStarts].sort(
+      ([, a], [, b]) => b.sentAt - a.sentAt,
+    );
+    for (const [startedAs, start] of newestFirst) {
       if (now - start.sentAt > DESKTOP_START_WINDOW_MS) {
         this.#desktopStarts.delete(startedAs);
         continue;
