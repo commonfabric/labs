@@ -18,8 +18,12 @@
  * no workstreams rather than everyone's; with no queue a start stays starting
  * and can be withdrawn; the workstream picker steers the kickoff, the start,
  * and the rail's Attach; an attachment whose workstream a later snapshot
- * drops, or that names none, keeps a place with Detach; and an index that is
- * not the complete bucket is called out.
+ * drops, or that names none, keeps a place with Detach; an index that is
+ * not the complete bucket is called out; and a desktop start sends the
+ * surface and no mode, joins its workstream through the session the app
+ * makes under an id of its own that names the start's as `startedAs`, drops
+ * its record on Detach by row or by verb, and is blocked with the reason over
+ * a source that cannot open the app.
  */
 import {
   action,
@@ -43,6 +47,7 @@ import type {
   Attachment,
   CommandValue,
   IndexBucketView,
+  PairedSessionIndexView,
   SessionIndexView,
   SessionStart,
   StartableSourcesView,
@@ -53,7 +58,11 @@ import {
 } from "../work-snapshot/main.tsx";
 import PersonWorkbench, { type SnapshotView } from "./main.tsx";
 
-type IndexFixture = SessionIndexView & StartableSourcesView & IndexBucketView;
+type IndexFixture =
+  & SessionIndexView
+  & StartableSourcesView
+  & IndexBucketView
+  & PairedSessionIndexView;
 
 /** The first queued command, decoded; `null` when the queue is empty. */
 // deno-lint-ignore no-explicit-any
@@ -68,6 +77,23 @@ const lastCommand = (queued: readonly CommandValue[]): any =>
 /** Whether the Start control is disabled, as the rendered tree has it. */
 const startDisabled = (root: unknown): boolean =>
   propValue(findNode(root, isButton("Start")), "disabled") === true;
+
+/** An index row for a session the app made for a desktop start: its own id,
+ * and the start's as `startedAs`. */
+const appMade = (id: string, startedAs: string) => ({
+  sourceId: "claude",
+  nativeSessionId: id,
+  title: "Board-load performance",
+  cwd: "/w/labs",
+  gitRepo: null,
+  gitBranch: "main",
+  gitWorktreeRoot: null,
+  updatedAt: "2026-09-16T21:00:00.000Z",
+  active: true,
+  archived: false,
+  syncStatus: "complete",
+  startedAs,
+});
 
 // The snapshot as the work-snapshot piece publishes it, fields this piece
 // does not read included; the dashboard reads it through its own view.
@@ -192,6 +218,115 @@ export default pattern(() => {
     commands,
     starts,
   });
+  // A desktop start: the connector opens Claude Code on this Mac with the
+  // kickoff ready to send; the session the app makes carries the start's id
+  // as `startedAs` and its own id everywhere else.
+  const desktopIndex = new Writable<IndexFixture>({
+    schema: "commonfabric.agent-connector.session-index",
+    ownerDid: "did:key:owner",
+    bucket: "all",
+    sources: [{
+      id: "claude",
+      driver: "claude-agent-sdk",
+      capabilities: { startSession: true, surfaces: ["headless", "desktop"] },
+    }],
+    sessions: [],
+    checkouts: [{ root: "/w/labs", branch: "main" }],
+  });
+  const deskCommands = new Writable<CommandValue[] | Default<[]>>([]);
+  const deskStarts = new Writable<SessionStart[] | Default<[]>>([]);
+  const desk = PersonWorkbench({
+    snapshot,
+    person: "seefeldb",
+    sessions: desktopIndex,
+    attached: new Writable<Attachment[] | Default<[]>>([]),
+    commands: deskCommands,
+    starts: deskStarts,
+    startMode: "acceptEdits",
+    startSurface: "desktop",
+  });
+  const deskBlocked = PersonWorkbench({
+    snapshot,
+    person: "seefeldb",
+    sessions: index,
+    startSurface: "desktop",
+  });
+  const assert_desktop_note = assert(() =>
+    desk.startBlocker === "" &&
+    hasText(desk[UI], "Opens Claude Code on this Mac with the kickoff ready") &&
+    !hasText(desk[UI], "permission mode")
+  );
+  const action_desktop_start = action(() => {
+    desk.spawnRoot.set("/w/labs");
+    desk.spawnPrompt.set("Open it in the app.");
+    desk.startSession.send();
+  });
+  const assert_desktop_started = assert(() =>
+    deskCommands.get().length === 1 &&
+    firstCommand(deskCommands.get())?.payload?.surface === "desktop" &&
+    firstCommand(deskCommands.get())?.payload?.mode === undefined &&
+    firstCommand(deskCommands.get())?.payload?.title ===
+      "Board-load performance" &&
+    desk.startingSessions.length === 1 &&
+    desk.startingSessions[0]?.workstreamId === "board-load" &&
+    desk.workstreams[0]?.sessions.length === 0 &&
+    hasText(desk[UI], "sent to Claude Code on this Mac")
+  );
+  const action_desktop_confirm = action(() => {
+    const started = firstCommand(deskCommands.get())?.nativeSessionId ?? "";
+    const current = desktopIndex.get();
+    desktopIndex.set({
+      ...current,
+      sessions: [...current.sessions, appMade("app-made-1", started)],
+    });
+  });
+  const assert_desktop_confirmed = assert(() =>
+    desk.startingSessions.length === 0 &&
+    desk.workstreams[0]?.sessions.length === 1 &&
+    desk.workstreams[0]?.sessions[0]?.nativeSessionId === "app-made-1" &&
+    desk.workstreams[0]?.sessions[0]?.startedAs ===
+      firstCommand(deskCommands.get())?.nativeSessionId &&
+    desk.recentSessions.every((row) => row.nativeSessionId !== "app-made-1") &&
+    desk.startBlocker === ""
+  );
+  const action_desktop_detach = action(() => {
+    clickInRow(desk[UI], "Board-load performance", "Detach");
+  });
+  const assert_desktop_detached = assert(() =>
+    desk.workstreams[0]?.sessions.length === 0 &&
+    deskStarts.get().length === 0 &&
+    desk.recentSessions.some((row) => row.nativeSessionId === "app-made-1")
+  );
+  const action_desktop_start_again = action(() => {
+    desk.spawnPrompt.set("Once more.");
+    desk.startSession.send();
+  });
+  const action_desktop_confirm_again = action(() => {
+    const started = lastCommand(deskCommands.get())?.nativeSessionId ?? "";
+    const current = desktopIndex.get();
+    desktopIndex.set({
+      ...current,
+      sessions: [...current.sessions, appMade("app-made-2", started)],
+    });
+  });
+  const assert_desktop_confirmed_again = assert(() =>
+    deskCommands.get().length === 2 &&
+    desk.startingSessions.length === 0 &&
+    desk.workstreams[0]?.sessions.length === 1 &&
+    desk.workstreams[0]?.sessions[0]?.nativeSessionId === "app-made-2"
+  );
+  const action_desktop_detach_verb = action(() => {
+    desk.detach.send({ sourceId: "claude", nativeSessionId: "app-made-2" });
+  });
+  const assert_desktop_verb_detached = assert(() =>
+    desk.workstreams[0]?.sessions.length === 0 &&
+    deskStarts.get().length === 0
+  );
+  const assert_desktop_blocked = assert(() =>
+    deskBlocked.startBlocker ===
+      "claude cannot open a session in Claude Code on this Mac; pick a harness that can, or start headlessly." &&
+    startDisabled(deskBlocked[UI])
+  );
   // A name the snapshot's people do not carry: nothing shows, not everything.
   const stranger = PersonWorkbench({
     snapshot,
@@ -749,6 +884,23 @@ export default pattern(() => {
       { assertion: assert_unfiled_orphaned },
       { render: recentBucket[UI] },
       { assertion: assert_recent_bucket_noted },
+      { render: desk[UI] },
+      { assertion: assert_desktop_note },
+      { action: action_desktop_start },
+      { render: desk[UI] },
+      { assertion: assert_desktop_started },
+      { action: action_desktop_confirm },
+      { assertion: assert_desktop_confirmed },
+      { render: desk[UI] },
+      { action: action_desktop_detach },
+      { assertion: assert_desktop_detached },
+      { action: action_desktop_start_again },
+      { action: action_desktop_confirm_again },
+      { assertion: assert_desktop_confirmed_again },
+      { action: action_desktop_detach_verb },
+      { assertion: assert_desktop_verb_detached },
+      { render: deskBlocked[UI] },
+      { assertion: assert_desktop_blocked },
     ],
   };
 });
