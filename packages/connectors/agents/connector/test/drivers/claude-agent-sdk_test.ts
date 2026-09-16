@@ -1384,7 +1384,12 @@ Deno.test("Claude driver starts a session on the desktop: opens the app's link w
   );
   assertEquals(driver.source.capabilities.surfaces, ["headless", "desktop"]);
 
-  const text = "Work on topic #7\n\nContext: the topic's living document.";
+  // Longer than the 200 characters the SDK lists of a first prompt, with
+  // the cut landing on a space (the SDK trims the cut before its ellipsis).
+  const text = "Work on topic #7\n\nContext: the topic's living document " +
+    "begins: a topic filed on the local board so the topic workbench has " +
+    "something to read, with links to the two pull requests it tracks " +
+    "and the rig\n\nLinks:\n- labs #7383\n- labs #7384";
   const outcome = await driver.startSession(NEW_SESSION_ID, {
     text,
     title: "topic #7: the workbench",
@@ -1412,16 +1417,21 @@ Deno.test("Claude driver starts a session on the desktop: opens the app's link w
   assertEquals((await driver.listSessions()).sessions, []);
 
   // The app makes the session: the start's directory, after the start,
-  // opening with the start's text (the SDK may list only a prefix of it).
-  // Another session made meanwhile stays what it is.
+  // opening with the start's text. The SDK lists the first prompt with its
+  // newlines as spaces, cut to 200 characters, trimmed, and marked with an
+  // ellipsis that is no part of the prompt (@anthropic-ai/claude-agent-sdk
+  // 0.3.206). Another session made meanwhile stays what it is.
   now += 30_000;
   const made = "11111111-1111-4111-8111-111111111111";
   const other = "22222222-2222-4222-8222-222222222222";
+  assertEquals(text.replace(/\n/g, " ")[199], " ");
+  const listedPrompt = text.replace(/\n/g, " ").slice(0, 200).trim() + "…";
+  assertEquals(listedPrompt.length, 200);
   listed.push(
     {
       sessionId: made,
-      summary: "Work on topic #7",
-      firstPrompt: "Work on topic #7",
+      summary: listedPrompt,
+      firstPrompt: listedPrompt,
       cwd: "/work/labs",
       lastModified: now,
       createdAt: now,

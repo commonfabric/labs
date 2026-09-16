@@ -124,6 +124,12 @@ const DESKTOP_START_WINDOW_MS = 24 * 60 * 60 * 1000;
 const promptKey = (text: string): string =>
   text.replace(/\s+/g, " ").trim().slice(0, 200);
 
+/** The listed first prompt as a comparable prefix: the SDK lists at most
+ * 200 characters of it and marks a cut with a trailing ellipsis, which is
+ * not part of the prompt. */
+const listedPromptKey = (text: string): string =>
+  promptKey(text.replace(/\s*…$/, ""));
+
 /** Whether a listed session is the one a desktop start produced: the
  * start's directory, made after the start was sent, opening with the
  * start's text (the SDK may list a prefix of the first prompt). */
@@ -135,7 +141,7 @@ const desktopStartMatches = (
   if (info.createdAt !== undefined && info.createdAt < start.sentAt - 60_000) {
     return false;
   }
-  const first = promptKey(info.firstPrompt ?? "");
+  const first = listedPromptKey(info.firstPrompt ?? "");
   return first.length > 0 && promptKey(start.text).startsWith(first);
 };
 
