@@ -63,11 +63,13 @@ drills in place; leaving restores the parent's scroll and selection.
 └ q back · enter drill · / search · : command ┘
 ```
 
-**Piece overview** — the structured piece viewer: arguments, a result
-summary, callables with their doc annotations, and pattern identity in one
-frame. It renders as a snapshot with refresh on demand rather than live —
-the live piece watch is deferred — so it costs no sink and ships beside
-the other two.
+There is no third view of a piece. What a piece is — its arguments, a
+summary of its result, its callables with their doc annotations, and its
+pattern identity — is one reading, and `describe` writes it as a page
+(decision 26). A frame over the same four would add refreshing in place,
+where a shell runs the line again, and scrolling, where `more` continues.
+A *live* view of a piece is a different thing and is deferred whole
+([`futures.md`](futures.md)).
 
 ## Watches are session objects
 
@@ -208,8 +210,9 @@ overview included.
 
 ## Open questions
 
-1. When the piece overview gains liveness — deferred with the live piece
-   watch. (The shallow-sink question is settled above: not expressible
+1. When a live view of a piece arrives — deferred whole
+   ([`futures.md`](futures.md)), and deferred for its seam rather than its
+   form. (The shallow-sink question is settled above: not expressible
    through `Cell.sink`; the raw-document seam and its proving gate are
    issue [#6534](https://github.com/commonfabric/labs/issues/6534).)
 2. The pinned strip's layout — deferred with the strip itself

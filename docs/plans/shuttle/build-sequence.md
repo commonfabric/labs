@@ -568,7 +568,7 @@ schema-derived flag machinery `cf` already exports (`pieceCallRawArgs`,
 lands here, since `set` is what makes stale computed state visible.
 
 **B3 — watch and views** (after A4). `Cell.sink` with the guard-plus-`idle()`
-settling discipline; the value, list, and structured piece-overview views;
+settling discipline; the value and list views;
 session watches (`watch`, `watches`, `unwatch`) with prompt event lines.
 Governed by [`views.md`](views.md). Landing in slices.
 
@@ -692,8 +692,6 @@ Still to land:
   rendering is the one `get` and `wish` write, so a cursor that meant anything
   to `enter` would be a map from a drawn row back to a path inside the value,
   which is a change to a shared renderer.
-- **The structured piece overview** (decision 26): one refreshable frame
-  carrying arguments, a result summary, callables and pattern identity.
 
 **B4 — externals and escapes.** `>` and `<` to and from `file:` externals
 under the scheme-absolute rule; the external working location
