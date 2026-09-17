@@ -489,32 +489,149 @@ function literalKeys(node: ts.TypeNode): Set<string> | undefined {
   return keys;
 }
 
+/** The primitive `type` names an intersection can narrow or find disjoint. */
+const PRIMITIVE_TYPE_NAMES = new Set([
+  "string",
+  "number",
+  "boolean",
+  "null",
+  "undefined",
+]);
+
+/**
+ * What a primitive schema accepts: the primitive types, and the values when
+ * a `const` or an `enum` makes them finite.
+ */
+type PrimitiveDomain = { types: string[]; values: unknown[] | undefined };
+
+/** The primitive type name of a literal value. */
+function primitiveTypeOf(value: unknown): string {
+  return value === null ? "null" : typeof value;
+}
+
+/**
+ * The domain of a schema that says nothing but which primitives it accepts —
+ * `type`, `const`, `enum` and no other keyword — or `undefined` for any
+ * other schema. An `enum` with no `type`, the spelling of a named literal
+ * union, takes its types from its values.
+ */
+function primitiveDomain(
+  schema: MutableJSONSchemaObj,
+): PrimitiveDomain | undefined {
+  const values = "const" in schema
+    ? [schema.const]
+    : Array.isArray(schema.enum)
+    ? [...schema.enum]
+    : undefined;
+  const declared = Array.isArray(schema.type)
+    ? schema.type as string[]
+    : typeof schema.type === "string"
+    ? [schema.type]
+    : undefined;
+  const types = declared ?? [...new Set((values ?? []).map(primitiveTypeOf))];
+  const primitivesOnly = types.length > 0 &&
+    types.every((type) => PRIMITIVE_TYPE_NAMES.has(type)) &&
+    Object.keys(schema).every((key) =>
+      key === "type" || key === "const" || key === "enum"
+    );
+  return primitivesOnly ? { types, values } : undefined;
+}
+
+/**
+ * The intersection of primitive schemas, as the checker reduces one: the
+ * types every part admits, and, where a part is finite, the values every
+ * part admits — `"a" & string` is `"a"`, `string & number` is nothing. A
+ * part that already says exactly that is returned as it is, so a literal
+ * keeps its spelling; otherwise the result is an `enum` or a `type`.
+ */
+function intersectPrimitives(
+  parts: MutableJSONSchema[],
+  domains: PrimitiveDomain[],
+): MutableJSONSchema {
+  let types = domains[0]!.types;
+  let values: unknown[] | undefined;
+  for (const domain of domains) {
+    types = types.filter((type) => domain.types.includes(type));
+    if (domain.values === undefined) continue;
+    const admitted = domain.values;
+    values = values === undefined
+      ? admitted
+      : values.filter((value) =>
+        admitted.some((other) => Object.is(value, other))
+      );
+  }
+  values = values?.filter((value) => types.includes(primitiveTypeOf(value)));
+  if (values !== undefined) {
+    const held = new Set(values.map(primitiveTypeOf));
+    types = types.filter((type) => held.has(type));
+  }
+  if (types.length === 0) return false;
+  const same = (left: unknown[] | undefined, right: unknown[] | undefined) =>
+    left === undefined || right === undefined
+      ? left === right
+      : left.length === right.length &&
+        left.every((value) => right.some((other) => Object.is(value, other)));
+  const exact = parts.find((_part, index) =>
+    same(domains[index]!.types, types) && same(domains[index]!.values, values)
+  );
+  if (exact !== undefined) return exact;
+  if (values !== undefined) return { enum: values } as MutableJSONSchema;
+  type SchemaType = NonNullable<MutableJSONSchemaObj["type"]>;
+  return { type: (types.length === 1 ? types[0]! : types) as SchemaType };
+}
+
+/** Whether a schema is an object with no members to speak of: `{}`. */
+function isEmptyObjectSchema(schema: MutableJSONSchema): boolean {
+  return isObjectSchema(schema) &&
+    Object.keys(schema).every((key) =>
+      key === "type" || key === "properties"
+    ) &&
+    Object.keys(schema.properties ?? {}).length === 0;
+}
+
 /**
  * The schema of an intersection whose constituents have these schemas, none
- * of them a union, merged the way `IntersectionFormatter` merges the types:
- * a constituent accepting anything makes the whole accept anything, one
- * accepting nothing (`never`) makes it accept nothing, `unknown` is the
- * identity and drops out, and `null` or `undefined` beside anything else
- * leaves nothing. What remains is one schema, returned as it is, or object
- * schemas whose properties are unioned (the first definition kept on a
- * clash) and whose `required` lists are unioned. A constituent that merge
- * refuses — a non-object, or one with an index signature, which an array is
- * — yields the same unsupported-pattern fallback the type-based path emits.
+ * of them a union, reduced the way the checker reduces the types before
+ * `IntersectionFormatter` merges them, in this order: a constituent
+ * accepting nothing (`never`) leaves nothing, whatever else is there; one
+ * accepting anything (`any`) then makes the whole accept anything; `unknown`
+ * is the identity and drops out; an empty object drops out beside anything
+ * else and takes `null` and `undefined` with it, `T & {}` being
+ * `NonNullable<T>`; primitives are narrowed or found disjoint
+ * (`intersectPrimitives`); and `null` or `undefined` beside an object leaves
+ * nothing. What remains is one schema, returned as it is, or object schemas
+ * whose properties are unioned (the first definition kept on a clash) and
+ * whose `required` lists are unioned. A constituent that merge refuses — a
+ * non-object, or one with an index signature, which an array is — yields
+ * the same unsupported-pattern fallback the type-based path emits.
  */
-function mergeIntersection(parts: MutableJSONSchema[]): MutableJSONSchema {
-  if (parts.some((part) => part === true)) return true;
+function mergeIntersection(
+  parts: MutableJSONSchema[],
+  context: GenerationContext,
+): MutableJSONSchema {
   if (parts.some((part) => part === false)) return false;
+  if (parts.some((part) => part === true)) return true;
   const isUnknown = (part: MutableJSONSchema) =>
     isObjectOrArray(part) && part.type === "unknown";
   const substantive = dedupeByValueEqual(
     parts.filter((part) => !isUnknown(part)),
   );
   if (substantive.length === 0) return { type: "unknown" };
-  if (substantive.length === 1) return substantive[0]!;
-  const isNullish = (part: MutableJSONSchema) =>
-    isObjectOrArray(part) &&
-    (part.type === "null" || part.type === "undefined");
-  if (substantive.some(isNullish)) return false;
+  const nonEmpty = substantive.filter((part) => !isEmptyObjectSchema(part));
+  const remaining = nonEmpty.length > 0 && nonEmpty.length < substantive.length
+    ? dedupeByValueEqual(nonEmpty.map((part) => withoutNullish(part, context)))
+    : substantive;
+  if (remaining.some((part) => part === false)) return false;
+  if (remaining.length === 1) return remaining[0]!;
+  // No boolean is left: `false` and `true` were answered above.
+  const domains = (remaining as MutableJSONSchemaObj[]).map(primitiveDomain);
+  if (domains.every((domain) => domain !== undefined)) {
+    return intersectPrimitives(remaining, domains as PrimitiveDomain[]);
+  }
+  const nullishOnly = (domain: PrimitiveDomain | undefined) =>
+    domain !== undefined &&
+    domain.types.every((type) => type === "null" || type === "undefined");
+  if (domains.some(nullishOnly)) return false;
   const unsupported = (reason: string): MutableJSONSchema => ({
     type: "object",
     additionalProperties: true,
@@ -522,7 +639,7 @@ function mergeIntersection(parts: MutableJSONSchema[]): MutableJSONSchema {
   });
   const properties: Record<string, MutableJSONSchema> = {};
   const required = new Set<string>();
-  for (const part of substantive) {
+  for (const part of remaining) {
     if (isArraySchema(part)) {
       return unsupported("index signature on constituent");
     }
@@ -1370,7 +1487,9 @@ export class SchemaGenerator {
             prefixes.flatMap((prefix) => arms.map((arm) => [...prefix, arm])),
           [[]],
         );
-      return unionOfSchemas(combinations.map(mergeIntersection));
+      return unionOfSchemas(
+        combinations.map((parts) => mergeIntersection(parts, context)),
+      );
     }
 
     // Handle ArrayTypeNode (e.g., number[], string[])

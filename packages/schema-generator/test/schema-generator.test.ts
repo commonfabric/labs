@@ -571,6 +571,9 @@ type CalculatorRequest = {
       "type Loop = [string] | Loop;",
       "type MaybeTuple = [Foo, string | undefined] | null | undefined;",
       "type Nil = null;",
+      'type AB = "a" | "b";',
+      "type SNN = string | number | null;",
+      "type SNU = string | number | undefined;",
     ].join("\n");
     const generateNamed = async (node: ts.TypeNode) => {
       const { checker, sourceFile } = await createTestProgram(NAMED);
@@ -2140,6 +2143,142 @@ type CalculatorRequest = {
           ]),
         ),
       ).toEqual(fooAndBar);
+    });
+
+    it("reduces an intersection as the checker reduces one", async () => {
+      // Before anything is merged or refused: `never` wins, even over `any`;
+      // an empty object part drops out and takes `null` and `undefined` with
+      // it (`T & {}`); primitives are narrowed or found disjoint.
+      const schemaOf = async (node: ts.TypeNode) => {
+        const result = await generateNamed(node);
+        return typeof result === "boolean"
+          ? result
+          : (result as { schema: unknown }).schema;
+      };
+      const keyword = (kind: ts.KeywordTypeSyntaxKind) =>
+        f.createKeywordTypeNode(kind);
+      const unknownKeyword = () => keyword(ts.SyntaxKind.UnknownKeyword);
+      const numberNode = () => keyword(ts.SyntaxKind.NumberKeyword);
+      const text = (value: string) =>
+        f.createLiteralTypeNode(f.createStringLiteral(value));
+      const anyOfTexts = (...values: string[]) =>
+        f.createParenthesizedType(f.createUnionTypeNode(values.map(text)));
+      const emptyObject = () => f.createTypeLiteralNode([]);
+      const nullNode = () => f.createLiteralTypeNode(f.createNull());
+      const both = (...members: ts.TypeNode[]) =>
+        f.createIntersectionTypeNode(members);
+
+      // `any` makes the whole accept anything...
+      expect(
+        await schemaOf(both(alias("Foo"), keyword(ts.SyntaxKind.AnyKeyword))),
+      ).toBe(true);
+      // ...unless `never` is there: it dominates `any`, in either order.
+      expect(
+        await schemaOf(
+          both(
+            unknownKeyword(),
+            keyword(ts.SyntaxKind.AnyKeyword),
+            keyword(ts.SyntaxKind.NeverKeyword),
+          ),
+        ),
+      ).toBe(false);
+      expect(
+        await schemaOf(
+          both(
+            keyword(ts.SyntaxKind.NeverKeyword),
+            keyword(ts.SyntaxKind.AnyKeyword),
+          ),
+        ),
+      ).toBe(false);
+
+      // `T & {}`: the empty object drops out, the one part left stands.
+      expect(
+        await schemaOf(
+          both(
+            f.createArrayTypeNode(literal([["topic", unknownNode()]])),
+            emptyObject(),
+          ),
+        ),
+      ).toEqual({
+        type: "array",
+        items: {
+          type: "object",
+          properties: { topic: { type: "unknown" } },
+          required: ["topic"],
+        },
+      });
+      expect(
+        await schemaOf(both(unknownKeyword(), stringNode(), emptyObject())),
+      ).toEqual({ type: "string" });
+      // ...and takes `null` and `undefined` with it.
+      expect(
+        await schemaOf(
+          both(
+            f.createParenthesizedType(
+              f.createUnionTypeNode([stringNode(), nullNode()]),
+            ),
+            emptyObject(),
+          ),
+        ),
+      ).toEqual({ type: "string" });
+      expect(await schemaOf(both(alias("SNN"), emptyObject()))).toEqual({
+        type: ["number", "string"],
+      });
+      expect(await schemaOf(both(nullNode(), emptyObject()))).toBe(false);
+      // Alone, it is what it is.
+      expect(await schemaOf(both(emptyObject(), emptyObject()))).toEqual({
+        type: "object",
+        properties: {},
+      });
+
+      // A literal beside its base type is the literal; inline literals keep
+      // the node path's spelling, a named union its own.
+      expect(
+        await schemaOf(
+          both(anyOfTexts("a", "b"), stringNode(), unknownKeyword()),
+        ),
+      ).toEqual({
+        anyOf: [
+          { type: "string", const: "a" },
+          { type: "string", const: "b" },
+        ],
+      });
+      expect(await schemaOf(both(alias("AB"), stringNode()))).toEqual({
+        enum: ["a", "b"],
+      });
+      expect(
+        await schemaOf(
+          both(
+            f.createLiteralTypeNode(f.createTrue()),
+            keyword(ts.SyntaxKind.BooleanKeyword),
+          ),
+        ),
+      ).toEqual({ type: "boolean", const: true });
+      // Two finite sets meet in what both hold.
+      expect(
+        await schemaOf(
+          both(anyOfTexts("a", "b", "c"), anyOfTexts("b", "c", "d")),
+        ),
+      ).toEqual({
+        anyOf: [
+          { type: "string", const: "b" },
+          { type: "string", const: "c" },
+        ],
+      });
+      expect(await schemaOf(both(alias("AB"), anyOfTexts("b", "c")))).toEqual({
+        type: "string",
+        const: "b",
+      });
+      // Type lists meet in the types both admit.
+      expect(await schemaOf(both(alias("SNN"), alias("SNU")))).toEqual({
+        type: ["number", "string"],
+      });
+      // Disjoint primitives leave nothing.
+      expect(
+        await schemaOf(both(stringNode(), numberNode(), unknownKeyword())),
+      ).toBe(false);
+      expect(await schemaOf(both(text("a"), text("b")))).toBe(false);
+      expect(await schemaOf(both(alias("AB"), numberNode()))).toBe(false);
     });
 
     it("merges named constituents of an intersection through their references", async () => {
