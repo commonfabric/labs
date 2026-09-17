@@ -1,0 +1,509 @@
+# Runs read: 26
+# Commits: bc23e3c6d09b77e63cf2b4a6a611c9dbaade4d96
+# Deno 2.9.4; experimental {"modernCellRep":false,"commitPreconditions":true,"plainResultReceipts":true,"computedCellIds":true,"lazyMaterialization":true,"serverExecution":false,"contentAddressedSchemas":true,"readerSchemaPrecedence":true}
+
+## Arms
+
+- `current` (topics): the sources as they stand: each topic reads both board tables
+- `q2-unread` (topics): both tables wired and declared; no computation reads either
+- `q2-read-one` (topics): the lifts declare the whole table as today and read row 0 only
+- `q3-index` (topics): the board indexes one entry per topic by name; the topic looks its own up with `lookup`, and holds its name as a stored value
+- `q4-handed` (topics): the create mints each topic's entry document and hands the topic that document; a board lift fills it
+- `q6-copies` (topics): the handed entry carries the mentioning topics' titles and names as copies rather than references
+- `q7-board-name` (topics): the copies arm, plus one reference to the board, through which the topic reads the collection's declared name
+
+## Starting one topic: what the server delivered to a fresh runtime
+
+`other` counts documents belonging to another topic (its result, argument or
+pattern document, or a document whose `result` backlinks reach one of those).
+`self`, `board` and `schema` count the topic's own family, the board's, and
+content-addressed schema documents. `startMs` is wall-clock for
+`runtime.start` plus `idle()` plus `storage.synced()`.
+
+arm               N  other  otherBytes  docs      bytes  self  board  schema  startMs  checks (referencedBy, shortName)
+current           4      3     113,070   187    264,137    73      5      87      107  {"referencedBy":2,"shortName":"1"}
+current          10      9     339,210   211    498,891    73      5      87      154  {"referencedBy":2,"shortName":"1"}
+current          40     39   1,469,910   331  1,672,761    73      5      87      181  {"referencedBy":2,"shortName":"1"}
+q2-unread         4      0           0   170    147,651    73      5      85      146  {"referencedBy":0}
+q2-unread        10      0           0   170    150,917    73      5      85       86  {"referencedBy":0}
+q2-unread        40      0           0   170    167,297    73      5      85       98  {"referencedBy":0}
+q2-read-one       4      3     113,070   186    263,957    73      5      87       84  {"referencedBy":2,"shortName":"1"}
+q2-read-one      10      9     339,210   210    498,710    73      5      87      181  {"referencedBy":2,"shortName":"1"}
+q2-read-one      40     39   1,469,910   330  1,672,550    73      5      87      188  {"referencedBy":2,"shortName":"1"}
+q3-index          4      3     113,124   195    269,182    73      3      92       83  {"referencedBy":2,"shortName":"1"}
+q3-index         10      9     339,372   219    503,284    73      3      92      115  {"referencedBy":2,"shortName":"1"}
+q3-index         40     39   1,470,612   339  1,673,944    73      3      92      287  {"referencedBy":2,"shortName":"1"}
+q3-index        100     99   3,733,092   579  4,015,270    73      3      92      205  {"referencedBy":2,"shortName":"1"}
+q3-index        200    199   7,503,892   979  7,918,070    73      3      92      352  {"referencedBy":2,"shortName":"1"}
+q4-handed         4      2      74,902   177    222,509    72      3      89       80  {"referencedBy":2,"shortName":"1"}
+q4-handed        10      2      74,902   177    223,850    72      3      89      166  {"referencedBy":2,"shortName":"1"}
+q4-handed        40      2      74,902   177    230,630    72      3      89      114  {"referencedBy":2,"shortName":"1"}
+q4-handed       100      2      74,902   177    244,193    72      3      89       81  {"referencedBy":2,"shortName":"1"}
+q4-handed       200      2      74,902   177    267,093    72      3      89      103  {"referencedBy":2,"shortName":"1"}
+q6-copies         4      0           0   173    145,923    72      3      88       82  {"referencedBy":2,"shortName":"1"}
+q6-copies        10      0           0   173    147,266    72      3      88      163  {"referencedBy":2,"shortName":"1"}
+q6-copies        40      0           0   173    154,048    72      3      88      142  {"referencedBy":2,"shortName":"1"}
+q6-copies       200      0           0   173    190,515    72      3      88       79  {"referencedBy":2,"shortName":"1"}
+q7-board-name     4      0           0   176    151,873    73      3      90       91  {"referencedBy":2,"shortName":"1","collectionName":"topics"}
+q7-board-name    10      0           0   176    153,216    73      3      90       97  {"referencedBy":2,"shortName":"1","collectionName":"topics"}
+q7-board-name    40      0           0   176    159,998    73      3      90      139  {"referencedBy":2,"shortName":"1","collectionName":"topics"}
+
+## The replayed demand (the #7439 method) against the same start
+
+Each replay root is one `session.queryGraph` the rig issued on the same store:
+the topic's argument document under the schema recorded on its argument link
+(`whole as recorded`), and each declared input's document under that input's
+property schema.
+
+arm               N root                          other  otherBytes  docs      bytes
+current           4 START (measured)                  3     113,070   187    264,137
+                    replay whole as recorded          3     113,070   100    228,773
+                    replay input mentionable          0           0    15     13,976
+                    replay input boardCrossrefs       3     113,070    87    223,093
+                    replay input boardNames           3     113,070    87    221,130
+current          10 START (measured)                  9     339,210   211    498,891
+                    replay whole as recorded          9     339,210   124    463,527
+                    replay input mentionable          0           0    15     15,317
+                    replay input boardCrossrefs       9     339,210   105    454,387
+                    replay input boardNames           9     339,210   105    450,469
+current          40 START (measured)                 39   1,469,910   331  1,672,761
+                    replay whole as recorded         39   1,469,910   244  1,637,397
+                    replay input mentionable          0           0    15     22,097
+                    replay input boardCrossrefs      39   1,469,910   195  1,610,857
+                    replay input boardNames          39   1,469,910   195  1,597,189
+q2-unread         4 START (measured)                  0           0   170    147,651
+                    replay whole as recorded          3     113,070   100    228,769
+                    replay input mentionable          0           0    15     13,972
+                    replay input boardCrossrefs       3     113,070    87    223,093
+                    replay input boardNames           3     113,070    87    221,130
+q2-unread        10 START (measured)                  0           0   170    150,917
+                    replay whole as recorded          9     339,210   124    463,516
+                    replay input mentionable          0           0    15     15,306
+                    replay input boardCrossrefs       9     339,210   105    454,387
+                    replay input boardNames           9     339,210   105    450,469
+q2-unread        40 START (measured)                  0           0   170    167,297
+                    replay whole as recorded         39   1,469,910   244  1,637,326
+                    replay input mentionable          0           0    15     22,026
+                    replay input boardCrossrefs      39   1,469,910   195  1,610,857
+                    replay input boardNames          39   1,469,910   195  1,597,189
+q2-read-one       4 START (measured)                  3     113,070   186    263,957
+                    replay whole as recorded          3     113,070   100    228,773
+                    replay input mentionable          0           0    15     13,976
+                    replay input boardCrossrefs       3     113,070    87    223,093
+                    replay input boardNames           3     113,070    87    221,130
+q2-read-one      10 START (measured)                  9     339,210   210    498,710
+                    replay whole as recorded          9     339,210   124    463,526
+                    replay input mentionable          0           0    15     15,316
+                    replay input boardCrossrefs       9     339,210   105    454,387
+                    replay input boardNames           9     339,210   105    450,469
+q2-read-one      40 START (measured)                 39   1,469,910   330  1,672,550
+                    replay whole as recorded         39   1,469,910   244  1,637,366
+                    replay input mentionable          0           0    15     22,066
+                    replay input boardCrossrefs      39   1,469,910   195  1,610,857
+                    replay input boardNames          39   1,469,910   195  1,597,189
+q3-index          4 START (measured)                  3     113,124   195    269,182
+                    replay whole as recorded          3     113,124   101    193,514
+                    replay input mentionable          0           0    16     15,093
+                    replay input boardEntryIndex      3     113,124    87    178,010
+q3-index         10 START (measured)                  9     339,372   219    503,284
+                    replay whole as recorded          9     339,372   125    427,616
+                    replay input mentionable          0           0    16     16,434
+                    replay input boardEntryIndex      9     339,372   111    410,771
+q3-index         40 START (measured)                 39   1,470,612   339  1,673,944
+                    replay whole as recorded         39   1,470,612   245  1,598,276
+                    replay input mentionable          0           0    16     23,214
+                    replay input boardEntryIndex     39   1,470,612   231  1,574,651
+q3-index        100 START (measured)                 99   3,733,092   579  4,015,270
+                    replay whole as recorded         99   3,733,092   485  3,939,602
+                    replay input mentionable          0           0    16     36,777
+                    replay input boardEntryIndex     99   3,733,092   471  3,902,414
+q3-index        200 START (measured)                199   7,503,892   979  7,918,070
+                    replay whole as recorded        199   7,503,892   885  7,842,402
+                    replay input mentionable          0           0    16     59,677
+                    replay input boardEntryIndex    199   7,503,892   871  7,782,314
+q4-handed         4 START (measured)                  2      74,902   177    222,509
+                    replay whole as recorded          2      74,902    86    148,223
+                    replay input mentionable          0           0    17     14,980
+                    replay input ownEntry             2      74,902    71    133,040
+q4-handed        10 START (measured)                  2      74,902   177    223,850
+                    replay whole as recorded          2      74,902    86    149,564
+                    replay input mentionable          0           0    17     16,321
+                    replay input ownEntry             2      74,902    71    133,040
+q4-handed        40 START (measured)                  2      74,902   177    230,630
+                    replay whole as recorded          2      74,902    86    156,344
+                    replay input mentionable          0           0    17     23,101
+                    replay input ownEntry             2      74,902    71    133,040
+q4-handed       100 START (measured)                  2      74,902   177    244,193
+                    replay whole as recorded          2      74,902    86    169,907
+                    replay input mentionable          0           0    17     36,664
+                    replay input ownEntry             2      74,902    71    133,040
+q4-handed       200 START (measured)                  2      74,902   177    267,093
+                    replay whole as recorded          2      74,902    86    192,807
+                    replay input mentionable          0           0    17     59,564
+                    replay input ownEntry             2      74,902    71    133,040
+q6-copies         4 START (measured)                  0           0   173    145,923
+                    replay whole as recorded          0           0    40     49,653
+                    replay input mentionable          0           0    18     15,152
+                    replay input ownEntry             0           0     5        762
+q6-copies        10 START (measured)                  0           0   173    147,266
+                    replay whole as recorded          0           0    40     50,996
+                    replay input mentionable          0           0    18     16,493
+                    replay input ownEntry             0           0     5        764
+q6-copies        40 START (measured)                  0           0   173    154,048
+                    replay whole as recorded          0           0    40     57,778
+                    replay input mentionable          0           0    18     23,273
+                    replay input ownEntry             0           0     5        766
+q6-copies       200 START (measured)                  0           0   173    190,515
+                    replay whole as recorded          0           0    40     94,245
+                    replay input mentionable          0           0    18     59,736
+                    replay input ownEntry             0           0     5        770
+q7-board-name     4 START (measured)                  0           0   176    151,873
+                    replay whole as recorded          0           0    62     72,587
+                    replay input mentionable          0           0    18     15,160
+                    replay input ownEntry             0           0     5        762
+                    replay input board                0           0    37     31,584
+q7-board-name    10 START (measured)                  0           0   176    153,216
+                    replay whole as recorded          0           0    62     73,930
+                    replay input mentionable          0           0    18     16,501
+                    replay input ownEntry             0           0     5        764
+                    replay input board                0           0    37     31,584
+q7-board-name    40 START (measured)                  0           0   176    159,998
+                    replay whole as recorded          0           0    62     80,712
+                    replay input mentionable          0           0    18     23,281
+                    replay input ownEntry             0           0     5        766
+                    replay input board                0           0    37     31,584
+
+## What the board pays
+
+`op-add` is one `addTopic` at that size, `op-mention` one `mention` that
+changes topic 0's inbound set, each measured with the board's derivations held
+live and its frames captured on their own. `commits` and `ops` are the
+transactions the client sent and the operations in them.
+
+arm               N op           commits    ops   outBytes  docsIn    bytesIn      ms
+current           4 add               12     98    148,672      87     67,455     114
+current           4 mention            3      4      6,544       4      3,203      20
+current          10 add               12     98    174,537      87     72,811     127
+current          10 mention            3      4      9,094       4      3,205      19
+current          40 add               12     98    303,778      87     99,661     363
+current          40 mention            3      4     21,754       4      3,205      33
+q2-unread         4 add               10     96    141,190      87     67,439      92
+q2-unread         4 mention            3      4      6,544       4      3,203      15
+q2-unread        10 add               10     96    160,562      87     72,787     121
+q2-unread        10 mention            3      4      9,092       4      3,205      21
+q2-unread        40 add               10     96    257,432      87     99,577     304
+q2-unread        40 mention            3      4     21,962       4      3,205      40
+q2-read-one       4 add               12     98    147,105      87     67,455      98
+q2-read-one       4 mention            3      4      6,544       4      3,203      15
+q2-read-one      10 add               12     98    171,026      87     72,809     152
+q2-read-one      10 mention            3      4      9,094       4      3,205      28
+q2-read-one      40 add               12     98    290,517      87     99,629     409
+q2-read-one      40 mention            3      4     21,964       4      3,205      75
+q3-index          4 add               17    111    181,352      98     76,986     105
+q3-index          4 mention            3      4      6,567       4      3,043      17
+q3-index         10 add               17    111    225,013      98     90,002     175
+q3-index         10 mention            3      4      9,103       4      3,046      27
+q3-index         40 add               17    111    437,867      98    155,223     432
+q3-index         40 mention            3      4     21,792       4      3,046      75
+q3-index        100 add               17    111    904,528     293    396,901    1082
+q3-index        100 mention            3      4     47,368       4      3,049     165
+q3-index        200 add               17    111  1,644,072     493    729,702    4257
+q3-index        200 mention            3      4     89,968       4      3,049     850
+q4-handed         4 add               11     99    141,397      88     67,634      96
+q4-handed         4 mention            3      4      6,544       4      3,036      16
+q4-handed        10 add               11     99    157,019      88     73,520     135
+q4-handed        10 mention            3      4      9,094       4      3,039      29
+q4-handed        40 add               11     99    233,941      88    103,010     429
+q4-handed        40 mention            3      4     21,754       4      3,039      59
+q4-handed       100 add               11     99    441,884     285    245,172     922
+q4-handed       100 mention            3      4     47,286       4      3,042      90
+q4-handed       200 add               11     99    754,488     485    428,972    3193
+q4-handed       200 mention            3      4     89,884       4      3,042     214
+q6-copies         4 add               11     98    141,449      88     67,453     103
+q6-copies         4 mention            4     13     12,494       9      3,761      22
+q6-copies        10 add               11     98    158,923      88     73,339     140
+q6-copies        10 mention            4     31     24,894      21      5,319      35
+q6-copies        40 add               11     98    244,845      88    102,829     344
+q6-copies        40 mention            4    121     85,792      81     13,177     126
+q6-copies       200 add               11     98    815,306     484    427,207    2960
+q6-copies       200 mention            4    601    412,701     401     55,399     414
+q7-board-name     4 add               20    120    208,035     101     73,083     174
+q7-board-name     4 mention            4     13     12,756       9      3,969      25
+q7-board-name    10 add               20    126    290,896     107     83,979     443
+q7-board-name    10 mention            4     31     24,917      21      5,527      36
+q7-board-name    40 add               20    157    706,172     138    139,125    5151
+q7-board-name    40 mention            4    121     85,843      81     13,385     110
+
+## Time
+
+`buildMs` files N topics and makes the mentions, and is the rig's cost rather
+than a product figure; `deferred` means the board's outputs were demanded once
+at the end of the build instead of throughout. `compileB` compiles the program
+in the fresh runtime, before the start. `pull` is `cell.pull()` on the topic's
+schema-less result cell, which is what `PiecesController.startPiece` does after
+`runtime.start`.
+
+arm               N   buildMs deferred   compileB  startMs  pullMs  pullOther  pullDocs
+current           4     1,775 no              126      107     185          3       202
+current          10     2,776 no              143      154     399          9       496
+current          40    12,976 no              125      181    3531         39      1942
+q2-unread         4     1,469 no              135      146      75          0        48
+q2-unread        10     2,729 no              254       86      85          0        48
+q2-unread        40    12,767 no              128       98      94          0        48
+q2-read-one       4     1,452 no              104       84     186          3       202
+q2-read-one      10     3,264 no              175      181     481          9       496
+q2-read-one      40    17,988 no              327      188    6247         39      1942
+q3-index          4     1,638 no              102       83     179          3       200
+q3-index         10     4,055 no              138      115     471          9       488
+q3-index         40    21,385 no              183      287    4248         39      1904
+q3-index        100    60,274 no              110      205    3597         43      2044
+q3-index        200   365,507 no              126      352    3356         43      2044
+q4-handed         4     1,633 no              103       80     181          4       200
+q4-handed        10     3,356 no              166      166     501         16       494
+q4-handed        40    14,261 no              148      114    5025         76      1940
+q4-handed       100    48,348 no              109       81    4143         86      2086
+q4-handed       200   284,546 no              182      103    4506         86      2086
+q6-copies         4     1,713 no              110       82      99          0        54
+q6-copies        10     3,391 no              128      163     122          0        54
+q6-copies        40    18,878 no              188      142     148          0        54
+q6-copies       200   280,787 no              121       79      93          0        54
+q7-board-name     4     1,971 no              117       91     104          0        56
+q7-board-name    10     4,862 no              139       97     114          0        56
+q7-board-name    40    82,381 no              187      139     152          0        56
+
+## The largest documents one start received
+
+### current, N=4 (experiment-output/runs/current-N4.result.json)
+     37,690  self         of:fid1:pzGuPmxRIKl8-IQ2SZ
+     37,690  other1       of:fid1:bgimkChDCZ92JUmMDR
+     37,690  other2       of:fid1:HYczNZqoWlcPw-IHd1
+     37,690  other3       of:fid1:ruKWZt-MNFVKPxjuie
+     14,793  schema       cid:fid1:rDwxqzSpM0wfHu9Pb
+     11,916  board        of:fid1:h7ZQw0Up8TI_kvhxoU
+      5,069  schema       cid:fid1:RYrZHRewlANAIssqy
+      5,034  schema       cid:fid1:CiQVFpuMFtuxk84pS
+### current, N=10 (experiment-output/runs/current-N10.result.json)
+     37,690  self         of:fid1:RGmwUXXxOvjnOcuNm5
+     37,690  other1       of:fid1:1px7dxzllmphj4jRBT
+     37,690  other5       of:fid1:91J5yWJzKB4FYc53HQ
+     37,690  other4       of:fid1:bJMdRm0kAOGN6S0IP3
+     37,690  other6       of:fid1:fl1mUQkHayvT7Wbiu0
+     37,690  other3       of:fid1:hoDkErEDF9b0Htux4B
+     37,690  other2       of:fid1:rfFMQtGKTZPP9wsn57
+     37,690  other8       of:fid1:rualjyYZflSmbphvp1
+### current, N=40 (experiment-output/runs/current-N40.result.json)
+     37,690  self         of:fid1:-wJe7spwXgS0srBBWm
+     37,690  other29      of:fid1:0MXY-XkVoR7iO5WidZ
+     37,690  other35      of:fid1:2jikBYhbpDXOQx61eX
+     37,690  other17      of:fid1:48v4o1kCHb1K16NKku
+     37,690  other21      of:fid1:5T0JFzpF_pVcPvtt1f
+     37,690  other32      of:fid1:6FljaW7EDoUVSRs571
+     37,690  other23      of:fid1:7Av8cTdLeg1LcN6DBZ
+     37,690  other15      of:fid1:7dc0ETyw-5Wmzhwtck
+### q2-unread, N=4 (experiment-output/runs/q2-unread-N4.result.json)
+     37,690  self         of:fid1:JM9OuI5I1vCdyrO5Jt
+     14,793  schema       cid:fid1:rDwxqzSpM0wfHu9Pb
+     11,916  board        of:fid1:x34-pbxGNj55ilHiBf
+      5,069  schema       cid:fid1:RYrZHRewlANAIssqy
+      5,034  schema       cid:fid1:CiQVFpuMFtuxk84pS
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+      1,889  schema       cid:fid1:eHeAZlBksbySNz6f7
+### q2-unread, N=10 (experiment-output/runs/q2-unread-N10.result.json)
+     37,690  self         of:fid1:0QPV7ImM0QZwlfvMZM
+     14,793  schema       cid:fid1:rDwxqzSpM0wfHu9Pb
+     11,916  board        of:fid1:7fCOoSAAqYnKpk2jrl
+      5,069  schema       cid:fid1:RYrZHRewlANAIssqy
+      5,034  schema       cid:fid1:CiQVFpuMFtuxk84pS
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      2,509  board        of:fid1:TxLuXsJ5AncmHhNU3E
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### q2-unread, N=40 (experiment-output/runs/q2-unread-N40.result.json)
+     37,690  self         of:fid1:qIZct48DBOLfI-h8TP
+     14,793  schema       cid:fid1:rDwxqzSpM0wfHu9Pb
+     11,916  board        of:fid1:_2pFdBEaLShphixqbK
+      9,229  board        of:fid1:ybua1oWA8jSc6ir98B
+      6,727  board        of:fid1:hIU-DyIvTyjIjErKzC
+      6,727  board        of:fid1:ujK4PShsUIrRiTnis6
+      5,069  schema       cid:fid1:RYrZHRewlANAIssqy
+      5,034  schema       cid:fid1:CiQVFpuMFtuxk84pS
+### q2-read-one, N=4 (experiment-output/runs/q2-read-one-N4.result.json)
+     37,690  self         of:fid1:nPxx204LhNOS599-YN
+     37,690  other3       of:fid1:016q00SmOtQo6kI0P7
+     37,690  other1       of:fid1:KJMtLOQztaRpUyMxxA
+     37,690  other2       of:fid1:VEmOck15YPjCT5Ls2V
+     14,793  schema       cid:fid1:rDwxqzSpM0wfHu9Pb
+     11,916  board        of:fid1:I23JX1IJH_HgpWPAIX
+      5,069  schema       cid:fid1:RYrZHRewlANAIssqy
+      5,034  schema       cid:fid1:CiQVFpuMFtuxk84pS
+### q2-read-one, N=10 (experiment-output/runs/q2-read-one-N10.result.json)
+     37,690  self         of:fid1:pRbxoHdJbE-DCxNtCe
+     37,690  other1       of:fid1:eKRctoZMBdiEIz7hgC
+     37,690  other4       of:fid1:IjhNnk2QTl581fL3Et
+     37,690  other8       of:fid1:MIFlmMiYqCXAO64Y4d
+     37,690  other3       of:fid1:muudoeBMNyHHUHP1_6
+     37,690  other5       of:fid1:oEIVb2-Ct1kNFuPqyf
+     37,690  other2       of:fid1:pj3Nb5HuOAIeK7ZhEY
+     37,690  other9       of:fid1:WGU1p9xL7mAw5re5Hl
+### q2-read-one, N=40 (experiment-output/runs/q2-read-one-N40.result.json)
+     37,690  self         of:fid1:VQMF1Ee4SZ0UksOI77
+     37,690  other2       of:fid1:_EKs_8_s7jaSxbwFa9
+     37,690  other7       of:fid1:-bp4yrtkR6yUlWOw4j
+     37,690  other17      of:fid1:2hFnziw1fDzVw_hAjX
+     37,690  other29      of:fid1:3E4og6iHM-0cE4vgqR
+     37,690  other20      of:fid1:3v5TKITJj7FfRQ5MdY
+     37,690  other35      of:fid1:4nJyAzUyRG8TP1Qncc
+     37,690  other30      of:fid1:6Hhuyx0SkSgCl11ZVd
+### q3-index, N=4 (experiment-output/runs/q3-index-N4.result.json)
+     37,708  self         of:fid1:xROPQaYbpWTPaoMik5
+     37,708  other2       of:fid1:0C3xc_aiBbRu69LlLp
+     37,708  other1       of:fid1:aPm80nB1HoJRibqtPk
+     37,708  other3       of:fid1:TuxRgxOVN7sl4OPsoF
+     14,793  schema       cid:fid1:rDwxqzSpM0wfHu9Pb
+     12,780  board        of:fid1:MCuXrakIm_1fSKnlom
+      5,975  schema       cid:fid1:-7muAH5uAw2JMdRpo
+      5,865  schema       cid:fid1:oykZakqanQS5Ec77C
+### q3-index, N=10 (experiment-output/runs/q3-index-N10.result.json)
+     37,708  self         of:fid1:9GmipabfEX2rDtKQzf
+     37,708  other5       of:fid1:_MB0WsRko2MwE4u5fl
+     37,708  other1       of:fid1:8BymSVLWqN1vpNCqVF
+     37,708  other4       of:fid1:8EKt5Ic8jcW89Lshed
+     37,708  other6       of:fid1:DkJrP3_7y9dO3Je-5L
+     37,708  other3       of:fid1:inCThXRdhrDjRWt7aC
+     37,708  other9       of:fid1:ML1v-D_TDgfPBihyO5
+     37,708  other7       of:fid1:S_9siMlTCCsYSwacrz
+### q3-index, N=40 (experiment-output/runs/q3-index-N40.result.json)
+     37,708  self         of:fid1:clylshiQGlaoBtJCqg
+     37,708  other38      of:fid1:__Z9pG3EHtrISzlItQ
+     37,708  other26      of:fid1:_2ruk3qEfsD65oV8rU
+     37,708  other15      of:fid1:_b-CUL79eGCDc_1Hrq
+     37,708  other22      of:fid1:_vFffwD91Di26uKDZs
+     37,708  other33      of:fid1:1vxFcEkEYbQYMNdwri
+     37,708  other28      of:fid1:4aN2MKCYVCTcK3PPvS
+     37,708  other18      of:fid1:8-R-c-dD3cySwKqKh-
+### q3-index, N=100 (experiment-output/runs/q3-index-N100.result.json)
+     37,708  self         of:fid1:DEsAQO7u70351_ldpW
+     37,708  other35      of:fid1:_1R4yYy8742gfZI0fm
+     37,708  other55      of:fid1:_alQ45iCTn_JjQZc2q
+     37,708  other25      of:fid1:-5RWDNLNw8Oj8lwOjC
+     37,708  other83      of:fid1:-g88OAlKWGhwz6P9UT
+     37,708  other98      of:fid1:-Jh2rIFr5pYaYDUcco
+     37,708  other56      of:fid1:-Yc4rszycurwNmqdFB
+     37,708  other6       of:fid1:0mMDV0FJ8W3K7fleDJ
+### q3-index, N=200 (experiment-output/runs/q3-index-N200.result.json)
+     45,763  board        of:fid1:2WPsDubnQjYf8OvsSI
+     37,708  self         of:fid1:Ym-mX0LKdAx0nxfz5H
+     37,708  other17      of:fid1:_-HiiwtuhKLuMD33fg
+     37,708  other169     of:fid1:_3YszQWTaNU6Bub3u9
+     37,708  other42      of:fid1:_7YjFkapztghu4TfHT
+     37,708  other4       of:fid1:_cP03XeBmsjSj5PrYG
+     37,708  other93      of:fid1:_iFskOtWF66yMJXZat
+     37,708  other38      of:fid1:-hDOesLk3TqRye7ih0
+### q4-handed, N=4 (experiment-output/runs/q4-handed-N4.result.json)
+     37,451  self         of:fid1:lN6n8jLH79EPwzY9bv
+     37,451  other3       of:fid1:szufX7coSKzLcaHLnF
+     37,451  other2       of:fid1:XB6yGKXe7E87DA4AkG
+     14,793  schema       cid:fid1:rDwxqzSpM0wfHu9Pb
+     12,747  board        of:fid1:pjxC-SlIUZmD1oSo7I
+      5,482  schema       cid:fid1:lb6PoHRhgeliVD_D3
+      5,441  schema       cid:fid1:gy4Oy1VA-CxcO-L4F
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+### q4-handed, N=10 (experiment-output/runs/q4-handed-N10.result.json)
+     37,451  self         of:fid1:2_C01_Jf869hI7lsjq
+     37,451  other8       of:fid1:5-WfSeRIfAALSIk52f
+     37,451  other9       of:fid1:RoP7EOrc7VJGnie4Kv
+     14,793  schema       cid:fid1:rDwxqzSpM0wfHu9Pb
+     12,747  board        of:fid1:Cu7He2Bf44zGWF3MK7
+      5,482  schema       cid:fid1:lb6PoHRhgeliVD_D3
+      5,441  schema       cid:fid1:gy4Oy1VA-CxcO-L4F
+      2,520  board        of:fid1:Dn3N-rxVGWkFENdrA_
+### q4-handed, N=40 (experiment-output/runs/q4-handed-N40.result.json)
+     37,451  self         of:fid1:axen88tXNZkYSLK2O-
+     37,451  other39      of:fid1:hB0yZP7CXfe2rFJm0j
+     37,451  other38      of:fid1:kgo1ij369ilzBq1SiM
+     14,793  schema       cid:fid1:rDwxqzSpM0wfHu9Pb
+     12,747  board        of:fid1:l0IJUAj6-ZSv9aJPLX
+      9,300  board        of:fid1:8JaU2o0ofhcJcgyJHd
+      5,482  schema       cid:fid1:lb6PoHRhgeliVD_D3
+      5,441  schema       cid:fid1:gy4Oy1VA-CxcO-L4F
+### q4-handed, N=100 (experiment-output/runs/q4-handed-N100.result.json)
+     37,451  self         of:fid1:DE_JgxcFdrv2A4aGtZ
+     37,451  other99      of:fid1:VCzYUPoRQMKYKaFnIs
+     37,451  other98      of:fid1:xzwRwQpD-r_fHeI3Tq
+     22,863  board        of:fid1:y3ApDvAHvs34kFvhZf
+     14,793  schema       cid:fid1:rDwxqzSpM0wfHu9Pb
+     12,747  board        of:fid1:1SP5uwjZzncguHgoq9
+      5,482  schema       cid:fid1:lb6PoHRhgeliVD_D3
+      5,441  schema       cid:fid1:gy4Oy1VA-CxcO-L4F
+### q4-handed, N=200 (experiment-output/runs/q4-handed-N200.result.json)
+     45,763  board        of:fid1:fII7Hd1aSrVquRWSUp
+     37,451  self         of:fid1:124CAY9qgeZDR0n6xA
+     37,451  other199     of:fid1:2HtbU3AqXzVjpD7YUj
+     37,451  other198     of:fid1:Ba4KNw2OAtjYNoHKpp
+     14,793  schema       cid:fid1:rDwxqzSpM0wfHu9Pb
+     12,747  board        of:fid1:MpGohJ7pWTkAcMot_U
+      5,482  schema       cid:fid1:lb6PoHRhgeliVD_D3
+      5,441  schema       cid:fid1:gy4Oy1VA-CxcO-L4F
+### q6-copies, N=4 (experiment-output/runs/q6-copies-N4.result.json)
+     37,451  self         of:fid1:qU1ZiNHf-I8nXCA3F-
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     12,747  board        of:fid1:eql_lMqlTObliYjIky
+      5,482  schema       cid:fid1:a9UTXQourajfB19R4
+      5,441  schema       cid:fid1:rQMOJzpJ1or-EII7A
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+      1,889  schema       cid:fid1:eHeAZlBksbySNz6f7
+### q6-copies, N=10 (experiment-output/runs/q6-copies-N10.result.json)
+     37,451  self         of:fid1:7NAAs_vKdGvIwI7Vi2
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     12,747  board        of:fid1:f8gHUgBoDu6dS9Um6V
+      5,482  schema       cid:fid1:a9UTXQourajfB19R4
+      5,441  schema       cid:fid1:rQMOJzpJ1or-EII7A
+      2,520  board        of:fid1:wMiftDyE0lj5tiyJLn
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### q6-copies, N=40 (experiment-output/runs/q6-copies-N40.result.json)
+     37,451  self         of:fid1:itLyzrN2AY2efmNAuA
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     12,747  board        of:fid1:oiPHtg-0W5bhqxg0VA
+      9,300  board        of:fid1:Q5CerWvEiX5Sd_ebCx
+      5,482  schema       cid:fid1:a9UTXQourajfB19R4
+      5,441  schema       cid:fid1:rQMOJzpJ1or-EII7A
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### q6-copies, N=200 (experiment-output/runs/q6-copies-N200.result.json)
+     45,763  board        of:fid1:b0DdGzkwO__FCQ8sVH
+     37,451  self         of:fid1:TLfiOSAf6Eqbwb3vbO
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     12,747  board        of:fid1:qx-7SuH2q4M1yr-Up7
+      5,482  schema       cid:fid1:a9UTXQourajfB19R4
+      5,441  schema       cid:fid1:rQMOJzpJ1or-EII7A
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### q7-board-name, N=4 (experiment-output/runs/q7-board-name-N4.result.json)
+     37,990  self         of:fid1:Vaf9rODvrlAaX2Ypho
+     14,899  schema       cid:fid1:Mp5sHtrvyxSrQDG3w
+     12,763  board        of:fid1:cNAWYMlTQpiy5ipmCx
+      5,752  schema       cid:fid1:73VLlUkh6LkrXwuPw
+      5,449  schema       cid:fid1:eaOCb3u5hKzN0nE6g
+      4,469  schema       cid:fid1:LjiX3amEPL9N1FmGg
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### q7-board-name, N=10 (experiment-output/runs/q7-board-name-N10.result.json)
+     37,990  self         of:fid1:q05MdEXXwII6f5-VCp
+     14,899  schema       cid:fid1:Mp5sHtrvyxSrQDG3w
+     12,763  board        of:fid1:AmgVDqm3rnVChIREGJ
+      5,752  schema       cid:fid1:73VLlUkh6LkrXwuPw
+      5,449  schema       cid:fid1:eaOCb3u5hKzN0nE6g
+      4,469  schema       cid:fid1:LjiX3amEPL9N1FmGg
+      2,520  board        of:fid1:4ghzD0cWGxTpq75149
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+### q7-board-name, N=40 (experiment-output/runs/q7-board-name-N40.result.json)
+     37,990  self         of:fid1:DIGN_FvMaLuGuHsyhR
+     14,899  schema       cid:fid1:Mp5sHtrvyxSrQDG3w
+     12,763  board        of:fid1:zQW8WqvrM3E78wJ51W
+      9,300  board        of:fid1:3YBuikmS952D6HFi3W
+      5,752  schema       cid:fid1:73VLlUkh6LkrXwuPw
+      5,449  schema       cid:fid1:eaOCb3u5hKzN0nE6g
+      4,469  schema       cid:fid1:LjiX3amEPL9N1FmGg
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k

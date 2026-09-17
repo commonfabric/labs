@@ -1,0 +1,15 @@
+# 2026-09-17T17:42:41.442Z q7-board-name N=4 build
+Can't load profile-create.tsx
+Can't load profile-create.tsx
+# 2026-09-17T17:42:43.413Z q7-board-name N=4 op-add
+# 2026-09-17T17:42:43.666Z q7-board-name N=4 op-mention
+# 2026-09-17T17:42:43.691Z q7-board-name N=4 ownership
+# 2026-09-17T17:42:43.692Z q7-board-name N=4 replay
+[ERROR][storage.v2::17:42:43.704] sync-load-failure sync completed without data for of:fid1:Vaf9rODvrlAaX2YphoD1caHMANrfYDGa5i3YA24kDUQ in did:key:z6MkuYppy6ahB8rcxbqG7GY1Vp2BvKj6yvaZtoiAfKcnWUPi: ConnectionError: memory client closed
+# 2026-09-17T17:42:43.704Z q7-board-name N=4 b-compile
+# 2026-09-17T17:42:43.822Z q7-board-name N=4 start
+# 2026-09-17T17:42:43.913Z q7-board-name N=4 pull
+Can't load profile-create.tsx
+# 2026-09-17T17:42:44.017Z q7-board-name N=4 checks
+# 2026-09-17T17:42:44.018Z q7-board-name N=4 attribution
+# result: experiment-output/runs/q7-board-name-N4.result.json

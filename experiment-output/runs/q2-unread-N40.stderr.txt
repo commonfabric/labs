@@ -1,0 +1,13 @@
+# 2026-09-17T17:43:37.593Z q2-unread N=40 build
+# 2026-09-17T17:43:50.361Z q2-unread N=40 op-add
+# 2026-09-17T17:43:50.807Z q2-unread N=40 op-mention
+# 2026-09-17T17:43:50.847Z q2-unread N=40 ownership
+# 2026-09-17T17:43:50.850Z q2-unread N=40 replay
+[ERROR][storage.v2::17:43:51.010] sync-load-failure sync completed without data for of:fid1:qIZct48DBOLfI-h8TPKlSxV39vV99kUu-6vqcbtCTEo in did:key:z6MknHNYFvMYqe86yC4pwgWErerkQrG3qSXs3eRH4awKbiHB: ConnectionError: memory client closed
+# 2026-09-17T17:43:51.010Z q2-unread N=40 b-compile
+# 2026-09-17T17:43:51.139Z q2-unread N=40 start
+# 2026-09-17T17:43:51.237Z q2-unread N=40 pull
+Can't load profile-create.tsx
+# 2026-09-17T17:43:51.332Z q2-unread N=40 checks
+# 2026-09-17T17:43:51.333Z q2-unread N=40 attribution
+# result: experiment-output/runs/q2-unread-N40.result.json

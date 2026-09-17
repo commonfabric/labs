@@ -1,0 +1,15 @@
+# 2026-09-17T17:48:47.600Z q3-index N=100 build
+[WARN][traverse::17:48:59.706] slow-traverse 153ms doc=of:fid1:mboxisXRAVGSFCNV0UfuQjZfaRtXJhtLckZyZPf0Wfc/application/json trackerKeys=4367 trackerVals=14290 traverseSchema=231 traversePtr=46 traverseArr=1 traverseObj=46 traverseDAG=0 anyOfBranches=0 anyOfFastRejects=0 anyOfPropertyMerges=0 getDocAtPath=0 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=3 schemaMemo=254 schemaMemoHits=0 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+# 2026-09-17T17:49:47.874Z q3-index N=100 op-add
+# 2026-09-17T17:49:49.568Z q3-index N=100 op-mention
+# 2026-09-17T17:49:49.733Z q3-index N=100 ownership
+# 2026-09-17T17:49:49.737Z q3-index N=100 replay
+[ERROR][storage.v2::17:49:50.048] sync-load-failure sync completed without data for of:fid1:1mZF_2-4IkoHFPhHHfb4LpsD9dd5jsF7C4kMV2vE9zU in did:key:z6Mkv6jSvppqbqg23YQXG5MW1oqbtN4GyAC4cnJNAmnJ85ZD: ConnectionError: memory client closed
+# 2026-09-17T17:49:50.048Z q3-index N=100 b-compile
+# 2026-09-17T17:49:50.158Z q3-index N=100 start
+# 2026-09-17T17:49:50.364Z q3-index N=100 pull
+Can't load profile-create.tsx
+Can't load profile-create.tsx
+# 2026-09-17T17:49:53.961Z q3-index N=100 checks
+# 2026-09-17T17:49:53.961Z q3-index N=100 attribution
+# result: experiment-output/runs/q3-index-N100.result.json

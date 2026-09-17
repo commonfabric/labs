@@ -1,0 +1,32 @@
+# 2026-09-17T17:56:09.268Z q3-index N=200 build
+[WARN][traverse::17:59:18.454] slow-traverse 202ms doc=of:fid1:2WPsDubnQjYf8OvsSIrcTv4x1wuP4FBKjiiuFwvj6n4/application/json trackerKeys=14579 trackerVals=48367 traverseSchema=786 traversePtr=157 traverseArr=1 traverseObj=157 traverseDAG=0 anyOfBranches=0 anyOfFastRejects=0 anyOfPropertyMerges=0 getDocAtPath=0 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=3 schemaMemo=809 schemaMemoHits=0 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+[WARN][traverse::18:00:10.300] slow-traverse 102ms doc=of:fid1:pjmIHgWCXHi9cWc_UYeXXFa-aett17tYQ5UoQB8bpDM/undefined trackerKeys=1730 trackerVals=2762 traverseSchema=4301 traversePtr=1892 traverseArr=173 traverseObj=344 traverseDAG=0 anyOfBranches=344 anyOfFastRejects=0 anyOfPropertyMerges=0 getDocAtPath=3784 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=7 schemaMemo=4301 schemaMemoHits=0 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+[WARN][cell::18:00:10.301] get >100ms get() took 101ms {
+  id: "of:fid1:pjmIHgWCXHi9cWc_UYeXXFa-aett17tYQ5UoQB8bpDM",
+  path: [ "topics" ],
+  space: "did:key:z6MkpSFax9WdRUke5ZiBcgJehxTch9ouYGYVFEesguYYsxWd",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][cell::18:01:42.726] get >60ms get() took 68ms {
+  id: "of:fid1:pjmIHgWCXHi9cWc_UYeXXFa-aett17tYQ5UoQB8bpDM",
+  path: [ "topics" ],
+  space: "did:key:z6MkpSFax9WdRUke5ZiBcgJehxTch9ouYGYVFEesguYYsxWd",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+# 2026-09-17T18:02:14.777Z q3-index N=200 op-add
+# 2026-09-17T18:02:21.380Z q3-index N=200 op-mention
+# 2026-09-17T18:02:22.230Z q3-index N=200 ownership
+# 2026-09-17T18:02:22.239Z q3-index N=200 replay
+[ERROR][storage.v2::18:02:22.758] sync-load-failure sync completed without data for of:fid1:MK9to76pgQnk2Ty3MqrCNRoPCSzTz9um2QcHrnbrohA in did:key:z6MkpSFax9WdRUke5ZiBcgJehxTch9ouYGYVFEesguYYsxWd: ConnectionError: memory client closed
+# 2026-09-17T18:02:22.758Z q3-index N=200 b-compile
+# 2026-09-17T18:02:22.885Z q3-index N=200 start
+# 2026-09-17T18:02:23.237Z q3-index N=200 pull
+Can't load profile-create.tsx
+Can't load profile-create.tsx
+# 2026-09-17T18:02:26.594Z q3-index N=200 checks
+# 2026-09-17T18:02:26.594Z q3-index N=200 attribution
+# result: experiment-output/runs/q3-index-N200.result.json

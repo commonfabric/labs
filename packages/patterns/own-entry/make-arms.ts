@@ -227,8 +227,17 @@ const fillEntries = lift((
     names: Default<Record<string, ReadonlyCell<unknown>>, {}>;
   },
 ): number => {
+  // The id of the document a cell RESOLVES to, as a string. Resolving first
+  // is what makes the join survive a member whose document has moved and left
+  // a forwarding link: the board's list then holds the old address, the
+  // namespace holds the address it was given, and only the resolved document
+  // is the same on both sides. \`getEntityId\` alone does not resolve.
   const idOf = (cell: unknown): string | undefined => {
-    const ref = getEntityId(cell);
+    const resolvable = cell as { resolveAsCell?: () => unknown } | undefined;
+    const target = typeof resolvable?.resolveAsCell === "function"
+      ? resolvable.resolveAsCell()
+      : cell;
+    const ref = getEntityId(target);
     return ref === undefined ? undefined : entityRefToString(ref);
   };
   const nameById = new Map<string, string>();
@@ -285,8 +294,17 @@ const entryRows = lift((
     names: Default<Record<string, ReadonlyCell<unknown>>, {}>;
   },
 ): OwnEntry[] => {
+  // The id of the document a cell RESOLVES to, as a string. Resolving first
+  // is what makes the join survive a member whose document has moved and left
+  // a forwarding link: the board's list then holds the old address, the
+  // namespace holds the address it was given, and only the resolved document
+  // is the same on both sides. \`getEntityId\` alone does not resolve.
   const idOf = (cell: unknown): string | undefined => {
-    const ref = getEntityId(cell);
+    const resolvable = cell as { resolveAsCell?: () => unknown } | undefined;
+    const target = typeof resolvable?.resolveAsCell === "function"
+      ? resolvable.resolveAsCell()
+      : cell;
+    const ref = getEntityId(target);
     return ref === undefined ? undefined : entityRefToString(ref);
   };
   const nameById = new Map<string, string>();

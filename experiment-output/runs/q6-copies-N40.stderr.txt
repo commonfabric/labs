@@ -1,0 +1,21 @@
+# 2026-09-17T17:45:07.978Z q6-copies N=40 build
+[WARN][cell::17:45:12.532] get >50ms get() took 52ms {
+  id: "of:fid1:EqkKNGrqFt51o3rgVs_Pw9RTZ2j1umNRltyGdqNhQgY",
+  path: [ "topics" ],
+  space: "did:key:z6MkhRyYUiPBYu8P1S7YtGrNnfWrax7fYqJWuRYUPh6HT5Km",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+# 2026-09-17T17:45:26.857Z q6-copies N=40 op-add
+# 2026-09-17T17:45:27.557Z q6-copies N=40 op-mention
+# 2026-09-17T17:45:27.683Z q6-copies N=40 ownership
+# 2026-09-17T17:45:27.686Z q6-copies N=40 replay
+[ERROR][storage.v2::17:45:27.885] sync-load-failure sync completed without data for of:fid1:itLyzrN2AY2efmNAuA0-OX5RPZGMvkF6GYdXrK45O2g in did:key:z6MkhRyYUiPBYu8P1S7YtGrNnfWrax7fYqJWuRYUPh6HT5Km: ConnectionError: memory client closed
+# 2026-09-17T17:45:27.886Z q6-copies N=40 b-compile
+# 2026-09-17T17:45:28.075Z q6-copies N=40 start
+# 2026-09-17T17:45:28.217Z q6-copies N=40 pull
+Can't load profile-create.tsx
+# 2026-09-17T17:45:28.364Z q6-copies N=40 checks
+# 2026-09-17T17:45:28.366Z q6-copies N=40 attribution
+# result: experiment-output/runs/q6-copies-N40.result.json

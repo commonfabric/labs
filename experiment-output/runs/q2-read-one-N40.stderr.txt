@@ -1,0 +1,33 @@
+# 2026-09-17T17:43:52.024Z q2-read-one N=40 build
+[WARN][traverse::17:44:00.876] slow-traverse 117ms doc=of:fid1:StoX85eZZD1X0duHUBbn0hDWjJNO_RxQzsZ9aMKZ6E4/undefined trackerKeys=351 trackerVals=504 traverseSchema=770 traversePtr=341 traverseArr=32 traverseObj=61 traverseDAG=0 anyOfBranches=62 anyOfFastRejects=0 anyOfPropertyMerges=0 getDocAtPath=678 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=7 schemaMemo=770 schemaMemoHits=0 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+[WARN][cell::17:44:00.876] get >110ms get() took 119ms {
+  id: "of:fid1:StoX85eZZD1X0duHUBbn0hDWjJNO_RxQzsZ9aMKZ6E4",
+  path: [ "topics" ],
+  space: "did:key:z6MkfrPddu5XZuznMqUtVM3pGYxDLfta7ExZHwrxPVPoiWWz",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][traverse::17:44:04.134] slow-traverse 634ms doc=of:fid1:StoX85eZZD1X0duHUBbn0hDWjJNO_RxQzsZ9aMKZ6E4/undefined trackerKeys=428 trackerVals=616 traverseSchema=945 traversePtr=418 traverseArr=39 traverseObj=75 traverseDAG=0 anyOfBranches=76 anyOfFastRejects=0 anyOfPropertyMerges=0 getDocAtPath=832 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=7 schemaMemo=945 schemaMemoHits=0 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+[WARN][cell::17:44:04.134] get >630ms get() took 633ms {
+  id: "of:fid1:StoX85eZZD1X0duHUBbn0hDWjJNO_RxQzsZ9aMKZ6E4",
+  path: [ "topics" ],
+  space: "did:key:z6MkfrPddu5XZuznMqUtVM3pGYxDLfta7ExZHwrxPVPoiWWz",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][traverse::17:44:06.847] slow-traverse 138ms doc=of:fid1:9kuJsq17Rj7BsYgT05gCuOJYzNDt8-fJ5InpDgeSBsE/undefined trackerKeys=120 trackerVals=156 traverseSchema=211 traversePtr=57 traverseArr=40 traverseObj=39 traverseDAG=0 anyOfBranches=0 anyOfFastRejects=0 anyOfPropertyMerges=0 getDocAtPath=114 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=5 schemaMemo=193 schemaMemoHits=18 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+# 2026-09-17T17:44:10.012Z q2-read-one N=40 op-add
+# 2026-09-17T17:44:10.748Z q2-read-one N=40 op-mention
+# 2026-09-17T17:44:10.823Z q2-read-one N=40 ownership
+# 2026-09-17T17:44:10.826Z q2-read-one N=40 replay
+[ERROR][storage.v2::17:44:11.117] sync-load-failure sync completed without data for of:fid1:VQMF1Ee4SZ0UksOI77yrligRwowIX0N-4H7XR-hHDNo in did:key:z6MkfrPddu5XZuznMqUtVM3pGYxDLfta7ExZHwrxPVPoiWWz: ConnectionError: memory client closed
+# 2026-09-17T17:44:11.118Z q2-read-one N=40 b-compile
+# 2026-09-17T17:44:11.446Z q2-read-one N=40 start
+# 2026-09-17T17:44:11.634Z q2-read-one N=40 pull
+Can't load profile-create.tsx
+Can't load profile-create.tsx
+# 2026-09-17T17:44:17.881Z q2-read-one N=40 checks
+# 2026-09-17T17:44:17.882Z q2-read-one N=40 attribution
+# result: experiment-output/runs/q2-read-one-N40.result.json

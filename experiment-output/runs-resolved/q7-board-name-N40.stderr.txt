@@ -1,0 +1,49 @@
+# 2026-09-17T18:23:49.877Z q7-board-name N=40 build
+Can't load profile-create.tsx
+Can't load profile-create.tsx
+[WARN][traverse::18:24:08.787] slow-traverse 141ms doc=of:fid1:zQW8WqvrM3E78wJ51WfS9D5W_B1KAKya9zCcK5XWpiQ/undefined trackerKeys=690 trackerVals=2009 traverseSchema=6568 traversePtr=1075 traverseArr=299 traverseObj=909 traverseDAG=0 anyOfBranches=10238 anyOfFastRejects=7404 anyOfPropertyMerges=0 getDocAtPath=2294 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=33 schemaMemo=6252 schemaMemoHits=316 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+[WARN][cell::18:24:08.787] get >140ms get() took 141ms {
+  id: "of:fid1:zQW8WqvrM3E78wJ51WfS9D5W_B1KAKya9zCcK5XWpiQ",
+  path: [],
+  space: "did:key:z6Mkv5Mcb2ThV47hAzwwBY89Auz9ncGnE8K6Zzm6wdyUwLWH",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:eaOCb3u5hKzN0nE6g3qhJwFhlnVOH28u_aj1i4ItHkY" },
+  viaLinkHop: true
+}
+[WARN][cell::18:24:19.081] get >50ms get() took 50ms {
+  id: "of:fid1:zQW8WqvrM3E78wJ51WfS9D5W_B1KAKya9zCcK5XWpiQ",
+  path: [],
+  space: "did:key:z6Mkv5Mcb2ThV47hAzwwBY89Auz9ncGnE8K6Zzm6wdyUwLWH",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:eaOCb3u5hKzN0nE6g3qhJwFhlnVOH28u_aj1i4ItHkY" },
+  viaLinkHop: true
+}
+[WARN][traverse::18:24:41.277] slow-traverse 184ms doc=of:fid1:zQW8WqvrM3E78wJ51WfS9D5W_B1KAKya9zCcK5XWpiQ/undefined trackerKeys=1015 trackerVals=2997 traverseSchema=9792 traversePtr=1608 traverseArr=442 traverseObj=1351 traverseDAG=0 anyOfBranches=15217 anyOfFastRejects=11005 anyOfPropertyMerges=0 getDocAtPath=3438 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=33 schemaMemo=9320 schemaMemoHits=472 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+[WARN][cell::18:24:41.277] get >180ms get() took 184ms {
+  id: "of:fid1:zQW8WqvrM3E78wJ51WfS9D5W_B1KAKya9zCcK5XWpiQ",
+  path: [],
+  space: "did:key:z6Mkv5Mcb2ThV47hAzwwBY89Auz9ncGnE8K6Zzm6wdyUwLWH",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:eaOCb3u5hKzN0nE6g3qhJwFhlnVOH28u_aj1i4ItHkY" },
+  viaLinkHop: true
+}
+[WARN][cell::18:24:41.915] get >50ms get() took 51ms {
+  id: "of:fid1:zQW8WqvrM3E78wJ51WfS9D5W_B1KAKya9zCcK5XWpiQ",
+  path: [],
+  space: "did:key:z6Mkv5Mcb2ThV47hAzwwBY89Auz9ncGnE8K6Zzm6wdyUwLWH",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:eaOCb3u5hKzN0nE6g3qhJwFhlnVOH28u_aj1i4ItHkY" },
+  viaLinkHop: true
+}
+# 2026-09-17T18:24:43.868Z q7-board-name N=40 op-add
+# 2026-09-17T18:24:47.957Z q7-board-name N=40 op-mention
+# 2026-09-17T18:24:48.034Z q7-board-name N=40 ownership
+# 2026-09-17T18:24:48.036Z q7-board-name N=40 replay
+[ERROR][storage.v2::18:24:48.058] sync-load-failure sync completed without data for of:fid1:io-_w72coSuoICG70_clf_sVveNtvtUMxltnvjau5xg in did:key:z6Mkv5Mcb2ThV47hAzwwBY89Auz9ncGnE8K6Zzm6wdyUwLWH: ConnectionError: memory client closed
+# 2026-09-17T18:24:48.058Z q7-board-name N=40 b-compile
+# 2026-09-17T18:24:48.182Z q7-board-name N=40 start
+# 2026-09-17T18:24:48.270Z q7-board-name N=40 pull
+Can't load profile-create.tsx
+# 2026-09-17T18:24:48.361Z q7-board-name N=40 checks
+# 2026-09-17T18:24:48.361Z q7-board-name N=40 attribution
+# result: experiment-output/runs-resolved/q7-board-name-N40.result.json

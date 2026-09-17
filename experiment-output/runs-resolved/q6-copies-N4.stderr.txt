@@ -1,0 +1,13 @@
+# 2026-09-17T18:22:35.119Z q6-copies N=4 build
+# 2026-09-17T18:22:36.852Z q6-copies N=4 op-add
+# 2026-09-17T18:22:37.045Z q6-copies N=4 op-mention
+# 2026-09-17T18:22:37.069Z q6-copies N=4 ownership
+# 2026-09-17T18:22:37.070Z q6-copies N=4 replay
+[ERROR][storage.v2::18:22:37.082] sync-load-failure sync completed without data for of:fid1:R2om6GqabJUvzyUhvLYS6oVCle6EOAF7AxE_sJ_X2XM in did:key:z6MkqsWyCKF1ifACgzrnhYj5JiEk629NVbagVQP44A48dq1c: ConnectionError: memory client closed
+# 2026-09-17T18:22:37.082Z q6-copies N=4 b-compile
+# 2026-09-17T18:22:37.202Z q6-copies N=4 start
+# 2026-09-17T18:22:37.290Z q6-copies N=4 pull
+Can't load profile-create.tsx
+# 2026-09-17T18:22:37.397Z q6-copies N=4 checks
+# 2026-09-17T18:22:37.397Z q6-copies N=4 attribution
+# result: experiment-output/runs-resolved/q6-copies-N4.result.json

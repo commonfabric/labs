@@ -1,0 +1,30 @@
+# 2026-09-17T18:02:37.404Z q6-copies N=200 build
+[WARN][traverse::18:04:15.447] slow-traverse 142ms doc=of:fid1:8YsPyjoBe5SSac08D6Ubm8hfat2wp61jXC8cb6uZbes/application/json trackerKeys=11616 trackerVals=37751 traverseSchema=7 traversePtr=1 traverseArr=2 traverseObj=2 traverseDAG=0 anyOfBranches=0 anyOfFastRejects=0 anyOfPropertyMerges=0 getDocAtPath=2 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=5 schemaMemo=189 schemaMemoHits=2 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+[WARN][cell::18:05:42.744] get >50ms get() took 56ms {
+  id: "of:fid1:b0DdGzkwO__FCQ8sVH_i1P5G2R-foPtv7fLlV5X1Jng",
+  path: [],
+  space: "did:key:z6MktJBKxUkuXhJwYLGFeZKge1yyFG4NNKqREimcQ9R6NGKt",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:1MIEa5h6LC5s8fNeepMiCtPgeyI4-c70456FtlJKxAE" },
+  viaLinkHop: true
+}
+[WARN][cell::18:06:34.052] get >50ms get() took 51ms {
+  id: "of:fid1:8YsPyjoBe5SSac08D6Ubm8hfat2wp61jXC8cb6uZbes",
+  path: [ "topics" ],
+  space: "did:key:z6MktJBKxUkuXhJwYLGFeZKge1yyFG4NNKqREimcQ9R6NGKt",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+# 2026-09-17T18:07:18.193Z q6-copies N=200 op-add
+# 2026-09-17T18:07:22.448Z q6-copies N=200 op-mention
+# 2026-09-17T18:07:22.862Z q6-copies N=200 ownership
+# 2026-09-17T18:07:22.871Z q6-copies N=200 replay
+[ERROR][storage.v2::18:07:22.925] sync-load-failure sync completed without data for of:fid1:TLfiOSAf6Eqbwb3vbO-JV2707Mq2lwqFGjjeeb_m92s in did:key:z6MktJBKxUkuXhJwYLGFeZKge1yyFG4NNKqREimcQ9R6NGKt: ConnectionError: memory client closed
+# 2026-09-17T18:07:22.925Z q6-copies N=200 b-compile
+# 2026-09-17T18:07:23.047Z q6-copies N=200 start
+# 2026-09-17T18:07:23.126Z q6-copies N=200 pull
+Can't load profile-create.tsx
+# 2026-09-17T18:07:23.219Z q6-copies N=200 checks
+# 2026-09-17T18:07:23.220Z q6-copies N=200 attribution
+# result: experiment-output/runs/q6-copies-N200.result.json

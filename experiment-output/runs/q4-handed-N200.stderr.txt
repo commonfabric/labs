@@ -1,0 +1,39 @@
+# 2026-09-17T17:51:02.726Z q4-handed N=200 build
+[WARN][cell::17:53:15.733] get >60ms get() took 62ms {
+  id: "of:fid1:m-SWluPSnLcigpsdqvzbrAJmopHmlWxEg1thGZiNC8E",
+  path: [ "topics" ],
+  space: "did:key:z6MkpxvrgDY6TwUGY258UCGGiV5APKxRAXEnkcAYMrHRXdpU",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][cell::17:54:24.755] get >70ms get() took 75ms {
+  id: "of:fid1:m-SWluPSnLcigpsdqvzbrAJmopHmlWxEg1thGZiNC8E",
+  path: [ "topics" ],
+  space: "did:key:z6MkpxvrgDY6TwUGY258UCGGiV5APKxRAXEnkcAYMrHRXdpU",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][traverse::17:54:59.732] slow-traverse 571ms doc=of:fid1:m-SWluPSnLcigpsdqvzbrAJmopHmlWxEg1thGZiNC8E/undefined trackerKeys=1890 trackerVals=3018 traverseSchema=4701 traversePtr=2068 traverseArr=189 traverseObj=376 traverseDAG=0 anyOfBranches=376 anyOfFastRejects=0 anyOfPropertyMerges=0 getDocAtPath=4136 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=7 schemaMemo=4701 schemaMemoHits=0 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+[WARN][cell::17:54:59.732] get >570ms get() took 571ms {
+  id: "of:fid1:m-SWluPSnLcigpsdqvzbrAJmopHmlWxEg1thGZiNC8E",
+  path: [ "topics" ],
+  space: "did:key:z6MkpxvrgDY6TwUGY258UCGGiV5APKxRAXEnkcAYMrHRXdpU",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+# 2026-09-17T17:55:47.273Z q4-handed N=200 op-add
+# 2026-09-17T17:55:51.283Z q4-handed N=200 op-mention
+# 2026-09-17T17:55:51.497Z q4-handed N=200 ownership
+# 2026-09-17T17:55:51.505Z q4-handed N=200 replay
+[ERROR][storage.v2::17:55:51.580] sync-load-failure sync completed without data for of:fid1:124CAY9qgeZDR0n6xAi8Xrqi6yQJaU-_ezaWaccoK2E in did:key:z6MkpxvrgDY6TwUGY258UCGGiV5APKxRAXEnkcAYMrHRXdpU: ConnectionError: memory client closed
+# 2026-09-17T17:55:51.581Z q4-handed N=200 b-compile
+# 2026-09-17T17:55:51.765Z q4-handed N=200 start
+# 2026-09-17T17:55:51.867Z q4-handed N=200 pull
+Can't load profile-create.tsx
+Can't load profile-create.tsx
+# 2026-09-17T17:55:56.374Z q4-handed N=200 checks
+# 2026-09-17T17:55:56.375Z q4-handed N=200 attribution
+# result: experiment-output/runs/q4-handed-N200.result.json

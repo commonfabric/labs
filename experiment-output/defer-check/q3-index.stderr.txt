@@ -1,0 +1,14 @@
+# 2026-09-17T17:48:21.236Z q3-index N=40 build
+# 2026-09-17T17:48:31.185Z q3-index N=40 op-add
+# 2026-09-17T17:48:31.683Z q3-index N=40 op-mention
+# 2026-09-17T17:48:31.735Z q3-index N=40 ownership
+# 2026-09-17T17:48:31.738Z q3-index N=40 replay
+[ERROR][storage.v2::17:48:31.859] sync-load-failure sync completed without data for of:fid1:cmem2ymVkZg_F4xEAClLz2JCk471VzZa6PMa0pKBTSM in did:key:z6MkigLfdRbi9nrUFKmthT6RQqUGSEsnRv5rH4QdxTyD5DaT: ConnectionError: memory client closed
+# 2026-09-17T17:48:31.859Z q3-index N=40 b-compile
+# 2026-09-17T17:48:31.966Z q3-index N=40 start
+# 2026-09-17T17:48:32.149Z q3-index N=40 pull
+Can't load profile-create.tsx
+Can't load profile-create.tsx
+# 2026-09-17T17:48:34.949Z q3-index N=40 checks
+# 2026-09-17T17:48:34.949Z q3-index N=40 attribution
+# result: experiment-output/defer-check/q3-index-N40.result.json

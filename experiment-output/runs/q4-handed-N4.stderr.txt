@@ -1,0 +1,14 @@
+# 2026-09-17T17:42:36.308Z q4-handed N=4 build
+# 2026-09-17T17:42:37.942Z q4-handed N=4 op-add
+# 2026-09-17T17:42:38.094Z q4-handed N=4 op-mention
+# 2026-09-17T17:42:38.110Z q4-handed N=4 ownership
+# 2026-09-17T17:42:38.111Z q4-handed N=4 replay
+[ERROR][storage.v2::17:42:38.127] sync-load-failure sync completed without data for of:fid1:lN6n8jLH79EPwzY9bvnryV3LBU3fMpbta9ljqP6ZCxM in did:key:z6MkmNSDKKvr3KYb8Gsk7RQeJDDbL5Qwic8aZFozU8fe7mu7: ConnectionError: memory client closed
+# 2026-09-17T17:42:38.127Z q4-handed N=4 b-compile
+# 2026-09-17T17:42:38.230Z q4-handed N=4 start
+# 2026-09-17T17:42:38.310Z q4-handed N=4 pull
+Can't load profile-create.tsx
+Can't load profile-create.tsx
+# 2026-09-17T17:42:38.491Z q4-handed N=4 checks
+# 2026-09-17T17:42:38.492Z q4-handed N=4 attribution
+# result: experiment-output/runs/q4-handed-N4.result.json

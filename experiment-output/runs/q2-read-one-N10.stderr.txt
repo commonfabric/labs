@@ -1,0 +1,14 @@
+# 2026-09-17T17:42:52.441Z q2-read-one N=10 build
+# 2026-09-17T17:42:55.706Z q2-read-one N=10 op-add
+# 2026-09-17T17:42:55.946Z q2-read-one N=10 op-mention
+# 2026-09-17T17:42:55.974Z q2-read-one N=10 ownership
+# 2026-09-17T17:42:55.978Z q2-read-one N=10 replay
+[ERROR][storage.v2::17:42:56.039] sync-load-failure sync completed without data for of:fid1:pRbxoHdJbE-DCxNtCebcye0bhSn1NdepHLE6SewwMU4 in did:key:z6MkrFeEH9UYrczJiPERGeNZyncag4g2VCjypLFGMcKVwZHG: ConnectionError: memory client closed
+# 2026-09-17T17:42:56.039Z q2-read-one N=10 b-compile
+# 2026-09-17T17:42:56.215Z q2-read-one N=10 start
+# 2026-09-17T17:42:56.396Z q2-read-one N=10 pull
+Can't load profile-create.tsx
+Can't load profile-create.tsx
+# 2026-09-17T17:42:56.878Z q2-read-one N=10 checks
+# 2026-09-17T17:42:56.879Z q2-read-one N=10 attribution
+# result: experiment-output/runs/q2-read-one-N10.result.json

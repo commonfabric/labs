@@ -83,6 +83,12 @@ const size = Number(args.n ?? "4");
 const degree = Number(args.d ?? "2");
 const outDir = args.out ?? "experiment-output/frames";
 const withPull = args.pull !== "false";
+const deferDemand = args["defer-demand"] === "true";
+// `--forward` models a topic whose document has moved and left a forwarding
+// link: the board's list entry for topic 0 is rewritten to a new document
+// whose only content is a link to topic 0, so the board holds the old address
+// and every reader of the list reaches the topic through one more hop.
+const forward = args.forward === "true";
 const arm = ARMS[armName];
 if (arm === undefined) throw new Error(`unknown arm: ${armName}`);
 if (degree >= size) throw new Error("degree must be below N");
@@ -292,8 +298,19 @@ if (setupCommit.error) throw setupCommit.error;
 // property of the board's result schema. A sink on the whole result would
 // also demand the board's rendered cards, one sub-pattern per topic, which no
 // topic reads.
-const cancels = arm.demand.map((key) => board.key(key).sink(() => {}));
+//
+// `--defer-demand` holds nothing live while the topics are filed and demands
+// the same outputs once at the end of the build instead. The board's
+// derivations then run over the finished list rather than once per file,
+// which is what makes a large board affordable; the measured phases below
+// (`op-add`, `op-mention`, `start`) all run with the demand in place, and the
+// figures at a size measured both ways agree.
+const cancels: (() => void)[] = [];
+const demandBoard = () => {
+  for (const key of arm.demand) cancels.push(board.key(key).sink(() => {}));
+};
 const cancelBoard = () => cancels.forEach((cancel) => cancel());
+if (!deferDemand) demandBoard();
 await runtimeA.idle();
 
 const addTopic = board.key("addTopic");
@@ -339,6 +356,10 @@ for (const [from, to] of early) {
   await mention(from, to);
 }
 await runtimeA.idle();
+if (deferDemand) {
+  demandBoard();
+  await runtimeA.idle();
+}
 await storageA.synced();
 const buildMs = ms(buildStart);
 const buildFile = rotate("build");
@@ -380,12 +401,64 @@ await storageA.synced();
 const mentionMs = ms(mentionStart);
 const mentionFile = rotate("op-mention");
 
+// --- The move, where one is asked for ------------------------------------
+
+const topic0Before = topicAt(0).getAsNormalizedFullLink();
+let forwarderId: string | undefined;
+if (forward) {
+  stage("forward");
+  const argumentMeta = getMetaLink(boardCell, "argument");
+  if (argumentMeta === undefined) throw new Error("board has no argument");
+  await runtimeA.editWithRetry((tx) => {
+    const forwarder = runtimeA.getCell<Json>(
+      space,
+      { forwarderFor: topic0Before.id },
+      undefined,
+      tx,
+    );
+    forwarder.setRaw(
+      runtimeA.getCellFromLink(topic0Before).withTx(tx).getAsLink(),
+    );
+    forwarderId = forwarder.getAsNormalizedFullLink().id;
+    const argument = runtimeA.getCellFromLink({
+      ...argumentMeta,
+      schema: undefined,
+    }).withTx(tx);
+    argument.key("topics").key(0).setRaw(forwarder.getAsLink());
+  });
+  await runtimeA.idle();
+  await storageA.synced();
+  rotate("forward");
+}
+
 // --- Ownership, and what runtime A computed for topic 0 -------------------
 
 stage("ownership");
 const topicCells = Array.from({ length: size }, (_, index) => topicAt(index));
+// After a move the list entry resolves through the forwarder, so the cell the
+// list hands back is the topic itself either way.
 const topic0 = topicCells[0];
 const topic0Link = topic0.getAsNormalizedFullLink();
+// What the move produced: the address the board's list now holds (the
+// forwarder), the document the topic is at (unchanged), and the raw value the
+// list entry carries, which must be a link to the forwarder.
+const listEntryRaw = forward
+  ? (() => {
+    const argumentMeta = getMetaLink(boardCell, "argument")!;
+    return runtimeA.getCellFromLink({ ...argumentMeta, schema: undefined })
+      .key("topics").getRaw() as Json;
+  })()
+  : undefined;
+const movedTo = forward
+  ? {
+    topicWasAt: topic0Before.id,
+    topicIsAt: topic0Link.id,
+    forwarderId,
+    listEntry0: Array.isArray(listEntryRaw)
+      ? JSON.stringify(listEntryRaw[0]).slice(0, 220)
+      : JSON.stringify(listEntryRaw).slice(0, 220),
+  }
+  : undefined;
 const owner = new Map<string, string>();
 const note = (id: string, who: string) => {
   const known = owner.get(id);
@@ -399,6 +472,8 @@ const noteFamily = (cell: Json, who: string) => {
   }
 };
 noteFamily(boardCell, "board");
+// The document the topic moved out of is the topic's own.
+if (forwarderId !== undefined) note(forwarderId, "self");
 topicCells.forEach((cell, index) =>
   noteFamily(cell, index === 0 ? "self" : `other${index}`)
 );
@@ -709,8 +784,12 @@ Deno.writeTextFileSync(
     deno: Deno.version.deno,
     arm: armName,
     base: arm.base,
+    what: arm.what,
     N: size,
     d: degree,
+    deferDemand,
+    forward,
+    movedTo,
     experimental,
     sharedIds,
     started,
