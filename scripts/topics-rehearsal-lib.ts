@@ -253,11 +253,10 @@ export interface TopicsExport {
  * one points at. A document write cannot carry a `$link`, so these are routed
  * aside and re-linked after the apply.
  *
- * Three today: `mentionable` (the board's derived mention index),
- * `boardCrossrefs` (its reference pivot), and `boardNames` (its names table,
- * which a topic reads its own member name out of). The mention index publishes
- * display rows with stable strings and unread member references, matching
- * the wiring the board supplies when it creates a topic.
+ * Two today: `mentionable` (the board's derived mention index) and
+ * `boardCrossrefs` (its reference pivot). The mention index publishes display
+ * rows with stable strings and unread member references, matching the wiring
+ * the board supplies when it creates a topic.
  *
  * Adding a wiring input to the topic pattern means adding it here. Leaving it
  * out is not silent: `buildRestoreDocument` throws on any link-valued field it
@@ -269,7 +268,6 @@ export interface TopicsExport {
 export const STRUCTURAL_LINK_SOURCES: Record<string, string> = {
   mentionable: "mentionable",
   boardCrossrefs: "crossrefs",
-  boardNames: "namesTable",
 };
 
 export const STRUCTURAL_LINK_FIELDS = Object.keys(STRUCTURAL_LINK_SOURCES);
@@ -277,8 +275,16 @@ export const STRUCTURAL_LINK_FIELDS = Object.keys(STRUCTURAL_LINK_SOURCES);
 /**
  * Retired link-valued fields, recognized so that a restore sets one aside by
  * name rather than reaching the unknown-link throw below.
+ *
+ * A field belongs here once the topic pattern stops declaring it, and moving
+ * it is not cosmetic: a retired field left in `STRUCTURAL_LINK_SOURCES` sends
+ * the restore to `cf piece link` against a path the pattern no longer has,
+ * which refuses — after the apply has already landed. `boardNames` is here
+ * because a topic stores the number its board calls it by rather than reading
+ * a table for it, so an export taken before that carries a link this restore
+ * leaves retired.
  */
-export const LEGACY_LINK_FIELDS = ["myName"] as const;
+export const LEGACY_LINK_FIELDS = ["myName", "boardNames"] as const;
 
 export interface RestoreDocument {
   /** The complete input document a restore applies. */

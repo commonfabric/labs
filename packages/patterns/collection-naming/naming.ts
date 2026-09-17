@@ -261,14 +261,14 @@ export function backfillNames(
 
 /**
  * What one `recordNames()` run reports, as three lists of names in filing
- * order. Together they cover every listed member the run could name: a member
- * at a position holding no object is in none of them, and neither is one the
- * namespace holds only under a key outside the name grammar.
+ * order. Together they cover every listed member the run could name, which is
+ * every position holding an object: a position holding anything else is in none
+ * of them.
  */
 export interface RecordNamesResult {
   /**
-   * The names the run wrote into the namespace. Empty when every listed
-   * member was already named, which is what a second run writes.
+   * The names the run wrote into the namespace. Empty when the namespace
+   * already named every listed member, which is what a second run writes.
    */
   assigned: string[];
 
@@ -288,12 +288,22 @@ export interface RecordNamesResult {
 }
 
 /**
- * Names every member of `members` the namespace does not hold, exactly as
- * `backfillNames()` does, and additionally asks each listed member to store
- * the name the namespace holds for it by sending that name to the member's own
- * `recordName` verb. A member that already reports that name is sent nothing,
- * so a run over a fully recorded list writes nothing at all — no key and no
- * event.
+ * Names every member of `members` the namespace does not name, and asks each
+ * listed member to store the name the namespace holds for it by sending that
+ * name to the member's own `recordName` verb. A member that already reports
+ * that name is sent nothing, so a run over a fully recorded list writes nothing
+ * at all — no key and no event.
+ *
+ * "Names" here is the names table's own notion: the namespace names a member
+ * when it holds it under a key the grammar admits, which is what `namesTable`
+ * builds a row from and what `nameOf` finds. A member the namespace holds ONLY
+ * under a foreign key — one a client wrote over the memory protocol, which
+ * `isMemberName()` does not admit — has no name by that lookup, so it is named
+ * here like any other unnamed member, and the foreign entry is left where it
+ * is. This is where the two walks differ: `backfillNames()` counts a member
+ * present at any key as named and skips it, which leaves it with no name and no
+ * row. Nothing this collection writes produces a foreign key; only a foreign
+ * writer does.
  *
  * The member contract this rests on is `recordName({ name })`: a member that
  * stores its own name provides it, takes the name the collection allocated,
@@ -330,13 +340,9 @@ export function recordNames(
   names: NamesMapCell,
 ): RecordNamesResult {
   const map = names.get() ?? {};
-  // The members the namespace holds, read as `backfillNames()` reads them:
-  // every value in the map whatever key it sits under, so that allocation
-  // here and there agree on which member is already named.
-  const held = Object.values(map) as (object | undefined)[];
-  // The name each of those sits under, for the entries under a name the
-  // grammar admits. A member held only under a foreign key is named as far as
-  // allocation is concerned and has no name for a member to record.
+  // Every name the namespace holds, to the member it names. A key outside the
+  // grammar is not a name, so an entry under one names nothing here — the same
+  // view `namesTable()` publishes and `nameOf()` reads.
   const entries = Object.entries(map)
     .filter(([name]) => isMemberName(name)) as [string, object | undefined][];
   const listed = members.get();
@@ -358,10 +364,8 @@ export function recordNames(
     handled.push(member);
     let name = entries.find(([, other]) => equals(member, other))?.[0];
     if (name === undefined) {
-      if (held.some((other) => equals(member, other))) continue;
       name = next;
       names.key(name).set(member);
-      held.push(member);
       entries.push([name, member]);
       assigned.push(name);
       next = incrementName(name);

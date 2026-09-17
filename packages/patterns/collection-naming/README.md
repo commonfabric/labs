@@ -35,19 +35,29 @@ collection does with it:
   member of a list in filing order, skips those already named, and returns
   exactly the names it wrote — `[]` on a second run, which writes nothing. It
   writes the namespace and nothing else, so a member it names stores no name of
-  its own. `recordNames(members, names)` does that walk and additionally asks
-  each listed member to store the name the namespace holds for it, by sending
-  that name to the member's own `recordName` verb; it returns `assigned`, the
-  names it wrote, `named`, the members already reporting theirs, and `pending`,
-  the members it asked. A send's effect is invisible to the transaction that
-  makes it, so `pending` is a list of requests rather than of outcomes: a later
-  run reports whichever landed under `named` and asks for the rest again. Which
-  of the two a collection calls turns on whether its member pattern declares
-  `recordName({ name })`. A member whose pattern does not stores the payload as
-  ordinary data at that name in its result, because a send to a path holding no
-  stream is an ordinary write — `Cell.send` in `packages/runner/src/cell.ts`
-  delegates to `set`. The exemplar's item declares none and calls
-  `backfillNames`; Topics' topic declares one and its board calls `recordNames`.
+  its own. `recordNames(members, names)` walks the same list and additionally
+  asks each listed member to store the name the namespace holds for it, by
+  sending that name to the member's own `recordName` verb; it returns
+  `assigned`, the names it wrote, `named`, the members already reporting theirs,
+  and `pending`, the members it asked. A send's effect is invisible to the
+  transaction that makes it, so `pending` is a list of requests rather than of
+  outcomes: a later run reports whichever landed under `named` and asks for the
+  rest again. Which of the two a collection calls turns on whether its member
+  pattern declares `recordName({ name })`. A member whose pattern does not
+  stores the payload as ordinary data at that name in its result, because a send
+  to a path holding no stream is an ordinary write — `Cell.send` in
+  `packages/runner/src/cell.ts` delegates to `set`.
+
+  The two differ on one shape, and which of them is right about it is settled by
+  the names table. `backfillNames` counts a member present at ANY key of the
+  namespace as named, so a member a foreign writer left under a key outside the
+  grammar is skipped and never gets a name. `recordNames` asks the question the
+  table asks — is the member held under a key `isMemberName` admits — so it
+  names such a member like any other unnamed one and leaves the foreign entry
+  alone. `namesTable` publishes a row only for a grammar-admitted key, so a
+  member skipped the first way has no name by every lookup a reader has. The
+  exemplar's item declares none and calls `backfillNames`; Topics' topic
+  declares one and its board calls `recordNames`.
 - **The declaration.** `NamingDeclaration` is what a collection publishes so a
   consumer learns the policy rather than assuming one: whether a name is unique
   across history or only among current members, whether it is permanent, whether

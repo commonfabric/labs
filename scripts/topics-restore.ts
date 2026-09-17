@@ -30,11 +30,10 @@
  * `cf piece link` against the board recorded in the export.
  *
  * Those wiring links are `STRUCTURAL_LINK_SOURCES`, which maps each one to
- * the board path it points at: `mentionable` to the board's `mentionable` index,
- * `boardCrossrefs` to its `crossrefs`, and `boardNames` to its `namesTable`.
- * A link-valued field absent from that map stops the restore rather than
- * being guessed at, so a wiring input added to the topic pattern announces
- * itself here.
+ * the board path it points at: `mentionable` to the board's `mentionable`
+ * index and `boardCrossrefs` to its `crossrefs`. A link-valued field absent
+ * from that map stops the restore rather than being guessed at, so a wiring
+ * input added to the topic pattern announces itself here.
  *
  * Four honest costs. Comment and link elements are re-written as plain
  * values, so their element entities are minted fresh: content, order,
@@ -42,8 +41,9 @@
  * individual old element is not preserved. A re-established link targets the
  * board's RESULT path where the original targeted its argument document —
  * aliases of one another (#5632), so a before/after diff of the stored link
- * differs while resolution does not. The deprecated `myName` legacy link is
- * not restored — it exists only as the pre-agentName attribution fallback.
+ * differs while resolution does not. A `LEGACY_LINK_FIELDS` link is not
+ * restored — `myName` exists only as the pre-agentName attribution fallback,
+ * and `boardNames` named a table a topic no longer reads.
  * And a field the CURRENT schema retired is written but cannot be read back,
  * so it is reported `not restored` and does not fail the run; only a field
  * the schema still declares can be checked, and there a difference is still a

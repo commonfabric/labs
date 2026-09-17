@@ -239,16 +239,30 @@ describe("topics-rehearsal-lib", () => {
         },
         resolved,
       );
-      expect(structural).toEqual([
-        "mentionable",
-        "boardCrossrefs",
-        "boardNames",
-      ]);
-      expect(legacy).toEqual(["myName"]);
+      expect(structural).toEqual(["mentionable", "boardCrossrefs"]);
+      // In the raw argument's own order, which is what the walk follows.
+      expect(legacy).toEqual(["boardNames", "myName"]);
       expect(doc.mentionable).toBeUndefined();
       expect(doc.boardCrossrefs).toBeUndefined();
       expect(doc.boardNames).toBeUndefined();
       expect(doc.myName).toBeUndefined();
+    });
+
+    it("keeps a link the pattern stopped declaring out of the relink list", () => {
+      // The whole point of retiring a link field rather than leaving it
+      // structural: `structural` is what the restore hands to `cf piece link`
+      // after the apply has already landed, so a path the current pattern does
+      // not declare there is a refusal the operator meets mid-restore, with
+      // the content write done and unverified. An export taken before a topic
+      // stored its own number carries exactly such a link.
+      const { doc, structural, legacy } = buildRestoreDocument(
+        { title: "t", boardNames: link },
+        resolved,
+      );
+      expect(structural).toEqual([]);
+      expect(legacy).toEqual(["boardNames"]);
+      expect(doc.boardNames).toBeUndefined();
+      expect(doc.title).toBe("t");
     });
 
     it("throws on a link-valued field it does not understand", () => {
