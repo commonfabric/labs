@@ -592,10 +592,12 @@ function isEmptyObjectSchema(schema: MutableJSONSchema): boolean {
 /**
  * The schema of an intersection whose constituents have these schemas, none
  * of them a union, reduced the way the checker reduces the types before
- * `IntersectionFormatter` merges them, in this order: a constituent
- * accepting nothing (`never`) leaves nothing, whatever else is there; one
- * accepting anything (`any`) then makes the whole accept anything; `unknown`
- * is the identity and drops out; an empty object drops out beside anything
+ * `IntersectionFormatter` merges them. Nothing comes first: a constituent
+ * accepting nothing (`never`) leaves nothing, and so do constituents that
+ * reduce to nothing between themselves — `string & number`, `null` beside
+ * an object — whatever else is there. Only then does one accepting anything
+ * (`any`) make the whole accept anything. The rest reduce in this order:
+ * `unknown` is the identity and drops out; an empty object drops out beside anything
  * else and takes `null` and `undefined` with it, `T & {}` being
  * `NonNullable<T>`; primitives are narrowed or found disjoint
  * (`intersectPrimitives`); and `null` or `undefined` beside an object leaves
@@ -610,7 +612,22 @@ function mergeIntersection(
   context: GenerationContext,
 ): MutableJSONSchema {
   if (parts.some((part) => part === false)) return false;
-  if (parts.some((part) => part === true)) return true;
+  const definite = parts.filter((part) => part !== true);
+  if (definite.length === parts.length) return mergeDefinite(parts, context);
+  // `any` wins only over what is still possible without it.
+  return definite.length > 0 && mergeDefinite(definite, context) === false
+    ? false
+    : true;
+}
+
+/**
+ * `mergeIntersection` for constituents that are neither `never` nor `any`:
+ * every step of its reduction after those two.
+ */
+function mergeDefinite(
+  parts: MutableJSONSchema[],
+  context: GenerationContext,
+): MutableJSONSchema {
   const isUnknown = (part: MutableJSONSchema) =>
     isObjectOrArray(part) && part.type === "unknown";
   const substantive = dedupeByValueEqual(

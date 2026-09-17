@@ -91,7 +91,9 @@ tuples, else an array's items read through a reference — the same lossy
 form as the type path), intersections (reduced as the checker reduces the
 types, then merged as `IntersectionFormatter` merges them, a named
 constituent read through its reference: a union constituent distributes;
-`never` leaves `false`, even beside `any`; `unknown` is the identity; an
+`never` leaves `false`, even beside `any`, and so do constituents that
+reduce to nothing between themselves, before `any` is allowed to win;
+`unknown` is the identity; an
 empty object part drops out and takes `null` and `undefined` with it, as
 `T & {}` does; primitives are narrowed or found disjoint, `"a" & string`
 being `"a"` and `string & number` nothing; and a constituent that merge

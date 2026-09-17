@@ -2191,6 +2191,37 @@ type CalculatorRequest = {
         ),
       ).toBe(false);
 
+      // ...and so does whatever reduces to nothing beside the `any`:
+      // disjoint primitives, disjoint literals, a nullish part beside an
+      // object or an empty object.
+      const anyKeyword = () => keyword(ts.SyntaxKind.AnyKeyword);
+      for (
+        const impossible of [
+          [anyKeyword(), stringNode(), numberNode(), unknownKeyword()],
+          [anyKeyword(), text("a"), text("b"), unknownKeyword()],
+          [anyKeyword(), nullNode(), literal([["topic", unknownNode()]])],
+          [
+            anyKeyword(),
+            keyword(ts.SyntaxKind.UndefinedKeyword),
+            literal([["topic", unknownNode()]]),
+          ],
+          [anyKeyword(), nullNode(), emptyObject(), unknownKeyword()],
+        ]
+      ) {
+        expect(await schemaOf(both(...impossible))).toBe(false);
+      }
+      // What is still possible beside it leaves `any` to win, a part the
+      // merge would refuse included.
+      expect(
+        await schemaOf(
+          both(anyKeyword(), text("a"), stringNode(), unknownKeyword()),
+        ),
+      ).toBe(true);
+      expect(
+        await schemaOf(both(anyKeyword(), alias("Foo"), stringNode())),
+      ).toBe(true);
+      expect(await schemaOf(both(anyKeyword(), unknownKeyword()))).toBe(true);
+
       // `T & {}`: the empty object drops out, the one part left stands.
       expect(
         await schemaOf(
