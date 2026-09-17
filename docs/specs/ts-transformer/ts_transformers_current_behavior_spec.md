@@ -2111,7 +2111,9 @@ Special path:
   `Array`, `ReadonlyArray`, `Record`) to their arguments, lowers a tuple to an
   array of its element union (`undefined` admitted for an optional element, a
   rest element contributing a spread tuple's elements or an array's items),
-  merges an intersection as the type-based path merges one, and unwraps
+  merges an intersection as the type-based path merges one, retaining nested
+  constituent types and distinguishing `void` from opaque cell wrappers during
+  reduction, and unwraps
   parentheses. A pattern-scope `.get()` on a
   `Cell<{ topic: unknown; title: string }>` lowers to a lift with result type
   `Readonly<{ topic: unknown; title: string }>` and a result schema that

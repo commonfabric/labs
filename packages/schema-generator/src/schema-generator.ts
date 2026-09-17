@@ -524,12 +524,9 @@ function primitiveTypeOf(value: unknown): string {
  */
 function primitiveDomain(
   schema: MutableJSONSchemaObj,
+  context: GenerationContext,
 ): PrimitiveDomain | undefined {
-  // `void` lowers to the opaque marker and nothing else.
-  if (
-    Object.keys(schema).length === 1 && Array.isArray(schema.asCell) &&
-    schema.asCell.length === 1 && schema.asCell[0] === "opaque"
-  ) {
+  if (context.schemaOrigins?.get(schema)?.kind === "void") {
     return { types: ["undefined"], values: undefined, isVoid: true };
   }
   const values = "const" in schema
@@ -607,8 +604,9 @@ function intersectPrimitives(
  */
 function reducePrimitiveParts(
   parts: MutableJSONSchemaObj[],
+  context: GenerationContext,
 ): MutableJSONSchemaObj[] | false {
-  const domains = parts.map(primitiveDomain);
+  const domains = parts.map((part) => primitiveDomain(part, context));
   const primitive = parts.filter((_part, index) =>
     domains[index] !== undefined
   );
@@ -638,9 +636,23 @@ function isEmptyObjectSchema(schema: MutableJSONSchema): boolean {
     Object.keys(schema.properties ?? {}).length === 0;
 }
 
+/** Folds equal intersection parts while preserving source type distinctions. */
+function dedupeIntersectionParts<T extends MutableJSONSchema>(
+  parts: T[],
+  context: GenerationContext,
+): T[] {
+  return dedupeByValueEqual(parts.map((schema) => ({
+    schema,
+    sourceKind: isObjectOrArray(schema)
+      ? context.schemaOrigins?.get(schema)?.kind ?? "schema"
+      : "schema",
+  }))).map((part) => part.schema);
+}
+
 /**
  * The schema of an intersection whose constituents have these schemas, as
- * the checker settles one. Identical constituents fold. A constituent
+ * the checker settles one. Nested fallbacks expose their source constituents
+ * before reduction, and identical constituents fold. A constituent
  * accepting nothing (`never`) leaves nothing. One accepting anything (`any`)
  * makes the whole accept anything — unless the constituents beside it that
  * are no union already contradict each other, which is as far as the checker
@@ -653,17 +665,37 @@ function intersectionOf(
   constituents: MutableJSONSchema[],
   context: GenerationContext,
 ): MutableJSONSchema {
-  const distinct = dedupeByValueEqual(constituents);
+  const expand = (schema: MutableJSONSchema): MutableJSONSchema[] => {
+    const resolved = resolveLocalRef(schema, context);
+    const origin = isObjectOrArray(resolved)
+      ? context.schemaOrigins?.get(resolved)
+      : undefined;
+    return origin?.kind === "intersection"
+      ? origin.parts().flatMap(expand)
+      : [schema];
+  };
+  const distinct = dedupeIntersectionParts(
+    constituents.flatMap(expand),
+    context,
+  );
   if (distinct.some((constituent) => constituent === false)) return false;
   const arms = distinct
     .filter((constituent) => constituent !== true)
-    .map((constituent) => unionArms(constituent, context));
+    .map((constituent) => {
+      const resolved = resolveLocalRef(constituent, context);
+      const origin = isObjectOrArray(resolved)
+        ? context.schemaOrigins?.get(resolved)
+        : undefined;
+      return origin?.kind === "union"
+        ? origin.parts().flatMap((part) => unionArms(part, context))
+        : unionArms(constituent, context);
+    });
   if (arms.length < distinct.length) {
     const direct = arms
       .filter((alternatives) => alternatives.length === 1)
       .map((alternatives) => alternatives[0] as MutableJSONSchemaObj)
       .filter((part) => {
-        const domain = primitiveDomain(part);
+        const domain = primitiveDomain(part, context);
         return domain === undefined ||
           (domain.types.length === 1 && (domain.values?.length ?? 1) === 1);
       });
@@ -675,12 +707,19 @@ function intersectionOf(
     [[]],
   );
   return unionOfSchemas(
-    combinations.map((parts) =>
-      parts.some((part) => part === false) ? false : mergeParts(
+    combinations.map((parts) => {
+      const expanded = parts.flatMap(expand);
+      if (
+        expanded.length !== parts.length ||
+        expanded.some((part, index) => part !== parts[index])
+      ) {
+        return intersectionOf(expanded, context);
+      }
+      return parts.some((part) => part === false) ? false : mergeParts(
         parts as MutableJSONSchemaObj[],
         context,
-      )
-    ),
+      );
+    }),
   );
 }
 
@@ -698,7 +737,7 @@ function contradictory(
 ): boolean {
   const parts = direct.filter((part) => part.type !== "unknown");
   if (parts.length < 2 || mergeParts(parts, context) !== false) return false;
-  const domains = parts.map(primitiveDomain);
+  const domains = parts.map((part) => primitiveDomain(part, context));
   const bareBoolean = (domain: PrimitiveDomain | undefined) =>
     domain?.types[0] === "boolean" && domain.values === undefined;
   const nullOnly = (domain: PrimitiveDomain | undefined) =>
@@ -724,35 +763,47 @@ function mergeParts(
   parts: MutableJSONSchemaObj[],
   context: GenerationContext,
 ): MutableJSONSchema {
-  const substantive = dedupeByValueEqual(
+  const substantive = dedupeIntersectionParts(
     parts.filter((part) => part.type !== "unknown"),
+    context,
   );
   if (substantive.length === 0) return { type: "unknown" };
   const nonEmpty = substantive.filter((part) => !isEmptyObjectSchema(part));
   const remaining: MutableJSONSchema[] =
     nonEmpty.length > 0 && nonEmpty.length < substantive.length
-      ? dedupeByValueEqual(
+      ? dedupeIntersectionParts(
         nonEmpty.map((part) => withoutNullish(part, context)),
+        context,
       )
       : substantive;
   if (remaining.some((part) => part === false)) return false;
   // The primitive parts are reduced among themselves wherever they sit, so
   // a contradiction between two of them is found with an object beside them
   // too; what they reduce to stands where the first of them stood.
-  const reduced = reducePrimitiveParts(remaining as MutableJSONSchemaObj[]);
+  const reduced = reducePrimitiveParts(
+    remaining as MutableJSONSchemaObj[],
+    context,
+  );
   if (reduced === false) return false;
   if (reduced.length === 1) return reduced[0]!;
   const nullish = (part: MutableJSONSchemaObj) => {
-    const domain = primitiveDomain(part);
+    const domain = primitiveDomain(part, context);
     return domain !== undefined && !domain.isVoid &&
       domain.types.every((type) => type === "null" || type === "undefined");
   };
   if (reduced.some(nullish)) return false;
-  const unsupported = (reason: string): MutableJSONSchema => ({
-    type: "object",
-    additionalProperties: true,
-    $comment: `Unsupported intersection pattern: ${reason}`,
-  });
+  const unsupported = (reason: string): MutableJSONSchema => {
+    const schema: MutableJSONSchemaObj = {
+      type: "object",
+      additionalProperties: true,
+      $comment: `Unsupported intersection pattern: ${reason}`,
+    };
+    context.schemaOrigins?.set(schema, {
+      kind: "intersection",
+      parts: () => reduced,
+    });
+    return schema;
+  };
   const properties: Record<string, MutableJSONSchema> = {};
   const required = new Set<string>();
   for (const part of reduced) {
@@ -900,6 +951,7 @@ export class SchemaGenerator {
       // Accumulating state
       definitions: {},
       emittedRefs: new Set(),
+      schemaOrigins: new WeakMap(),
 
       // Stack state
       definitionStack: new Set(),
@@ -1705,8 +1757,7 @@ export class SchemaGenerator {
       case ts.SyntaxKind.UnknownKeyword:
         return { type: "unknown" };
       case ts.SyntaxKind.VoidKeyword:
-        // matches anything, but we will not access the cell
-        return { asCell: ["opaque"] };
+        return PrimitiveFormatter.getSchemaType(checker.getVoidType(), context);
       case ts.SyntaxKind.AnyKeyword:
         // Accept any value
         return true;

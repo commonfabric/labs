@@ -90,12 +90,16 @@ what lies behind it: a spread tuple's elements, each member's for a union of
 tuples, else an array's items read through a reference — the same lossy
 form as the type path), intersections (reduced as the checker reduces the
 types, then merged as `IntersectionFormatter` merges them, a named
-constituent read through its reference: identical constituents fold;
+constituent read through its reference: unsupported nested and named
+intersections retain their constituents for an enclosing reduction;
+identical constituents fold while preserving source type distinctions;
 `never` leaves `false`; `any` makes the whole accept anything unless the
 constituents beside it that are no union already contradict each other,
 which is as far as the checker looks before `any` wins; otherwise a union
 constituent distributes; `unknown` is the identity; `void` reduces as
-`undefined` does beside another primitive; an
+`undefined` does beside another primitive. Its source type identifies it:
+`OpaqueCell<any>` has the same emitted opaque schema but remains an object
+constituent, and a union of the two retains both alternatives for reduction. An
 empty object part drops out and takes `null` and `undefined` with it, as
 `T & {}` does; primitives are narrowed or found disjoint wherever they
 sit, `"a" & string` being `"a"` and `string & number` nothing; and a

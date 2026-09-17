@@ -246,6 +246,21 @@ export class UnionFormatter implements TypeFormatter {
 
     // If only one schema remains after filtering/merging, return it directly without anyOf wrapper
     if (anyOf.length === 1) {
+      const isVoid = (schema: MutableJSONSchema) =>
+        isObjectOrArray(schema) &&
+        context.schemaOrigins?.get(schema)?.kind === "void";
+      if (
+        unionOptions.some(isVoid) && unionOptions.some((part) => !isVoid(part))
+      ) {
+        // The emitted schemas can coincide while the source types still
+        // form a union, as `void | OpaqueCell<any>` does.
+        const schema = { ...anyOf[0]! };
+        context.schemaOrigins?.set(schema, {
+          kind: "union",
+          parts: () => unionOptions,
+        });
+        return schema;
+      }
       return anyOf[0]!;
     }
 
