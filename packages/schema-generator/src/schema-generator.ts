@@ -490,6 +490,65 @@ function literalKeys(node: ts.TypeNode): Set<string> | undefined {
 }
 
 /**
+ * The schema of an intersection whose constituents have these schemas, none
+ * of them a union, merged the way `IntersectionFormatter` merges the types:
+ * a constituent accepting anything makes the whole accept anything, one
+ * accepting nothing (`never`) makes it accept nothing, `unknown` is the
+ * identity and drops out, and `null` or `undefined` beside anything else
+ * leaves nothing. What remains is one schema, returned as it is, or object
+ * schemas whose properties are unioned (the first definition kept on a
+ * clash) and whose `required` lists are unioned. A constituent that merge
+ * refuses — a non-object, or one with an index signature, which an array is
+ * — yields the same unsupported-pattern fallback the type-based path emits.
+ */
+function mergeIntersection(parts: MutableJSONSchema[]): MutableJSONSchema {
+  if (parts.some((part) => part === true)) return true;
+  if (parts.some((part) => part === false)) return false;
+  const isUnknown = (part: MutableJSONSchema) =>
+    isObjectOrArray(part) && part.type === "unknown";
+  const substantive = dedupeByValueEqual(
+    parts.filter((part) => !isUnknown(part)),
+  );
+  if (substantive.length === 0) return { type: "unknown" };
+  if (substantive.length === 1) return substantive[0]!;
+  const isNullish = (part: MutableJSONSchema) =>
+    isObjectOrArray(part) &&
+    (part.type === "null" || part.type === "undefined");
+  if (substantive.some(isNullish)) return false;
+  const unsupported = (reason: string): MutableJSONSchema => ({
+    type: "object",
+    additionalProperties: true,
+    $comment: `Unsupported intersection pattern: ${reason}`,
+  });
+  const properties: Record<string, MutableJSONSchema> = {};
+  const required = new Set<string>();
+  for (const part of substantive) {
+    if (isArraySchema(part)) {
+      return unsupported("index signature on constituent");
+    }
+    if (!isObjectSchema(part)) return unsupported("non-object constituent");
+    if (part.additionalProperties !== undefined) {
+      return unsupported("index signature on constituent");
+    }
+    for (
+      const [key, value] of Object.entries(
+        (part.properties ?? {}) as Record<string, MutableJSONSchema>,
+      )
+    ) {
+      if (!(key in properties)) properties[key] = value;
+    }
+    if (Array.isArray(part.required)) {
+      for (const key of part.required) {
+        if (typeof key === "string") required.add(key);
+      }
+    }
+  }
+  const merged: MutableJSONSchemaObj = { type: "object", properties };
+  if (required.size > 0) merged.required = [...required];
+  return merged;
+}
+
+/**
  * The schema of a union whose arms have these schemas: an arm that is itself
  * a bare union contributes its arms, an arm accepting anything makes the
  * whole accept anything, arms accepting nothing drop out, equal arms fold
@@ -1296,54 +1355,22 @@ export class SchemaGenerator {
       };
     }
 
-    // An intersection of object types merges the way IntersectionFormatter
-    // merges one: properties unioned with the first definition kept on a
-    // clash, `required` unioned, a named constituent's definition read
-    // through its reference. A constituent that accepts anything widens the
-    // whole; one that is not an object schema is skipped, as the type-based
-    // merge skips it.
+    // An intersection merges the way IntersectionFormatter merges one
+    // (`mergeIntersection`), each constituent read through its reference.
+    // A union constituent distributes, as the checker distributes it
+    // before the type-based path ever sees the intersection: every
+    // combination of arms is merged on its own.
     if (ts.isIntersectionTypeNode(typeNode)) {
-      const properties: Record<string, MutableJSONSchema> = {};
-      const required = new Set<string>();
-      let additionalProperties: MutableJSONSchema | undefined;
-      let sawObject = false;
-      for (const member of typeNode.types) {
-        // A named constituent analyzes to a reference; its definition is
-        // what gets merged, read in place and never altered.
-        const schema = resolveLocalRef(
-          this.#analyzeChildNode(member, checker, context),
-          context,
+      const combinations = typeNode.types
+        .map((member) =>
+          unionArms(this.#analyzeChildNode(member, checker, context), context)
+        )
+        .reduce<MutableJSONSchema[][]>(
+          (prefixes, arms) =>
+            prefixes.flatMap((prefix) => arms.map((arm) => [...prefix, arm])),
+          [[]],
         );
-        if (schema === true) return true;
-        if (!isObjectSchema(schema)) continue;
-        sawObject = true;
-        for (
-          const [key, value] of Object.entries(
-            (schema.properties ?? {}) as Record<string, MutableJSONSchema>,
-          )
-        ) {
-          if (!(key in properties)) properties[key] = value;
-        }
-        if (Array.isArray(schema.required)) {
-          for (const key of schema.required) {
-            if (typeof key === "string") required.add(key);
-          }
-        }
-        if (
-          additionalProperties === undefined &&
-          schema.additionalProperties !== undefined
-        ) {
-          additionalProperties = schema
-            .additionalProperties as MutableJSONSchema;
-        }
-      }
-      if (!sawObject) return true;
-      const merged: MutableJSONSchemaObj = { type: "object", properties };
-      if (required.size > 0) merged.required = [...required];
-      if (additionalProperties !== undefined) {
-        merged.additionalProperties = additionalProperties;
-      }
-      return merged;
+      return unionOfSchemas(combinations.map(mergeIntersection));
     }
 
     // Handle ArrayTypeNode (e.g., number[], string[])

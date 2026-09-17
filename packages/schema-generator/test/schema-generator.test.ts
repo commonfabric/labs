@@ -2017,6 +2017,131 @@ type CalculatorRequest = {
       });
     });
 
+    it("merges an intersection as the type-based path merges one", async () => {
+      // The constituents the type-based merge refuses get its own fallback,
+      // `never` leaves nothing, `unknown` is the identity, and a union
+      // constituent distributes as the checker distributes it.
+      const schemaOf = async (node: ts.TypeNode) => {
+        const result = await generateNamed(node);
+        return typeof result === "boolean"
+          ? result
+          : (result as { schema: unknown }).schema;
+      };
+      const keyword = (kind: ts.KeywordTypeSyntaxKind) =>
+        f.createKeywordTypeNode(kind);
+      const unsupported = (reason: string) => ({
+        type: "object",
+        additionalProperties: true,
+        $comment: `Unsupported intersection pattern: ${reason}`,
+      });
+      expect(
+        await schemaOf(
+          f.createIntersectionTypeNode([
+            alias("Foo"),
+            keyword(ts.SyntaxKind.NeverKeyword),
+          ]),
+        ),
+      ).toBe(false);
+      expect(
+        await schemaOf(
+          f.createIntersectionTypeNode([alias("Foo"), stringNode()]),
+        ),
+      ).toEqual(unsupported("non-object constituent"));
+      // A branded primitive is a non-object constituent too.
+      expect(
+        await schemaOf(
+          f.createIntersectionTypeNode([
+            stringNode(),
+            literal([[
+              "__brand",
+              f.createLiteralTypeNode(f.createStringLiteral("x")),
+            ]]),
+          ]),
+        ),
+      ).toEqual(unsupported("non-object constituent"));
+      // An array has an index signature, as a record does.
+      expect(
+        await schemaOf(
+          f.createIntersectionTypeNode([
+            alias("Foo"),
+            f.createArrayTypeNode(stringNode()),
+          ]),
+        ),
+      ).toEqual(unsupported("index signature on constituent"));
+      expect(
+        await schemaOf(
+          f.createIntersectionTypeNode([alias("Foo"), alias("Rec")]),
+        ),
+      ).toEqual(unsupported("index signature on constituent"));
+      // `unknown` is the identity: what is left stands as it is.
+      expect(
+        await schemaOf(
+          f.createIntersectionTypeNode([
+            stringNode(),
+            keyword(ts.SyntaxKind.UnknownKeyword),
+          ]),
+        ),
+      ).toEqual({ type: "string" });
+      expect(
+        await schemaOf(
+          f.createIntersectionTypeNode([
+            keyword(ts.SyntaxKind.UnknownKeyword),
+            keyword(ts.SyntaxKind.UnknownKeyword),
+          ]),
+        ),
+      ).toEqual({ type: "unknown" });
+      // A union constituent distributes; an arm that is `null` beside an
+      // object leaves nothing and drops out.
+      const fooAndBar = {
+        type: "object",
+        properties: {
+          x: { type: "unknown" },
+          y: { type: "string" },
+          z: { type: "number" },
+        },
+        required: ["x", "y", "z"],
+      };
+      expect(
+        await schemaOf(
+          f.createIntersectionTypeNode([
+            alias("Foo"),
+            f.createParenthesizedType(
+              f.createUnionTypeNode([
+                alias("Bar"),
+                literal([["w", keyword(ts.SyntaxKind.BooleanKeyword)]]),
+              ]),
+            ),
+          ]),
+        ),
+      ).toEqual({
+        anyOf: [
+          fooAndBar,
+          {
+            type: "object",
+            properties: {
+              x: { type: "unknown" },
+              y: { type: "string" },
+              w: { type: "boolean" },
+            },
+            required: ["x", "y", "w"],
+          },
+        ],
+      });
+      expect(
+        await schemaOf(
+          f.createIntersectionTypeNode([
+            alias("Foo"),
+            f.createParenthesizedType(
+              f.createUnionTypeNode([
+                alias("Bar"),
+                f.createLiteralTypeNode(f.createNull()),
+              ]),
+            ),
+          ]),
+        ),
+      ).toEqual(fooAndBar);
+    });
+
     it("merges named constituents of an intersection through their references", async () => {
       expect(
         ((await generateNamed(

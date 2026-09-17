@@ -88,10 +88,13 @@ nodes (unwrapped), `ArrayTypeNode`, tuples (an array of the element union,
 `undefined` admitted for an optional element, a rest element contributing
 what lies behind it: a spread tuple's elements, each member's for a union of
 tuples, else an array's items read through a reference — the same lossy
-form as the type path), intersections of object types
-(merged as `IntersectionFormatter` merges them, a named constituent read
-through its reference), unions (`true` member short-circuits, `false`
-members filtered, singletons unwrapped), literal nodes,
+form as the type path), intersections (merged as `IntersectionFormatter`
+merges the types, a named constituent read through its reference: `never`
+leaves `false`, `unknown` is the identity, a union constituent distributes,
+and a constituent that merge refuses — a non-object, or one with an index
+signature, which an array is — yields its same unsupported-pattern
+fallback), unions (`true` member short-circuits, `false` members filtered,
+singletons unwrapped), literal nodes,
 `TypeReference` nodes (wrapper detection first; then the default library's
 generic aliases — `Readonly`, `Partial`, `Required`, `Pick`, `Omit`,
 `NonNullable`, `Array`, `ReadonlyArray`, `Record` — applied structurally to

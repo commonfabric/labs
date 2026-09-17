@@ -110,13 +110,6 @@ const LIB_DECLARED_NATIVE_TYPES = new Set([
 ]);
 
 /**
- * Formatter that replaces specific types with a manually specified schema
- *
- * This mostly exists to support native types, but it's also used to replace
- * complex types with simpler schemas than what would be generatted, and allow
- * for referencing embedded schema definitions.
- */
-/**
  * Whether `sourceFile` is one of the default library's declaration files, by
  * the names the libraries are shipped under (`lib.*.d.ts`, the bare
  * `es20xx.d.ts` / `dom.d.ts` / `jsx.d.ts` this repository bundles, Node's
@@ -137,6 +130,13 @@ export function isDefaultLibrarySourceFile(
     /(^|[\\/])node_modules[\\/]@types[\\/]node[\\/]/.test(fileName);
 }
 
+/**
+ * Formatter that replaces specific types with a manually specified schema
+ *
+ * This mostly exists to support native types, but it's also used to replace
+ * complex types with simpler schemas than what would be generatted, and allow
+ * for referencing embedded schema definitions.
+ */
 export class NativeTypeFormatter implements TypeFormatter {
   supportsType(type: ts.Type, context: GenerationContext): boolean {
     if (NativeTypeFormatter.declaresSqliteDbBrand(type)) {

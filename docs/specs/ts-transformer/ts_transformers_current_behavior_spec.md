@@ -2111,10 +2111,11 @@ Special path:
   `Array`, `ReadonlyArray`, `Record`) to their arguments, lowers a tuple to an
   array of its element union (`undefined` admitted for an optional element, a
   rest element contributing a spread tuple's elements or an array's items),
-  merges an intersection of object types, and unwraps parentheses. A
-  pattern-scope `.get()` on a `Cell<{ topic: unknown; title: string }>`
-  lowers to a lift with result type `Readonly<{ topic: unknown; title:
-  string }>` and a result schema that keeps both members; a tuple view of
+  merges an intersection as the type-based path merges one, and unwraps
+  parentheses. A pattern-scope `.get()` on a
+  `Cell<{ topic: unknown; title: string }>` lowers to a lift with result type
+  `Readonly<{ topic: unknown; title: string }>` and a result schema that
+  keeps both members; a tuple view of
   `unknown` keeps `items: { type: "unknown" }`. The
   `schema-injection/cell-get-unknown-member-result` fixture pins the emitted
   lift schemas.
