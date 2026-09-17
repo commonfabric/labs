@@ -263,6 +263,14 @@ function pickedView(
 /** The alias declarations already opened on one path — see `#openTypeNode`. */
 type OpenedAliases = ReadonlySet<ts.TypeAliasDeclaration>;
 
+/**
+ * How `#tupleSlots` reads a node. Under `nonNullable` a union's `null` and
+ * `undefined` members are dropped, as `NonNullable` drops them. Under
+ * `spread` the node is what a rest element spreads, so a member that is no
+ * tuple is an array and is held in a rest slot rather than ending the read.
+ */
+type TupleReading = { nonNullable: boolean; spread: boolean };
+
 /** One slot of a tuple as the checker sees it once spreads are expanded. */
 type TupleSlot = {
   kind: "required" | "optional" | "rest";
@@ -1486,25 +1494,35 @@ export class SchemaGenerator {
    * generic alias. `node` is opened through parentheses, `readonly`, and
    * aliases, and through the default library's `Readonly`, `NonNullable`,
    * `Required`, and `Partial` — `NonNullable` dropping a union's `null` and
-   * `undefined` members (`nonNullable`), the last two applied to the slots
-   * they wrap — so the optionality an outer `Required` acts on survives any
-   * composition of them.
+   * `undefined` members however they are spelled, the last two applied to
+   * the slots they wrap — so the optionality an outer `Required` acts on
+   * survives any composition of them. A union is one alternative per
+   * member, each read on its own; read as a spread (`TupleReading`), a
+   * member that is no tuple is an array, held in a rest slot, so a tuple
+   * beside it keeps its slots and the read always has an answer.
    */
   #tupleSlots(
     node: ts.TypeNode,
     checker: ts.TypeChecker,
     context: GenerationContext,
     opened: OpenedAliases,
-    nonNullable = false,
+    reading: TupleReading,
   ): TupleSlot[][] | undefined {
     const behind = this.#openTypeNode(node, checker, context, opened);
     const target = behind.node;
     if (ts.isUnionTypeNode(target)) {
-      const members = target.types
-        .filter((member) => !(nonNullable && isNullishTypeNode(member)))
-        .map((member) =>
-          this.#tupleSlots(member, checker, context, behind.opened, nonNullable)
+      const members: (TupleSlot[][] | undefined)[] = [];
+      for (const member of target.types) {
+        // A member is nullish by what it opens to: `Nil` and `(null)` are
+        // `null` as much as the bare keyword is. Dropped, it is no
+        // alternative at all, which is not a failed read.
+        const opensTo =
+          this.#openTypeNode(member, checker, context, behind.opened).node;
+        if (reading.nonNullable && isNullishTypeNode(opensTo)) continue;
+        members.push(
+          this.#tupleSlots(member, checker, context, behind.opened, reading),
         );
+      }
       return members.every((member) => member !== undefined)
         ? (members as TupleSlot[][][]).flat()
         : undefined;
@@ -1517,13 +1535,13 @@ export class SchemaGenerator {
       target.typeArguments?.length === 1 &&
       this.#isLibraryDeclaredName(target, target.typeName, checker, context)
     ) {
-      const wrapped = (dropNullish = nonNullable) =>
+      const wrapped = (nonNullable = reading.nonNullable) =>
         this.#tupleSlots(
           target.typeArguments![0]!,
           checker,
           context,
           behind.opened,
-          dropNullish,
+          { ...reading, nonNullable },
         );
       switch (target.typeName.text) {
         case "Readonly":
@@ -1536,16 +1554,19 @@ export class SchemaGenerator {
           return wrapped()?.map(partialSlots);
       }
     }
-    return undefined;
+    return reading.spread
+      ? unionArms(this.#analyzeChildNode(node, checker, context), context)
+        .map((arm) => [restSlot(arm)])
+      : undefined;
   }
 
   /**
    * The slots of a tuple type node, one list per alternative: a spread
    * tuple's slots inlined, each with its own optionality, a spread over a
-   * union of tuples multiplying the alternatives; anything else spread
-   * being an array, a rest slot holding its items, read through a reference
-   * and a union of arrays; then each alternative normalized as the checker
-   * normalizes a tuple.
+   * union multiplying the alternatives, one per member; anything else
+   * spread being an array, a rest slot holding its items, read through a
+   * reference and a union of arrays; then each alternative normalized as
+   * the checker normalizes a tuple.
    */
   #slotsOfTupleNode(
     tuple: ts.TupleTypeNode,
@@ -1565,14 +1586,16 @@ export class SchemaGenerator {
           ts.isRestTypeNode(element) || ts.isOptionalTypeNode(element)
         ? element.type
         : element;
-      const contributions: TupleSlot[][] = rest
-        ? this.#tupleSlots(inner, checker, context, opened) ??
-          unionArms(this.#analyzeChildNode(inner, checker, context), context)
-            .map((arm) => [restSlot(arm)])
+      // A spread always has slots: what is no tuple is an array.
+      const contributions = rest
+        ? this.#tupleSlots(inner, checker, context, opened, {
+          nonNullable: false,
+          spread: true,
+        }) as TupleSlot[][]
         : [[{
           kind: optional ? "optional" : "required",
           schema: this.#analyzeChildNode(inner, checker, context),
-        }]];
+        } as TupleSlot]];
       alternatives = alternatives.flatMap((prefix) =>
         contributions.map((slots) => [...prefix, ...slots])
       );
@@ -1612,7 +1635,13 @@ export class SchemaGenerator {
       );
       return unionOfSchemas(
         peeled.core.types
-          .filter((member) => !(dropNullish && isNullishTypeNode(member)))
+          .filter((member) =>
+            !(dropNullish &&
+              isNullishTypeNode(
+                this.#openTypeNode(member, checker, context, peeled.opened)
+                  .node,
+              ))
+          )
           .map((member) =>
             this.#requiredView(
               peeled.wrappers.reduceRight<ts.TypeNode>(
@@ -1627,7 +1656,10 @@ export class SchemaGenerator {
           ),
       );
     }
-    const slots = this.#tupleSlots(node, checker, context, opened);
+    const slots = this.#tupleSlots(node, checker, context, opened, {
+      nonNullable: false,
+      spread: false,
+    });
     if (slots !== undefined) {
       return {
         type: "array",

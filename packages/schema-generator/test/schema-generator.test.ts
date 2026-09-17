@@ -570,6 +570,7 @@ type CalculatorRequest = {
       "type TU = [Foo, string | undefined] | [number];",
       "type Loop = [string] | Loop;",
       "type MaybeTuple = [Foo, string | undefined] | null | undefined;",
+      "type Nil = null;",
     ].join("\n");
     const generateNamed = async (node: ts.TypeNode) => {
       const { checker, sourceFile } = await createTestProgram(NAMED);
@@ -1751,6 +1752,212 @@ type CalculatorRequest = {
             required: ["a"],
           },
         ],
+      });
+    });
+
+    it("keeps a tuple's slots beside an array in a spread union", async () => {
+      // A spread over a union is one alternative per member: the tuple
+      // member keeps its slots, the array member is held in a rest slot. So
+      // `Required` keeps the tuple's authored `undefined`, and an optional
+      // prefix is normalized against each alternative on its own.
+      const schemaOf = async (node: ts.TypeNode) =>
+        ((await generateNamed(node)) as { schema: unknown }).schema;
+      const undefinedNode = () =>
+        f.createKeywordTypeNode(ts.SyntaxKind.UndefinedKeyword);
+      const numberNode = () =>
+        f.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword);
+      const stringOrUndefinedTuple = () =>
+        f.createTupleTypeNode([
+          f.createUnionTypeNode([stringNode(), undefinedNode()]),
+        ]);
+      const spreadOf = (...members: ts.TypeNode[]) =>
+        f.createRestTypeNode(
+          f.createParenthesizedType(f.createUnionTypeNode(members)),
+        );
+      const fooStringUndefinedNumber = {
+        type: "array",
+        items: {
+          anyOf: [
+            { $ref: "#/$defs/Foo" },
+            { type: "string" },
+            { type: "undefined" },
+            { type: "number" },
+          ],
+        },
+      };
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              alias("Foo"),
+              spreadOf(
+                stringOrUndefinedTuple(),
+                f.createArrayTypeNode(numberNode()),
+              ),
+            ]),
+          ),
+        ),
+      ).toEqual(fooStringUndefinedNumber);
+      // The optional prefix is required, `undefined` and all, where a
+      // required slot follows it, and stays optional beside the array.
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              f.createOptionalTypeNode(alias("Foo")),
+              spreadOf(
+                f.createTupleTypeNode([numberNode()]),
+                f.createArrayTypeNode(stringNode()),
+              ),
+            ]),
+          ),
+        ),
+      ).toEqual({
+        type: "array",
+        items: {
+          anyOf: [
+            { $ref: "#/$defs/Foo" },
+            { type: "undefined" },
+            { type: "number" },
+            { type: "string" },
+          ],
+        },
+      });
+      // Through a wrapper, the array member's elements still count as
+      // optional and lose `undefined`; the tuple member's do not.
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              alias("Foo"),
+              f.createRestTypeNode(
+                alias(
+                  "Readonly",
+                  f.createUnionTypeNode([
+                    stringOrUndefinedTuple(),
+                    f.createArrayTypeNode(
+                      f.createParenthesizedType(
+                        f.createUnionTypeNode([numberNode(), undefinedNode()]),
+                      ),
+                    ),
+                  ]),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ).toEqual(fooStringUndefinedNumber);
+      // As authored, the same items.
+      expect(
+        await schemaOf(
+          f.createTupleTypeNode([
+            alias("Foo"),
+            spreadOf(
+              stringOrUndefinedTuple(),
+              f.createArrayTypeNode(numberNode()),
+            ),
+          ]),
+        ),
+      ).toEqual(fooStringUndefinedNumber);
+    });
+
+    it("drops a nullish member under `NonNullable` however it is spelled", async () => {
+      // `Nil` and `(null)` are `null` as much as the bare keyword is; the
+      // member is classified by what it opens to, and dropped it is no
+      // alternative at all — not a failed read that sends the whole spread
+      // to the array reading.
+      const schemaOf = async (node: ts.TypeNode) =>
+        ((await generateNamed(node)) as { schema: unknown }).schema;
+      const undefinedNode = () =>
+        f.createKeywordTypeNode(ts.SyntaxKind.UndefinedKeyword);
+      const nullNode = () => f.createLiteralTypeNode(f.createNull());
+      const stringOrUndefined = () =>
+        f.createUnionTypeNode([stringNode(), undefinedNode()]);
+      const keptUndefined = {
+        type: "array",
+        items: {
+          anyOf: [
+            { $ref: "#/$defs/Foo" },
+            { type: "string" },
+            { type: "undefined" },
+          ],
+        },
+      };
+      for (
+        const nullish of [
+          () => alias("Nil"),
+          () => f.createParenthesizedType(nullNode()),
+          nullNode,
+        ]
+      ) {
+        expect(
+          await schemaOf(
+            alias(
+              "Required",
+              f.createTupleTypeNode([
+                alias("Foo"),
+                f.createRestTypeNode(
+                  alias(
+                    "NonNullable",
+                    f.createUnionTypeNode([
+                      f.createTupleTypeNode([stringOrUndefined()]),
+                      nullish(),
+                    ]),
+                  ),
+                ),
+              ]),
+            ),
+          ),
+        ).toEqual(keptUndefined);
+      }
+      // The same spelling outside a spread.
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            alias(
+              "NonNullable",
+              f.createUnionTypeNode([
+                f.createTupleTypeNode([alias("Foo"), stringOrUndefined()]),
+                alias("Nil"),
+              ]),
+            ),
+          ),
+        ),
+      ).toEqual(keptUndefined);
+      // An array member beside the dropped one: its elements lose
+      // `undefined` under `Required`.
+      expect(
+        await schemaOf(
+          alias(
+            "Required",
+            f.createTupleTypeNode([
+              alias("Foo"),
+              f.createRestTypeNode(
+                alias(
+                  "NonNullable",
+                  f.createUnionTypeNode([
+                    f.createArrayTypeNode(
+                      f.createParenthesizedType(
+                        f.createUnionTypeNode([
+                          f.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword),
+                          undefinedNode(),
+                        ]),
+                      ),
+                    ),
+                    alias("Nil"),
+                  ]),
+                ),
+              ),
+            ]),
+          ),
+        ),
+      ).toEqual({
+        type: "array",
+        items: { anyOf: [{ $ref: "#/$defs/Foo" }, { type: "number" }] },
       });
     });
 
