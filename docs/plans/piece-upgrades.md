@@ -63,7 +63,9 @@ a writable handle into it, which the write-back proof holds to that schema. Two
 writers escape that: a raw cell write (`cf cell set`, `setRawUntyped`), which
 reads no schema, and a client still running an older version of the pattern,
 which reads an older one. So the state is knowable up to those two, and the
-design has to say what it does about each (D2, and proposal T3). A consumer's
+design says what it does about each: an older writer is refused by the
+writer-version guard (D2), and a raw write on a stamped document is refused
+unless it names the version it claims (the default under T3). A consumer's
 contract is a promise the piece made to code it cannot see. A producer's
 contract is a promise made to the piece by code it does not control. One
 instrument, schema comparison, is used for all three today, and that is the
@@ -294,10 +296,14 @@ is proposal T3 below.
   root document and for every entry document the write reaches.
 - **T2.** What the refusal is. A conflict, so that existing retry and reload
   paths handle it, or a distinct error a client can name.
-- **T3.** Whether an unversioned raw write (`cf cell set`, `setRawUntyped`) is
-  refused on a stamped document or admitted. Refusing protects the stamp;
-  admitting keeps operator repair possible. A middle path admits it with an
-  explicit flag naming the version it claims.
+- **T3.** How an unversioned raw write (`cf cell set`, `setRawUntyped`) is
+  treated on a stamped document. The design's default: refused, unless the
+  caller names the version it claims to write at, which the guard then checks
+  as it checks any writer. Refusing protects the stamp from a writer that read
+  no schema; the named version keeps operator repair possible and makes the
+  operator say which shape they believe they are writing. The question for
+  Bernhard is whether that default stands, and where the claimed version
+  rides on a raw write.
 - **T4.** Whether a step may wait. A step that needs a document not yet synced
   either fails the transaction, to be retried when the data arrives, or the
   runtime syncs the documents the step names before opening the transaction.
