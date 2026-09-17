@@ -140,3 +140,23 @@ done
   markers naming which phase each figure came from.
 - `summary-*.txt`, `frames-*.txt` — the tables above, regenerable from the
   records by the two commands listed.
+
+## The run that did not finish
+
+```
+CF_MEMORY_FRAME_LOG=$PWD/experiment-output/runs/live-q7-board-name-200.jsonl \
+  deno run -A packages/patterns/own-entry/measure-start.ts \
+    --arm=q7-board-name --n=200 --d=2 --defer-demand=true \
+    --out=experiment-output/runs
+```
+
+**Broken: stopped by me after 25 minutes, still inside its build phase.** Its
+only output is `runs/q7-board-name-N200.stderr.txt`, which carries the build
+stage marker and nothing after it; there is no result record, and no figure in
+the report comes from it. The reason is the arm itself: filing topics into the
+board that passes itself into every child cost 89 s at N=40 against 21 s for
+the same board without that reference (`runs/q7-board-name-N40.result.json`
+against `runs/q6-copies-N40.result.json`, `ms.build`), and N=200 did not
+finish. That build cost is unattributed. The arm's N = 4, 10 and 40 runs
+completed and are what § 7 of the report uses; its sibling `q6-copies`, which
+differs only by that reference, has an N=200 run.
