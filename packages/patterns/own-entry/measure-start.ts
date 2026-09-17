@@ -288,7 +288,12 @@ const board = runtimeA.run(
 runtimeA.prepareTxForCommit(setupTx);
 const setupCommit = await setupTx.commit();
 if (setupCommit.error) throw setupCommit.error;
-const cancelBoard = board.sink(() => {});
+// Held live: only the board outputs the arm's topics read, each under its
+// property of the board's result schema. A sink on the whole result would
+// also demand the board's rendered cards, one sub-pattern per topic, which no
+// topic reads.
+const cancels = arm.demand.map((key) => board.key(key).sink(() => {}));
+const cancelBoard = () => cancels.forEach((cancel) => cancel());
 await runtimeA.idle();
 
 const addTopic = board.key("addTopic");
@@ -656,9 +661,26 @@ if (phases.pull !== undefined) {
   }
 }
 
+/** The largest documents a phase delivered, with whose each is. */
+const largest = (delivered: Iterable<Delivered>, count = 8) =>
+  [...delivered]
+    .sort((left, right) => right.bytes - left.bytes)
+    .slice(0, count)
+    .map(({ id, scope, bytes }) => ({
+      id: id.slice(0, 26),
+      scope,
+      bytes,
+      whose: owner.get(id) ?? familyOf(id) ??
+        (id.startsWith("cid:") ? "schema" : "unattributed"),
+    }));
+
 const phaseLine = (phase: ReturnType<typeof summarizePhase>) => {
   const { delivered, ...rest } = phase;
-  return { ...rest, ...classify(delivered.values()) };
+  return {
+    ...rest,
+    ...classify(delivered.values()),
+    largest: largest(delivered.values()),
+  };
 };
 
 const buildSummary = (() => {
