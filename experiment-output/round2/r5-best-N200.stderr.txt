@@ -1,0 +1,38 @@
+# 2026-09-17T19:40:59.372Z r5-best N=200 build
+[WARN][traverse::19:44:23.201] slow-traverse 556ms doc=of:fid1:v8QoghUFKJ84KP1e1wBbAbiWRe63p-4GEFVjBf-KWFk/undefined trackerKeys=1808 trackerVals=2886 traverseSchema=4493 traversePtr=1980 traverseArr=180 traverseObj=359 traverseDAG=0 anyOfBranches=360 anyOfFastRejects=0 anyOfPropertyMerges=0 getDocAtPath=3954 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=7 schemaMemo=4493 schemaMemoHits=0 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+[WARN][cell::19:44:23.201] get >550ms get() took 556ms {
+  id: "of:fid1:v8QoghUFKJ84KP1e1wBbAbiWRe63p-4GEFVjBf-KWFk",
+  path: [ "topics" ],
+  space: "did:key:z6Mkq2H2M2mBJjCV2teEp7k3oAras3H2UBmunSH4iF8wexhQ",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][cell::19:44:33.741] get >80ms get() took 81ms {
+  id: "of:fid1:v8QoghUFKJ84KP1e1wBbAbiWRe63p-4GEFVjBf-KWFk",
+  path: [ "topics" ],
+  space: "did:key:z6Mkq2H2M2mBJjCV2teEp7k3oAras3H2UBmunSH4iF8wexhQ",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][cell::19:45:00.721] get >50ms get() took 54ms {
+  id: "of:fid1:v8QoghUFKJ84KP1e1wBbAbiWRe63p-4GEFVjBf-KWFk",
+  path: [ "topics" ],
+  space: "did:key:z6Mkq2H2M2mBJjCV2teEp7k3oAras3H2UBmunSH4iF8wexhQ",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+# 2026-09-17T19:45:37.862Z r5-best N=200 op-add
+# 2026-09-17T19:45:41.446Z r5-best N=200 op-mention
+# 2026-09-17T19:45:41.628Z r5-best N=200 ownership
+# 2026-09-17T19:45:41.636Z r5-best N=200 replay
+[ERROR][storage.v2::19:45:41.757] sync-load-failure sync completed without data for of:fid1:tAucJCTzpdXLbqsoszpHqBG-MDtmy9um2G4_wzBqpds in did:key:z6Mkq2H2M2mBJjCV2teEp7k3oAras3H2UBmunSH4iF8wexhQ: ConnectionError: memory client closed
+# 2026-09-17T19:45:41.757Z r5-best N=200 b-compile
+# 2026-09-17T19:45:41.877Z r5-best N=200 start
+# 2026-09-17T19:45:41.958Z r5-best N=200 pull
+Can't load profile-create.tsx
+# 2026-09-17T19:45:42.051Z r5-best N=200 checks
+# 2026-09-17T19:45:42.051Z r5-best N=200 attribution
+# result: experiment-output/round2/r5-best-N200.result.json

@@ -1,0 +1,14 @@
+{"t":9498,"dir":"out","type":"transact","requestId":"32543945-065d-475f-a190-4cc246870c03","bytes":842,"commit":{"localSeq":666,"operations":[{"op":"patch","id":"of:fid1:KqVmZhLlQU_pRGJZIcfXNH9ZnTByQC-MqPc8DK1KGLo","scope":"space","bytes":318}],"confirmedReads":2,"confirmedReadsAtSeqZero":0,"confirmedReadIdsAtSeqZero":[],"pendingReads":0,"reads":{"distinctDocs":1,"byKind":{"of":2},"byDepth":{"3":1,"4":1},"topDocs":[["of:fid1:KqVmZhLlQU_pRGJZIcfXNH9ZnTByQC-MqPc8DK1KGLo",2]],"topDocPaths":["value///link@1","value/ownEntry///link@1"]}}}
+{"t":9499,"dir":"in","type":"response","requestId":"69c4c086-fc9c-4038-b174-e55318128acf","bytes":98,"serverSeq":665}
+{"t":9499,"dir":"out","type":"session.ack","requestId":"f634358f-fd99-4400-b763-42c2202f4fa8","bytes":210}
+{"t":9501,"dir":"in","type":"response","requestId":"ef5b84c2-63cd-44b8-bb25-54d92e82961d","bytes":98,"serverSeq":665}
+{"t":9501,"dir":"in","type":"response","requestId":"b108b966-1662-44f9-98e9-06a7d3fa81a1","bytes":98,"serverSeq":665}
+{"t":9501,"dir":"in","type":"response","requestId":"fb85b171-a779-4a2d-9c09-1b92550de569","bytes":98,"serverSeq":665}
+{"t":9501,"dir":"in","type":"response","requestId":"c0f0c467-f02b-4228-8485-71df94c67e61","bytes":98,"serverSeq":665}
+{"t":9501,"dir":"in","type":"response","requestId":"41e4cd8b-bc6d-45d5-9ed8-6c80ed6de3bf","bytes":98,"serverSeq":665}
+{"t":9501,"dir":"in","type":"response","requestId":"dbd03b03-1861-4639-ade7-3d84e4297e98","bytes":98,"serverSeq":665}
+{"t":9501,"dir":"in","type":"response","requestId":"c44623a3-296c-4991-9dd3-66578edb8383","bytes":98,"serverSeq":665}
+{"t":9501,"dir":"in","type":"response","requestId":"32543945-065d-475f-a190-4cc246870c03","bytes":501,"seq":666}
+{"t":9501,"dir":"out","type":"session.ack","requestId":"a4f06d02-80b1-42db-beaa-b08cbbceff6e","bytes":210}
+{"t":9501,"dir":"in","type":"response","requestId":"f634358f-fd99-4400-b763-42c2202f4fa8","bytes":98,"serverSeq":666}
+{"t":9502,"dir":"in","type":"session/effect","bytes":1840,"effectType":"sync","sync":{"fromSeq":665,"toSeq":666,"upserts":[{"id":"of:fid1:KqVmZhLlQU_pRGJZIcfXNH9ZnTByQC-MqPc8DK1KGLo","scope":"space","branch":"","seq":666,"bytes":1454,"keys":["boardCrossrefs","boardNames","body","bodyUpdatedAt","bodyUpdatedBy","comments","createdAt","createdBy","links","mentionable","mentioned","ownEntry"]}],"removes":0}}

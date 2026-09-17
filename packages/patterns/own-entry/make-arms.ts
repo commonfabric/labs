@@ -1213,6 +1213,119 @@ ${BOARD_DEFAULT}`,
   [BOARD_RETURN, `${BOARD_RETURN}    ownEntries: entries,\n`],
 ];
 
+/** r4-adopt: the create hands nothing, as a board from before the design
+ * would not have; a board verb mints the missing entries, and each topic
+ * takes its own through a verb of its own. */
+const adoptTopic: Edit[] = [
+  [
+    `  ownEntry?: ReadonlyCell<OwnEntry | undefined>;`,
+    `  /** EXPERIMENT (r4-adopt): declared WRITABLE, because this topic's own
+   * \`adoptEntry\` verb writes the reference here. A topic filed before the
+   * design holds none, and its argument is not something its board can
+   * reach — a board writes a member's result and never its argument — so
+   * either the topic takes the entry itself, through this input, or an
+   * operator writes the argument from outside.
+   */
+  ownEntry?: Writable<OwnEntry | undefined>;`,
+  ],
+  [
+    `/** EXPERIMENT (r4-adopt): the inbound references this topic's entry carries. */`,
+    `/** EXPERIMENT (r4-adopt): take the entry the board minted for this topic.
+ * One transaction. Idempotent in the sense that matters: taking the same
+ * entry again writes the same reference. */
+const adoptEntryHandler = handler<
+  { entry: unknown },
+  { ownEntry: Writable<OwnEntry | undefined> }
+>(({ entry }, { ownEntry }) => {
+  if (entry === undefined || entry === null) {
+    throw new Error("adoptEntry rejected: entry must be a reference");
+  }
+  ownEntry.set(entry as OwnEntry);
+});
+
+/** EXPERIMENT (r4-adopt): the inbound references this topic's entry carries. */`,
+  ],
+  [
+    `    const addComment = addCommentHandler({ upgrade, comments });`,
+    `    // EXPERIMENT (r4-adopt): how a topic filed before the design is handed
+    // its entry, without an operator reaching into its argument.
+    const adoptEntry = adoptEntryHandler({ ownEntry });
+
+    const addComment = addCommentHandler({ upgrade, comments });`,
+  ],
+  [
+    `  /** Stop referencing a piece: removes every \`mention\`-made entry naming it.`,
+    `  /** EXPERIMENT (r4-adopt): take the entry the board minted for this topic. */
+  adoptEntry: Stream<{ entry: unknown }>;
+
+  /** Stop referencing a piece: removes every \`mention\`-made entry naming it.`,
+  ],
+  [`      referencedBy,\n`, `      referencedBy,\n      adoptEntry,\n`],
+];
+
+const adoptMain: Edit[] = [
+  // The create hands nothing: this models a board from before the design.
+  [
+    `    // EXPERIMENT (r4-adopt): the entry document is minted before the topic,
+    // so the create can hand the topic that document and nothing broader.
+    const entry = new Writable<OwnEntry>({
+      name: "",
+      mentionedBy: [],
+    });
+    const { name, member: piece } = createNamed(names, (allocated) =>`,
+    `    const { name, member: piece } = createNamed(names, (allocated) =>`,
+  ],
+  [
+    `      // EXPERIMENT (r4-adopt): this topic's own entry, and nothing else of
+      // the board.
+      ownEntry: entry,
+    }));
+    entrySlots.push({ name, entry });`,
+    `    }));`,
+  ],
+  // The verb that mints what the creates did not.
+  [
+    `  const backfill = action<BackfillNamesEvent, BackfillNamesResult>(`,
+    `  // EXPERIMENT (r4-adopt): mint an entry for every named topic that has
+  // none, in one transaction. The entries exist after this; handing each
+  // topic its own is a separate step, because a board cannot write a
+  // member's argument.
+  const backfillEntries = action<
+    BackfillNamesEvent,
+    { minted: string[] }
+  >(({ agentName }) => {
+    if (!topicAuthorFromAgent(agentName)) {
+      rejectMutation("backfillEntries", "agentName must be non-blank");
+    }
+    const held = new Set(
+      (entrySlots.get() ?? []).map((slot) => slot.name),
+    );
+    const minted: string[] = [];
+    for (const [name, member] of Object.entries(names.get() ?? {})) {
+      if (member === undefined || held.has(name)) continue;
+      const entry = new Writable<OwnEntry>({ name, mentionedBy: [] });
+      entrySlots.push({ name, entry });
+      minted.push(name);
+    }
+    return { minted };
+  });
+
+  const backfill = action<BackfillNamesEvent, BackfillNamesResult>(`,
+  ],
+  [
+    `  /** EXPERIMENT (r4-adopt): the named pivot the fills read their rows from. */`,
+    `  /** EXPERIMENT (r4-adopt): mint an entry for every named topic that has
+   * none. Returns the names it minted for; empty on a second run. */
+  backfillEntries: Stream<BackfillNamesEvent, { minted: string[] }>;
+
+  /** EXPERIMENT (r4-adopt): the named pivot the fills read their rows from. */`,
+  ],
+  [
+    `    backfillNames: backfill,\n`,
+    `    backfillNames: backfill,\n    backfillEntries,\n`,
+  ],
+];
+
 const ARMS: Record<string, { topic: Edit[]; main: Edit[] }> = {
   "q2-unread": q2Unread,
   "q2-read-one": q2ReadOne,
@@ -1247,6 +1360,21 @@ const ARMS: Record<string, { topic: Edit[]; main: Edit[] }> = {
   "r3-one-entry": {
     topic: [...entryTopic("r3-one-entry", true, true), ...everythingTopic],
     main: perEntryMain("r3-one-entry", { everything: true }),
+  },
+  // The two halves that measured best, together: entries filled one per
+  // topic, and the universe bounded and left as its own input rather than
+  // copied into every entry.
+  "r5-best": {
+    topic: entryTopic("r5-best", true, true),
+    main: [...perEntryMain("r5-best", { everything: false }), ...prunedMain],
+  },
+  "r4-adopt": {
+    topic: [...entryTopic("r4-adopt", true, true), ...adoptTopic],
+    main: [
+      ...perEntryMain("r4-adopt", { everything: false }),
+      ...prunedMain,
+      ...adoptMain,
+    ],
   },
   "r6-table-copies": {
     topic: tableTopic,

@@ -1,0 +1,64 @@
+# 2026-09-17T19:36:02.617Z r2-per-entry N=200 build
+[WARN][cell::19:36:09.729] get >70ms get() took 78ms {
+  id: "of:fid1:HnCzQQCjMRWO5EAU34oNJctWpq3hKh-BHw0G481_G-g",
+  path: [ "topics" ],
+  space: "did:key:z6MkioiWaXP9VdtNhRDFc8wkN9yFti2LdyQdET82GncYvif8",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][traverse::19:37:23.944] slow-traverse 443ms doc=of:fid1:HnCzQQCjMRWO5EAU34oNJctWpq3hKh-BHw0G481_G-g/undefined trackerKeys=1248 trackerVals=1990 traverseSchema=3093 traversePtr=1364 traverseArr=124 traverseObj=247 traverseDAG=0 anyOfBranches=248 anyOfFastRejects=0 anyOfPropertyMerges=0 getDocAtPath=2722 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=7 schemaMemo=3093 schemaMemoHits=0 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+[WARN][cell::19:37:23.944] get >440ms get() took 443ms {
+  id: "of:fid1:HnCzQQCjMRWO5EAU34oNJctWpq3hKh-BHw0G481_G-g",
+  path: [ "topics" ],
+  space: "did:key:z6MkioiWaXP9VdtNhRDFc8wkN9yFti2LdyQdET82GncYvif8",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][cell::19:37:30.775] get >90ms get() took 91ms {
+  id: "of:fid1:HnCzQQCjMRWO5EAU34oNJctWpq3hKh-BHw0G481_G-g",
+  path: [ "topics" ],
+  space: "did:key:z6MkioiWaXP9VdtNhRDFc8wkN9yFti2LdyQdET82GncYvif8",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][traverse::19:37:34.835] slow-traverse 122ms doc=of:fid1:TJ8lt2JCAzuOrGRYdrKAL2lmcAZMbB7Bo_ExBkgHp-0/application/json trackerKeys=11161 trackerVals=36087 traverseSchema=723 traversePtr=118 traverseArr=34 traverseObj=120 traverseDAG=0 anyOfBranches=1120 anyOfFastRejects=805 anyOfPropertyMerges=0 getDocAtPath=210 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=35 schemaMemo=100570 schemaMemoHits=36 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+[WARN][cell::19:38:21.791] get >60ms get() took 68ms {
+  id: "of:fid1:HnCzQQCjMRWO5EAU34oNJctWpq3hKh-BHw0G481_G-g",
+  path: [ "topics" ],
+  space: "did:key:z6MkioiWaXP9VdtNhRDFc8wkN9yFti2LdyQdET82GncYvif8",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][cell::19:39:57.809] get >60ms get() took 67ms {
+  id: "of:fid1:HnCzQQCjMRWO5EAU34oNJctWpq3hKh-BHw0G481_G-g",
+  path: [ "topics" ],
+  space: "did:key:z6MkioiWaXP9VdtNhRDFc8wkN9yFti2LdyQdET82GncYvif8",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][traverse::19:40:40.185] slow-traverse 136ms doc=of:fid1:HnCzQQCjMRWO5EAU34oNJctWpq3hKh-BHw0G481_G-g/undefined trackerKeys=1990 trackerVals=3178 traverseSchema=4951 traversePtr=2178 traverseArr=199 traverseObj=396 traverseDAG=0 anyOfBranches=396 anyOfFastRejects=0 anyOfPropertyMerges=0 getDocAtPath=4356 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=7 schemaMemo=4951 schemaMemoHits=0 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+[WARN][cell::19:40:40.185] get >130ms get() took 135ms {
+  id: "of:fid1:HnCzQQCjMRWO5EAU34oNJctWpq3hKh-BHw0G481_G-g",
+  path: [ "topics" ],
+  space: "did:key:z6MkioiWaXP9VdtNhRDFc8wkN9yFti2LdyQdET82GncYvif8",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+# 2026-09-17T19:40:53.920Z r2-per-entry N=200 op-add
+# 2026-09-17T19:40:57.875Z r2-per-entry N=200 op-mention
+# 2026-09-17T19:40:58.088Z r2-per-entry N=200 ownership
+# 2026-09-17T19:40:58.098Z r2-per-entry N=200 replay
+[ERROR][storage.v2::19:40:58.243] sync-load-failure sync completed without data for of:fid1:5S_5sPpGHnVAlmXMQS6tfqzz9lk9VE8-8d4lUVyVWO4 in did:key:z6MkioiWaXP9VdtNhRDFc8wkN9yFti2LdyQdET82GncYvif8: ConnectionError: memory client closed
+# 2026-09-17T19:40:58.244Z r2-per-entry N=200 b-compile
+# 2026-09-17T19:40:58.391Z r2-per-entry N=200 start
+# 2026-09-17T19:40:58.476Z r2-per-entry N=200 pull
+Can't load profile-create.tsx
+# 2026-09-17T19:40:58.569Z r2-per-entry N=200 checks
+# 2026-09-17T19:40:58.569Z r2-per-entry N=200 attribution
+# result: experiment-output/round2/r2-per-entry-N200.result.json

@@ -1,0 +1,155 @@
+# experiment-output/round2/r3-one-entry-N200.start.jsonl
+# 65 frames, 56 distinct selectors
+
+## Frames, in order
+
+t=316900ms in  response                    176 bytes
+t=316901ms out session.watch.add           425 bytes  roots=1 over 1 selectors
+       1 root(s) under selector b40c1ccc (4 chars of schema)
+t=316905ms in  response                104,647 bytes  delivered 68 documents
+          366 bytes  cid:fid1:_50NhSOZOrI6T44zDgM8P9lzd_ZLYquLpsGbxPUE4dM keys=["properties","required","type"]
+        1,916 bytes  cid:fid1:_HoOxMWe9VU4v3ge9hqJ4Glz0NgRuAYJwJYnrvHEQFo keys=["default","description","properties","required","type"]
+          666 bytes  cid:fid1:-K9ErxwLITa-K3hfIT2WTALdRSauHumFfWtrIjxaWOc keys=["properties","required","type"]
+           38 bytes  cid:fid1:0Mk4k_I8EAMtILy3eY8zlrPwEJKp2nE-tWHIWk3a_nI keys=["default"]
+          393 bytes  cid:fid1:0raYVbXgf-VWaRacwMmjX-iHAQ32ad5sK8C7NoTvg_A keys=["default","properties","required","type"]
+        1,637 bytes  cid:fid1:1vAYQoDGJ7qbR_oiY8ddAMjNi591ga4HqyqFLPrPoyw keys=["description","properties","required","type"]
+    … 62 more documents in this frame
+t=316954ms out session.watch.add        64,817 bytes  roots=184 over 105 selectors
+       1 root(s) under selector df184fdd (4 chars of schema)
+       1 root(s) under selector ad4fdfb9 (4 chars of schema)
+       1 root(s) under selector eb0961b8 (4 chars of schema)
+       1 root(s) under selector b7636636 (4 chars of schema)
+      13 root(s) under selector b40c1ccc (4 chars of schema)
+       1 root(s) under selector b07a4750 (4 chars of schema)
+       1 root(s) under selector e84337bf (4 chars of schema)
+       1 root(s) under selector 8f9018a3 (4 chars of schema)
+       1 root(s) under selector 23f32322 (84 chars of schema)
+       1 root(s) under selector ae78ae83 (4 chars of schema)
+       1 root(s) under selector b50b1fbf (84 chars of schema)
+       1 root(s) under selector ad9e2ed5 (84 chars of schema)
+       1 root(s) under selector ae10e04e (84 chars of schema)
+       1 root(s) under selector 46f43da7 (84 chars of schema)
+       1 root(s) under selector 82a2f259 (90 chars of schema)
+       1 root(s) under selector e3bbaa1c (4 chars of schema)
+       1 root(s) under selector a0006650 (608 chars of schema)
+       1 root(s) under selector 9319c8e9 (84 chars of schema)
+       1 root(s) under selector 1c3426c4 (4 chars of schema)
+       1 root(s) under selector c799b302 (4 chars of schema)
+       1 root(s) under selector f48885e2 (758 chars of schema)
+       1 root(s) under selector 32ec2466 (84 chars of schema)
+       1 root(s) under selector 4fbfc9d3 (4 chars of schema)
+       1 root(s) under selector 5ae9cf76 (4 chars of schema)
+       1 root(s) under selector 2c515463 (84 chars of schema)
+       1 root(s) under selector 93066e82 (124 chars of schema)
+       1 root(s) under selector 0cad64d5 (1,968 chars of schema)
+       1 root(s) under selector c6d888ee (105 chars of schema)
+       1 root(s) under selector 74f6ee38 (103 chars of schema)
+       8 root(s) under selector c5e7882d (23 chars of schema)
+       1 root(s) under selector 28e13b04 (106 chars of schema)
+       7 root(s) under selector f8420b07 (4 chars of schema)
+       1 root(s) under selector 6cb0144a (84 chars of schema)
+       1 root(s) under selector 2262ba1c (110 chars of schema)
+       1 root(s) under selector 91255d6a (470 chars of schema)
+       1 root(s) under selector ba9b57a5 (4 chars of schema)
+      27 root(s) under selector ab0d575d (4 chars of schema)
+       1 root(s) under selector fb386636 (47 chars of schema)
+      12 root(s) under selector 0742ec50 (4 chars of schema)
+       2 root(s) under selector 42de712b (55 chars of schema)
+       2 root(s) under selector bf74782c (52 chars of schema)
+       2 root(s) under selector a8c0f281 (55 chars of schema)
+       2 root(s) under selector 5fd799d6 (84 chars of schema)
+       2 root(s) under selector d013a05c (122 chars of schema)
+       1 root(s) under selector 322a4a5c (123 chars of schema)
+       1 root(s) under selector 1d8d8a74 (114 chars of schema)
+       1 root(s) under selector 27c2dd01 (118 chars of schema)
+       1 root(s) under selector 93ecdba9 (667 chars of schema)
+       1 root(s) under selector 6686a34e (90 chars of schema)
+       1 root(s) under selector 151bafd5 (368 chars of schema)
+       1 root(s) under selector be129257 (356 chars of schema)
+       1 root(s) under selector 2413dece (130 chars of schema)
+       1 root(s) under selector 374bfa9f (114 chars of schema)
+       1 root(s) under selector e525e4cd (116 chars of schema)
+       1 root(s) under selector c1cd6d95 (665 chars of schema)
+       1 root(s) under selector 334ea87b (429 chars of schema)
+       1 root(s) under selector abbd0cc6 (421 chars of schema)
+       1 root(s) under selector 3abe44dc (99 chars of schema)
+       1 root(s) under selector 5f63262f (109 chars of schema)
+       1 root(s) under selector 32b19e19 (117 chars of schema)
+       1 root(s) under selector fbd67549 (1,209 chars of schema)
+       2 root(s) under selector 6bb8995f (4 chars of schema)
+       1 root(s) under selector 244b88b9 (95 chars of schema)
+       1 root(s) under selector fcc46414 (124 chars of schema)
+       1 root(s) under selector b080eba3 (143 chars of schema)
+       4 root(s) under selector a9004e1b (4 chars of schema)
+       1 root(s) under selector 707bf4ee (4 chars of schema)
+       1 root(s) under selector 981f8d71 (4 chars of schema)
+       3 root(s) under selector ad7c0981 (4 chars of schema)
+       1 root(s) under selector d3b7b732 (4 chars of schema)
+       1 root(s) under selector e8d03447 (4 chars of schema)
+       1 root(s) under selector af1a005e (4 chars of schema)
+       1 root(s) under selector 7c400294 (58 chars of schema)
+       1 root(s) under selector b98d2318 (52 chars of schema)
+       1 root(s) under selector f7e23503 (388 chars of schema)
+       1 root(s) under selector e4cb961d (4 chars of schema)
+       1 root(s) under selector f33f2966 (318 chars of schema)
+       1 root(s) under selector 07f77822 (4 chars of schema)
+       1 root(s) under selector 355a6969 (92 chars of schema)
+       1 root(s) under selector e634d330 (141 chars of schema)
+       1 root(s) under selector b9d27f7b (4 chars of schema)
+       1 root(s) under selector 11c74d88 (4 chars of schema)
+       2 root(s) under selector 14e43314 (4 chars of schema)
+       1 root(s) under selector a75bb3b2 (50 chars of schema)
+       1 root(s) under selector 81a1665f (62 chars of schema)
+       1 root(s) under selector 78bb52a8 (4 chars of schema)
+       1 root(s) under selector 64868eb0 (4 chars of schema)
+       1 root(s) under selector af59a92b (4 chars of schema)
+       1 root(s) under selector 26c55904 (84 chars of schema)
+       1 root(s) under selector a889952e (4 chars of schema)
+       1 root(s) under selector 8de2f9a2 (4 chars of schema)
+       1 root(s) under selector 0f499279 (4 chars of schema)
+       5 root(s) under selector f2be555a (4 chars of schema)
+       1 root(s) under selector ab721572 (4 chars of schema)
+       2 root(s) under selector 98d1d1be (4 chars of schema)
+       1 root(s) under selector d08da04c (4 chars of schema)
+       1 root(s) under selector d9a1ddb7 (4 chars of schema)
+       1 root(s) under selector 57ab6c03 (4 chars of schema)
+       1 root(s) under selector 286aa69a (4 chars of schema)
+       1 root(s) under selector 3cf1c2a6 (4 chars of schema)
+       1 root(s) under selector c43f15d7 (4 chars of schema)
+       1 root(s) under selector b99990d6 (4 chars of schema)
+       1 root(s) under selector 03716eef (4 chars of schema)
+       1 root(s) under selector 43d2b99e (4 chars of schema)
+       1 root(s) under selector e0e6bb4b (4 chars of schema)
+t=316968ms in  response                 50,858 bytes  delivered 98 documents
+        2,509 bytes  cid:fid1:7kgY8QF8_QFlxWS8kudv9S9-3tn_q6JbvFSqQ_3CxFM keys=["properties","required","type"]
+          589 bytes  cid:fid1:7Sv4lwK3YfWafm96_XRw7GgVrb1P3nmzubr-Ww0d9Gs keys=["properties","required","type"]
+          671 bytes  cid:fid1:CchHLuI77_3Rka6br7r6sSVww8olv6tr33y-0m1GjTE keys=["properties","required","type"]
+           85 bytes  cid:fid1:kh_X6zFz1RFU2VxJB5Hp9e-TVL9e2ssIn1lnvh8ADH8 keys=["additionalProperties","properties","type"]
+        5,691 bytes  cid:fid1:l7hoP6-vBk9fvFSfZ5iL6yrf8r9EYFps2NN6wFcaCvw keys=["description","properties","required","tags","type"]
+        1,065 bytes  cid:fid1:mcoK7lQ3ZSabLC0AqA-zU-L4MZZhAsj3h9gJxqLgteQ keys=["default","description","properties","required","type"]
+    … 92 more documents in this frame
+t=316985ms out session.watch.add           780 bytes  roots=2 over 1 selectors
+       2 root(s) under selector 241cb61d (96 chars of schema)
+t=316986ms in  response                    176 bytes
+t=316996ms out session.watch.add           425 bytes  roots=1 over 1 selectors
+       1 root(s) under selector b40c1ccc (4 chars of schema)
+t=316997ms in  response                    176 bytes
+
+## The first 2 selectors in full
+
+### 23f32322
+{
+ "path": [],
+ "schema": {
+  "$ref": "cid:fid1:-K9ErxwLITa-K3hfIT2WTALdRSauHumFfWtrIjxaWOc"
+ }
+}
+
+### b50b1fbf
+{
+ "path": [],
+ "schema": {
+  "$ref": "cid:fid1:cM8xSitvjGbC1X0R9ONbejIi7WjBuEQiQsdYtrKuUto"
+ }
+}
+

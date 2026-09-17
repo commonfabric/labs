@@ -197,6 +197,40 @@ export const ARMS: Record<string, Arm> = {
     checkSchema: copyRows,
     checks: copiesAndName,
   },
+  "r4-adopt": {
+    base: "topics",
+    what: "the best arm with the create handing nothing, as a board from " +
+      "before the design would not have: a board verb mints the entries and " +
+      "each topic is handed its own by a verb of its own or by an operator",
+    board: "own-entry/arms/r4-adopt/main.tsx",
+    demand: [
+      "namesTable",
+      "mentionable",
+      "topicCount",
+      "pivot",
+      "perEntryWrites",
+    ],
+    replayInputs: ["ownEntry", "mentionable"],
+    checkSchema: copyRows,
+    checks: copiesAndName,
+  },
+  "r5-best": {
+    base: "topics",
+    what: "the two halves that measured best: entries filled one per topic, " +
+      "and the universe bounded and left as its own input rather than copied " +
+      "into every entry",
+    board: "own-entry/arms/r5-best/main.tsx",
+    demand: [
+      "namesTable",
+      "mentionable",
+      "topicCount",
+      "pivot",
+      "perEntryWrites",
+    ],
+    replayInputs: ["ownEntry", "mentionable"],
+    checkSchema: copyRows,
+    checks: copiesAndName,
+  },
   "r6-table-copies": {
     base: "topics",
     what: "no handed reference: the board publishes its entries as one table " +

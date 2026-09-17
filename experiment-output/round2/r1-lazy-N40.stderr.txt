@@ -1,0 +1,14 @@
+# 2026-09-17T19:22:55.349Z r1-lazy N=40 build
+# 2026-09-17T19:23:03.912Z r1-lazy N=40 op-add
+# 2026-09-17T19:23:04.559Z r1-lazy N=40 op-mention
+# 2026-09-17T19:23:04.637Z r1-lazy N=40 ownership
+# 2026-09-17T19:23:04.639Z r1-lazy N=40 replay
+[ERROR][storage.v2::19:23:04.657] sync-load-failure sync completed without data for of:fid1:nhyRkbWHn7JN3y5-ml6HDaYD40HTxpARIRolGDitM48 in did:key:z6MkvqFATEZHbTkSA39erbdgYM7ujmJbPkU7WLbev5vvyawa: ConnectionError: memory client closed
+# 2026-09-17T19:23:04.657Z r1-lazy N=40 b-compile
+# 2026-09-17T19:23:04.776Z r1-lazy N=40 start
+# 2026-09-17T19:23:04.862Z r1-lazy N=40 pull
+Can't load profile-create.tsx
+# 2026-09-17T19:23:04.957Z r1-lazy N=40 checks
+# 2026-09-17T19:23:04.957Z r1-lazy N=40 attribution
+[ERROR][storage.v2::19:23:04.992] sync-load-failure sync completed without data for of:fid1:nhyRkbWHn7JN3y5-ml6HDaYD40HTxpARIRolGDitM48 in did:key:z6MkvqFATEZHbTkSA39erbdgYM7ujmJbPkU7WLbev5vvyawa: ConnectionError: memory client closed
+# result: experiment-output/round2/r1-lazy-N40.result.json

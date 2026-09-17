@@ -1,0 +1,15 @@
+# 2026-09-17T20:02:23.198Z r5-best N=1000 build
+# 2026-09-17T20:02:24.867Z r5-best N=1000 synthesize
+# 2026-09-17T20:03:05.006Z r5-best N=1000 op-add
+# 2026-09-17T20:03:07.949Z r5-best N=1000 op-mention
+# 2026-09-17T20:03:08.313Z r5-best N=1000 ownership
+# 2026-09-17T20:03:08.341Z r5-best N=1000 replay
+[ERROR][storage.v2::20:03:09.081] sync-load-failure sync completed without data for of:fid1:Vw6kjpnYTQ8_x9DgmGBN69xwNa4Pq63NhwabJW3kGGM in did:key:z6MkoGGMVdQ3JW4rixt5iB2wGMcmYcdveJGf3k7AoofVYD7U: ConnectionError: memory client closed
+# 2026-09-17T20:03:09.082Z r5-best N=1000 b-compile
+# 2026-09-17T20:03:09.214Z r5-best N=1000 start
+# 2026-09-17T20:03:09.311Z r5-best N=1000 pull
+Can't load profile-create.tsx
+# 2026-09-17T20:03:09.464Z r5-best N=1000 checks
+# 2026-09-17T20:03:09.465Z r5-best N=1000 attribution
+[ERROR][storage.v2::20:03:09.572] sync-load-failure sync completed without data for of:fid1:Gar8pHO3XCc6TbkpR-9zVeLWmFv-w7bcBExZnwMcnyk in did:key:z6MkoGGMVdQ3JW4rixt5iB2wGMcmYcdveJGf3k7AoofVYD7U: ConnectionError: memory client closed
+# result: experiment-output/round2-1000/r5-best-N1000.result.json

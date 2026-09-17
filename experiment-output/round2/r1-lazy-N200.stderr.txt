@@ -1,0 +1,96 @@
+# 2026-09-17T19:51:01.765Z r1-lazy N=200 build
+[WARN][cell::19:52:22.677] get >90ms get() took 96ms {
+  id: "of:fid1:wzOll6xrG3RYnhMA9hDdH2-Gj213FKdZYiAjsQOwaWA",
+  path: [],
+  space: "did:key:z6MkmwymwCfGJafHa9oGe53RgwrciLv35MZJdmZmSRhD7ihT",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:1MIEa5h6LC5s8fNeepMiCtPgeyI4-c70456FtlJKxAE" },
+  viaLinkHop: true
+}
+[WARN][cell::19:53:36.737] get >90ms get() took 98ms {
+  id: "of:fid1:H9_K-kFL-OiuxiMlCr3Kukp93H1DTiCELQ35PqeQl5M",
+  path: [ "topics" ],
+  space: "did:key:z6MkmwymwCfGJafHa9oGe53RgwrciLv35MZJdmZmSRhD7ihT",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][traverse::19:53:54.759] slow-traverse 303ms doc=of:fid1:H9_K-kFL-OiuxiMlCr3Kukp93H1DTiCELQ35PqeQl5M/undefined trackerKeys=1638 trackerVals=2614 traverseSchema=4068 traversePtr=1793 traverseArr=163 traverseObj=325 traverseDAG=0 anyOfBranches=326 anyOfFastRejects=0 anyOfPropertyMerges=0 getDocAtPath=3580 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=7 schemaMemo=4068 schemaMemoHits=0 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+[WARN][cell::19:53:54.769] get >310ms get() took 312ms {
+  id: "of:fid1:H9_K-kFL-OiuxiMlCr3Kukp93H1DTiCELQ35PqeQl5M",
+  path: [ "topics" ],
+  space: "did:key:z6MkmwymwCfGJafHa9oGe53RgwrciLv35MZJdmZmSRhD7ihT",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][cell::19:54:18.677] get >50ms get() took 53ms {
+  id: "of:fid1:H9_K-kFL-OiuxiMlCr3Kukp93H1DTiCELQ35PqeQl5M",
+  path: [ "topics" ],
+  space: "did:key:z6MkmwymwCfGJafHa9oGe53RgwrciLv35MZJdmZmSRhD7ihT",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][cell::19:54:25.929] get >50ms get() took 53ms {
+  id: "of:fid1:H9_K-kFL-OiuxiMlCr3Kukp93H1DTiCELQ35PqeQl5M",
+  path: [ "topics" ],
+  space: "did:key:z6MkmwymwCfGJafHa9oGe53RgwrciLv35MZJdmZmSRhD7ihT",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][cell::19:54:36.809] get >50ms get() took 51ms {
+  id: "of:fid1:H9_K-kFL-OiuxiMlCr3Kukp93H1DTiCELQ35PqeQl5M",
+  path: [ "topics" ],
+  space: "did:key:z6MkmwymwCfGJafHa9oGe53RgwrciLv35MZJdmZmSRhD7ihT",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][cell::19:54:46.241] get >50ms get() took 54ms {
+  id: "of:fid1:H9_K-kFL-OiuxiMlCr3Kukp93H1DTiCELQ35PqeQl5M",
+  path: [ "topics" ],
+  space: "did:key:z6MkmwymwCfGJafHa9oGe53RgwrciLv35MZJdmZmSRhD7ihT",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][cell::19:54:58.326] get >50ms get() took 50ms {
+  id: "of:fid1:H9_K-kFL-OiuxiMlCr3Kukp93H1DTiCELQ35PqeQl5M",
+  path: [ "topics" ],
+  space: "did:key:z6MkmwymwCfGJafHa9oGe53RgwrciLv35MZJdmZmSRhD7ihT",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+[WARN][traverse::19:55:29.816] slow-traverse 240ms doc=of:fid1:H9_K-kFL-OiuxiMlCr3Kukp93H1DTiCELQ35PqeQl5M/undefined trackerKeys=369 trackerVals=369 traverseSchema=369 traversePtr=184 traverseArr=0 traverseObj=1 traverseDAG=0 anyOfBranches=0 anyOfFastRejects=0 anyOfPropertyMerges=0 getDocAtPath=368 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=3 schemaMemo=369 schemaMemoHits=0 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+[WARN][cell::19:55:29.816] get >240ms get() took 244ms {
+  id: "of:fid1:H9_K-kFL-OiuxiMlCr3Kukp93H1DTiCELQ35PqeQl5M",
+  path: [ "names" ],
+  space: "did:key:z6MkmwymwCfGJafHa9oGe53RgwrciLv35MZJdmZmSRhD7ihT",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:4vbh8mgRqgO1qLVuNQrEW4hJ7OFbDgf8ndQoE27N6pM" },
+  viaLinkHop: true
+}
+[WARN][cell::19:56:03.724] get >60ms get() took 65ms {
+  id: "of:fid1:H9_K-kFL-OiuxiMlCr3Kukp93H1DTiCELQ35PqeQl5M",
+  path: [ "topics" ],
+  space: "did:key:z6MkmwymwCfGJafHa9oGe53RgwrciLv35MZJdmZmSRhD7ihT",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:W1GSRl6_tIP4cMqzDqDu_1ieiHY__w-AV4gp2bo3vqM" },
+  viaLinkHop: true
+}
+# 2026-09-17T19:56:36.136Z r1-lazy N=200 op-add
+# 2026-09-17T19:56:41.695Z r1-lazy N=200 op-mention
+# 2026-09-17T19:56:42.219Z r1-lazy N=200 ownership
+# 2026-09-17T19:56:42.228Z r1-lazy N=200 replay
+[ERROR][storage.v2::19:56:42.292] sync-load-failure sync completed without data for of:fid1:xR31SvH3ZbBdoPM3ak5hBLdsG4DNpdQWZgEb0pC55BE in did:key:z6MkmwymwCfGJafHa9oGe53RgwrciLv35MZJdmZmSRhD7ihT: ConnectionError: memory client closed
+# 2026-09-17T19:56:42.292Z r1-lazy N=200 b-compile
+# 2026-09-17T19:56:42.448Z r1-lazy N=200 start
+# 2026-09-17T19:56:42.567Z r1-lazy N=200 pull
+Can't load profile-create.tsx
+Can't load profile-create.tsx
+# 2026-09-17T19:56:42.702Z r1-lazy N=200 checks
+# 2026-09-17T19:56:42.703Z r1-lazy N=200 attribution
+# result: experiment-output/round2/r1-lazy-N200.result.json

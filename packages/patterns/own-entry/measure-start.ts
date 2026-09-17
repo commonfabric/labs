@@ -89,6 +89,23 @@ const deferDemand = args["defer-demand"] === "true";
 // whose only content is a link to topic 0, so the board holds the old address
 // and every reader of the list reaches the topic through one more hop.
 const forward = args.forward === "true";
+// `--synthesize` writes the topics past the measured few straight to storage
+// rather than filing them through `addTopic`: one document per topic, one
+// namespace entry, and one entry slot each, appended to the board's own
+// inputs. What it buys is a size a verb-filed build cannot reach; what it
+// costs is that those topics are documents rather than pieces, so the board's
+// derivations run over them but nothing runs them. The measured topic and the
+// topics that mention it are filed through the verb either way.
+const synthesize = args.synthesize === "true";
+// `--adopt` measures how a topic filed before the design is handed its entry.
+// The board's create hands nothing in the `r4-adopt` arm, so the topics start
+// without one: `backfillEntries` mints the entries, and then either the topic
+// takes its own through a verb of its own (`verb`), or an operator writes the
+// reference into the topic's argument from outside (`operator`).
+const adopt = args.adopt;
+if (adopt !== undefined && adopt !== "verb" && adopt !== "operator") {
+  throw new Error(`--adopt must be verb or operator, not \`${adopt}\``);
+}
 const arm = ARMS[armName];
 if (arm === undefined) throw new Error(`unknown arm: ${armName}`);
 if (degree >= size) throw new Error("degree must be below N");
@@ -324,7 +341,10 @@ const fileTopic = async (n: number) => {
     })
   );
 };
-for (let n = 1; n < size; n++) await fileTopic(n);
+// Filed through the verb: every topic, or — when the remainder is
+// synthesized — the measured topic and the topics that mention it.
+const filedInBuild = synthesize ? 1 + degree : size - 1;
+for (let n = 1; n <= filedInBuild; n++) await fileTopic(n);
 await runtimeA.idle();
 
 const topics = board.key("topics");
@@ -340,21 +360,100 @@ const mention = async (from: number, to: number) => {
 // Every mention but the last one: topic N-1 naming topic 0. Topic N-1 does
 // not exist yet, so its mentions are made after the add below.
 const pending: [number, number][] = [];
-for (let from = 1; from < size; from++) {
-  for (let step = 1; step <= degree; step++) {
-    const to = (from + step) % size;
-    if (to === from) continue;
-    pending.push([from, to]);
+if (synthesize) {
+  // The topics that mention the measured one are the ones the verb filed.
+  for (let from = 1; from <= degree; from++) pending.push([from, 0]);
+} else {
+  for (let from = 1; from < size; from++) {
+    for (let step = 1; step <= degree; step++) {
+      const to = (from + step) % size;
+      if (to === from) continue;
+      pending.push([from, to]);
+    }
   }
 }
-const lastMention = pending.find(([from, to]) => from === size - 1 && to === 0);
-const early = pending.filter(([from]) => from < size - 1);
+const lastMention = synthesize
+  ? pending[pending.length - 1]
+  : pending.find(([from, to]) => from === size - 1 && to === 0);
+// A verb-filed build defers every mention made BY the topic the add files;
+// a synthesized one defers only the last mention, which is what `op-mention`
+// measures.
+const early = synthesize
+  ? pending.filter((entry) => entry !== lastMention)
+  : pending.filter(([from]) => from < size - 1);
 await topics.pull();
 for (const [from, to] of early) {
-  // A mention of topic N-1 waits for it to exist.
-  if (to === size - 1) continue;
+  // A mention of a topic the add below files waits for it to exist.
+  if (!synthesize && to === size - 1) continue;
   await mention(from, to);
 }
+// --- The synthesized remainder, where one is asked for --------------------
+
+if (synthesize) {
+  stage("synthesize");
+  const argumentMeta = getMetaLink(boardCell, "argument");
+  if (argumentMeta === undefined) throw new Error("board has no argument");
+  // deno-lint-ignore no-explicit-any
+  const argumentOf = (tx: any) =>
+    runtimeA.getCellFromLink({ ...argumentMeta, schema: undefined }).withTx(tx);
+  const filed = 1 + degree;
+  const chunk = 100;
+  for (let from = filed; from < size - 1; from += chunk) {
+    const upto = Math.min(from + chunk, size - 1);
+    await runtimeA.editWithRetry((tx) => {
+      const argument = argumentOf(tx);
+      const listed = [
+        ...(argument.key("topics").getRaw() as Json[] ?? []),
+      ];
+      const named = {
+        ...(argument.key("names").getRaw() as Record<string, Json> ?? {}),
+      };
+      const slots = [
+        ...(argument.key("entrySlots").getRaw() as Json[] ?? []),
+      ];
+      for (let index = from; index < upto; index++) {
+        const name = String(index + 1);
+        const topic = runtimeA.getCell<Json>(
+          space,
+          { syntheticTopic: index },
+          undefined,
+          tx,
+        );
+        topic.setRaw({
+          title: `Topic ${index + 1}`,
+          body: `Body of topic ${index + 1}. ${"x".repeat(400)}`,
+          createdAt: 1_700_000_000_000 + index,
+          createdBy: { kind: "agent", name: "probe" },
+          shortName: name,
+          mentions: [],
+          mentioned: [],
+          comments: [],
+          links: [],
+          references: {},
+          commentCount: 0,
+          lastActivityAt: 1_700_000_000_000 + index,
+        });
+        const entry = runtimeA.getCell<Json>(
+          space,
+          { syntheticEntry: index },
+          undefined,
+          tx,
+        );
+        entry.setRaw({ name, mentionedBy: [] });
+        listed.push(topic.getAsLink());
+        named[name] = topic.getAsLink();
+        slots.push({ name, entry: entry.getAsLink() });
+      }
+      argument.key("topics").setRaw(listed);
+      argument.key("names").setRaw(named);
+      argument.key("entrySlots").setRaw(slots);
+    });
+  }
+  await runtimeA.idle();
+  await storageA.synced();
+  rotate("synthesize");
+}
+
 await runtimeA.idle();
 if (deferDemand) {
   demandBoard();
@@ -379,12 +478,14 @@ const listed = (topics.get() ?? []) as unknown[];
 if (listed.length !== size) {
   throw new Error(`expected ${size} topics, board holds ${listed.length}`);
 }
-for (const [from, to] of early) {
-  if (to === size - 1) await mention(from, to);
-}
-for (const [from, to] of pending) {
-  if (from === size - 1 && !(to === 0 && lastMention !== undefined)) {
-    await mention(from, to);
+if (!synthesize) {
+  for (const [from, to] of early) {
+    if (to === size - 1) await mention(from, to);
+  }
+  for (const [from, to] of pending) {
+    if (from === size - 1 && !(to === 0 && lastMention !== undefined)) {
+      await mention(from, to);
+    }
   }
 }
 await runtimeA.idle();
@@ -400,6 +501,84 @@ await runtimeA.idle();
 await storageA.synced();
 const mentionMs = ms(mentionStart);
 const mentionFile = rotate("op-mention");
+
+// --- Adoption, where one is asked for ------------------------------------
+
+let adoption: Json;
+if (adopt !== undefined) {
+  // The entry has to exist before a topic can be handed it. The board's own
+  // `backfillEntries` verb mints one per named topic in a single
+  // transaction, and it does NOT settle: see the broken run recorded in
+  // COMMANDS.md. So the entry is minted here, in one transaction, which is
+  // what an operator's tooling does — and what the board verb would do once
+  // it settles.
+  stage("adopt: mint one entry");
+  const mintStart = performance.now();
+  const boardArgumentMeta = getMetaLink(boardCell, "argument");
+  if (boardArgumentMeta === undefined) throw new Error("board has no argument");
+  let mintedId: string | undefined;
+  await runtimeA.editWithRetry((tx) => {
+    const argument = runtimeA
+      .getCellFromLink({ ...boardArgumentMeta, schema: undefined })
+      .withTx(tx);
+    const slots = [...(argument.key("entrySlots").getRaw() as Json[] ?? [])];
+    const entry = runtimeA.getCell<Json>(
+      space,
+      { adoptedEntryFor: "1" },
+      undefined,
+      tx,
+    );
+    entry.setRaw({ name: "1", mentionedBy: [] });
+    mintedId = entry.getAsNormalizedFullLink().id;
+    slots.push({ name: "1", entry: entry.getAsLink() });
+    argument.key("entrySlots").setRaw(slots);
+  });
+  await runtimeA.idle();
+  await storageA.synced();
+  const mintMs = ms(mintStart);
+  const mintFile = rotate("op-mint");
+
+  const entryCell = runtimeA.getCellFromLink({
+    space: space as Json,
+    id: mintedId!,
+    path: [],
+    type: "application/json",
+  } as Json);
+
+  stage(`adopt: ${adopt}`);
+  const adoptStart = performance.now();
+  if (adopt === "verb") {
+    // The topic's own verb writes the reference into its own input.
+    const adoptEntry = topicAt(0).key("adoptEntry");
+    await adoptEntry.pull();
+    await runtimeA.editWithRetry((tx) =>
+      adoptEntry.withTx(tx).send({ entry: entryCell })
+    );
+  } else {
+    // An operator writes the topic's argument from outside, which is what a
+    // one-time link-bind through the CLI does.
+    const argumentMeta = getMetaLink(topicAt(0), "argument");
+    if (argumentMeta === undefined) throw new Error("topic has no argument");
+    await runtimeA.editWithRetry((tx) => {
+      runtimeA.getCellFromLink({ ...argumentMeta, schema: undefined })
+        .withTx(tx)
+        .key("ownEntry")
+        .setRaw(entryCell.withTx(tx).getAsLink());
+    });
+  }
+  await runtimeA.idle();
+  await storageA.synced();
+  const adoptMs = ms(adoptStart);
+  const adoptFile = rotate("op-adopt");
+  adoption = {
+    route: adopt,
+    mintedEntry: mintedId,
+    mintMs,
+    adoptMs,
+    mintFile,
+    adoptFile,
+  };
+}
 
 // --- The move, where one is asked for ------------------------------------
 
@@ -714,6 +893,10 @@ const phases: Record<string, ReturnType<typeof summarizePhase>> = {
   start: summarizePhase(startFile),
 };
 if (pullFile !== undefined) phases.pull = summarizePhase(pullFile);
+if (adoption !== undefined) {
+  phases["op-mint"] = summarizePhase(adoption.mintFile);
+  phases["op-adopt"] = summarizePhase(adoption.adoptFile);
+}
 const allIds = new Set<string>();
 for (const phase of Object.values(phases)) {
   for (const { id, scope } of phase.delivered.values()) {
@@ -790,6 +973,8 @@ Deno.writeTextFileSync(
     deferDemand,
     forward,
     movedTo,
+    synthesize,
+    adoption,
     experimental,
     sharedIds,
     started,

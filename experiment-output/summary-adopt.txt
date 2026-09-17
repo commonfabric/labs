@@ -1,0 +1,96 @@
+# Runs read: 2
+# Commits: afcac4397dba45aaece33f2bc0e986dc17b7943a
+# Deno 2.9.4; experimental {"modernCellRep":false,"commitPreconditions":true,"plainResultReceipts":true,"computedCellIds":true,"lazyMaterialization":true,"serverExecution":false,"contentAddressedSchemas":true,"readerSchemaPrecedence":true}
+
+## Arms
+
+- `r4-adopt` (topics): the best arm with the create handing nothing, as a board from before the design would not have: a board verb mints the entries and each topic is handed its own by a verb of its own or by an operator
+
+## Starting one topic: what the server delivered to a fresh runtime
+
+`other` counts documents belonging to another topic (its result, argument or
+pattern document, or a document whose `result` backlinks reach one of those).
+`self`, `board` and `schema` count the topic's own family, the board's, and
+content-addressed schema documents. `startMs` is wall-clock for
+`runtime.start` plus `idle()` plus `storage.synced()`.
+
+arm               N  other  otherBytes  docs      bytes  self  board  schema  startMs filed  checks (referencedBy, shortName)
+r4-adopt         40      0           0   178    160,773    73      3      92       86        {"referencedBy":2,"shortName":"1"}
+r4-adopt         40      0           0   178    160,773    73      3      92       81        {"referencedBy":2,"shortName":"1"}
+
+## The replayed demand (the #7439 method) against the same start
+
+Each replay root is one `session.queryGraph` the rig issued on the same store:
+the topic's argument document under the schema recorded on its argument link
+(`whole as recorded`), and each declared input's document under that input's
+property schema.
+
+arm               N root                          other  otherBytes  docs      bytes
+r4-adopt         40 START (measured)                  0           0   178    160,773
+                    replay whole as recorded          0           0    40     65,861
+                    replay input mentionable          0           0    19     31,236
+                    replay input ownEntry             0           0     5        766
+r4-adopt         40 START (measured)                  0           0   178    160,773
+                    replay whole as recorded          0           0    40     65,861
+                    replay input mentionable          0           0    19     31,236
+                    replay input ownEntry             0           0     5        766
+
+## What the board pays
+
+`op-add` is one `addTopic` at that size, `op-mention` one `mention` that
+changes topic 0's inbound set, each measured with the board's derivations held
+live and its frames captured on their own. `commits` and `ops` are the
+transactions the client sent and the operations in them.
+
+arm               N op           commits    ops   outBytes  docsIn    bytesIn      ms
+r4-adopt         40 add               11     97    223,534     129    137,133     290
+r4-adopt         40 mention            3      4     21,862       4      2,670      38
+r4-adopt         40 add               11     97    223,534     129    137,133     280
+r4-adopt         40 mention            3      4     21,862       4      2,670      37
+
+## Time
+
+`buildMs` files N topics and makes the mentions, and is the rig's cost rather
+than a product figure; `deferred` means the board's outputs were demanded once
+at the end of the build instead of throughout. `compileB` compiles the program
+in the fresh runtime, before the start. `pull` is `cell.pull()` on the topic's
+schema-less result cell, which is what `PiecesController.startPiece` does after
+`runtime.start`.
+
+arm               N   buildMs deferred   compileB  startMs  pullMs  pullOther  pullDocs
+r4-adopt         40     8,832 yes             122       86      98          0        54
+r4-adopt         40     9,612 yes             115       81     100          0        54
+
+## The largest documents one start received
+
+### r4-adopt, N=40 (experiment-output/adopt/r4-adopt-operator-N40.result.json)
+     37,963  self         of:fid1:x0OBozGq0W7SO1wxrn
+     15,007  schema       cid:fid1:mlE9f-zcaFJiYX3qd
+     14,167  board        of:fid1:WenrfbEz5h5fniIUaw
+     12,620  board        of:fid1:hFyqCDPWtUJPrY5Dq1
+      5,946  schema       cid:fid1:jDql3mMA_t-zY5-Vz
+      5,822  schema       cid:fid1:DCteMa5nfiHK8gXTR
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### r4-adopt, N=40 (experiment-output/adopt/r4-adopt-verb-N40.result.json)
+     37,963  self         of:fid1:XLc2tn_c1ZfVIWI541
+     15,007  schema       cid:fid1:mlE9f-zcaFJiYX3qd
+     14,167  board        of:fid1:WenrfbEz5h5fniIUaw
+     12,620  board        of:fid1:hFyqCDPWtUJPrY5Dq1
+      5,946  schema       cid:fid1:jDql3mMA_t-zY5-Vz
+      5,822  schema       cid:fid1:DCteMa5nfiHK8gXTR
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+
+## Handing an entry to a topic filed before the design
+
+`mint` is one entry document created and put in the board's slots, in one
+transaction — what an operator's tooling does, because the board verb that
+mints them all does not settle (see COMMANDS.md). `adopt` is handing that ONE
+topic the entry: `verb` is the topic's own verb writing its own input,
+`operator` is a write into that topic's argument from outside. `checks` is
+what the topic computed from the entry afterwards, in a fresh runtime.
+
+route         N  minted      mint commits/ops/bytes  adopt commits/ops/bytes  adoptMs  checks
+operator     40       1             8 / 25 / 88,333            1 / 1 / 1,262        5  {"referencedBy":2,"shortName":"1"}
+verb         40       1             8 / 25 / 88,333            1 / 2 / 5,072       16  {"referencedBy":2,"shortName":"1"}

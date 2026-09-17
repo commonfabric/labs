@@ -1,0 +1,16 @@
+# 2026-09-17T20:18:02.545Z r4-adopt N=40 build
+[WARN][schema-generator.object::20:18:03.503] schema-gen JSDoc conflict for property 'ownEntry'; using first doc
+# 2026-09-17T20:18:11.377Z r4-adopt N=40 op-add
+# 2026-09-17T20:18:11.823Z r4-adopt N=40 op-mention
+# 2026-09-17T20:18:11.862Z r4-adopt N=40 adopt: mint one entry
+# 2026-09-17T20:18:11.924Z r4-adopt N=40 adopt: operator
+# 2026-09-17T20:18:11.929Z r4-adopt N=40 ownership
+# 2026-09-17T20:18:11.932Z r4-adopt N=40 replay
+[ERROR][storage.v2::20:18:11.958] sync-load-failure sync completed without data for of:fid1:QZ4bK8f4S9YcgiNNHBlQ_G3noljUHxLr8h4ZMjtkufA in did:key:z6MkoLmXxBPbipoEvWNKtNDvNHDeDavV4gyA95vgpHDqYJWR: ConnectionError: memory client closed
+# 2026-09-17T20:18:11.958Z r4-adopt N=40 b-compile
+# 2026-09-17T20:18:12.081Z r4-adopt N=40 start
+# 2026-09-17T20:18:12.168Z r4-adopt N=40 pull
+Can't load profile-create.tsx
+# 2026-09-17T20:18:12.266Z r4-adopt N=40 checks
+# 2026-09-17T20:18:12.266Z r4-adopt N=40 attribution
+# result: experiment-output/adopt/r4-adopt-N40.result.json

@@ -1,0 +1,14 @@
+# 2026-09-17T19:59:45.173Z r5-best N=20 build
+# 2026-09-17T19:59:46.755Z r5-best N=20 synthesize
+# 2026-09-17T19:59:47.079Z r5-best N=20 op-add
+# 2026-09-17T19:59:47.246Z r5-best N=20 op-mention
+# 2026-09-17T19:59:47.273Z r5-best N=20 ownership
+# 2026-09-17T19:59:47.274Z r5-best N=20 replay
+[ERROR][storage.v2::19:59:47.286] sync-load-failure sync completed without data for of:fid1:2rpfINXTP7cY5C2kzTqb4aaYoE2gAcPWXyUMw68dQCU in did:key:z6MkmRHJZ6FyDLm7Jui9Z9Tq9ZZkZjDMuzX3BpUDZxkty4ki: ConnectionError: memory client closed
+# 2026-09-17T19:59:47.286Z r5-best N=20 b-compile
+# 2026-09-17T19:59:47.396Z r5-best N=20 start
+# 2026-09-17T19:59:47.482Z r5-best N=20 pull
+Can't load profile-create.tsx
+# 2026-09-17T19:59:47.571Z r5-best N=20 checks
+# 2026-09-17T19:59:47.572Z r5-best N=20 attribution
+# result: experiment-output/synth-check/r5-best-N20.result.json

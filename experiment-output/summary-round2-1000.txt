@@ -1,0 +1,155 @@
+# Runs read: 6
+# Commits: afcac4397dba45aaece33f2bc0e986dc17b7943a
+# Deno 2.9.4; experimental {"modernCellRep":false,"commitPreconditions":true,"plainResultReceipts":true,"computedCellIds":true,"lazyMaterialization":true,"serverExecution":false,"contentAddressedSchemas":true,"readerSchemaPrecedence":true}
+
+## Arms
+
+- `q6-copies` (topics): the handed entry carries the mentioning topics' titles and names as copies rather than references
+- `r1-pruned` (topics): the copies arm with the board's mention universe bounded to its 50 most recently filed members
+- `r1-lazy` (topics): the copies arm where the editor completes over a session copy the open verb takes, so nothing reads the universe at startup
+- `r3-one-entry` (topics): everything the topic reads of its board in one handed entry: its name, its backlinks, the board's name and a bounded universe, all as values, filled one entry per topic
+- `r5-best` (topics): the two halves that measured best: entries filled one per topic, and the universe bounded and left as its own input rather than copied into every entry
+- `r6-table-copies` (topics): no handed reference: the board publishes its entries as one table of values and each topic finds its own row by the name it stores
+
+## Starting one topic: what the server delivered to a fresh runtime
+
+`other` counts documents belonging to another topic (its result, argument or
+pattern document, or a document whose `result` backlinks reach one of those).
+`self`, `board` and `schema` count the topic's own family, the board's, and
+content-addressed schema documents. `startMs` is wall-clock for
+`runtime.start` plus `idle()` plus `storage.synced()`.
+
+arm               N  other  otherBytes  docs      bytes  self  board  schema  startMs filed  checks (referencedBy, shortName)
+q6-copies      1000      0           0   173    373,710    72      3      88       90 synth  {"referencedBy":2,"shortName":"1"}
+r1-pruned      1000      0           0   172    160,718    72      3      87       87 synth  {"referencedBy":2,"shortName":"1"}
+r1-lazy        1000      0           0   175    374,166    72      3      89      278 synth  {"referencedBy":2,"shortName":"1"}
+r3-one-entry   1000      0           0   166    134,967    74      1      80      100 synth  {"referencedBy":2,"shortName":"1","collectionName":"topics"}
+r5-best        1000      0           0   176    162,136    72      3      91       96 synth  {"referencedBy":2,"shortName":"1"}
+r6-table-copies 1000      0           0   168    403,775    72      4      85      181 synth  {"referencedBy":2,"shortName":"1"}
+
+## The replayed demand (the #7439 method) against the same start
+
+Each replay root is one `session.queryGraph` the rig issued on the same store:
+the topic's argument document under the schema recorded on its argument link
+(`whole as recorded`), and each declared input's document under that input's
+property schema.
+
+arm               N root                          other  otherBytes  docs      bytes
+q6-copies      1000 START (measured)                  0           0   173    373,710
+                    replay whole as recorded          0           0    40    277,440
+                    replay input mentionable          0           0    18    242,939
+                    replay input ownEntry             0           0     5        762
+r1-pruned      1000 START (measured)                  0           0   172    160,718
+                    replay whole as recorded          0           0    39     69,093
+                    replay input mentionable          0           0    17     34,592
+                    replay input ownEntry             0           0     5        762
+r1-lazy        1000 START (measured)                  0           0   175    374,166
+                    replay whole as recorded          0           0    40    277,430
+                    replay input mentionable          0           0    18    242,935
+                    replay input ownEntry             0           0     5        762
+r3-one-entry   1000 START (measured)                  0           0   166    134,967
+                    replay whole as recorded          0           0    41     53,835
+                    replay input ownEntry             0           0    22     18,776
+r5-best        1000 START (measured)                  0           0   176    162,136
+                    replay whole as recorded          0           0    41     69,750
+                    replay input mentionable          0           0    19     35,216
+                    replay input ownEntry             0           0     5        762
+r6-table-copies 1000 START (measured)                  0           0   168    403,775
+                    replay whole as recorded          0           0    37    308,565
+                    replay input mentionable          0           0    17    242,290
+                    replay input boardEntries         0           0    15     45,211
+
+## What the board pays
+
+`op-add` is one `addTopic` at that size, `op-mention` one `mention` that
+changes topic 0's inbound set, each measured with the board's derivations held
+live and its frames captured on their own. `commits` and `ops` are the
+transactions the client sent and the operations in them.
+
+arm               N op           commits    ops   outBytes  docsIn    bytesIn      ms
+q6-copies      1000 add               11     98  1,943,681      90  1,156,191    2583
+q6-copies      1000 mention            4      6    537,619       5      2,918     792
+r1-pruned      1000 add               12     99  1,864,356      91  1,172,081    2316
+r1-pruned      1000 mention            4      6    537,619       5      2,918     921
+r1-lazy        1000 add               11     99  1,945,159      91  1,156,721    2813
+r1-lazy        1000 mention            4      6    537,619       5      2,918     918
+r3-one-entry   1000 add               18    119  2,773,965    1105  2,588,615    4103
+r3-one-entry   1000 mention            4      7    216,342       6      3,058     415
+r5-best        1000 add               18    117  2,792,629     107  2,350,840    2808
+r5-best        1000 mention            4      7    216,114       6      3,047     363
+r6-table-copies 1000 add               11     96  1,679,375      89  1,187,957    2541
+r6-table-copies 1000 mention            4      5    433,927       5     34,959     759
+
+## Time
+
+`buildMs` files N topics and makes the mentions, and is the rig's cost rather
+than a product figure; `deferred` means the board's outputs were demanded once
+at the end of the build instead of throughout. `compileB` compiles the program
+in the fresh runtime, before the start. `pull` is `cell.pull()` on the topic's
+schema-less result cell, which is what `PiecesController.startPiece` does after
+`runtime.start`.
+
+arm               N   buildMs deferred   compileB  startMs  pullMs  pullOther  pullDocs
+q6-copies      1000     6,037 yes             122       90     102          0        54
+r1-pruned      1000     5,502 yes             119       87     102          0        54
+r1-lazy        1000     6,075 yes             137      278     104          0        54
+r3-one-entry   1000    42,594 yes             120      100     102          0        56
+r5-best        1000    41,808 yes             131       96     153          0        54
+r6-table-copies 1000     4,514 yes             108      181     119          0        54
+
+## The largest documents one start received
+
+### q6-copies, N=1000 (experiment-output/round2-1000/q6-copies-N1000.result.json)
+    228,966  board        of:fid1:fveh7ASvSU5-YwEkvK
+     37,451  self         of:fid1:2nbKS-X9HtETV7cvL9
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     12,747  board        of:fid1:qcnIlB7viHKvH4oeRn
+      5,482  schema       cid:fid1:a9UTXQourajfB19R4
+      5,441  schema       cid:fid1:rQMOJzpJ1or-EII7A
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### r1-pruned, N=1000 (experiment-output/round2-1000/r1-pruned-N1000.result.json)
+     37,451  self         of:fid1:1sYvIl8lxoIZNYt0ws
+     15,890  board        of:fid1:7RrFOAlEU25-3Ptk3U
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     13,002  board        of:fid1:u3W04Mq0ywS3nmjFC8
+      5,482  schema       cid:fid1:i6lSxZSYdoGhMVoRI
+      5,441  schema       cid:fid1:cXcs3gQDsbSQZxK95
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### r1-lazy, N=1000 (experiment-output/round2-1000/r1-lazy-N1000.result.json)
+    228,966  board        of:fid1:eSEBdpGmm6i0_RoCPu
+     37,693  self         of:fid1:L5HN4oGLMIYTiw8Xpw
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     12,747  board        of:fid1:whn5pdLDXsKlELsLOH
+      5,478  schema       cid:fid1:UlG2n-OjWGBfeZDP4
+      5,437  schema       cid:fid1:tDiHNtNduQ7NMRD5F
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### r3-one-entry, N=1000 (experiment-output/round2-1000/r3-one-entry-N1000.result.json)
+     38,457  self         of:fid1:vXqAm2saVuajyS7ywr
+     15,091  schema       cid:fid1:8SIgzDk98rLj6eAYj
+      5,691  schema       cid:fid1:l7hoP6-vBk9fvFSfZ
+      5,488  schema       cid:fid1:4d8Urpif0lmgneKnp
+      3,290  board        of:fid1:9ylX_2piZLo4tXHdZZ
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+      1,889  schema       cid:fid1:eHeAZlBksbySNz6f7
+### r5-best, N=1000 (experiment-output/round2-1000/r5-best-N1000.result.json)
+     37,451  self         of:fid1:Gar8pHO3XCc6TbkpR-
+     15,890  board        of:fid1:51ayyQ0yIPT8LWzPNa
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     13,645  board        of:fid1:FQ5r2Kb6J1_h5L_G3-
+      5,676  schema       cid:fid1:AbqPymyHLG1yq_Vto
+      5,478  schema       cid:fid1:AMHJbsof3KQR_b4Ko
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### r6-table-copies, N=1000 (experiment-output/round2-1000/r6-table-copies-N1000.result.json)
+    228,966  board        of:fid1:AhfVb7JJRg6wrrJhsS
+     37,451  self         of:fid1:VBo6P1cE-ONLEJQvVd
+     32,251  board        of:fid1:a7TL15uGux-R5PI3HV
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     12,414  board        of:fid1:SnaC6DVWy2ODqfg5Oh
+      5,612  schema       cid:fid1:vzpPqAsRkHoveUIeF
+      5,226  schema       cid:fid1:gYJK6kEoAGQkb7bFC
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k

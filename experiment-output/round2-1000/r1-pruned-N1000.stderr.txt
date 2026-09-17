@@ -1,0 +1,23 @@
+# 2026-09-17T20:02:13.554Z r1-pruned N=1000 build
+# 2026-09-17T20:02:14.987Z r1-pruned N=1000 synthesize
+# 2026-09-17T20:02:19.056Z r1-pruned N=1000 op-add
+[WARN][traverse::20:02:19.349] slow-traverse 155ms doc=of:fid1:rTI_71qLqJyHUNhzPo_ezEXP1Y5T4_XWQNhJhF04VTU/undefined trackerKeys=1008 trackerVals=1008 traverseSchema=5998 traversePtr=999 traverseArr=1000 traverseObj=1999 traverseDAG=0 anyOfBranches=0 anyOfFastRejects=0 anyOfPropertyMerges=0 getDocAtPath=1998 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=7 schemaMemo=5998 schemaMemoHits=0 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+[WARN][cell::20:02:19.350] get >150ms get() took 155ms {
+  id: "of:fid1:rTI_71qLqJyHUNhzPo_ezEXP1Y5T4_XWQNhJhF04VTU",
+  path: [ "entrySlots" ],
+  space: "did:key:z6MkvseyHJbChZZhkP6KJecRGNVEuT77jP3uMocHaf2PmXXY",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:RF3wyKCk6OIe12_p3XG-F-OZ-f5Br6tqfzxL61mE0KE" },
+  viaLinkHop: true
+}
+# 2026-09-17T20:02:21.503Z r1-pruned N=1000 op-mention
+# 2026-09-17T20:02:22.424Z r1-pruned N=1000 ownership
+# 2026-09-17T20:02:22.455Z r1-pruned N=1000 replay
+[ERROR][storage.v2::20:02:22.470] sync-load-failure sync completed without data for of:fid1:1sYvIl8lxoIZNYt0wsiR_D91bONd68vHBZaPkNKq3_M in did:key:z6MkvseyHJbChZZhkP6KJecRGNVEuT77jP3uMocHaf2PmXXY: ConnectionError: memory client closed
+# 2026-09-17T20:02:22.471Z r1-pruned N=1000 b-compile
+# 2026-09-17T20:02:22.590Z r1-pruned N=1000 start
+# 2026-09-17T20:02:22.677Z r1-pruned N=1000 pull
+Can't load profile-create.tsx
+# 2026-09-17T20:02:22.780Z r1-pruned N=1000 checks
+# 2026-09-17T20:02:22.780Z r1-pruned N=1000 attribution
+# result: experiment-output/round2-1000/r1-pruned-N1000.result.json

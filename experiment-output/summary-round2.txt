@@ -1,0 +1,357 @@
+# Runs read: 18
+# Commits: e942a22731b7ffcf315023b40c177fcdd8f99f7f afcac4397dba45aaece33f2bc0e986dc17b7943a
+# Deno 2.9.4; experimental {"modernCellRep":false,"commitPreconditions":true,"plainResultReceipts":true,"computedCellIds":true,"lazyMaterialization":true,"serverExecution":false,"contentAddressedSchemas":true,"readerSchemaPrecedence":true}
+
+## Arms
+
+- `r1-pruned` (topics): the copies arm with the board's mention universe bounded to its 50 most recently filed members
+- `r1-lazy` (topics): the copies arm where the editor completes over a session copy the open verb takes, so nothing reads the universe at startup
+- `r2-per-entry` (topics): the copies arm whose entries are filled one per topic, from that topic's own row of an index over the pivot
+- `r3-one-entry` (topics): everything the topic reads of its board in one handed entry: its name, its backlinks, the board's name and a bounded universe, all as values, filled one entry per topic
+- `r5-best` (topics): the two halves that measured best: entries filled one per topic, and the universe bounded and left as its own input rather than copied into every entry
+- `r6-table-copies` (topics): no handed reference: the board publishes its entries as one table of values and each topic finds its own row by the name it stores
+
+## Starting one topic: what the server delivered to a fresh runtime
+
+`other` counts documents belonging to another topic (its result, argument or
+pattern document, or a document whose `result` backlinks reach one of those).
+`self`, `board` and `schema` count the topic's own family, the board's, and
+content-addressed schema documents. `startMs` is wall-clock for
+`runtime.start` plus `idle()` plus `storage.synced()`.
+
+arm               N  other  otherBytes  docs      bytes  self  board  schema  startMs filed  checks (referencedBy, shortName)
+r1-pruned         4      0           0   172    146,339    72      3      87       88        {"referencedBy":2,"shortName":"1"}
+r1-pruned        40      0           0   172    157,452    72      3      87      134        {"referencedBy":2,"shortName":"1"}
+r1-pruned       200      0           0   172    160,723    72      3      87       90        {"referencedBy":2,"shortName":"1"}
+r1-lazy           4      0           0   175    146,379    72      3      89       94        {"referencedBy":2,"shortName":"1"}
+r1-lazy          40      0           0   175    154,504    72      3      89       86        {"referencedBy":2,"shortName":"1"}
+r1-lazy         200      0           0   175    190,971    72      3      89      119        {"referencedBy":2,"shortName":"1"}
+r2-per-entry      4      0           0   177    147,386    72      3      92       93        {"referencedBy":2,"shortName":"1"}
+r2-per-entry     40      0           0   177    155,511    72      3      92       98        {"referencedBy":2,"shortName":"1"}
+r2-per-entry    200      0           0   177    191,978    72      3      92       85        {"referencedBy":2,"shortName":"1"}
+r3-one-entry      4      0           0   166    132,180    74      1      80      183        {"referencedBy":2,"shortName":"1","collectionName":"topics"}
+r3-one-entry     40      0           0   166    134,221    74      1      80       84        {"referencedBy":2,"shortName":"1","collectionName":"topics"}
+r3-one-entry    200      0           0   166    134,972    74      1      80      116        {"referencedBy":2,"shortName":"1","collectionName":"topics"}
+r5-best           4      0           0   176    147,757    72      3      91       80        {"referencedBy":2,"shortName":"1"}
+r5-best          40      0           0   176    158,870    72      3      91      214        {"referencedBy":2,"shortName":"1"}
+r5-best         200      0           0   176    162,141    72      3      91       81        {"referencedBy":2,"shortName":"1"}
+r6-table-copies    4      0           0   168    144,356    72      4      85       94        {"referencedBy":2,"shortName":"1"}
+r6-table-copies   40      0           0   168    156,268    72      4      85       80        {"referencedBy":2,"shortName":"1"}
+r6-table-copies  200      0           0   168    210,196    72      4      85      125        {"referencedBy":2,"shortName":"1"}
+
+## The replayed demand (the #7439 method) against the same start
+
+Each replay root is one `session.queryGraph` the rig issued on the same store:
+the topic's argument document under the schema recorded on its argument link
+(`whole as recorded`), and each declared input's document under that input's
+property schema.
+
+arm               N root                          other  otherBytes  docs      bytes
+r1-pruned         4 START (measured)                  0           0   172    146,339
+                    replay whole as recorded          0           0    39     50,206
+                    replay input mentionable          0           0    17     15,705
+                    replay input ownEntry             0           0     5        762
+r1-pruned        40 START (measured)                  0           0   172    157,452
+                    replay whole as recorded          0           0    39     64,847
+                    replay input mentionable          0           0    17     30,342
+                    replay input ownEntry             0           0     5        766
+r1-pruned       200 START (measured)                  0           0   172    160,723
+                    replay whole as recorded          0           0    39     69,098
+                    replay input mentionable          0           0    17     34,589
+                    replay input ownEntry             0           0     5        770
+r1-lazy           4 START (measured)                  0           0   175    146,379
+                    replay whole as recorded          0           0    40     49,643
+                    replay input mentionable          0           0    18     15,148
+                    replay input ownEntry             0           0     5        762
+r1-lazy          40 START (measured)                  0           0   175    154,504
+                    replay whole as recorded          0           0    40     57,768
+                    replay input mentionable          0           0    18     23,269
+                    replay input ownEntry             0           0     5        766
+r1-lazy         200 START (measured)                  0           0   175    190,971
+                    replay whole as recorded          0           0    40     94,235
+                    replay input mentionable          0           0    18     59,732
+                    replay input ownEntry             0           0     5        770
+r2-per-entry      4 START (measured)                  0           0   177    147,386
+                    replay whole as recorded          0           0    42     50,340
+                    replay input mentionable          0           0    20     15,791
+                    replay input ownEntry             0           0     5        762
+r2-per-entry     40 START (measured)                  0           0   177    155,511
+                    replay whole as recorded          0           0    42     58,465
+                    replay input mentionable          0           0    20     23,912
+                    replay input ownEntry             0           0     5        766
+r2-per-entry    200 START (measured)                  0           0   177    191,978
+                    replay whole as recorded          0           0    42     94,932
+                    replay input mentionable          0           0    20     60,375
+                    replay input ownEntry             0           0     5        770
+r3-one-entry      4 START (measured)                  0           0   166    132,180
+                    replay whole as recorded          0           0    41     51,048
+                    replay input ownEntry             0           0    22     15,989
+r3-one-entry     40 START (measured)                  0           0   166    134,221
+                    replay whole as recorded          0           0    41     53,089
+                    replay input ownEntry             0           0    22     18,030
+r3-one-entry    200 START (measured)                  0           0   166    134,972
+                    replay whole as recorded          0           0    41     53,840
+                    replay input ownEntry             0           0    22     18,781
+r5-best           4 START (measured)                  0           0   176    147,757
+                    replay whole as recorded          0           0    41     50,863
+                    replay input mentionable          0           0    19     16,329
+                    replay input ownEntry             0           0     5        762
+r5-best          40 START (measured)                  0           0   176    158,870
+                    replay whole as recorded          0           0    41     65,504
+                    replay input mentionable          0           0    19     30,966
+                    replay input ownEntry             0           0     5        766
+r5-best         200 START (measured)                  0           0   176    162,141
+                    replay whole as recorded          0           0    41     69,755
+                    replay input mentionable          0           0    19     35,213
+                    replay input ownEntry             0           0     5        770
+r6-table-copies    4 START (measured)                  0           0   168    144,356
+                    replay whole as recorded          0           0    37     49,146
+                    replay input mentionable          0           0    17     14,503
+                    replay input boardEntries         0           0    15     13,579
+r6-table-copies   40 START (measured)                  0           0   168    156,268
+                    replay whole as recorded          0           0    37     61,058
+                    replay input mentionable          0           0    17     22,624
+                    replay input boardEntries         0           0    15     17,370
+r6-table-copies  200 START (measured)                  0           0   168    210,196
+                    replay whole as recorded          0           0    37    114,986
+                    replay input mentionable          0           0    17     59,087
+                    replay input boardEntries         0           0    15     34,835
+
+## What the board pays
+
+`op-add` is one `addTopic` at that size, `op-mention` one `mention` that
+changes topic 0's inbound set, each measured with the board's derivations held
+live and its frames captured on their own. `commits` and `ops` are the
+transactions the client sent and the operations in them.
+
+arm               N op           commits    ops   outBytes  docsIn    bytesIn      ms
+r1-pruned         4 add               12     99    142,761      89     68,964     114
+r1-pruned         4 mention            4     13     12,502       9      3,761      24
+r1-pruned        40 add               12     99    267,326     165    146,995     277
+r1-pruned        40 mention            4    121     85,782      81     13,177      79
+r1-pruned       200 add               12     99    823,029     485    443,094    2950
+r1-pruned       200 mention            4    601    412,751     401     55,399     415
+r1-lazy           4 add               11     99    142,927      89     67,983     117
+r1-lazy           4 mention            4     13     12,494       9      3,761      25
+r1-lazy          40 add               11     99    267,484     165    134,905     375
+r1-lazy          40 mention            4    121     85,777      81     13,177      77
+r1-lazy         200 add               11     99    816,786     485    427,737    3206
+r1-lazy         200 mention            4    601    412,912     401     55,399     524
+r2-per-entry      4 add               17    116    176,583      99     77,549     136
+r2-per-entry      4 mention            4      7      9,826       6      3,379      23
+r2-per-entry     40 add               17    116    318,337     179    188,031     558
+r2-per-entry     40 mention            4      7     24,808       6      3,382      43
+r2-per-entry    200 add               17    116    948,243     499    668,326    3122
+r2-per-entry    200 mention            4      7     93,177       6      3,385     212
+r3-one-entry      4 add               18    119    180,997     102     79,901     132
+r3-one-entry      4 mention            4      7      9,842       6      3,390      20
+r3-one-entry     40 add               18    119    318,823     182    200,532     427
+r3-one-entry     40 mention            4      7     25,034       6      3,393      38
+r3-one-entry    200 add               18    119    935,936     502    714,854   11541
+r3-one-entry    200 mention            4      7     93,594       6      3,396     246
+r5-best           4 add               18    117    178,885     108     81,635     120
+r5-best           4 mention            4      7      9,584       6      3,379      19
+r5-best          40 add               18    117    319,651     180    200,651     428
+r5-best          40 mention            4      7     24,810       6      3,382      42
+r5-best         200 add               18    117    955,941     500    684,213    2863
+r5-best         200 mention            4      7     92,986       6      3,385     182
+r6-table-copies    4 add               11     96    140,018      87     67,241     123
+r6-table-copies    4 mention            4      5      9,952       5      3,659      59
+r6-table-copies   40 add               11     96    247,226     162    145,634     245
+r6-table-copies   40 mention            4      5     44,194       5      7,453      50
+r6-table-copies  200 add               11     96    722,945     482    490,221    2766
+r6-table-copies  200 mention            4      5    199,817       5     24,921     476
+
+## Time
+
+`buildMs` files N topics and makes the mentions, and is the rig's cost rather
+than a product figure; `deferred` means the board's outputs were demanded once
+at the end of the build instead of throughout. `compileB` compiles the program
+in the fresh runtime, before the start. `pull` is `cell.pull()` on the topic's
+schema-less result cell, which is what `PiecesController.startPiece` does after
+`runtime.start`.
+
+arm               N   buildMs deferred   compileB  startMs  pullMs  pullOther  pullDocs
+r1-pruned         4     2,045 no              131       88     108          0        54
+r1-pruned        40     8,901 yes             110      134     167          0        54
+r1-pruned       200   286,172 yes             218       90     101          0        54
+r1-lazy           4     1,731 no              114       94     116          0        54
+r1-lazy          40     8,562 yes             118       86      94          0        54
+r1-lazy         200   334,369 yes             154      119     134          0        54
+r2-per-entry      4     1,919 no              123       93     124          0        54
+r2-per-entry     40     9,895 yes             127       98     100          0        54
+r2-per-entry    200   291,301 yes             145       85      92          0        54
+r3-one-entry      4     2,002 no              144      183     100          0        56
+r3-one-entry     40     8,584 yes             129       84      88          0        56
+r3-one-entry    200   303,479 yes             175      116     125          0        56
+r5-best           4     2,235 yes             106       80      94          0        54
+r5-best          40     9,106 yes             133      214     102          0        54
+r5-best         200   278,489 yes             118       81      92          0        54
+r6-table-copies    4     1,609 no              126       94     117          0        54
+r6-table-copies   40     8,793 yes             108       80      89          0        54
+r6-table-copies  200   294,570 yes             140      125     124          0        54
+
+## The largest documents one start received
+
+### r1-pruned, N=4 (experiment-output/round2/r1-pruned-N4.result.json)
+     37,451  self         of:fid1:23JLd9nceVGuafnDkf
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     13,002  board        of:fid1:FhlCrVuZxjykBASTc5
+      5,482  schema       cid:fid1:i6lSxZSYdoGhMVoRI
+      5,441  schema       cid:fid1:cXcs3gQDsbSQZxK95
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+      1,889  schema       cid:fid1:eHeAZlBksbySNz6f7
+### r1-pruned, N=40 (experiment-output/round2/r1-pruned-N40.result.json)
+     37,451  self         of:fid1:z32EOGXUDbz5kZMrxM
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     13,002  board        of:fid1:k4NvlvkXwmKZ3uuebH
+     12,620  board        of:fid1:OmeIWBo2RAqFeme1TA
+      5,482  schema       cid:fid1:i6lSxZSYdoGhMVoRI
+      5,441  schema       cid:fid1:cXcs3gQDsbSQZxK95
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### r1-pruned, N=200 (experiment-output/round2/r1-pruned-N200.result.json)
+     37,451  self         of:fid1:W5A25-lsMqhAKkT8Xi
+     15,887  board        of:fid1:WdmiqOfIprJqkmBSJv
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     13,002  board        of:fid1:WPWOC9auwoj1VPNICS
+      5,482  schema       cid:fid1:i6lSxZSYdoGhMVoRI
+      5,441  schema       cid:fid1:cXcs3gQDsbSQZxK95
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### r1-lazy, N=4 (experiment-output/round2/r1-lazy-N4.result.json)
+     37,693  self         of:fid1:KcOlJLcl8AWE2aeAnv
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     12,747  board        of:fid1:sLXEYWkJdynKfh5F4Z
+      5,478  schema       cid:fid1:UlG2n-OjWGBfeZDP4
+      5,437  schema       cid:fid1:tDiHNtNduQ7NMRD5F
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+      1,889  schema       cid:fid1:eHeAZlBksbySNz6f7
+### r1-lazy, N=40 (experiment-output/round2/r1-lazy-N40.result.json)
+     37,693  self         of:fid1:nhyRkbWHn7JN3y5-ml
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     12,747  board        of:fid1:ZCwYjX8TnInbEtqOnD
+      9,300  board        of:fid1:WRIDa339RzK4_Uv2t6
+      5,478  schema       cid:fid1:UlG2n-OjWGBfeZDP4
+      5,437  schema       cid:fid1:tDiHNtNduQ7NMRD5F
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### r1-lazy, N=200 (experiment-output/round2/r1-lazy-N200.result.json)
+     45,763  board        of:fid1:wzOll6xrG3RYnhMA9h
+     37,693  self         of:fid1:xR31SvH3ZbBdoPM3ak
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     12,747  board        of:fid1:zBPlm5ET-xSqKz7wC4
+      5,478  schema       cid:fid1:UlG2n-OjWGBfeZDP4
+      5,437  schema       cid:fid1:tDiHNtNduQ7NMRD5F
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### r2-per-entry, N=4 (experiment-output/round2/r2-per-entry-N4.result.json)
+     37,451  self         of:fid1:Pcfx8wFCdh20N8M6xx
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     13,390  board        of:fid1:vNdZwzmW9qiN9sa9Qe
+      5,691  schema       cid:fid1:HAuDl4xGptkDmzVTa
+      5,488  schema       cid:fid1:YZF5fOzPGG5Vvn3nh
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+      1,889  schema       cid:fid1:eHeAZlBksbySNz6f7
+### r2-per-entry, N=40 (experiment-output/round2/r2-per-entry-N40.result.json)
+     37,451  self         of:fid1:cmaf8jKyPQKCGE0y9O
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     13,390  board        of:fid1:RFwijMpxnfzTI5M4Y2
+      9,300  board        of:fid1:nPbEAPfP5cIyl_BOfO
+      5,691  schema       cid:fid1:HAuDl4xGptkDmzVTa
+      5,488  schema       cid:fid1:YZF5fOzPGG5Vvn3nh
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### r2-per-entry, N=200 (experiment-output/round2/r2-per-entry-N200.result.json)
+     45,763  board        of:fid1:gFX1MIMifa4Ul6GjTN
+     37,451  self         of:fid1:Is1C_E1tQ1d0CjjyO9
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     13,390  board        of:fid1:yVNYHsmjP-LfKOPOb7
+      5,691  schema       cid:fid1:HAuDl4xGptkDmzVTa
+      5,488  schema       cid:fid1:YZF5fOzPGG5Vvn3nh
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### r3-one-entry, N=4 (experiment-output/round2/r3-one-entry-N4.result.json)
+     38,457  self         of:fid1:mzz7tKz3klOQ-VJ8Sk
+     15,091  schema       cid:fid1:8SIgzDk98rLj6eAYj
+      5,691  schema       cid:fid1:l7hoP6-vBk9fvFSfZ
+      5,488  schema       cid:fid1:4d8Urpif0lmgneKnp
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+      1,889  schema       cid:fid1:eHeAZlBksbySNz6f7
+      1,664  schema       cid:fid1:MPdRIepoWmgSci9-0
+### r3-one-entry, N=40 (experiment-output/round2/r3-one-entry-N40.result.json)
+     38,457  self         of:fid1:kFbNTDSGyPrOUI9pj2
+     15,091  schema       cid:fid1:8SIgzDk98rLj6eAYj
+      5,691  schema       cid:fid1:l7hoP6-vBk9fvFSfZ
+      5,488  schema       cid:fid1:4d8Urpif0lmgneKnp
+      2,540  board        of:fid1:SZa8fkZ8IPL_YCINhl
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+      1,889  schema       cid:fid1:eHeAZlBksbySNz6f7
+### r3-one-entry, N=200 (experiment-output/round2/r3-one-entry-N200.result.json)
+     38,457  self         of:fid1:cNbxNqzkaQqp2P18Ee
+     15,091  schema       cid:fid1:8SIgzDk98rLj6eAYj
+      5,691  schema       cid:fid1:l7hoP6-vBk9fvFSfZ
+      5,488  schema       cid:fid1:4d8Urpif0lmgneKnp
+      3,287  board        of:fid1:aP5etGwT9Y76-okpvN
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+      1,889  schema       cid:fid1:eHeAZlBksbySNz6f7
+### r5-best, N=4 (experiment-output/round2/r5-best-N4.result.json)
+     37,451  self         of:fid1:iQbOk7CUZCLRREATl4
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     13,645  board        of:fid1:KBEDoTD9nNEUKOviw4
+      5,676  schema       cid:fid1:AbqPymyHLG1yq_Vto
+      5,478  schema       cid:fid1:AMHJbsof3KQR_b4Ko
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+      1,889  schema       cid:fid1:eHeAZlBksbySNz6f7
+### r5-best, N=40 (experiment-output/round2/r5-best-N40.result.json)
+     37,451  self         of:fid1:mmB54PwBYJ2WE_cMrY
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     13,645  board        of:fid1:VvOj5BXjOQPkz4tofe
+     12,620  board        of:fid1:jMJ2VsLE4GhCu5z0rT
+      5,676  schema       cid:fid1:AbqPymyHLG1yq_Vto
+      5,478  schema       cid:fid1:AMHJbsof3KQR_b4Ko
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### r5-best, N=200 (experiment-output/round2/r5-best-N200.result.json)
+     37,451  self         of:fid1:ajiJK1jBbR1Ni04j4l
+     15,887  board        of:fid1:D-BwYpDxUWFHvi17aN
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     13,645  board        of:fid1:_mRDr5zZLpPR_VCOre
+      5,676  schema       cid:fid1:AbqPymyHLG1yq_Vto
+      5,478  schema       cid:fid1:AMHJbsof3KQR_b4Ko
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+### r6-table-copies, N=4 (experiment-output/round2/r6-table-copies-N4.result.json)
+     37,451  self         of:fid1:EzougK6QsZmB6vfLGz
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     12,414  board        of:fid1:bGuWnpbiSfN4L6Ds_Z
+      5,612  schema       cid:fid1:vzpPqAsRkHoveUIeF
+      5,226  schema       cid:fid1:gYJK6kEoAGQkb7bFC
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+      1,916  schema       cid:fid1:_HoOxMWe9VU4v3ge9
+      1,889  schema       cid:fid1:eHeAZlBksbySNz6f7
+### r6-table-copies, N=40 (experiment-output/round2/r6-table-copies-N40.result.json)
+     37,451  self         of:fid1:m3kjQtC8WtKsadPYu3
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     12,414  board        of:fid1:MZrl_X5NcPMzdlRGh5
+      9,300  board        of:fid1:IZ83Il1gn9ZnZOdj5U
+      5,612  schema       cid:fid1:vzpPqAsRkHoveUIeF
+      5,226  schema       cid:fid1:gYJK6kEoAGQkb7bFC
+      4,410  board        of:fid1:J5xlnUGAPFsxpgvyyU
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k
+### r6-table-copies, N=200 (experiment-output/round2/r6-table-copies-N200.result.json)
+     45,763  board        of:fid1:_7IUUju-BqZUmBATdK
+     37,451  self         of:fid1:p1bishbLn-DEF-6jrY
+     21,875  board        of:fid1:_FlwRi4A-BcYrzHE9u
+     14,793  schema       cid:fid1:hJxN5jKpz-VfTn5xx
+     12,414  board        of:fid1:X2XSERN4lMb_zBAnIV
+      5,612  schema       cid:fid1:vzpPqAsRkHoveUIeF
+      5,226  schema       cid:fid1:gYJK6kEoAGQkb7bFC
+      2,509  schema       cid:fid1:7kgY8QF8_QFlxWS8k

@@ -1,0 +1,13 @@
+# 2026-09-17T19:23:26.833Z r6-table-copies N=40 build
+# 2026-09-17T19:23:35.626Z r6-table-copies N=40 op-add
+# 2026-09-17T19:23:36.173Z r6-table-copies N=40 op-mention
+# 2026-09-17T19:23:36.223Z r6-table-copies N=40 ownership
+# 2026-09-17T19:23:36.226Z r6-table-copies N=40 replay
+[ERROR][storage.v2::19:23:36.243] sync-load-failure sync completed without data for of:fid1:m3kjQtC8WtKsadPYu3pZpEtCImOJMDGo0WHy2J0N0RA in did:key:z6MkwH3uVED7ieysgfsDAqKNgp1XfWQv2RAM5WmbCa5Yzenp: ConnectionError: memory client closed
+# 2026-09-17T19:23:36.243Z r6-table-copies N=40 b-compile
+# 2026-09-17T19:23:36.353Z r6-table-copies N=40 start
+# 2026-09-17T19:23:36.432Z r6-table-copies N=40 pull
+Can't load profile-create.tsx
+# 2026-09-17T19:23:36.522Z r6-table-copies N=40 checks
+# 2026-09-17T19:23:36.522Z r6-table-copies N=40 attribution
+# result: experiment-output/round2/r6-table-copies-N40.result.json

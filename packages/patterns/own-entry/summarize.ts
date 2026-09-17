@@ -29,6 +29,13 @@ const ARM_ORDER = [
   "q4-handed",
   "q6-copies",
   "q7-board-name",
+  "r1-pruned",
+  "r1-lazy",
+  "r2-per-entry",
+  "r3-one-entry",
+  "r4-adopt",
+  "r5-best",
+  "r6-table-copies",
 ];
 runs.sort((left, right) =>
   ARM_ORDER.indexOf(left.arm) - ARM_ORDER.indexOf(right.arm) ||
@@ -74,7 +81,9 @@ console.log(
     pad("otherBytes", 11)
   } ${pad("docs", 5)} ${pad("bytes", 10)} ${pad("self", 5)} ${
     pad("board", 6)
-  } ${pad("schema", 7)} ${pad("startMs", 8)}  checks (referencedBy, shortName)`,
+  } ${pad("schema", 7)} ${pad("startMs", 8)} ${
+    padRight("filed", 6)
+  } checks (referencedBy, shortName)`,
 );
 for (const run of runs) {
   const phase = run.phases.start;
@@ -85,7 +94,9 @@ for (const run of runs) {
       pad(phase.selfDocs + phase.selfFamilyDocs, 5)
     } ${pad(phase.boardDocs + phase.boardFamilyDocs, 6)} ${
       pad(phase.schemaDocs, 7)
-    } ${pad(run.ms.start, 8)}  ${
+    } ${pad(run.ms.start, 8)} ${
+      padRight(run.synthesize === true ? "synth" : "", 6)
+    } ${
       JSON.stringify({
         referencedBy: run.checksB?.referencedBy,
         shortName: run.checksB?.shortName,
@@ -204,6 +215,49 @@ for (const run of runs) {
       `  ${pad(n(document.bytes), 9)}  ${padRight(document.whose, 12)} ${
         document.scope === "space" ? "" : document.scope + " "
       }${document.id}`,
+    );
+  }
+}
+
+const adopted = runs.filter((run) => run.adoption !== undefined);
+if (adopted.length > 0) {
+  console.log(`
+## Handing an entry to a topic filed before the design
+
+\`mint\` is one entry document created and put in the board's slots, in one
+transaction — what an operator's tooling does, because the board verb that
+mints them all does not settle (see COMMANDS.md). \`adopt\` is handing that ONE
+topic the entry: \`verb\` is the topic's own verb writing its own input,
+\`operator\` is a write into that topic's argument from outside. \`checks\` is
+what the topic computed from the entry afterwards, in a fresh runtime.
+`);
+  console.log(
+    `${padRight("route", 10)} ${pad("N", 4)} ${pad("minted", 7)} ${
+      pad("mint commits/ops/bytes", 27)
+    } ${pad("adopt commits/ops/bytes", 24)} ${pad("adoptMs", 8)}  checks`,
+  );
+  for (const run of adopted) {
+    const backfill = run.phases["op-mint"];
+    const adopt = run.phases["op-adopt"];
+    console.log(
+      `${padRight(run.adoption.route, 10)} ${pad(run.N, 4)} ${pad(1, 7)} ${
+        pad(
+          `${backfill.commits} / ${backfill.commitOps} / ${
+            n(backfill.bytesOut)
+          }`,
+          27,
+        )
+      } ${
+        pad(
+          `${adopt.commits} / ${adopt.commitOps} / ${n(adopt.bytesOut)}`,
+          24,
+        )
+      } ${pad(run.adoption.adoptMs, 8)}  ${
+        JSON.stringify({
+          referencedBy: run.checksB?.referencedBy,
+          shortName: run.checksB?.shortName,
+        })
+      }`,
     );
   }
 }

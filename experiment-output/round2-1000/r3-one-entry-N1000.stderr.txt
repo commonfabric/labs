@@ -1,0 +1,33 @@
+# 2026-09-17T20:00:58.921Z r3-one-entry N=1000 build
+# 2026-09-17T20:01:00.731Z r3-one-entry N=1000 synthesize
+[WARN][traverse::20:01:04.850] slow-traverse 110ms doc=of:fid1:Gv7Oim4mkUFNl03m8AXlBWk8FtbM74dzHOtO2q0Bihg/undefined trackerKeys=1004 trackerVals=1004 traverseSchema=5995 traversePtr=999 traverseArr=1 traverseObj=999 traverseDAG=0 anyOfBranches=0 anyOfFastRejects=0 anyOfPropertyMerges=0 getDocAtPath=1998 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=4 schemaMemo=5995 schemaMemoHits=0 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+# 2026-09-17T20:01:41.516Z r3-one-entry N=1000 op-add
+[WARN][traverse::20:01:41.777] slow-traverse 174ms doc=of:fid1:_YmAS_4gQTVGw91MEwKpx-GnXC5AmMZPOWnxMom_De4/undefined trackerKeys=1010 trackerVals=1010 traverseSchema=59095 traversePtr=1998 traverseArr=1999 traverseObj=2049 traverseDAG=0 anyOfBranches=0 anyOfFastRejects=0 anyOfPropertyMerges=0 getDocAtPath=3996 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=8 schemaMemo=9195 schemaMemoHits=49900 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+[WARN][cell::20:01:41.777] get >170ms get() took 174ms {
+  id: "of:fid1:_YmAS_4gQTVGw91MEwKpx-GnXC5AmMZPOWnxMom_De4",
+  path: [ "entrySlots" ],
+  space: "did:key:z6Mkk3t8DL8LgL256oM6YXdkqmHZ2xdRjmGfPjaBn9Jwfxoe",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:A7ZCAnLjKm6MekGIqk2gftX8R3-jNIuroPeaZbwHmbc" },
+  viaLinkHop: true
+}
+[WARN][traverse::20:01:42.169] slow-traverse 171ms doc=of:fid1:_YmAS_4gQTVGw91MEwKpx-GnXC5AmMZPOWnxMom_De4/undefined trackerKeys=1010 trackerVals=1010 traverseSchema=59095 traversePtr=1998 traverseArr=1999 traverseObj=2049 traverseDAG=0 anyOfBranches=0 anyOfFastRejects=0 anyOfPropertyMerges=0 getDocAtPath=3996 dagMemo=0 uniqueDocs=0 uniquePaths=0 maxDepth=8 schemaMemo=9195 schemaMemoHits=49900 topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)
+[WARN][cell::20:01:42.169] get >170ms get() took 170ms {
+  id: "of:fid1:_YmAS_4gQTVGw91MEwKpx-GnXC5AmMZPOWnxMom_De4",
+  path: [ "entrySlots" ],
+  space: "did:key:z6Mkk3t8DL8LgL256oM6YXdkqmHZ2xdRjmGfPjaBn9Jwfxoe",
+  scope: "space",
+  schema: { "$ref": "cid:fid1:A7ZCAnLjKm6MekGIqk2gftX8R3-jNIuroPeaZbwHmbc" },
+  viaLinkHop: true
+}
+# 2026-09-17T20:01:45.878Z r3-one-entry N=1000 op-mention
+# 2026-09-17T20:01:46.294Z r3-one-entry N=1000 ownership
+# 2026-09-17T20:01:46.327Z r3-one-entry N=1000 replay
+[ERROR][storage.v2::20:01:47.324] sync-load-failure sync completed without data for of:fid1:lVLRRNKubWjB_ZUZEpl3YuDNqIUFcITB5wuDsI5Psx0 in did:key:z6Mkk3t8DL8LgL256oM6YXdkqmHZ2xdRjmGfPjaBn9Jwfxoe: ConnectionError: memory client closed
+# 2026-09-17T20:01:47.325Z r3-one-entry N=1000 b-compile
+# 2026-09-17T20:01:47.445Z r3-one-entry N=1000 start
+# 2026-09-17T20:01:47.545Z r3-one-entry N=1000 pull
+Can't load profile-create.tsx
+# 2026-09-17T20:01:47.648Z r3-one-entry N=1000 checks
+# 2026-09-17T20:01:47.649Z r3-one-entry N=1000 attribution
+# result: experiment-output/round2-1000/r3-one-entry-N1000.result.json

@@ -1,0 +1,13 @@
+# 2026-09-17T19:22:44.972Z r1-pruned N=40 build
+# 2026-09-17T19:22:53.874Z r1-pruned N=40 op-add
+# 2026-09-17T19:22:54.361Z r1-pruned N=40 op-mention
+# 2026-09-17T19:22:54.440Z r1-pruned N=40 ownership
+# 2026-09-17T19:22:54.443Z r1-pruned N=40 replay
+[ERROR][storage.v2::19:22:54.461] sync-load-failure sync completed without data for of:fid1:z32EOGXUDbz5kZMrxMIhWI4pQorOafqBYxxzhjdaXEw in did:key:z6MkgpNsVA8nLZ9mWPQxoEK1DtP4Ns1SzJLwbxS8aCKT5zCV: ConnectionError: memory client closed
+# 2026-09-17T19:22:54.461Z r1-pruned N=40 b-compile
+# 2026-09-17T19:22:54.572Z r1-pruned N=40 start
+# 2026-09-17T19:22:54.706Z r1-pruned N=40 pull
+Can't load profile-create.tsx
+# 2026-09-17T19:22:54.873Z r1-pruned N=40 checks
+# 2026-09-17T19:22:54.874Z r1-pruned N=40 attribution
+# result: experiment-output/round2/r1-pruned-N40.result.json

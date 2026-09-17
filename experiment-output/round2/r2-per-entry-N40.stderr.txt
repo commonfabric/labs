@@ -1,0 +1,12 @@
+# 2026-09-17T19:23:05.394Z r2-per-entry N=40 build
+# 2026-09-17T19:23:15.289Z r2-per-entry N=40 op-add
+# 2026-09-17T19:23:16.017Z r2-per-entry N=40 op-mention
+# 2026-09-17T19:23:16.061Z r2-per-entry N=40 ownership
+# 2026-09-17T19:23:16.063Z r2-per-entry N=40 replay
+# 2026-09-17T19:23:16.090Z r2-per-entry N=40 b-compile
+# 2026-09-17T19:23:16.218Z r2-per-entry N=40 start
+# 2026-09-17T19:23:16.315Z r2-per-entry N=40 pull
+Can't load profile-create.tsx
+# 2026-09-17T19:23:16.416Z r2-per-entry N=40 checks
+# 2026-09-17T19:23:16.416Z r2-per-entry N=40 attribution
+# result: experiment-output/round2/r2-per-entry-N40.result.json
