@@ -160,3 +160,13 @@ against `runs/q6-copies-N40.result.json`, `ms.build`), and N=200 did not
 finish. That build cost is unattributed. The arm's N = 4, 10 and 40 runs
 completed and are what § 7 of the report uses; its sibling `q6-copies`, which
 differs only by that reference, has an N=200 run.
+
+## One thing the records do not say
+
+The rig began recording `deferDemand`, `forward` and `movedTo` in its result
+file only after the N = 100 and N = 200 runs were taken, so those records read
+`"deferDemand": null`. They were invoked with `--defer-demand=true`, as the
+commands above show, and their `ms.build` is consistent with it (q3-index:
+21,385 ms at N=40 with the demand held throughout against 9,948 ms deferred, in
+`defer-check/`). Every run under `forward/`, `forward-resolved/` and
+`runs-resolved/` records all three fields.
