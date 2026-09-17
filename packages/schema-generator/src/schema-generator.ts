@@ -500,9 +500,16 @@ const PRIMITIVE_TYPE_NAMES = new Set([
 
 /**
  * What a primitive schema accepts: the primitive types, and the values when
- * a `const` or an `enum` makes them finite.
+ * a `const` or an `enum` makes them finite. `void` has the domain of
+ * `undefined` — beside another primitive the checker reduces it as one — and
+ * is marked, because beside an object it is not the nullish part that
+ * `undefined` is, and because `undefined & void` is `undefined`.
  */
-type PrimitiveDomain = { types: string[]; values: unknown[] | undefined };
+type PrimitiveDomain = {
+  types: string[];
+  values: unknown[] | undefined;
+  isVoid: boolean;
+};
 
 /** The primitive type name of a literal value. */
 function primitiveTypeOf(value: unknown): string {
@@ -518,6 +525,13 @@ function primitiveTypeOf(value: unknown): string {
 function primitiveDomain(
   schema: MutableJSONSchemaObj,
 ): PrimitiveDomain | undefined {
+  // `void` lowers to the opaque marker and nothing else.
+  if (
+    Object.keys(schema).length === 1 && Array.isArray(schema.asCell) &&
+    schema.asCell.length === 1 && schema.asCell[0] === "opaque"
+  ) {
+    return { types: ["undefined"], values: undefined, isVoid: true };
+  }
   const values = "const" in schema
     ? [schema.const]
     : Array.isArray(schema.enum)
@@ -534,7 +548,7 @@ function primitiveDomain(
     Object.keys(schema).every((key) =>
       key === "type" || key === "const" || key === "enum"
     );
-  return primitivesOnly ? { types, values } : undefined;
+  return primitivesOnly ? { types, values, isVoid: false } : undefined;
 }
 
 /**
@@ -571,13 +585,48 @@ function intersectPrimitives(
       ? left === right
       : left.length === right.length &&
         left.every((value) => right.some((other) => Object.is(value, other)));
-  const exact = parts.find((_part, index) =>
-    same(domains[index]!.types, types) && same(domains[index]!.values, values)
-  );
-  if (exact !== undefined) return exact;
+  const says = (index: number) =>
+    same(domains[index]!.types, types) && same(domains[index]!.values, values);
+  const indexes = parts.map((_part, index) => index);
+  const exact =
+    indexes.find((index) => !domains[index]!.isVoid && says(index)) ??
+      indexes.find(says);
+  if (exact !== undefined) return parts[exact]!;
   if (values !== undefined) return { enum: values } as MutableJSONSchema;
   type SchemaType = NonNullable<MutableJSONSchemaObj["type"]>;
   return { type: (types.length === 1 ? types[0]! : types) as SchemaType };
+}
+
+/**
+ * `parts` with its primitive schemas intersected into one, or `false` when
+ * they are disjoint. The one that survives stands where it stood — the
+ * checker drops the wider part and keeps the narrower in place, and the
+ * order decides which refused part the merge meets first — and a result
+ * none of them spelled stands where the first of them stood. Parts that are
+ * no primitive stay as they are, in order.
+ */
+function reducePrimitiveParts(
+  parts: MutableJSONSchemaObj[],
+): MutableJSONSchemaObj[] | false {
+  const domains = parts.map(primitiveDomain);
+  const primitive = parts.filter((_part, index) =>
+    domains[index] !== undefined
+  );
+  if (primitive.length < 2) return parts;
+  const met = intersectPrimitives(
+    primitive,
+    domains.filter((domain) => domain !== undefined),
+  );
+  if (met === false) return false;
+  const survivor = parts.indexOf(met as MutableJSONSchemaObj);
+  const stands = survivor >= 0 ? survivor : parts.indexOf(primitive[0]!);
+  return parts.flatMap((part, index) =>
+    index === stands
+      ? [met as MutableJSONSchemaObj]
+      : domains[index] === undefined
+      ? [part]
+      : []
+  );
 }
 
 /** Whether a schema is an object with no members to speak of: `{}`. */
@@ -590,65 +639,115 @@ function isEmptyObjectSchema(schema: MutableJSONSchema): boolean {
 }
 
 /**
- * The schema of an intersection whose constituents have these schemas, none
- * of them a union, reduced the way the checker reduces the types before
- * `IntersectionFormatter` merges them. Nothing comes first: a constituent
- * accepting nothing (`never`) leaves nothing, and so do constituents that
- * reduce to nothing between themselves — `string & number`, `null` beside
- * an object — whatever else is there. Only then does one accepting anything
- * (`any`) make the whole accept anything. The rest reduce in this order:
- * `unknown` is the identity and drops out; an empty object drops out beside anything
- * else and takes `null` and `undefined` with it, `T & {}` being
- * `NonNullable<T>`; primitives are narrowed or found disjoint
- * (`intersectPrimitives`); and `null` or `undefined` beside an object leaves
- * nothing. What remains is one schema, returned as it is, or object schemas
- * whose properties are unioned (the first definition kept on a clash) and
- * whose `required` lists are unioned. A constituent that merge refuses — a
- * non-object, or one with an index signature, which an array is — yields
- * the same unsupported-pattern fallback the type-based path emits.
+ * The schema of an intersection whose constituents have these schemas, as
+ * the checker settles one. Identical constituents fold. A constituent
+ * accepting nothing (`never`) leaves nothing. One accepting anything (`any`)
+ * makes the whole accept anything — unless the constituents beside it that
+ * are no union already contradict each other, which is as far as the checker
+ * looks before `any` wins: it never distributes a union beside `any`, so
+ * `any & null & (string | number)` is `any` where `any & null & string` is
+ * nothing. Otherwise a union constituent distributes, and every combination
+ * of arms is merged on its own (`mergeParts`).
  */
-function mergeIntersection(
-  parts: MutableJSONSchema[],
+function intersectionOf(
+  constituents: MutableJSONSchema[],
   context: GenerationContext,
 ): MutableJSONSchema {
-  if (parts.some((part) => part === false)) return false;
-  const definite = parts.filter((part) => part !== true);
-  if (definite.length === parts.length) return mergeDefinite(parts, context);
-  // `any` wins only over what is still possible without it.
-  return definite.length > 0 && mergeDefinite(definite, context) === false
-    ? false
-    : true;
+  const distinct = dedupeByValueEqual(constituents);
+  if (distinct.some((constituent) => constituent === false)) return false;
+  const arms = distinct
+    .filter((constituent) => constituent !== true)
+    .map((constituent) => unionArms(constituent, context));
+  if (arms.length < distinct.length) {
+    const direct = arms
+      .filter((alternatives) => alternatives.length === 1)
+      .map((alternatives) => alternatives[0] as MutableJSONSchemaObj)
+      .filter((part) => {
+        const domain = primitiveDomain(part);
+        return domain === undefined ||
+          (domain.types.length === 1 && (domain.values?.length ?? 1) === 1);
+      });
+    return contradictory(direct, context) ? false : true;
+  }
+  const combinations = arms.reduce<MutableJSONSchema[][]>(
+    (prefixes, alternatives) =>
+      prefixes.flatMap((prefix) => alternatives.map((arm) => [...prefix, arm])),
+    [[]],
+  );
+  return unionOfSchemas(
+    combinations.map((parts) =>
+      parts.some((part) => part === false) ? false : mergeParts(
+        parts as MutableJSONSchemaObj[],
+        context,
+      )
+    ),
+  );
 }
 
 /**
- * `mergeIntersection` for constituents that are neither `never` nor `any`:
- * every step of its reduction after those two.
+ * Whether these constituents, none of them a union, contradict each other
+ * the way the checker finds before it lets `any` win: a nullish part beside
+ * an object, or two disjoint primitives. It finds the latter from a
+ * string-like, number-like, or void-like part, or between two unit types, so
+ * `null` beside the bare `boolean`, which is none of those, is no
+ * contradiction to it at that point, though `null` beside `true` is.
  */
-function mergeDefinite(
-  parts: MutableJSONSchema[],
+function contradictory(
+  direct: MutableJSONSchemaObj[],
+  context: GenerationContext,
+): boolean {
+  const parts = direct.filter((part) => part.type !== "unknown");
+  if (parts.length < 2 || mergeParts(parts, context) !== false) return false;
+  const domains = parts.map(primitiveDomain);
+  const bareBoolean = (domain: PrimitiveDomain | undefined) =>
+    domain?.types[0] === "boolean" && domain.values === undefined;
+  const nullOnly = (domain: PrimitiveDomain | undefined) =>
+    domain?.types[0] === "null";
+  return !domains.every((domain) => bareBoolean(domain) || nullOnly(domain));
+}
+
+/**
+ * The schema of an intersection of these parts, none of them a union,
+ * `never`, or `any`, reduced the way the checker reduces the types before
+ * `IntersectionFormatter` merges them, in this order: `unknown` is the
+ * identity and drops out; an empty object drops out beside anything else and
+ * takes `null` and `undefined` with it, `T & {}` being `NonNullable<T>`;
+ * primitives are narrowed or found disjoint wherever they sit
+ * (`reducePrimitiveParts`); and `null` or `undefined` beside an object
+ * leaves nothing. What remains is one schema, returned as it is, or object
+ * schemas whose properties are unioned (the first definition kept on a
+ * clash) and whose `required` lists are unioned. A part that merge refuses —
+ * a non-object, or one with an index signature, which an array is — yields
+ * the same unsupported-pattern fallback the type-based path emits.
+ */
+function mergeParts(
+  parts: MutableJSONSchemaObj[],
   context: GenerationContext,
 ): MutableJSONSchema {
-  const isUnknown = (part: MutableJSONSchema) =>
-    isObjectOrArray(part) && part.type === "unknown";
   const substantive = dedupeByValueEqual(
-    parts.filter((part) => !isUnknown(part)),
+    parts.filter((part) => part.type !== "unknown"),
   );
   if (substantive.length === 0) return { type: "unknown" };
   const nonEmpty = substantive.filter((part) => !isEmptyObjectSchema(part));
-  const remaining = nonEmpty.length > 0 && nonEmpty.length < substantive.length
-    ? dedupeByValueEqual(nonEmpty.map((part) => withoutNullish(part, context)))
-    : substantive;
+  const remaining: MutableJSONSchema[] =
+    nonEmpty.length > 0 && nonEmpty.length < substantive.length
+      ? dedupeByValueEqual(
+        nonEmpty.map((part) => withoutNullish(part, context)),
+      )
+      : substantive;
   if (remaining.some((part) => part === false)) return false;
-  if (remaining.length === 1) return remaining[0]!;
-  // No boolean is left: `false` and `true` were answered above.
-  const domains = (remaining as MutableJSONSchemaObj[]).map(primitiveDomain);
-  if (domains.every((domain) => domain !== undefined)) {
-    return intersectPrimitives(remaining, domains as PrimitiveDomain[]);
-  }
-  const nullishOnly = (domain: PrimitiveDomain | undefined) =>
-    domain !== undefined &&
-    domain.types.every((type) => type === "null" || type === "undefined");
-  if (domains.some(nullishOnly)) return false;
+  // The primitive parts are reduced among themselves wherever they sit, so
+  // a contradiction between two of them is found with an object beside them
+  // too; what they reduce to stands where the first of them stood.
+  const reduced = reducePrimitiveParts(remaining as MutableJSONSchemaObj[]);
+  if (reduced === false) return false;
+  if (reduced.length === 1) return reduced[0]!;
+  const nullish = (part: MutableJSONSchemaObj) => {
+    const domain = primitiveDomain(part);
+    return domain !== undefined && !domain.isVoid &&
+      domain.types.every((type) => type === "null" || type === "undefined");
+  };
+  if (reduced.some(nullish)) return false;
   const unsupported = (reason: string): MutableJSONSchema => ({
     type: "object",
     additionalProperties: true,
@@ -656,7 +755,7 @@ function mergeDefinite(
   });
   const properties: Record<string, MutableJSONSchema> = {};
   const required = new Set<string>();
-  for (const part of remaining) {
+  for (const part of reduced) {
     if (isArraySchema(part)) {
       return unsupported("index signature on constituent");
     }
@@ -1489,23 +1588,15 @@ export class SchemaGenerator {
       };
     }
 
-    // An intersection merges the way IntersectionFormatter merges one
-    // (`mergeIntersection`), each constituent read through its reference.
-    // A union constituent distributes, as the checker distributes it
-    // before the type-based path ever sees the intersection: every
-    // combination of arms is merged on its own.
+    // An intersection is settled as the checker settles one and merged the
+    // way IntersectionFormatter merges one (`intersectionOf`), each
+    // constituent read through its reference.
     if (ts.isIntersectionTypeNode(typeNode)) {
-      const combinations = typeNode.types
-        .map((member) =>
-          unionArms(this.#analyzeChildNode(member, checker, context), context)
-        )
-        .reduce<MutableJSONSchema[][]>(
-          (prefixes, arms) =>
-            prefixes.flatMap((prefix) => arms.map((arm) => [...prefix, arm])),
-          [[]],
-        );
-      return unionOfSchemas(
-        combinations.map((parts) => mergeIntersection(parts, context)),
+      return intersectionOf(
+        typeNode.types.map((member) =>
+          this.#analyzeChildNode(member, checker, context)
+        ),
+        context,
       );
     }
 

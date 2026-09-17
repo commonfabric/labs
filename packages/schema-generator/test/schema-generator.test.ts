@@ -2312,6 +2312,154 @@ type CalculatorRequest = {
       expect(await schemaOf(both(alias("AB"), numberNode()))).toBe(false);
     });
 
+    it("settles `any`, `void`, and mixed parts in an intersection as the checker does", async () => {
+      const schemaOf = async (node: ts.TypeNode) => {
+        const result = await generateNamed(node);
+        return typeof result === "boolean"
+          ? result
+          : (result as { schema: unknown }).schema;
+      };
+      const keyword = (kind: ts.KeywordTypeSyntaxKind) =>
+        f.createKeywordTypeNode(kind);
+      const anyKeyword = () => keyword(ts.SyntaxKind.AnyKeyword);
+      const unknownKeyword = () => keyword(ts.SyntaxKind.UnknownKeyword);
+      const voidKeyword = () => keyword(ts.SyntaxKind.VoidKeyword);
+      const undefinedKeyword = () => keyword(ts.SyntaxKind.UndefinedKeyword);
+      const numberNode = () => keyword(ts.SyntaxKind.NumberKeyword);
+      const booleanNode = () => keyword(ts.SyntaxKind.BooleanKeyword);
+      const nullNode = () => f.createLiteralTypeNode(f.createNull());
+      const text = (value: string) =>
+        f.createLiteralTypeNode(f.createStringLiteral(value));
+      const either = (...members: ts.TypeNode[]) =>
+        f.createParenthesizedType(f.createUnionTypeNode(members));
+      const both = (...members: ts.TypeNode[]) =>
+        f.createIntersectionTypeNode(members);
+      const unsupported = (reason: string) => ({
+        type: "object",
+        additionalProperties: true,
+        $comment: `Unsupported intersection pattern: ${reason}`,
+      });
+
+      // Primitives contradict each other with an object or an array beside
+      // them too, and that beats `any`.
+      for (
+        const impossible of [
+          [stringNode(), numberNode(), alias("Foo")],
+          [anyKeyword(), stringNode(), numberNode(), alias("Foo")],
+          [
+            anyKeyword(),
+            stringNode(),
+            numberNode(),
+            f.createArrayTypeNode(unknownKeyword()),
+          ],
+          [anyKeyword(), text("a"), text("b"), alias("Foo")],
+          [anyKeyword(), booleanNode(), stringNode()],
+          [anyKeyword(), nullNode(), f.createLiteralTypeNode(f.createTrue())],
+        ]
+      ) {
+        expect(await schemaOf(both(...impossible))).toBe(false);
+      }
+      // Compatible primitives beside an object stay the pattern the merge
+      // refuses; the narrower one stands where it stood, which decides the
+      // part the merge meets first.
+      expect(
+        await schemaOf(both(text("a"), stringNode(), alias("Foo"))),
+      ).toEqual(unsupported("non-object constituent"));
+      expect(
+        await schemaOf(
+          both(
+            stringNode(),
+            f.createArrayTypeNode(unknownKeyword()),
+            text("a"),
+          ),
+        ),
+      ).toEqual(unsupported("index signature on constituent"));
+
+      // Beside `any` the checker looks no further than the parts that are no
+      // union: it never distributes one, and `null` beside the bare `boolean`
+      // is no contradiction to it there.
+      for (
+        const stillAny of [
+          [anyKeyword(), nullNode(), either(stringNode(), numberNode())],
+          [anyKeyword(), nullNode(), alias("AB")],
+          [anyKeyword(), numberNode(), alias("AB")],
+          [anyKeyword(), nullNode(), booleanNode()],
+          [
+            anyKeyword(),
+            undefinedKeyword(),
+            either(alias("Foo"), alias("Bar")),
+          ],
+        ]
+      ) {
+        expect(await schemaOf(both(...stillAny))).toBe(true);
+      }
+
+      // `void` reduces as `undefined` does beside another primitive, and is
+      // no nullish part beside an object.
+      expect(
+        await schemaOf(
+          both(
+            anyKeyword(),
+            undefinedKeyword(),
+            voidKeyword(),
+            unknownKeyword(),
+          ),
+        ),
+      ).toBe(true);
+      expect(
+        await schemaOf(
+          both(
+            anyKeyword(),
+            either(nullNode(), undefinedKeyword()),
+            voidKeyword(),
+            unknownKeyword(),
+          ),
+        ),
+      ).toBe(true);
+      expect(
+        await schemaOf(
+          both(anyKeyword(), nullNode(), voidKeyword(), unknownKeyword()),
+        ),
+      ).toBe(false);
+      expect(await schemaOf(both(undefinedKeyword(), voidKeyword()))).toEqual({
+        type: "undefined",
+      });
+      expect(await schemaOf(both(voidKeyword(), undefinedKeyword()))).toEqual({
+        type: "undefined",
+      });
+      expect(await schemaOf(both(stringNode(), voidKeyword()))).toBe(false);
+      expect(
+        await schemaOf(both(voidKeyword(), f.createTypeLiteralNode([]))),
+      ).toEqual({ asCell: ["opaque"] });
+      expect(await schemaOf(both(voidKeyword(), alias("Foo")))).toEqual(
+        unsupported("non-object constituent"),
+      );
+
+      // Identical constituents fold before a union distributes, so a union
+      // met with itself is itself, with no merged arm between its members.
+      expect(
+        await schemaOf(
+          both(
+            either(alias("Foo"), alias("Bar")),
+            either(alias("Foo"), alias("Bar")),
+          ),
+        ),
+      ).toEqual({
+        anyOf: [
+          {
+            type: "object",
+            properties: { x: { type: "unknown" }, y: { type: "string" } },
+            required: ["x", "y"],
+          },
+          {
+            type: "object",
+            properties: { z: { type: "number" } },
+            required: ["z"],
+          },
+        ],
+      });
+    });
+
     it("merges named constituents of an intersection through their references", async () => {
       expect(
         ((await generateNamed(
