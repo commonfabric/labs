@@ -78,10 +78,23 @@ space holding real data.
    publishes — so `setsrc --check` proves every update after this one. Like step
    1's, the flag is a team-authorization decision under the rule in
    `references/pattern-updates.md`, and a separate one, for an unrelated reason.
+   The flag is for `mentionable` and for nothing else this leg does.
 
    This leg is also what gives a Topic the input its number is stored in and the
    `recordName` verb that writes it, so it is a prerequisite of step 3 rather
    than a nicety.
+
+   **It also stops declaring `boardNames`, which every deployed Topic has a link
+   bound at, and that is not a second refusal.** The candidate declares no path
+   there, so the retained-link proof reaches the link against an unconstrained
+   destination and neither refuses it nor writes it: the link stays in the raw
+   argument document, unreachable through the new projection, and a targeted
+   input read of `boardNames` then refuses the path. That is measured, in
+   `packages/cli/test/piece-link-input-visibility.test.ts` — "accepts a
+   candidate that stops declaring an input holding a retained link". The bound
+   is in the case beside it: what a candidate may not do is stop PUBLISHING a
+   path, which is an ordinary backward-compatibility refusal and not about the
+   link. A Topic never published `boardNames`, so only the declaration goes.
 
    **Every Topic takes this step before step 3 runs.** A Topic still on source
    that declares no `recordName` is not merely left unnumbered. A send to a path

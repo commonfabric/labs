@@ -28,9 +28,17 @@ This block is LIVE: the change that moves a stage updates it here.
 A topic takes the number its board calls it by as an ordinary input and
 reports that. It reads no board table to learn it, and the `boardNames` input
 is gone from `topic.tsx` altogether, so no topic reaches a sibling topic on
-account of its own number. `addTopic` and the browser composer allocate over
-the board's namespace and pass the number into the topic in the transaction
-that creates it, the way the exemplar's `addItem` does. A topic nobody has
+account of its own number. Dropping a declared input that deployed topics have
+a link bound at is accepted rather than refused — the candidate declares no
+path there, so the link is neither proved against anything nor written, and it
+stays in the raw argument document unreachable through the new projection. That
+is measured in `packages/cli/test/piece-link-input-visibility.test.ts`, beside
+the case that bounds it: a candidate may not stop PUBLISHING a path, and a
+topic never published this one.
+
+`addTopic` and the browser composer allocate over the board's namespace and
+pass the number into the topic in the transaction that creates it, the way the
+exemplar's `addItem` does. A topic nobody has
 numbered stores nothing, reports nothing, and renders without failing.
 
 The board's `backfillNames` is now the whole of the operator procedure for the
