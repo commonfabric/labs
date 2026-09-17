@@ -20,12 +20,12 @@ import {
   type MentionableRow,
 } from "../collection-naming/mentionable.ts";
 import {
-  assignName,
-  backfillNames,
+  createNamed,
   type NamesMap,
   namesTable,
   type NamesTableRow,
   type NamingDeclaration,
+  recordNames,
   SEQUENCE_NAMING,
 } from "../collection-naming/naming.ts";
 import Topic, {
@@ -92,13 +92,17 @@ export interface TopicDemand extends TopicSummary {
   body: string | Default<"">;
   mentions: unknown[] | Default<[]>;
 
-  /** The board's name for the topic, as the topic reads it out of the board's
-   * names table and publishes it, which it does only while
-   * `SHOW_TOPIC_NUMBERS` in `./topic.tsx` is on. Where a topic publishes one,
-   * the card renders it as a badge and the mention index copies it into the
-   * topic's universe row, so `#42` matches without expanding a topic; where
-   * none is published, the card shows no badge and the row carries the empty
-   * string.
+  /** The board's number for the topic, as the topic PUBLISHES it: out of the
+   * number the topic stores, and only while `SHOW_TOPIC_NUMBERS` in
+   * `./topic.tsx` is on. Where a topic publishes one, the card renders it as a
+   * badge and the mention index copies it into the topic's universe row, so
+   * `#42` matches without expanding a topic; where none is published, the card
+   * shows no badge and the row carries the empty string.
+   *
+   * The shown number, not the stored one, and the difference is what
+   * `backfillNames` loses while the switch is off: this reads absent for every
+   * topic then, whatever each one holds. `BackfillNamesResult` says what that
+   * costs the step and what an operator reads instead.
    *
    * OPTIONAL rather than defaulted, which is a fact about the compatibility
    * proof: a defaulted property moves the demand's defaults below an array
@@ -109,10 +113,10 @@ export interface TopicDemand extends TopicSummary {
    * property. Demanding a string there narrows that contract even when the
    * property is optional, so `setsrc` requires an accepted compatibility
    * break until the producer guarantees the string type. An optional
-   * `unknown` demand imposes no such restriction. A topic whose
-   * lookup has produced no value — one filed a moment ago, or one from before
-   * the board numbered anything — is absent here rather than blank, and every
-   * consumer treats the two the same. */
+   * `unknown` demand imposes no such restriction. A topic that stores no
+   * number — one from before the board numbered anything, until
+   * `backfillNames` has reached it — is absent here rather than blank, and
+   * every consumer treats the two the same. */
   shortName?: string;
 }
 
@@ -165,11 +169,11 @@ export interface AddTopicResult {
    * resolve (`createdAt`, `createdBy`). */
   topic: TopicIndexRow;
 
-  /** The name the create allocated, as it was written to the namespace. The
-   * topic's own `shortName` is a lookup that may not have produced a value
-   * when this returns — and produces none at all while `SHOW_TOPIC_NUMBERS` is
-   * off — so this is the one to read: a caller must not have to wait for a
-   * derivation to learn the name it just allocated. */
+  /** The number the create allocated, as it was written to the namespace and
+   * passed into the topic. This is the one to read, for two reasons: the row
+   * IS the created topic, so reading a property off it waits for that piece to
+   * materialize, and the topic publishes no `shortName` at all while
+   * `SHOW_TOPIC_NUMBERS` is off. */
   name: string;
 }
 
@@ -179,11 +183,31 @@ export interface BackfillNamesEvent {
   agentName: string;
 }
 
-/** What `backfillNames` returns. */
+/**
+ * What `backfillNames` returns: three lists of numbers in filing order, which
+ * together cover every listed topic the run could number.
+ *
+ * The split follows where each write lands. The namespace is the board's own
+ * document, so `assigned` is what this run wrote. A topic's stored number is
+ * the topic's own document, which only the topic can write, so the run can
+ * report which topics it found already carrying theirs and which it asked —
+ * and cannot report the outcome of an asking it just made.
+ */
 export interface BackfillNamesResult {
-  /** The names this run wrote, in filing order; empty when every member was
-   * already named, which is what a second run returns. */
+  /** The numbers this run wrote into the namespace; empty when every listed
+   * topic was already in it, which is what a second run writes. */
   assigned: string[];
+
+  /** The numbers of the topics that already report them. The run sent these
+   * topics nothing. */
+  named: string[];
+
+  /** The numbers this run asked topics to store, one `recordName` call each.
+   * None is confirmed: a send's effect is invisible to the transaction that
+   * makes it, so a topic here is one whose number is not stored YET as far as
+   * this run could see. Run the verb again to find out — the numbers that
+   * landed come back under `named`, and the rest are asked for again. */
+  pending: string[];
 }
 
 /** One row of the board's compact discovery index: the topic itself, declared
@@ -206,9 +230,9 @@ export interface TopicIndexRow {
   commentCount: number | Default<0> | undefined;
   lastActivityAt: number | Default<0> | undefined;
 
-  /** The board's name for the topic, as the topic publishes it, so absent for
-   * as long as a topic publishes none. Optional rather than defaulted, unlike
-   * the two above, for the reason `TopicDemand.shortName` states. */
+  /** The board's number for the topic, as the topic publishes it, so absent
+   * for as long as a topic publishes none. Optional rather than defaulted,
+   * unlike the two above, for the reason `TopicDemand.shortName` states. */
   shortName?: string;
 }
 
@@ -499,9 +523,10 @@ export interface TopicsOutput {
   // deno-lint-ignore ban-types
   names: Default<NamesMap, {}>;
 
-  /** The names table, one row per named member, which every topic the board
-   * creates reads its own name from. Published so a topic composed outside
-   * `addTopic` can be wired to the same table. */
+  /** The names table, one row per numbered member: what `nameOf` reads to find
+   * the number the board gives a topic by identity, including a topic whose own
+   * `shortName` is absent. No topic reads it — a topic reports the number it
+   * stores — so this is published for a caller doing that reverse lookup. */
   namesTable: NamesTableRow[] | Default<[]>;
 
   /** What the board declares about its names, for a consumer deciding whether
@@ -533,10 +558,12 @@ export interface TopicsOutput {
    * reference plus the write-time facts the pattern resolved. */
   addTopic: Stream<AddTopicEvent, AddTopicResult>;
 
-  /** Name every unnamed member in filing order. Idempotent. A member filed
-   * past `addTopic` also needs a one-time link-bind of `namesTable` onto it
-   * before its row and its universe entry show the name, the same operator
-   * step `mentionable` states for itself. */
+  /** Number every topic the namespace does not hold, in filing order, and ask
+   * every topic that reports no number to store the one the namespace holds
+   * for it. Idempotent: a run over topics that all report their numbers writes
+   * nothing and sends nothing. What one run cannot confirm is the asking, so
+   * the result separates the topics it found numbered from the ones it asked,
+   * and running it again completes whichever asking did not land. */
   backfillNames: Stream<BackfillNamesEvent, BackfillNamesResult>;
 
   /** Submit the footer composer as the current viewer's canonical Profile. */
@@ -564,10 +591,6 @@ export const submitProfileTopic = handler<void, {
    * Nothing here writes a row. */
   boardCrossrefs: Writable<TopicCrossrefRow[] | Default<[]>>;
 
-  /** The names table, handed to the composed topic for the same reason and on
-   * the same terms as `boardCrossrefs`. */
-  boardNames: Writable<NamesTableRow[] | Default<[]>>;
-
   /** The namespace, written one key per create. Read for its keys and written
    * at one of them inside this handler, so the allocation and the append are
    * one transaction. */
@@ -580,7 +603,6 @@ export const submitProfileTopic = handler<void, {
   topics,
   mentionable,
   boardCrossrefs,
-  boardNames,
   names,
   newTitle,
   profileName,
@@ -589,23 +611,25 @@ export const submitProfileTopic = handler<void, {
   const trimmed = newTitle.get().trim();
   const author = topicAuthorFromPerson(profileName, profileAvatar);
   if (!trimmed || !author) return;
-  const piece = Topic({
-    topicStateVersion: TOPIC_STATE_VERSION,
-    title: trimmed,
-    createdAt: Date.now(),
-    createdBy: author,
-    // Same wiring `addTopic` gives its children: the board's mention index
-    // is the universe the new topic's editor autocompletes over, the board's
-    // pivot is where it reads its inbound references, and the board's names
-    // table is where it reads its own number.
-    mentionable,
-    boardCrossrefs,
-    boardNames,
-  });
-  // The name and the append are one transaction, as they are in `addTopic`:
-  // no reader observes the topic without its name, and a concurrent create
-  // serializes on the map's keys rather than taking the same one.
-  assignName(names, piece);
+  // The number, the create, and the append are one transaction, as they are
+  // in `addTopic`: no reader observes the topic without its number, and a
+  // concurrent create serializes on the map's keys rather than taking the
+  // same one.
+  const { member: piece } = createNamed(names, (allocated) =>
+    Topic({
+      topicStateVersion: TOPIC_STATE_VERSION,
+      title: trimmed,
+      createdAt: Date.now(),
+      createdBy: author,
+      // The number this create allocated, stored with the topic, which is
+      // what lets the topic report it without reading the board.
+      shortName: allocated,
+      // Same wiring `addTopic` gives its children: the board's mention index
+      // is the universe the new topic's editor autocompletes over, and the
+      // board's pivot is where it reads its inbound references.
+      mentionable,
+      boardCrossrefs,
+    }));
   topics.push(piece);
   newTitle.set("");
 });
@@ -625,8 +649,8 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   // child's editor autocompletes over, as one document of copies instead of
   // the topics themselves.
   const mentionable = mentionableIndex({ members: topics });
-  // Derived once for the whole board too; every topic reads its own row out
-  // of it to learn the number the board calls it by.
+  // Derived once for the whole board, for a caller's reverse lookup by
+  // identity; no topic reads it.
   const table = namesTable({ names });
   const hasNoTopics = topicCount === 0;
 
@@ -655,31 +679,34 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
     const author = topicAuthorFromAgent(agentName) ??
       rejectMutation("addTopic", "agentName must be non-blank");
     if (!trimmed) rejectMutation("addTopic", "title must be non-empty");
-    const piece = Topic({
-      topicStateVersion: TOPIC_STATE_VERSION,
-      title: trimmed,
-      // Body at create is part of the create's atomic unit; created-with is
-      // not an update, so bodyUpdatedBy/At stay unset (createdBy covers it).
-      // Preserved verbatim, matching setBody and the UI save path — trimming
-      // would corrupt whitespace-sensitive Markdown (indented code blocks).
-      body: body ?? "",
-      createdAt: Date.now(),
-      createdBy: author,
-      // The board's mention index, so the editor has a mention universe. A
-      // piece from before the index is rewired to it as a one-time
-      // link-bind, the backfill the input declares for itself.
-      mentionable,
-      // The board's mention pivot. A topic reads its inbound references out of
-      // the row the board already built for it rather than rebuilding the join.
-      boardCrossrefs: crossrefs,
-      // The board's names table, so the topic can read its own name out of the
-      // row the board already built for it.
-      boardNames: table,
-    });
-    // The name and the append are one transaction: no reader observes the
-    // topic without its name, and a concurrent create serializes on the map's
-    // keys rather than taking the same one.
-    const name = assignName(names, piece);
+    // The number, the create, and the append are one transaction: the topic is
+    // built holding the number the map records it under, no reader observes the
+    // topic without its number, and a concurrent create serializes on the
+    // map's keys, re-running with the next number rather than taking the same
+    // one.
+    const { name, member: piece } = createNamed(names, (allocated) =>
+      Topic({
+        topicStateVersion: TOPIC_STATE_VERSION,
+        title: trimmed,
+        // Body at create is part of the create's atomic unit; created-with is
+        // not an update, so bodyUpdatedBy/At stay unset (createdBy covers it).
+        // Preserved verbatim, matching setBody and the UI save path — trimming
+        // would corrupt whitespace-sensitive Markdown (indented code blocks).
+        body: body ?? "",
+        createdAt: Date.now(),
+        createdBy: author,
+        // The number this create allocated, stored with the topic, which is
+        // what lets the topic report it without reading the board.
+        shortName: allocated,
+        // The board's mention index, so the editor has a mention universe. A
+        // piece from before the index is rewired to it as a one-time
+        // link-bind, the backfill the input declares for itself.
+        mentionable,
+        // The board's mention pivot. A topic reads its inbound references out
+        // of the row the board already built for it rather than rebuilding the
+        // join.
+        boardCrossrefs: crossrefs,
+      }));
     // Mergeable append: concurrent creates from different users all land.
     // The session composer draft is `submitTopic`'s to clear; a headless
     // create has no draft.
@@ -692,7 +719,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
       if (!topicAuthorFromAgent(agentName)) {
         rejectMutation("backfillNames", "agentName must be non-blank");
       }
-      return { assigned: backfillNames(topics, names) };
+      return recordNames(topics, names);
     },
   );
 
@@ -700,7 +727,6 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
     topics,
     mentionable,
     boardCrossrefs: crossrefs,
-    boardNames: table,
     names,
     newTitle,
     profileName,

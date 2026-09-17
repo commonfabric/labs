@@ -31,9 +31,23 @@ collection does with it:
   member, matched by identity, or `undefined`. `ownName` is the same lookup as a
   lift, for a member reading its own row out of a table its collection wired to
   it.
-- **The backfill.** `backfillNames(members, names)` names every unnamed member
-  of a list in filing order, skips those already named, and returns exactly the
-  names it wrote — `[]` on a second run, which writes nothing.
+- **The two backfills.** `backfillNames(members, names)` names every unnamed
+  member of a list in filing order, skips those already named, and returns
+  exactly the names it wrote — `[]` on a second run, which writes nothing. It
+  writes the namespace and nothing else, so a member it names stores no name of
+  its own. `recordNames(members, names)` does that walk and additionally asks
+  each listed member to store the name the namespace holds for it, by sending
+  that name to the member's own `recordName` verb; it returns `assigned`, the
+  names it wrote, `named`, the members already reporting theirs, and `pending`,
+  the members it asked. A send's effect is invisible to the transaction that
+  makes it, so `pending` is a list of requests rather than of outcomes: a later
+  run reports whichever landed under `named` and asks for the rest again. Which
+  of the two a collection calls turns on whether its member pattern declares
+  `recordName({ name })`. A member whose pattern does not stores the payload as
+  ordinary data at that name in its result, because a send to a path holding no
+  stream is an ordinary write — `Cell.send` in `packages/runner/src/cell.ts`
+  delegates to `set`. The exemplar's item declares none and calls
+  `backfillNames`; Topics' topic declares one and its board calls `recordNames`.
 - **The declaration.** `NamingDeclaration` is what a collection publishes so a
   consumer learns the policy rather than assuming one: whether a name is unique
   across history or only among current members, whether it is permanent, whether
@@ -49,11 +63,12 @@ needs at runtime. `allocator.ts` holds the allocation rule — `nextNameAmong`,
 `createNamed`, `assignName`, and the `NamesMap` and `NamesMapCell` shapes — and
 takes no value from `commonfabric`, so a plain `deno test` can import it and run
 the allocator with no pattern runtime behind it. `naming.ts` holds what does
-take one — the names table, the reverse lookup, the backfill — and re-exports
-the whole of `allocator.ts`, so a collection reaches the library through
-`naming.ts` alone.
+take one — the names table, the reverse lookup, the two backfills — and
+re-exports the whole of `allocator.ts`, so a collection reaches the library
+through `naming.ts` alone.
 
-Nothing in `naming.ts` knows what kind of piece a member is. A member is a cell,
+Nothing in `naming.ts` knows what kind of piece a member is beyond the one verb
+`recordNames` sends to and the one property it reads. A member is a cell,
 compared by identity and never read through, which is what keeps every read
 there — the allocator surveying keys, the table over the map, a member finding
 its row — from expanding a member document.
@@ -240,9 +255,10 @@ cf piece call --cell /of:<board> backfillNames --json '{"agentName":"Sol"}'
   board given no namespace at all, and the rejections.
 - `topics-shape.test.tsx` — a test-only board whose members are the real `Topic`
   pattern, wired through the library the way the exemplar is. It holds the
-  library to a member pattern it does not own — allocation on create, the
-  backfill, the names table, and the reverse lookup, all over topics, through a
-  board that is not the Topics board.
+  library to a member pattern it does not own — allocation on create,
+  `backfillNames`, the names table, and the reverse lookup, all over topics,
+  through a board that is not the Topics board. `recordNames` is covered where
+  its member contract is declared, in `../topics/naming.test.tsx`.
 
 Two tests of this directory's code live under `../integration/`, because each
 needs more than one runtime:
@@ -270,15 +286,16 @@ One more lives in the shell package, because it needs a browser as well:
 ## Topics
 
 The Topics board (`../topics/`) is the collection this library exists for, and
-it calls it: `addTopic` allocates in the same transaction as its append,
-`backfillNames` names what the board held before, each topic reads its own name
-out of `boardNames` and publishes it as `shortName`, and both boards derive
-their mention universe through `mentionable.ts`. Topics shows no numbers for now
-— `SHOW_TOPIC_NUMBERS` in `../topics/topic.tsx` says why — so a topic publishes
-no `shortName`, and every place that would show one reads nothing: the header,
-the cards, the survey rows, and the universe rows the derivation copies from
-each topic. This exemplar shows its numbers in all three places. What is still
-to come is in [the plan](../../../docs/plans/collection-naming-topics.md): the
-production backfill, which needs the one-time link-bind of `namesTable` onto
-every topic filed before the namespace, and the slug that binds the board's
-`names` cell as `top`.
+it calls it: `addTopic` allocates in the same transaction as its append and
+passes the name into the topic it creates, its `backfillNames` verb runs
+`recordNames` over what the board held before, each topic stores its own name
+and publishes it as `shortName`, and both boards derive their mention universe
+through `mentionable.ts`. Topics shows no numbers for now — `SHOW_TOPIC_NUMBERS`
+in `../topics/topic.tsx` says why — so a topic publishes no `shortName`, and
+every place that would show one reads nothing: the header, the cards, the survey
+rows, and the universe rows the derivation copies from each topic. A topic still
+STORES its number, which is what `recordNames` asks it to do and what no switch
+gates; the switch costs the step its report, which `RecordNamesResult` states.
+This exemplar shows its numbers in all three places. What is still to come is in
+[the plan](../../../docs/plans/collection-naming-topics.md): the production
+backfill, and the slug that binds the board's `names` cell as `top`.

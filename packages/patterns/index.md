@@ -242,20 +242,22 @@ themselves, declared through a narrow row schema of summary scalars, so a row's
 address IS its topic's and a survey and the follow-up read name one document.
 `addTopic` returns the piece it created, so a caller addresses a new topic
 straight from the create. The board owns a member namespace through
-`collection-naming/naming.ts`: `addTopic` allocates the next decimal name in the
-same transaction as the append, each topic reads its own name out of the board's
-names table and publishes it as `shortName`, and `backfillNames` names what the
-board held before it numbered anything. No topic's number is shown for now:
+`collection-naming/naming.ts`: `addTopic` allocates the next decimal number and
+passes it into the topic it creates, in the same transaction as the append; each
+topic stores that number and publishes it as `shortName`, reading nothing of its
+board to report it; and `backfillNames` numbers what the board held before it
+numbered anything, asking each such topic to store its number through the
+topic's own `recordName`. No topic's number is SHOWN for now:
 `SHOW_TOPIC_NUMBERS` in `topic.tsx` is off while only some topics have one, so a
 topic publishes no `shortName` and every surface that would show one reads
-nothing. Topics reference each other by CELL: the board derives the whole graph
-once by scanning what each topic points at with `equals`, and each topic reads
-its own inbound edges out of that pivot. Demonstrates: reading-list-style
-piece-in-list composition, profile-native browser authorship on a shared piece,
-mergeable comment appends, session-scoped drafts, bounding a whole-list
-derivation with a narrow declared `lift` parameter, passing topics through a
-sort so an activity-ordered list keeps the identity its elements already have,
-`multiUserTest` coverage.
+nothing; the numbers are stored and recorded either way. Topics reference each
+other by CELL: the board derives the whole graph once by scanning what each
+topic points at with `equals`, and each topic reads its own inbound edges out of
+that pivot. Demonstrates: reading-list-style piece-in-list composition,
+profile-native browser authorship on a shared piece, mergeable comment appends,
+session-scoped drafts, bounding a whole-list derivation with a narrow declared
+`lift` parameter, passing topics through a sort so an activity-ordered list
+keeps the identity its elements already have, `multiUserTest` coverage.
 
 **Keywords:** topics, issues, tracker, discussion, thread, comments, multi-user,
 profile, mergeable, index, discovery, bounded read, row identity, references,
@@ -271,10 +273,10 @@ interface TopicsInput {
   // unread reference
   names?: Writable<Default<NamesMap, {}>>;
 }
-// TopicInput additionally takes the three wirings addTopic gives a child:
-// mentionable (the @-mention universe for the body editor), boardCrossrefs
-// (the reference pivot), and boardNames (the names table it reads its own
-// number out of).
+// TopicInput additionally takes the two wirings addTopic gives a child —
+// mentionable (the @-mention universe for the body editor) and boardCrossrefs
+// (the reference pivot) — plus shortName, the number the create allocated,
+// which the topic stores and reports.
 ```
 
 ### Output Schema
@@ -290,14 +292,15 @@ interface TopicsOutput {
   index: TopicIndexRow[];
   // { topic, mentionedBy } per topic — the reference graph, derived once here
   crossrefs: TopicCrossrefRow[];
-  // The namespace, the table every topic reads its name out of, and the
-  // policy the names are held to
+  // The namespace, the reverse lookup a caller reads a topic's number out of
+  // by identity, and the policy the numbers are held to
   names: Default<NamesMap, {}>;
   namesTable: NamesTableRow[];
   naming: NamingDeclaration;
-  // Returns { topic, name } — the piece it created and the name it allocated
+  // Returns { topic, name } — the piece it created and the number it allocated
   addTopic: Stream<AddTopicEvent, AddTopicResult>;
-  // Names every unnamed member in filing order; idempotent
+  // Numbers every member the namespace lacks and asks each unnumbered topic to
+  // store its number; returns { assigned, named, pending }; idempotent
   backfillNames: Stream<BackfillNamesEvent, BackfillNamesResult>;
   submitTopic: Stream<void>;
 }
@@ -308,10 +311,11 @@ interface TopicsOutput {
 A single #topic piece: the durable object the tracker's list holds. Body edits
 go through an explicit Edit→Save toggle (one whole-value `set` per save keeps
 the concurrent-edit window small); comments and links are mergeable appends.
-Reads the board's name for itself out of `boardNames` by identity and publishes
-it as `shortName` while `SHOW_TOPIC_NUMBERS` is on, rendering it as a badge
-beside the title; the constant is off for now, so a topic publishes and shows
-none. A topic wired to no board has no name either way. Use from
+Stores the number its board calls it by as its own input, and publishes it as
+`shortName` while `SHOW_TOPIC_NUMBERS` is on, rendering it as a badge beside the
+title; the constant is off for now, so a topic stores its number and shows none.
+A topic nobody has numbered stores none either way. `recordName` is how a number
+reaches a topic the board did not pass one to at create. Use from
 `topics/main.tsx` via `navigateTo()`, or standalone.
 
 **Keywords:** topic, detail, thread, comment, links, body, navigateTo,

@@ -1,20 +1,36 @@
-# Naming the Topics that predate the namespace
+# Numbering the Topics that predate the namespace
 
 Part of `skills/topics/SKILL.md`, which is the map. This is the operator
-procedure, with its order, its two commands, its audit, and its traps.
+procedure, with its order, its command, its audit, and its traps.
 
-A Topic reads its own name by looking itself up in the board's names table,
-which reaches it as its `boardNames` ARGUMENT — `addTopic` wires it at create,
-and `ownName` in `packages/patterns/collection-naming/naming.ts` is the lookup.
-A parent writes its member's result and never its member's argument, so
-`backfillNames` names a Topic filed before the namespace in the board's map
-while that Topic goes on reading no name. No pattern can close that gap. One
-`deno task cf piece link` per Topic can, and this is that procedure.
+A Topic reports the number stored in its own input. `addTopic` allocates the
+number and passes it into the Topic it creates, so a Topic filed since the
+namespace landed carries one from birth. A Topic filed before it carries none,
+and no verb of the board can write one into it: a parent writes its member's
+result and never its member's argument. The Topic makes that write itself,
+through its own `recordName`, and the board's `backfillNames` is the step that
+numbers the namespace and asks every Topic reporting no number to store the
+number the namespace holds for it.
 
-It was established by a clone rehearsal, and the evidence — every command, its
-output, and the counts and timings behind the claims here — is
-`docs/history/plans/collection-naming-s6-backfill-rehearsal-2026-09-05.md`. Read
-that before deciding anything this procedure says needs deciding.
+**Topics shows no numbers while this runs.** `SHOW_TOPIC_NUMBERS` in
+`packages/patterns/topics/topic.tsx` is off until every Topic has a number, and
+while it is off a Topic publishes no `shortName` whether or not it stores one.
+Turning it on is a pattern update of its own and the team's decision, not an
+agent's. So every `shortName` read below is what this procedure looks like once
+numbers are shown; until then the board's `namesTable` says which Topics have a
+number and what it is, and a Topic's own durable input says what that Topic
+stores. `deno task cf cell get /top/<n> title` answers either way, because a
+member's address is the namespace's and not the Topic's.
+
+**This procedure has not been rehearsed against a clone in this shape.** The two
+source legs below are unchanged, and were measured twice —
+`docs/history/plans/collection-naming-s6-backfill-rehearsal-2026-09-05.md` and
+`docs/history/plans/collection-naming-s6-backfill-rehearsal-rerun-2026-09-06.md`
+record what each run cost and which of its figures scale. What stands behind the
+numbering step is pattern-test coverage in
+`packages/patterns/topics/naming.test.tsx`, not a clone run. Rehearse per
+`docs/development/space-clone-rehearsal.md` before running any of this against a
+space holding real data.
 
 ### The order
 
@@ -58,128 +74,95 @@ that before deciding anything this procedure says needs deciding.
    `docs/history/topics-mentionable-readonly-break.md`. The cost is one forced
    update per Topic and no more: a readable handle drops the write-back leg of
    the retained-link proof that a writable one carries — the leg that would
-   demand the Topic's three-string projection accept the `piece` the board's row
+   demand the Topic's three-field projection accept the `piece` the board's row
    publishes — so `setsrc --check` proves every update after this one. Like step
    1's, the flag is a team-authorization decision under the rule in
    `references/pattern-updates.md`, and a separate one, for an unrelated reason.
 
-   **Skipping it leaves a usable board.** A Topic still on pre-graft source is
-   named by `backfillNames` like any other member, answers to
+   This leg is also what gives a Topic the input its number is stored in and the
+   `recordName` verb that writes it, so it is a prerequisite of step 3 rather
+   than a nicety.
+
+   **Every Topic takes this step before step 3 runs.** A Topic still on source
+   that declares no `recordName` is not merely left unnumbered. A send to a path
+   holding no stream is an ordinary write — `Cell.send` in
+   `packages/runner/src/cell.ts` delegates to `set` — so the numbering step's
+   event lands as data at `recordName` in that Topic's result document. Nothing
+   else about the Topic is harmed and the number itself is in the board's
+   `names` map either way, but that data sits there until the Topic's source
+   moves and replaces the path with the stream. Finish step 2 first.
+
+   **Skipping step 2 leaves a usable board**, on narrower terms than a
+   namespace-only run left. A Topic still on pre-graft source is numbered in the
+   namespace like any other member, answers to
    `deno task cf cell get /top/<n> title`, and reads back as an ordinary `index`
-   row with no `shortName` and no damage to the array around it. So naming,
+   row with no `shortName` and no damage to the array around it. So numbering,
    `/top/<n>` addressing and index membership all survive the step being
-   skipped, and `shortName` — the badge and the number on the index row, both of
-   which appear only once Topics shows numbers at all — is what is absent. That
-   bounds what skipping costs from BELOW, not from above: no run against a
-   populated board has forced a Topic update, so what else a completed one would
-   change there is not known, and the record says so. Step 4's refusal on such a
-   Topic is this state being enforced rather than an error.
+   skipped, and `shortName` — the badge, and the number on the index row — is
+   what is absent. What is different now is that nothing can supply it later:
+   the number lives in the Topic's own input, and a Topic that declares no such
+   input has nowhere to put one.
 
-3. **`backfillNames` once**, through the board. It returns the names it wrote,
-   in filing order, and is idempotent: a second run writes nothing and returns
-   an empty list.
+3. **`backfillNames`, as many times as it takes.** It numbers every Topic the
+   namespace does not hold, in filing order, and asks every Topic reporting no
+   number to store the one the namespace holds for it. Over Topics that all
+   report their numbers it writes no key and sends no event.
 
-4. **`deno task cf piece link` once per Topic that `addTopic` did not wire** —
-   that is, per Topic that took step 2. A Topic that skipped it has no
-   `boardNames` input to bind, and the bind says so.
-
-A finished run shows no number anywhere on the board, and a Topic publishes none
-either. `SHOW_TOPIC_NUMBERS` in `packages/patterns/topics/topic.tsx` is off
-until every Topic has a number, and while it is off a Topic's `shortName` is
-absent whether or not the bind reached it. Turning the constant on is a pattern
-update of its own and the team's decision, not an agent's.
-
-So the `shortName` reads below are what this procedure looks like once numbers
-are shown. Until then, two reads answer the same questions: the audit's read of
-the Topic's stored `boardNames` argument says whether the bind landed, and the
-board's `namesTable` says which Topics have a number and what it is.
-
-### The two commands
+### The command
 
 ```bash
 deno task cf piece call --cell "$TOPICS_BOARD" --invocation '<id>' backfillNames \
   '{"agentName":"Sol"}'
-deno task cf piece link "$TOPICS_BOARD/namesTable" "$TOPIC/boardNames"
 ```
 
-The bind needs no `--allow-non-existing` flag after step 2. The Topic declares
-`boardNames?: ReadonlyCell<NamesTableRow[] | Default<[]>>`, so `input.get()`
-exposes a `boardNames` handle whose value defaults to `[]`. That makes the
-target present for the link command's value-presence check even before a link is
-stored.
-
-Between them is the gap this procedure exists for: the board's `names` map and
-`namesTable` hold the name, and the Topic does not. While numbers are hidden
-that gap is invisible from the Topic's side, because a bound Topic publishes no
-number either; the reads that show it are the two named above.
-
-```
-$ deno task cf cell get --cell "$TOPIC" shortName --step
-Cannot read piece result at "shortName": stored data is present, but its schema
-could not resolve all required values. The piece was stepped, but the required
-value still did not materialize.
-```
-
-Once numbers are shown, the bind makes that read answer with the number and the
-board's `index` row carry it as `shortName`.
-`deno task cf cell get /top/<n>
-title` returns the Topic's title whether they
-are shown or not, because a member's address is the namespace's and not the
-Topic's. A Topic left unbound keeps reporting the message above, which is what a
-half-finished run looks like: the board serves every Topic either way, named
-beside unnamed, and the repair is to bind the rest. Nothing has to be undone.
-
-The bind is idempotent — repeating it with the same two endpoints changes
-nothing and commits nothing. Note that `wrote to space` prints either way, so it
-is not evidence that anything was written.
-
-**Read twice before concluding a bind failed.** The first read after a backfill
-can report no name for a correctly wired Topic, and the next identical command
-answers with the number, with no write in between.
-
-**Cost is one command per Topic**, serially. On a board the size of the Estuary
-one that is the bulk-CLI shape
+One command for the whole board, where the shape this replaced cost one
+`cf piece link` per Topic. Step 2 is still one `setsrc` per Topic, serially, and
+on a board the size of the Estuary one that is the bulk-CLI shape
 `docs/history/topics-board-migration-2026-08-28.md` found unreliable from a
 laptop; run it from somewhere that record vindicates.
 
+The report is three lists of numbers in filing order:
+
+- `assigned` — what this run wrote into the namespace.
+- `named` — the Topics already reporting theirs. Nothing was written or sent for
+  these.
+- `pending` — the Topics this run asked. None of them is confirmed, because a
+  send's effect is invisible to the transaction that makes it.
+
+An empty `pending` is the finished state, and a non-empty one is a reason to run
+the step again rather than a failure: the run after it reports whichever asking
+landed under `named` and asks for the rest.
+
+**A number that comes back under `pending` on every run is not waiting for a
+retry.** That Topic's own verb is refusing the number, which `recordName` does
+when the Topic already stores a different one. Read its stored number, decide
+which number that Topic is to keep, and reconcile by hand; nothing in the board
+resolves it, and each run costs one refused handler transaction.
+
 ### Audit which Topics still need it
 
-The derived `shortName` is the wrong thing to audit — read the durable argument:
+The number a Topic reports is the number it stores, so the board's own index is
+the survey:
 
 ```bash
-deno task cf cell get --cell "$TOPIC" boardNames --input --select name
+deno task cf cell get "$TOPICS_BOARD" index --step --select @,title,shortName
 ```
 
-A bound Topic returns the whole names table (`[{"name":"1"},…]`); an unbound one
-returns `[]`. Read the VALUE, not the keys: the input is declared
-`boardNames?: ReadonlyCell<NamesTableRow[] | Default<[]>>` in
-`packages/patterns/topics/topic.tsx`, so the key is there either way and its
-presence says nothing.
+A row with no `shortName` is a Topic with no stored number. To read one Topic's
+number without depending on its result having materialized, read the durable
+input:
+
+```bash
+deno task cf cell get --cell "$TOPIC" shortName --input
+```
 
 Audit only Topics whose source has already been migrated. Input reads use the
-current pattern's projection: if it does not declare `boardNames`, this targeted
-read refuses the path, including when the raw argument document holds a legacy
-link there. Updating the pattern to select the input exposes that retained link
-without rewriting it. Whether the pattern then consumes its row is what a
-Topic's published `shortName` shows, so that check waits for numbers to be
-shown; the bind itself is what the read above settles.
+current pattern's projection: a Topic whose pattern does not declare `shortName`
+refuses this targeted read with `Cannot access path "shortName"`, and so does a
+targeted `deno task cf cell set --input` write to it. Updating the Topic's
+pattern is what makes the path reachable at all.
 
 ### Traps
-
-**A bind cannot expose an undeclared input** (#6965). A Topic that has not taken
-step 2 has no `boardNames` input in its pattern schema. Linking to it refuses
-before writing, with or without `--allow-non-existing`:
-
-```
-Cannot access path "boardNames" - property "boardNames" not found in the current pattern's input schema. Update the target pattern with cf piece setsrc to declare this input before linking, reading, or writing it. --allow-non-existing does not override the input schema.
-```
-
-Update the Topic's pattern before binding. A refused bind stores no link and
-reports no successful link receipt; targeted `deno task cf cell set --input`
-writes also refuse the undeclared path. The flag overrides missing pieces or
-endpoint values, so it can bind a declared input that has neither a value nor a
-default. It cannot override the input schema. Topics' `boardNames` default makes
-that override unnecessary for this migration.
 
 **`setsrc --check` issues no storage writes**, including when it refuses. Normal
 reads can demand server-side materialization when server execution is active;
@@ -187,7 +170,18 @@ verify the clone's fingerprint before reusing its baseline. Applying source can
 persist compilation artifacts before setup accepts it, so reset the clone with
 `deno task cf space reset` before repeating an apply rehearsal.
 
-**Binding a piece the board does not hold** does nothing wrong and nothing
-useful: it succeeds, and the Topic reads no name. The lookup is by identity —
-`nameOf` in `packages/patterns/collection-naming/naming.ts` finds the row whose
-`member` `equals` the one asked about — so a non-member has no row to find.
+**A number is permanent, and only the verb enforces that.** `recordName` refuses
+a number that disagrees with one the Topic already stores, and writes nothing
+when it agrees. A targeted `deno task cf cell set --input` write to `shortName`
+has no such guard and will overwrite or blank a stored number, so reach for the
+verb:
+
+```bash
+deno task cf piece call --cell "$TOPIC" recordName '{"name":"42"}'
+```
+
+**The namespace and the stored number are two writes, and only the first is the
+board's.** A Topic numbered in `names` that reports no `shortName` is the
+half-finished state, and it is what the numbering step's `pending` list names.
+The board serves every Topic either way, numbered beside unnumbered, and the
+repair is another run of the step. Nothing has to be undone.
