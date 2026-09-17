@@ -620,6 +620,599 @@ const boardNameMain: Edit[] = [
   ],
 ];
 
+// --- Round 2 -------------------------------------------------------------
+
+/** The copies the editor completes over, without the member reference a
+ * universe row carries. */
+const UNIVERSE_COPY =
+  `/** EXPERIMENT: a universe row as a member reads it — the three display
+ * strings and no reference to the member, so reading the universe expands no
+ * member. */
+export interface UniverseCopy {
+  [NAME]: string | Default<"">;
+  title: string | Default<"">;
+  shortName: string | Default<"">;
+}
+
+`;
+
+/**
+ * The board edits every round-2 arm shares: the entry document is minted
+ * before the topic (so the create can hand it over), and the slot the board
+ * keeps carries the topic as well as its name, so a per-entry fill can find
+ * that topic's row by identity rather than by a join over the whole table.
+ */
+const perEntryMain = (arm: string, opts: {
+  /** Fold the board's name and a bounded universe into the entry. */
+  everything: boolean;
+}): Edit[] => [
+  COMPOSER_TOPIC_UNTYPED,
+  [
+    `  assignName,\n  backfillNames,\n`,
+    `  assignName,\n  backfillNames,\n  createNamed,\n`,
+  ],
+  [
+    `  handler,\n`,
+    `  handler,\n  type Cell,\n  type ComparableCell,\n  computed,\n  entityRefToString,\n  getEntityId,\n  type KeyIndex,\n`,
+  ],
+  [
+    `  type TopicCrossrefRow,\n  type TopicMentionable,`,
+    `  type OwnEntry,\n  type TopicCrossrefRow,\n  type TopicMentionable,${
+      opts.everything ? `\n  type UniverseCopy,` : ""
+    }`,
+  ],
+  [
+    `export interface TopicsInput {\n`,
+    `/** EXPERIMENT (${arm}): where the board keeps a topic's entry document,
+ * under the name it was filed as. */
+export interface EntrySlot {
+  /** The board's name for the topic. */
+  name: string;
+
+  /** The entry, which the create also handed to the topic. */
+  entry: Writable<OwnEntry>;
+}
+
+export interface TopicsInput {
+  /** EXPERIMENT (${arm}): one slot per topic the board has filed. */
+  entrySlots?: Writable<EntrySlot[] | Default<[]>>;
+
+`,
+  ],
+  [
+    BOARD_DEFAULT,
+    `/** EXPERIMENT (${arm}): what the pivot reads of one topic — what it points
+ * at, and the two display strings a topic that mentions it shows. */
+interface PivotSource {
+  mentions: ComparableCell<unknown>[] | Default<[]>;
+  title: string | Default<"">;
+  shortName?: string;
+}
+
+/** EXPERIMENT (${arm}): one row of the pivot, addressed by the topic it is
+ * about and NAMED, so a per-entry fill finds its row by a key both sides
+ * compute. Its members are cells carrying the two display strings, which is
+ * what lets one type serve the pivot, the index over it, and the fill. */
+interface PivotRow {
+  name: string;
+  mentionedBy: ReadonlyCell<PivotSource>[];
+}
+
+/** EXPERIMENT (${arm}): the board's mention pivot, named. One row per topic,
+ * carrying the board's name for it and the topics that mention it as cells.
+ * The name comes from the namespace, joined by the identity each side
+ * RESOLVES to — \`getEntityId\` alone does not resolve, and a member whose
+ * document has moved and left a forwarding link is reached through the old
+ * address, so an unresolved join would lose it. */
+const pivotTable = lift((
+  { sources, names }: {
+    sources: ReadonlyCell<PivotSource>[] | Default<[]>;
+    // deno-lint-ignore ban-types
+    names: Default<Record<string, ReadonlyCell<unknown>>, {}>;
+  },
+): PivotRow[] => {
+  const idOf = (cell: unknown): string | undefined => {
+    const resolvable = cell as { resolveAsCell?: () => unknown } | undefined;
+    const target = typeof resolvable?.resolveAsCell === "function"
+      ? resolvable.resolveAsCell()
+      : cell;
+    const ref = getEntityId(target);
+    return ref === undefined ? undefined : entityRefToString(ref);
+  };
+  const nameById = new Map<string, string>();
+  for (const [name, member] of Object.entries(names)) {
+    if (member === undefined) continue;
+    const id = idOf(member);
+    if (id !== undefined) nameById.set(id, name);
+  }
+  // Every pass below reads plain arrays: an element read through a reactive
+  // array resolves a link every time.
+  const list = Array.from(sources);
+  const mentions = list.map((topic) => {
+    const value = topic?.get();
+    return value === undefined ? [] : Array.from(value.mentions ?? []);
+  });
+  const rows: unknown[] = [];
+  list.forEach((topic, index) => {
+    const id = idOf(topic);
+    const name = id === undefined ? undefined : nameById.get(id);
+    if (name === undefined) return;
+    const inbound: ReadonlyCell<PivotSource>[] = [];
+    list.forEach((source, other) => {
+      if (other === index) return;
+      if (mentions[other].some((mention) => equals(topic, mention))) {
+        inbound.push(source);
+      }
+    });
+    rows.push(
+      Writable.for<PivotRow>(topic).set({ name, mentionedBy: inbound }),
+    );
+  });
+  return rows as PivotRow[];
+});
+
+/** EXPERIMENT (${arm}): the pivot indexed by the name each row carries — a
+ * string key, which is the only kind a member can compute for itself. */
+const indexPivot = pattern<
+  { rows: Cell<PivotRow[]> },
+  { index: KeyIndex<string, PivotRow> }
+>(({ rows }) => ({ index: rows.keyBy((row) => row.name) }));
+
+/** EXPERIMENT (${arm}): ONE topic's entry, written from that topic's own row.
+ * A mention change re-runs this for the topics whose row changed and for no
+ * others, which is the whole point of it being per topic. The titles and names
+ * it copies come from the mentioning topics themselves, each of which
+ * publishes its own name, so no names table is read here. Returns what it
+ * wrote, which is what a reader demands to make it run. */
+const fillOneEntry = lift((
+  { entry, name, row${opts.everything ? ", collectionName, universe" : ""} }: {
+    entry: Writable<OwnEntry>;
+    name: string;
+    row: PivotRow | undefined;${
+      opts.everything
+        ? `
+    collectionName: string;
+    universe: UniverseCopy[];`
+        : ""
+    }
+  },
+): number => {
+  const mentionedBy = (row?.mentionedBy ?? []).map((source) => {
+    const value = source.get();
+    return { title: value?.title ?? "", shortName: value?.shortName ?? "" };
+  });
+  entry.set({
+    name,
+    mentionedBy,${
+      opts.everything
+        ? `
+    // The board's own name, and its universe, as values — so a topic's whole
+    // demand on its board is this one entry.
+    collectionName,
+    universe,`
+        : ""
+    }
+  });
+  return mentionedBy.length;
+});
+
+${
+      opts.everything
+        ? `/** EXPERIMENT (${arm}): the universe, bounded. A member's editor completes
+ * over the most recently filed \`UNIVERSE_BOUND\` members rather than over every
+ * member, so what a member loads at startup does not grow with the
+ * collection. What it costs is completion over the rest, which is the
+ * component's to ask for; see the report. */
+const boundedUniverse = lift((
+  { rows }: {
+    rows: {
+      [NAME]: string | Default<"">;
+      title: string | Default<"">;
+      shortName: string | Default<"">;
+    }[] | Default<[]>;
+  },
+): UniverseCopy[] =>
+  rows.slice(Math.max(0, rows.length - UNIVERSE_BOUND)).map((row) => ({
+    [NAME]: row[NAME] ?? "",
+    title: row.title ?? "",
+    shortName: row.shortName ?? "",
+  })) as UniverseCopy[]
+);
+
+/** How many members a bounded universe carries. */
+const UNIVERSE_BOUND = 50;
+
+/** What this board calls itself. */
+const BOARD_NAME = "topics";
+
+`
+        : ""
+    }${BOARD_DEFAULT}`,
+  ],
+  [
+    `export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {`,
+    `export default pattern<TopicsInput, TopicsOutput>((
+  { topics, names, entrySlots },
+) => {`,
+  ],
+  [
+    BOARD_TABLE,
+    `${BOARD_TABLE}${
+      opts.everything
+        ? `
+  // EXPERIMENT (${arm}): the universe, bounded, and derived once.
+  const universe = boundedUniverse({ rows: mentionable });`
+        : ""
+    }
+  // EXPERIMENT (${arm}): the named pivot, indexed by name, and one entry per
+  // topic written from that topic's own row of it.
+  const pivot = pivotTable({ sources: topics, names });
+  const byName = indexPivot({ rows: pivot });
+  const perEntryWrites = entrySlots.map((slot) => {
+    // The lookup is wrapped so the compiler lowers it into a computation that
+    // receives the index handle as a cell. Reading \`.index\` in the board body
+    // and handing the result straight to a factory leaves the access as a
+    // plain property read of the params cell, which is undefined at build
+    // time.
+    const row = computed(() => byName.index.lookup(slot.name));
+    return fillOneEntry({
+      entry: slot.entry,
+      name: slot.name,
+      row,${
+      opts.everything
+        ? `
+      collectionName: BOARD_NAME,
+      universe,`
+        : ""
+    }
+    });
+  });`,
+  ],
+  [
+    ADD_TOPIC_START,
+    `    // EXPERIMENT (${arm}): the entry document is minted before the topic,
+    // so the create can hand the topic that document and nothing broader.
+    const entry = new Writable<OwnEntry>({
+      name: "",
+      mentionedBy: [],${
+      opts.everything ? `\n      collectionName: "",\n      universe: [],` : ""
+    }
+    });
+    const { name, member: piece } = createNamed(names, (allocated) =>
+      Topic({
+        shortName: allocated,`,
+  ],
+  [
+    opts.everything
+      ? `      // The board's mention index, so the editor has a mention universe. A
+      // piece from before the index is rewired to it as a one-time
+      // link-bind, the backfill the input declares for itself.
+      mentionable,
+${ADD_TOPIC_WIRING}`
+      : ADD_TOPIC_WIRING,
+    `      // EXPERIMENT (${arm}): this topic's own entry, and nothing else of
+      // the board.
+      ownEntry: entry,
+    }));
+    entrySlots.push({ name, entry });`,
+  ],
+  [ADD_TOPIC_NAME, ``],
+  [
+    BOARD_OUTPUT_INDEX,
+    `${BOARD_OUTPUT_INDEX}
+
+  /** EXPERIMENT (${arm}): one slot per topic, each holding that topic's own
+   * entry document. */
+  entrySlots: EntrySlot[] | Default<[]>;
+
+  /** EXPERIMENT (${arm}): the named pivot the fills read their rows from. */
+  pivot: PivotRow[] | Default<[]>;
+
+  /** EXPERIMENT (${arm}): how many references each per-topic fill wrote.
+   * Demanding it is what makes the fills run. */
+  perEntryWrites: number[];`,
+  ],
+  [
+    BOARD_RETURN,
+    `${BOARD_RETURN}    entrySlots,\n    pivot,\n    perEntryWrites,\n`,
+  ],
+  ...(opts.everything
+    ? [
+      [
+        `    naming: SEQUENCE_NAMING,\n`,
+        `    // EXPERIMENT (${arm}): the board declares the name its entries carry.
+    naming: { ...SEQUENCE_NAMING, name: BOARD_NAME },
+`,
+      ],
+    ] as Edit[]
+    : []),
+];
+
+/** The topic side of "one entry for everything": the entry carries the name,
+ * the board's name and the universe, and no other input is wired. */
+const everythingTopic: Edit[] = [
+  [
+    `/** EXPERIMENT (r3-one-entry): what the board holds about one topic. */
+export interface OwnEntry {`,
+    `${UNIVERSE_COPY}/** EXPERIMENT (r3-one-entry): what the board holds about one topic —
+ * everything the topic reads of its board, in one document. */
+export interface OwnEntry {
+  /** The board's own name, as a value. */
+  collectionName: string | Default<"">;
+
+  /** The universe the editor completes over, as COPIES of a bounded slice of
+   * the board's — so what a topic reads of its board is this one document, and
+   * what it reads does not grow with the board. What it costs the board is a
+   * copy per topic; the report measures that.
+   */
+  universe: UniverseCopy[] | Default<[]>;
+`,
+  ],
+  [
+    `    const referencedBy = entryBacklinks({ entry: ownEntry });`,
+    `    const referencedBy = entryBacklinks({ entry: ownEntry });
+    // EXPERIMENT (r3-one-entry): both out of the same entry.
+    const collectionName = entryCollectionName({ entry: ownEntry });
+    const universe = entryUniverse({ entry: ownEntry });`,
+  ],
+  [
+    BACKLINKS_DECL,
+    `/** EXPERIMENT (r3-one-entry): the board's name, out of the entry. */
+const entryCollectionName = lift((
+  { entry }: { entry: { collectionName: string | Default<""> } | undefined },
+): string | undefined => entry?.collectionName);
+
+/** EXPERIMENT (r3-one-entry): the universe, out of the entry. One reference
+ * to one bounded document; the rows carry no member reference, so reading them
+ * expands no topic. */
+const entryUniverse = lift((
+  { entry }: {
+    entry: { universe: UniverseCopy[] | Default<[]> } | undefined;
+  },
+): UniverseCopy[] => (entry?.universe ?? []) as UniverseCopy[]);
+
+${BACKLINKS_DECL}`,
+  ],
+  [
+    `                        $mentionable={mentionable}`,
+    `                        $mentionable={universe}`,
+  ],
+  [
+    `export interface TopicOutput extends TopicPiece {\n  [UI]: VNode;\n`,
+    `export interface TopicOutput extends TopicPiece {
+  [UI]: VNode;
+
+  /** EXPERIMENT (r3-one-entry): the board's declared name, out of the entry. */
+  collectionName?: string;
+
+  /** EXPERIMENT (r3-one-entry): how many members the entry's universe carries,
+   * so a measurement can see that the editor has one. */
+  universeCount?: number;
+`,
+  ],
+  [
+    TOPIC_RETURN,
+    `${TOPIC_RETURN}      collectionName,\n      universeCount,\n`,
+  ],
+  [
+    `    const universe = entryUniverse({ entry: ownEntry });`,
+    `    const universe = entryUniverse({ entry: ownEntry });
+    const universeCount = universe.length;`,
+  ],
+];
+
+/** r1-pruned: the board's universe, bounded, wired as the universe input. */
+const prunedMain: Edit[] = [
+  [
+    `  const mentionable = mentionableIndex({ members: topics });`,
+    `  const mentionable = boundedUniverse({
+    rows: mentionableIndex({ members: topics }),
+  });`,
+  ],
+  [
+    BOARD_DEFAULT,
+    `/** EXPERIMENT (r1-pruned): the universe, bounded to the most recently filed
+ * members, so what a member loads at startup does not grow with the board. */
+const boundedUniverse = lift((
+  { rows }: {
+    rows: {
+      [NAME]: string | Default<"">;
+      title: string | Default<"">;
+      shortName: string | Default<"">;
+      piece: unknown;
+    }[] | Default<[]>;
+  },
+): MentionableRow[] =>
+  rows.slice(Math.max(0, rows.length - 50)) as MentionableRow[]
+);
+
+${BOARD_DEFAULT}`,
+  ],
+];
+
+/** r1-lazy: the editor completes over a session copy the open verb takes, so
+ * the universe is read when the editor opens rather than at startup. */
+const lazyTopic: Edit[] = [
+  [
+    `    const referencesDraft = new Writable.perSession<TopicMentionRefMap>({});`,
+    `    const referencesDraft = new Writable.perSession<TopicMentionRefMap>({});
+    // EXPERIMENT (r1-lazy): the universe the editor completes over, taken when
+    // the editor opens rather than read at startup.
+    const universeDraft = new Writable.perSession<
+      TopicMentionable[] | ReadonlyCell<TopicMentionable[]>
+    >([]);`,
+  ],
+  [
+    `    const startEditBody = action(() => {
+      bodyDraft.set(body.get());`,
+    `    const startEditBody = action(() => {
+      bodyDraft.set(body.get());
+      // EXPERIMENT (r1-lazy): the universe, copied into session state here.
+      universeDraft.set(mentionable);`,
+  ],
+  [
+    `                        $mentionable={mentionable}`,
+    `                        $mentionable={universeDraft}`,
+  ],
+];
+
+/** r6-table-copies: no handed reference. The board publishes its entries as a
+ * table of copies and wires the whole table into every topic, which finds its
+ * own row by the name it stores. */
+const tableTopic: Edit[] = [
+  [
+    TOPIC_INPUT_END,
+    `  boardNames?: ReadonlyCell<NamesTableRow[] | Default<[]>>;
+
+  /** EXPERIMENT (r6-table-copies): the board's entry table, whole. Every row
+   * carries values only — no reference to any topic — so a reader of the
+   * table expands no topic, and a topic finds its own row by the name it
+   * stores. */
+  boardEntries?: ReadonlyCell<OwnEntry[] | Default<[]>>;
+}
+
+/** EXPERIMENT (r6-table-copies): what a topic shows of a topic that mentions
+ * it. */
+export interface TopicBacklinkCopy {
+  title: string;
+  shortName: string;
+}
+
+/** EXPERIMENT (r6-table-copies): one row of the board's entry table. */
+export interface OwnEntry {
+  name: string;
+  mentionedBy: TopicBacklinkCopy[];
+}`,
+  ],
+  ...storedName("r6-table-copies"),
+  [
+    `      boardNames,\n      shortName,\n      [SELF]: self,`,
+    `      boardNames,\n      shortName,\n      boardEntries,\n      [SELF]: self,`,
+  ],
+  [
+    BACKLINKS,
+    `    const referencedBy = ownRowBacklinks({
+      table: boardEntries,
+      name: shortName,
+    });`,
+  ],
+  [
+    BACKLINKS_DECL,
+    `/** EXPERIMENT (r6-table-copies): this topic's inbound references, found in
+ * the board's table by the name this topic stores. The declared parameter is
+ * the WHOLE table, as today's lookup declares it, and every position in it is
+ * a value rather than a reference. */
+const ownRowBacklinks = lift((
+  { table, name }: {
+    table: { name: string; mentionedBy: TopicBacklinkCopy[] }[] | Default<[]>;
+    name?: string;
+  },
+): TopicBacklinkCopy[] =>
+  (table.find((row) => row.name === name)?.mentionedBy ??
+    []) as TopicBacklinkCopy[]
+);
+
+${BACKLINKS_DECL}`,
+  ],
+  [
+    `  referencedBy: TopicSummary[] | Default<[]>;`,
+    `  referencedBy: TopicBacklinkCopy[] | Default<[]>;`,
+  ],
+  [
+    `                      {referencedBy.map((topic) => (
+                        <cf-cell-link $cell={topic} />
+                      ))}`,
+    `                      {referencedBy.map((topic) => (
+                        <cf-text>{topic.shortName} {topic.title}</cf-text>
+                      ))}`,
+  ],
+];
+
+const tableMain: Edit[] = [
+  ...storedNameMain("r6-table-copies"),
+  [
+    `  handler,\n`,
+    `  handler,\n  type ComparableCell,\n  entityRefToString,\n  getEntityId,\n`,
+  ],
+  [
+    `  type TopicCrossrefRow,\n  type TopicMentionable,`,
+    `  type OwnEntry,\n  type TopicCrossrefRow,\n  type TopicMentionable,`,
+  ],
+  [
+    BOARD_DEFAULT,
+    `/** EXPERIMENT (r6-table-copies): the board's entry table: one row per named
+ * topic, carrying the topics that mention it as COPIES. One document of
+ * values, so a topic reading the whole table expands no topic. */
+const entryTable = lift((
+  { rows, names }: {
+    rows:
+      | {
+        topic: ComparableCell<unknown>;
+        mentionedBy: ReadonlyCell<{
+          title: string | Default<"">;
+          shortName?: string;
+        }>[];
+      }[]
+      | Default<[]>;
+    // deno-lint-ignore ban-types
+    names: Default<Record<string, ReadonlyCell<unknown>>, {}>;
+  },
+): OwnEntry[] => {
+  const idOf = (cell: unknown): string | undefined => {
+    const resolvable = cell as { resolveAsCell?: () => unknown } | undefined;
+    const target = typeof resolvable?.resolveAsCell === "function"
+      ? resolvable.resolveAsCell()
+      : cell;
+    const ref = getEntityId(target);
+    return ref === undefined ? undefined : entityRefToString(ref);
+  };
+  const nameById = new Map<string, string>();
+  for (const [name, member] of Object.entries(names)) {
+    if (member === undefined) continue;
+    const id = idOf(member);
+    if (id !== undefined) nameById.set(id, name);
+  }
+  const out: OwnEntry[] = [];
+  for (const row of rows) {
+    const id = idOf(row.topic);
+    const name = id === undefined ? undefined : nameById.get(id);
+    if (name === undefined) continue;
+    out.push({
+      name,
+      mentionedBy: row.mentionedBy.map((source) => {
+        const value = source.get();
+        return { title: value?.title ?? "", shortName: value?.shortName ?? "" };
+      }),
+    });
+  }
+  return out;
+});
+
+${BOARD_DEFAULT}`,
+  ],
+  [
+    BOARD_TABLE,
+    `${BOARD_TABLE}
+  // EXPERIMENT (r6-table-copies): the entry table, derived once for the board.
+  // deno-lint-ignore no-explicit-any
+  const entries = entryTable({ rows: crossrefs as any, names });`,
+  ],
+  [
+    ADD_TOPIC_WIRING,
+    `      // EXPERIMENT (r6-table-copies): the whole entry table, of values.
+      boardEntries: entries,
+    }));`,
+  ],
+  [
+    BOARD_OUTPUT_INDEX,
+    `${BOARD_OUTPUT_INDEX}
+
+  /** EXPERIMENT (r6-table-copies): one entry row per named topic. */
+  ownEntries: OwnEntry[];`,
+  ],
+  [BOARD_RETURN, `${BOARD_RETURN}    ownEntries: entries,\n`],
+];
+
 const ARMS: Record<string, { topic: Edit[]; main: Edit[] }> = {
   "q2-unread": q2Unread,
   "q2-read-one": q2ReadOne,
@@ -638,6 +1231,26 @@ const ARMS: Record<string, { topic: Edit[]; main: Edit[] }> = {
   "q7-board-name": {
     topic: [...entryTopic("q7-board-name", true, true), ...boardNameTopic],
     main: [...entryMain("q7-board-name", true, true), ...boardNameMain],
+  },
+  "r1-pruned": {
+    topic: entryTopic("r1-pruned", true, true),
+    main: [...entryMain("r1-pruned", true, true), ...prunedMain],
+  },
+  "r1-lazy": {
+    topic: [...entryTopic("r1-lazy", true, true), ...lazyTopic],
+    main: entryMain("r1-lazy", true, true),
+  },
+  "r2-per-entry": {
+    topic: entryTopic("r2-per-entry", true, true),
+    main: perEntryMain("r2-per-entry", { everything: false }),
+  },
+  "r3-one-entry": {
+    topic: [...entryTopic("r3-one-entry", true, true), ...everythingTopic],
+    main: perEntryMain("r3-one-entry", { everything: true }),
+  },
+  "r6-table-copies": {
+    topic: tableTopic,
+    main: tableMain,
   },
 };
 

@@ -1,0 +1,13 @@
+# 2026-09-17T19:22:22.310Z r3-one-entry N=4 build
+# 2026-09-17T19:22:24.312Z r3-one-entry N=4 op-add
+# 2026-09-17T19:22:24.514Z r3-one-entry N=4 op-mention
+# 2026-09-17T19:22:24.534Z r3-one-entry N=4 ownership
+# 2026-09-17T19:22:24.535Z r3-one-entry N=4 replay
+[ERROR][storage.v2::19:22:24.548] sync-load-failure sync completed without data for of:fid1:17IchmDpKOZXPb6Ydf_mFr7oPS9BPNeuotsXPXQ3aAE in did:key:z6MkoaGECr54o6Qi9aDoKTxQpu26xTrsnmbeobfnmc8ge42x: ConnectionError: memory client closed
+# 2026-09-17T19:22:24.549Z r3-one-entry N=4 b-compile
+# 2026-09-17T19:22:24.693Z r3-one-entry N=4 start
+# 2026-09-17T19:22:24.877Z r3-one-entry N=4 pull
+Can't load profile-create.tsx
+# 2026-09-17T19:22:24.977Z r3-one-entry N=4 checks
+# 2026-09-17T19:22:24.978Z r3-one-entry N=4 attribution
+# result: experiment-output/round2/r3-one-entry-N4.result.json

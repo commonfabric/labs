@@ -61,6 +61,7 @@ const copyRows = {
     },
     shortName: { type: "string" },
     collectionName: { type: "string" },
+    universeCount: { type: "number" },
   },
 };
 
@@ -77,6 +78,7 @@ const copiesAndName = (value: Json) => ({
     ? value.referencedBy[0]
     : undefined,
   collectionName: value?.collectionName,
+  universeCount: value?.universeCount,
 });
 
 const TABLES = ["boardCrossrefs", "boardNames", "mentionable"];
@@ -138,6 +140,70 @@ export const ARMS: Record<string, Arm> = {
     board: "own-entry/arms/q6-copies/main.tsx",
     demand: [...TABLE_DEMAND, "entriesWritten"],
     replayInputs: ["ownEntry", "mentionable"],
+    checkSchema: copyRows,
+    checks: copiesAndName,
+  },
+  "r1-pruned": {
+    base: "topics",
+    what:
+      "the copies arm with the board's mention universe bounded to its 50 " +
+      "most recently filed members",
+    board: "own-entry/arms/r1-pruned/main.tsx",
+    demand: [...TABLE_DEMAND, "entriesWritten"],
+    replayInputs: ["ownEntry", "mentionable"],
+    checkSchema: copyRows,
+    checks: copiesAndName,
+  },
+  "r1-lazy": {
+    base: "topics",
+    what: "the copies arm where the editor completes over a session copy the " +
+      "open verb takes, so nothing reads the universe at startup",
+    board: "own-entry/arms/r1-lazy/main.tsx",
+    demand: [...TABLE_DEMAND, "entriesWritten"],
+    replayInputs: ["ownEntry", "mentionable"],
+    checkSchema: copyRows,
+    checks: copiesAndName,
+  },
+  "r2-per-entry": {
+    base: "topics",
+    what: "the copies arm whose entries are filled one per topic, from that " +
+      "topic's own row of an index over the pivot",
+    board: "own-entry/arms/r2-per-entry/main.tsx",
+    demand: [
+      "namesTable",
+      "mentionable",
+      "topicCount",
+      "pivot",
+      "perEntryWrites",
+    ],
+    replayInputs: ["ownEntry", "mentionable"],
+    checkSchema: copyRows,
+    checks: copiesAndName,
+  },
+  "r3-one-entry": {
+    base: "topics",
+    what: "everything the topic reads of its board in one handed entry: its " +
+      "name, its backlinks, the board's name and a bounded universe, all as " +
+      "values, filled one entry per topic",
+    board: "own-entry/arms/r3-one-entry/main.tsx",
+    demand: [
+      "namesTable",
+      "mentionable",
+      "topicCount",
+      "pivot",
+      "perEntryWrites",
+    ],
+    replayInputs: ["ownEntry"],
+    checkSchema: copyRows,
+    checks: copiesAndName,
+  },
+  "r6-table-copies": {
+    base: "topics",
+    what: "no handed reference: the board publishes its entries as one table " +
+      "of values and each topic finds its own row by the name it stores",
+    board: "own-entry/arms/r6-table-copies/main.tsx",
+    demand: [...TABLE_DEMAND, "ownEntries"],
+    replayInputs: ["boardEntries", "mentionable"],
     checkSchema: copyRows,
     checks: copiesAndName,
   },

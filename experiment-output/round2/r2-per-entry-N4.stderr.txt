@@ -1,0 +1,13 @@
+# 2026-09-17T19:22:19.190Z r2-per-entry N=4 build
+# 2026-09-17T19:22:21.110Z r2-per-entry N=4 op-add
+# 2026-09-17T19:22:21.317Z r2-per-entry N=4 op-mention
+# 2026-09-17T19:22:21.340Z r2-per-entry N=4 ownership
+# 2026-09-17T19:22:21.341Z r2-per-entry N=4 replay
+[ERROR][storage.v2::19:22:21.352] sync-load-failure sync completed without data for of:fid1:CFkHOQHEGEyn3cQQ9Pexg5crgIsW06bzKmKi2kgZ4gA in did:key:z6MkuKsyiQJgfub7NkMNajy9aPNT6BXRLcu2jTckpQMLkhft: ConnectionError: memory client closed
+# 2026-09-17T19:22:21.352Z r2-per-entry N=4 b-compile
+# 2026-09-17T19:22:21.476Z r2-per-entry N=4 start
+# 2026-09-17T19:22:21.569Z r2-per-entry N=4 pull
+Can't load profile-create.tsx
+# 2026-09-17T19:22:21.693Z r2-per-entry N=4 checks
+# 2026-09-17T19:22:21.694Z r2-per-entry N=4 attribution
+# result: experiment-output/round2/r2-per-entry-N4.result.json
