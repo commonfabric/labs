@@ -281,8 +281,14 @@ export interface RecordNamesResult {
   /**
    * The names the run asked members to store, one send each. A send's effect
    * is invisible to the transaction that makes it, so the run confirms none of
-   * them: a later run reports whichever landed under `named` and asks for the
-   * rest again.
+   * them.
+   *
+   * Empty is the finished state: every listed member reports its name and the
+   * run asked for nothing. Non-empty is not a failure — it is the set to run
+   * the step over again, and the run after reports whichever asking landed
+   * under `named` and asks for the rest. A name that stays here across runs is
+   * a member whose own verb is refusing it, which `recordName` does for a
+   * member that already stores a different name.
    */
   pending: string[];
 }

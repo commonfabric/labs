@@ -152,6 +152,61 @@ when the Topic already stores a different one. Read its stored number, decide
 which number that Topic is to keep, and reconcile by hand; nothing in the board
 resolves it, and each run costs one refused handler transaction.
 
+### What a half-finished Topic looks like, and what it costs
+
+Numbering a Topic is two writes, and only the first is the board's: the key in
+the board's `names` map, committed by the step's own transaction, and the number
+in the Topic's own input, which only the Topic can write. A run that makes the
+first and does not get the second is the state `pending` names, and it is worth
+knowing exactly how far it goes, because an operator meets it whenever a run
+leaves `pending` non-empty.
+
+**`top/<n>` resolves.** The resolver reads the containing piece's map and
+follows the entry to the piece — `resolveSlugReference` in
+`packages/runner/src/slug-resolution.ts` looks the segment up with
+`map.key(member)` and never reads the Topic — so
+`deno task cf cell get /@<space>/top/<n> title` answers as soon as the key is
+there, whatever the Topic stores. The number is usable as an address before the
+Topic can show it.
+
+**The Topic shows no number.** Its `shortName` is absent, so its header renders
+no badge, its `index` row carries no `shortName`, and its mention-universe row
+matches no `#<n>` query. Every display reads that one property, so all three
+move together.
+
+**A re-run cannot give it a different number.** The step looks a listed member
+up among the map's entries by identity before it allocates, so a member the map
+already holds takes the name it is held under. The comparison resolves both
+sides, so a Topic whose document has moved behind a forwarding link still
+matches its entry. No number is reused, and no Topic collects two.
+
+**A Topic whose source has no `recordName` ends up holding the payload as
+data.** A send to a path holding no stream is an ordinary write, so
+`{"name":"<n>"}` lands at `recordName` in that Topic's result document. Nothing
+declares a reader for it, so it is inert: it survives the Topic running again,
+and the Topic's next source update replaces the path with the stream, after
+which the verb works. It is untidy rather than damaging, and step 2 before step
+3 is what avoids it.
+
+**What an operator sees**, in the order they would look:
+
+```bash
+# the step's own report, run after run
+deno task cf piece call --cell "$TOPICS_BOARD" backfillNames '{"agentName":"Sol"}'
+# -> { "assigned": [], "named": ["1"], "pending": ["2"] }
+
+# the board's survey: the row for 2 carries no shortName
+deno task cf cell get "$TOPICS_BOARD" index --step --select @,title,shortName
+
+# and the number addresses the Topic anyway
+deno task cf cell get /@<space>/top/2 title
+```
+
+So the worst case is bounded: a number allocated, reachable, and permanently
+that Topic's, on a Topic that does not yet show it. No content is touched, no
+number is lost or reused, the board serves every Topic either way, and the
+repair is another run of the step. Nothing has to be undone.
+
 ### Audit which Topics still need it
 
 The number a Topic reports is the number it stores, so the board's own index is
@@ -193,8 +248,5 @@ verb:
 deno task cf piece call --cell "$TOPIC" recordName '{"name":"42"}'
 ```
 
-**The namespace and the stored number are two writes, and only the first is the
-board's.** A Topic numbered in `names` that reports no `shortName` is the
-half-finished state, and it is what the numbering step's `pending` list names.
-The board serves every Topic either way, numbered beside unnumbered, and the
-repair is another run of the step. Nothing has to be undone.
+**A half-finished Topic is not an error state.** What it costs is above, under
+"What a half-finished Topic looks like"; the repair is another run of the step.

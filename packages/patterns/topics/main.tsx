@@ -205,8 +205,13 @@ export interface BackfillNamesResult {
   /** The numbers this run asked topics to store, one `recordName` call each.
    * None is confirmed: a send's effect is invisible to the transaction that
    * makes it, so a topic here is one whose number is not stored YET as far as
-   * this run could see. Run the verb again to find out — the numbers that
-   * landed come back under `named`, and the rest are asked for again. */
+   * this run could see.
+   *
+   * Empty means the board is finished: every topic it holds reports its
+   * number. Non-empty is not a failure but the set to run the verb over again
+   * — the numbers that landed come back under `named`, and the rest are asked
+   * for again. A number allocated for a topic that has not stored it is still
+   * that topic's permanently, and `top/<n>` already reaches it. */
   pending: string[];
 }
 
