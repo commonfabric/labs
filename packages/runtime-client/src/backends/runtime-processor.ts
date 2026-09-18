@@ -121,6 +121,7 @@ import {
 } from "@commonfabric/utils/types";
 
 import { postToClient } from "./post-to-client.ts";
+import { preloadProfiles } from "./preload-profiles.ts";
 import {
   postContextualRuntimeError,
   runtimeErrorPost,
@@ -821,6 +822,7 @@ export class RuntimeProcessor {
 
   #telemetryEnabled = false;
   #intentOutcomeCancel: Cancel | undefined;
+  #profilePreloadCancel: Cancel | undefined;
 
   /**
    * VDOM mounts, by the mounting client's scoped mount id. A mount id comes
@@ -1136,6 +1138,8 @@ export class RuntimeProcessor {
         this.#cancelSpaceAccessLoss?.();
         this.#cancelSpaceAccessLoss = undefined;
         this.#intentOutcomeCancel = undefined;
+        this.#profilePreloadCancel?.();
+        this.#profilePreloadCancel = undefined;
         this.#siteTableCancel?.();
         this.#siteTableCancel = undefined;
         for (const cancel of this.#subscriptions.values()) {
@@ -3465,6 +3469,11 @@ export class RuntimeProcessor {
     // can reject an entry. A default-host provider is provisional. Failures
     // here must not block worker boot.
     processor.watchSiteTable();
+    try {
+      processor.#profilePreloadCancel = preloadProfiles(runtime);
+    } catch (error) {
+      console.warn("[RuntimeProcessor] Could not preload profiles:", error);
+    }
     return processor;
   }
 }

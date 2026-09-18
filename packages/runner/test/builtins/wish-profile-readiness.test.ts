@@ -15,9 +15,9 @@ import { defer } from "@commonfabric/utils/defer";
 import type { JSONSchema } from "../../src/builder/types.ts";
 import { wish } from "../../src/builtins/wish.ts";
 import {
-  createWishProfileReadiness,
-  WishProfilePending,
-} from "../../src/builtins/wish-profile-readiness.ts";
+  createDocumentReadiness,
+  DocumentPending,
+} from "../../src/document-readiness.ts";
 import type { Cell } from "../../src/cell.ts";
 import { canonicalizeCfcLabel } from "../../src/cfc/canonical.ts";
 import { readStoredCfcMetadata } from "../../src/cfc/metadata.ts";
@@ -108,7 +108,7 @@ describe("wish-profile-readiness", () => {
         },
       });
       expect((await seed.commit()).error).toBeUndefined();
-      const readiness = createWishProfileReadiness(
+      const readiness = createDocumentReadiness(
         runtime,
         (cancel) => cancels.push(cancel),
       );
@@ -443,7 +443,7 @@ describe("wish-profile-readiness", () => {
           const state = output!.withTx(undefined);
           expect(String(state.key("error").get())).toContain(
             outcome === "failed"
-              ? "Could not load profile selection data"
+              ? "Could not load document"
               : "Profile data is unavailable",
           );
           expect(
@@ -543,7 +543,7 @@ describe("wish-profile-readiness", () => {
         expect(output).toBeDefined();
         const state = output!.withTx(undefined);
         expect(state.key("error").get()).toBe(
-          "Error: Could not load profile selection data",
+          "Error: Could not load document",
         );
         expect(
           state.key("$UI").key("props").key("data-profile-create-ui").get(),
@@ -598,14 +598,14 @@ describe("wish-profile-readiness", () => {
         value: undefined,
         configurable: true,
       });
-      const readiness = createWishProfileReadiness(
+      const readiness = createDocumentReadiness(
         runtime,
         (cancel) => cancels.push(cancel),
       );
       const tx = runtime.edit();
       try {
         expect(() => readiness.requireDocument(runtime.getHomeSpaceCell(), tx))
-          .toThrow(WishProfilePending);
+          .toThrow(DocumentPending);
       } finally {
         tx.abort();
       }
@@ -643,7 +643,7 @@ describe("wish-profile-readiness", () => {
         subscriptions.push(subscription);
         originalSubscribe(subscription);
       };
-      const readiness = createWishProfileReadiness(
+      const readiness = createDocumentReadiness(
         runtime,
         (cancel) => cancels.push(cancel),
       );
@@ -665,7 +665,7 @@ describe("wish-profile-readiness", () => {
           tx.abort();
         }
       };
-      expect(requireDocument).toThrow(WishProfilePending);
+      expect(requireDocument).toThrow(DocumentPending);
       expect(loads).toHaveLength(1);
       runtime.scheduler.setDebounce(registered, 60_000);
       const resetAt = performance.now();
@@ -678,7 +678,7 @@ describe("wish-profile-readiness", () => {
       loads[0].resolve();
       await manager.crossSpaceSettled();
       // The old epoch's completion must not confirm the new replica.
-      expect(requireDocument).toThrow(WishProfilePending);
+      expect(requireDocument).toThrow(DocumentPending);
       expect(loads).toHaveLength(2);
       loads[1].resolve();
       await manager.crossSpaceSettled();

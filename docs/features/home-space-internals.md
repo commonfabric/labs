@@ -18,6 +18,19 @@ const runtime = new Runtime({
 // Derived internally: runtime.userIdentityDID === storageManager.as.did()
 ```
 
+## Profile warming
+
+The authenticated browser worker starts a read-only subscription to
+`Home.defaultPattern.profiles` during initialization. Its schema reads only
+`name`, `avatar`, and `initialNameApplied` from each profile. Roster changes warm
+new entries; unrelated profile content is outside the subscription.
+
+The subscription belongs to the worker's authenticated identity, independently
+of the space being viewed. Worker initialization returns without waiting for
+the loads, and disposal cancels the subscription. It neither creates a Home
+pattern nor creates a profile. Wish still checks document readiness when
+resolving a request, because a preload can be incomplete or fail.
+
 ## ACL Initialization
 
 The home space has no separate derived space signer: the active user identity
