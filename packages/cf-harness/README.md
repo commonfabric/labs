@@ -2381,20 +2381,26 @@ establishes the source update, not the behavior the user asked for.
 For a classifier or filter change, the child is instructed to evaluate the old
 and new predicates over the same bounded sample before applying the revision.
 The check retains the existing readers, session scope, and filters. Its result
-reports `ready`, `sampleSize`, `beforeCount`, `afterCount`, and `changedCount`;
-the last counts rows whose inclusion changes, rather than subtracting totals.
-Pending reads, errors, and `outputConcerns` must be resolved before treating any
-counts as evidence. Sampling establishes the effect on that sample only.
+reports `pending`, `error`, `ready`, `sampleSize`, `beforeCount`, `afterCount`,
+and `changedCount`; the last counts rows whose inclusion changes, rather than
+subtracting totals. Pending reads, errors, and `outputConcerns` must be resolved
+before treating any counts as evidence. Sampling establishes the effect on that
+sample only.
 
 Either branch of the child return can carry an opaque `verificationRef` to that
-comparison. The parent reads it through ordinary `run_pattern` and
-`resultSchema`, under the existing release rules. The actual revised piece stays
-in `resultRef`; comparison counts, rows, and sender names get no new return
-channel. A released, ready check showing zero effect or an empty sample leads to
-a `finish_task` question with that finding and what the user can clarify.
-Readiness means the read settled without an error, independently of sample size
-or effect. A released nonzero check supports applying the tested rule and
-reporting its sampled delta, subject to any refresh warning.
+comparison. The parent passes it as an input to a minimal unnamed `run_pattern`
+reader whose `resultSchema` preserves all those status and comparison fields.
+Missing status fields are not defaulted and missing counts are not zero. A
+pending comparison is reread once through the same reference before interpreting
+its counts; a still-pending result remains unavailable. An observed query
+failure remains a failure, and a policy refusal calls for no reread. These reads
+use the existing release rules. The actual revised piece stays in `resultRef`;
+comparison counts, rows, and sender names get no new return channel. A released,
+ready check showing zero effect or an empty sample leads to a `finish_task`
+question with that finding and what the user can clarify. Readiness means the
+read settled without an error, independently of sample size or effect. A
+released nonzero check supports applying the tested rule and reporting its
+sampled delta, subject to any refresh warning.
 
 For both creation and revision, unavailable inspection does not prevent applying
 the requested source. When execution or the update succeeds but its result

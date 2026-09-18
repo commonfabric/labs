@@ -2,7 +2,7 @@
 
 Status: current implementation reference\
 Last verified: 2026-09-21\
-Revision: `a830c91858+unavailable-inspection`
+Revision: `a830c91858+inspection-review`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -492,10 +492,13 @@ The current package provides:
 - revision verification guidance uses `read_piece_source.inputRef` for the
   piece's bound arguments and ordinary `run_pattern` for an old/new rule check
   over one bounded sample. The child's separate `verificationRef` carries no
-  values into the parent; comparison fields use the existing release path. A
-  released, ready comparison with zero effect or an empty sample calls for a
-  question. Unavailable inspection allows a requested create or revision to be
-  applied: a successful receipt returns the piece with the fixed
+  values into the parent; a minimal reader preserves readiness, comparison
+  counts, and pending/error fields through the existing release path. Pending
+  evidence is reread once through the same reference, never interpreted as
+  settled-empty data. Query failures remain failures; policy refusals are not
+  retried. A released, ready comparison with zero effect or an empty sample
+  calls for a question. Unavailable inspection allows a requested create or
+  revision to be applied: a successful receipt returns the piece with the fixed
   `verification: "not-checked"` marker. The piece's visible summary and the
   final text state the inspection limitation, describe only the build or change,
   and point to the piece without claiming unseen results or asking for a

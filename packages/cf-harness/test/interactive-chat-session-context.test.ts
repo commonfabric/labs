@@ -206,6 +206,18 @@ describe("interactive chat session context", () => {
     expect(context).toContain(
       "It must not assert unseen rows, counts, matches, unread status, or relevance scores.",
     );
+    expect(context).toContain(
+      "Its resultSchema must expose pending, error, ready, sampleSize, beforeCount, afterCount, and changedCount.",
+    );
+    expect(context).toContain(
+      "never default a missing pending or error field, missing readiness to true, or missing counts to zero",
+    );
+    expect(context).toContain(
+      "Reread the same verificationRef once through that reader before interpreting its counts; do not author a replacement probe.",
+    );
+    expect(context).toContain(
+      "A policy refusal is final for that read and does not call for a reread.",
+    );
     expect(context).not.toContain(
       "A zero changedCount, empty sample, or unavailable verification is not completion",
     );
