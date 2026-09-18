@@ -169,9 +169,9 @@ const __cfLift_6 = __cfHelpers.lift<{
 // contains `unknown` there, so a generic-default `unknown` stays open rather
 // than turning reference-only — and the read prints its type as
 // `Readonly<{…}>`, or as a tuple. The analyzer applies the library alias to
-// its argument and lowers the tuple to an array of its element union; it used
-// to resolve the alias to its UNINSTANTIATED declared type (an empty object,
-// every member dropped) and to send the tuple to the accept-anything
+// its argument, rather than resolving the alias to its UNINSTANTIATED
+// declared type (an empty object, every member dropped), and lowers the
+// tuple to an array of its element union rather than to the accept-anything
 // fallback (`true`).
 export default pattern((__cf_pattern_input) => {
     const entry = __cf_pattern_input.key("entry");

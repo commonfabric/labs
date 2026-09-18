@@ -107,6 +107,8 @@ export class PrimitiveFormatter implements TypeFormatter {
       return { type: "undefined" };
     }
     if (flags & ts.TypeFlags.Void) {
+      // A `void` value is present but never read, so it carries the opaque
+      // cell marker; the origin tells it from a cell that carries the same.
       const schema: MutableJSONSchemaObj = { asCell: ["opaque"] };
       context.schemaOrigins?.set(schema, { kind: "void" });
       return schema;

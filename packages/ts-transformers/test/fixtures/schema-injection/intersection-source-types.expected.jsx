@@ -19,6 +19,11 @@ const __cfAmdHooks = undefined;
 type Brand = string & {
     topic: unknown;
 };
+type Folded = (string & {
+    a: 1;
+}) | (number & {
+    b: 2;
+});
 type OpaqueCompatible = any & OpaqueCell<any> & string & unknown;
 export const validOpaque: OpaqueCompatible = 123;
 export const opaqueCompatible = true as const satisfies __cfHelpers.JSONSchema;
@@ -34,6 +39,12 @@ export const nestedCompatible = true as const satisfies __cfHelpers.JSONSchema;
 export const reducedInnerAny = true as const satisfies __cfHelpers.JSONSchema;
 export const distributedBrand = false as const satisfies __cfHelpers.JSONSchema;
 export const unionBesideAny = true as const satisfies __cfHelpers.JSONSchema;
+export const foldedUnionBesideAny = true as const satisfies __cfHelpers.JSONSchema;
+export const foldedUnion = __cfHelpers.__cf_data({
+    type: "object",
+    additionalProperties: true,
+    $comment: "Unsupported intersection pattern: non-object constituent"
+} as const satisfies __cfHelpers.JSONSchema);
 // @ts-ignore: Internals
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);

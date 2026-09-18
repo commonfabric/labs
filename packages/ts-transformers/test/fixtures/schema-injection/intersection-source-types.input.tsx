@@ -7,6 +7,7 @@ import { type OpaqueCell, toSchema } from "commonfabric";
 // Expected: each call becomes the checker's `true` or `false` schema.
 
 type Brand = string & { topic: unknown };
+type Folded = (string & { a: 1 }) | (number & { b: 2 });
 type OpaqueCompatible = any & OpaqueCell<any> & string & unknown;
 export const validOpaque: OpaqueCompatible = 123;
 
@@ -39,3 +40,5 @@ export const distributedBrand = toSchema<(Brand | number) & boolean & unknown>()
 export const unionBesideAny = toSchema<
   any & (Brand | number) & boolean & unknown
 >();
+export const foldedUnionBesideAny = toSchema<any & Folded & number>();
+export const foldedUnion = toSchema<Folded & number>();

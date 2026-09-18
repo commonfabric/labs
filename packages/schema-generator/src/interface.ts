@@ -92,7 +92,10 @@ export interface GenerationContext {
    * Source distinctions needed while reducing intersections. Schemas can
    * coincide for different types, and a fallback can hide its constituents.
    * Constituents are formatted lazily when an enclosing intersection needs
-   * them; standalone fallbacks retain their normal formatter behavior.
+   * them; standalone fallbacks retain their normal formatter behavior. The
+   * record is keyed on the schema object itself, so it reaches a reader only
+   * through the object a formatter returned — the one the definitions hold
+   * and a `$ref` resolves to — and a copy carries none of it.
    */
   schemaOrigins?: WeakMap<
     MutableJSONSchemaObj,

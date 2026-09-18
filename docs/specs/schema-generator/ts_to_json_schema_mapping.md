@@ -89,34 +89,43 @@ nodes (unwrapped), `ArrayTypeNode`, tuples (an array of the element union,
 what lies behind it: a spread tuple's elements, each member's for a union of
 tuples, else an array's items read through a reference — the same lossy
 form as the type path), intersections (reduced as the checker reduces the
-types, then merged as `IntersectionFormatter` merges them, a named
-constituent read through its reference: unsupported nested and named
-intersections retain their constituents for an enclosing reduction;
-identical constituents fold while preserving source type distinctions;
-`never` leaves `false`; `any` makes the whole accept anything unless the
-constituents beside it that are no union already contradict each other,
-which is as far as the checker looks before `any` wins; otherwise a union
-constituent distributes; `unknown` is the identity; `void` reduces as
-`undefined` does beside another primitive. Its source type identifies it:
-`OpaqueCell<any>` has the same emitted opaque schema but remains an object
-constituent, and a union of the two retains both alternatives for reduction. An
-empty object part drops out and takes `null` and `undefined` with it, as
-`T & {}` does; primitives are narrowed or found disjoint wherever they
-sit, `"a" & string` being `"a"` and `string & number` nothing; and a
-constituent that merge
+types, then merged as `IntersectionFormatter` merges them; the rules are
+below), unions (`true` member short-circuits, `false` members filtered,
+singletons unwrapped), literal nodes, `TypeReference` nodes (wrapper
+detection first; then the default library's generic aliases — `Readonly`,
+`Partial`, `Required`, `Pick`, `Omit`, `NonNullable`, `Array`,
+`ReadonlyArray`, `Record` — applied structurally to their arguments when the
+name binds through the node or, for an unbindable synthetic reference,
+resolves lexically (`checker.resolveName`) to a library declaration, so an
+authored or imported shadow of the name keeps the general path; then a
+scope-based name-resolution fallback for unbindable synthetic references via
+`checker.getSymbolsInScope` — plus a `Date`-by-name special case), keyword
+types, and a final resolve-else-`true` fallback.
+
+An intersection node is settled the way the checker settles the type, each
+constituent read through its reference, and what remains is merged as
+`IntersectionFormatter` merges: identical constituents fold; `never` leaves
+`false`; `any` makes the whole accept anything unless the constituents beside
+it that are no union already contradict each other, which is as far as the
+checker looks before `any` wins; otherwise a union constituent distributes
+and every combination of arms is settled on its own; `unknown` is the
+identity; an empty object part drops out and takes `null` and `undefined`
+with it, as `T & {}` does; primitives are narrowed or found disjoint wherever
+they sit, `"a" & string` being `"a"` and `string & number` nothing; `null` or
+`undefined` beside an object leaves nothing; and a constituent that merge
 refuses — a non-object, or one with an index signature, which an array is —
-yields its same unsupported-pattern fallback), unions (`true` member
-short-circuits, `false` members filtered, singletons unwrapped), literal
-nodes,
-`TypeReference` nodes (wrapper detection first; then the default library's
-generic aliases — `Readonly`, `Partial`, `Required`, `Pick`, `Omit`,
-`NonNullable`, `Array`, `ReadonlyArray`, `Record` — applied structurally to
-their arguments when the name resolves lexically (`checker.resolveName`) to a
-library declaration, so an authored or imported shadow of the name keeps the
-general path; then a scope-based name-resolution fallback for unbindable
-synthetic references via `checker.getSymbolsInScope` — plus a `Date`-by-name
-special case), keyword types, and a final
-resolve-else-`true` fallback.
+yields the same unsupported-pattern fallback the type path emits. Where a
+schema alone no longer says what its type was, the generation context
+records where it came from (`schemaOrigins`): `void` lowers to the opaque
+marker `OpaqueCell<any>` also lowers to, and reduces as `undefined` does
+beside another primitive (`undefined & void` is `undefined`, `string & void`
+nothing) while the wrapper, having no primitive domain, is refused by a
+merge as a non-object constituent; an unsupported-pattern fallback keeps the
+constituents behind it, so a nested or named intersection is reopened when
+an enclosing one reduces it (`(string & Brand) & number` is nothing); and a
+union whose arms fold to one schema — `void | OpaqueCell<any>`, or two
+branded primitives with the same fallback — keeps every arm, so an
+intersection meeting the survivor still distributes over them.
 
 `readonly` marks mutability and contributes no JSON Schema keyword. A
 synthetic `readonly T[]` therefore has the same schema as its wrapped `T[]`.

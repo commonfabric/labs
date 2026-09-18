@@ -2,12 +2,20 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
+import type { JSONSchema } from "@commonfabric/api";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import { createTestProgram } from "./utils.ts";
 
+/** The schema both paths give an intersection they merge but cannot support. */
+const UNSUPPORTED_NON_OBJECT: JSONSchema = {
+  type: "object",
+  additionalProperties: true,
+  $comment: "Unsupported intersection pattern: non-object constituent",
+};
+
 describe("SchemaGenerator", () => {
   describe("intersection source types", () => {
-    const cases: [string, string, boolean][] = [
+    const cases: [string, string, JSONSchema][] = [
       [
         "returns `true` for an opaque cell beside `any` and `string`",
         "any & OpaqueCell<any> & string & unknown",
@@ -93,12 +101,37 @@ describe("SchemaGenerator", () => {
         "any & (Brand | number) & boolean & unknown",
         true,
       ],
+      // Two branded primitives emit one fallback, so their union folds to it;
+      // an intersection meeting the survivor still reads both arms.
+      [
+        "returns `true` when `any` meets a union whose arms fold to one fallback",
+        "any & Folded & number",
+        true,
+      ],
+      [
+        "keeps the arm a union folded away when the other arm is refused",
+        "Folded & number",
+        UNSUPPORTED_NON_OBJECT,
+      ],
+      [
+        "returns `true` when `any` meets a union the node path folded",
+        "any & (((string & A) | (number & B)) & unknown) & number",
+        true,
+      ],
+      [
+        "keeps the arm the node path folded away when the other arm is refused",
+        "(((string & A) | (number & B)) & unknown) & number",
+        UNSUPPORTED_NON_OBJECT,
+      ],
     ];
 
     for (const [description, expression, expected] of cases) {
       it(description, async () => {
         const code = `
           type Brand = string & { topic: unknown };
+          type Folded = (string & { a: 1 }) | (number & { b: 2 });
+          type A = { a: 1 };
+          type B = { b: 2 };
           type VoidAlias = void;
           type Result = ${expression};
         `;
@@ -112,7 +145,7 @@ describe("SchemaGenerator", () => {
           throw new Error("Missing `Result` declaration");
         }
         const type = checker.getTypeFromTypeNode(declaration.type);
-        expect(new SchemaGenerator().generateSchema(type, checker)).toBe(
+        expect(new SchemaGenerator().generateSchema(type, checker)).toEqual(
           expected,
         );
 
@@ -134,7 +167,7 @@ describe("SchemaGenerator", () => {
           undefined,
           undefined,
           sourceFile,
-        )).toBe(expected);
+        )).toEqual(expected);
       });
     }
   });

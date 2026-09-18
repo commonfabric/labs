@@ -529,13 +529,8 @@ type CalculatorRequest = {
           undefined,
           sourceFile,
         ) as Record<string, unknown>;
-      expect(schema).not.toEqual({
-        type: "object",
-        properties: { a: { type: "unknown" } },
-        required: ["a"],
-      });
-      expect((schema.properties as Record<string, unknown> | undefined)?.a)
-        .toBeUndefined();
+      // The general path's answer, not the alias applied to its argument.
+      expect(schema).toEqual({ type: "object", properties: {} });
     });
 
     // Named authored types analyze to a reference into the definitions, so

@@ -32,6 +32,7 @@ import {
   safeGetTypeOfSymbolAtLocation,
 } from "./type-utils.ts";
 import { attachDocTags, extractDocFromType } from "./doc-utils.ts";
+import { unionFoldedFrom } from "./schema-origins.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
 
@@ -636,7 +637,10 @@ function isEmptyObjectSchema(schema: MutableJSONSchema): boolean {
     Object.keys(schema.properties ?? {}).length === 0;
 }
 
-/** Folds equal intersection parts while preserving source type distinctions. */
+/**
+ * `parts` with equal schemas folded, parts whose origin kind differs kept
+ * apart: `void` and the opaque cell it lowers like are two parts still.
+ */
 function dedupeIntersectionParts<T extends MutableJSONSchema>(
   parts: T[],
   context: GenerationContext,
@@ -720,6 +724,7 @@ function intersectionOf(
         context,
       );
     }),
+    context,
   );
 }
 
@@ -837,9 +842,14 @@ function mergeParts(
  * a bare union contributes its arms, an arm accepting anything makes the
  * whole accept anything, arms accepting nothing drop out, equal arms fold
  * (by value-model equality, as every other union in this package folds),
- * and a lone survivor stands alone.
+ * and a lone survivor stands alone. Given the context, a fold that drops an
+ * arm with an origin of its own is recorded (`unionFoldedFrom`), so an
+ * intersection that meets the survivor still reads every arm.
  */
-function unionOfSchemas(schemas: MutableJSONSchema[]): MutableJSONSchema {
+function unionOfSchemas(
+  schemas: MutableJSONSchema[],
+  context?: GenerationContext,
+): MutableJSONSchema {
   const flat = schemas.flatMap((schema) =>
     isObjectOrArray(schema) && Array.isArray(schema.anyOf) &&
       Object.keys(schema).length === 1
@@ -847,12 +857,15 @@ function unionOfSchemas(schemas: MutableJSONSchema[]): MutableJSONSchema {
       : [schema]
   );
   if (flat.some((schema) => schema === true)) return true;
-  const unique = dedupeByValueEqual(
-    flat.filter((schema) => schema !== false),
-  );
+  const kept = flat.filter((schema) => schema !== false);
+  const unique = dedupeByValueEqual(kept);
   if (unique.length === 0) return false;
-  if (unique.length === 1) return unique[0]!;
-  return { anyOf: unique as MutableJSONSchemaObj[] };
+  const folded = unique.length === 1
+    ? unique[0]!
+    : { anyOf: unique as MutableJSONSchemaObj[] };
+  return context === undefined
+    ? folded
+    : unionFoldedFrom(folded, kept, unique.length, context);
 }
 
 /**
@@ -1627,10 +1640,9 @@ export class SchemaGenerator {
     // A tuple lowers the way the type-based path lowers one: an array whose
     // items accept any of the elements, structure and arity dropped
     // (tuple-emission.test.ts pins that choice). A rest element contributes
-    // its array's items; an optional one admits `undefined` as well. Without
-    // this branch a tuple fell through to the
-    // accept-anything fallback, so a tuple of `unknown` — reference-only
-    // slots — read as a request for everything.
+    // its array's items; an optional one admits `undefined` as well, so a
+    // tuple of `unknown` — reference-only slots — reads as that and not as a
+    // request for everything.
     if (ts.isTupleTypeNode(typeNode)) {
       return {
         type: "array",
@@ -2138,9 +2150,8 @@ export class SchemaGenerator {
    * type arguments applied structurally. The general path resolves such a
    * reference by name to the alias's UNINSTANTIATED declared type — a mapped
    * type over an unbound parameter — which reads as an empty object and drops
-   * every member the arguments carried. A cell read prints its type through
-   * `Readonly<{…}>`, so that was the fate of every pattern-scope read of an
-   * object type this analyzer was handed. Each alias is applied the way the
+   * every member the arguments carried, and a cell read prints its type
+   * through `Readonly<{…}>`. Each alias is applied the way the
    * type-based path applies it, to an inline object, to the definition a
    * named type's reference points at (on a copy — the shared definition is
    * left as every other consumer reads it), and to each arm of a union of
