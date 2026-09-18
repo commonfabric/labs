@@ -129,8 +129,8 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
           },
           // The program's own word on default-library membership; the
           // generator only holds a checker, which cannot reach the program.
-          isDefaultLibrarySourceFile: (sourceFile) =>
-            context.isSourceFileDefaultLibrary(sourceFile),
+          isDefaultLibrarySourceFile: (file) =>
+            context.isSourceFileDefaultLibrary(file),
           // The schema-generator owns the general/nested CFC alias path. Give
           // it the same spelling and stamp source used by the direct
           // WriteAuthorizedBy special case below, including for bindings

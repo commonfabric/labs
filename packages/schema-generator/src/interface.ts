@@ -143,6 +143,7 @@ export interface GenerationContext {
   writerIdentityForSourceFile?: (
     fileName: string,
   ) => WriterSourceIdentity;
+
   /** The program's word on default-library membership, when supplied. */
   isDefaultLibrarySourceFile?: (sourceFile: ts.SourceFile) => boolean;
 

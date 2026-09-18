@@ -930,7 +930,11 @@ way into the emitted schema. Lookups always try the node and
 
 `SchemaGenerationOptions` (`interface.ts`, plumbed at `schema-generator.ts`)
 supports `onDiagnostic` for recoverable generation problems (§7),
-`writerIdentityForSourceFile` for writer claims (§11), and `widenLiterals`.
+`writerIdentityForSourceFile` for writer claims (§11),
+`isDefaultLibrarySourceFile` for the program's own word on whether a
+declaration file is the default library's (the transformer supplies
+`program.isSourceFileDefaultLibrary`; without it, file names decide —
+`src/typescript/default-library.ts`), and `widenLiterals`.
 The effects of `widenLiterals` are:
 (1) single literal types emit bare base types instead of one-value enums
 (`primitive-formatter.ts`; bigint literals → `{ type: "integer" }`);

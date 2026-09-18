@@ -1,3 +1,10 @@
+/**
+ * Whether a declaration belongs to TypeScript's default library — what the
+ * native-type formatter and the node-based analyzer's library-alias rules ask
+ * before they treat a name such as `Readonly` or `Map` as the library's rather
+ * than an author's. The program's answer is believed when a caller has one;
+ * the file-name fallback serves a generator running without a program.
+ */
 import ts from "typescript";
 
 /**

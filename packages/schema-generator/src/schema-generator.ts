@@ -17,9 +17,9 @@ import { ObjectFormatter } from "./formatters/object-formatter.ts";
 import { ArrayFormatter } from "./formatters/array-formatter.ts";
 import { CommonFabricFormatter } from "./formatters/common-fabric-formatter.ts";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
-import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
 import { UnionFormatter } from "./formatters/union-formatter.ts";
 import { IntersectionFormatter } from "./formatters/intersection-formatter.ts";
+import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
 import {
   detectWrapperViaNode,
   getNamedTypeKey,
