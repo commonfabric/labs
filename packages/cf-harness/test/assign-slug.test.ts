@@ -482,6 +482,32 @@ describe("assign-slug", () => {
   });
 
   describe("assignSlugTool", () => {
+    it("refuses naming when the piece's read state cannot be established", async () => {
+      await linkDefaultPattern();
+      const engine = createEngine();
+      const created = await createPiece(engine);
+      const unreadable = stub(pieces, "getResult", () => {
+        throw new Error("private result-read diagnostic");
+      });
+      try {
+        const result = await engine.invokeBuiltinTool("assign_slug", {
+          token: created.resultRef,
+          slug: "unverified-report",
+        });
+        expect(result.output).toMatchObject({
+          status: "error",
+          message:
+            "assign_slug could not verify the piece's read state and UI; no name was assigned.",
+        });
+        expect(engine.getRunState().assignedPieces).toBeUndefined();
+      } finally {
+        unreadable.restore();
+      }
+      expect(await pieces.getRegisteredPieces()).toEqual([]);
+      await expect(resolvePieceAddress(pieces, "unverified-report"))
+        .rejects.toMatchObject({ code: "missing" });
+    });
+
     it("refuses a data-only result before registering or naming it", async () => {
       await linkDefaultPattern();
       const engine = createEngine();

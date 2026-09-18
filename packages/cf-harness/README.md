@@ -1949,11 +1949,12 @@ output the pattern's own schema DECLARES at its top level is read: a property
 name is a channel, a name computed from what a pattern read would publish that
 data through the name, and nothing here goes through a release measurement,
 while a declared name is a constant of the source the model composed. And an
-emptiness is read only off a result that reports a read — one declaring an error
-branch or a `pending` flag — because an empty list is an ordinary shape for a
-result to hold, and calling every one of them a read that returned nothing would
-say "no rows" about a selection nobody has made yet. A failure is read off any
-result, since a string reporting one is not an ordinary shape.
+emptiness concern is read only off a result declaring a read — an error branch
+or a `pending` flag — whose captured `pending` value is not true. An empty list
+is an ordinary shape for a result to hold, and calling every one of them a read
+that returned nothing would say "no rows" about a selection nobody has made yet.
+A true `pending` flag produces its own concern instead. A failure is read off
+any result, since a string reporting one is not an ordinary shape.
 
 So the report UNDER-reports rather than over-reports, and is best-effort by
 construction. An output reached through a `$ref` or a combinator is not read, a
@@ -1967,12 +1968,13 @@ A result declaring `pending: true` carries a `pending` concern instead of an
 emptiness concern. Its captured zeros and empty lists are not data. The root's
 exact returned snapshot is checked even when the runtime has no instantiation
 recorder or the read settles before the composed-output scan. A failure is
-reported alongside pending either way. Read the same result reference again
-under a schema including the read state before describing counts or naming the
-page; a new page is not needed to receive the outstanding reply. A settled,
-error-free empty filtered result should be checked against the same source
-without the uncertain predicate, and both counts and the filter presented. All
-value reads use the ordinary release boundary.
+reported alongside pending either way. Pass the held result reference as an
+`inputs` entry to a minimal unnamed reader pattern through `run_pattern`, with a
+`resultSchema` covering pending, error, and counts, before describing counts or
+naming the page; a replacement page is not needed to receive the outstanding
+reply. A settled, error-free empty filtered result should be checked against the
+same source without the uncertain predicate, and both counts and the filter
+presented. All value reads use the ordinary release boundary.
 
 The failure's own TEXT does not travel in the result. A concern names what the
 model already holds: it wrote the composition, and a composed instance's outputs

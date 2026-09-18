@@ -372,9 +372,9 @@ export const mintInputCellHandles = async (
 
 /**
  * The context message announcing `inputCells` to the model: one line per
- * input cell, pairing the token with the operator's name for it. An empty
- * list explicitly records that this run has no input-cell attachments; conversation
- * history may still identify a target.
+ * input cell, pairing the token with its host-supplied attachment name or
+ * session-confirmed slug. An empty list explicitly records that this run has
+ * no input-cell attachments; conversation history may still identify a target.
  */
 export const inputCellsContextMessage = (
   inputCells: readonly HarnessInputCell[],

@@ -8,8 +8,9 @@ pane a host embeds to show one session working.
 
 A completed turn that names a piece keeps its reference for a bare follow-up in
 the same session, including after restart. Explicit attachments select the new
-turn's inputs. Pending reads cannot be named as ready pages, and data-only
-probes stay unnamed; a read that settles later is verified on the same piece.
+turn's inputs. A `pending: true` output declared by the piece's top-level result
+schema prevents naming it as a ready page, and data-only probes stay unnamed.
+Reread the same piece after its read settles and verify the result.
 
 The server binds `127.0.0.1` and asks one thing of a request: that it names this
 server's own host. A hostile name that resolves to `127.0.0.1` would otherwise
