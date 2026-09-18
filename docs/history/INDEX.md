@@ -5,6 +5,8 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 ## Audits and reports
 
 - [Topics computation cost under lazy materialization on and off](development/performance/2026-09-18-topics-lazy-materialization.md) — 2026-09-18; the headless Topics matrix run once in each mode plus a five-round repeat subset, with the raw samples of both arms beside it in `2026-09-18-topics-lazy-materialization.results.json`: the `all-backlinks` workload re-runs `backlinksOf` for every topic with lazy materialization off while `topic-open` does not change its run count and `aggregates` demands no backlinks at all, proxy accesses are absent from every measured case in that mode, and the matrix arms' elapsed times are single samples taken under contention that support no latency conclusion.
+- [Fresh-store browser timing follow-up](development/performance/2026-09-18-default-on-fresh-store/) ([report](development/performance/2026-09-18-default-on-fresh-store/README.md)) — Reversed-order 1,184-vote profile-location pair on independent fresh stores; stable read counts and variable wall-clock observations.
+
 - [Default-on lunch-poll browser measurements](development/performance/2026-09-18-default-on-browser/) ([report](development/performance/2026-09-18-default-on-browser/README.md)) — Six synthetic mounted-browser cases, matching same-space/cross-space reactive counts, observed timing limits, screenshots, and separate headless evidence.
 
 - [2026-09-16 CFC evidence review](development/performance/2026-09-16-cfc-evidence-review.md) — Phase warmup verification and deterministic browser comparison including capture identity and size.

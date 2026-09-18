@@ -176,6 +176,16 @@ Cubic review. Live deployment remains separately coordinated.
 
 ### F5 — Measure and close
 
+Measurement progress: the
+[default-on browser matrix](../history/development/performance/2026-09-18-default-on-browser/README.md)
+covers three vote-list sizes in both profile locations, with separate headless
+evidence and rendered screenshots. The
+[fresh-store follow-up](../history/development/performance/2026-09-18-default-on-fresh-store/README.md)
+records timing variability despite stable reactive-body counts. Comparative
+latency claims require controlled repetitions and phase attribution; these
+records do not qualify a speedup. Guidance and final disposition of remaining
+measurement limits are still pending.
+
 - [ ] Repeat F0 on a pinned revision with the current default-on flag posture,
       using matched inputs and demanded surfaces. Report changes in access count
       separately from changes in per-access cost, handler cost, initialization
