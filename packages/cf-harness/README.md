@@ -1659,6 +1659,15 @@ explicit artifact resume and opaque provider context that may retain them.
 `CF_HARNESS_CHAT_ARTIFACT_ROOT` supplies the Loom host's default durable run
 root, including for restored sessions without their own artifact root.
 
+Successful `assign_slug` calls also retain host-owned naming receipts: a slug
+and the piece's complete reference, including its space. A completed turn that
+names pieces replaces the session's naming checkpoint; unnamed intermediate
+probes add nothing. A bare follow-up mints fresh tokens for those pieces through
+the ordinary input-cell path. SQLite restart preserves the checkpoint; a failed
+or canceled turn cannot replace it. Explicit attachments take precedence and,
+when that turn completes without naming a piece, clear the earlier implicit
+target. References stay host-side and input-cell space checks still apply.
+
 SQLite checkpoints also retain the existing transcript-omissions record.
 Restoration verifies every recorded result's unique identity before attaching
 any host-only annotations; serialized model messages contain none of that
@@ -1929,11 +1938,11 @@ a pattern composing it is free to pass neither on, which is how a run answers
 materialized is read where it stands, the run's own root included, and each
 output reporting a failure (a non-empty `error` or `errorMessage`, or any string
 carrying the `sqlite:` prefix the runtime writes its own SQLite failures under)
-or holding no rows (an empty list) is named: the output's key, the identity of
-the pattern that produced it — which for a composed one is the id its own
-`cf:pattern:` import addresses — and fixed text saying what to do about it.
-Absent when there is nothing to say, and one entry per pattern, output and kind
-however many times a pattern was materialized.
+or holding no rows (an empty list), or declaring `pending: true`, is named: the
+output's key, the identity of the pattern that produced it — which for a
+composed one is the id its own `cf:pattern:` import addresses — and fixed text
+saying what to do about it. Absent when there is nothing to say, and one entry
+per pattern, output and kind however many times a pattern was materialized.
 
 Two bounds decide what a concern may be read from, and both fail closed. Only an
 output the pattern's own schema DECLARES at its top level is read: a property
@@ -1954,14 +1963,16 @@ the report stands. Each of those costs a reason to look at something; none of
 them reports something that is not there, which is the direction to fail in for
 a disclosure sitting beside a result the run already returned.
 
-A result reporting itself `pending` has its emptiness passed over, and only its
-emptiness. A read still in flight is empty because it has not landed, and a
-query over a served store is in flight for the whole of the run that issued it —
-so an empty output read then is a fact about the clock rather than about the
-data, while a failure read then is a failure either way. That the rows land on
-the PIECE rather than in this call's answer is the same fact from the other
-side: a reader composed here reports no error and no rows in one breath, and it
-is the absent error that says the read is sound.
+A result declaring `pending: true` carries a `pending` concern instead of an
+emptiness concern. Its captured zeros and empty lists are not data. The root's
+exact returned snapshot is checked even when the runtime has no instantiation
+recorder or the read settles before the composed-output scan. A failure is
+reported alongside pending either way. Read the same result reference again
+under a schema including the read state before describing counts or naming the
+page; a new page is not needed to receive the outstanding reply. A settled,
+error-free empty filtered result should be checked against the same source
+without the uncertain predicate, and both counts and the filter presented. All
+value reads use the ordinary release boundary.
 
 The failure's own TEXT does not travel in the result. A concern names what the
 model already holds: it wrote the composition, and a composed instance's outputs
@@ -2043,6 +2054,12 @@ happened, and the failing computation's own text is withheld from model context
 — a computation over data the model cannot read may carry that data in what it
 throws — while the run artifact keeps it. An empty result with no observed cause
 still reports ok, since silence is not evidence of failure.
+
+`assign_slug` checks the current piece before registration: a declared pending
+read or an unestablished UI refuses naming with a fixed diagnostic. Data-only
+probes stay unnamed. UI presence is a structural check; it does not attest to
+rendered correctness or release any content. These checks share the output
+concern reader and the runtime's UI schema.
 
 A successful `assign_slug` returns `{ slug }`, plus `url` when the harness can
 compose one honestly. The URL is the session's API URL, the space, and the slug

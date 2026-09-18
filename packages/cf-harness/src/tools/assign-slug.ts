@@ -1,5 +1,10 @@
 import { getPatternIdentityRef, validateSlug } from "@commonfabric/runner";
-import { parseLLMFriendlyLink } from "@commonfabric/runner/shared";
+import {
+  createLLMFriendlyLink,
+  parseLLMFriendlyLink,
+  UI,
+} from "@commonfabric/runner/shared";
+import { uiSchema } from "@commonfabric/runner/schemas";
 import {
   assignSlug,
   pieceId,
@@ -9,8 +14,13 @@ import {
   SlugReleasedError,
   SlugResolutionError,
 } from "@commonfabric/piece";
-import type { PiecesController } from "@commonfabric/piece/ops";
+import {
+  PieceController,
+  type PiecesController,
+} from "@commonfabric/piece/ops";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
+import { observedOutputsIn } from "../run-pattern-output-concerns.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 
 export interface AssignSlugToolInput {
@@ -51,9 +61,9 @@ export type AssignSlugToolOutput =
  * Naming is separate from creation on purpose: `run_pattern` always returns
  * a plain handle, and whether a piece deserves a public name is a decision
  * the caller can make later, about any piece it can reference, and revise by
- * naming a replacement under a fresh slug. Nothing is disclosed in the
- * process — the slug is the caller's own word, the address behind the token
- * stays trusted-side, and no value is read.
+ * naming a replacement under a fresh slug. A pending read or missing UI
+ * refuses publication. These host-side checks return fixed diagnostics;
+ * the values read and the address behind the token stay trusted-side.
  *
  * A slug rather than a free-text name because the slug is the only handle
  * the tool can set: what the piece list displays is the pattern's own `NAME`
@@ -63,7 +73,7 @@ export const assignSlugToolDescriptor: HarnessToolDescriptor = {
   toolId: "assign_slug",
   title: "Assign Slug",
   description:
-    "Register the piece behind a handle token in the space's piece list and give it a named address a person can open. Use it after run_pattern when a piece deserves a name; a piece never named stays out of the list, which is what pure computation wants. A slug already naming another piece, or a collection, is refused rather than repointed.",
+    "Register the piece behind a handle token in the space's piece list and give it a named address a person can open. Use it after verifying a settled result and a UI; pending reads and data-only results cannot be named; a piece never named stays out of the list, which is what pure computation wants. A slug already naming another piece, or a collection, is refused rather than repointed.",
   effectClass: "side-effect",
   inputSchema: {
     type: "object",
@@ -330,6 +340,45 @@ export const assignSlugTool: HarnessToolDefinition<
         "assign_slug token does not refer to a piece; only a piece can be named",
       );
     }
+    try {
+      const controller = new PieceController(pieces, cell);
+      const pattern = await controller.getPattern({ projectResult: false });
+      const result = pieces.getResult(cell);
+      const value = await controller.result.get();
+      if (
+        observedOutputsIn(value, pattern.resultSchema)
+          .some((output) => output.concern.concern === "pending")
+      ) {
+        return errorOutput(
+          "assign_slug cannot name a piece whose read is pending. Read the same piece again and verify its settled result before naming it.",
+        );
+      }
+      const ui = result.asSchema(uiSchema);
+      await ui.pull();
+      const rendered = ui.get();
+      if (!isObjectNotArray(rendered) || rendered[UI] == null) {
+        return errorOutput(
+          "assign_slug cannot confirm a UI on this piece. Keep data-only probes unnamed; name the user-facing page after verifying it.",
+        );
+      }
+    } catch {
+      return errorOutput(
+        "assign_slug could not verify the piece's read state and UI; no name was assigned.",
+      );
+    }
+    const successOutput = (): AssignSlugToolSuccessOutput => {
+      context.recordAssignedPiece?.({
+        slug,
+        ref: createLLMFriendlyLink(cell.getAsNormalizedFullLink()),
+      });
+      const url = namedPieceUrl(pieces, slug);
+      return {
+        outputId,
+        status: "ok",
+        slug,
+        ...(url !== undefined ? { url } : {}),
+      };
+    };
     const availability = await slugAvailability(pieces, slug);
     if (availability.state === "taken") {
       if (availability.pieceId === targetId) {
@@ -348,13 +397,7 @@ export const assignSlugTool: HarnessToolDefinition<
             }`,
           );
         }
-        const url = namedPieceUrl(pieces, slug);
-        return {
-          outputId,
-          status: "ok",
-          slug,
-          ...(url !== undefined ? { url } : {}),
-        };
+        return successOutput();
       }
       return errorOutput(
         `assign_slug slug "${slug}" already names another piece in this space, and assigning would repoint that address. Choose another slug.`,
@@ -421,12 +464,6 @@ export const assignSlugTool: HarnessToolDefinition<
         }. The piece is listed in this space.`,
       );
     }
-    const url = namedPieceUrl(pieces, slug);
-    return {
-      outputId,
-      status: "ok",
-      slug,
-      ...(url !== undefined ? { url } : {}),
-    };
+    return successOutput();
   },
 };

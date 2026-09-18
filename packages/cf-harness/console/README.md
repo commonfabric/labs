@@ -6,6 +6,11 @@ server holding one in-process interactive chat service, and two Lit pages
 reading its events over Server-Sent Events: the console itself, and the live
 pane a host embeds to show one session working.
 
+A completed turn that names a piece keeps its reference for a bare follow-up in
+the same session, including after restart. Explicit attachments select the new
+turn's inputs. Pending reads cannot be named as ready pages, and data-only
+probes stay unnamed; a read that settles later is verified on the same piece.
+
 The server binds `127.0.0.1` and asks one thing of a request: that it names this
 server's own host. A hostile name that resolves to `127.0.0.1` would otherwise
 make these routes same-origin to a browser, and that name is visible on the

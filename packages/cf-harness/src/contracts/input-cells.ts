@@ -6,12 +6,11 @@
  * what run state persists.
  */
 
-/** One input cell as the operator specified it, before any minting. */
+/** One host-supplied input cell, before minting its turn's handle. */
 export interface HarnessInputCellSpec {
   /**
-   * The operator's name for the input cell. Model-facing: it is the whole
-   * of what the model is told the token names, so it is operator-authored
-   * prose by construction — never text read from the fabric.
+   * The attachment's name, or a slug confirmed by this session's naming
+   * tool. Model-facing; the host supplies it rather than reading cell data.
    */
   name: string;
 

@@ -17,6 +17,7 @@ import type { HarnessCfcPolicySnapshot } from "./contracts/cfc-policy-snapshot.t
 import type { HarnessHandleTable } from "./contracts/handle-table.ts";
 import type { HarnessWellKnownGrant } from "./contracts/well-known-grants.ts";
 import type { HarnessInputCell } from "./contracts/input-cells.ts";
+import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
 import type { HarnessPatternRef } from "./contracts/pattern-refs.ts";
 import type { HarnessResearchRunSummary } from "./contracts/research.ts";
 import type { HarnessPolicyEvent } from "./contracts/policy.ts";
@@ -232,6 +233,10 @@ export interface HarnessRunState {
   skillsRoot?: HarnessSkillsRootRecord;
   wellKnownGrants?: HarnessWellKnownGrant[];
   inputCells?: HarnessInputCell[];
+
+  /** Pieces successfully named by this run, retained for session follow-ups. */
+  assignedPieces?: HarnessAssignedPiece[];
+
   patternRefs?: HarnessPatternRef[];
   policyEvents: HarnessPolicyEvent[];
   policyDecisions?: HarnessPolicyDecisionRecord[];
@@ -321,6 +326,7 @@ export interface CreateHarnessRunStateOptions {
   skillsRoot?: HarnessSkillsRootRecord;
   wellKnownGrants?: HarnessWellKnownGrant[];
   inputCells?: HarnessInputCell[];
+  assignedPieces?: HarnessAssignedPiece[];
   patternRefs?: HarnessPatternRef[];
   policyDecisions?: HarnessPolicyDecisionRecord[];
   researchRuns?: HarnessResearchRunSummary[];
@@ -462,6 +468,9 @@ export const createHarnessRunState = (
       : {}),
     ...(options.inputCells !== undefined
       ? { inputCells: structuredClone(options.inputCells) }
+      : {}),
+    ...(options.assignedPieces !== undefined
+      ? { assignedPieces: structuredClone(options.assignedPieces) }
       : {}),
     ...(options.patternRefs !== undefined
       ? { patternRefs: structuredClone(options.patternRefs) }

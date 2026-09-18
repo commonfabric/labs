@@ -20,6 +20,7 @@ import type {
   HarnessSkillScriptExecutionTarget,
 } from "../contracts/skill.ts";
 import type { HarnessBrowserAccessLease } from "../contracts/browser-access.ts";
+import type { HarnessAssignedPiece } from "../contracts/assigned-piece.ts";
 import type { HarnessDocsCorpus } from "../docs-corpus/corpus.ts";
 import type { HarnessResearchRunSummary } from "../contracts/research.ts";
 import type { HarnessPatternRef } from "../contracts/pattern-refs.ts";
@@ -130,6 +131,9 @@ export interface HarnessToolContext {
 
   /** Explicit input-cell attachments established for the calling run. */
   inputCells?: readonly HarnessInputCell[];
+
+  /** Retains a successful naming receipt for the next session turn. */
+  recordAssignedPiece?(piece: HarnessAssignedPiece): void;
 
   /** Adds one admitted kit and its trusted records to durable run state. */
   recordResearchRun?(run: HarnessResearchRunSummary): void | Promise<void>;

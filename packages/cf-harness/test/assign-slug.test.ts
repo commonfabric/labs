@@ -7,10 +7,14 @@
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import { expect } from "@std/expect";
+import { join, toFileUrl } from "@std/path";
 import { normalize } from "@std/path/posix";
 import { createSession, Identity } from "@commonfabric/identity";
+import { table } from "@commonfabric/memory/sqlite/schema";
+import type { SqliteDbRef } from "@commonfabric/memory/v2";
 import {
   assignSlug,
   resolvePieceAddress,
@@ -24,9 +28,24 @@ import {
   Runtime,
   slugIdForSpace,
 } from "@commonfabric/runner";
-import { parseLLMFriendlyLink } from "@commonfabric/runner/shared";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  createLLMFriendlyLink,
+  parseLLMFriendlyLink,
+} from "@commonfabric/runner/shared";
+import {
+  EmulatedStorageManager,
+  newLoopbackServer,
+  StorageManager,
+} from "@commonfabric/runner/storage/cache.deno";
+import { ExecutorHost } from "@commonfabric/runner/executor/host";
 import { CfHarnessEngine } from "../src/engine.ts";
+import {
+  HarnessInteractiveChatService,
+  type HarnessInteractivePromptLoopFactory,
+} from "../src/interactive-chat-service.ts";
+import { openSqliteHarnessChatSessionStore } from "../src/sqlite-session-store.ts";
+import { resolveHandleToken } from "../src/handle-table.ts";
+import type { ReadPieceSourceToolSuccessOutput } from "../src/tools/piece-source.ts";
 import {
   type AssignSlugToolErrorOutput,
   type AssignSlugToolSuccessOutput,
@@ -44,11 +63,12 @@ import type {
 const signer = await Identity.fromPassphrase("cf-harness assign-slug tool");
 
 const DOUBLING_PATTERN_SOURCE = [
-  "import { computed, pattern } from 'commonfabric';",
+  "import { computed, pattern, UI } from 'commonfabric';",
   "interface Input { n: number; }",
   "interface Output { doubled: number; }",
   "export default pattern<Input, Output>(({ n }) => ({",
   "  doubled: computed(() => n * 2),",
+  "  [UI]: <div>{n}</div>,",
   "}));",
   "",
 ].join("\n");
@@ -144,6 +164,160 @@ describe("assign-slug", () => {
     });
   }
 
+  it("marks a pending served read as not-yet-data and names the same page after its reply arrives", async () => {
+    await runtime.dispose();
+    await storageManager.close();
+    const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+    const reply = Promise.withResolvers<{ rows: { n: number }[] }>();
+    const requested = Promise.withResolvers<void>();
+    let queries = 0;
+    const service = await Identity.fromPassphrase("pending-page-service");
+    const host = new ExecutorHost({
+      server,
+      serviceIdentity: service.did(),
+      ensureSpaceRoots: false,
+      createRuntime: (space) => {
+        const manager = EmulatedStorageManager.connectTo(server, {
+          as: service,
+        });
+        const rpc = stub(manager.open(space), "sqliteQuery", () => {
+          queries++;
+          requested.resolve();
+          return reply.promise;
+        });
+        const serving = new Runtime({
+          apiUrl: new URL("http://toolshed.test"),
+          storageManager: manager,
+          servingPosture: true,
+          experimental: { serverExecution: true },
+        });
+        return Promise.resolve({
+          runtime: serving,
+          dispose: async () => {
+            await serving.dispose();
+            rpc.restore();
+            await manager.close();
+          },
+        });
+      },
+    });
+    storageManager = EmulatedStorageManager.connectTo(server, { as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL("http://toolshed.test"),
+      storageManager,
+    });
+    pieces = new PiecesController(
+      await createSession({
+        identity: signer,
+        spaceName: "pending-served-page",
+      }),
+      runtime,
+    );
+    try {
+      const space = pieces.getSpace();
+      const tx = runtime.edit();
+      const mail = runtime.getCell<SqliteDbRef>(
+        space,
+        "pending-mail",
+        undefined,
+        tx,
+      );
+      mail.set({
+        id: "pending-mailbox",
+        tables: { messages: table({ id: "integer primary key" }) },
+      });
+      expect((await tx.commit()).error).toBeUndefined();
+
+      const resultSchema = {
+        type: "object",
+        properties: { n: { type: "number" }, pending: { type: "boolean" } },
+        required: ["n", "pending"],
+      } as const;
+      const runPersistent = pieces.runPersistent.bind(pieces);
+      const creation = stub(pieces, "runPersistent", async (...args) => {
+        const cell = await runPersistent(...args);
+        const pending = Promise.withResolvers<void>();
+        const cancel = pieces.getResult(cell).asSchema(resultSchema).sink(
+          (value) => {
+            if (value?.pending === true) pending.resolve();
+          },
+        );
+        try {
+          await pending.promise;
+        } finally {
+          cancel();
+        }
+        return cell;
+      });
+      const engine = createEngine();
+      const result = await engine.invokeBuiltinTool("run_pattern", {
+        sourceText: `
+        import { computed, pattern, UI, type SqliteDb } from "commonfabric";
+        export default pattern<{ mail: SqliteDb }, { n: number; pending: boolean }>(({ mail }) => {
+          const read = mail.query<{ n: number }>("SELECT count(*) AS n FROM messages", { scope: "session" });
+          const n = computed(() => read.result?.[0]?.n ?? 0);
+          const pending = computed(() => read.pending === true);
+          return { n, pending, [UI]: <div>{pending ? "Loading" : n}</div> };
+        });
+      `,
+        inputs: {
+          mail: createLLMFriendlyLink(mail.getAsNormalizedFullLink(), space),
+        },
+        resultSchema,
+      });
+      creation.restore();
+      const output = result.output as RunPatternToolSuccessOutput;
+      expect(output.status).toBe("ok");
+      expect(output.value).toMatchObject({ n: 0, pending: true });
+      expect(output.outputConcerns).toContainEqual(
+        expect.objectContaining({ concern: "pending" }),
+      );
+      await requested.promise;
+      expect(queries).toBe(1);
+      const naming = { token: output.resultRef, slug: "mailbox-size" };
+      const refused = await engine.invokeBuiltinTool("assign_slug", naming);
+      expect(refused.output).toMatchObject({
+        status: "error",
+        message: expect.stringContaining("pending"),
+      });
+      expect(engine.getRunState().assignedPieces).toBeUndefined();
+
+      const resultCell = runtime.getCellFromLink(
+        parseLLMFriendlyLink(output.resultRef, space),
+      )
+        .asSchema(resultSchema);
+      const settled = Promise.withResolvers<unknown>();
+      const cancel = resultCell.sink((value) => {
+        if (value?.pending === false) settled.resolve(value);
+      });
+      try {
+        reply.resolve({ rows: [{ n: 1739 }] });
+        expect(await settled.promise).toEqual({ n: 1739, pending: false });
+        const accepted = await engine.invokeBuiltinTool("assign_slug", naming);
+        expect(accepted.output).toMatchObject({
+          status: "ok",
+          slug: "mailbox-size",
+        });
+        expect(await resolvePieceAddress(pieces, "mailbox-size")).toBe(
+          output.pieceId,
+        );
+        expect(engine.getRunState().assignedPieces).toEqual([{
+          slug: "mailbox-size",
+          ref: createLLMFriendlyLink(resultCell.getAsNormalizedFullLink()),
+        }]);
+      } finally {
+        cancel();
+        reply.resolve({ rows: [] });
+      }
+    } finally {
+      reply.resolve({ rows: [] });
+      await host.close();
+      await runtime.dispose();
+      await storageManager.close();
+      await server.close();
+    }
+  });
+
   async function linkDefaultPattern() {
     const defaultRoot = await pieces.create(DEFAULT_PATTERN_SOURCE, {
       input: { pieceRegistry: [] },
@@ -166,7 +340,204 @@ describe("assign-slug", () => {
     return output;
   }
 
+  it("remints the last named piece after session restart and lets a bare follow-up revise it", async () => {
+    const root = await Deno.makeTempDir();
+    const url = toFileUrl(join(root, "sessions.sqlite"));
+    let store = await openSqliteHarnessChatSessionStore({ url });
+    let created: RunPatternToolSuccessOutput;
+    const inputs: { name: string; token: string; ref: string }[][] = [];
+    const createPromptLoop: HarnessInteractivePromptLoopFactory = (
+      options,
+    ) => ({
+      runTranscript: async (request) => {
+        const engine = options.engine ?? new CfHarnessEngine(options);
+        inputs.push(engine.getRunState().inputCells ?? []);
+        if (options.taskText === "Make a counter") {
+          created = await createPiece(engine);
+          const named = await engine.invokeBuiltinTool("assign_slug", {
+            token: created.resultRef,
+            slug: "my-counter",
+          });
+          expect(named.output.status).toBe("ok");
+          // Unnamed intermediate results do not become next-turn targets.
+          await createPiece(engine, 99);
+        } else if (options.taskText === "Triple it") {
+          const state = engine.getRunState();
+          const input = state.inputCells![0];
+          const entry = resolveHandleToken(state.handleTable!, input.token);
+          expect(entry?.ref).toBe(input.ref);
+          const read = await engine.invokeBuiltinTool("read_piece_source", {
+            token: entry!.ref,
+          });
+          const source = read.output as ReadPieceSourceToolSuccessOutput;
+          expect(source.status).toBe("ok");
+          expect(source.files[0].contents).toBe(DOUBLING_PATTERN_SOURCE);
+          const revised = await engine.invokeBuiltinTool("revise_piece", {
+            token: entry!.ref,
+            sourceText: DOUBLING_PATTERN_SOURCE.replace("n * 2", "n * 3"),
+            expectedRevisionId: source.sourceRevisionId,
+          });
+          expect(revised.output.status).toBe("ok");
+        } else if (options.taskText === "Fail after naming") {
+          const other = await createPiece(engine, 3);
+          await engine.invokeBuiltinTool("assign_slug", {
+            token: other.resultRef,
+            slug: "unfinished-counter",
+          });
+          throw new Error("fixture interrupted before session commit");
+        }
+        return {
+          model: "gpt-test",
+          modelTurns: 1,
+          finalAssistantText: "Done",
+          transcript: [...request.transcript, {
+            role: "assistant",
+            content: "Done",
+          }],
+          runState: engine.getRunState(),
+        };
+      },
+    });
+    const serviceOptions = () => ({
+      sessionStore: store,
+      createPromptLoop,
+      basePromptLoopOptions: {
+        sandboxRuntime: new FakeSandboxRuntime(),
+        cfcEnforcementMode: "disabled" as const,
+        fabricSessionFactory: () => Promise.resolve({ pieces }),
+      },
+    });
+    try {
+      let service = new HarnessInteractiveChatService(serviceOptions());
+      await service.startSession("start", {
+        sessionId: "follow-up",
+        model: "gpt-test",
+        workspace: { hostPath: "/workspace" },
+      });
+      await service.startTurn("first", {
+        sessionId: "follow-up",
+        turnId: "first",
+        input: { text: "Make a counter" },
+      });
+      await service.waitForTurn("follow-up", "first");
+      expect(store.getTurn("follow-up", "first")?.turn.status).toBe(
+        "completed",
+      );
+      const checkpoint = store.getSession("follow-up")!.assignedPieces!;
+      expect(checkpoint).toEqual([{
+        slug: "my-counter",
+        ref: createLLMFriendlyLink(
+          parseLLMFriendlyLink(created!.resultRef, pieces.getSpace()),
+        ),
+      }]);
+      expect(inputs[0]).toEqual([]);
+      store.close();
+      store = await openSqliteHarnessChatSessionStore({ url });
+      service = new HarnessInteractiveChatService(serviceOptions());
+      await service.initializeFromStore();
+      await service.startTurn("second", {
+        sessionId: "follow-up",
+        turnId: "second",
+        input: { text: "Triple it" },
+      });
+      await service.waitForTurn("follow-up", "second");
+      expect(store.getTurn("follow-up", "second")?.turn.status).toBe(
+        "completed",
+      );
+      expect(inputs[1]).toEqual([
+        expect.objectContaining({ name: "my-counter", ref: checkpoint[0].ref }),
+      ]);
+      expect(await (await pieces.get(created!.pieceId)).result.get())
+        .toMatchObject({ doubled: 63 });
+      expect(await resolvePieceAddress(pieces, "my-counter")).toBe(
+        created!.pieceId,
+      );
+
+      await service.startTurn("failed", {
+        sessionId: "follow-up",
+        turnId: "failed",
+        input: { text: "Fail after naming" },
+      });
+      await service.waitForTurn("follow-up", "failed");
+      expect(store.getTurn("follow-up", "failed")?.turn.status).toBe("failed");
+      expect(store.getSession("follow-up")?.assignedPieces).toEqual(checkpoint);
+
+      const attached = await createPiece(createEngine(), 5);
+      await service.startTurn("attached", {
+        sessionId: "follow-up",
+        turnId: "attached",
+        input: { text: "Use this counter" },
+        inputCells: [{ name: "attached", ref: attached.resultRef }],
+      });
+      await service.waitForTurn("follow-up", "attached");
+      expect(inputs[3]).toEqual([
+        expect.objectContaining({ name: "attached", ref: attached.resultRef }),
+      ]);
+
+      expect(store.getSession("follow-up")?.assignedPieces).toEqual([]);
+    } finally {
+      store.close();
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
   describe("assignSlugTool", () => {
+    it("refuses a data-only result before registering or naming it", async () => {
+      await linkDefaultPattern();
+      const engine = createEngine();
+      const created = await engine.invokeBuiltinTool("run_pattern", {
+        sourceText: DOUBLING_PATTERN_SOURCE.replace(
+          "  [UI]: <div>{n}</div>,\n",
+          "",
+        ),
+        inputs: { n: 21 },
+      });
+      const result = await engine.invokeBuiltinTool("assign_slug", {
+        token: (created.output as RunPatternToolSuccessOutput).resultRef,
+        slug: "data-only-probe",
+      });
+      expect(result.output).toMatchObject({ status: "error" });
+      expect((result.output as AssignSlugToolErrorOutput).message).toContain(
+        "confirm a UI",
+      );
+      expect(await pieces.getRegisteredPieces()).toEqual([]);
+    });
+
+    it("refuses a pending result and names the same piece after its read settles", async () => {
+      await linkDefaultPattern();
+      const engine = createEngine();
+      const created = await engine.invokeBuiltinTool("run_pattern", {
+        sourceText: [
+          'import { pattern, UI } from "commonfabric";',
+          "export default pattern<{ pending: boolean }>(({ pending }) => ({",
+          "  pending, [UI]: <div>Report</div>,",
+          "}));",
+        ].join("\n"),
+        inputs: { pending: true },
+      });
+      const output = created.output as RunPatternToolSuccessOutput;
+      const assign = () =>
+        engine.invokeBuiltinTool("assign_slug", {
+          token: output.resultRef,
+          slug: "settled-report",
+        });
+      const refused = await assign();
+      expect(refused.output).toMatchObject({ status: "error" });
+      expect((refused.output as AssignSlugToolErrorOutput).message).toContain(
+        "pending",
+      );
+      expect(await pieces.getRegisteredPieces()).toEqual([]);
+      const piece = await pieces.get(output.pieceId);
+      await piece.input.set(false, ["pending"]);
+      await runtime.idle();
+      expect((await assign()).output).toMatchObject({
+        status: "ok",
+        slug: "settled-report",
+      });
+      expect((await pieces.getRegisteredPieces()).map((piece) => piece.id))
+        .toEqual([output.pieceId]);
+    });
+
     it("registers the referenced piece and points the slug at it", async () => {
       await linkDefaultPattern();
       const engine = createEngine();
