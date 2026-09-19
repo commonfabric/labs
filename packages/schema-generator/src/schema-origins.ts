@@ -17,10 +17,12 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { GenerationContext } from "./interface.ts";
 
 /**
- * `folded`, the schema a union of `options` folded to, recorded as that union
- * when the fold dropped an option that carried an origin of its own — on a
- * schema of its own, so the record does not make the surviving option stand
- * for the whole. Returned as it came when nothing that mattered was folded.
+ * `folded`, the schema a union of `options` folded to with `kept` arms left,
+ * recorded as that union when the fold dropped an option that carried an
+ * origin of its own — on a schema of its own, so the record does not make
+ * the surviving option stand for the whole. An option accepting nothing is
+ * no arm: it is neither counted as folded nor recorded. Returned as it came
+ * when nothing that mattered was folded.
  */
 export function unionFoldedFrom(
   folded: MutableJSONSchema,
@@ -29,14 +31,15 @@ export function unionFoldedFrom(
   context: GenerationContext,
 ): MutableJSONSchema {
   const origins = context.schemaOrigins;
+  const arms = options.filter((option) => option !== false);
   if (
     origins === undefined || !isObjectOrArray(folded) ||
-    kept >= options.length ||
-    !options.some((option) => isObjectOrArray(option) && origins.has(option))
+    kept >= arms.length ||
+    !arms.some((arm) => isObjectOrArray(arm) && origins.has(arm))
   ) {
     return folded;
   }
   const schema: MutableJSONSchemaObj = { ...folded };
-  origins.set(schema, { kind: "union", parts: () => options });
+  origins.set(schema, { kind: "union", parts: () => arms });
   return schema;
 }

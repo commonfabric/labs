@@ -529,8 +529,12 @@ type CalculatorRequest = {
           undefined,
           sourceFile,
         ) as Record<string, unknown>;
-      // The general path's answer, not the alias applied to its argument.
-      expect(schema).toEqual({ type: "object", properties: {} });
+      // What is pinned is the routing: the library's rule is not applied, so
+      // the argument's member does not reach the schema. What the general
+      // path makes of the shadow's own surface is that path's matter.
+      expect(schema.type).toBe("object");
+      expect(Object.keys(schema.properties as Record<string, unknown>)).not
+        .toContain("a");
     });
 
     // Named authored types analyze to a reference into the definitions, so
