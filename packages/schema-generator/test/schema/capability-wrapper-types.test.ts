@@ -360,8 +360,8 @@ describe("Schema: Capability wrapper types", () => {
     });
 
     it("emits the resolved value and its default for a union holding an expanded `Default` arm", async () => {
-      // One member the node path cannot read would otherwise turn the whole
-      // union into accept-anything, and the value schema with it.
+      // Unresolved names can erase the union's shape; an unreadable computed
+      // brand can erase its default. The resolved value retains both.
       const schema = await narrowedSchema(
         "Stored | Default<Empty>",
         ts.factory.createUnionTypeNode([
@@ -388,6 +388,36 @@ describe("Schema: Capability wrapper types", () => {
       expect(schema).toMatchObject({
         anyOf: [{ $ref: "#/$defs/Stored" }, { $ref: "#/$defs/Empty" }],
         default: {},
+        asCell: ["readonly"],
+      });
+    });
+
+    it("recovers a primitive default when only its computed brand cannot be read", async () => {
+      const schema = await narrowedSchema(
+        'Default<string, "x">',
+        ts.factory.createUnionTypeNode([
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+          ts.factory.createIntersectionTypeNode([
+            ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+            ts.factory.createTypeLiteralNode([
+              ts.factory.createPropertySignature(
+                [ts.factory.createModifier(ts.SyntaxKind.ReadonlyKeyword)],
+                ts.factory.createComputedPropertyName(
+                  ts.factory.createIdentifier("DEFAULT_MARKER"),
+                ),
+                undefined,
+                ts.factory.createLiteralTypeNode(
+                  ts.factory.createStringLiteral("x"),
+                ),
+              ),
+            ]),
+          ]),
+        ]),
+      );
+
+      expect(schema).toEqual({
+        type: "string",
+        default: "x",
         asCell: ["readonly"],
       });
     });

@@ -486,10 +486,11 @@ pre-cleanup schemas.
   that node-based analysis cannot read from a synthetic position, of which the
   printer produces two: `import("./mod.ts").T` for a name the emitting module
   does not import, and the `T & { readonly [DEFAULT_MARKER]: V }` arm of an
-  expanded `Default`. Node-based analysis formats such a member as
-  accept-anything, and a union with one such member accepts anything as a
-  whole, which would leave the cell with no value schema at all. Both cases
-  apply only for capability kinds
+  expanded `Default`. An unreadable member can make a whole union accept
+  anything, while an unreadable computed property name can drop brand metadata
+  from an otherwise structured schema. Both mark the node-driven result as
+  incomplete, so the resolved value supplies its shape and defaults. Both
+  fallback cases apply only for capability kinds
   (`CELL_CAPABILITY_KIND_MAP`, `common-fabric-formatter.ts`: the five
   cell-capability kinds true; `Stream`/`SqliteDb`/`Reactive` false; exhaustive
   over `CellWrapperKind`), and only where a resolved wrapper type exists: a

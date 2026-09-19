@@ -1551,6 +1551,10 @@ export class SchemaGenerator {
         if (ts.isPropertySignature(member) && member.name && member.type) {
           const propName = getPropertyNameText(member.name, checker);
           if (!propName) {
+            // A computed brand such as `[DEFAULT_MARKER]` can carry metadata
+            // that only the resolved type retains. A wrapper with that type
+            // must know this node's members were not fully interpreted.
+            context.uninterpretedTypeNodes?.push(typeNode);
             continue;
           }
 

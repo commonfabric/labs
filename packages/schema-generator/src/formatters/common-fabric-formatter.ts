@@ -492,10 +492,11 @@ export class CommonFabricFormatter implements TypeFormatter {
     // read. The printer emits forms that node-based analysis cannot interpret
     // from a synthetic position — `import("./mod.ts").T` for a name the
     // emitting module does not import, and the `T & { [DEFAULT_MARKER]: V }`
-    // arm of an expanded `Default` — and one such member turns a whole union
-    // into accept-anything. The resolved wrapper's inner needs no guessing, so
-    // it supplies the value schema instead, at the cost of any narrowing the
-    // node carried: the schema is then that of the whole stored value.
+    // arm of an expanded `Default`. An unreadable member can turn a union into
+    // accept-anything; skipping a computed brand can lose its default metadata.
+    // The resolved wrapper's inner supplies the complete value schema instead,
+    // at the cost of any narrowing the node carried: the schema is then that
+    // of the whole stored value.
     if (uninterpreted.length > 0) {
       const resolvedInner = fallbackInnerTypeRef &&
         this.#firstTypeArgument(fallbackInnerTypeRef, context);
