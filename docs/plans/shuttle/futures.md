@@ -105,6 +105,24 @@ keep the first build small. The designs are settled — recorded here so
 they are re-scheduled later, never re-litigated — and the main document's
 decisions point here where they defer.
 
+- **A live view of a piece.** A frame carrying what a piece is — its
+  arguments, a summary of its result, its callables and its pattern
+  identity — and keeping it current as the piece computes. What `describe`
+  writes is that reading already, so what is deferred here is the
+  liveness: a piece is many cells, and watching one frame's worth of them
+  is the seam question issue
+  [#6534](https://github.com/commonfabric/labs/issues/6534) carries for
+  the list view. Open: whether a frame over a whole piece subscribes per
+  cell or over the document, and what it shows for a cell that has not
+  settled.
+- **Narrowing inside a view.** A key that shows only the part of what is
+  on screen that matches, beside the `/` that finds. It waits on a
+  narrowing shaped to the data: `--filter` takes arrays today, and a
+  rendering of a value is a tree, so the question is which shapes are
+  worth narrowing and what a narrowed tree reads back as. Whatever answers
+  it answers for every surface that reads, not for a view alone — a view
+  that narrowed its own drawing would hand back something that is no
+  longer the value's rendering ([`views.md`](views.md)).
 - **The pinned strip.** A reserved region above the prompt renders armed
   watches' current values live while scrollback flows past. Event lines
   carry the arm-then-act loop in v1; the strip returns when watch density

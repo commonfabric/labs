@@ -291,9 +291,17 @@ invisible, the prompt renders the whole ambient record — place and scope
     `@session` takes the capped deep sink, which reads through the scope
     its cells carry. Making that seam scope-aware end to end is part of
     #6534, not a shuttle workaround.
-26. **The piece overview ships structured, not live.** One frame —
-    arguments, result summary, callables, pattern identity — rendered as a
-    refreshable snapshot in B3; the live piece watch is deferred.
+26. **A piece reads through one verb, and `describe` is it.** The four
+    things a reader wants of a piece — its arguments, a summary of its
+    result, its callables with their doc annotations, and its pattern
+    identity — are one reading, and `describe` writes it. A second surface
+    onto the same four is an overlap in purpose that a difference in form
+    does not pay for: a frame over them would add a way to refresh in
+    place, where a shell refreshes by running the line again, and a way to
+    scroll, where `more` continues the page already. So v1 ships the one
+    verb. A live view of a piece is deferred
+    ([`futures.md`](futures.md)), and it is deferred for the seam rather
+    than the form.
 27. **Handles are structured.** A handle is a bound reference with
     structure, not a string: a listing records each row's kind as it mints
     the handle, and for a callable row it records the receiver and the
@@ -459,9 +467,9 @@ way.
 
 None blocking v1. The B3 seam-proving gate and its two preparatory
 experiments are recorded in decision 25 and issue
-[#6534](https://github.com/commonfabric/labs/issues/6534); the piece
-overview's liveness is deferred with the live piece watch
-([`views.md`](views.md)).
+[#6534](https://github.com/commonfabric/labs/issues/6534); a live view of
+a piece is deferred whole ([`futures.md`](futures.md)), what a piece is
+being `describe`'s reading rather than a view's (decision 26).
 
 ## Non-goals for v1
 
