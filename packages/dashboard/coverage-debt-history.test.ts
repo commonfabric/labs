@@ -510,6 +510,42 @@ describe("coverage-debt-history", () => {
       ]);
     });
 
+    it("stops at the run-listing page budget", async () => {
+      // Page 151 keeps the listing full past the 150-page budget, and page 152
+      // ends it, so the fixture cannot leave the case running forever.
+      const fullPage = Array.from({ length: PAGE_SIZE }, (_, at) => ({
+        id: at + 1,
+        created_at: "not a date",
+        head_branch: "topic",
+        event: "pull_request",
+        conclusion: "success",
+      }));
+      const github = fakeGitHub({}, Array(151).fill(fullPage));
+      const warnings: unknown[][] = [];
+      const warn = console.warn;
+      console.warn = (...parts: unknown[]) => void warnings.push(parts);
+      try {
+        const history = await refreshCoverageDebt({
+          token: "t",
+          days: 1,
+          now: NOW,
+          github,
+          store: new CoverageDebtStore(file),
+        });
+        expect(history.samples).toEqual([]);
+      } finally {
+        console.warn = warn;
+      }
+
+      expect(github.paths.length).toBe(150);
+      const last = new URLSearchParams(github.paths[149].split("?")[1]);
+      expect(last.get("page")).toBe("150");
+      expect(warnings).toEqual([[
+        "coverage debt: read 150 pages of runs without reaching " +
+        "2026-09-02; the days it did not reach are left for a later refresh.",
+      ]]);
+    });
+
     it("passes over a cold run, a run with no artifact, and one it cannot parse", async () => {
       const github = fakeGitHub({
         "2026-09-02": [
