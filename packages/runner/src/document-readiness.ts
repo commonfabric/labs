@@ -94,13 +94,17 @@ export function createDocumentReadiness(
     ): boolean {
       const link = cell.getAsNormalizedFullLink();
       const address = { ...link, path: [] };
+      const identity = tx.tx.scopeKeyIdentity;
+      const key = entityKey(address, identity ?? runtime.scopeKeyIdentity);
       const document = tx.readOrThrow(address, {
         nonRecursive: true,
       });
-      if (document !== undefined) return true;
+      if (document !== undefined) {
+        // Presence supersedes both completed and in-flight confirmations.
+        confirmations.delete(key);
+        return true;
+      }
 
-      const identity = tx.tx.scopeKeyIdentity;
-      const key = entityKey(address, identity ?? runtime.scopeKeyIdentity);
       const prior = confirmations.get(key);
       if (prior?.status === "confirmed") return false;
       if (prior?.status === "failed") throw prior.error;

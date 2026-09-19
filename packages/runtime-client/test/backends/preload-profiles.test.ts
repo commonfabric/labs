@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { spy, stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
 import { type Cell, Runtime } from "@commonfabric/runner";
@@ -158,6 +159,7 @@ describe("preload-profiles", () => {
 
   it("starts during worker initialization and releases its subscription on disposal", async () => {
     const manager = EmulatedStorageManager.emulate({ as: user });
+    using close = spy(manager, "close");
     const restore = stubWorkerBoot(() => manager);
     const workerGlobal = globalThis as { postMessage?: unknown };
     const originalPostMessage = Object.getOwnPropertyDescriptor(
@@ -207,10 +209,40 @@ describe("preload-profiles", () => {
       await processor?.dispose();
       Runtime.prototype.getHomeSpaceCell = originalGetHome;
       restore();
-      await manager.close();
+      if (!processor) await manager.close();
       if (originalPostMessage) {
         Object.defineProperty(globalThis, "postMessage", originalPostMessage);
       } else delete workerGlobal.postMessage;
+    }
+    expect(close.calls).toHaveLength(1);
+  });
+
+  it("finishes worker initialization when profile preloading cannot start", async () => {
+    const manager = EmulatedStorageManager.emulate({ as: user });
+    const restore = stubWorkerBoot(() => manager);
+    const failure = new Error("Profile subscription unavailable");
+    using warning = stub(console, "warn");
+    using _home = stub(Runtime.prototype, "getHomeSpaceCell", () => {
+      throw failure;
+    });
+    let processor: RuntimeProcessor | undefined;
+    try {
+      processor = await RuntimeProcessor.initialize({
+        apiUrl: "https://worker.test/",
+        identity: user.keyPair,
+        spaceDid: otherUser.did(),
+      });
+      expect(processor.isDisposed()).toBe(false);
+      expect(warning.calls.map((call) => call.args)).toContainEqual([
+        "[RuntimeProcessor] Could not preload profiles:",
+        failure,
+      ]);
+      await processor.dispose();
+      expect(processor.isDisposed()).toBe(true);
+    } finally {
+      await processor?.dispose();
+      if (!processor) await manager.close();
+      restore();
     }
   });
 });
