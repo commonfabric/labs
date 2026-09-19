@@ -711,13 +711,18 @@ literal argument while still refusing to remove an admitted option or widen a
 result contract.
 
 When a source alternative contains a nested `anyOf` with only descriptive
-annotations beside it, its children may each satisfy a different target
-alternative. The other source constraints remain in every child proof. A
-wrapper carrying constraints, reference scope, defaults, or semantic metadata
-keeps its own comparison boundary. During evolution, splitting also requires
-each child to supply the wrapper's effective default in the original source
-scope. Whole-branch proofs take precedence, preserving compatible nested
-contracts whose boundaries matter.
+annotations other than `$comment` beside it, its children may each satisfy a
+different target alternative. The other source constraints remain in every
+child proof. A wrapper carrying constraints, reference scope, defaults, or
+semantic metadata keeps its own comparison boundary. During evolution,
+splitting also requires each child to supply the wrapper's effective default
+in the original source scope. Whole-branch proofs take precedence, preserving
+compatible nested contracts whose boundaries matter. Wrappers carrying
+`$comment` stay opaque because the runner reserves some comment values for
+traversal markers. The supplementary split search stops after eight splits
+along a proof path, including splits reached through a whole-branch retry, and
+conservatively refuses an update it cannot prove within that bound. Ordinary
+whole-branch proofs remain available at every depth.
 
 An incompatible pattern contract or retained link becomes an
 actionable warning. The UI requires explicit confirmation, and command-line

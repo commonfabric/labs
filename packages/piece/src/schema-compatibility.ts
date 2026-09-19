@@ -50,6 +50,9 @@ interface CompatibilityContext {
   role: SchemaRole;
   activePairs: ActivePairsByRoot;
 
+  /** Depth of supplementary nested-union splits along this proof path. */
+  sourceUnionSplitDepth: number;
+
   /**
    * Piece evolution deliberately permits a small set of non-subset changes
    * (for example, naming a previously-uncontracted field on an open argument
@@ -94,9 +97,10 @@ type ActivePairsByRoot = WeakMap<
 >;
 
 /**
- * The annotations that describe a schema to a reader or to a listing and take
- * no part in any comparison this module makes. Two schemas that differ only in
- * these say the same thing, and {@link schemaSubtreesEqual} reads past them.
+ * The annotations omitted by keyword and equality comparisons. Two schemas
+ * that differ only in these compare equally through {@link schemaSubtreesEqual}.
+ * Nested-union splitting keeps `$comment` wrappers opaque because the runner
+ * reserves some comment values for traversal markers.
  *
  * {@link ANNOTATION_KEYS} extends this set with four keywords the subset proof
  * likewise treats as annotations but the equality walk still compares:
@@ -652,6 +656,7 @@ export function assertPatternSchemasBackwardCompatible(
       targetRoot: candidate.argumentSchema,
       role: "argument",
       activePairs: new WeakMap(),
+      sourceUnionSplitDepth: 0,
       allowEvolutionPolicy: true,
       allowEvolutionDefaults: true,
       allowTargetDefaults: false,
@@ -669,6 +674,7 @@ export function assertPatternSchemasBackwardCompatible(
       targetRoot: previousResultSchema,
       role: "result",
       activePairs: new WeakMap(),
+      sourceUnionSplitDepth: 0,
       allowEvolutionPolicy: true,
       allowEvolutionDefaults: true,
       allowTargetDefaults: false,
@@ -735,6 +741,7 @@ export function assertSchemaSubset(
     // object fields. Link materialization may also fill valid target defaults.
     role: "argument",
     activePairs: new WeakMap(),
+    sourceUnionSplitDepth: 0,
     allowEvolutionPolicy: false,
     allowEvolutionDefaults: true,
     allowTargetDefaults: true,
@@ -1849,6 +1856,13 @@ function withoutNodeLevelKeywords(schema: SchemaObject): SchemaObject {
 }
 
 /**
+ * The supplementary union proof retries whole branches after each split.
+ * Bounding its depth limits repeated work on long union spines; the ordinary
+ * whole-branch proof remains available at every depth.
+ */
+const MAX_SOURCE_UNION_SPLIT_DEPTH = 8;
+
+/**
  * Proves a source conjunction against the target alternatives. A transparent
  * nested `anyOf` can send each child to a different target alternative while
  * retaining the source's other conjuncts. Wrappers carrying constraints or
@@ -1856,7 +1870,7 @@ function withoutNodeLevelKeywords(schema: SchemaObject): SchemaObject {
  * child must also preserve the wrapper's effective default in its owning root.
  */
 function sourceAlternativeAcceptedBy(
-  source: readonly JSONSchema[],
+  sourceAlternative: readonly JSONSchema[],
   targets: readonly (readonly JSONSchema[])[],
   path: string,
   context: CompatibilityContext,
@@ -1865,20 +1879,25 @@ function sourceAlternativeAcceptedBy(
   // contracts whose defaults or metadata require the existing boundaries.
   if (
     targets.some((target) =>
-      schemaConjunctionSubsetIssue(source, target, path, context) === undefined
+      schemaConjunctionSubsetIssue(sourceAlternative, target, path, context) ===
+        undefined
     )
   ) return true;
 
   // Splitting only adds a proof when children can choose different targets.
   // A single target is already checked recursively by the whole-branch proof;
   // retrying it at each wrapper would repeat the same work exponentially.
-  if (targets.length < 2) return false;
+  if (
+    targets.length < 2 ||
+    context.sourceUnionSplitDepth >= MAX_SOURCE_UNION_SPLIT_DEPTH
+  ) return false;
 
-  return source.some((fragment, index) => {
+  return sourceAlternative.some((fragment, index) => {
     if (
       typeof fragment === "boolean" || fragment.anyOf === undefined ||
       Object.keys(fragment).some((key) =>
-        key !== "anyOf" && !DESCRIPTIVE_ANNOTATION_KEYS.has(key)
+        key !== "anyOf" &&
+        (key === "$comment" || !DESCRIPTIVE_ANNOTATION_KEYS.has(key))
       )
     ) return false;
     if (
@@ -1892,10 +1911,17 @@ function sourceAlternativeAcceptedBy(
     ) return false;
     return fragment.anyOf.every((branch) =>
       sourceAlternativeAcceptedBy(
-        [...source.slice(0, index), branch, ...source.slice(index + 1)],
+        [
+          ...sourceAlternative.slice(0, index),
+          branch,
+          ...sourceAlternative.slice(index + 1),
+        ],
         targets,
         path,
-        context,
+        {
+          ...context,
+          sourceUnionSplitDepth: context.sourceUnionSplitDepth + 1,
+        },
       )
     );
   });

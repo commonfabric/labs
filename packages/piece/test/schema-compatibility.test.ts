@@ -3129,6 +3129,59 @@ describe("piece schema compatibility", () => {
       });
     }
 
+    it("bounds repeated split retries while retaining whole-branch proofs", () => {
+      let nested: JSONSchema = {
+        anyOf: [{ type: "boolean" }, { type: "null" }],
+      };
+      for (let depth = 0; depth < 128; depth++) {
+        nested = { anyOf: [nested, { type: "null" }] };
+      }
+      expect(() => assertSchemaSubset(nested, flat))
+        .toThrow(/a schema alternative/);
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(nested, flat),
+          pattern(flat, nested),
+        )
+      ).toThrow(/argument:[\s\S]*result:/);
+
+      // The same deep schema fits a single target alternative without the
+      // supplementary split search, so the bound does not restrict that proof.
+      const whole: JSONSchema = { enum: [false, true, null, "auto"] };
+      expect(() => assertSchemaSubset(nested, whole)).not.toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(nested, whole),
+          pattern(whole, nested),
+        )
+      ).not.toThrow();
+    });
+
+    it("keeps comment-marked wrappers at their comparison boundary", () => {
+      for (
+        const $comment of [
+          "emptyProperties",
+          "missingProperty",
+          "rejectedProperty",
+          "A boolean or null",
+        ]
+      ) {
+        const nested: JSONSchema = {
+          anyOf: [{
+            $comment,
+            anyOf: [{ type: "boolean" }, { type: "null" }],
+          }],
+        };
+        expect(() => assertSchemaSubset(nested, flat)).toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(nested, flat),
+            pattern(flat, nested),
+          )
+        ).toThrow(/argument:[\s\S]*result:/);
+      }
+    });
+
     it("retains outer constraints when matching nested alternatives separately", () => {
       const nested: JSONSchema = {
         maxLength: 3,
@@ -3348,14 +3401,14 @@ describe("piece schema compatibility", () => {
       expect(() => assertSchemaSubset(marked, bareFlattened)).toThrow();
       expect(() =>
         assertPatternSchemasBackwardCompatible(
-          pattern(marked, markedFlattened),
-          pattern(markedFlattened, marked),
+          pattern(marked, true),
+          pattern(markedFlattened, true),
         )
       ).toThrow(/argument:/);
       expect(() =>
         assertPatternSchemasBackwardCompatible(
-          pattern(marked, markedFlattened),
-          pattern(markedFlattened, marked),
+          pattern(true, markedFlattened),
+          pattern(true, marked),
         )
       ).toThrow(/result:/);
     });
