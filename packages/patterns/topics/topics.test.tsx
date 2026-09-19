@@ -30,6 +30,7 @@ import {
   type NamesTableRow,
 } from "../collection-naming/naming.ts";
 import Topics, {
+  activityOrderOf,
   distinctByIdentity,
   mentionedBy,
   mentionListsOf,
@@ -628,6 +629,32 @@ export default pattern(() => {
       return inbound.length === 1 && equals(inbound[0], twinA);
     },
   );
+
+  // A topic that has never run publishes no `lastActivityAt`, and the row
+  // coalesces that absence to 0. Ordering on the 0 would file the newest topic
+  // on the board below every topic that has ever run, so the order falls back
+  // to `createdAt`, which a cold row always carries.
+  const assert_cold_row_orders_by_created_at = assert(() =>
+    activityOrderOf({ lastActivityAt: 0, createdAt: 1700 }) === 1700 &&
+    activityOrderOf({ lastActivityAt: undefined, createdAt: 1700 }) === 1700
+  );
+
+  // A topic that HAS run orders by its published activity, which is what the
+  // fallback must not mask: `lastActivityOf` is a max including `createdAt`,
+  // so a real value is always the later of the two and never 0.
+  const assert_warm_row_orders_by_last_activity = assert(() =>
+    activityOrderOf({ lastActivityAt: 2500, createdAt: 1700 }) === 2500
+  );
+
+  // The ordering this exists for, stated as the comparison the sort makes: a
+  // cold topic filed AFTER a warm one still sorts above it. Fixed inputs that
+  // disagree with the defect — under the old `?? 0` the cold row scored 0 and
+  // lost to every warm row, whatever its filing time.
+  const assert_cold_new_topic_outranks_an_older_warm_one = assert(() => {
+    const coldAndNew = { lastActivityAt: 0, createdAt: 9000 };
+    const warmAndOld = { lastActivityAt: 8000, createdAt: 1000 };
+    return activityOrderOf(coldAndNew) > activityOrderOf(warmAndOld);
+  });
 
   // The pivot's row list, handed a board naming `identityTarget` twice: once
   // directly and once as the slot of a list holding a link to it. The slot is
@@ -1254,6 +1281,9 @@ export default pattern(() => {
       { assertion: assert_mention_index_rows_pure },
       { action: action_seed_row_universe },
       { assertion: assert_row_universe_accepted },
+      { assertion: assert_cold_row_orders_by_created_at },
+      { assertion: assert_warm_row_orders_by_last_activity },
+      { assertion: assert_cold_new_topic_outranks_an_older_warm_one },
       { assertion: assert_self_mention_inert_through_a_twin },
       { assertion: assert_mentioned_by_counts_each_matching_entry },
       {

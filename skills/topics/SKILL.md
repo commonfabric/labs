@@ -63,6 +63,10 @@ reference edge and take no `agentName`.
   state. One invocation session per run, one invocation id per logical mutation,
   a read-back after every write, and no retry on the strength of a timeout,
   which is how one Topic becomes two.
+- A Topic's derived scalars — `lastActivityAt`, `commentCount`, `shortName` —
+  materialize only once the piece has RUN, and `addTopic` does not run it.
+  Finish a headless filing with `deno task cf piece step --cell "$TOPIC"`, or
+  the board reads those fields as their defaults and sorts the new Topic last.
 - The body is the living document, replaced whole; comments are append-only,
   point-in-time progress; every relevant pull request is an `addLink` with
   `kind: "pr"`; relationships between Topics are references, never pasted fids.
@@ -72,11 +76,11 @@ reference edge and take no `agentName`.
 
 ## The detail, by task
 
-| Read                               | When you are                                                                                                                                  |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `references/reading.md`            | surveying the board or reading a Topic: the index, addresses and how to compare them, durable inputs against stepped results                  |
-| `references/verbs.md`              | discovering fields and operations, choosing a verb, identifying the deployed contract, retraction and by-reference verbs                      |
-| `references/naming.md`             | citing or resolving a Topic by its number, `top/42`, and what the deployment carries                                                          |
-| `references/mutating.md`           | creating a Topic and recovering its address, the observation asymmetry, the Topic verbs, references between Topics, the editorial conventions |
-| `references/pattern-updates.md`    | changing pattern source: `setsrc` rehearsal, `--root`, team authorization                                                                     |
-| `references/namespace-backfill.md` | naming the Topics filed before the namespace: the operator procedure and its traps                                                            |
+| Read                               | When you are                                                                                                                                                         |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `references/reading.md`            | surveying the board or reading a Topic: the index, addresses and how to compare them, durable inputs against stepped results                                         |
+| `references/verbs.md`              | discovering fields and operations, choosing a verb, identifying the deployed contract, retraction and by-reference verbs                                             |
+| `references/naming.md`             | citing or resolving a Topic by its number, `top/42`, and what the deployment carries                                                                                 |
+| `references/mutating.md`           | creating a Topic and recovering its address, the observation asymmetry, warming a filed Topic, the Topic verbs, references between Topics, the editorial conventions |
+| `references/pattern-updates.md`    | changing pattern source: `setsrc` rehearsal, `--root`, team authorization                                                                                            |
+| `references/namespace-backfill.md` | naming the Topics filed before the namespace: the operator procedure and its traps                                                                                   |

@@ -57,6 +57,32 @@ deno task cf cell get "$TOPICS_BOARD" index --step --select @,title
 deno task cf cell get --cell "$TOPIC" title --input
 ```
 
+## Warm the topic you just filed
+
+A Topic's scalars divide in two, and a headless filing only writes one half.
+`title`, `body` and `createdAt` are durable inputs, written by `addTopic`.
+`lastActivityAt`, `commentCount` and `shortName` are DERIVED, and a derivation
+materializes only once the piece has RUN. Creating a topic does not run it.
+
+Opening a topic in the shell runs it, which is why a topic filed through the UI
+never shows this and one filed here always does: until something runs it, the
+board reads its derived fields as their declared defaults — `lastActivityAt` 0,
+no number badge — and the card sorts by that 0, placing the newest topic on the
+board beneath every topic that has ever run.
+
+So finish a filing by stepping the new topic, which is the headless equivalent
+of opening it:
+
+```bash
+deno task cf piece step --cell "$TOPIC"
+deno task cf cell get "$TOPICS_BOARD" index --step --select @,title,lastActivityAt,shortName
+```
+
+`piece step` runs one scheduling step — start, idle, synced, stop. It runs the
+piece's own computation and writes no content of its own, so it is safe to
+repeat and safe to run over a topic somebody else filed. A bulk filing is worth
+a pass over every topic it created.
+
 Use one invocation session per agent run and an explicit invocation id per
 logical mutation. Retry an uncertain mutation only with that same session/id
 pair. The full retry and receipt model is in `skills/cf/SKILL.md` and
