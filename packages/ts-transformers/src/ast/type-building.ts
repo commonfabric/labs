@@ -438,14 +438,18 @@ export function expressionToTypeNode(
     expr,
     context,
   );
-  if (declaredTypeNode) {
+  const preservedTypeNode = declaredTypeNode &&
+    getPreservedBindingTypeNode(declaredTypeNode, context.checker);
+  if (declaredTypeNode && preservedTypeNode) {
+    // The type is read from the declared node: the preserved node may be one
+    // built here, which the checker cannot resolve.
     const type = context.checker.getTypeFromTypeNode(declaredTypeNode);
     // Deep position-stripped clone: the declaration may live in another
     // source file, and a shallow clone keeps child positions — the printer
     // would slice the EMIT file's text at those offsets, corrupting literal
     // type arguments (`Default<string, .ts";`).
     const clonedTypeNode = cloneTypeNodeDeepForEmission(
-      declaredTypeNode,
+      preservedTypeNode,
       context.state.typeRegistry,
     );
     context.state.typeRegistry.set(clonedTypeNode, type);
@@ -481,13 +485,7 @@ function getDestructuredBindingDeclaredTypeNode(
     return undefined;
   }
 
-  const typeNode = getDeclaredTypeNodeForBindingElement(
-    declaration,
-    context.checker,
-  );
-  return typeNode && shouldPreserveBindingDeclaredTypeNode(typeNode)
-    ? typeNode
-    : undefined;
+  return getDeclaredTypeNodeForBindingElement(declaration, context.checker);
 }
 
 export function getDeclaredTypeNodeForBindingElement(
@@ -549,6 +547,138 @@ function getBindingElementPropertyKey(
   return undefined;
 }
 
+/**
+ * Returns the type node to emit for a destructured binding in place of its
+ * inferred type, or `undefined` when the inferred type loses nothing. Inside a
+ * pattern body a binding's type has its `Default` and scope wrappers stripped,
+ * so a binding whose declared type carries one is emitted from what its author
+ * wrote. A wrapper reached through a type alias counts the same as one written
+ * in place, and is emitted as the type the alias names.
+ */
+export function getPreservedBindingTypeNode(
+  declaredTypeNode: ts.TypeNode,
+  checker: ts.TypeChecker,
+): ts.TypeNode | undefined {
+  const authored = resolveTypeAliasReferences(declaredTypeNode, checker);
+  return shouldPreserveBindingDeclaredTypeNode(authored) ? authored : undefined;
+}
+
+/**
+ * Helper for `getPreservedBindingTypeNode()`, which replaces each reference to
+ * a type alias that names a wrapper-carrying type with the type node the alias
+ * names, at the positions `shouldPreserveBindingDeclaredTypeNode()` inspects:
+ * the node itself, a member of a union or an intersection, and an argument of
+ * `Writable`. Returns the node it was given when none of those is such a
+ * reference.
+ *
+ * Two kinds of reference stay as written. One names a type that carries no
+ * wrapper: nothing in it needs the authored spelling, so the alias keeps its
+ * name. The other names a generic alias, whose type is spelled in terms of the
+ * alias's own type parameters.
+ */
+function resolveTypeAliasReferences(
+  typeNode: ts.TypeNode,
+  checker: ts.TypeChecker,
+  resolving: ReadonlySet<ts.TypeNode> = new Set(),
+): ts.TypeNode {
+  const resolve = (node: ts.TypeNode) =>
+    resolveTypeAliasReferences(node, checker, resolving);
+  const resolveAll = (nodes: ts.NodeArray<ts.TypeNode>) => {
+    const resolved = nodes.map(resolve);
+    return resolved.some((node, index) => node !== nodes[index])
+      ? resolved
+      : undefined;
+  };
+
+  if (ts.isParenthesizedTypeNode(typeNode)) {
+    const inner = resolve(typeNode.type);
+    return inner === typeNode.type
+      ? typeNode
+      : ts.factory.updateParenthesizedType(typeNode, inner);
+  }
+
+  if (ts.isUnionTypeNode(typeNode)) {
+    const members = resolveAll(typeNode.types);
+    // A member that named a union contributes that union's members, so the
+    // result stays one flat union.
+    return members
+      ? ts.factory.updateUnionTypeNode(
+        typeNode,
+        ts.factory.createNodeArray(
+          members.flatMap((member) =>
+            ts.isUnionTypeNode(member) ? [...member.types] : [member]
+          ),
+        ),
+      )
+      : typeNode;
+  }
+
+  if (ts.isIntersectionTypeNode(typeNode)) {
+    const members = resolveAll(typeNode.types);
+    return members
+      ? ts.factory.updateIntersectionTypeNode(
+        typeNode,
+        ts.factory.createNodeArray(members),
+      )
+      : typeNode;
+  }
+
+  if (!ts.isTypeReferenceNode(typeNode)) {
+    return typeNode;
+  }
+
+  if (typeNode.typeArguments) {
+    const name = ts.isIdentifier(typeNode.typeName)
+      ? typeNode.typeName.text
+      : typeNode.typeName.right.text;
+    const typeArguments = name === "Writable"
+      ? resolveAll(typeNode.typeArguments)
+      : undefined;
+    return typeArguments
+      ? ts.factory.updateTypeReferenceNode(
+        typeNode,
+        typeNode.typeName,
+        ts.factory.createNodeArray(typeArguments),
+      )
+      : typeNode;
+  }
+
+  const aliased = getAliasedTypeNode(typeNode, checker);
+  // An alias already being resolved names itself; its reference stays.
+  if (!aliased || resolving.has(aliased)) {
+    return typeNode;
+  }
+  const named = resolveTypeAliasReferences(
+    aliased,
+    checker,
+    new Set([...resolving, aliased]),
+  );
+  return shouldPreserveBindingDeclaredTypeNode(named) ? named : typeNode;
+}
+
+/**
+ * Helper for `resolveTypeAliasReferences()`, which returns the type node a
+ * reference to a non-generic type alias names, or `undefined` for a reference
+ * to anything else.
+ */
+function getAliasedTypeNode(
+  reference: ts.TypeReferenceNode,
+  checker: ts.TypeChecker,
+): ts.TypeNode | undefined {
+  const name = ts.isIdentifier(reference.typeName)
+    ? reference.typeName
+    : reference.typeName.right;
+  let symbol = checker.getSymbolAtLocation(name);
+  // An imported alias resolves to its import binding first.
+  if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
+    symbol = checker.getAliasedSymbol(symbol);
+  }
+  const declaration = symbol?.declarations?.find(ts.isTypeAliasDeclaration);
+  return declaration && !declaration.typeParameters?.length
+    ? declaration.type
+    : undefined;
+}
+
 export function shouldPreserveBindingDeclaredTypeNode(
   typeNode: ts.TypeNode,
 ): boolean {
@@ -586,12 +716,6 @@ function unwrapParenthesizedTypeNode(typeNode: ts.TypeNode): ts.TypeNode {
     current = current.type;
   }
   return current;
-}
-
-export function cloneTypeNode<T extends ts.TypeNode>(typeNode: T): T {
-  return (ts.factory as typeof ts.factory & {
-    cloneNode<TNode extends ts.Node>(node: TNode): TNode;
-  }).cloneNode(typeNode);
 }
 
 /**

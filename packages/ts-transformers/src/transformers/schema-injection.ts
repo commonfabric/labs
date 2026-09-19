@@ -28,11 +28,11 @@ import {
   widenLiteralType,
 } from "../ast/mod.ts";
 import {
-  cloneTypeNode,
+  cloneTypeNodeDeepForEmission,
   createRegisteredTypeLiteral,
   getDeclaredTypeNodeForBindingElement,
+  getPreservedBindingTypeNode,
   reportUnknownReactiveType,
-  shouldPreserveBindingDeclaredTypeNode,
 } from "../ast/type-building.ts";
 import {
   type CapabilityParamSummary,
@@ -2024,9 +2024,11 @@ function getExplicitValueTypeNode(
       declaration,
       checker,
     );
-    return typeNode && shouldPreserveBindingDeclaredTypeNode(typeNode)
-      ? cloneTypeNode(typeNode)
-      : undefined;
+    const preserved = typeNode &&
+      getPreservedBindingTypeNode(typeNode, checker);
+    // The preserved node may come from an alias declared in another module, so
+    // it is cloned without source positions.
+    return preserved ? cloneTypeNodeDeepForEmission(preserved) : undefined;
   }
   return undefined;
 }

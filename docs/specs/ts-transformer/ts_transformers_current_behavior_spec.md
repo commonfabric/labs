@@ -1280,6 +1280,26 @@ inside nested callbacks. Parameters and locals declared within the wrapped
 expression stay inside it, including when the wrapper belongs to a reactive
 collection callback. Module bindings remain lexical references.
 
+A capture's type is inferred from its expression, with literal types widened.
+One case reads the declaration instead. Inside a pattern body, a binding
+destructured from the callback parameter has its `Default` and scope wrappers
+(`PerSpace`, `PerUser`, `PerSession`, `PerAny`) stripped from its type. A
+binding whose declared property type carries one — as the type itself, as a
+member of a union or an intersection, or as the argument of `Writable` — is
+therefore emitted from the type node its author wrote
+(`getPreservedBindingTypeNode`, `src/ast/type-building.ts`). At any of those
+positions, a reference to a non-generic type alias whose type carries a wrapper
+is replaced by the type the alias names, so `type Draft = Writable<string |
+Default<"">>` captures with the schema of the wrapper written in place,
+including when the alias is imported from another module. A reference to an
+alias that carries no wrapper stays a reference, which schema generation emits
+under the alias's name. A reference to a generic alias also stays as written,
+and when nothing else in the declared type carries a wrapper the capture is
+typed by inference. Pattern result inference reads a returned input
+binding through the same function when its declared type carries a scope
+wrapper. `aliased-binding-declared-type.test.ts` and
+`ast/getPreservedBindingTypeNode.test.ts` pin these.
+
 ### 9.2 Handler strategy
 
 Transforms inline JSX event handlers:
