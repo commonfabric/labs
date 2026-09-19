@@ -28,10 +28,8 @@ import {
   widenLiteralType,
 } from "../ast/mod.ts";
 import {
-  cloneTypeNodeDeepForEmission,
   createRegisteredTypeLiteral,
-  getDeclaredTypeNodeForBindingElement,
-  getPreservedBindingTypeNode,
+  getPreservedTypeForBindingElement,
   reportUnknownReactiveType,
 } from "../ast/type-building.ts";
 import {
@@ -1971,8 +1969,9 @@ function buildObjectLiteralReturnTypeNode(
       return undefined;
     }
 
-    const valueTypeNode = getExplicitValueTypeNode(valueExpr, checker) ??
-      typeToSchemaTypeNode(valueType, checker, sourceFile);
+    const valueTypeNode =
+      getExplicitValueTypeNode(valueExpr, checker, typeRegistry) ??
+        typeToSchemaTypeNode(valueType, checker, sourceFile);
     if (!valueTypeNode) {
       return undefined;
     }
@@ -2003,6 +2002,7 @@ function buildObjectLiteralReturnTypeNode(
 function getExplicitValueTypeNode(
   valueExpr: ts.Expression,
   checker: ts.TypeChecker,
+  typeRegistry?: WeakMap<ts.Node, ts.Type>,
 ): ts.TypeNode | undefined {
   if (!ts.isIdentifier(valueExpr)) {
     return undefined;
@@ -2020,15 +2020,11 @@ function getExplicitValueTypeNode(
     return declaration.type;
   }
   if (declaration && ts.isBindingElement(declaration)) {
-    const typeNode = getDeclaredTypeNodeForBindingElement(
+    return getPreservedTypeForBindingElement(
       declaration,
       checker,
-    );
-    const preserved = typeNode &&
-      getPreservedBindingTypeNode(typeNode, checker);
-    // The preserved node may come from an alias declared in another module, so
-    // it is cloned without source positions.
-    return preserved ? cloneTypeNodeDeepForEmission(preserved) : undefined;
+      typeRegistry,
+    )?.typeNode;
   }
   return undefined;
 }

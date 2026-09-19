@@ -18,6 +18,7 @@ async function schemasOf(
 ): Promise<Record<string, unknown>[]> {
   const output = await transformSource(IMPORTS + source, {
     types: COMMONFABRIC_TYPES,
+    typeCheck: true,
   });
   return callSchemas(parseModule(output), callee);
 }
@@ -66,6 +67,232 @@ const CELL_VALUES: [title: string, type: string, capture: unknown][] = [
 ];
 
 describe("aliased binding declared type", () => {
+  describe("a binding declared by a generic input", () => {
+    for (
+      const [title, valueType, valueSchema] of [
+        ["a number", "number", { type: ["number", "string"], default: "" }],
+        ["an object", "{ count: number }", {
+          anyOf: [
+            {
+              type: "object",
+              properties: { count: { type: "number" } },
+              required: ["count"],
+            },
+            { type: "string" },
+          ],
+          default: "",
+        }],
+      ] as const
+    ) {
+      for (const cell of [false, true]) {
+        for (const action of [false, true]) {
+          it(`retains ${title} and its default in ${action ? "an action" : "a computed"} ${cell ? "cell" : "value"} capture`, async () => {
+            const output = await transformSource(
+              `${IMPORTS}
+type Blank = string | Default<"">;
+interface Input<T> { c: ${cell ? "Writable<T | Blank>" : "T | Blank"}; }
+export default pattern<Input<${valueType}>>(({ c }) => ({
+  s: ${action ? "action" : "computed"}(() => JSON.stringify(${
+                cell ? "c.get()" : "c"
+              })),
+}));`,
+              { types: COMMONFABRIC_TYPES, typeCheck: true },
+            );
+            const schemas = callSchemas(
+              parseModule(output),
+              action ? "handler" : "lift",
+            );
+            const capture = schemas[action ? 1 : 0]!;
+            expect((capture.properties as Record<string, unknown>).c).toEqual({
+              ...valueSchema,
+              ...(cell ? { asCell: ["readonly"] } : {}),
+            });
+          });
+        }
+      }
+    }
+
+    it("retains the concrete type and default in a result with a scoped binding", async () => {
+      const output = await transformSource(
+        `${IMPORTS}
+type Blank = string | Default<"">;
+interface Input<T> { c: T | Blank; nickname: PerUser<string>; }
+export default pattern<Input<number>>(({ c, nickname }) => ({ c, nickname }));`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const result = patternSchemas(parseModule(output)).output;
+      expect((result.properties as Record<string, unknown>).c).toEqual({
+        type: ["number", "string"],
+        default: "",
+      });
+      expect((result.properties as Record<string, unknown>).nickname).toEqual({
+        type: "string",
+        scope: "user",
+      });
+    });
+
+    it("instantiates an inherited, nested, renamed binding from an imported input", async () => {
+      const output = await transformFiles({
+        "/types.ts": `import type { Default } from "commonfabric";
+type Blank = string | Default<"">;
+interface Fields<T> { nested: { c: T | Blank }; }
+export interface Input<T> extends Fields<T> {}`,
+        "/main.tsx": `import { computed, pattern } from "commonfabric";
+import type { Input } from "./types.ts";
+export default pattern<Input<number>>((({ nested: { c: renamed } }) => ({
+  s: computed(() => JSON.stringify(renamed)),
+})));`,
+      }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+      const [capture] = callSchemas(parseModule(output["/main.tsx"]!), "lift");
+      expect((capture!.properties as Record<string, unknown>).renamed).toEqual({
+        type: ["number", "string"],
+        default: "",
+      });
+    });
+
+    it("instantiates a property declared in a generic input alias", async () => {
+      const [capture] = await schemasOf(
+        `
+type Blank = string | Default<"">;
+type Input<T> = { c: Writable<T | Blank> };
+export default pattern<Input<number>>(({ c }) => ({
+  s: computed(() => JSON.stringify(c.get())),
+}));`,
+        "lift",
+      );
+      expect((capture!.properties as Record<string, unknown>).c).toEqual({
+        type: ["number", "string"],
+        default: "",
+        asCell: ["readonly"],
+      });
+    });
+
+    it("retains the concrete fields of an alias supplied as the type argument", async () => {
+      const [capture] = await schemasOf(
+        `
+type Blank = string | Default<"">;
+type Box<T> = { value: T };
+interface Input<T> { c: Writable<T | Blank>; }
+export default pattern<Input<Box<number>>>(({ c }) => ({
+  s: computed(() => JSON.stringify(c.get())),
+}));`,
+        "lift",
+      );
+      expect((capture!.properties as Record<string, unknown>).c).toEqual({
+        anyOf: [
+          {
+            type: "object",
+            properties: { value: { type: "number" } },
+            required: ["value"],
+          },
+          { type: "string" },
+        ],
+        default: "",
+        asCell: ["readonly"],
+      });
+    });
+
+    it("uses inference for an argument that requires named-type resolution", async () => {
+      const [capture] = await schemasOf(
+        `
+type Blank = string | Default<"">;
+interface Box<T> { value: T; }
+interface Input<T> { c: T | Blank; }
+export default pattern<Input<Box<number>>>(({ c }) => ({
+  s: computed(() => JSON.stringify(c)),
+}));`,
+        "lift",
+      );
+      expect((capture!.properties as Record<string, unknown>).c).toEqual({
+        anyOf: [
+          { type: "string" },
+          {
+            type: "object",
+            properties: { value: { type: "number" } },
+            required: ["value"],
+          },
+        ],
+      });
+    });
+
+    it("uses the inferred binding type when the authored generic arguments are unavailable", async () => {
+      const [capture] = await schemasOf(
+        `
+type Blank = string | Default<"">;
+interface Input<T> { c: T | Blank; }
+const make = pattern<Input<number>>;
+export default make(({ c }) => ({
+  s: computed(() => JSON.stringify(c)),
+}));`,
+        "lift",
+      );
+      expect((capture!.properties as Record<string, { type: unknown }>).c!.type)
+        .toEqual(["number", "string"]);
+    });
+
+    for (
+      const [shape, concrete] of [
+        ['T["value"]', { type: ["number", "string"] }],
+        ["Writable<T>", {
+          anyOf: [
+            { type: "string" },
+            {
+              type: "object",
+              properties: { value: { type: "number" } },
+              required: ["value"],
+              asCell: ["cell"],
+            },
+          ],
+        }],
+        ["T[]", {
+          anyOf: [
+            { type: "string" },
+            {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { value: { type: "number" } },
+                required: ["value"],
+              },
+            },
+          ],
+        }],
+        ["Box<T>", {
+          anyOf: [
+            { type: "string" },
+            {
+              type: "object",
+              properties: {
+                nested: {
+                  type: "object",
+                  properties: { value: { type: "number" } },
+                  required: ["value"],
+                },
+              },
+              required: ["nested"],
+            },
+          ],
+        }],
+      ] as const
+    ) {
+      it(`uses the instantiated inferred type for a property containing ${shape}`, async () => {
+        const [capture] = await schemasOf(
+          `
+type Blank = string | Default<"">;
+type Box<T> = { nested: T };
+interface Input<T extends { value: number }> { c: ${shape} | Blank; }
+export default pattern<Input<{ value: number }>>(({ c }) => ({
+  s: computed(() => JSON.stringify(c)),
+}));`,
+          "lift",
+        );
+        expect((capture!.properties as Record<string, unknown>).c).toEqual(
+          concrete,
+        );
+      });
+    }
+  });
+
   describe("a `computed()` capture of a cell declared through an alias", () => {
     for (const [title, type, capture] of CELL_VALUES) {
       it(`emits the schema of a cell written in place, for ${title}`, async () => {

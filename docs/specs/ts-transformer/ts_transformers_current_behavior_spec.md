@@ -1295,9 +1295,20 @@ including when the alias is imported from another module. A reference to an
 alias that carries no wrapper stays a reference, which schema generation emits
 under the alias's name. A reference to a generic alias also stays as written,
 and when nothing else in the declared type carries a wrapper the capture is
-typed by inference. Pattern result inference reads a returned input
-binding through the same function when its declared type carries a scope
-wrapper. `aliased-binding-declared-type.test.ts` and
+typed by inference. When the property belongs to a generic input, preservation
+substitutes direct references to enclosing type parameters with the caller's
+type arguments through unions, intersections, parentheses, and a `Writable`
+whose argument carries a wrapper before emitting the node. The pattern
+builder's input type supplies these
+arguments before callback normalization strips defaults and scopes; inherited
+properties and nested destructuring follow that input type. If an enclosing
+type parameter cannot be resolved, or appears inside another type expression
+such as `Box<T>` or `T[K]`, the binding uses its inferred type. Substituted
+arguments are emitted structurally; if an argument still needs named-type
+resolution, the binding also uses inference.
+Pattern result inference reads returned input bindings through the same
+preservation path when a returned binding carries a scope wrapper.
+`aliased-binding-declared-type.test.ts` and
 `ast/getPreservedBindingTypeNode.test.ts` pin these.
 
 ### 9.2 Handler strategy
