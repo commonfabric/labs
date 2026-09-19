@@ -390,13 +390,15 @@ export default pattern(() => {
   });
   const assert_record_wrote_the_store = assert(() => blankNumber.get() === "5");
 
-  // The create passes its allocated number into the topic it creates, which
-  // no published path shows and no cell of this file's is inside. What does
-  // show it is the topic's own refusal: `recordName` rejects a number that
-  // disagrees with one already stored, so a board-created topic refusing `9`
-  // is a topic that stores something else. Drop the pass-through at the create
-  // and nothing is stored, the call is accepted, and this assertion reads `9`
-  // back out of the namespace's own topic.
+  // The create passes its allocated number into the topic it creates. No
+  // published path shows that while numbers are hidden, and no cell of this
+  // file's is the created topic's input, so the witness is the topic's own
+  // REFUSAL: `recordName` rejects a number disagreeing with one already
+  // stored, so a board-created topic refusing `9` is one that stores something
+  // else. That refusal is counted, not asserted — it is one of this file's
+  // three expected runtime errors, and dropping the pass-through at the create
+  // makes the call succeed and the count fall to two. The assertion below
+  // carries only the namespace half, which is what it can read.
   const madeNames = new Writable<NamesMap>({});
   const madeTopics = new Writable<TopicDemand[] | Default<[]>>([]);
   const made = Topics({ topics: madeTopics, names: madeNames });
@@ -406,7 +408,7 @@ export default pattern(() => {
   const action_record_a_second_number = action(() => {
     madeTopics.key(0).resolveAsCell().key("recordName").send({ name: "9" });
   });
-  const assert_create_stored_what_it_allocated = assert(() =>
+  const assert_create_allocated_into_the_namespace = assert(() =>
     Object.keys((madeNames.get() ?? {}) as NamesMap).join(",") === "1" &&
     nameOf(madeTopics.key(0), made.namesTable ?? []) === "1"
   );
@@ -555,7 +557,7 @@ export default pattern(() => {
       { assertion: assert_record_wrote_the_store },
       { action: action_make_one },
       { action: action_record_a_second_number },
-      { assertion: assert_create_stored_what_it_allocated },
+      { assertion: assert_create_allocated_into_the_namespace },
       { action: action_file_a_blocked_topic },
       { action: action_record_blocked },
       { assertion: assert_blocked_write_did_not_land },
