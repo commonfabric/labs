@@ -487,30 +487,6 @@ export function newestArtifactsByName(artifacts: Artifact[]): Artifact[] {
   return [...byName.values()];
 }
 
-/**
- * The API path listing the runs a coverage baseline could come from:
- * successful pushes to the default branch, newest first.
- *
- * One path rather than one per reader, because the workflow the runs
- * belong to has to be the same for everything that compares against a
- * baseline, and a second copy is a second place to update when the run
- * moves to another workflow.
- *
- * GitHub serves a listing that carries a filter from a search index, and that
- * index can return a window of runs that ended weeks ago with no error to say
- * so. A reader that cannot tolerate that reads {@link workflowRunsPagePath}
- * and applies {@link isBaselineCandidateRun} itself.
- */
-export function workflowRunsPathForBaseline(perPage: number): string {
-  const params = new URLSearchParams({
-    branch: "main",
-    status: "success",
-    event: "push",
-    per_page: String(perPage),
-  });
-  return `/repos/${REPO}/actions/workflows/${WORKFLOW_FILE}/runs?${params}`;
-}
-
 /** Runs on one page of {@link workflowRunsPagePath}: GitHub's maximum. */
 export const WORKFLOW_RUNS_PAGE_SIZE = 100;
 
@@ -518,10 +494,19 @@ export const WORKFLOW_RUNS_PAGE_SIZE = 100;
  * The API path of one page of every run of the workflow, newest first, with
  * `1` as the first page.
  *
- * It carries no filter, which is what keeps GitHub from serving it out of the
- * search index {@link workflowRunsPathForBaseline} describes. The pull request
- * details are left out because nothing here reads them and they are most of
- * the response.
+ * One path rather than one per reader, because the workflow the runs belong to
+ * has to be the same for everything that compares against a baseline, and a
+ * second copy is a second place to update when the run moves to another
+ * workflow.
+ *
+ * It carries no filter, which is what keeps GitHub from serving it out of a
+ * search index. A listing that carries any of the `actor`, `branch`,
+ * `check_suite_id`, `created`, `event`, `head_sha` or `status` parameters is
+ * answered from that index, which can return a window of runs that ended weeks
+ * ago with a success status and no error to say so. A reader that wants only
+ * some of these runs applies {@link isBaselineCandidateRun} itself. The pull
+ * request details are left out because nothing here reads them and they are
+ * most of the response.
  */
 export function workflowRunsPagePath(page: number): string {
   const params = new URLSearchParams({
@@ -534,8 +519,7 @@ export function workflowRunsPagePath(page: number): string {
 
 /**
  * Returns whether a run could serve as a coverage baseline: a push to the
- * default branch that concluded successfully. The same runs
- * {@link workflowRunsPathForBaseline} asks GitHub to select.
+ * default branch that concluded successfully.
  */
 export function isBaselineCandidateRun(
   run: Pick<WorkflowRun, "event" | "head_branch" | "conclusion">,

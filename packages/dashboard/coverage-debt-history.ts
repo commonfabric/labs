@@ -10,16 +10,27 @@
  * time, so the history is assembled here a day at a time and kept on disk.
  *
  * One sample a day is enough for a trend measured in weeks, and it bounds what
- * the collection costs: the runs are listed for one day at a time and only the
- * newest few of them are opened. Two things disqualify a run. A run whose
- * compile byte cache missed covers branches that only a cold compile reaches,
- * which lowers its debt by around a tenth of a percent — the same size as a
- * week's real movement, and the reason the coverage ratchet skips a cold run
- * too. And a run whose artifact will not parse measured nothing this can read.
+ * the collection costs: only the newest few runs of a day are opened. Two
+ * things disqualify a run. A run whose compile byte cache missed covers
+ * branches that only a cold compile reaches, which lowers its debt by around a
+ * tenth of a percent — the same size as a week's real movement, and the
+ * reason the coverage ratchet skips a cold run too. And a run whose artifact
+ * will not parse measured nothing this can read.
+ *
+ * The runs come from the listing that carries no filter, read newest first and
+ * sorted into days here. A listing carrying `branch`, `event`, `status` or
+ * `created` is answered from a search index that can return a window of runs
+ * weeks old, with a success status and nothing to mark it; a day selected that
+ * way can come back empty or stale, and a day that is over is never asked
+ * about again, so a wrong answer would stay on the tile until it aged out of
+ * the window. Reading one listing for the whole window rather than one per day
+ * is what keeps that affordable: a day cannot be seeked to, only paged back
+ * to, so a request per day would re-read every page the older days sit behind.
  *
  * A day that has been read keeps its answer, including the answer that it has
  * no usable run, because a day that is over gains no runs. A read that failed
- * establishes nothing and is left for the next collection.
+ * establishes nothing and is left for the next collection, and so is a day the
+ * listing was not read back far enough to have shown every run of.
  */
 
 import { isObjectOrArray } from "@commonfabric/utils/types";
@@ -39,8 +50,24 @@ export const WORKSPACE_METRIC = "coverage-debt: workspace uncovered lines";
 /** Runs of one day opened before the day is given up as unreadable. */
 export const RUNS_READ_PER_DAY = 3;
 
-/** Days read at once. */
+/** Days whose runs are opened at once. */
 const FETCH_CONCURRENCY = 8;
+
+/** Runs on one page of the listing: GitHub's maximum. */
+const RUNS_PAGE_SIZE = 100;
+
+/**
+ * The most pages one refresh reads.
+ *
+ * A refresh that finds every day but today already answered stops after the
+ * page holding today's runs, so this bounds the refresh that has a whole
+ * window to fill: the first one after the history file is lost, which pages
+ * back as far as the oldest day of the window. It is set above what that
+ * takes, so that the days beyond it are the ones no listing reaches rather
+ * than the ones this stopped short of. A refresh that spends it says so and
+ * leaves the days it did not reach for the next one.
+ */
+const RUNS_MAX_PAGES = 150;
 
 const DAY_MS = 86_400_000;
 /**
@@ -100,6 +127,15 @@ interface StoredHistory {
 
 interface WorkflowRun {
   id: number;
+
+  /** When the run was created, ISO 8601; the day it is sorted into. */
+  created_at: string;
+
+  /** The branch the run's head commit is on. */
+  head_branch?: string;
+
+  event: string;
+  conclusion: string;
 }
 
 interface RunArtifact {
@@ -262,7 +298,127 @@ export class CoverageDebtStore {
 type DayReading =
   | { outcome: "read"; day: StoredDay }
   | { outcome: "unchanged" }
+  | { outcome: "unshown" }
   | { outcome: "failed"; error: unknown };
+
+/** The API path of one page of every run of the workflow, newest first. */
+function runsPagePath(page: number): string {
+  const params = new URLSearchParams({
+    per_page: String(RUNS_PAGE_SIZE),
+    page: String(page),
+    exclude_pull_requests: "true",
+  });
+  return `repos/${REPO}/actions/workflows/${COVERAGE_WORKFLOW}/runs` +
+    `?${params}`;
+}
+
+/** Whether a run is one a day's number could be read from. */
+function measuresMain(run: WorkflowRun): boolean {
+  return run.event === "push" && run.head_branch === "main" &&
+    run.conclusion === "success";
+}
+
+/** The UTC day a run falls in, or nothing where its date will not read. */
+function runDay(run: WorkflowRun): string | undefined {
+  const at = Date.parse(run.created_at);
+  return Number.isNaN(at) ? undefined : utcDay(at);
+}
+
+/** The runs one day of the window holds. */
+interface DayRuns {
+  /** The day's newest runs, newest first, at most `RUNS_READ_PER_DAY`. */
+  runs: WorkflowRun[];
+
+  /**
+   * Whether the listing was read back past the start of the day, which is
+   * what makes the runs above all of the day's rather than the ones shown so
+   * far. Until it is, a day holding fewer than `RUNS_READ_PER_DAY` of them
+   * may hold more that a later page would name.
+   */
+  whole: boolean;
+}
+
+/** A day the listing is read for, and what the store already holds of it. */
+interface WantedDay {
+  day: string;
+
+  /** The newest run the day listed when it was last read. */
+  newestRun?: number;
+}
+
+/** What reading the listing for a window of days found. */
+interface WindowRuns {
+  days: Map<string, DayRuns>;
+
+  /** Why the reading stopped early, when a page could not be read. */
+  error?: unknown;
+}
+
+/**
+ * The runs of each day named, read from the listing newest first.
+ *
+ * It stops once every day named is answered, which is what keeps the usual
+ * refresh to one page: a day whose newest run is the one it already held has
+ * gained nothing, whatever the rest of the day holds, and the listing is
+ * newest first, so the first page a day appears on settles that.
+ */
+async function readWindowRuns(
+  wanted: readonly WantedDay[],
+  token: string,
+  github: CoverageDebtGitHub,
+): Promise<WindowRuns> {
+  const days = new Map<string, DayRuns>(
+    wanted.map(({ day }) => [day, { runs: [], whole: false }]),
+  );
+  const knownNewest = new Map(
+    wanted.map(({ day, newestRun }) => [day, newestRun]),
+  );
+  const answered = (day: string, found: DayRuns) => {
+    if (found.whole || found.runs.length === RUNS_READ_PER_DAY) return true;
+    const newest = found.runs[0]?.id;
+    return newest !== undefined && newest === knownNewest.get(day);
+  };
+  const settled = () => [...days].every(([day, found]) => answered(day, found));
+  const markWholeBefore = (oldest: string) => {
+    for (const [day, value] of days) {
+      if (day > oldest) value.whole = true;
+    }
+  };
+  for (let page = 1; page <= RUNS_MAX_PAGES; page++) {
+    let listed: { workflow_runs?: WorkflowRun[] };
+    try {
+      listed = await github.json(runsPagePath(page), token);
+    } catch (error) {
+      return { days, error };
+    }
+    const runs = listed.workflow_runs ?? [];
+    for (const run of runs) {
+      if (!measuresMain(run)) continue;
+      const at = runDay(run);
+      const day = at === undefined ? undefined : days.get(at);
+      if (day !== undefined && day.runs.length < RUNS_READ_PER_DAY) {
+        day.runs.push(run);
+      }
+    }
+    if (runs.length < RUNS_PAGE_SIZE) {
+      // The listing ended, so every run it holds has been shown.
+      for (const day of days.values()) day.whole = true;
+      return { days };
+    }
+    // The listing is newest first, so a day newer than the page's last run
+    // is one every run of has been shown. A last run with no usable date
+    // says where the page reached back to no better than the page before it.
+    const reached = runDay(runs[runs.length - 1]);
+    if (reached !== undefined) markWholeBefore(reached);
+    if (settled()) return { days };
+  }
+  console.warn(
+    `coverage debt: read ${RUNS_MAX_PAGES} pages of runs without reaching ` +
+      `${wanted[0]?.day}; the days it did not reach are left for a later ` +
+      "refresh.",
+  );
+  return { days };
+}
 
 async function readArtifact(
   artifactId: number,
@@ -281,23 +437,17 @@ async function readArtifact(
 }
 
 async function readDay(
-  day: string,
+  found: DayRuns,
   token: string,
   github: CoverageDebtGitHub,
   known: StoredDay | undefined,
 ): Promise<DayReading> {
   try {
-    const listed = await github.json<{ workflow_runs?: WorkflowRun[] }>(
-      `repos/${REPO}/actions/workflows/${COVERAGE_WORKFLOW}/runs` +
-        `?branch=main&event=push&status=success&created=${day}` +
-        `&per_page=${RUNS_READ_PER_DAY}`,
-      token,
-    );
-    const runs = listed.workflow_runs ?? [];
+    const runs = found.runs;
     const newestRun = runs[0]?.id;
     // Nothing has landed since the day was last read, so nothing can have
-    // measured a different number. This is the whole cost of a refresh that
-    // finds the tree where it left it.
+    // measured a different number. This is what a refresh that finds the tree
+    // where it left it costs beyond the listing itself.
     if (newestRun !== undefined && newestRun === known?.newestRun) {
       return { outcome: "unchanged" };
     }
@@ -316,6 +466,14 @@ async function readDay(
         outcome: "read",
         day: { measured: { uncoveredLines, runId: run.id }, newestRun },
       };
+    }
+    // No run the reading showed measured the day. Saying the day has none
+    // takes having seen them all, which a reading stopped short of the day's
+    // start has not: the rest of the day is where a usable run would be. A
+    // day that is over is never asked about again, so recording this one now
+    // would keep the wrong answer for as long as the window holds it.
+    if (!found.whole && runs.length < RUNS_READ_PER_DAY) {
+      return { outcome: "unshown" };
     }
     const seen = newestRun === undefined ? {} : { newestRun };
     return { outcome: "read", day: seen };
@@ -352,11 +510,23 @@ export async function refreshCoverageDebt(options: {
   const wanted = window.filter((day) =>
     day === today || store.get(day) === undefined
   );
-  let error: unknown;
+  const listing = await readWindowRuns(
+    wanted.map((day) => ({ day, newestRun: store.get(day)?.newestRun })),
+    token,
+    github,
+  );
+  let error: unknown = listing.error;
   for (let at = 0; at < wanted.length; at += FETCH_CONCURRENCY) {
     const batch = wanted.slice(at, at + FETCH_CONCURRENCY);
     const readings = await Promise.all(
-      batch.map((day) => readDay(day, token, github, store.get(day))),
+      batch.map((day) =>
+        readDay(
+          listing.days.get(day) ?? { runs: [], whole: false },
+          token,
+          github,
+          store.get(day),
+        )
+      ),
     );
     readings.forEach((reading, index) => {
       if (reading.outcome === "read") store.set(batch[index], reading.day);

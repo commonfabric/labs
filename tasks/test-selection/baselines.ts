@@ -21,11 +21,13 @@ import {
   downloadAndParseCoverageBaseline,
   fetchArtifactsForRun,
   githubGet,
+  isBaselineCandidateRun,
   newestArtifactsByName,
   PERF_METRICS_ARTIFACT_NAME,
   TOKEN,
+  WORKFLOW_RUNS_PAGE_SIZE,
   type WorkflowRun,
-  workflowRunsPathForBaseline,
+  workflowRunsPagePath,
 } from "../ci-check-lib.ts";
 import type { CoverageBaseline } from "./manifest.ts";
 import { LOCAL_COVERAGE_BASELINE_DAYS } from "./policy.ts";
@@ -139,8 +141,7 @@ function measuredSetFigures(
 }
 
 /**
- * How many recent runs one listing asks for, which is GitHub's maximum
- * for one page.
+ * How many of the newest `main` runs one reading gathers.
  *
  * It bounds how far one publish can catch up rather than how much
  * history a manifest holds: what the window holds is built up by each
@@ -150,6 +151,17 @@ function measuredSetFigures(
  * until it has run a few times.
  */
 const BASELINE_RUNS = 100;
+
+/**
+ * The most pages one reading asks for.
+ *
+ * The listing holds every run of the workflow, of which the pushes to
+ * `main` that succeeded are a fraction, so gathering {@link BASELINE_RUNS}
+ * of them takes several pages. This bounds what a stretch holding few of
+ * them costs: the reading stops early, and the publish after it carries
+ * what this one published forward and adds the runs since.
+ */
+const BASELINE_LISTING_MAX_PAGES = 15;
 
 /** What the live source reaches for, so a test can hand it something. */
 export interface BaselineReads {
@@ -165,7 +177,17 @@ export interface BaselineReads {
   ) => Promise<{ metrics: Map<string, { uncoveredLines: number }> } | null>;
 }
 
-/** The runs and artifacts of the repository this is running in. */
+/**
+ * The runs and artifacts of the repository this is running in.
+ *
+ * The runs are gathered from the listing that carries no filter, and which
+ * of them could serve as a baseline is decided here. Asking GitHub to make
+ * that selection is served from a search index that can answer with a window
+ * of runs weeks old, with a success status and nothing to mark it; such a
+ * window puts every run it names outside the publisher's own window, so the
+ * gathering would stop at the first of them and the manifest would carry
+ * forward without the runs since.
+ */
 export function liveBaselineSource(reads: BaselineReads = {}): BaselineSource {
   const list = reads.list ??
     ((path: string) => githubGet<{ workflow_runs: WorkflowRun[] }>(path));
@@ -173,14 +195,22 @@ export function liveBaselineSource(reads: BaselineReads = {}): BaselineSource {
   const baselineOf = reads.baseline ?? downloadAndParseCoverageBaseline;
   return {
     async runs() {
-      const response = await list(
-        workflowRunsPathForBaseline(BASELINE_RUNS),
-      );
-      return response.workflow_runs.map((run) => ({
-        id: run.id,
-        commit: run.head_sha,
-        createdAt: run.created_at,
-      }));
+      const found: BaselineRun[] = [];
+      for (let page = 1; page <= BASELINE_LISTING_MAX_PAGES; page++) {
+        const { workflow_runs: runs } = await list(workflowRunsPagePath(page));
+        for (const run of runs) {
+          if (!isBaselineCandidateRun(run)) continue;
+          found.push({
+            id: run.id,
+            commit: run.head_sha,
+            createdAt: run.created_at,
+          });
+          if (found.length === BASELINE_RUNS) return found;
+        }
+        // A short page is the last one the listing has.
+        if (runs.length < WORKFLOW_RUNS_PAGE_SIZE) break;
+      }
+      return found;
     },
     async metrics(runId: number) {
       let artifacts: Artifact[];

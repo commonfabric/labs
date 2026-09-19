@@ -14,7 +14,6 @@ import {
   PERF_METRICS_ARTIFACT_NAME,
   type PRInfo,
   type WorkflowRun,
-  workflowRunsPathForBaseline,
 } from "./ci-check-lib.ts";
 import {
   appendJobSummary,
@@ -816,18 +815,6 @@ Deno.test("writeCoverageDebtSuggestion writes nothing when no coverage group res
   );
 
   assertEquals(payload, null);
-});
-
-Deno.test("baseline workflow path fetches successful main push runs", () => {
-  const path = workflowRunsPathForBaseline(20);
-  const query = new URLSearchParams(path.split("?")[1]);
-
-  assertStringIncludes(path, "/actions/workflows/deno.yml/runs?");
-  assertEquals(query.get("branch"), "main");
-  assertEquals(query.get("status"), "success");
-  assertEquals(query.get("event"), "push");
-  assertEquals(query.get("per_page"), "20");
-  assertEquals(query.get("created"), null);
 });
 
 Deno.test("fetchLatestBaselineRunSha reads the newest baseline run's head", async () => {
