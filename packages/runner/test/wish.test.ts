@@ -1638,11 +1638,7 @@ describe("wish built-in", () => {
         expect(data.type).toBe("from-other-space");
       });
 
-      it("answers nothing, not a no-match error, while the arbitrary DID space's mentionables are not there", async () => {
-        // The other space holds nothing when the wish runs: its mentionables
-        // read as not loaded, which is a pending answer — neither a match nor
-        // the no-match error a loaded, empty space would earn. Once the data
-        // is there, a wish over the same scope finds it.
+      it("reports confirmed absence in an arbitrary DID space and finds later arrivals", async () => {
         const wishPattern = pattern(() => {
           return {
             result: wish({ query: "#late-tag", scope: [otherSpace.did()] }),
@@ -1662,7 +1658,9 @@ describe("wish built-in", () => {
 
         await result.pull();
         expect(result.key("result").get()?.result).toBeUndefined();
-        expect(result.key("result").get()?.error).toBeUndefined();
+        expect(result.key("result").get()?.error).toContain(
+          "No 1 space(s) found",
+        );
 
         const otherSpaceCell = runtime.getCell(
           otherSpace.did(),
