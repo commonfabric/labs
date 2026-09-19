@@ -49,7 +49,7 @@ import {
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
-  HANDLE_TOKEN_PATTERN,
+  ANY_HANDLE_TOKEN_PATTERN,
   type HarnessHandleEntry,
   type HarnessHandleTable,
 } from "./contracts/handle-table.ts";
@@ -96,6 +96,26 @@ export interface AgentObservedDocumentReferent {
 export type AgentObservedHandle =
   | AgentObservedCellHandle
   | AgentObservedDocumentReferent;
+
+/**
+ * Everything a run's handle table says the run observed: each general
+ * address handle as a cell, and each held referent as a document carrying
+ * the content and label it was admitted under. A handle held for one purpose
+ * only — a `skill-context` one — is not an observation.
+ */
+export const agentObservedHandlesOfTable = (
+  table: HarnessHandleTable,
+): AgentObservedHandle[] => [
+  ...table.entries.filter((entry) => entry.capability === undefined).map((
+    entry,
+  ): AgentObservedHandle => ({ kind: "cell", token: entry.token })),
+  ...(table.referents ?? []).map((referent): AgentObservedHandle => ({
+    kind: "document",
+    token: referent.token,
+    value: referent.value,
+    label: referent.label,
+  })),
+];
 
 export interface WriteAgentResultOptions {
   session: HarnessFabricSession;
@@ -220,9 +240,11 @@ type Placement =
   | Reference
   | { kind: "sealed"; path: Path };
 
-const tokenPattern = (): RegExp => new RegExp(HANDLE_TOKEN_PATTERN.source, "g");
+// Tokens of either kind: an address handle, or a held non-cell referent.
+const tokenPattern = (): RegExp =>
+  new RegExp(ANY_HANDLE_TOKEN_PATTERN.source, "g");
 
-const wholeTokenPattern = new RegExp(`^${HANDLE_TOKEN_PATTERN.source}$`);
+const wholeTokenPattern = new RegExp(`^${ANY_HANDLE_TOKEN_PATTERN.source}$`);
 
 /**
  * `schema` with every `asCell` position replaced by the schema that accepts

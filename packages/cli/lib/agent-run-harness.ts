@@ -30,7 +30,7 @@ import {
 } from "@commonfabric/cf-harness/fabric-session";
 import { createHarnessHandleTable } from "@commonfabric/cf-harness/handle-table";
 import {
-  type AgentObservedHandle,
+  agentObservedHandlesOfTable,
   AgentResultWriteError,
   relaxAsCellPositions,
   writeAgentResult,
@@ -238,9 +238,8 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
 
   const handleTable = loopResult.runState.handleTable ??
     createHarnessHandleTable(loopResult.runState.runId);
-  const observedHandles: AgentObservedHandle[] = handleTable.entries
-    .filter((entry) => entry.capability === undefined)
-    .map((entry) => ({ kind: "cell", token: entry.token }));
+  // Every cell the run holds a handle to, and every Loom row it was shown.
+  const observedHandles = agentObservedHandlesOfTable(handleTable);
   let session: HarnessFabricSession | undefined;
   const ownsSession = options.harnessDeps?.fabricSessionFactory === undefined;
   try {

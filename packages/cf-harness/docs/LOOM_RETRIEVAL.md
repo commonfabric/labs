@@ -185,3 +185,27 @@ fixed fields, the envelope, the entries so far, and this one — stays within
 `truncated` flag is set. The envelope's strings are bounded the same way. The
 model-context observation the result contributes carries `truncated` whenever
 the result does.
+
+## Rows as held referents
+
+Each admitted row is registered in the run's handle table as a held referent
+that is not a cell, and its entry carries the token as `handle`
+(`cfh:v:<suffix>`). The table records the row as the model saw it, the label it
+was measured with, and `labelSource` — `row` for a label read off the row's
+`ifc`, `query` for one assigned from the query. A withheld row is registered
+nowhere. Retrieving the same row twice yields one token.
+
+A referent token stays text everywhere a tool input passes: the swap that turns
+address tokens into addresses does not match it. `describe_handle` reports a
+referent's kind, the tool that observed it, its `labelSource`, and its label's
+atom types, and never its content.
+
+The agent result writer takes these through
+`agentObservedHandlesOfTable(handleTable)`, which returns each general address
+handle as a cell and each referent as a document. A structured result that names
+a row's token gets a document minted from the row under its label and a link to
+it. Every observed row is minted and read by the result transaction whether or
+not the result names it, because its content entered model context and the
+result's inline text has to carry its label; a row the result does not name is
+linked from nowhere. A referent token the run does not hold fails the write as
+`unheld_handle`.

@@ -253,6 +253,12 @@ every free string a schema does not enumerate, which is the rule for a value
 leaving the fabric toward a model and not for text a model authored on its way
 in.
 
+A Loom row reaches the writer as a held referent: each admitted row is
+registered in the run's handle table under a `cfh:v:` token, with its content,
+the label it was admitted under, and whether that label was the row's or the
+query's, and `agentObservedHandlesOfTable` hands the writer the table's cells
+and referents together.
+
 The result reaches the writer through the harness's `submit_result` tool. An
 agent request's task is bound to the prompt-slot role `context`, and under the
 harness's enforcing modes a `context` run is refused every sandbox write, so it

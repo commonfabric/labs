@@ -27,7 +27,7 @@ import {
 } from "../cfc-label-disclosure.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { HarnessFabricSession } from "../fabric-session.ts";
-import { resolveHandleToken } from "../handle-table.ts";
+import { resolveHandleToken, resolveReferentToken } from "../handle-table.ts";
 import { schemaShapeOnly } from "../schema-shape.ts";
 import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
 
@@ -77,6 +77,16 @@ export interface DescribeHandleToolOutput {
    * an agent can write over it is code that treats it as one.
    */
   database?: DescribeHandleDatabase;
+
+  /**
+   * Present when the token names a held referent that is not a cell: what
+   * kind it is, which tool observed it, and where its label came from.
+   */
+  referent?: {
+    kind: "document";
+    source: string;
+    labelSource: "row" | "query";
+  };
 }
 
 /**
@@ -775,6 +785,30 @@ const invokeDescribeHandle = async (
 ): Promise<DescribeHandleResearchResult> => {
   const outputId = context.nextOutputId("describe_handle");
   const token = typeof input.token === "string" ? input.token.trim() : "";
+  const referent = context.handleTable === undefined
+    ? undefined
+    : resolveReferentToken(context.handleTable, token);
+  if (referent !== undefined) {
+    // A held referent that is not a cell. The model saw its content when the
+    // tool returned it; what is reported here is what it is and the atom
+    // types of the label it was admitted under.
+    return {
+      output: {
+        outputId,
+        token: referent.token,
+        known: true,
+        hasSchema: false,
+        referent: {
+          kind: referent.kind,
+          source: referent.source,
+          labelSource: referent.labelSource,
+        },
+        labels: [{ path: [], ...cfcLabelAtomTypes(referent.label) }],
+      },
+      cfcLabel: referent.label,
+      cfcLabelAvailable: true,
+    };
+  }
   const entry = context.handleTable === undefined
     ? undefined
     : resolveHandleToken(context.handleTable, token);

@@ -25,6 +25,7 @@ import {
   type HarnessCfcModelContextObservationInput,
   mergeConfidentialityOnlyLabels,
 } from "../contracts/cfc-model-context.ts";
+import type { HarnessHandleReferent } from "../contracts/handle-table.ts";
 import type { ToolOutputId, ToolResultRef } from "../contracts/tool-result.ts";
 import {
   type LoomCalendarListInput,
@@ -85,6 +86,13 @@ export type LoomRetrievalEntry =
 
     /** The row without its `ifc` field, its strings bounded. */
     value: unknown;
+
+    /**
+     * The token the run holds this row under. A structured result names the
+     * row by it, and the result's writer links a document minted from the
+     * row. Absent outside a run that keeps a handle table.
+     */
+    handle?: string;
 
     /** Present when a string of the row was cut to the bound. */
     truncated?: true;
@@ -303,6 +311,9 @@ const rowsOf = (
   }
 };
 
+/** As long as any referent token, for sizing an entry before it is held. */
+const HANDLE_SIZE_STAND_IN = "cfh:v:22222";
+
 /**
  * Measures each row against `ceiling` and bounds what is admitted. Rows are
  * measured in order, and an entry is added only while the serialized result
@@ -310,17 +321,20 @@ const rowsOf = (
  * far, and this entry — stays within the output bound; the rows left out are
  * counted rather than carried.
  */
-const measureRows = (
+const measureRows = async (
   rows: unknown[],
   ceiling: readonly CfcConfClause[] | undefined,
   queryLabel: IFCLabel | undefined,
   reserved: number,
-): {
+  hold?: (
+    referent: Pick<HarnessHandleReferent, "value" | "label" | "labelSource">,
+  ) => Promise<string>,
+): Promise<{
   entries: LoomRetrievalEntry[];
   omitted: number;
   truncated: boolean;
   labels: IFCLabel[];
-} => {
+}> => {
   const entries: LoomRetrievalEntry[] = [];
   const labels: IFCLabel[] = [];
   let size = reserved;
@@ -346,9 +360,22 @@ const measureRows = (
         ...(bounded.cut ? { truncated: true as const } : {}),
       };
     }
-    const entrySize = JSON.stringify(entry).length;
+    // A token is fixed-width, so the entry is sized with a stand-in and the
+    // row is held only once it is known to fit.
+    const entrySize = JSON.stringify(
+      entry.status === "admitted" && hold !== undefined
+        ? { ...entry, handle: HANDLE_SIZE_STAND_IN }
+        : entry,
+    ).length;
     if (size + entrySize > LOOM_RETRIEVAL_MAX_OUTPUT_CHARS) break;
     size += entrySize;
+    if (entry.status === "admitted" && hold !== undefined && label) {
+      entry.handle = await hold({
+        value: entry.value,
+        label: label as IFCLabel,
+        labelSource: entry.labelSource,
+      });
+    }
     entries.push(entry);
     truncated ||= entry.status === "admitted" && entry.truncated === true;
     if (entry.status === "admitted" && label !== undefined) {
@@ -371,7 +398,8 @@ const invoke = async <C extends LoomRetrievalCommand>(
   command: C,
   input: LoomRetrievalInputMap[C],
 ): Promise<LoomRetrievalToolOutput> => {
-  const outputId = context.nextOutputId(`loom_${command.replace(".", "_")}`);
+  const outputToolId = `loom_${command.replace(".", "_")}`;
+  const outputId = context.nextOutputId(outputToolId);
   const fail = (
     code: LoomRetrievalToolErrorCode,
     message: string,
@@ -450,11 +478,15 @@ const invoke = async <C extends LoomRetrievalCommand>(
     truncated: true,
     ...(envelope !== undefined ? { envelope } : {}),
   };
-  const measured = measureRows(
+  const mint = context.mintReferentHandle?.bind(context);
+  const measured = await measureRows(
     split.rows,
     ceiling,
     context.toolInputCfcLabel,
     JSON.stringify(skeleton).length + LOOM_RETRIEVAL_LABEL_JOIN_ALLOWANCE,
+    mint === undefined
+      ? undefined
+      : (referent) => mint({ source: outputToolId, ...referent }),
   );
   const observedLabel = mergeConfidentialityOnlyLabels(measured.labels);
   return {

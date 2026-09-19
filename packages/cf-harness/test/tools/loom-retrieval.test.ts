@@ -93,6 +93,9 @@ const contextWith = (
     configured?: boolean;
     aborted?: boolean;
     queryLabel?: unknown[];
+
+    /** Collects what the tool registers as held referents. */
+    referents?: Record<string, unknown>[];
   },
 ): { context: HarnessToolContext; calls: ProcessRunRequest[] } => {
   const calls: ProcessRunRequest[] = [];
@@ -125,6 +128,14 @@ const contextWith = (
         toolInputCfcLabel: {
           confidentiality: options.queryLabel,
         } as HarnessToolContext["toolInputCfcLabel"],
+      }
+      : {}),
+    ...(options.referents !== undefined
+      ? {
+        mintReferentHandle: (referent: Record<string, unknown>) => {
+          options.referents!.push(referent);
+          return Promise.resolve(`cfh:v:2222${options.referents!.length}`);
+        },
       }
       : {}),
     signal: controller.signal,
@@ -990,5 +1001,48 @@ describe("loom-retrieval tools", () => {
       ]);
       expect(output.envelope).toBeUndefined();
     });
+  });
+  it("registers each admitted row as a held referent and names its handle on the entry", async () => {
+    const referents: Record<string, unknown>[] = [];
+    const { context } = contextWith({
+      stdout: searchPayload([
+        hit("m1", { confidentiality: [WORK] }),
+        hit("m2", { confidentiality: [HEALTH] }),
+        hit("m3", undefined),
+      ]),
+      ceiling,
+      queryLabel: [OWNER],
+      referents,
+    });
+
+    const output = ok(
+      await loomSearchTool.invoke(context, { query: "donuts" }),
+    );
+
+    expect(
+      output.entries.map((entry) =>
+        entry.status === "admitted" ? entry.handle : entry.status
+      ),
+    ).toEqual(["cfh:v:22221", "withheld", "cfh:v:22222"]);
+    // The referent is the row as the model saw it, under the label it was
+    // measured with, and says where that label came from.
+    expect(referents).toEqual([
+      {
+        source: "loom_search",
+        value: output.entries[0].status === "admitted"
+          ? output.entries[0].value
+          : undefined,
+        label: { confidentiality: [WORK], integrity: [] },
+        labelSource: "row",
+      },
+      {
+        source: "loom_search",
+        value: output.entries[2].status === "admitted"
+          ? output.entries[2].value
+          : undefined,
+        label: { confidentiality: [OWNER], integrity: [] },
+        labelSource: "query",
+      },
+    ]);
   });
 });

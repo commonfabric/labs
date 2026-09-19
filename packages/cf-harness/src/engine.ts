@@ -73,7 +73,10 @@ import {
   type HarnessCfcModelContextObservationInput,
 } from "./contracts/cfc-model-context.ts";
 import type { HarnessCfcPolicySnapshot } from "./contracts/cfc-policy-snapshot.ts";
-import type { HarnessHandleTable } from "./contracts/handle-table.ts";
+import type {
+  HarnessHandleReferent,
+  HarnessHandleTable,
+} from "./contracts/handle-table.ts";
 import {
   createHarnessPolicyDecisionRecord,
   type HarnessPolicyDecisionRecord,
@@ -132,6 +135,7 @@ import {
   assertValidHarnessHandleTable,
   createHarnessHandleTable,
   mintAddressHandle,
+  mintReferentHandle,
 } from "./handle-table.ts";
 import {
   cacheHarnessPatternIndexClientFactory,
@@ -1609,6 +1613,21 @@ export class CfHarnessEngine {
     return { replaced };
   }
 
+  /**
+   * Mints and records a handle for content a tool observed that is not a
+   * cell, so a result naming the token can link a document minted from it.
+   */
+  async mintReferentHandle(
+    referent: Omit<HarnessHandleReferent, "token" | "kind">,
+  ): Promise<string> {
+    const minted = await mintReferentHandle(
+      this.handleTable ?? createHarnessHandleTable(this.#runState.runId),
+      referent,
+    );
+    await this.recordHandleTable(minted.table);
+    return minted.token;
+  }
+
   async persistRunState(): Promise<string | undefined> {
     return await this.artifactStore?.persistRunState(this.#runState);
   }
@@ -2713,6 +2732,9 @@ export class CfHarnessEngine {
       hostProcessRunner: this.hostProcessRunner,
       loomAuthoring: this.config.loomAuthoring,
       loomRetrieval: this.config.loomRetrieval,
+      mintReferentHandle: (
+        referent: Omit<HarnessHandleReferent, "token" | "kind">,
+      ) => this.mintReferentHandle(referent),
       ...(this.#structuredResult !== undefined
         ? {
           structuredResult: {

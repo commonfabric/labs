@@ -315,7 +315,10 @@ The current package provides:
   runner's commit boundary and surfaces as a typed `cfc_commit_refused` failure
   whose message names no label. A handle at a position whose schema declares a
   `maxConfidentiality` the referent's label exceeds is sealed rather than
-  linked;
+  linked. The Loom retrieval tools register each admitted row in the run's
+  handle table as a held referent under a `cfh:v:` token, and
+  `agentObservedHandlesOfTable` hands the writer the table's cells and
+  referents together ([Read-only Loom retrieval](LOOM_RETRIEVAL.md));
 - opt-in fabric-session tools — `run_pattern` and `assign_slug`
   (`--fabric-api-url`, `--fabric-identity`, and `--fabric-space` configured
   together, or their `CF_HARNESS_FABRIC_*` environment fallbacks).

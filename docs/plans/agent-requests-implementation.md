@@ -366,10 +366,14 @@ and a result link, and observes `pending: false` and `result` on the node.
       included, so a run that searches Loom or describes a handle needs
       `enforce-explicit`. The runner passes no mode today and takes the
       harness default.
-- [ ] Observed Loom rows reach the result writer. The executor hands the
-      writer every cell handle the run's table holds; a Loom row the run
-      observed is not yet recorded as a document referent, so a result cannot
-      link one. Stage 6's demonstration needs it.
+- [x] Observed Loom rows reach the result writer. Each admitted row is
+      registered in the run's handle table as a held referent
+      (`HarnessHandleTable.referents`, token `cfh:v:<suffix>`, with its
+      content, label, and `labelSource`), its entry names the token as
+      `handle`, `describe_handle` discloses kind, source, label source, and
+      atom types, and `agentObservedHandlesOfTable` hands cells and referents
+      to the writer. The writer mints every observed row, named or not, since
+      the inline text carries its label; only a named row is linked.
 
 *Exit:* the stage-4 runner test suite passes across two test toolsheds, and a
 manual run against `dev-local` with a real harness and a scripted model moves

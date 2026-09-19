@@ -27,8 +27,11 @@ import {
   HARNESS_HANDLE_TABLE_TYPE,
   type HarnessHandleCapability,
   type HarnessHandleEntry,
+  type HarnessHandleReferent,
   type HarnessHandleTable,
   MIN_HANDLE_TOKEN_SUFFIX_LENGTH,
+  REFERENT_HANDLE_TOKEN_PREFIX,
+  REFERENT_TOKEN_PATTERN,
 } from "./contracts/handle-table.ts";
 import type { HarnessSkillAcquisition } from "./contracts/skill.ts";
 
@@ -269,6 +272,63 @@ export const mintAddressHandle = async (
   };
 };
 
+/**
+ * Mints a referent handle for content a tool observed, returning the updated
+ * table and the token. Minting is idempotent per referent: the same source,
+ * content, label, and label source share one token, so a row a run retrieves
+ * twice is held once. The suffix is derived the way an address handle's is.
+ */
+export const mintReferentHandle = async (
+  table: HarnessHandleTable,
+  referent: Omit<HarnessHandleReferent, "token" | "kind">,
+  options: { hasher?: HandleTokenHasher } = {},
+): Promise<{ table: HarnessHandleTable; token: string }> => {
+  const hasher = options.hasher ?? sha256Hasher;
+  const referents = table.referents ?? [];
+  const key = JSON.stringify([
+    "referent",
+    referent.source,
+    referent.value,
+    referent.label,
+    referent.labelSource,
+  ]);
+  const existing = referents.find((held) =>
+    JSON.stringify([
+      "referent",
+      held.source,
+      held.value,
+      held.label,
+      held.labelSource,
+    ]) === key
+  );
+  if (existing !== undefined) return { table, token: existing.token };
+  let attempt = 0;
+  let suffix = await deriveTokenSuffix(table.salt, key, attempt, hasher);
+  while (
+    referents.some((held) =>
+      held.token === REFERENT_HANDLE_TOKEN_PREFIX + suffix
+    )
+  ) {
+    attempt += 1;
+    suffix = await deriveTokenSuffix(table.salt, key, attempt, hasher);
+  }
+  const token = REFERENT_HANDLE_TOKEN_PREFIX + suffix;
+  return {
+    table: {
+      ...table,
+      referents: [...referents, { token, kind: "document", ...referent }],
+    },
+    token,
+  };
+};
+
+/** Returns the referent holding `token`, or `undefined` when none does. */
+export const resolveReferentToken = (
+  table: HarnessHandleTable,
+  token: string,
+): HarnessHandleReferent | undefined =>
+  table.referents?.find((held) => held.token === token);
+
 /** Returns the entry holding `token`, or `undefined` when none does. */
 export const resolveHandleToken = (
   table: HarnessHandleTable,
@@ -482,6 +542,61 @@ export const swapTokensForRefs = (
 /** Token grammar accepted by {@link assertValidHarnessHandleTable}. */
 const FULL_TOKEN_PATTERN = new RegExp(`^${HANDLE_TOKEN_PATTERN.source}$`);
 
+/** Referent token grammar accepted by the same check. */
+const FULL_REFERENT_TOKEN_PATTERN = new RegExp(
+  `^${REFERENT_TOKEN_PATTERN.source}$`,
+);
+
+/** Helper for the table check, which validates the referents it holds. */
+const assertValidReferents = (referents: unknown): void => {
+  if (referents === undefined) return;
+  if (!Array.isArray(referents)) {
+    throw new Error("invalid handle table: referents must be an array");
+  }
+  const tokens = new Set<string>();
+  for (const referent of referents) {
+    if (!isObjectNotArray(referent)) {
+      throw new Error("invalid handle table: referent is not an object");
+    }
+    const { token, kind, source, label, labelSource } = referent;
+    if (
+      typeof token !== "string" || !FULL_REFERENT_TOKEN_PATTERN.test(token)
+    ) {
+      throw new Error(
+        `invalid handle table: malformed referent token \`${String(token)}\``,
+      );
+    }
+    if (kind !== "document") {
+      throw new Error(
+        `invalid handle table: referent kind must be \`document\`, got \`${
+          String(kind)
+        }\``,
+      );
+    }
+    if (typeof source !== "string" || source.length === 0) {
+      throw new Error(
+        `invalid handle table: referent \`${token}\` has an empty source`,
+      );
+    }
+    if (!isObjectNotArray(label)) {
+      throw new Error(
+        `invalid handle table: referent \`${token}\` has a label that is not an object`,
+      );
+    }
+    if (labelSource !== "row" && labelSource !== "query") {
+      throw new Error(
+        `invalid handle table: referent \`${token}\` has an unknown labelSource \`${
+          String(labelSource)
+        }\``,
+      );
+    }
+    if (tokens.has(token)) {
+      throw new Error(`invalid handle table: duplicate token \`${token}\``);
+    }
+    tokens.add(token);
+  }
+};
+
 /**
  * Asserts that `table` is a well-formed version-1 handle table, guarding the
  * seams that adopt one from persisted state: a version this code does not
@@ -513,6 +628,7 @@ export const assertValidHarnessHandleTable = (
   if (!Array.isArray(raw.entries)) {
     throw new Error("invalid handle table: entries must be an array");
   }
+  assertValidReferents(raw.referents);
   const tokens = new Set<string>();
   const addressKeys = new Set<string>();
   for (const entry of table.entries) {
