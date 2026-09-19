@@ -845,11 +845,11 @@ describe("agent runner", () => {
         },
         required: ["answer", "basedOn"],
       };
-      let finished: Cell<unknown> | undefined;
+      const input: { finished?: Cell<unknown> } = {};
       await startHarnessRunner(async ({ resultPath }) => {
         const minted = await mintAddressHandle(
           createHarnessHandleTable("run-token"),
-          renderCellReference(finished!.getAsNormalizedFullLink()),
+          renderCellReference(input.finished!.getAsNormalizedFullLink()),
         );
         await Deno.writeTextFile(
           resultPath,
@@ -869,10 +869,11 @@ describe("agent runner", () => {
         patternSide,
         { confidentiality: [READING] },
       );
-      finished = (recordOf(result).key("inputs").get() as unknown as Record<
-        string,
-        Cell<unknown>
-      >).finished;
+      input.finished =
+        (recordOf(result).key("inputs").get() as unknown as Record<
+          string,
+          Cell<unknown>
+        >).finished;
 
       const record = await waitForState(result, "completed");
 

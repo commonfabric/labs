@@ -542,7 +542,9 @@ export function agent(
         // push mints its element from the length this transaction read, so
         // two index writes that each read the list before the other landed
         // wrote one element twice and listed one record in both slots.
-        const entry = entries.elementById(recordId);
+        const entry = entries.elementById(recordId) as Cell<
+          { run: Cell<unknown>; host: string }
+        >;
         entry.set({ run: record, host });
         entries.addUnique(entry);
       });
