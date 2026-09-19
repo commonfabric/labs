@@ -5,6 +5,7 @@ import type { MutableJSONSchema } from "@commonfabric/api";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import { getPropertyNameText } from "./typescript/property-name.ts";
 import type { CellWrapperKind } from "./typescript/cell-brand.ts";
+import { hasScopeBrand } from "./typescript/scope-brand.ts";
 import {
   isWrapperSpelling,
   spellingsWhere,
@@ -446,6 +447,14 @@ export function getNamedTypeKey(
     aliasName === "Stream" || aliasName === "SqliteDb" ||
     aliasName === "Reactive"
   ) {
+    return undefined;
+  }
+
+  // An alias of a scope wrapper names the value type together with the scope of
+  // the slot holding it. A definition is shared by every use of the alias, and
+  // the write path reads a slot's scope from that slot's own schema, never
+  // through a `$ref`, so the scope has to be emitted where the alias is used.
+  if (aliasName && hasScopeBrand(type)) {
     return undefined;
   }
 

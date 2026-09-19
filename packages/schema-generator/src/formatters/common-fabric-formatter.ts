@@ -35,6 +35,11 @@ import {
   wrapperKindToBrand,
 } from "../typescript/cell-brand.ts";
 import { isDefaultAliasSymbol } from "../typescript/property-optionality.ts";
+import {
+  getScopeBrand,
+  hasScopeBrand,
+  isScopeBrandConstituent,
+} from "../typescript/scope-brand.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 import { scopeInsideUnionError } from "../scope-placement.ts";
 
@@ -117,6 +122,20 @@ const applyScopeToAsCellEntry = (
 };
 
 /**
+ * The error raised for a scope-branded type whose wrapped type cannot be
+ * recovered, which leaves no value schema to place the scope beside.
+ */
+const inseparableScopeError = (typeText: string): Error =>
+  new Error(
+    `The scope wrapper inside \`${typeText}\` cannot be separated from the ` +
+      `type it wraps, so its scope cannot be placed on the slot's schema and ` +
+      `the value would be stored as shared space-scoped data. Write the ` +
+      `wrapper outermost where the type is used (\`prop: PerUser<T>\`) or ` +
+      `behind an alias without type parameters ` +
+      `(\`type Scoped = PerUser<T>\`).`,
+  );
+
+/**
  * Formatter for Common Fabric-specific types (Cell<T>, Stream<T>, Reactive<T>, Default<T,V>)
  *
  * TypeScript handles alias resolution automatically and we don't need to
@@ -141,6 +160,10 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     if (resolveScopeWrapperNode(context.typeNode)) {
+      return true;
+    }
+
+    if (hasScopeBrand(type)) {
       return true;
     }
 
@@ -229,6 +252,14 @@ export class CommonFabricFormatter implements TypeFormatter {
     );
     if (resolvedCfcAlias) {
       return this.#formatResolvedCfcAlias(resolvedCfcAlias, context);
+    }
+
+    // A CFC alias or a `Default` around a scope wrapper carries the brand as
+    // well. Each lowers its own part first and formats the wrapper as its
+    // argument, which is why this sits below the CFC aliases and steps aside
+    // for a `Default`.
+    if (hasScopeBrand(type) && !this.#isDefaultWrapper(aliasType, context)) {
+      return this.#formatScopeBrandedType(aliasType, context);
     }
 
     // Handle wrapper unions first (before FactoryInput<T> union check)
@@ -614,6 +645,130 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     return this.#applyScopeWrapperSemantics(innerSchema, scope);
+  }
+
+  /**
+   * Formats a type that carries a scope brand without being written as a scope
+   * wrapper where it is used: one reached through an alias, or built by a
+   * generic. Throws when the wrapped type cannot be recovered, since emitting
+   * the value schema alone would store the slot as shared space-scoped data.
+   */
+  #formatScopeBrandedType(
+    type: TypeWithInternals,
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    // The alias that produced the type is where its author wrote the wrapper,
+    // and that node holds what the checker has already reduced away: an
+    // `undefined` member, or a `Default`.
+    const { declaration, authored } = this.#authoredScopeWrapper(type, context);
+
+    if (authored && !declaration?.typeParameters?.length) {
+      return this.#formatScopeWrapperTypeFromNode(
+        authored.node,
+        context,
+        authored.scope,
+        type,
+      );
+    }
+
+    // `type Mine<T> = PerUser<T>`: the wrapped type is one of the alias's own
+    // arguments.
+    const wrappedNode = authored?.node.typeArguments?.[0];
+    if (
+      authored && wrappedNode && ts.isTypeReferenceNode(wrappedNode) &&
+      ts.isIdentifier(wrappedNode.typeName) && !wrappedNode.typeArguments
+    ) {
+      const name = wrappedNode.typeName.text;
+      const index = declaration?.typeParameters?.findIndex((parameter) =>
+        parameter.name.text === name
+      ) ?? -1;
+      const wrapped = type.aliasTypeArguments?.[index];
+      if (wrapped) {
+        return this.#applyScopeWrapperSemantics(
+          this.#schemaGenerator.formatChildType(wrapped, context, undefined),
+          authored.scope,
+        );
+      }
+    }
+
+    // Otherwise the wrapped type is whatever the brand was intersected onto,
+    // which is recoverable only while it is still a single constituent.
+    const scope = getScopeBrand(type, context.typeChecker);
+    const constituents = type.isIntersection()
+      ? type.types.filter((part) => !isScopeBrandConstituent(part))
+      : [];
+    if (scope === undefined || constituents.length !== 1) {
+      throw inseparableScopeError(context.typeChecker.typeToString(type));
+    }
+    return this.#applyScopeWrapperSemantics(
+      this.#schemaGenerator.formatChildType(
+        constituents[0]!,
+        context,
+        undefined,
+      ),
+      scope,
+    );
+  }
+
+  /**
+   * Returns `true` for a `Default`, recognized by the node it was written as,
+   * following aliases, or by the alias the type names.
+   */
+  #isDefaultWrapper(
+    type: TypeWithInternals,
+    context: GenerationContext,
+  ): boolean {
+    return isDefaultAliasSymbol(type.aliasSymbol) ||
+      detectWrapperViaNode(context.typeNode, context.typeChecker) === "Default";
+  }
+
+  /**
+   * Finds the alias declaration whose body is the scope wrapper that produced
+   * `type`, following aliases of aliases. The type names its alias when it has
+   * one; the checker drops that name from a type it reduced (`PerUser<T |
+   * undefined>` is `T & Brand`), so the node the type was written as is the
+   * second way in.
+   */
+  #authoredScopeWrapper(
+    type: TypeWithInternals,
+    context: GenerationContext,
+  ): {
+    declaration?: ts.TypeAliasDeclaration;
+    authored?: ResolvedScopeWrapper;
+  } {
+    const checker = context.typeChecker;
+    const aliasDeclarationOf = (
+      name: ts.EntityName,
+    ): ts.TypeAliasDeclaration | undefined => {
+      let symbol = checker.getSymbolAtLocation(name);
+      if (symbol && (symbol.flags & ts.SymbolFlags.Alias) !== 0) {
+        symbol = checker.getAliasedSymbol(symbol);
+      }
+      return symbol?.declarations?.find(ts.isTypeAliasDeclaration);
+    };
+
+    const written = context.typeNode;
+    let declaration = type.aliasSymbol?.declarations?.find(
+      ts.isTypeAliasDeclaration,
+    ) ??
+      (written && ts.isTypeReferenceNode(written)
+        ? aliasDeclarationOf(written.typeName)
+        : undefined);
+
+    const visited = new Set<ts.TypeAliasDeclaration>();
+    while (declaration && !visited.has(declaration)) {
+      visited.add(declaration);
+      let body = declaration.type;
+      while (ts.isParenthesizedTypeNode(body)) body = body.type;
+
+      const authored = resolveScopeWrapperNode(body);
+      if (authored) return { declaration, authored };
+
+      // Only a bare reference renames a type without changing it.
+      if (!ts.isTypeReferenceNode(body) || body.typeArguments) break;
+      declaration = aliasDeclarationOf(body.typeName);
+    }
+    return {};
   }
 
   #applyScopeWrapperSemantics(
@@ -2159,7 +2314,8 @@ export class CommonFabricFormatter implements TypeFormatter {
       const memberScope = resolveScopeWrapperNode(memberNode)?.scope ??
         scopeForWrapperName(
           (memberType as TypeWithInternals).aliasSymbol?.name,
-        );
+        ) ??
+        getScopeBrand(memberType, context.typeChecker);
       if (memberScope !== undefined) {
         throw scopeInsideUnionError(memberScope);
       }

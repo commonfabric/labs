@@ -725,7 +725,10 @@ Default paths of §7:
 `SCOPE_BRAND`-typed intersections, `packages/api/index.ts`) lower to a
 `scope` key with values `"space" | "user" | "session" | "any"`
 (`SCOPE_WRAPPER_SCOPES`, `common-fabric-formatter.ts`). Detection is by
-node name or aliasSymbol name. Placement
+node name, by aliasSymbol name, or by the `SCOPE_BRAND` property the type
+carries (`typescript/scope-brand.ts`); the brand is what finds a wrapper
+reached through a type alias, imported or not, and an inferred type that kept
+the brand while losing every name. Placement
 (`applyScopeWrapperSemantics`): if the inner schema has a
 non-empty `asCell`, the scope merges into the **first** entry, turning a
 string entry into the object form (`applyScopeToAsCellEntry`) —
@@ -751,6 +754,24 @@ name the emitting module does not import, and the
 carries the default. Both cost whatever narrowing the node carried: the schema
 is then that of the whole declared value. Tested: scope-wrappers.test.ts, and
 end-to-end in ts-transformers `aliased-binding-declared-type.test.ts`.
+
+An alias of a scope wrapper emits what the wrapper emits written in place:
+`type Nickname = PerUser<string>` used as `name: Nickname` →
+`{ type: "string", scope: "user" }`, with no `$defs.Nickname`
+(`getNamedTypeKey` refuses a type carrying the brand). A definition is shared
+by every use of the alias while a scope belongs to one slot, and the runtime
+never reads a scope through a `$ref`, so a scope inside `$defs` would be
+inert. The wrapped type comes from the alias declaration's own
+`PerUser<…>` node, which keeps what the checker reduces out of the type — the
+`undefined` of `PerUser<T | undefined>`, a `Default` — and is reached from the
+type's aliasSymbol or from the node the type was written as. A generic alias
+whose wrapped type is one of its own parameters (`type Mine<T> = PerUser<T>`)
+takes that alias argument. Anything else formats the single constituent the
+brand was intersected onto; when there is no single constituent — the checker
+distributed the brand over a union, or flattened it into a wider intersection
+— generation **throws** (`… cannot be separated from the type it wraps …`)
+rather than emit an unscoped value schema (tested, scope-wrappers.test.ts;
+end-to-end: ts-transformers `aliased-scope-wrapper-schema.test.ts`).
 
 A scope wrapper **as a union member throws** (`A scope wrapper cannot be a
 member of a union.`; tested, scope-wrappers.test.ts). The runtime reads a
@@ -978,6 +999,7 @@ Everything that throws, with source (test-pinned unless noted):
 | `DeepDefault` unknown key | `DeepDefault key "…" does not exist on the target object type.` | `union-formatter.ts` |
 | Nested scope wrappers | `Nested scope wrappers require a cell boundary between scopes.` | `common-fabric-formatter.ts` |
 | Scope wrapper as a union member | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
+| Scope-branded type with no single wrapped constituent | `The scope wrapper inside … cannot be separated from the type it wraps, …` | `common-fabric-formatter.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |
 | Wrapper/scope/CFC alias without type argument | `<Kind><T> requires type argument` | `common-fabric-formatter.ts` (untested) |
