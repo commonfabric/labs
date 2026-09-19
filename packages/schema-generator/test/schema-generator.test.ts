@@ -2664,6 +2664,123 @@ type CalculatorRequest = {
     });
   });
 
+  describe("synthetic references to a name the module holds", () => {
+    // A synthetic reference carries no binding, so its name is resolved from
+    // the scope of the module the schema is generated for.
+
+    const reference = (name: string) =>
+      ts.factory.createTypeReferenceNode(ts.factory.createIdentifier(name));
+    const CONTACT = { $ref: "#/$defs/Contact" };
+    const CONTACT_DEFS = {
+      Contact: {
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+      },
+    };
+
+    async function generate(
+      files: Record<string, string>,
+      node: ts.TypeNode,
+    ): Promise<unknown> {
+      const { checker, sourceFile } = await createTestProgramFromFiles(
+        files,
+        "/main.ts",
+      );
+      const result = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        node,
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+      );
+      if (typeof result === "boolean") return result;
+      const { $schema: _schema, ...schema } = result as Record<string, unknown>;
+      return schema;
+    }
+
+    it("reads a name the module declares", async () => {
+      const schema = await generate(
+        { "/main.ts": "interface Contact { name: string }\nexport {};" },
+        reference("Contact"),
+      );
+
+      expect(schema).toEqual({ ...CONTACT, $defs: CONTACT_DEFS });
+    });
+
+    it("reads a name the module declares with `export`", async () => {
+      const schema = await generate(
+        { "/main.ts": "export interface Contact { name: string }" },
+        reference("Contact"),
+      );
+
+      expect(schema).toEqual({ ...CONTACT, $defs: CONTACT_DEFS });
+    });
+
+    it("reads a name the module imports", async () => {
+      const schema = await generate(
+        {
+          "/types.ts": "export interface Contact { name: string }",
+          "/main.ts": "import type { Contact } from './types.ts';\n" +
+            "export type Keep = Contact;",
+        },
+        reference("Contact"),
+      );
+
+      expect(schema).toEqual({ ...CONTACT, $defs: CONTACT_DEFS });
+    });
+
+    it("reads a name the module imports under another name", async () => {
+      const schema = await generate(
+        {
+          "/types.ts": "export interface Contact { name: string }",
+          "/main.ts": "import type { Contact as Person } from './types.ts';\n" +
+            "export type Keep = Person;",
+        },
+        reference("Person"),
+      );
+
+      expect(schema).toEqual({ ...CONTACT, $defs: CONTACT_DEFS });
+    });
+
+    it("keeps every member of a union holding an exported name", async () => {
+      const schema = await generate(
+        {
+          "/main.ts": "export interface Contact { name: string }\n" +
+            "interface Other { other: number }",
+        },
+        ts.factory.createUnionTypeNode([
+          reference("Contact"),
+          reference("Other"),
+        ]),
+      );
+
+      expect(schema).toEqual({
+        anyOf: [CONTACT, { $ref: "#/$defs/Other" }],
+        $defs: {
+          ...CONTACT_DEFS,
+          Other: {
+            type: "object",
+            properties: { other: { type: "number" } },
+            required: ["other"],
+          },
+        },
+      });
+    });
+
+    it("returns `true` for a name the module neither declares nor imports", async () => {
+      const schema = await generate(
+        {
+          "/types.ts": "export interface Contact { name: string }",
+          "/main.ts": "export {};",
+        },
+        reference("Contact"),
+      );
+
+      expect(schema).toBe(true);
+    });
+  });
+
   describe("synthetic type literals", () => {
     it("preserves numeric literal property names", async () => {
       const generator = new SchemaGenerator();

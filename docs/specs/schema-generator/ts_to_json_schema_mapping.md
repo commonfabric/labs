@@ -97,10 +97,13 @@ detection first; then the default library's generic aliases — `Readonly`,
 `ReadonlyArray`, `Record` — applied structurally to their arguments when the
 name binds through the node or, for an unbindable synthetic reference,
 resolves lexically (`checker.resolveName`) to a library declaration, so an
-authored or imported shadow of the name keeps the general path; then a
-scope-based name-resolution fallback for unbindable synthetic references via
-`checker.getSymbolsInScope` — plus a `Date`-by-name special case), keyword
-types, and a final resolve-else-`true` fallback.
+authored or imported shadow of the name keeps the general path; then the
+general path, which resolves the name the same way — bound through the node,
+else lexically from the module's scope, an import followed to what it
+imports — and formats the declared type, so a name the module declares,
+exported or not, or imports is read, and a generic declaration is read
+uninstantiated — plus a `Date`-by-name special case), keyword types, and a
+final resolve-else-`true` fallback.
 
 An intersection node is settled the way the checker settles the type, each
 constituent read through its reference, and what remains is merged as

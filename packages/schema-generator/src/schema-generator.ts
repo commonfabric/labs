@@ -2094,8 +2094,6 @@ export class SchemaGenerator {
    * followed to what it imports: bound through the node when the checker can
    * bind it, else resolved lexically, so an authored or imported declaration
    * of the same name shadows a global's the way it does for the checker.
-   * (`getSymbolsInScope` lists every visible symbol, globals included, in no
-   * order that honors shadowing.)
    */
   #resolveTypeName(
     typeNode: ts.TypeReferenceNode,
@@ -2248,6 +2246,13 @@ export class SchemaGenerator {
     return undefined;
   }
 
+  /**
+   * The declared type a reference's name denotes as seen from the reference's
+   * scope, which holds what the module declares, exported or not, and what it
+   * imports. A generic declaration is read uninstantiated, its type parameters
+   * unbound. Returns `undefined` for a qualified name, and for a name that
+   * resolves to nothing the checker can type.
+   */
   #resolveTypeReferenceFromScope(
     typeNode: ts.TypeReferenceNode,
     checker: ts.TypeChecker,
@@ -2256,23 +2261,12 @@ export class SchemaGenerator {
     if (!ts.isIdentifier(typeNode.typeName)) {
       return undefined;
     }
-    const typeName = typeNode.typeName.text;
-    const symbolAtNode = checker.getSymbolAtLocation(typeNode.typeName);
-    if (symbolAtNode) {
-      const declared = checker.getDeclaredTypeOfSymbol(symbolAtNode);
-      if (declared && !(declared.flags & ts.TypeFlags.Any)) {
-        return declared;
-      }
-    }
-
-    const scopeNode = this.#scopeSourceFile(typeNode, checker, context);
-    if (!scopeNode) return undefined;
-
-    const candidates = checker.getSymbolsInScope(
-      scopeNode,
-      ts.SymbolFlags.Type,
+    const symbol = this.#resolveTypeName(
+      typeNode,
+      typeNode.typeName,
+      checker,
+      context,
     );
-    const symbol = candidates.find((candidate) => candidate.name === typeName);
     if (!symbol) return undefined;
     const declared = checker.getDeclaredTypeOfSymbol(symbol);
     if (!declared || (declared.flags & ts.TypeFlags.Any)) {
