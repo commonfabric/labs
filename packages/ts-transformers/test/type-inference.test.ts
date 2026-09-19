@@ -453,7 +453,7 @@ Deno.test("type inference helpers detect collections and array element types", (
       }).type,
       checker,
     ),
-    "string",
+    "string[]",
   );
   assertEquals(
     typeText(
