@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import {
+  BASELINE_LISTING_MAX_PAGES,
   type BaselineRun,
   type BaselineSource,
   collectCoverageBaselines,
@@ -427,6 +428,45 @@ describe("baselines", () => {
       // asked for behind it.
       expect(runs.length).toBe(100);
       expect(asked.length).toBe(2);
+    });
+
+    it("stops at the page budget on a listing that keeps going", async () => {
+      const asked: string[] = [];
+      const source = liveBaselineSource({
+        list: (path) => {
+          asked.push(path);
+          const at = Number(path.match(/[?&]page=(\d+)/)?.[1]);
+          // Full pages holding one candidate each, so neither the cap nor
+          // the end of the listing is what stops the reading. The listing
+          // ends well past the budget rather than never, so a reading that
+          // ignored the budget ends this case instead of hanging it.
+          return Promise.resolve({
+            workflow_runs: at <= 40 ? page(100, 1, at * 1000) : [],
+          });
+        },
+      });
+      const runs = await source.runs();
+
+      expect(asked.length).toBe(BASELINE_LISTING_MAX_PAGES);
+      expect(runs.length).toBe(BASELINE_LISTING_MAX_PAGES);
+    });
+
+    it("names a run once that two pages both list", async () => {
+      const source = liveBaselineSource({
+        list: (path) => {
+          const at = Number(path.match(/[?&]page=(\d+)/)?.[1]);
+          // A run created between the two reads pushes run 1099 off the
+          // first page and onto the head of the second.
+          if (at === 1) {
+            return Promise.resolve({ workflow_runs: page(100, 2, 1000) });
+          }
+          return Promise.resolve({
+            workflow_runs: [run({ id: 1001 }), run({ id: 2000 })],
+          });
+        },
+      });
+      expect((await source.runs()).map((one) => one.id))
+        .toEqual([1000, 1001, 2000]);
     });
 
     it("reads the uncovered count out of each metric the artifact holds", async () => {

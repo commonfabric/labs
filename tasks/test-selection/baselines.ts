@@ -161,7 +161,7 @@ const BASELINE_RUNS = 100;
  * them costs: the reading stops early, and the publish after it carries
  * what this one published forward and adds the runs since.
  */
-const BASELINE_LISTING_MAX_PAGES = 15;
+export const BASELINE_LISTING_MAX_PAGES = 15;
 
 /** What the live source reaches for, so a test can hand it something. */
 export interface BaselineReads {
@@ -196,9 +196,15 @@ export function liveBaselineSource(reads: BaselineReads = {}): BaselineSource {
   return {
     async runs() {
       const found: BaselineRun[] = [];
+      const seen = new Set<number>();
       for (let page = 1; page <= BASELINE_LISTING_MAX_PAGES; page++) {
         const { workflow_runs: runs } = await list(workflowRunsPagePath(page));
         for (const run of runs) {
+          // A run created while the pages are being read pushes the ones
+          // behind it down a place, so the run at a page boundary is listed
+          // again at the head of the next page.
+          if (seen.has(run.id)) continue;
+          seen.add(run.id);
           if (!isBaselineCandidateRun(run)) continue;
           found.push({
             id: run.id,
