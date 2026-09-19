@@ -16,7 +16,6 @@ import {
   getNativeTypeSchema,
   getPropertyNameText,
   hasDefaultMarker,
-  isDefaultBrandedMember,
   isEmptyObjectDefaultType,
   resolveWrapperNode,
   TypeWithInternals,
@@ -274,7 +273,10 @@ export class UnionFormatter implements TypeFormatter {
     context: GenerationContext,
   ): MutableJSONSchema | undefined {
     const checker = context.typeChecker;
-    const branded = members.filter((m) => isDefaultBrandedMember(m, checker));
+    // Only a member carrying DEFAULT_MARKER is a brand arm. A propertyless
+    // member without one is a value: the plain arm of `Default<{}>` or of
+    // `Default<Record<PropertyKey, never>>` has no properties either.
+    const branded = members.filter((m) => hasDefaultMarker(m, checker));
     if (branded.length === 0) return undefined;
 
     // A union-valued default (`Default<boolean, true>`,
@@ -283,13 +285,11 @@ export class UnionFormatter implements TypeFormatter {
     // them, and exclude all of them from the formatted remainder.
     const extracted = extractDefaultValueFromBrandedMembers(branded, checker);
     if (!extracted) {
-      if (branded.some((member) => hasDefaultMarker(member, checker))) {
-        reportUnresolvedDefault(context);
-      }
+      reportUnresolvedDefault(context);
       return undefined;
     }
 
-    let rest = members.filter((m) => !isDefaultBrandedMember(m, checker));
+    let rest = members.filter((m) => !hasDefaultMarker(m, checker));
     // Degenerate empty-array members (the empty tuple `[]` / `never[]`) ride
     // along with expanded array Defaults (historically the unbranded arm of
     // `Default<[]>`, see CT-1639/CT-1640). When a real array member is

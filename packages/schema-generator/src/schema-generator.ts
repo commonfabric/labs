@@ -906,7 +906,10 @@ export class SchemaGenerator {
       return this.formatChildType(type, context, typeNode);
     }
 
-    // Fallback: accept any value
+    // Fallback: accept any value. This is a guess rather than a reading of the
+    // node, so it is recorded for a caller holding a usable type for the
+    // position.
+    context.uninterpretedTypeNodes?.push(typeNode);
     return true;
   }
 

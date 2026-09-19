@@ -291,4 +291,120 @@ describe("Schema: Capability wrapper types", () => {
 
     expect(result).toEqual({ type: "string", asCell: ["writeonly"] });
   });
+
+  describe("a synthetic node narrowing a resolved wrapper", () => {
+    // The transformer narrows `Cell<T>` to `__cfHelpers.ReadonlyCell<...>` and
+    // prints `T` inside it when it holds no authored node for `T`. Each case
+    // pairs the resolved `Cell<T>` with such a node, the way a property of a
+    // resolved object type reaches the wrapper formatter.
+
+    const PRELUDE = `
+      declare const DEFAULT_MARKER: unique symbol;
+      type DefaultMarker<T> = { readonly [DEFAULT_MARKER]: T };
+      type Default<T, V extends T = T> = (T & DefaultMarker<V>) | T;
+      interface Stored { name?: string }
+      type Empty = Record<PropertyKey, never>;
+    `;
+    const named = (name: string) => ts.factory.createTypeReferenceNode(name);
+
+    async function narrowedSchema(
+      valueType: string,
+      innerNode: ts.TypeNode,
+    ): Promise<unknown> {
+      const { checker, sourceFile } = await createTestProgram(
+        `${PRELUDE} interface X { authored: Cell<${valueType}>; }`,
+      );
+      const symbol = checker.getSymbolsInScope(
+        sourceFile,
+        ts.SymbolFlags.Interface,
+      ).find((candidate) => candidate.name === "X");
+      if (!symbol) throw new Error("Interface X not found");
+      const authored = checker.getDeclaredTypeOfSymbol(symbol)
+        .getProperty("authored");
+      if (!authored) throw new Error("Property X.authored not found");
+
+      return new SchemaGenerator().generateSchema(
+        checker.getTypeOfSymbolAtLocation(authored, sourceFile),
+        checker,
+        ts.factory.createTypeReferenceNode(
+          ts.factory.createQualifiedName(
+            ts.factory.createIdentifier("__cfHelpers"),
+            ts.factory.createIdentifier("ReadonlyCell"),
+          ),
+          [innerNode],
+        ),
+      );
+    }
+
+    it("emits the resolved value for a name printed as an import type", async () => {
+      // The printer writes `import("./types.ts").Stored` for a name the
+      // emitting module does not import, which no scope lookup resolves.
+      const schema = await narrowedSchema(
+        "Stored",
+        ts.factory.createImportTypeNode(
+          ts.factory.createLiteralTypeNode(
+            ts.factory.createStringLiteral("./types.ts"),
+          ),
+          undefined,
+          ts.factory.createIdentifier("Stored"),
+        ),
+      );
+
+      expect(schema).toEqual({
+        $ref: "#/$defs/Stored",
+        asCell: ["readonly"],
+        $defs: {
+          Stored: { type: "object", properties: { name: { type: "string" } } },
+        },
+      });
+    });
+
+    it("emits the resolved value and its default for a union holding an expanded `Default` arm", async () => {
+      // One member the node path cannot read would otherwise turn the whole
+      // union into accept-anything, and the value schema with it.
+      const schema = await narrowedSchema(
+        "Stored | Default<Empty>",
+        ts.factory.createUnionTypeNode([
+          named("Stored"),
+          named("Empty"),
+          ts.factory.createParenthesizedType(
+            ts.factory.createIntersectionTypeNode([
+              named("Empty"),
+              ts.factory.createTypeLiteralNode([
+                ts.factory.createPropertySignature(
+                  [ts.factory.createModifier(ts.SyntaxKind.ReadonlyKeyword)],
+                  ts.factory.createComputedPropertyName(
+                    ts.factory.createIdentifier("DEFAULT_MARKER"),
+                  ),
+                  undefined,
+                  named("Empty"),
+                ),
+              ]),
+            ]),
+          ),
+        ]),
+      );
+
+      expect(schema).toMatchObject({
+        anyOf: [{ $ref: "#/$defs/Stored" }, { $ref: "#/$defs/Empty" }],
+        default: {},
+        asCell: ["readonly"],
+      });
+    });
+
+    it("keeps a member only the node carries when every member can be read", async () => {
+      const schema = await narrowedSchema(
+        "string",
+        ts.factory.createUnionTypeNode([
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+          ts.factory.createKeywordTypeNode(ts.SyntaxKind.UndefinedKeyword),
+        ]),
+      );
+
+      expect(schema).toEqual({
+        anyOf: [{ type: "string" }, { type: "undefined" }],
+        asCell: ["readonly"],
+      });
+    });
+  });
 });

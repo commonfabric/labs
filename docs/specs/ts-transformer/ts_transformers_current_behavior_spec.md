@@ -403,6 +403,24 @@ receiver's complete stored shape, including when the result passes through a
 helper. Optional member reads retain the receiver without imposing a full-shape
 read.
 
+A cell reached through a type alias — `type ProfileCell = Writable<...>` —
+gives the transformer no authored node for its value, so the value type is
+printed inside the inferred capability wrapper. Schema generation can read
+some prints only from the type behind them: `import("./mod.ts").T` for a name
+the emitting module does not import, and the brand arm of an expanded
+`Default`.
+Where the cell is a property, schema generation reads the value from the
+property's resolved type; where the cell is the whole argument there is no
+such type, so the printed node is registered in `typeRegistry` with the value
+type it was printed from. An aliased cell therefore emits the value schema the
+same wrapper emits written inline, under every inferred capability, for a
+generic alias, and for an alias imported from another module. One shape
+differs: `T | Default<V>` where `V` is an object type assignable to `T`.
+Inline, the authored `Default` node shows that `T` already covers `V`, and the
+schema is `T` with the default. Through an alias the resolved union keeps `V`
+as a member of its own, and the schema is `anyOf: [T, V]` with the default.
+`aliased-cell-value-schema.test.ts` pins these.
+
 The type-driven shrink also guards its descent on (type, requested-paths): a
 pair already on the path falls back to the named type reference — no
 structural fallback — which schema generation resolves through `$defs`

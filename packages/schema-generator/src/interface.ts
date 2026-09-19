@@ -122,6 +122,14 @@ export interface GenerationContext {
 
   /** Override for array items schema, propagated from wrapper types */
   arrayItemsOverride?: JSONSchema;
+
+  /**
+   * Synthetic type nodes that node-based analysis could not interpret and so
+   * formatted as accept-anything. A caller that also holds a usable type for
+   * the position installs an array here, and a non-empty one afterwards tells
+   * it the node-driven schema is a guess. Shared by every child context.
+   */
+  uninterpretedTypeNodes?: ts.TypeNode[];
 }
 
 /**
