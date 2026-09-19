@@ -359,12 +359,23 @@ export class GitHubRateLimitError extends Error {}
 
 /**
  * Whether `resp` is GitHub applying a request limit. It answers both its
- * primary and its secondary limits with 403 or 429, so what separates one from
- * an ordinary refusal is the headers: the primary limit leaves no requests in
- * the window, and the secondary one says how long to wait.
+ * primary and its secondary limits with 403 or 429, and the two statuses are
+ * read differently because only one of them means anything else.
+ *
+ * 429 is too many requests and nothing besides, so the status settles it. The
+ * rate-limit headers are documented as optional, and a response carrying none
+ * of them is still a limit.
+ *
+ * 403 is also how GitHub refuses a request the token may not make, and an
+ * artifact download reaches storage that answers 403 for a signed URL that has
+ * expired. So there the headers decide: no requests left in the window, or a
+ * wait to observe. A bare 403 is taken at its word as a refusal, because
+ * reporting a permission failure as a limit would promise the author a re-run
+ * that clears it.
  */
 function isRateLimitResponse(resp: Response): boolean {
-  if (resp.status !== 403 && resp.status !== 429) return false;
+  if (resp.status === 429) return true;
+  if (resp.status !== 403) return false;
   return isOverPrimaryRateLimit(resp) ||
     resp.headers.get("retry-after") !== null;
 }

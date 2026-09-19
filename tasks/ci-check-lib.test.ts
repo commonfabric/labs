@@ -1322,6 +1322,27 @@ Deno.test("githubGet stops retrying a spent window answered as a busy signal", a
   assertEquals(calls, 1);
 });
 
+Deno.test("githubGet reads a busy signal carrying no headers as a rate limit", async () => {
+  // GitHub documents the rate-limit headers as optional, and 429 means too
+  // many requests whatever it sends beside it. Read as an ordinary failure it
+  // would reach the coverage walk as a run that measured nothing.
+  const calls = await withFetchAnswering(
+    () =>
+      new Response("slow down", {
+        status: 429,
+        statusText: "Too Many Requests",
+      }),
+    async () => {
+      await assertRejects(
+        () => githubGet("/repos/commonfabric/labs/actions/runs"),
+        GitHubRateLimitError,
+      );
+    },
+  );
+
+  assertEquals(calls, 4);
+});
+
 Deno.test("githubGet does not call an ordinary refusal a rate limit", async () => {
   await withFetchAnswering(
     () => new Response("forbidden", { status: 403, statusText: "Forbidden" }),
