@@ -11,10 +11,10 @@
  *
  * What that costs is an order: a renderer works once `value-debug` has been
  * loaded, and throws before then. Every entry in the package's export map
- * loads it, and loads it first, apart from the two which are a single module
- * that renders nothing (`api.ts` and `frozen-builtins.ts`). So a program which
- * imports the package has it. A unit test which imports one module by its path
- * may not, and gets it by importing `@/for-testing-only.ts`.
+ * loads it, apart from the two which are a single module that renders nothing
+ * (`api.ts` and `frozen-builtins.ts`), so a program which imports the package
+ * has it. A unit test which imports one module by its path may not, and gets it
+ * by importing `@/for-testing-only.ts`.
  */
 
 import type * as valueDebug from "@/value-debug/index.ts";

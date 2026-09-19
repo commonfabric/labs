@@ -15,11 +15,6 @@
  * other half of why the rule above is absolute rather than stylistic.
  */
 
-// Loaded for its effect, and before anything else here: it installs the debug
-// renderers, which the package's modules reach through
-// `value-debug-internal.ts`.
-import "@/value-debug/index.ts";
-
 import { isInstance, isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { FabricValue } from "./index.ts";

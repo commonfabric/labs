@@ -19,11 +19,6 @@
  * barrel, so that loading the classes constructs none of it.
  */
 
-// Loaded for its effect, and before anything else here: it installs the debug
-// renderers, which the package's modules reach through
-// `value-debug-internal.ts`.
-import "@/value-debug/index.ts";
-
 import { ProblematicValue, UnknownValue } from "@/codec-common";
 import {
   FabricError,

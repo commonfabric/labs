@@ -20,9 +20,11 @@
  * codec, and the machinery driving those lives in `codec-common/`.
  */
 
-// Loaded for its effect, and before anything else here: it installs the debug
-// renderers, which the package's modules reach through
-// `value-debug-internal.ts`.
+// Loaded for its effect: it installs the debug renderers, which the package's
+// modules reach through `value-debug-internal.ts`. This barrel is where that
+// happens because every export-map entry which loads a module that renders
+// loads this barrel too, a property `test/value-debug-internal-entries.test.ts`
+// checks entry by entry.
 import "@/value-debug/index.ts";
 
 export {
