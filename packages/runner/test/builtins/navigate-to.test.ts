@@ -17,16 +17,14 @@ const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
 
 describe("navigate-to", () => {
-  let storageManager: ReturnType<typeof StorageManager.emulate>;
   let runtime: Runtime;
   let navigations: string[];
 
   beforeEach(() => {
-    storageManager = StorageManager.emulate({ as: signer });
     navigations = [];
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
-      storageManager,
+      storageManager: StorageManager.emulate({ as: signer }),
       navigateCallback: (target) => {
         navigations.push(entityRefToString(target.entityId));
       },
@@ -34,8 +32,8 @@ describe("navigate-to", () => {
   });
 
   afterEach(async () => {
+    // Disposing the runtime closes the storage manager it was given.
     await runtime.dispose();
-    await storageManager.close();
   });
 
   it("sets its result again, without navigating, when it runs after it has navigated", async () => {
