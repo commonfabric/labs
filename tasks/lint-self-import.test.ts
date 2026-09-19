@@ -48,7 +48,7 @@ const WIDGETS = {
   name: "@example/widgets",
   exports: {
     ".": "./src/index.ts",
-    "./traverse": "./src/traverse.ts",
+    "./sprocket": "./src/sprocket.ts",
   },
 };
 
@@ -57,12 +57,12 @@ const ALIASED = {
   name: "@example/aliased",
   exports: {
     ".": "./src/index.ts",
-    "./types": "./src/types/index.ts",
+    "./knobs": "./src/knobs/index.ts",
   },
   imports: {
     "@": "./src/index.ts",
     "@/": "./src/",
-    "@/types": "./src/types/index.ts",
+    "@/knobs": "./src/knobs/index.ts",
     "@std/path": "jsr:@std/path@^1",
   },
 };
@@ -99,17 +99,17 @@ describe("lint-self-import", () => {
   it("reports an import of the package's own subpath export", () => {
     const messages = fixture(WIDGETS).diagnose(
       "src/schema.ts",
-      `import { walk } from "@example/widgets/traverse";`,
+      `import { spin } from "@example/widgets/sprocket";`,
     );
     expect(messages.length).toBe(1);
     expect(messages[0]).toContain(SUBPATH);
-    expect(messages[0]).toContain("Import `./traverse.ts` instead.");
+    expect(messages[0]).toContain("Import `./sprocket.ts` instead.");
   });
 
   it("gives general advice for a subpath the exports map omits", () => {
     const messages = fixture(WIDGETS).diagnose(
       "src/schema.ts",
-      `import { walk } from "@example/widgets/nowhere";`,
+      `import { spin } from "@example/widgets/nowhere";`,
     );
     expect(messages.length).toBe(1);
     expect(messages[0]).toContain(
@@ -191,7 +191,7 @@ describe("lint-self-import", () => {
   it("returns nothing for an exact alias that reaches another module", () => {
     const messages = fixture(ALIASED).diagnose(
       "src/maker.ts",
-      `import type { GizmoValue } from "@/types";`,
+      `import type { GizmoValue } from "@/knobs";`,
     );
     expect(messages).toEqual([]);
   });
@@ -237,7 +237,7 @@ describe("lint-self-import", () => {
   it("returns nothing for an import of another package", () => {
     const messages = fixture(WIDGETS).diagnose(
       "src/runtime.ts",
-      `import { isRecord } from "@example/gadgets/types";`,
+      `import { isKnob } from "@example/gadgets/knobs";`,
     );
     expect(messages).toEqual([]);
   });
@@ -345,12 +345,12 @@ describe("lint-self-import", () => {
     );
     const second = pkg.diagnose(
       "src/schema.ts",
-      `import { walk } from "@example/widgets/traverse";`,
+      `import { spin } from "@example/widgets/sprocket";`,
     );
     expect(first.length).toBe(1);
     expect(first[0]).toContain(BARREL);
     expect(second.length).toBe(1);
-    expect(second[0]).toContain("Import `./traverse.ts` instead.");
+    expect(second[0]).toContain("Import `./sprocket.ts` instead.");
   });
 
   it("prefers deno.json to deno.jsonc, as Deno itself does", () => {
