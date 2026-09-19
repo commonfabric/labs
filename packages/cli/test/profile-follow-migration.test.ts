@@ -80,8 +80,11 @@ describe("profile-follow-migration", () => {
       const profile = cell.withTx();
       await profile.pull();
       profile.key("setName").send({ name: "Saved name" });
+      const legacyInbox = { space, host: "https://inbox.example" };
+      profile.key("setInbox").send(legacyInbox);
       await runtime.idle();
       expect(profile.key("name").get()).toBe("Saved name");
+      expect(profile.key("inbox").get()).toEqual(legacyInbox);
       await runtime.patternManager.flushCompileCacheWrites();
       const config = {
         apiUrl: "https://profile.test",
@@ -103,6 +106,7 @@ describe("profile-follow-migration", () => {
       }
       expect(getPatternSource(profile)).toBeUndefined();
       expect(getPatternIdentityRef(profile)).toEqual(before);
+      expect(profile.key("inbox").get()).toEqual(legacyInbox);
       const applied = await followPieceSource(
         config,
         "system:system/profile-home.tsx",
@@ -116,6 +120,7 @@ describe("profile-follow-migration", () => {
       expect(getPatternIdentityRef(profile)).not.toEqual(before);
       await profile.pull();
       expect(profile.key("name").get()).toBe("Saved name");
+      expect(profile.key("inbox").get()).toEqual({});
       const inboxTx = runtime.edit();
       const inbox = runtime.getCell(space, "share inbox", undefined, inboxTx);
       const inboxPattern = await runtime.patternManager.compilePattern({
@@ -140,6 +145,9 @@ export default pattern(() => ({ receive: receive({}) }));
           .getAsNormalizedFullLink();
       expect(storedInbox().id).toBe(inbox.getAsNormalizedFullLink().id);
       expect(storedInbox().space).toBe(space);
+      expect(Object.keys(profile.key("inbox").get() as object)).toEqual([
+        "piece",
+      ]);
       const attached = getPatternIdentityRef(profile);
       servedSource = source + "\n// Next deployment.\n";
       servedIdentity = await resolveEntryIdentity(

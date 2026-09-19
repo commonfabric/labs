@@ -5,10 +5,13 @@
 `cf piece follow --cell <piece> <origin>` adopts the origin’s current pattern
 and records the origin for future updates. It refuses incompatible schemas by
 default. After reviewing the reported changes, pass
-`--dangerously-allow-incompatible-schema` to accept that compatibility review.
-The confirmation applies the exact reviewed candidate and revalidates source
-state and retained inputs. A new compatibility review is returned to the caller
-without automatically accepting it.
+`--dangerously-allow-incompatible-schema` to perform a fresh review and accept
+the candidate reviewed in that invocation. If the origin released between runs,
+this candidate and its incompatibilities can differ from the earlier report. The
+command prints the incompatibility it accepted, pins that candidate during
+confirmation, and revalidates source state and retained inputs. A changed review
+during confirmation is returned to the caller without automatically accepting
+it.
 
 For a detached profile with the legacy inbox descriptor, the manual migration is
 `cf piece follow --cell <profile> system:system/profile-home.tsx

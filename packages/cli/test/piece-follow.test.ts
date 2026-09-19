@@ -137,11 +137,10 @@ describe("cf piece follow", () => {
           );
           expect(calls.length).toBe(allow ? 2 : 1);
           expect(result).toEqual(
-            !allow
-              ? incompatible
-              : changesDuringConfirmation
-              ? changed
-              : { status: "applied" },
+            !allow ? incompatible : changesDuringConfirmation ? changed : {
+              status: "applied",
+              acceptedIncompatibility: incompatible.message,
+            },
           );
           if (allow) {
             expect(calls[1][0]).toEqual(calls[0][0]);
@@ -156,6 +155,42 @@ describe("cf piece follow", () => {
   });
 
   describe("followPieceSourceAction()", () => {
+    for (const warning of [undefined, "refresh failed"]) {
+      it(`reports the incompatibility accepted in this invocation${warning ? " even when refresh fails" : ""}`, async () => {
+        const rendered: unknown[] = [];
+        const errors: string[] = [];
+        const codes: number[] = [];
+        await followPieceSourceAction(
+          { ...BASE_OPTIONS, dangerouslyAllowIncompatibleSchema: true },
+          "system:system/profile-home.tsx",
+          {
+            followPieceSource: () =>
+              Promise.resolve({
+                status: "applied",
+                acceptedIncompatibility: "result.inbox.host: field removed",
+                executionWarning: warning,
+              }),
+            render: (value) => rendered.push(value),
+            hint: () => {},
+            printError: (value) => errors.push(value),
+            setExitCode: (code) => codes.push(code),
+          },
+        );
+        expect(rendered).toEqual([
+          "Accepted incompatibility: result.inbox.host: field removed",
+          "of:profile now follows system:system/profile-home.tsx",
+        ]);
+        expect(codes).toEqual(warning ? [1] : []);
+        expect(errors).toEqual(
+          warning
+            ? [
+              "The follow committed, but refreshing the running piece failed: refresh failed",
+            ]
+            : [],
+        );
+      });
+    }
+
     it("reports a follow that landed", async () => {
       const rendered: unknown[] = [];
       const hints: string[] = [];

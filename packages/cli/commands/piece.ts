@@ -5115,6 +5115,11 @@ export async function followPieceSourceAction(
     }))(1);
     return;
   }
+  if (result.acceptedIncompatibility !== undefined) {
+    (deps.render ?? render)(
+      `Accepted incompatibility: ${result.acceptedIncompatibility}`,
+    );
+  }
   (deps.render ?? render)(`${config.piece} now follows ${trimmed}`);
   if (result.executionWarning !== undefined) {
     // The transition is durable, but the piece did not come back up: said
