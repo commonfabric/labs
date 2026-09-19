@@ -288,10 +288,10 @@ connection sets `int64` — so a stored `4294967303` arrives as `7`, and a
 label derived from that is a label for another key's rows. Two paths read
 rule inputs, and each answers it where it reads:
 
-- the **read** side runs labeled queries (`queryWithOrigins`, issued only for
-  a db that declares `ifc` or a row rule) on an `int64` connection, where a
-  value past 2^53 arrives as a `bigint`. Ordinary reads keep the connection
-  and the values they have always had.
+- the **read** side opens every pooled connection with `int64`, labeled
+  queries (`queryWithOrigins`) and ordinary ones alike, so a value past 2^53
+  arrives as a `bigint` (Section [01](./01-api.md), "The `Row` type
+  argument").
 - **commit evaluation** runs on the engine connection, which serves
   everything and cannot flip mode for this, so SQLite renders instead: the
   affected rowid as text (the read-back addresses the row that was written
