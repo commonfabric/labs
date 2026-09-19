@@ -57,10 +57,6 @@ export abstract class BaseFabricPrimitive extends FabricPrimitive {
   abstract get [VALUE_TAG](): FabricPrimitiveValueTag;
 
   //
-  // Instance members
-  //
-
-  //
   // Static members
   //
 
