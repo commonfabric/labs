@@ -13,10 +13,13 @@ import { transformFiles } from "./utils.ts";
 
 const CONTACT = "interface Contact { name: string }";
 
-const READ_CONTACT =
-  `export default pattern<{ contact: Writable<Contact> }>(({ contact }) => {
+/** A pattern whose `computed()` reads `name` from a captured cell of `value`. */
+const readContact = (value: string) =>
+  `export default pattern<{ contact: Writable<${value}> }>(({ contact }) => {
      return { label: computed(() => contact.key("name").get()) };
    });`;
+
+const READ_CONTACT = readContact("Contact");
 
 /** The schema of `contact` in the input of the lift the `computed()` lowers to. */
 async function capturedContactSchema(
@@ -59,5 +62,33 @@ describe("captured-cell-value-schema", () => {
     });
 
     expect(schema).toEqual(stored);
+  });
+
+  it("emits every member of a union holding a type the module declares with `export`", async () => {
+    const schema = await capturedContactSchema({
+      "/test.tsx": `import { computed, pattern, Writable } from "commonfabric";
+        export ${CONTACT}
+        interface Other { name: string; other: number }
+        ${readContact("Contact | Other")}`,
+    });
+
+    expect(schema).toEqual({
+      anyOf: [{ $ref: "#/$defs/Contact" }, { $ref: "#/$defs/Other" }],
+      asCell: ["readonly"],
+    });
+  });
+
+  it("emits every member of a union holding a type the module imports", async () => {
+    const schema = await capturedContactSchema({
+      "/types.ts": `export ${CONTACT}`,
+      "/test.tsx": `import { computed, pattern, Writable } from "commonfabric";
+        import type { Contact } from "./types.ts";
+        ${readContact("Contact | undefined")}`,
+    });
+
+    expect(schema).toEqual({
+      anyOf: [{ $ref: "#/$defs/Contact" }, { type: "undefined" }],
+      asCell: ["readonly"],
+    });
   });
 });
