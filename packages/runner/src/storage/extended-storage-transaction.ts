@@ -1938,7 +1938,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   }
 
   /**
-   * Returns a read-only view of schema inputs for a document across scopes.
+   * Returns the read-only schema inputs recorded for a document across scopes:
+   * a view of its bucket, or the shared frozen empty array when it has none.
    * Queries visit only that document's recorded schema inputs.
    */
   getCfcSchemaPolicyInputs(

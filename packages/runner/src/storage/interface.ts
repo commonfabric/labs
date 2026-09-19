@@ -2123,9 +2123,14 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   ): void;
 
   /**
-   * Returns read-only schema inputs recorded for the document across scopes.
-   * Each query includes inputs appended since earlier queries, including a
-   * query that found none. Path and IFC relevance remain the caller's checks.
+   * Returns the read-only schema inputs recorded for the document across
+   * scopes. Path and IFC relevance remain the caller's checks.
+   *
+   * Query rather than hold the result. For a document with recorded inputs
+   * the result is a view, and shows inputs recorded after it was taken. For
+   * a document with none it is a shared frozen empty array, which a later
+   * recording does not change. Two queries for the same document therefore
+   * agree; a held result and a later query need not.
    */
   getCfcSchemaPolicyInputs(
     space: MemorySpace,

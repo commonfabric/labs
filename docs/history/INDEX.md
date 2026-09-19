@@ -65,7 +65,7 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 
 - [2026-09-11-nested-collection-scan-diagnostic.md](development/performance/2026-09-11-nested-collection-scan-diagnostic.md) — E3 warning acceptance across 413 pattern entries and 1,731 modules: seven occurrences at five source sites, guarded-UI limits, and callback-local exclusions.
 - [2026-09-11-computed-lift-collection-loops.md](development/performance/2026-09-11-computed-lift-collection-loops.md) — E1 compiled computed/broad-lift/narrow-lift comparison at 32/128/512 linked rows, identical default-posture read counts, and unread-field invalidation controls.
-
+- [2026-09-11-pending-schema-policy-index-cost.md](development/performance/2026-09-11-pending-schema-policy-index-cost.md) — post-merge review of the document-indexed pending schema-policy lookup: record-path cost per input from a same-build A/B and from the retained profiles, and mutation results showing the link-write decision's target arm is pinned by no test.
 - [2026-09-11-pending-schema-policy-index.md](development/performance/2026-09-11-pending-schema-policy-index.md) — document-indexed pending schema-policy lookup CPU attribution and 1,184-vote fixture acceptance with unchanged read budgets.
 - [2026-09-11-reactive-lunch-rows.md](development/performance/2026-09-11-reactive-lunch-rows.md) — repository-only reactive lunch-row acceptance: 93 assertions, unchanged budgets at three sizes, matched two-browser voting, and headless settlement limits.
 
