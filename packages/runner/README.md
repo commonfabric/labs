@@ -943,3 +943,15 @@ the requested space for fabric imports but does not replicate closures.
 
 See the project's main contribution guide for details on development workflow,
 testing, and submitting changes.
+
+## Cross-space child source ownership
+
+A cross-space child with a recorded source origin or source revision history
+owns its stored pattern and arguments. Reinstantiating its parent resumes that
+stored state, including owner edits that detached the origin. Untracked nested
+children continue to take their pattern and inputs from the parent.
+
+For a space-scoped child, resume waits for the parent transaction to commit and
+retains the parent demand root across cold loading. Parent teardown cancels only
+the start it owns; a replacement or independently started child keeps running.
+Scoped serving children resume through their per-actor program coordinator.

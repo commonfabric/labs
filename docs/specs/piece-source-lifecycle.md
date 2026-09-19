@@ -324,6 +324,15 @@ runs; a cross-space child's closure replicates after its run, so it may carry
 the origin ahead of the revision, and is followed from a baseline the first
 adoption records.
 
+Once a cross-space child carries an origin or source revision history,
+reinstantiating its parent resumes the child's stored pattern and arguments.
+The parent's imported module does not replace an independently adopted revision
+or an owner edit, including an edit that cleared the origin. A space-scoped
+child resumes after the parent transaction commits, with the parent's demand
+root and ownership of that particular start; scoped serving children resume
+through their per-actor program coordinator. Children without an independent
+source lifecycle continue to bind the parent's module and inputs.
+
 In this document, **wishing code into being** means a product authoring
 affordance that asks an LLM to write pattern source. It is distinct from the
 runtime `wish()` builtin. The builtin discovers and connects to existing
