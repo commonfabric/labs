@@ -52,6 +52,21 @@ const RUNNER = {
   },
 };
 
+/** A package with a `@/` alias over `src/` and a `@` alias for its barrel. */
+const DATA_MODEL = {
+  name: "@commonfabric/data-model",
+  exports: {
+    ".": "./src/index.ts",
+    "./types": "./src/types/index.ts",
+  },
+  imports: {
+    "@": "./src/index.ts",
+    "@/": "./src/",
+    "@/types": "./src/types/index.ts",
+    "@std/path": "jsr:@std/path@^1",
+  },
+};
+
 /** The distinguishing phrase of each of the rule's two messages. */
 const BARREL = "is the entry point of the package this file belongs to";
 const SUBPATH = "gives one module two spellings";
@@ -136,6 +151,78 @@ describe("lint-self-import", () => {
     );
     expect(messages.length).toBe(1);
     expect(messages[0]).toContain(BARREL);
+  });
+
+  it("reports an exact alias for the package's own entry point", () => {
+    const messages = fixture(DATA_MODEL).diagnose(
+      "src/codecs.ts",
+      `import { FabricHash } from "@";`,
+    );
+    expect(messages.length).toBe(1);
+    expect(messages[0]).toContain(BARREL);
+  });
+
+  it("reports a prefix alias that reaches the package's own entry point", () => {
+    const messages = fixture(DATA_MODEL).diagnose(
+      "src/codecs.ts",
+      `import { FabricHash } from "@/index.ts";`,
+    );
+    expect(messages.length).toBe(1);
+    expect(messages[0]).toContain(BARREL);
+  });
+
+  it("returns nothing for a prefix alias that reaches another module", () => {
+    const messages = fixture(DATA_MODEL).diagnose(
+      "src/codecs.ts",
+      `import { FabricHash } from "@/fabric-hash.ts";`,
+    );
+    expect(messages).toEqual([]);
+  });
+
+  it("returns nothing for an exact alias that reaches another module", () => {
+    const messages = fixture(DATA_MODEL).diagnose(
+      "src/codecs.ts",
+      `import type { FabricValue } from "@/types";`,
+    );
+    expect(messages).toEqual([]);
+  });
+
+  it("returns nothing for an alias to the entry point in a test file", () => {
+    const messages = fixture(DATA_MODEL).diagnose(
+      "test/codecs.test.ts",
+      `import { FabricHash } from "@";`,
+    );
+    expect(messages).toEqual([]);
+  });
+
+  it("returns nothing for an imports entry that names another package", () => {
+    const messages = fixture(DATA_MODEL).diagnose(
+      "src/codecs.ts",
+      `import { resolve } from "@std/path";`,
+    );
+    expect(messages).toEqual([]);
+  });
+
+  it("takes the longest prefix alias, as an import map does", () => {
+    // Under `@/` alone, `@/deep/index.ts` would be `src/deep/index.ts`. The
+    // longer key sends it to the entry point instead.
+    const messages = fixture({
+      ...DATA_MODEL,
+      imports: { "@/": "./src/", "@/deep/": "./src/" },
+    }).diagnose(
+      "src/codecs.ts",
+      `import { FabricHash } from "@/deep/index.ts";`,
+    );
+    expect(messages.length).toBe(1);
+    expect(messages[0]).toContain(BARREL);
+  });
+
+  it("returns nothing for an alias in a package with no entry point", () => {
+    const messages = fixture({
+      name: "@commonfabric/toolshed",
+      imports: { "@/": "./" },
+    }).diagnose("routes/health.ts", `import { app } from "@/index.ts";`);
+    expect(messages).toEqual([]);
   });
 
   it("returns nothing for an import of another package", () => {

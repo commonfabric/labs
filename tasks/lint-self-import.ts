@@ -13,7 +13,10 @@
  *     back, so the module graph gains a cycle. When the import brings in a
  *     value rather than a type that cycle is there at run time, and the order
  *     in which the modules of the package initialize starts to depend on the
- *     order in which the entry point lists its exports.
+ *     order in which the entry point lists its exports. An alias from the
+ *     package's own `imports` map that resolves to the entry point's file, such
+ *     as `@` or `@/index.ts` where `@/` maps to `./src/`, is the same import
+ *     and is reported the same way.
  *   - A subpath such as `@scope/pkg/thing` names one module rather than the
  *     whole package, so it adds no cycle. It still leaves the package and comes
  *     back, so the same file arrives under two spellings, and the shorter one
@@ -58,6 +61,11 @@ interface OwningPackage {
   readonly name: string;
   /** The `exports` map, from specifier suffix to a path under `root`. */
   readonly exports: ReadonlyMap<string, string>;
+  /**
+   * The entries of the `imports` map that name a path under `root`, from key
+   * to that path.
+   */
+  readonly aliases: ReadonlyMap<string, string>;
 }
 
 /**
@@ -106,6 +114,22 @@ function exportMap(exports: unknown): ReadonlyMap<string, string> {
 }
 
 /**
+ * The entries of a configuration's `imports` map whose value is a path relative
+ * to the configuration, which are the ones that can name a file of the package.
+ */
+function aliasMap(imports: unknown): ReadonlyMap<string, string> {
+  const map = new Map<string, string>();
+  if (isObjectOrArray(imports)) {
+    for (const [key, value] of Object.entries(imports)) {
+      if (typeof value === "string" && value.startsWith("./")) {
+        map.set(key, value);
+      }
+    }
+  }
+  return map;
+}
+
+/**
  * The package that owns files in `directory`. The nearest enclosing directory
  * with a Deno configuration is the package, and a configuration that declares
  * no name gives a package that cannot be named, so the walk stops there rather
@@ -128,7 +152,38 @@ function computeOwner(directory: string): OwningPackage | null {
   }
   const name = config.name;
   if (typeof name !== "string" || name === "") return null;
-  return { root: directory, name, exports: exportMap(config.exports) };
+  return {
+    root: directory,
+    name,
+    exports: exportMap(config.exports),
+    aliases: aliasMap(config.imports),
+  };
+}
+
+/**
+ * The file `specifier` names through one of the package's aliases, or null
+ * when no alias matches it. The match is the one an import map makes: a key
+ * equal to the specifier, and failing that the longest key ending in `/` that
+ * the specifier starts with.
+ */
+function aliasTarget(owner: OwningPackage, specifier: string): string | null {
+  const exact = owner.aliases.get(specifier);
+  if (exact !== undefined) return resolve(owner.root, exact);
+  let best: readonly [key: string, path: string] | null = null;
+  for (const entry of owner.aliases) {
+    const [key] = entry;
+    if (!key.endsWith("/") || !specifier.startsWith(key)) continue;
+    if (best === null || key.length > best[0].length) best = entry;
+  }
+  if (best === null) return null;
+  return resolve(owner.root, best[1], specifier.slice(best[0].length));
+}
+
+/** True when `specifier` is an alias for the package's entry point. */
+function isEntryPointAlias(owner: OwningPackage, specifier: string): boolean {
+  const entryPoint = owner.exports.get(".");
+  if (entryPoint === undefined) return false;
+  return aliasTarget(owner, specifier) === resolve(owner.root, entryPoint);
 }
 
 /** The specifier that reaches `to` from the file at `from`. */
@@ -165,7 +220,7 @@ function message(
   // The entry point gets no file named for it: the relative path to it reaches
   // the same barrel, so the fix is a path to whichever module defines the
   // imported name, which the rule does not know.
-  if (specifier === owner.name) {
+  if (specifier === owner.name || isEntryPointAlias(owner, specifier)) {
     return `\`${specifier}\` is the entry point of the package this file ` +
       "belongs to. Importing it from inside the package puts a cycle in the " +
       "module graph, and makes the order in which this module initializes " +
@@ -191,7 +246,10 @@ export default {
         const check = (node: Deno.lint.Node, source: unknown) => {
           const value = (source as { value?: unknown } | null)?.value;
           if (typeof value !== "string") return;
-          if (value !== owner.name && !value.startsWith(`${owner.name}/`)) {
+          if (
+            value !== owner.name && !value.startsWith(`${owner.name}/`) &&
+            !isEntryPointAlias(owner, value)
+          ) {
             return;
           }
           context.report({
