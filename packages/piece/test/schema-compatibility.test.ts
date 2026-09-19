@@ -3157,6 +3157,53 @@ describe("piece schema compatibility", () => {
       ).not.toThrow();
     });
 
+    it("spends the split bound on a nested shape one level at a time", () => {
+      // The bound is spent along a proof path, so a nested shape whose every
+      // level carries its own splitting union spends it one level at a time:
+      // each level's descent happens inside that level's split. Seven levels
+      // (eight unions, counting the leaf) is what the bound affords.
+      const source = (levels: number): JSONSchema => ({
+        anyOf: [{
+          anyOf: [
+            { type: "null" },
+            levels === 0 ? { type: "boolean" } : {
+              type: "object",
+              properties: { f: source(levels - 1) },
+              required: ["f"],
+            },
+          ],
+        }],
+      });
+      const target = (levels: number): JSONSchema => ({
+        anyOf: [
+          { type: "null" },
+          levels === 0 ? { enum: [false, true, "auto"] } : {
+            type: "object",
+            properties: { f: target(levels - 1) },
+            required: ["f"],
+          },
+        ],
+      });
+
+      expect(() => assertSchemaSubset(source(7), target(7))).not.toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(source(7), target(7)),
+          pattern(target(7), source(7)),
+        )
+      ).not.toThrow();
+
+      // Past the bound the proof stops and refuses rather than widening.
+      expect(() => assertSchemaSubset(source(64), target(64)))
+        .toThrow(/a schema alternative/);
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(source(64), target(64)),
+          pattern(target(64), source(64)),
+        )
+      ).toThrow(/argument:[\s\S]*result:/);
+    });
+
     it("keeps comment-marked wrappers at their comparison boundary", () => {
       for (
         const $comment of [
