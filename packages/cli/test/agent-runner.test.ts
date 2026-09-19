@@ -532,6 +532,81 @@ describe("agent runner", () => {
     expect(ran).toBe(false);
   });
 
+  it("writes nothing over a record another runner took while its run was out", async () => {
+    const held = defer<AgentRunExecution>();
+    const reports: string[] = [];
+    await startRunner(() => held.promise, {
+      report: (message) => reports.push(message),
+    });
+    const result = await submit();
+    await waitForState(result, "running");
+
+    // The lease passed and another runner recovered and claimed the record.
+    await patternSide.editWithRetry((tx) => {
+      const record = recordOf(result).withTx(tx);
+      record.key("attempts").set(2);
+      record.key("claim").set({
+        runner: "did:key:other#1",
+        leaseUntil: "2026-09-18T13:00:00.000Z",
+      });
+    });
+    await waitForCellValue<AgentRunRecord>(
+      patternSide,
+      recordOf(result),
+      (value) => value?.claim?.runner === "did:key:other#1",
+    );
+    held.resolve({ outcome: "refused" });
+    await runners[0].idle();
+
+    expect(recordOf(result).get()?.state).toBe("running");
+    expect(recordOf(result).get()?.claim?.runner).toBe("did:key:other#1");
+    expect(reports.some((line) => line.includes("was no longer held"))).toBe(
+      true,
+    );
+  });
+
+  it("reports a scan that fails, and goes on following the queue", async () => {
+    const reports: string[] = [];
+    await patternSide.editWithRetry((tx) => {
+      agentQueueIndexCell(patternSide, home, tx).key("entries").push({
+        run: patternSide.getCell(home, "a record on a host nobody serves"),
+        host: "https://unknown.example",
+      });
+    });
+    const own = connect(CLOUD);
+    await startRunner(() => Promise.resolve({ outcome: "refused" }), {
+      report: (message) => reports.push(message),
+      runtimeForHost: (host) =>
+        host === CLOUD
+          ? Promise.resolve(own)
+          : Promise.reject(new Error(`no toolshed at ${host}`)),
+    });
+    await runners[0].idle();
+
+    expect(reports).toContain(
+      "agent runner: a queue scan failed: no toolshed at https://unknown.example",
+    );
+  });
+
+  it("claims the older of two queued records first under a cap of one", async () => {
+    const first = await submit();
+    clock = new Date("2026-09-18T12:00:05.000Z");
+    const second = await submit();
+    const order: string[] = [];
+    await startRunner((run) => {
+      order.push(run.record.task);
+      return Promise.resolve({ outcome: "refused" });
+    });
+
+    await waitForState(first, "refused");
+    await waitForState(second, "refused");
+
+    expect(order).toEqual([
+      recordOf(first).get()!.task,
+      recordOf(second).get()!.task,
+    ]);
+  });
+
   it("leaves a request naming a tool it does not offer `queued`", async () => {
     const result = await submit({ tools: ["loom_profile"] });
     const runner = await startRunner(() =>
@@ -807,6 +882,70 @@ describe("agent runner", () => {
       expect(
         (written.get() as { basedOn?: string[] }).basedOn,
       ).toEqual(["Dune", "Solaris"]);
+    });
+
+    it("ends `refused` a result the space's policy will not commit", async () => {
+      // The run observed a cell labeled outside the request's ceiling, so the
+      // join the result would carry does not fit the ceiling declared on it.
+      const READING = "https://cfc.test/atom/reading";
+      const SECRET = "https://cfc.test/atom/secret";
+      const secret = patternSide.getCell(home, "a secret the run observed", {
+        type: "string",
+        ifc: { confidentiality: [SECRET] },
+      });
+      await patternSide.editWithRetry((tx) => {
+        secret.withTx(tx).set("the butler did it");
+      });
+      await startHarnessRunner(async ({ resultPath }) => {
+        const minted = await mintAddressHandle(
+          createHarnessHandleTable("run-refused"),
+          renderCellReference(secret.getAsNormalizedFullLink()),
+        );
+        await Deno.writeTextFile(
+          resultPath,
+          JSON.stringify({ answer: "Hyperion" }),
+        );
+        const result = loopResult("run-refused");
+        return {
+          ...result,
+          runState: { ...result.runState, handleTable: minted.table },
+        };
+      });
+      const result = await submit(
+        { maxConfidentiality: [READING] },
+        patternSide,
+        { confidentiality: [READING] },
+      );
+
+      const record = await waitForState(result, "refused");
+
+      expect(record.errorCode).toBe("REFUSED");
+      expect(record.result).toBeUndefined();
+    });
+
+    it("fails as `PROVIDER_FAILURE` a result naming a handle the run does not hold", async () => {
+      await startHarnessRunner(async ({ resultPath }) => {
+        await Deno.writeTextFile(
+          resultPath,
+          JSON.stringify({ answer: "cfh:a:zzzzz" }),
+        );
+        // A run that reports direct usage alone, and no artifact root.
+        const { totalUsage, ...result } = loopResult("run-unheld");
+        const { artifactRoot: _root, ...runState } = result
+          .runState as unknown as Record<string, unknown>;
+        return {
+          ...result,
+          usage: totalUsage,
+          runState: runState as unknown as HarnessPromptLoopResult["runState"],
+        };
+      });
+      const result = await submit();
+
+      const record = await waitForState(result, "failed");
+
+      expect(record.errorCode).toBe("PROVIDER_FAILURE");
+      expect(record.usageCoverage).toBe("direct");
+      expect(record.runRef).toBeUndefined();
     });
 
     it("fails as `PROVIDER_FAILURE` a run that wrote no result", async () => {

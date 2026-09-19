@@ -26,6 +26,9 @@ import {
   createHarnessHandleTable,
   mintAddressHandle,
 } from "../src/handle-table.ts";
+import { createToolOutputId } from "../src/contracts/tool-result.ts";
+import { submitResultTool } from "../src/tools/submit-result.ts";
+import type { HarnessToolContext } from "../src/tools/types.ts";
 import type {
   SandboxCommandRequest,
   SandboxCommandResult,
@@ -344,5 +347,17 @@ describe("submit_result", () => {
       answer: "Hyperion",
       source: token,
     });
+  });
+
+  it("returns `not_configured` when invoked outside a run that takes a result", async () => {
+    const output = await submitResultTool.invoke(
+      {
+        nextOutputId: (toolId: string) =>
+          createToolOutputId("run-direct", toolId, 1),
+      } as unknown as HarnessToolContext,
+      { result: { answer: "Hyperion" } },
+    );
+
+    expect(output).toMatchObject({ status: "error", code: "not_configured" });
   });
 });

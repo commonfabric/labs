@@ -63,7 +63,46 @@ describe("referent handles", () => {
     });
   });
 
+  describe("mintReferentHandle() under a token collision", () => {
+    it("derives another suffix for a different row whose first suffix is taken", async () => {
+      // A hasher that ignores all but the attempt counter's presence, so two
+      // rows collide on their first suffix.
+      const hasher = (bytes: Uint8Array) =>
+        Promise.resolve(
+          new Uint8Array(32).fill(
+            new TextDecoder().decode(bytes).endsWith("\u00001") ? 7 : 3,
+          ),
+        );
+      const first = await mintReferentHandle(
+        createHarnessHandleTable("run-referents"),
+        ROW,
+        { hasher },
+      );
+      const second = await mintReferentHandle(
+        first.table,
+        { ...ROW, value: { title: "Mail 2" } },
+        { hasher },
+      );
+
+      expect(second.token).not.toBe(first.token);
+      expect(second.token).toMatch(/^cfh:v:[2-9a-z]{5}$/);
+    });
+  });
+
   describe("assertValidHarnessHandleTable()", () => {
+    it("throws for referents that are not an array of objects", () => {
+      const table = createHarnessHandleTable("run-referents");
+
+      expect(() =>
+        // deno-lint-ignore no-explicit-any
+        assertValidHarnessHandleTable({ ...table, referents: {} as any })
+      ).toThrow("referents must be an array");
+      expect(() =>
+        // deno-lint-ignore no-explicit-any
+        assertValidHarnessHandleTable({ ...table, referents: ["row"] as any })
+      ).toThrow("referent is not an object");
+    });
+
     it("accepts a table holding referents and throws for a malformed one", async () => {
       const { table, token } = await mintReferentHandle(
         createHarnessHandleTable("run-referents"),

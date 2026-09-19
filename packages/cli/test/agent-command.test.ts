@@ -8,11 +8,18 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { ValidationError } from "@cliffy/command";
 
+import { Identity } from "@commonfabric/identity";
+import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import { Runtime } from "@commonfabric/runner";
+import { agentQueueIndexCell } from "@commonfabric/runner/agent-run";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+
 import {
   type AgentRunnerCommandConfig,
   type AgentRunnerCommandDeps,
   createAgentCommand,
   resolveRunnerTools,
+  startAgentRunner,
 } from "../commands/agent.ts";
 import { withEnv } from "./utils.ts";
 
@@ -192,5 +199,135 @@ describe("cf agent runner", () => {
       run(deps, ["runner", "-i", "/k", "-a", "http://localhost:8100"]),
     ).rejects.toThrow("signal setup failed");
     expect(events.at(-1)).toBe("stop");
+  });
+
+  describe("startAgentRunner()", () => {
+    /** A home runtime whose home pattern is seeded data with a live stream. */
+    const openHome = async (options: { queue: boolean }) => {
+      const signer = await Identity.fromPassphrase(
+        `agent command ${crypto.randomUUID()}`,
+      );
+      const home = signer.did();
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://cloud.example"),
+        storageManager,
+      });
+      const homePattern = runtime.getCell(home, "home-pattern");
+      await runtime.editWithRetry((tx) => {
+        homePattern.withTx(tx).setRaw(
+          options.queue
+            ? { agentQueue: { entries: [], setAgentRunner: { $stream: true } } }
+            : {},
+        );
+        // deno-lint-ignore no-explicit-any
+        (runtime.getHomeSpaceCell(tx) as any).key("defaultPattern").set(
+          homePattern,
+        );
+      });
+      // Stands in for the queue piece's `setAgentRunner` handler.
+      const cancel = runtime.scheduler.addEventHandler(
+        (tx, event: { runner?: unknown }) => {
+          homePattern.withTx(tx).key("agentQueue").key("agentRunner")
+            .set(event.runner);
+        },
+        homePattern.key("agentQueue").key("setAgentRunner")
+          .getAsNormalizedFullLink(),
+      );
+      const config: AgentRunnerCommandConfig = {
+        identityPath: "/keys/me.key",
+        home,
+        homeHost: "https://cloud.example",
+        runnerHost: "http://localhost:8100",
+        tools: ["describe_handle"],
+        maxConcurrent: 1,
+        leaseMs: 60_000,
+        workRoot: "/unused",
+      };
+      return {
+        config,
+        runtime,
+        homePattern,
+        close: async () => {
+          cancel();
+          await storageManager.close();
+        },
+      };
+    };
+
+    it("registers the runner through the queue's `setAgentRunner` stream, and disposes its runtimes on stop", async () => {
+      const opened = await openHome({ queue: true });
+      const running = await startAgentRunner(
+        opened.config,
+        () => {},
+        {
+          openHome: () =>
+            Promise.resolve({
+              runtime: opened.runtime,
+              homePattern: opened.homePattern,
+            }),
+          openHost: () => Promise.reject(new Error("no second toolshed here")),
+        },
+        () => Promise.resolve({ outcome: "refused" }),
+      );
+
+      const registered = await waitForCellValue<{ host: string }>(
+        opened.runtime,
+        agentQueueIndexCell(opened.runtime, opened.config.home as never)
+          .key("agentRunner"),
+        (value) => value !== undefined,
+      );
+      expect(registered).toMatchObject({
+        host: "http://localhost:8100",
+        tools: ["describe_handle"],
+      });
+
+      await running.stop();
+      await opened.close();
+    });
+
+    it("opens a second toolshed for an entry that names one, with the harness executor by default", async () => {
+      const opened = await openHome({ queue: true });
+      await opened.runtime.editWithRetry((tx) => {
+        agentQueueIndexCell(opened.runtime, opened.config.home as never, tx)
+          .key("entries").push({
+            run: opened.runtime.getCell(opened.config.home as never, "a run"),
+            host: "https://other.example/",
+          });
+      });
+      const asked = Promise.withResolvers<string>();
+      const running = await startAgentRunner(opened.config, () => {}, {
+        openHome: () =>
+          Promise.resolve({
+            runtime: opened.runtime,
+            homePattern: opened.homePattern,
+          }),
+        openHost: (_config, origin) => {
+          asked.resolve(origin);
+          return Promise.reject(new Error("no toolshed there"));
+        },
+      });
+
+      expect(await asked.promise).toBe("https://other.example");
+
+      await running.stop();
+      await opened.close();
+    });
+
+    it("throws, and disposes the home runtime, when the home space holds no agent queue", async () => {
+      const opened = await openHome({ queue: false });
+
+      await expect(
+        startAgentRunner(opened.config, () => {}, {
+          openHome: () =>
+            Promise.resolve({
+              runtime: opened.runtime,
+              homePattern: opened.homePattern,
+            }),
+          openHost: () => Promise.reject(new Error("unused")),
+        }),
+      ).rejects.toThrow("holds no agent queue");
+      await opened.close();
+    });
   });
 });

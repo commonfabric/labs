@@ -361,6 +361,12 @@ and a result link, and observes `pending: false` and `result` on the node.
       (`structured_result_return`). The runner's executor allows it beside a
       request's tools and validates with `asCell` positions relaxed. The
       manual `dev-local` run completes at the default `enforce-strict`.
+- [x] Index entries keyed by record id. The builtin's index write used a
+      plain `push`, which mints its element from the list length the
+      transaction read; two index writes that each read the list before the
+      other landed wrote one element twice and listed one record in both
+      slots, leaving the other record for no runner to find. The entry is now
+      `entries.elementById(recordId)` added with `addUnique`.
 - [ ] The harness mode an agent run uses. Under `enforce-strict` a
       `context`-role run is refused every tool but `submit_result`, reads
       included, so a run that searches Loom or describes a handle needs

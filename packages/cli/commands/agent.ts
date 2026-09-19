@@ -2,6 +2,7 @@ import { Command, ValidationError } from "@cliffy/command";
 import { join } from "@std/path";
 
 import {
+  type Cell,
   experimentalOptionsForDeployedClient,
   Runtime,
   runtimePresets,
@@ -10,7 +11,11 @@ import { agentQueueIndexCell } from "@commonfabric/runner/agent-run";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { createHarnessAgentRunExecutor } from "../lib/agent-run-harness.ts";
-import { AgentRunner, type AgentRunnerEntry } from "../lib/agent-runner.ts";
+import {
+  AgentRunner,
+  type AgentRunnerEntry,
+  type AgentRunnerOptions,
+} from "../lib/agent-runner.ts";
 import { normalizeApiUrl } from "../lib/api-url.ts";
 import { cliText } from "../lib/cli-name.ts";
 import { loadIdentity } from "../lib/identity.ts";
@@ -184,75 +189,108 @@ export async function resolveAgentRunnerConfig(
   };
 }
 
+/** The connections a runner opens, which a test replaces. */
+export interface AgentRunnerConnections {
+  /**
+   * Connects to the home toolshed as the identity and runs the home default
+   * pattern there, creating it when the home space has none. Returns the
+   * runtime and the pattern's result cell, unbound from any transaction.
+   */
+  openHome(
+    config: AgentRunnerCommandConfig,
+    // deno-lint-ignore no-explicit-any
+  ): Promise<{ runtime: Runtime; homePattern: Cell<any> }>;
+
+  /** A storage-only runtime on another toolshed, as the same identity. */
+  openHost(config: AgentRunnerCommandConfig, origin: string): Promise<Runtime>;
+}
+
+/** The production connections: a deployed toolshed at each origin. */
+const deployedConnections: AgentRunnerConnections = {
+  // The home connection is a full one: the home default pattern runs here,
+  // since the queue's `agentRunner` entry takes writes only through the
+  // pattern's own handler.
+  async openHome(config) {
+    const pieces = await loadPieces({
+      apiUrl: config.homeHost,
+      space: config.home,
+      identity: config.identityPath,
+    });
+    const homePattern = await pieces.ensureDefaultPattern();
+    return {
+      runtime: pieces.runtime,
+      // The controller's cell is bound to the transaction it was read under;
+      // an event is sent from an unbound one.
+      homePattern: homePattern.getCell().withTx(),
+    };
+  },
+  // Records are read and written there, and nothing of that deployment's is
+  // run.
+  async openHost(config, origin) {
+    return new Runtime(runtimePresets.remoteClient({
+      apiUrl: new URL(origin),
+      storageManager: StorageManager.open({
+        as: await loadIdentity(config.identityPath),
+        memoryHost: new URL(origin),
+      }),
+      experimental: await experimentalOptionsForDeployedClient({
+        apiUrl: new URL(origin),
+        env: Deno.env.get,
+      }),
+    }));
+  },
+};
+
 /**
  * Connects to the home toolshed, registers the runner, and starts it. The
  * production `start`.
+ *
+ * @throws Error when the home space holds no agent queue.
  */
-async function startAgentRunner(
+export async function startAgentRunner(
   config: AgentRunnerCommandConfig,
   report: (message: string) => void,
+  connections: AgentRunnerConnections = deployedConnections,
+  execute?: AgentRunnerOptions["execute"],
 ): Promise<{ stop(): Promise<void> }> {
   const { home, homeHost, identityPath } = config;
-  const identity = await loadIdentity(identityPath);
-
-  // The home toolshed's connection is a full one: the home default pattern
-  // runs here, since the queue's `agentRunner` entry takes writes only
-  // through the pattern's own handler.
-  const homePieces = await loadPieces({
-    apiUrl: homeHost,
-    space: home,
-    identity: identityPath,
-  });
-  const runtimes = new Map<string, Runtime>([[homeHost, homePieces.runtime]]);
+  const homeSpace = home as `did:${string}:${string}`;
+  const { runtime: homeRuntime, homePattern } = await connections.openHome(
+    config,
+  );
+  const runtimes = new Map<string, Runtime>([[homeHost, homeRuntime]]);
+  const disposeAll = async () => {
+    for (const runtime of runtimes.values()) await runtime.dispose();
+  };
   const runtimeForHost = async (host: string): Promise<Runtime> => {
     const origin = new URL(host).origin;
     let runtime = runtimes.get(origin);
     if (runtime === undefined) {
-      // A second toolshed gets a storage-only runtime: records are read and
-      // written there, and nothing of that deployment's is run.
-      runtime = new Runtime(runtimePresets.remoteClient({
-        apiUrl: new URL(origin),
-        storageManager: StorageManager.open({
-          as: identity,
-          memoryHost: new URL(origin),
-        }),
-        experimental: await experimentalOptionsForDeployedClient({
-          apiUrl: new URL(origin),
-          env: Deno.env.get,
-        }),
-      }));
+      runtime = await connections.openHost(config, origin);
       runtimes.set(origin, runtime);
     }
     return runtime;
   };
 
-  const homePattern = await homePieces.ensureDefaultPattern();
-  const queue = agentQueueIndexCell(
-    homePieces.runtime,
-    home as `did:${string}:${string}`,
-  );
+  const queue = agentQueueIndexCell(homeRuntime, homeSpace);
   await queue.sync();
   if (queue.get() === undefined) {
+    await disposeAll();
     throw new Error(
       "The home space holds no agent queue: its home pattern predates the " +
         "`agentQueue` field. Open the home space in the shell once so the " +
         "pattern updates, then start the runner again.",
     );
   }
-  const registerRunner = (entry: AgentRunnerEntry): Promise<void> => {
-    // The controller's cell is bound to the transaction it was read under;
-    // an event is sent from an unbound one. The send settles when the
-    // handling's commit does.
-    // deno-lint-ignore no-explicit-any
-    const stream = (homePattern.getCell() as any).withTx()
-      .key("agentQueue").key("setAgentRunner");
-    return new Promise<void>((resolve) =>
-      stream.send({ runner: entry }, () => resolve())
+  // The send settles when the handling's commit does.
+  const registerRunner = (entry: AgentRunnerEntry): Promise<void> =>
+    new Promise<void>((resolve) =>
+      homePattern.key("agentQueue").key("setAgentRunner")
+        .send({ runner: entry }, () => resolve())
     );
-  };
 
   const runner = new AgentRunner({
-    homeSpace: home as `did:${string}:${string}`,
+    homeSpace,
     homeHost,
     runnerHost: config.runnerHost,
     runnerId: `${home}#${crypto.randomUUID()}`,
@@ -261,7 +299,7 @@ async function startAgentRunner(
     leaseMs: config.leaseMs,
     runtimeForHost,
     registerRunner,
-    execute: createHarnessAgentRunExecutor({
+    execute: execute ?? createHarnessAgentRunExecutor({
       identityKeyPath: identityPath,
       requester: home,
       workRoot: config.workRoot,
@@ -279,7 +317,7 @@ async function startAgentRunner(
   return {
     stop: async () => {
       await runner.stop();
-      for (const runtime of runtimes.values()) await runtime.dispose();
+      await disposeAll();
     },
   };
 }

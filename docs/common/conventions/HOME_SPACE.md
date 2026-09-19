@@ -142,8 +142,10 @@ user's favorites only, and the queue is not a favorite.
 The piece holds two things:
 
 - `entries` - one `{ run, host }` entry per `AgentRun` record the user has
-  submitted, across spaces and toolsheds. The `agent` builtin appends an entry
-  when a request commits. `run` links to the record in the requesting space;
+  submitted, across spaces and toolsheds. The `agent` builtin adds an entry
+  when a request commits, as an element addressed by the record's id
+  (`elementById` and `addUnique`, the way favorites are keyed), so two requests
+  indexed side by side land as two elements. `run` links to the record in the requesting space;
   `host` is the origin of the toolshed serving that space, carried beside the
   link because a link resolves a space and not the host that serves it.
 - `agentRunner` - the user's registered runner:

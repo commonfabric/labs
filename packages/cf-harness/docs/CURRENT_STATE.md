@@ -317,8 +317,8 @@ The current package provides:
   `maxConfidentiality` the referent's label exceeds is sealed rather than
   linked. The Loom retrieval tools register each admitted row in the run's
   handle table as a held referent under a `cfh:v:` token, and
-  `agentObservedHandlesOfTable` hands the writer the table's cells and
-  referents together ([Read-only Loom retrieval](LOOM_RETRIEVAL.md));
+  `agentObservedHandlesOfTable` hands the writer the table's cells and referents
+  together ([Read-only Loom retrieval](LOOM_RETRIEVAL.md));
 - opt-in fabric-session tools — `run_pattern` and `assign_slug`
   (`--fabric-api-url`, `--fabric-identity`, and `--fabric-space` configured
   together, or their `CF_HARNESS_FABRIC_*` environment fallbacks).

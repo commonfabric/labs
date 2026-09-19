@@ -232,6 +232,32 @@ describe("agent builtin", () => {
     expect(runtime.getHomeSpaceCell().getRaw()).toBeUndefined();
   });
 
+  it("lists two requests staged together as two entries to two records", async () => {
+    setUp();
+    // Two requests whose index writes run side by side: each entry has to
+    // land as an element of its own, not as one element written twice.
+    const first = runAgentPattern("agent-index-pair-a", { task: "first" });
+    const second = runAgentPattern("agent-index-pair-b", { task: "second" });
+    await tx.commit();
+
+    await waitForRecord(first);
+    await waitForRecord(second);
+    const index = agentQueueIndexCell(runtime, space);
+    await waitForCellValue<unknown[]>(
+      runtime,
+      index.key("entries"),
+      (value) => (value?.length ?? 0) > 1,
+    );
+    await runtime.settled();
+
+    const tasks = [0, 1].map((at) =>
+      (index.key("entries").key(at).key("run").resolveAsCell().get() as {
+        task?: string;
+      })?.task
+    );
+    expect(tasks.toSorted()).toEqual(["first", "second"]);
+  });
+
   it("creates no second record on a memo hit", async () => {
     setUp();
     const hits: string[] = [];
