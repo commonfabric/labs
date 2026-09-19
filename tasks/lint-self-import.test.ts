@@ -44,8 +44,8 @@ function fixture(config: Record<string, unknown>): Fixture {
   };
 }
 
-const RUNNER = {
-  name: "@commonfabric/runner",
+const WIDGETS = {
+  name: "@example/widgets",
   exports: {
     ".": "./src/index.ts",
     "./traverse": "./src/traverse.ts",
@@ -53,8 +53,8 @@ const RUNNER = {
 };
 
 /** A package with a `@/` alias over `src/` and a `@` alias for its barrel. */
-const DATA_MODEL = {
-  name: "@commonfabric/data-model",
+const ALIASED = {
+  name: "@example/aliased",
   exports: {
     ".": "./src/index.ts",
     "./types": "./src/types/index.ts",
@@ -77,18 +77,18 @@ describe("lint-self-import", () => {
   });
 
   it("reports an import of the package's own entry point", () => {
-    const messages = fixture(RUNNER).diagnose(
+    const messages = fixture(WIDGETS).diagnose(
       "src/runtime.ts",
-      `import { RuntimeTelemetry } from "@commonfabric/runner";`,
+      `import { RuntimeTelemetry } from "@example/widgets";`,
     );
     expect(messages.length).toBe(1);
     expect(messages[0]).toContain(BARREL);
   });
 
   it("gives general advice for an entry-point import, whose path is the barrel", () => {
-    const messages = fixture(RUNNER).diagnose(
+    const messages = fixture(WIDGETS).diagnose(
       "src/storage/interface.ts",
-      `import { Runtime } from "@commonfabric/runner";`,
+      `import { Runtime } from "@example/widgets";`,
     );
     expect(messages[0]).toContain(
       "Import the module that defines it by relative path instead.",
@@ -97,9 +97,9 @@ describe("lint-self-import", () => {
   });
 
   it("reports an import of the package's own subpath export", () => {
-    const messages = fixture(RUNNER).diagnose(
+    const messages = fixture(WIDGETS).diagnose(
       "src/schema.ts",
-      `import { walk } from "@commonfabric/runner/traverse";`,
+      `import { walk } from "@example/widgets/traverse";`,
     );
     expect(messages.length).toBe(1);
     expect(messages[0]).toContain(SUBPATH);
@@ -107,9 +107,9 @@ describe("lint-self-import", () => {
   });
 
   it("gives general advice for a subpath the exports map omits", () => {
-    const messages = fixture(RUNNER).diagnose(
+    const messages = fixture(WIDGETS).diagnose(
       "src/schema.ts",
-      `import { walk } from "@commonfabric/runner/nowhere";`,
+      `import { walk } from "@example/widgets/nowhere";`,
     );
     expect(messages.length).toBe(1);
     expect(messages[0]).toContain(
@@ -118,95 +118,95 @@ describe("lint-self-import", () => {
   });
 
   it("reports a re-export of the package's own entry point", () => {
-    const messages = fixture(RUNNER).diagnose(
+    const messages = fixture(WIDGETS).diagnose(
       "src/shared.ts",
-      `export * from "@commonfabric/runner";`,
+      `export * from "@example/widgets";`,
     );
     expect(messages.length).toBe(1);
     expect(messages[0]).toContain(BARREL);
   });
 
   it("reports a named re-export from the package's own name", () => {
-    const messages = fixture(RUNNER).diagnose(
+    const messages = fixture(WIDGETS).diagnose(
       "src/shared.ts",
-      `export { Runtime } from "@commonfabric/runner";`,
+      `export { Runtime } from "@example/widgets";`,
     );
     expect(messages.length).toBe(1);
     expect(messages[0]).toContain(BARREL);
   });
 
   it("reports a dynamic import of the package's own name", () => {
-    const messages = fixture(RUNNER).diagnose(
+    const messages = fixture(WIDGETS).diagnose(
       "src/lazy.ts",
-      `export const load = () => import("@commonfabric/runner");`,
+      `export const load = () => import("@example/widgets");`,
     );
     expect(messages.length).toBe(1);
     expect(messages[0]).toContain(BARREL);
   });
 
   it("reports a type-only import of the package's own name", () => {
-    const messages = fixture(RUNNER).diagnose(
+    const messages = fixture(WIDGETS).diagnose(
       "src/runtime.ts",
-      `import type { Runtime } from "@commonfabric/runner";`,
+      `import type { Runtime } from "@example/widgets";`,
     );
     expect(messages.length).toBe(1);
     expect(messages[0]).toContain(BARREL);
   });
 
   it("reports an exact alias for the package's own entry point", () => {
-    const messages = fixture(DATA_MODEL).diagnose(
-      "src/codecs.ts",
-      `import { FabricHash } from "@";`,
+    const messages = fixture(ALIASED).diagnose(
+      "src/maker.ts",
+      `import { Gizmo } from "@";`,
     );
     expect(messages.length).toBe(1);
     expect(messages[0]).toContain(BARREL);
   });
 
   it("advises no form of specifier for an alias of the entry point", () => {
-    const messages = fixture(DATA_MODEL).diagnose(
-      "src/codecs.ts",
-      `import { FabricHash } from "@";`,
+    const messages = fixture(ALIASED).diagnose(
+      "src/maker.ts",
+      `import { Gizmo } from "@";`,
     );
     expect(messages[0]).toContain("Import the module that defines it instead.");
     expect(messages[0]).not.toContain("relative path");
   });
 
   it("reports a prefix alias that reaches the package's own entry point", () => {
-    const messages = fixture(DATA_MODEL).diagnose(
-      "src/codecs.ts",
-      `import { FabricHash } from "@/index.ts";`,
+    const messages = fixture(ALIASED).diagnose(
+      "src/maker.ts",
+      `import { Gizmo } from "@/index.ts";`,
     );
     expect(messages.length).toBe(1);
     expect(messages[0]).toContain(BARREL);
   });
 
   it("returns nothing for a prefix alias that reaches another module", () => {
-    const messages = fixture(DATA_MODEL).diagnose(
-      "src/codecs.ts",
-      `import { FabricHash } from "@/fabric-hash.ts";`,
+    const messages = fixture(ALIASED).diagnose(
+      "src/maker.ts",
+      `import { Gizmo } from "@/gizmo.ts";`,
     );
     expect(messages).toEqual([]);
   });
 
   it("returns nothing for an exact alias that reaches another module", () => {
-    const messages = fixture(DATA_MODEL).diagnose(
-      "src/codecs.ts",
-      `import type { FabricValue } from "@/types";`,
+    const messages = fixture(ALIASED).diagnose(
+      "src/maker.ts",
+      `import type { GizmoValue } from "@/types";`,
     );
     expect(messages).toEqual([]);
   });
 
   it("returns nothing for an alias to the entry point in a test file", () => {
-    const messages = fixture(DATA_MODEL).diagnose(
-      "test/codecs.test.ts",
-      `import { FabricHash } from "@";`,
+    const messages = fixture(ALIASED).diagnose(
+      "test/maker.test.ts",
+      `import { Gizmo } from "@";`,
     );
     expect(messages).toEqual([]);
   });
 
   it("returns nothing for an imports entry that names another package", () => {
-    const messages = fixture(DATA_MODEL).diagnose(
-      "src/codecs.ts",
+    const messages = fixture(ALIASED).diagnose(
+      "src/maker.ts",
       `import { resolve } from "@std/path";`,
     );
     expect(messages).toEqual([]);
@@ -216,11 +216,11 @@ describe("lint-self-import", () => {
     // Under `@/` alone, `@/deep/index.ts` would be `src/deep/index.ts`. The
     // longer key sends it to the entry point instead.
     const messages = fixture({
-      ...DATA_MODEL,
+      ...ALIASED,
       imports: { "@/": "./src/", "@/deep/": "./src/" },
     }).diagnose(
-      "src/codecs.ts",
-      `import { FabricHash } from "@/deep/index.ts";`,
+      "src/maker.ts",
+      `import { Gizmo } from "@/deep/index.ts";`,
     );
     expect(messages.length).toBe(1);
     expect(messages[0]).toContain(BARREL);
@@ -228,30 +228,30 @@ describe("lint-self-import", () => {
 
   it("returns nothing for an alias in a package with no entry point", () => {
     const messages = fixture({
-      name: "@commonfabric/toolshed",
+      name: "@example/server",
       imports: { "@/": "./" },
     }).diagnose("routes/health.ts", `import { app } from "@/index.ts";`);
     expect(messages).toEqual([]);
   });
 
   it("returns nothing for an import of another package", () => {
-    const messages = fixture(RUNNER).diagnose(
+    const messages = fixture(WIDGETS).diagnose(
       "src/runtime.ts",
-      `import { isRecord } from "@commonfabric/utils/types";`,
+      `import { isRecord } from "@example/gadgets/types";`,
     );
     expect(messages).toEqual([]);
   });
 
   it("returns nothing for a package whose name only prefixes this one's", () => {
-    const messages = fixture(RUNNER).diagnose(
+    const messages = fixture(WIDGETS).diagnose(
       "src/runtime.ts",
-      `import { x } from "@commonfabric/runner-client";`,
+      `import { x } from "@example/widgets-client";`,
     );
     expect(messages).toEqual([]);
   });
 
   it("returns nothing for a relative import", () => {
-    const messages = fixture(RUNNER).diagnose(
+    const messages = fixture(WIDGETS).diagnose(
       "src/runtime.ts",
       `import { RuntimeTelemetry } from "./telemetry.ts";`,
     );
@@ -259,33 +259,33 @@ describe("lint-self-import", () => {
   });
 
   it("returns nothing for a file under the package's test directory", () => {
-    const messages = fixture(RUNNER).diagnose(
+    const messages = fixture(WIDGETS).diagnose(
       "test/runtime.test.ts",
-      `import { Runtime } from "@commonfabric/runner";`,
+      `import { Runtime } from "@example/widgets";`,
     );
     expect(messages).toEqual([]);
   });
 
   it("returns nothing for a file under the package's integration directory", () => {
-    const messages = fixture(RUNNER).diagnose(
+    const messages = fixture(WIDGETS).diagnose(
       "integration/boot.ts",
-      `import { Runtime } from "@commonfabric/runner";`,
+      `import { Runtime } from "@example/widgets";`,
     );
     expect(messages).toEqual([]);
   });
 
   it("returns nothing for a test file beside the source it tests", () => {
-    const messages = fixture(RUNNER).diagnose(
+    const messages = fixture(WIDGETS).diagnose(
       "src/runtime.test.ts",
-      `import { Runtime } from "@commonfabric/runner";`,
+      `import { Runtime } from "@example/widgets";`,
     );
     expect(messages).toEqual([]);
   });
 
   it("returns nothing for a benchmark file", () => {
-    const messages = fixture(RUNNER).diagnose(
+    const messages = fixture(WIDGETS).diagnose(
       "src/runtime.bench.ts",
-      `import { Runtime } from "@commonfabric/runner";`,
+      `import { Runtime } from "@example/widgets";`,
     );
     expect(messages).toEqual([]);
   });
@@ -297,7 +297,7 @@ describe("lint-self-import", () => {
     const messages = Deno.lint.runPlugin(
       plugin,
       resolve(root, "src/main.ts"),
-      `import { Runtime } from "@commonfabric/runner";`,
+      `import { Runtime } from "@example/widgets";`,
     ).map((diagnostic) => diagnostic.message);
     expect(messages).toEqual([]);
   });
@@ -305,7 +305,7 @@ describe("lint-self-import", () => {
   it("returns nothing for a file whose package declares no name", () => {
     const messages = fixture({ exports: { ".": "./mod.ts" } }).diagnose(
       "src/main.ts",
-      `import { Runtime } from "@commonfabric/runner";`,
+      `import { Runtime } from "@example/widgets";`,
     );
     expect(messages).toEqual([]);
   });
@@ -314,22 +314,22 @@ describe("lint-self-import", () => {
     // A workspace member with no name of its own sits inside a package that has
     // one. Its files belong to the member, so the enclosing name is another
     // package's and free to import.
-    const outer = fixture(RUNNER);
+    const outer = fixture(WIDGETS);
     const inner = resolve(outer.root, "nested");
     Deno.mkdirSync(inner);
     Deno.writeTextFileSync(resolve(inner, "deno.jsonc"), "{}\n");
     const messages = Deno.lint.runPlugin(
       plugin,
       resolve(inner, "main.ts"),
-      `import { Runtime } from "@commonfabric/runner";`,
+      `import { Runtime } from "@example/widgets";`,
     ).map((diagnostic) => diagnostic.message);
     expect(messages).toEqual([]);
   });
 
   it("reports a type written as an inline `import(...)`", () => {
-    const messages = fixture(RUNNER).diagnose(
+    const messages = fixture(WIDGETS).diagnose(
       "src/runtime.ts",
-      `type T = import("@commonfabric/runner").Runtime;`,
+      `type T = import("@example/widgets").Runtime;`,
     );
     expect(messages.length).toBe(1);
     expect(messages[0]).toContain(BARREL);
@@ -338,14 +338,14 @@ describe("lint-self-import", () => {
   it("reads a second file against the package it already resolved", () => {
     // The owning package is cached per directory, so the second file in a
     // directory takes a different path to the same answer than the first.
-    const pkg = fixture(RUNNER);
+    const pkg = fixture(WIDGETS);
     const first = pkg.diagnose(
       "src/runtime.ts",
-      `import { Runtime } from "@commonfabric/runner";`,
+      `import { Runtime } from "@example/widgets";`,
     );
     const second = pkg.diagnose(
       "src/schema.ts",
-      `import { walk } from "@commonfabric/runner/traverse";`,
+      `import { walk } from "@example/widgets/traverse";`,
     );
     expect(first.length).toBe(1);
     expect(first[0]).toContain(BARREL);
@@ -356,14 +356,14 @@ describe("lint-self-import", () => {
   it("prefers deno.json to deno.jsonc, as Deno itself does", () => {
     // Deno takes deno.json whole and ignores the other file, so a name in the
     // ignored one is not the package's name.
-    const pkg = fixture({ name: "@commonfabric/ignored" });
+    const pkg = fixture({ name: "@example/ignored" });
     Deno.writeTextFileSync(
       resolve(pkg.root, "deno.json"),
-      JSON.stringify(RUNNER),
+      JSON.stringify(WIDGETS),
     );
     const messages = pkg.diagnose(
       "src/runtime.ts",
-      `import { Runtime } from "@commonfabric/runner";`,
+      `import { Runtime } from "@example/widgets";`,
     );
     expect(messages.length).toBe(1);
     expect(messages[0]).toContain(BARREL);
@@ -380,18 +380,18 @@ describe("lint-self-import", () => {
       Deno.lint.runPlugin(
         plugin,
         resolve(root, "src/main.ts"),
-        `import { Runtime } from "@commonfabric/runner";`,
+        `import { Runtime } from "@example/widgets";`,
       )
     ).toThrow();
   });
 
   it("reports a package that names itself in a bare exports string", () => {
     const messages = fixture({
-      name: "@commonfabric/leb128",
+      name: "@example/single",
       exports: "./src/mod.ts",
     }).diagnose(
       "src/encode.ts",
-      `import { decode } from "@commonfabric/leb128";`,
+      `import { decode } from "@example/single";`,
     );
     expect(messages.length).toBe(1);
     expect(messages[0]).toContain(BARREL);
