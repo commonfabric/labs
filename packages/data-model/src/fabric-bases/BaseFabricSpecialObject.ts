@@ -1,7 +1,6 @@
 // `interface.ts` extends its protocol classes from the class here, and nearly
 // every module of the package imports `interface.ts`. So whatever this module
-// imports has to import nothing at run time itself. `value-debug-internal.ts`,
-// which is what `@/value-debug` names, is such a module.
+// imports has to import nothing at run time itself.
 import {
   areDebugRenderersInstalled,
   toCompactDebugString,
