@@ -17,13 +17,10 @@ import {
  */
 export abstract class BaseFabricSpecialObject {
   /**
-   * Custom inspector, so that a `console.log()` or a debugger shows what this
-   * value _is_. The default rendering is `{}`: state lives in private fields,
-   * which have no enumerable own properties for an inspector to find.
-   *
-   * Delegates to the canonical debug renderer rather than formatting here, so
-   * that this surface improves whenever that one does. Where the renderers are
-   * not installed, the result names the class and nothing more.
+   * Custom inspector: what `console.log()` and a debugger show for this value.
+   * The result is the value's compact debug string, as `toCompactDebugString()`
+   * renders it. Where the debug renderers are not installed, it is the name of
+   * the value's class in square brackets.
    */
   [Symbol.for("Deno.customInspect")](): string {
     return areDebugRenderersInstalled()
