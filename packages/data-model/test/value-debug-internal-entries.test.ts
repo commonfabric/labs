@@ -7,9 +7,8 @@
 import { expect } from "@std/expect";
 import { parse as parseJsonc } from "@std/jsonc";
 import { describe, it } from "@std/testing/bdd";
-import { defer } from "@commonfabric/utils/defer";
 
-import type { EntryLoadReport } from "./value-debug-internal-entry-worker.ts";
+import { reportFromFreshRealm } from "./value-debug-internal-worker-client.ts";
 
 /**
  * The entries which are a single module that renders nothing, and so have no
@@ -25,25 +24,6 @@ const EXPORTS = (parseJsonc(
   Deno.readTextFileSync(new URL("../deno.jsonc", import.meta.url)),
 ) as { exports: Record<string, string> }).exports;
 
-/** Loads `modulePath` first in a worker, and returns the worker's report. */
-async function loadAlone(modulePath: string): Promise<EntryLoadReport> {
-  const worker = new Worker(
-    new URL("./value-debug-internal-entry-worker.ts", import.meta.url).href,
-    { type: "module" },
-  );
-  const report = defer<EntryLoadReport>();
-
-  worker.onmessage = (ev) => report.resolve(ev.data as EntryLoadReport);
-  worker.onerror = (ev) => report.reject(new Error(ev.message));
-
-  try {
-    worker.postMessage(new URL(`../${modulePath}`, import.meta.url).href);
-    return await report.promise;
-  } finally {
-    worker.terminate();
-  }
-}
-
 describe("value-debug-internal-entries", () => {
   it("finds the export map", () => {
     expect(Object.keys(EXPORTS)).toContain(".");
@@ -56,7 +36,11 @@ describe("value-debug-internal-entries", () => {
     const expected = !RENDERS_NOTHING.has(entry);
 
     it(`reports the renderers ${expected ? "installed" : "not installed"} once \`${entry}\` alone has loaded`, async () => {
-      expect(await loadAlone(modulePath)).toEqual({ installed: expected });
+      const url = new URL(`../${modulePath}`, import.meta.url).href;
+
+      expect(await reportFromFreshRealm(url)).toMatchObject({
+        installed: expected,
+      });
     });
   }
 });
