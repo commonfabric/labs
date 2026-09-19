@@ -299,6 +299,7 @@ export {
   TYPE,
   UI,
   type UnsafeBinding,
+  VIEWS,
   type VNode,
   WebhookConfigSchema,
 } from "./builder/types.ts";
