@@ -1492,13 +1492,20 @@ function arraySubsetIssue(
   return schemaSubsetIssue(sourceItems, targetItems, `${path}[]`, context);
 }
 
+/**
+ * Checks target literal restrictions against explicit source literals or the
+ * finite value set of a boolean or null source type.
+ */
 function literalSubsetIssue(
   source: SchemaObject,
   target: SchemaObject,
   path: string,
 ): string | undefined {
-  const sourceValues = allowedLiteralValues(source) ??
-    (source.type === "null" ? [null] : undefined);
+  let sourceValues = allowedLiteralValues(source);
+  if (sourceValues === undefined) {
+    if (source.type === "boolean") sourceValues = [false, true];
+    else if (source.type === "null") sourceValues = [null];
+  }
   const targetValues = allowedLiteralValues(target);
   if (!targetValues) return undefined;
   if (!sourceValues) {

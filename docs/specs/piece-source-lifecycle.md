@@ -694,12 +694,15 @@ evolution and link proofs, under their respective default policies.
 
 Literal comparisons intersect `const` and `enum` with the declared `type`, so
 values that the type excludes do not restrict a widening. A `null` type proves
-membership in an enum or const containing `null`. Source enums containing
-several JSON value types are partitioned by type, including beside a type list
-or within nested `anyOf` branches, with sibling constraints and branch metadata
-retained. Each partition must satisfy a target alternative. Target enums remain
-whole, and an enum containing a value outside the JSON type vocabulary, such as
-a `FabricPrimitive`, remains subject to the conservative object proof. During
+membership in an enum or const containing `null`; a `boolean` type proves
+membership in an enum containing both `false` and `true`. This permits argument
+widening from `boolean` to `boolean | "auto"` and the reverse result narrowing.
+Source enums containing several JSON value types are partitioned by type,
+including beside a type list or within nested `anyOf` branches, with sibling
+constraints and branch metadata retained. Each partition must satisfy a target
+alternative. Target enums remain whole, and an enum containing a value outside
+the JSON type vocabulary, such as a `FabricPrimitive`, remains subject to the
+conservative object proof. During
 pattern evolution, a branch stays whole if partitioning would change the
 effective default it supplies, including defaults inherited from a child branch
 or a reference. Link proofs compare target defaults only, so source defaults do
