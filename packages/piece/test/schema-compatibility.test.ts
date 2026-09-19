@@ -3267,6 +3267,98 @@ describe("piece schema compatibility", () => {
         ).toThrow(/result:/);
       }
     });
+
+    it("keeps a nested union reached through a reference at its boundary", () => {
+      const inline: JSONSchema = {
+        $defs: { value: { anyOf: [{ type: "boolean" }, { type: "null" }] } },
+        anyOf: [{ anyOf: [{ type: "boolean" }, { type: "null" }] }],
+      };
+      const referenced: JSONSchema = {
+        $defs: { value: { anyOf: [{ type: "boolean" }, { type: "null" }] } },
+        anyOf: [{ $ref: "#/$defs/value" }],
+      };
+      // Written inline the wrapper is transparent, so its children may take
+      // different target alternatives.
+      expect(() => assertSchemaSubset(inline, flat)).not.toThrow();
+      // Named through a `$ref` it is not: the reference decides which schema
+      // and which root the proof compares, so the wrapper keeps its own
+      // boundary and the whole union has to fit one target alternative.
+      expect(() => assertSchemaSubset(referenced, flat)).toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(referenced, true),
+          pattern(flat, true),
+        )
+      ).toThrow(/argument:/);
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(true, flat),
+          pattern(true, referenced),
+        )
+      ).toThrow(/result:/);
+    });
+
+    it("splits the generated cell union only when it carries no marker", () => {
+      // The shape the generator emits for `Cell<Profile | undefined> |
+      // undefined`, the only nested `anyOf` in the pattern baselines
+      // (`cfc-group-chat-demo/main.tsx`, `authorProfile`). The result schema
+      // spells the wrapper bare; the argument schema marks it a cell.
+      const defs = {
+        profile: { type: "object", properties: { name: { type: "string" } } },
+      } satisfies Record<string, JSONSchema>;
+      const nestedUnion = (
+        marker: Exclude<JSONSchema, boolean>,
+      ): JSONSchema => ({
+        $defs: defs,
+        anyOf: [
+          { type: "undefined" },
+          {
+            ...marker,
+            anyOf: [{ type: "undefined" }, { $ref: "#/$defs/profile" }],
+          },
+        ],
+      });
+      const flattened = (branch: JSONSchema): JSONSchema => ({
+        $defs: defs,
+        anyOf: [{ type: "undefined" }, branch],
+      });
+
+      const bare = nestedUnion({});
+      const bareFlattened = flattened({ $ref: "#/$defs/profile" });
+      expect(() => assertSchemaSubset(bare, bareFlattened)).not.toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(bare, bareFlattened),
+          pattern(bareFlattened, bare),
+        )
+      ).not.toThrow();
+
+      // Splitting the marked wrapper would drop the marker. The flattened
+      // target admits a cell of the profile and a plain `undefined`, but not
+      // a cell holding `undefined`, so that transition narrows and stays
+      // refused in both roles.
+      const marked = nestedUnion({ asCell: ["cell"] });
+      const markedFlattened = flattened({
+        asCell: ["cell"],
+        $ref: "#/$defs/profile",
+      });
+      expect(() => assertSchemaSubset(marked, markedFlattened)).toThrow();
+      // Dropping the marker outright is the transition a split that looked
+      // past it would wrongly admit: a cell is not a profile.
+      expect(() => assertSchemaSubset(marked, bareFlattened)).toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(marked, markedFlattened),
+          pattern(markedFlattened, marked),
+        )
+      ).toThrow(/argument:/);
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(marked, markedFlattened),
+          pattern(markedFlattened, marked),
+        )
+      ).toThrow(/result:/);
+    });
   });
 
   describe("finite literal subsets", () => {
