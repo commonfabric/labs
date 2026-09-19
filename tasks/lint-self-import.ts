@@ -61,11 +61,8 @@ interface OwningPackage {
   readonly name: string;
   /** The `exports` map, from specifier suffix to a path under `root`. */
   readonly exports: ReadonlyMap<string, string>;
-  /**
-   * The entries of the `imports` map that name a path under `root`, from key
-   * to that path.
-   */
-  readonly aliases: ReadonlyMap<string, string>;
+  /** The `imports` map, from key to the address it stands for. */
+  readonly imports: ReadonlyMap<string, string>;
 }
 
 /**
@@ -113,17 +110,12 @@ function exportMap(exports: unknown): ReadonlyMap<string, string> {
   return map;
 }
 
-/**
- * The entries of a configuration's `imports` map whose value is a path relative
- * to the configuration, which are the ones that can name a file of the package.
- */
-function aliasMap(imports: unknown): ReadonlyMap<string, string> {
+/** The `imports` map of a configuration, keeping the entries that are strings. */
+function importMap(imports: unknown): ReadonlyMap<string, string> {
   const map = new Map<string, string>();
   if (isObjectOrArray(imports)) {
     for (const [key, value] of Object.entries(imports)) {
-      if (typeof value === "string" && value.startsWith("./")) {
-        map.set(key, value);
-      }
+      if (typeof value === "string") map.set(key, value);
     }
   }
   return map;
@@ -156,27 +148,32 @@ function computeOwner(directory: string): OwningPackage | null {
     root: directory,
     name,
     exports: exportMap(config.exports),
-    aliases: aliasMap(config.imports),
+    imports: importMap(config.imports),
   };
 }
 
 /**
- * The file `specifier` names through one of the package's aliases, or null
- * when no alias matches it. The match is the one an import map makes: a key
- * equal to the specifier, and failing that the longest key ending in `/` that
- * the specifier starts with.
+ * The file `specifier` names through the package's `imports` map, or null when
+ * it names none. The match is the one an import map makes: a key equal to the
+ * specifier, and failing that the longest key ending in `/` that the specifier
+ * starts with. The winning entry is chosen from the whole map, and only then
+ * asked whether it is a path relative to the configuration, so an entry naming
+ * another package shadows a shorter one naming a directory here.
  */
 function aliasTarget(owner: OwningPackage, specifier: string): string | null {
-  const exact = owner.aliases.get(specifier);
-  if (exact !== undefined) return resolve(owner.root, exact);
-  let best: readonly [key: string, path: string] | null = null;
-  for (const entry of owner.aliases) {
-    const [key] = entry;
-    if (!key.endsWith("/") || !specifier.startsWith(key)) continue;
-    if (best === null || key.length > best[0].length) best = entry;
+  let key = owner.imports.has(specifier) ? specifier : null;
+  if (key === null) {
+    for (const candidate of owner.imports.keys()) {
+      if (!candidate.endsWith("/") || !specifier.startsWith(candidate)) {
+        continue;
+      }
+      if (key === null || candidate.length > key.length) key = candidate;
+    }
   }
-  if (best === null) return null;
-  return resolve(owner.root, best[1], specifier.slice(best[0].length));
+  if (key === null) return null;
+  const address = owner.imports.get(key);
+  if (address === undefined || !address.startsWith("./")) return null;
+  return resolve(owner.root, address, specifier.slice(key.length));
 }
 
 /** True when `specifier` is an alias for the package's entry point. */

@@ -226,6 +226,22 @@ describe("lint-self-import", () => {
     expect(messages[0]).toContain(BARREL);
   });
 
+  it("returns nothing for an exact entry naming another package, over a local prefix", () => {
+    const messages = fixture({
+      ...ALIASED,
+      imports: { "@/": "./src/", "@/index.ts": "npm:elsewhere@^1" },
+    }).diagnose("src/maker.ts", `import { Gizmo } from "@/index.ts";`);
+    expect(messages).toEqual([]);
+  });
+
+  it("returns nothing for a longer prefix naming another package, over a local one", () => {
+    const messages = fixture({
+      ...ALIASED,
+      imports: { "@/": "./", "@/src/": "npm:/elsewhere@^1/" },
+    }).diagnose("src/maker.ts", `import { Gizmo } from "@/src/index.ts";`);
+    expect(messages).toEqual([]);
+  });
+
   it("returns nothing for an alias in a package with no entry point", () => {
     const messages = fixture({
       name: "@example/server",
