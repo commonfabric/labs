@@ -333,6 +333,17 @@ root and ownership of that particular start; scoped serving children resume
 through their per-actor program coordinator. Children without an independent
 source lifecycle continue to bind the parent's module and inputs.
 
+**Independent input ownership** begins with that recorded origin or revision
+history, even before the child adopts another release. The parent supplies the
+initial bindings; subsequent parent releases do not replace them. Stored links
+remain reactive to their existing targets, but replacing a parent-internal cell
+does not retarget the child's link to the new cell. A parent author must preserve
+those targets or coordinate an owner-authorized input update on the child, such
+as `cf piece apply`, against the child's retained input contract. That
+explicit input update is the rebinding mechanism; restarting or updating the
+parent alone leaves the child's inputs intact. Source adoption likewise keeps
+the stored inputs, including owner overrides.
+
 In this document, **wishing code into being** means a product authoring
 affordance that asks an LLM to write pattern source. It is distinct from the
 runtime `wish()` builtin. The builtin discovers and connects to existing

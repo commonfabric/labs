@@ -11937,9 +11937,9 @@ export class Runner {
       // parent's program on each release of the parent, so an origin of its
       // own would be followed twice; a cross-space child outlives the
       // program that made it and is what a release has to reach.
-      const sourceOrigin = childResultCell.space === parentResultCell.space
-        ? undefined
-        : this.#childSystemOrigin(instanceTx, parentResultCell, patternImpl);
+      const sourceOrigin = crossSpace && !resumeExisting
+        ? this.#childSystemOrigin(instanceTx, parentResultCell, patternImpl)
+        : undefined;
       const options = {
         awaitSyncBeforeInitialRun: defersInitialRunUntilSynced(
           schedulerRehydration,

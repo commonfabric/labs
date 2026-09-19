@@ -381,5 +381,38 @@ export default pattern<{ value: string }>(({ value }) => ({ child: Child${
         expect(child.key("marker").get()).toBe("original changed");
       });
     }
+
+    it("keeps a tracked child's bindings when a parent release changes its input expression", async () => {
+      const { parent, child } = await create();
+      const argument = child.getArgumentCell()!.getRaw();
+      const ref = getPatternIdentityRef(child);
+      runtime.runner.stop(parent);
+      const changedParent = await runtime.patternManager.compilePattern({
+        main: parentPath,
+        files: [
+          {
+            name: parentPath,
+            contents: `import { computed, pattern } from 'commonfabric';
+import Child from './child.tsx';
+export default pattern<{ value: string }>(({ value }) => ({
+  child: Child.inSpace('${child.space}')({ value: computed(() => value + '!') }),
+}));`,
+          },
+          { name: childPath, contents: childSource("original") },
+        ],
+      }, { space: parent.space });
+      const tx = runtime.edit();
+      runtime.runner.run(tx, changedParent, { value: "parent" }, parent);
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit()).error).toBeUndefined();
+      await parent.pull();
+      await runtime.idle();
+      const resumedChild = parent.key("child").resolveAsCell();
+      await resumedChild.pull();
+      expect(resumedChild.sourceURI).toBe(child.sourceURI);
+      expect(getPatternIdentityRef(resumedChild)).toEqual(ref);
+      expect(resumedChild.getArgumentCell()!.getRaw()).toEqual(argument);
+      expect(resumedChild.key("marker").get()).toBe("original parent");
+    });
   });
 });
