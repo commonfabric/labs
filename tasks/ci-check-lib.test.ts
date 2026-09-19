@@ -1343,6 +1343,28 @@ Deno.test("githubGet reads a busy signal carrying no headers as a rate limit", a
   assertEquals(calls, 4);
 });
 
+Deno.test("githubGet waits out a secondary limit that arrives as a refusal", async () => {
+  // The same condition spelled 403 rather than 429. Retrying is what can still
+  // hold the pull request to its baseline, so the status it arrives under must
+  // not decide whether the wait is observed.
+  const calls = await withFetchAnswering(
+    () =>
+      new Response("slow down", {
+        status: 403,
+        statusText: "Forbidden",
+        headers: { "retry-after": "0", "x-ratelimit-remaining": "42" },
+      }),
+    async () => {
+      await assertRejects(
+        () => githubGet("/repos/commonfabric/labs/actions/runs"),
+        GitHubRateLimitError,
+      );
+    },
+  );
+
+  assertEquals(calls, 4);
+});
+
 Deno.test("githubGet does not call an ordinary refusal a rate limit", async () => {
   await withFetchAnswering(
     () => new Response("forbidden", { status: 403, statusText: "Forbidden" }),

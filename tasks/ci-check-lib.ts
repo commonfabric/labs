@@ -388,6 +388,16 @@ function isOverPrimaryRateLimit(resp: Response): boolean {
   return resp.headers.get("x-ratelimit-remaining") === "0";
 }
 
+/**
+ * Whether `resp` is a limit that asks for a wait rather than one that has
+ * spent the window. Such a limit often clears inside the job, so it is worth
+ * another attempt whichever status it arrives under — and an attempt that
+ * succeeds is a pull request held to its baseline rather than passed ungated.
+ */
+function isSecondaryRateLimit(resp: Response): boolean {
+  return isRateLimitResponse(resp) && !isOverPrimaryRateLimit(resp);
+}
+
 function githubApiError(
   resp: Response,
   path: string,
@@ -445,8 +455,14 @@ export async function githubGet<T>(path: string): Promise<T> {
     if (resp.ok) return resp.json();
 
     await cancelResponseBody(resp);
+    // A secondary limit is worth another attempt whatever status carries it,
+    // which is why it is named here beside the statuses that are retried by
+    // their own nature. A spent window is not, and an ordinary refusal will
+    // not answer differently for being asked again.
+    const worthRetrying = RETRYABLE_GITHUB_STATUSES.has(resp.status) ||
+      isSecondaryRateLimit(resp);
     if (
-      !RETRYABLE_GITHUB_STATUSES.has(resp.status) ||
+      !worthRetrying ||
       isOverPrimaryRateLimit(resp) ||
       attempt === GITHUB_GET_MAX_ATTEMPTS
     ) {
