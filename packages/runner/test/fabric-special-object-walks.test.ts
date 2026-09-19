@@ -58,8 +58,14 @@ import {
 
 import { mergeDefaults } from "../src/schema.ts";
 import { mergeAnyOfMatches } from "../src/traverse.ts";
-import { snapshotQueryResult } from "../src/query-result-proxy.ts";
-import { extractDefaultValues } from "../src/runner-utils.ts";
+import {
+  isFabricInstanceOrView,
+  snapshotQueryResult,
+} from "../src/query-result-proxy.ts";
+import {
+  extractDefaultValues,
+  mergeSchemaDefaults,
+} from "../src/runner-utils.ts";
 import { sanitizeSchemaForLinks } from "../src/link-utils.ts";
 import {
   getValueAtPath,
@@ -360,7 +366,28 @@ describe("fabric special objects through the runner's walks", () => {
     // `query-result-proxy.ts` carries that gap and the marker for closing it,
     // and the identity case above pins it.
 
+    forEachSpecialObject(
+      FABRIC_PRIMITIVES,
+      (name) => `is not a \`${name}\` to \`isFabricInstanceOrView()\``,
+      (_kind, special) => {
+        expect(isFabricInstanceOrView(special)).toBe(false);
+      },
+    );
+
+    it("is not a plain record to `isFabricInstanceOrView()`", () => {
+      expect(isFabricInstanceOrView({ a: 1 })).toBe(false);
+      expect(isFabricInstanceOrView([1])).toBe(false);
+      expect(isFabricInstanceOrView(null)).toBe(false);
+      // An own `constructor` is data sharing the name, not the class, and
+      // cannot answer for an instance; the answer never reads the name.
+      expect(isFabricInstanceOrView({ constructor: FabricError })).toBe(false);
+    });
+
     for (const kind of FABRIC_INSTANCES) {
+      it(`is a \`${kind.name}\` to \`isFabricInstanceOrView()\``, () => {
+        expect(isFabricInstanceOrView(kind.make())).toBe(true);
+      });
+
       it(`is refused by \`mergeAnyOfMatches()\` for a \`${kind.name}\``, () => {
         const special = kind.make();
         expect(() => mergeAnyOfMatches([special, special])).toThrow(
@@ -470,6 +497,37 @@ describe("fabric special objects through the runner's walks", () => {
       const read = cell.get()[0] as object;
       expect(read.constructor.name).toBe("FabricError");
       expect(read instanceof FabricError).toBe(false);
+    });
+
+    it("hands a stored `FabricError` through `mergeSchemaDefaults()` whole", () => {
+      // The read hands back a view whose prototype is `Object.prototype` (the
+      // identity case above), so the merge took the instance for a record and
+      // copied it, and the copy's descriptor query met the freeze shield the
+      // view's stub target lacks: a proxy-invariant `TypeError` where a
+      // verdict was owed. The merge asks `isFabricInstanceOrView()` now,
+      // which asks `instanceof` of the object the view stands for, and hands
+      // the view back as the leaf `traverseDAG` made it.
+
+      const cell = runtime.getCell<{ err: unknown }>(
+        space,
+        "walks-merge-defaults-error",
+        undefined,
+        tx,
+      );
+      cell.set(
+        { err: FabricError.fromNativeError(new Error("boom")) } as never,
+      );
+
+      const view = cell.get();
+      expect(isFabricInstanceOrView(view.err)).toBe(true);
+      expect(isFabricInstanceOrView(view)).toBe(false);
+
+      const merged = mergeSchemaDefaults(view, undefined, {
+        type: "object",
+        properties: { err: { type: "object" } },
+      }, { mergeMaterializedLinks: true });
+      expect(merged.err).toBe(view.err);
+      expect((merged.err as object).constructor.name).toBe("FabricError");
     });
 
     it("appends a `FabricError` to a stored array", () => {

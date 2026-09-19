@@ -711,6 +711,11 @@ caller. Five shapes cover the tree today:
 - **Treat it as the atomic value it is.** Three sites in `data-updating.ts`
   hand it to the branch that emits it whole: two exclude it from array
   anchoring, and one resets the slot before the per-key writes that follow.
+  `mergeSchemaDefaults()` in `runner-utils.ts` hands a present instance back
+  in place of merging into it, and asks `isFabricInstanceOrView()` rather
+  than `instanceof`, so an instance seen through a cell read -- whose
+  prototype the view erases -- gets the same answer instead of a copy that
+  trips the proxy invariant.
 - **Compare it by content.** `storage/v2-transaction.ts`'s
   `shallowStructureChanged()` hands both operands to `valueEqual()` rather than
   comparing key sets, which for two special objects would compare two empty

@@ -18,6 +18,7 @@ import {
 import { isCell, isStream } from "./cell.ts";
 import { ContextualFlowControl } from "./cfc.ts";
 import { isCellLink } from "./link-utils.ts";
+import { isFabricInstanceOrView } from "./query-result-proxy.ts";
 import { type SigilLink, type URI } from "./sigil-types.ts";
 import {
   cfcSchemaResolvedRoot,
@@ -648,6 +649,26 @@ function mergeSchemaDefaultsUncached(
   }
 
   try {
+    // A present `FabricInstance` is durable state, handed back whole: the
+    // rule below for a scalar or special object, stated ahead of the union
+    // arms because one seen through a cell read is a view whose prototype is
+    // `Object.prototype`, which those arms and the record copy would take
+    // for a record. The copy cannot even fail quietly -- a spread's
+    // descriptor query meets the instance's non-configurable freeze shield,
+    // which the view's stub target lacks, so the proxy invariant throws
+    // before any verdict. `traverseDAG` leafs the instance through on the
+    // schemaless read that produced the view, and the merge owes the same:
+    // defaults fill absent slots and never replace a present value, and the
+    // instance's own verdict belongs to the validator, which judges it whole.
+    //
+    // TODO(danfuzz): schemas will come to describe an instance's contents -- a
+    // `FabricMap` with keys of one type and values of another, say -- and a
+    // default can then sit inside one. This return, and the special-object
+    // rule below it, is what stops the merge at the instance's surface; when
+    // that lands, the merge descends an instance by its codec contents
+    // instead, and both stops come out.
+    if (valuePresent && isFabricInstanceOrView(value)) return value;
+
     if (
       valuePresent &&
       (isFabricPlainObject(value as FabricValue) || Array.isArray(value)) &&

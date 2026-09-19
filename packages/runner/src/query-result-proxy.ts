@@ -1,4 +1,5 @@
 import {
+  FabricInstance,
   FabricPrimitive,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
@@ -394,6 +395,12 @@ function createViewProxy<T>(
   // the walk proceeds to rebuild the value as a bare `{}`. That is around ten
   // sites and counting, so they are not listed here to go stale;
   // `grep -rn 'instanceof FabricInstance' packages/runner/src` finds them.
+  //
+  // `isFabricInstanceOrView()` below is the interim test for a client that
+  // has an answer for an instance and must not lose one this way. It asks
+  // nothing of the view: `storedValueByView` records, at construction, the
+  // stored object each view stands for, and the predicate asks `instanceof`
+  // of that object.
   //
   // `test/llm-dialog-special-objects.test.ts` pins that end to end, so closing
   // this turns that test red rather than letting it pass silently.
@@ -791,6 +798,7 @@ function createViewProxy<T>(
   }) as T;
 
   // Cache the proxy in the appropriate cache before returning
+  storedValueByView.set(proxy as object, value);
   txCache.byLink.set(cacheKey, proxy);
   // Not the by-value index for a pinned view: it names a value rather than an
   // instant, so it would hand a view taken at one epoch to a reader asking at
@@ -822,6 +830,48 @@ export function getCellOrThrow<T = any>(value: any): Cell<T> {
 export function isCellResult(value: any): value is CellResult<any> {
   return isObjectOrArray(value) &&
     typeof (value as Partial<BackToCellInternals>)[toCell] === "function";
+}
+
+/**
+ * The stored object each view stands for, recorded when the view is built.
+ *
+ * A view's proxy target is an empty stub with no `getPrototypeOf` trap (the
+ * marker above the proxy construction says why), so nothing about the view
+ * itself -- its prototype, `instanceof`, a plain-object test -- reports the
+ * class of the value behind it. The class is a fact about that value, and the
+ * value is in hand where the view is built, so this records it there rather
+ * than reconstructing it from the view afterwards.
+ *
+ * Deliberately not exported. The object is the creation-time read, and
+ * reading its contents directly would bypass the view's read tracking; the
+ * one question asked of it, {@link isFabricInstanceOrView}, is a class
+ * question that touches no contents.
+ */
+const storedValueByView = new WeakMap<object, unknown>();
+
+/**
+ * Whether `value` is a `FabricInstance`, held directly or seen through a cell
+ * read.
+ *
+ * A view over an instance has `Object.prototype` for its prototype, so
+ * `instanceof FabricInstance` is `false` for it and a plain-object test takes
+ * it for a record with no keys. A walk that has an answer for an instance and
+ * would otherwise copy the view needs to know -- and the copy cannot even fail
+ * quietly: its descriptor query meets the instance's non-configurable freeze
+ * shield, which the stub target lacks, and the proxy invariant throws.
+ *
+ * The answer is `instanceof` of the object the view stands for, which the view
+ * registry recorded at construction; the view itself is asked nothing, and no
+ * storage read is made. A value that is neither an instance nor a view is not
+ * one.
+ *
+ * TODO(danfuzz): once a view over a `FabricInstance` is perceived as one (the
+ * marker above the proxy construction), this collapses to `instanceof`.
+ */
+export function isFabricInstanceOrView(value: unknown): boolean {
+  if (value instanceof FabricInstance) return true;
+  if (typeof value !== "object" || value === null) return false;
+  return storedValueByView.get(value) instanceof FabricInstance;
 }
 
 /**
