@@ -289,6 +289,16 @@ export interface RecordNamesResult {
    * under `named` and asks for the rest. A name that stays here across runs is
    * a member whose own verb is refusing it, which `recordName` does for a
    * member that already stores a different name.
+   *
+   * All of that rests on a member publishing the name it stores. A collection
+   * that withholds that publication leaves this list holding every listed
+   * member on every run, because no member can be seen to have stored
+   * anything: `named` stays empty and the step cannot say it is finished. The
+   * asking still writes nothing, since `recordName` reads the member's own
+   * input rather than its publication, so a run is still safe to repeat.
+   * Topics withholds it today, behind `SHOW_TOPIC_NUMBERS` in
+   * `../topics/topic.tsx`, and `BackfillNamesResult` there says what an
+   * operator reads instead.
    */
   pending: string[];
 }

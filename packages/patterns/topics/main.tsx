@@ -192,6 +192,31 @@ export interface BackfillNamesEvent {
  * the topic's own document, which only the topic can write, so the run can
  * report which topics it found already carrying theirs and which it asked —
  * and cannot report the outcome of an asking it just made.
+ *
+ * WHILE `SHOW_TOPIC_NUMBERS` IN `./topic.tsx` IS OFF IT CANNOT REPORT THE
+ * FIRST OF THOSE EITHER. A topic's published `shortName` is the only signal
+ * this step can read, and that switch gates it, so every topic reads as
+ * storing no number whatever it holds: `named` comes back empty, `pending`
+ * comes back holding every listed topic, and each run asks every topic again.
+ * The asking writes nothing — `recordName` reads the ungated input and
+ * declines a number already stored — so the step stays safe to repeat; what it
+ * loses is the ability to say it is finished. Turning the switch on restores
+ * the report by itself.
+ *
+ * What an operator reads instead, until then:
+ *
+ * - `assigned` still settles the namespace half exactly. Empty means every
+ *   listed topic is numbered in `names`, which is what `top/<n>` resolves
+ *   through and what `namesTable` lists.
+ * - One topic's stored number comes from its own durable input,
+ *   `cf cell get --cell <topic> shortName --input`, which no switch gates.
+ * - Calling `recordName` on a topic directly reports that topic: `wrote: true`
+ *   the first time, `wrote: false` once the number is stored. The board route
+ *   cannot report per topic, because a verb's result reaches its caller and
+ *   the board sends rather than calls.
+ *
+ * `skills/topics/references/namespace-backfill.md` is the operator procedure
+ * and says the same.
  */
 export interface BackfillNamesResult {
   /** The numbers this run wrote into the namespace; empty when every listed

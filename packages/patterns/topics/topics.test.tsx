@@ -526,17 +526,21 @@ export default pattern(() => {
   });
 
   // The browser composer allocates out of the same namespace the headless
-  // create does, in the same transaction as its append, and passes what it
-  // allocated into the topic: drop the allocation and the map stays empty
-  // while the topic still lands, and drop the pass-through and the topic
-  // reports no number while the map still holds one.
+  // create does, in the same transaction as its append: drop the allocation
+  // and the map stays empty while the topic still lands.
+  //
+  // That the composer also passes the number INTO the topic is covered in
+  // naming.test.tsx, on the headless create the two share through
+  // `createNamed`. It cannot be covered here, and the reason is worth knowing:
+  // the composer builds the topic inside the handler, so no cell of this
+  // file's is its number input, and `SHOW_TOPIC_NUMBERS` gates the published
+  // `shortName`, so reading that would assert an absence every topic has.
   const assert_profile_topic_named = assert(() =>
     Object.keys(profileNames.get()).join(",") === "1" &&
     equals(
       profileNames.get()["1"] as object,
       profileTopics.key(0),
-    ) &&
-    profileTopics.get()?.[0]?.shortName === "1"
+    )
   );
 
   const assert_profile_comment_submitted = assert(() => {

@@ -146,11 +146,37 @@ An empty `pending` is the finished state, and a non-empty one is a reason to run
 the step again rather than a failure: the run after it reports whichever asking
 landed under `named` and asks for the rest.
 
+**While numbers are hidden, only `assigned` means anything.** The step reads a
+Topic's published `shortName` to tell a stored number from none, and
+`SHOW_TOPIC_NUMBERS` gates exactly that, so every Topic reads as storing nothing
+however much it holds: `named` comes back empty and `pending` comes back holding
+every Topic on the board, run after run. The asking writes nothing —
+`recordName` reads the Topic's own input, which no switch gates, and declines a
+number already stored — so running the step again is safe and idle; what it
+cannot do is tell you it is done.
+
+So until the switch is on, read three things instead of `pending`:
+
+- **`assigned` empty** means every listed Topic is numbered in `names`. That is
+  the whole of the namespace half, and it is what `top/<n>` resolves through.
+- **One Topic's stored number** comes from its own durable input, which no
+  switch gates: `deno task cf cell get --cell "$TOPIC" shortName --input`.
+- **`recordName` called on one Topic reports that Topic**: `wrote: true` the
+  first time, `wrote: false` once the number is stored. The board route cannot
+  report per Topic, because a verb's result reaches its caller and the board
+  sends rather than calls. For a handful of Topics this is the direct answer;
+  for a boardful it is one command each, which is what the board route exists to
+  avoid.
+
+Turning `SHOW_TOPIC_NUMBERS` on restores the report by itself. Nothing else
+about the step changes with it.
+
 **A number that comes back under `pending` on every run is not waiting for a
-retry.** That Topic's own verb is refusing the number, which `recordName` does
-when the Topic already stores a different one. Read its stored number, decide
-which number that Topic is to keep, and reconcile by hand; nothing in the board
-resolves it, and each run costs one refused handler transaction.
+retry** — once numbers are shown, when `pending` means something again. That
+Topic's own verb is refusing the number, which `recordName` does when the Topic
+already stores a different one. Read its stored number, decide which number that
+Topic is to keep, and reconcile by hand; nothing in the board resolves it, and
+each run costs one refused handler transaction.
 
 ### What a half-finished Topic looks like, and what it costs
 
