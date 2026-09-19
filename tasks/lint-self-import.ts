@@ -197,6 +197,13 @@ const GENERAL_ADVICE =
   "Import the module that defines it by relative path instead.";
 
 /**
+ * The advice given for an alias of the entry point. A package that has aliases
+ * addresses its own modules through them as readily as by relative path, so
+ * this names no form.
+ */
+const ALIAS_ADVICE = "Import the module that defines it instead.";
+
+/**
  * What to import instead: the module the offending subpath resolves to, named
  * relative to the offending file. A subpath the `exports` map does not carry
  * resolves to nothing, and the advice stays general.
@@ -220,11 +227,13 @@ function message(
   // The entry point gets no file named for it: the relative path to it reaches
   // the same barrel, so the fix is a path to whichever module defines the
   // imported name, which the rule does not know.
-  if (specifier === owner.name || isEntryPointAlias(owner, specifier)) {
+  const isAlias = isEntryPointAlias(owner, specifier);
+  if (specifier === owner.name || isAlias) {
+    const advice = isAlias ? ALIAS_ADVICE : GENERAL_ADVICE;
     return `\`${specifier}\` is the entry point of the package this file ` +
       "belongs to. Importing it from inside the package puts a cycle in the " +
       "module graph, and makes the order in which this module initializes " +
-      `depend on the order the entry point lists its exports. ${GENERAL_ADVICE}`;
+      `depend on the order the entry point lists its exports. ${advice}`;
   }
   return `\`${specifier}\` is an export of the package this file belongs to, ` +
     "and it resolves back to a file inside that package. Naming it this way " +

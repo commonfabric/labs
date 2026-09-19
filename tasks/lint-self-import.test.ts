@@ -162,6 +162,15 @@ describe("lint-self-import", () => {
     expect(messages[0]).toContain(BARREL);
   });
 
+  it("advises no form of specifier for an alias of the entry point", () => {
+    const messages = fixture(DATA_MODEL).diagnose(
+      "src/codecs.ts",
+      `import { FabricHash } from "@";`,
+    );
+    expect(messages[0]).toContain("Import the module that defines it instead.");
+    expect(messages[0]).not.toContain("relative path");
+  });
+
   it("reports a prefix alias that reaches the package's own entry point", () => {
     const messages = fixture(DATA_MODEL).diagnose(
       "src/codecs.ts",
