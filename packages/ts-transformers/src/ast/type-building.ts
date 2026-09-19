@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { resolvesToCommonFabricSymbol } from "../core/common-fabric-symbols.ts";
 import type { TransformationContext } from "../core/mod.ts";
 import type { CaptureTreeNode } from "../utils/capture-tree.ts";
 import { createPropertyName } from "../utils/identifiers.ts";
@@ -497,9 +498,17 @@ export function getDeclaredTypeNodeForBindingElement(
 }
 
 /**
- * Returns a binding's wrapper-carrying type, substituting direct enclosing
- * type parameters through unions, intersections, parentheses, and Writable.
- * Returns undefined when preservation cannot retain the instantiated type.
+ * Returns the type node and type to emit for a destructured binding whose
+ * declared type carries a wrapper, or `undefined` when its inferred type loses
+ * nothing.
+ *
+ * A property of a generic input is declared in terms of the input's type
+ * parameters, which mean nothing where the binding is emitted. Each one is
+ * replaced by the caller's type argument, where it sits in a union, an
+ * intersection, parentheses, or a wrapper, and where that argument prints as a
+ * node that reads the same anywhere. Every other generic binding is emitted as
+ * its instantiated declared type, which keeps the wrapper and the complete
+ * value type, and spells a default's value as one more member of the union.
  */
 export function getPreservedTypeForBindingElement(
   declaration: ts.BindingElement,
@@ -511,92 +520,156 @@ export function getPreservedTypeForBindingElement(
   if (!declared || !preserved) return undefined;
 
   const parameters = new Set<ts.Type>();
-  let unsupportedParameter = false;
-  const findParameters = (node: ts.Node, canSubstitute: boolean) => {
+  let everyParameterReplaceable = true;
+  const findParameters = (node: ts.Node, replaceable: boolean) => {
     if (ts.isTypeReferenceNode(node)) {
       const type = checker.getTypeFromTypeNode(node);
       if (type.flags & ts.TypeFlags.TypeParameter) {
         parameters.add(type);
-        unsupportedParameter ||= !canSubstitute;
+        everyParameterReplaceable &&= replaceable;
       }
     }
-    const name = ts.isTypeReferenceNode(node)
-      ? ts.isIdentifier(node.typeName)
-        ? node.typeName.text
-        : node.typeName.right.text
-      : undefined;
-    // Composite types such as Box<T> and T[K] retain checker links to their
-    // generic declarations. Their instantiated schemas come from inference.
+    // A parameter inside any other type expression, such as `Box<T>` or
+    // `T[K]`, is read through that expression's own generic declaration, so a
+    // node put in its place there changes nothing.
     const through = ts.isUnionTypeNode(node) ||
       ts.isIntersectionTypeNode(node) ||
       ts.isParenthesizedTypeNode(node) ||
-      (ts.isTypeReferenceNode(node) && name === "Writable" &&
-        shouldPreserveBindingDeclaredTypeNode(node));
+      (ts.isTypeReferenceNode(node) &&
+        shouldPreserveBindingDeclaredTypeNode(node, checker));
     ts.forEachChild(
       node,
-      (child) => findParameters(child, canSubstitute && through),
+      (child) => findParameters(child, replaceable && through),
     );
   };
   findParameters(preserved, true);
-  if (unsupportedParameter) return undefined;
 
-  let type = checker.getTypeFromTypeNode(declared);
-  let typeNode = preserved;
-  if (parameters.size) {
-    const instantiated = getInstantiatedBindingType(declaration, checker);
-    if (!instantiated) return undefined;
-    const { substitutions } = instantiated;
-    if ([...parameters].some((parameter) => !substitutions.has(parameter))) {
-      return undefined;
-    }
-    const replacements = new Map<ts.Type, ts.TypeNode>();
-    for (const parameter of parameters) {
-      const replacement = typeToTypeNodeWithRegistry(
-        substitutions.get(parameter)!,
-        {
-          checker,
-          factory: ts.factory,
-          sourceFile: declaration.getSourceFile(),
-        },
-        typeRegistry,
-        DEFAULT_TYPE_NODE_FLAGS | ts.NodeBuilderFlags.InTypeAlias,
-      );
-      let needsResolution = false;
-      const inspect = (node: ts.Node) => {
-        needsResolution ||= ts.isTypeReferenceNode(node) ||
-          ts.isImportTypeNode(node) ||
-          ts.isTypeQueryNode(node);
-        ts.forEachChild(node, inspect);
-      };
-      inspect(replacement);
-      // A synthesized reference can resolve through its generic declaration
-      // during schema generation. Self-contained argument nodes keep the
-      // concrete structure; other arguments use the inferred binding type.
-      if (needsResolution) return undefined;
-      replacements.set(parameter, replacement);
-    }
-    const result = ts.transform(preserved, [(context) => {
-      const substitute = (node: ts.Node): ts.Node => {
-        if (ts.isTypeReferenceNode(node)) {
-          const replacement = replacements.get(
-            checker.getTypeFromTypeNode(node),
-          );
-          if (replacement) return replacement;
-        }
-        return ts.visitEachChild(node, substitute, context);
-      };
-      return (node) => ts.visitNode(node, substitute, ts.isTypeNode)!;
-    }]);
-    typeNode = result.transformed[0]!;
-    result.dispose();
-    type = instantiated.type;
+  if (parameters.size === 0) {
+    return registerForEmission(
+      preserved,
+      checker.getTypeFromTypeNode(declared),
+      typeRegistry,
+    );
   }
 
-  // Alias declarations can live in another file; the printer must use the
-  // nodes' values instead of slicing this file at their source positions.
+  const instantiated = getInstantiatedBindingType(declaration, checker);
+  if (!instantiated) return undefined;
+  const substituted = everyParameterReplaceable
+    ? substituteTypeParameters(
+      preserved,
+      parameters,
+      instantiated.substitutions,
+      declaration,
+      checker,
+      typeRegistry,
+    )
+    : undefined;
+  if (substituted) {
+    return registerForEmission(substituted, instantiated.type, typeRegistry);
+  }
+
+  // The instantiated declared type still carries the wrapper. The binding's
+  // type inside the pattern body does not, and with `Default<{}>` stripped
+  // from `T | {}` that union reduces to `{}`, so returning `undefined` here
+  // would emit a value type without `T`.
+  const typeNode = typeToTypeNodeWithRegistry(
+    instantiated.type,
+    { checker, factory: ts.factory, sourceFile: declaration.getSourceFile() },
+    typeRegistry,
+  );
+  return { typeNode, type: instantiated.type };
+}
+
+/**
+ * Helper for `getPreservedTypeForBindingElement()`, which registers `type` for
+ * a clone of `typeNode` that carries no source positions. The node may come
+ * from an alias declared in another module, and the printer reads a positioned
+ * node's text out of the module it is printing.
+ */
+function registerForEmission(
+  typeNode: ts.TypeNode,
+  type: ts.Type,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+): { typeNode: ts.TypeNode; type: ts.Type } {
   const cloned = cloneTypeNodeDeepForEmission(typeNode, typeRegistry);
   typeRegistry?.set(cloned, type);
   return { typeNode: cloned, type };
+}
+
+/**
+ * Helper for `getPreservedTypeForBindingElement()`, which replaces each
+ * reference to one of `parameters` in `typeNode` with a node printed from its
+ * type argument. Returns `undefined` when an argument is missing, or prints as
+ * a node that schema generation would read differently where it is emitted.
+ */
+function substituteTypeParameters(
+  typeNode: ts.TypeNode,
+  parameters: ReadonlySet<ts.Type>,
+  substitutions: ReadonlyMap<ts.Type, ts.Type>,
+  declaration: ts.BindingElement,
+  checker: ts.TypeChecker,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+): ts.TypeNode | undefined {
+  const replacements = new Map<ts.Type, ts.TypeNode>();
+  for (const parameter of parameters) {
+    const argument = substitutions.get(parameter);
+    if (!argument) return undefined;
+    const replacement = typeToTypeNodeWithRegistry(
+      argument,
+      { checker, factory: ts.factory, sourceFile: declaration.getSourceFile() },
+      typeRegistry,
+      DEFAULT_TYPE_NODE_FLAGS | ts.NodeBuilderFlags.InTypeAlias,
+    );
+    if (!readsTheSameWhereEmitted(replacement, declaration, checker)) {
+      return undefined;
+    }
+    replacements.set(parameter, replacement);
+  }
+
+  const result = ts.transform(typeNode, [(context) => {
+    const substitute = (node: ts.Node): ts.Node => {
+      if (ts.isTypeReferenceNode(node)) {
+        const replacement = replacements.get(checker.getTypeFromTypeNode(node));
+        if (replacement) return replacement;
+      }
+      return ts.visitEachChild(node, substitute, context);
+    };
+    return (node) => ts.visitNode(node, substitute, ts.isTypeNode)!;
+  }]);
+  const substituted = result.transformed[0]!;
+  result.dispose();
+  return substituted;
+}
+
+/**
+ * Helper for `substituteTypeParameters()`, which returns `true` for a printed
+ * type node that schema generation reads as the type it was printed from. Three
+ * forms are not: a reference with type arguments, whose members are read from
+ * its generic declaration with their parameters unresolved; `import("…").T`
+ * and `typeof x`, which name what the emitting module may not hold; and a name
+ * that is out of scope where the binding is declared.
+ */
+function readsTheSameWhereEmitted(
+  typeNode: ts.TypeNode,
+  declaration: ts.BindingElement,
+  checker: ts.TypeChecker,
+): boolean {
+  let inScope: Set<string> | undefined;
+  const reads = (node: ts.Node): boolean => {
+    if (ts.isImportTypeNode(node) || ts.isTypeQueryNode(node)) return false;
+    if (ts.isTypeReferenceNode(node)) {
+      if (node.typeArguments?.length || !ts.isIdentifier(node.typeName)) {
+        return false;
+      }
+      inScope ??= new Set(
+        checker.getSymbolsInScope(declaration, ts.SymbolFlags.Type)
+          .map((symbol) => symbol.name),
+      );
+      if (!inScope.has(node.typeName.text)) return false;
+    }
+    return ts.forEachChild(node, (child) => !reads(child)) !== true;
+  };
+  return reads(typeNode);
 }
 
 /** Resolves a destructuring path against its input type and collects generic arguments. */
@@ -716,7 +789,9 @@ export function getPreservedBindingTypeNode(
   checker: ts.TypeChecker,
 ): ts.TypeNode | undefined {
   const authored = resolveTypeAliasReferences(declaredTypeNode, checker);
-  return shouldPreserveBindingDeclaredTypeNode(authored) ? authored : undefined;
+  return shouldPreserveBindingDeclaredTypeNode(authored, checker)
+    ? authored
+    : undefined;
 }
 
 /**
@@ -784,10 +859,7 @@ function resolveTypeAliasReferences(
   }
 
   if (typeNode.typeArguments) {
-    const name = ts.isIdentifier(typeNode.typeName)
-      ? typeNode.typeName.text
-      : typeNode.typeName.right.text;
-    const typeArguments = name === "Writable"
+    const typeArguments = getWrapperName(typeNode, checker) === "Writable"
       ? resolveAll(typeNode.typeArguments)
       : undefined;
     return typeArguments
@@ -809,7 +881,9 @@ function resolveTypeAliasReferences(
     checker,
     new Set([...resolving, aliased]),
   );
-  return shouldPreserveBindingDeclaredTypeNode(named) ? named : typeNode;
+  return shouldPreserveBindingDeclaredTypeNode(named, checker)
+    ? named
+    : typeNode;
 }
 
 /**
@@ -835,32 +909,65 @@ function getAliasedTypeNode(
     : undefined;
 }
 
+/**
+ * The wrappers a pattern body's view of a binding strips from its type.
+ */
+const BODY_STRIPPED_WRAPPER_NAMES: ReadonlySet<string> = new Set([
+  "Default",
+  "PerAny",
+  "PerSession",
+  "PerSpace",
+  "PerUser",
+]);
+
+/**
+ * Returns the name of the wrapper `reference` names — `Writable`, or one of
+ * the wrappers a pattern body strips — and `undefined` for a reference to
+ * anything else. A type of the author's own that shares a wrapper's name is
+ * something else: the name counts only where it resolves to the declaration
+ * `commonfabric` exports. Given no checker, or a node the checker cannot
+ * resolve, as a synthesized one is, the spelling alone decides.
+ */
+function getWrapperName(
+  reference: ts.TypeReferenceNode,
+  checker: ts.TypeChecker | undefined,
+): string | undefined {
+  const identifier = ts.isIdentifier(reference.typeName)
+    ? reference.typeName
+    : reference.typeName.right;
+  const name = identifier.text;
+  if (name !== "Writable" && !BODY_STRIPPED_WRAPPER_NAMES.has(name)) {
+    return undefined;
+  }
+  const symbol = checker?.getSymbolAtLocation(identifier);
+  return !checker || !symbol ||
+      resolvesToCommonFabricSymbol(symbol, checker, name)
+    ? name
+    : undefined;
+}
+
+/**
+ * Returns `true` for a declared type that carries a wrapper the pattern body's
+ * view of a binding strips: as the type itself, as a member of a union or an
+ * intersection, or as the argument of `Writable`.
+ */
 export function shouldPreserveBindingDeclaredTypeNode(
   typeNode: ts.TypeNode,
+  checker?: ts.TypeChecker,
 ): boolean {
   const unwrapped = unwrapParenthesizedTypeNode(typeNode);
+  const carries = (node: ts.TypeNode) =>
+    shouldPreserveBindingDeclaredTypeNode(node, checker);
 
   if (ts.isTypeReferenceNode(unwrapped)) {
-    const name = ts.isIdentifier(unwrapped.typeName)
-      ? unwrapped.typeName.text
-      : unwrapped.typeName.right.text;
-    if (name === "Writable") {
-      return unwrapped.typeArguments?.some(
-        shouldPreserveBindingDeclaredTypeNode,
-      ) ??
-        false;
-    }
-    return (
-      name === "PerSpace" ||
-      name === "PerUser" ||
-      name === "PerSession" ||
-      name === "PerAny" ||
-      name === "Default"
-    );
+    const name = getWrapperName(unwrapped, checker);
+    return name === "Writable"
+      ? unwrapped.typeArguments?.some(carries) ?? false
+      : name !== undefined;
   }
 
   if (ts.isUnionTypeNode(unwrapped) || ts.isIntersectionTypeNode(unwrapped)) {
-    return unwrapped.types.some(shouldPreserveBindingDeclaredTypeNode);
+    return unwrapped.types.some(carries);
   }
 
   return false;

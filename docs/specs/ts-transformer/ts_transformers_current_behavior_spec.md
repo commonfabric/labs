@@ -1287,27 +1287,42 @@ destructured from the callback parameter has its `Default` and scope wrappers
 binding whose declared property type carries one — as the type itself, as a
 member of a union or an intersection, or as the argument of `Writable` — is
 therefore emitted from the type node its author wrote
-(`getPreservedBindingTypeNode`, `src/ast/type-building.ts`). At any of those
-positions, a reference to a non-generic type alias whose type carries a wrapper
-is replaced by the type the alias names, so `type Draft = Writable<string |
-Default<"">>` captures with the schema of the wrapper written in place,
-including when the alias is imported from another module. A reference to an
-alias that carries no wrapper stays a reference, which schema generation emits
-under the alias's name. A reference to a generic alias also stays as written,
-and when nothing else in the declared type carries a wrapper the capture is
-typed by inference. When the property belongs to a generic input, preservation
-substitutes direct references to enclosing type parameters with the caller's
-type arguments through unions, intersections, parentheses, and a `Writable`
-whose argument carries a wrapper before emitting the node. The pattern
-builder's input type supplies these
-arguments before callback normalization strips defaults and scopes; inherited
-properties and nested destructuring follow that input type. If an enclosing
-type parameter cannot be resolved, or appears inside another type expression
-such as `Box<T>` or `T[K]`, the binding uses its inferred type. Substituted
-arguments are emitted structurally; if an argument still needs named-type
-resolution, the binding also uses inference.
+(`getPreservedTypeForBindingElement`, `src/ast/type-building.ts`). A wrapper's
+name counts only where it resolves to the declaration `commonfabric` exports: a
+type of the author's own named `Default` is an ordinary type, and its binding is
+typed by inference. At any of those positions, a reference to a non-generic type
+alias whose type carries a wrapper is replaced by the type the alias names, so
+`type Draft = Writable<string | Default<"">>` captures with the schema of the
+wrapper written in place, including when the alias is imported from another
+module. A reference to an alias that carries no wrapper stays a reference, which
+schema generation emits under the alias's name. A reference to a generic alias
+also stays as written, and when nothing else in the declared type carries a
+wrapper the capture is typed by inference.
+
+A property of a generic input is declared in terms of the input's type
+parameters. The pattern builder's type argument supplies the caller's arguments,
+before callback normalization strips defaults and scopes; inherited properties
+and nested or renamed destructuring follow that type. A parameter that sits in a
+union, an intersection, parentheses, or a wrapper is replaced by a node printed
+from its argument, which gives the schema of the concrete type written in place.
+That holds where the printed argument reads the same wherever it is emitted:
+keywords, literals, type literals, and a name without type arguments that is in
+scope where the binding is declared. Every other generic binding — a parameter
+inside another type expression such as `Box<T>`, `T[K]`, or `T[]`, or an
+argument that prints as a reference with type arguments, as `import("…").T`,
+as `typeof x`, or as a name out of scope — is emitted as its instantiated
+declared type. That keeps the wrapper and the complete value type, and keeps a
+default's value as a member of the union: `anyOf: [T, V]` with the default,
+where the concrete type written in place emits `T` with the default. The
+pattern body's view of such a binding is not used, because stripping
+`Default<{}>` from `T | {}` lets the union reduce to `{}`. When the builder's
+type argument cannot be found, as when `pattern<Input<number>>` is bound to a
+name before it is called, the only instantiated type on hand is the pattern
+body's view, and the binding is emitted with its concrete value type and
+without its default.
+
 Pattern result inference reads returned input bindings through the same
-preservation path when a returned binding carries a scope wrapper.
+function when a returned binding carries a scope wrapper.
 `aliased-binding-declared-type.test.ts` and
 `ast/getPreservedBindingTypeNode.test.ts` pin these.
 

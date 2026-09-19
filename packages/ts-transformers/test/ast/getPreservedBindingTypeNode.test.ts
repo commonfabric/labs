@@ -8,13 +8,17 @@ import {
   getPreservedBindingTypeNode,
 } from "../../src/ast/type-building.ts";
 
-// The wrappers are declared in the module under test, so the checker resolves
-// every name without a library. `Writable`, `Default`, and `PerUser` are
-// generic aliases here as they are in `commonfabric`.
-const PRELUDE = `
-type Writable<T> = { get(): T };
-type Default<T, V = T> = T & { readonly __default?: V };
-type PerUser<T> = T & { readonly __scope?: "user" };
+// A wrapper counts only where its name resolves to the declaration
+// `commonfabric` exports, so the wrappers are declared in that module and each
+// module under test imports them. They are generic aliases here as they are in
+// `commonfabric`.
+const COMMONFABRIC = `declare module "commonfabric" {
+  export type Writable<T> = { get(): T };
+  export type Default<T, V = T> = T & { readonly __default?: V };
+  export type PerUser<T> = T & { readonly __scope?: "user" };
+}
+`;
+const IMPORTS = `import type { Default, PerUser, Writable } from "commonfabric";
 `;
 
 /**
@@ -28,7 +32,8 @@ function preserved(
   const fileName = "/main.ts";
   const sources: Record<string, string> = {
     ...files,
-    [fileName]: PRELUDE + declarations,
+    "/commonfabric.d.ts": COMMONFABRIC,
+    [fileName]: declarations,
   };
   const compilerOptions: ts.CompilerOptions = {
     target: ts.ScriptTarget.ES2020,
@@ -51,7 +56,11 @@ function preserved(
   host.getCanonicalFileName = (name) => name;
   host.getNewLine = () => "\n";
 
-  const program = ts.createProgram([fileName], compilerOptions, host);
+  const program = ts.createProgram(
+    ["/commonfabric.d.ts", fileName],
+    compilerOptions,
+    host,
+  );
   const sourceFile = program.getSourceFile(fileName)!;
   const input = sourceFile.statements.find((statement) =>
     ts.isInterfaceDeclaration(statement) && statement.name.text === "Input"
@@ -73,31 +82,35 @@ function preserved(
 
 describe("getPreservedBindingTypeNode()", () => {
   it("returns the declared node for a wrapper written in place", () => {
-    expect(preserved(`interface Input { c: Writable<string | Default<"">>; }`))
+    expect(
+      preserved(
+        `${IMPORTS}interface Input { c: Writable<string | Default<"">>; }`,
+      ),
+    )
       .toBe(`Writable<string | Default<"">>`);
   });
 
   it("returns `undefined` for a type that carries no wrapper", () => {
-    expect(preserved(`interface Input { c: Writable<string>; }`))
+    expect(preserved(`${IMPORTS}interface Input { c: Writable<string>; }`))
       .toBeUndefined();
   });
 
   it("returns `undefined` for an alias of a type that carries no wrapper", () => {
-    expect(preserved(`
+    expect(preserved(`${IMPORTS}
       type Plain = Writable<string>;
       interface Input { c: Plain; }
     `)).toBeUndefined();
   });
 
   it("returns the type an alias names", () => {
-    expect(preserved(`
+    expect(preserved(`${IMPORTS}
       type Draft = Writable<string | Default<"">>;
       interface Input { c: Draft; }
     `)).toBe(`Writable<string | Default<"">>`);
   });
 
   it("returns the type at the end of a chain of aliases", () => {
-    expect(preserved(`
+    expect(preserved(`${IMPORTS}
       type Draft = Writable<string | Default<"">>;
       type Renamed = Draft;
       interface Input { c: Renamed; }
@@ -105,28 +118,28 @@ describe("getPreservedBindingTypeNode()", () => {
   });
 
   it("returns a `Writable` of the type its aliased argument names", () => {
-    expect(preserved(`
+    expect(preserved(`${IMPORTS}
       type Blank = string | Default<"">;
       interface Input { c: Writable<Blank>; }
     `)).toBe(`Writable<string | Default<"">>`);
   });
 
   it("returns one flat union for a member that names a union", () => {
-    expect(preserved(`
+    expect(preserved(`${IMPORTS}
       type Blank = string | Default<"">;
       interface Input { c: Blank | number; }
     `)).toBe(`string | Default<""> | number`);
   });
 
   it("leaves a reference to an alias that carries no wrapper as written", () => {
-    expect(preserved(`
+    expect(preserved(`${IMPORTS}
       type Status = "idle" | "running";
       interface Input { c: Writable<Status | Default<"idle">>; }
     `)).toBe(`Writable<Status | Default<"idle">>`);
   });
 
   it("returns an intersection of the types its aliased members name", () => {
-    expect(preserved(`
+    expect(preserved(`${IMPORTS}
       type Nickname = PerUser<string>;
       interface Input { c: Nickname & { readonly tag?: "nick" }; }
     `)).toBe(`PerUser<string> & {
@@ -135,7 +148,7 @@ describe("getPreservedBindingTypeNode()", () => {
   });
 
   it("returns a parenthesized type around the type its alias names", () => {
-    expect(preserved(`
+    expect(preserved(`${IMPORTS}
       type Draft = Writable<string | Default<"">>;
       interface Input { c: (Draft); }
     `)).toBe(`(Writable<string | Default<"">>)`);
@@ -148,24 +161,45 @@ describe("getPreservedBindingTypeNode()", () => {
       interface Input { c: Draft; }
     `,
       {
-        "/types.ts": `
-          type Writable<T> = { get(): T };
-          type Default<T, V = T> = T & { readonly __default?: V };
+        "/types.ts": `${IMPORTS}
           export type Draft = Writable<string | Default<"remote">>;
         `,
       },
     )).toBe(`Writable<string | Default<"remote">>`);
   });
 
-  it("leaves a reference to a generic alias as written", () => {
+  it("returns `undefined` for the author's own type that shares a wrapper's name", () => {
     expect(preserved(`
+      type Default<T, V = T> = { mine: T; tag?: V };
+      interface Input { c: Default<string, "x">; }
+    `)).toBeUndefined();
+  });
+
+  it("returns `undefined` for an alias of the author's own type that shares a wrapper's name", () => {
+    expect(preserved(`
+      type Default<T, V = T> = { mine: T; tag?: V };
+      type Mine = Default<string, "x">;
+      interface Input { c: Mine; }
+    `)).toBeUndefined();
+  });
+
+  it("returns `undefined` for the author's own `Writable` around a wrapper", () => {
+    expect(preserved(`
+      import type { Default } from "commonfabric";
+      type Writable<T> = { mine: T };
+      interface Input { c: Writable<string | Default<"">>; }
+    `)).toBeUndefined();
+  });
+
+  it("leaves a reference to a generic alias as written", () => {
+    expect(preserved(`${IMPORTS}
       type Defaulted<T> = Writable<T | Default<"">>;
       interface Input { c: Defaulted<string>; }
     `)).toBeUndefined();
   });
 
   it("leaves an alias's reference to itself as written", () => {
-    expect(preserved(`
+    expect(preserved(`${IMPORTS}
       type Nested = Writable<Nested | Default<"">>;
       interface Input { c: Nested; }
     `)).toBe(`Writable<Nested | Default<"">>`);
