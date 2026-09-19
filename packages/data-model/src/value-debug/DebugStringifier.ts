@@ -11,7 +11,7 @@ import { codecOf } from "@/codec-common/codecOf.ts";
 import { isCodecTypeTag } from "@/codec-common/isCodecTypeTag.ts";
 import { REALM_CODEC } from "@/codec-interface/interface.ts";
 import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
-import type { RealmCodecValue } from "@/codec-realm/interface.ts";
+import type { RealmCodecValue } from "@/codec-realm";
 import {
   type FabricPlainObject,
   FabricPrimitive,

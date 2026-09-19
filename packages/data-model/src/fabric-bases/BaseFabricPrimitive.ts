@@ -11,7 +11,7 @@
 
 import { FabricPrimitive } from "@/interface.ts";
 import { toCompactDebugString } from "@/value-debug";
-import type { FabricPrimitiveValueTag } from "@/fabric-primitives/interface.ts";
+import type { FabricPrimitiveValueTag } from "@/fabric-primitives";
 
 /**
  * Well-known symbol keying the getter through which a concrete primitive
