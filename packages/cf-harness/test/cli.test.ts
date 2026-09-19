@@ -3910,8 +3910,12 @@ Deno.test("runCfHarnessCli validates a top-level structured result sidecar", asy
   assertEquals(stderr, []);
   assertEquals(
     runPromptOptions?.systemPrompt?.includes(
-      "write a JSON file at /workspace/capture.results.json",
+      "Writing a JSON file at /workspace/capture.results.json",
     ),
+    true,
+  );
+  assertEquals(
+    runPromptOptions?.systemPrompt?.includes("call submit_result"),
     true,
   );
   assertEquals(writes.length, 1);

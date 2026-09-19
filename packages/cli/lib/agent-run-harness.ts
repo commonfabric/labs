@@ -160,7 +160,11 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
       "--input-cell",
       `${name}=${renderCellReference(cell.getAsNormalizedFullLink())}`,
     ]),
-    ...tools.flatMap((tool) => ["--allow-tool", tool]),
+    // A request naming its tools narrows the run to them, and to the tool
+    // the run returns its result through.
+    ...(tools.length > 0 ? [...tools, "submit_result"] : []).flatMap((
+      tool,
+    ) => ["--allow-tool", tool]),
     ...(options.harnessArgs ?? []),
   ];
 

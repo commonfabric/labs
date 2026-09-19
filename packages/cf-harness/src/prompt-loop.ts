@@ -2782,6 +2782,14 @@ const evaluateToolPolicy = (
         }),
       };
   }
+  if (descriptor.toolId === "submit_result") {
+    // The run's return, admitted at every mode and under every prompt-slot
+    // role. Its authority is the host's: the tool exists only in a run the
+    // host configured with a structured-result schema, and the call reaches
+    // nothing but that run's own result file. A run's final message, which
+    // no policy gates, returns in the same sense.
+    return { allowed: true, reasonCodes: ["structured_result_return"] };
+  }
   switch (cfcEnforcementMode) {
     case "disabled":
       return { allowed: true, reasonCodes: ["cfc_disabled"] };
@@ -3002,6 +3010,7 @@ export class CfHarnessPromptLoop {
       docsCorpusAvailable: this.engine.docsCorpusAvailable,
       loomAuthoringAvailable: this.engine.config.loomAuthoring !== undefined,
       loomRetrievalAvailable: this.engine.config.loomRetrieval !== undefined,
+      structuredResultAvailable: this.engine.structuredResultAvailable,
     };
   }
 
@@ -3942,7 +3951,9 @@ export class CfHarnessPromptLoop {
    * than a referent, and `research`, whose private loop must retain the same
    * opaque tokens it describes and binds. `loom_compose` also proves
    * membership before resolving a Pattern Instance. `finish_task` preserves
-   * its user-facing message as text. Returns `input` itself
+   * its user-facing message as text, and `submit_result` its value: a token
+   * in a structured result is what the result writer resolves. Returns
+   * `input` itself
    * when no substitution applies.
    */
   #resolveHandleTokensInToolInput(
@@ -3952,7 +3963,7 @@ export class CfHarnessPromptLoop {
     if (
       toolId === "delegate_task" || toolId === "describe_handle" ||
       toolId === "research" || toolId === "finish_task" ||
-      toolId === "loom_compose"
+      toolId === "loom_compose" || toolId === "submit_result"
     ) {
       return input;
     }
@@ -4865,7 +4876,9 @@ export class CfHarnessPromptLoop {
     }
     const taskOutcome = toolId === "finish_task" &&
         isObjectNotArray(result.output) && result.output.status === "ok"
-      ? readHarnessTaskOutcome(result.output.taskOutcome)
+      ? readHarnessTaskOutcome(
+        (result.output as { taskOutcome?: unknown }).taskOutcome,
+      )
       : undefined;
     return {
       toolMessage,

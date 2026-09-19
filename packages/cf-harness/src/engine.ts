@@ -12,7 +12,12 @@ import type {
   LoomProfileInput,
   LoomSearchInput,
 } from "./loom-retrieval.ts";
+import type { JSONSchema } from "@commonfabric/api";
 import type { LoomRetrievalToolOutput } from "./tools/loom-retrieval.ts";
+import type {
+  SubmitResultInput,
+  SubmitResultOutput,
+} from "./tools/submit-result.ts";
 import {
   dirname,
   join as joinHostPath,
@@ -311,6 +316,7 @@ export interface BuiltinToolInputMap {
   loom_calendar_list: LoomCalendarListInput;
   loom_context: LoomContextInput;
   loom_profile: LoomProfileInput;
+  submit_result: SubmitResultInput;
 }
 
 export interface BuiltinToolOutputMap {
@@ -346,10 +352,17 @@ export interface BuiltinToolOutputMap {
   loom_calendar_list: LoomRetrievalToolOutput;
   loom_context: LoomRetrievalToolOutput;
   loom_profile: LoomRetrievalToolOutput;
+  submit_result: SubmitResultOutput;
 }
 
 interface ToolOutputWithId {
   outputId: string;
+}
+
+/** A structured-result schema and the host path its JSON file is kept at. */
+export interface HarnessStructuredResultTarget {
+  schema: JSONSchema;
+  path: string;
 }
 
 export interface CreateHarnessEngineOptions
@@ -448,6 +461,15 @@ export interface CreateHarnessEngineOptions
    * no single such text, and nothing invents one.
    */
   taskText?: string;
+
+  /**
+   * The structured result this run ends on: the schema it is validated
+   * against and the host path of the JSON file that holds it. Configured, the
+   * run offers `submit_result`, which writes that file host-side; the model
+   * writing the file itself stays a second way to the same place. A subagent
+   * run takes none: the result is the root run's to return.
+   */
+  structuredResult?: HarnessStructuredResultTarget;
 
   /**
    * Operator input cells to mint handles for at run start; see
@@ -608,6 +630,8 @@ export class CfHarnessEngine {
   #researchRunner?: HarnessResearchRunner;
   #patternIndexLedger?: PatternIndexLedger;
   readonly #taskText?: string;
+  readonly #structuredResult?: HarnessStructuredResultTarget;
+  #structuredResultRecorded = false;
   readonly #inputCells: readonly HarnessInputCellSpec[];
   readonly #connectorGrants: readonly HarnessConnectorGrantSpec[];
   readonly #patternRefs: readonly HarnessPatternRefSpec[];
@@ -815,6 +839,9 @@ export class CfHarnessEngine {
           skillsShAcquisitionClientFactory,
         );
     this.#taskText = options.taskText;
+    this.#structuredResult = options.lineage === undefined
+      ? options.structuredResult
+      : undefined;
     this.#inputCells = options.inputCells ?? [];
     this.#connectorGrants = options.connectorGrants ?? [];
     this.#patternRefs = options.patternRefs ?? [];
@@ -1560,6 +1587,26 @@ export class CfHarnessEngine {
     );
     await this.recordHandleTable(minted.table);
     return minted.token;
+  }
+
+  /** Whether this run was configured with a structured-result schema. */
+  get structuredResultAvailable(): boolean {
+    return this.#structuredResult !== undefined;
+  }
+
+  /**
+   * Helper for `submit_result`, which writes a validated result to the
+   * configured file, replacing whatever an earlier submission left.
+   */
+  async #recordStructuredResult(
+    value: unknown,
+  ): Promise<{ replaced: boolean }> {
+    const { path } = this.#structuredResult!;
+    await Deno.mkdir(dirname(path), { recursive: true });
+    await Deno.writeTextFile(path, `${JSON.stringify(value, null, 2)}\n`);
+    const replaced = this.#structuredResultRecorded;
+    this.#structuredResultRecorded = true;
+    return { replaced };
   }
 
   async persistRunState(): Promise<string | undefined> {
@@ -2666,6 +2713,14 @@ export class CfHarnessEngine {
       hostProcessRunner: this.hostProcessRunner,
       loomAuthoring: this.config.loomAuthoring,
       loomRetrieval: this.config.loomRetrieval,
+      ...(this.#structuredResult !== undefined
+        ? {
+          structuredResult: {
+            schema: this.#structuredResult.schema,
+            record: (value: unknown) => this.#recordStructuredResult(value),
+          },
+        }
+        : {}),
       ...(this.config.fabricSession?.cfcReadMaxConfidentiality !== undefined
         ? {
           cfcReadMaxConfidentiality:

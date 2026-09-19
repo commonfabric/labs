@@ -2153,7 +2153,8 @@ const appendStructuredResultInstructions = (
   lines.push(
     "",
     "Structured result contract:",
-    `- Before finishing, write a JSON file at ${structuredResult.sandboxPath}.`,
+    "- Before finishing, call submit_result with the whole result as `result`. It validates the value against the configured schema and tells you what to correct.",
+    `- Writing a JSON file at ${structuredResult.sandboxPath} yourself is the other way to the same place, where you hold a tool that can write it.`,
     "- The harness validates that file against the configured structured-result schema after the run.",
     "- If the file is missing, invalid JSON, or schema-invalid, the CLI exits nonzero and records the validation failure in the batch result sidecar when configured.",
   );
@@ -3375,6 +3376,14 @@ export const runCfHarnessCli = async (
         // What the run was asked to do, in the operator's words. A pattern
         // the run publishes carries it as the request it answers.
         ...(parsed.prompt !== undefined ? { taskText: parsed.prompt } : {}),
+        ...(parsed.structuredResult !== undefined
+          ? {
+            structuredResult: {
+              schema: parsed.structuredResult.schema,
+              path: parsed.structuredResult.path,
+            },
+          }
+          : {}),
         ...(deps.fabricSessionFactory !== undefined
           ? { fabricSessionFactory: deps.fabricSessionFactory }
           : {}),
@@ -3493,6 +3502,14 @@ export const runCfHarnessCli = async (
         // What the run was asked to do, in the operator's words. A pattern
         // the run publishes carries it as the request it answers.
         ...(parsed.prompt !== undefined ? { taskText: parsed.prompt } : {}),
+        ...(parsed.structuredResult !== undefined
+          ? {
+            structuredResult: {
+              schema: parsed.structuredResult.schema,
+              path: parsed.structuredResult.path,
+            },
+          }
+          : {}),
         ...(deps.fabricSessionFactory !== undefined
           ? { fabricSessionFactory: deps.fabricSessionFactory }
           : {}),

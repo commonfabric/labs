@@ -1,3 +1,4 @@
+import type { JSONSchema } from "@commonfabric/api";
 import type {
   CfcConfClause,
   CfcEnforcementMode,
@@ -209,6 +210,17 @@ export interface HarnessToolContext {
 
   /** Host-owned Loom retrieval routing, absent when the run has no grant. */
   loomRetrieval?: HarnessLoomRetrievalConfig;
+
+  /**
+   * Where the run's structured result goes, absent when the run was
+   * configured with no schema. `record` writes a validated value where the
+   * file-based path leaves one, and reports whether it replaced an earlier
+   * one.
+   */
+  structuredResult?: {
+    schema: JSONSchema;
+    record(value: unknown): Promise<{ replaced: boolean }>;
+  };
 
   /**
    * The run's observation ceiling: the fabric session's read ceiling, met

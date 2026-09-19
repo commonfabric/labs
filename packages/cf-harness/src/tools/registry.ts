@@ -22,6 +22,7 @@ import { runPatternTool } from "./run-pattern.ts";
 import { runSkillScriptTool } from "./run-skill-script.ts";
 import { searchPatternsTool } from "./search-patterns.ts";
 import { searchSkillsTool } from "./search-skills.ts";
+import { submitResultTool } from "./submit-result.ts";
 import { webFetchTool } from "./web-fetch.ts";
 import { viewImageTool } from "./view-image.ts";
 import { writeFileTool } from "./write-file.ts";
@@ -53,6 +54,7 @@ export const BUILTIN_TOOLS = [
   loomInspectTool,
   loomAuthoringContextTool,
   ...LOOM_RETRIEVAL_TOOLS,
+  submitResultTool,
 ] as const;
 
 export const BUILTIN_TOOL_REGISTRY = new Map<
