@@ -620,7 +620,9 @@ function substituteTypeParameters(
       typeRegistry,
       DEFAULT_TYPE_NODE_FLAGS | ts.NodeBuilderFlags.InTypeAlias,
     );
-    if (!readsTheSameWhereEmitted(replacement, declaration, checker)) {
+    if (
+      !readsTheSameWhereEmitted(replacement, argument, declaration, checker)
+    ) {
       return undefined;
     }
     replacements.set(parameter, replacement);
@@ -642,34 +644,87 @@ function substituteTypeParameters(
 }
 
 /**
- * Helper for `substituteTypeParameters()`, which returns `true` for a printed
- * type node that schema generation reads as the type it was printed from. Three
- * forms are not: a reference with type arguments, whose members are read from
- * its generic declaration with their parameters unresolved; `import("…").T`
- * and `typeof x`, which name what the emitting module may not hold; and a name
- * that is out of scope where the binding is declared.
+ * Helper for `substituteTypeParameters()`, which returns `true` for a node
+ * printed from `type` that schema generation reads as that type. Three forms
+ * are not: a reference with type arguments, whose members are read from its
+ * generic declaration with their parameters unresolved; `import("…").T` and
+ * `typeof x`, which name what the emitting module may not hold; and a name
+ * that, where the binding is declared, is out of scope or names another type.
+ * The printer writes a bare name without asking what it resolves to there.
  */
 function readsTheSameWhereEmitted(
   typeNode: ts.TypeNode,
+  type: ts.Type,
   declaration: ts.BindingElement,
   checker: ts.TypeChecker,
 ): boolean {
-  let inScope: Set<string> | undefined;
+  let inScope: Map<string, ts.Symbol> | undefined;
+  let mentioned: Map<string, ts.Symbol[]> | undefined;
+  const namesTheSameType = (name: string): boolean => {
+    inScope ??= new Map(
+      checker.getSymbolsInScope(declaration, ts.SymbolFlags.Type)
+        .map((symbol) => [symbol.name, symbol]),
+    );
+    mentioned ??= getSymbolsMentionedByType(type, checker);
+    const local = inScope.get(name);
+    const resolved = local && local.flags & ts.SymbolFlags.Alias
+      ? checker.getAliasedSymbol(local)
+      : local;
+    const declared = resolved?.declarations?.[0];
+    return !!declared &&
+      (mentioned.get(name) ?? []).some((symbol) =>
+        symbol.declarations?.[0] === declared
+      );
+  };
   const reads = (node: ts.Node): boolean => {
     if (ts.isImportTypeNode(node) || ts.isTypeQueryNode(node)) return false;
-    if (ts.isTypeReferenceNode(node)) {
-      if (node.typeArguments?.length || !ts.isIdentifier(node.typeName)) {
-        return false;
-      }
-      inScope ??= new Set(
-        checker.getSymbolsInScope(declaration, ts.SymbolFlags.Type)
-          .map((symbol) => symbol.name),
-      );
-      if (!inScope.has(node.typeName.text)) return false;
+    if (
+      ts.isTypeReferenceNode(node) &&
+      (node.typeArguments?.length || !ts.isIdentifier(node.typeName) ||
+        !namesTheSameType(node.typeName.text))
+    ) {
+      return false;
     }
     return ts.forEachChild(node, (child) => !reads(child)) !== true;
   };
   return reads(typeNode);
+}
+
+/**
+ * Helper for `readsTheSameWhereEmitted()`, which returns the symbols `type`
+ * mentions, by name: its own, and those of its union and intersection members,
+ * its type arguments, and the properties of its object-literal types.
+ */
+function getSymbolsMentionedByType(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): Map<string, ts.Symbol[]> {
+  const mentioned = new Map<string, ts.Symbol[]>();
+  const visited = new Set<ts.Type>();
+  const visit = (current: ts.Type): void => {
+    if (visited.has(current)) return;
+    visited.add(current);
+    for (const symbol of [current.aliasSymbol, current.symbol]) {
+      if (!symbol) continue;
+      const symbols = mentioned.get(symbol.name) ?? [];
+      symbols.push(symbol);
+      mentioned.set(symbol.name, symbols);
+    }
+    current.aliasTypeArguments?.forEach(visit);
+    if (current.isUnionOrIntersection()) current.types.forEach(visit);
+    if (!(current.flags & ts.TypeFlags.Object)) return;
+    const object = current as ts.ObjectType;
+    if (object.objectFlags & ts.ObjectFlags.Reference) {
+      checker.getTypeArguments(object as ts.TypeReference).forEach(visit);
+    }
+    if (object.objectFlags & ts.ObjectFlags.Anonymous) {
+      for (const property of checker.getPropertiesOfType(object)) {
+        visit(checker.getTypeOfSymbol(property));
+      }
+    }
+  };
+  visit(type);
+  return mentioned;
 }
 
 /** Resolves a destructuring path against its input type and collects generic arguments. */

@@ -1306,20 +1306,22 @@ and nested or renamed destructuring follow that type. A parameter that sits in a
 union, an intersection, parentheses, or a wrapper is replaced by a node printed
 from its argument, which gives the schema of the concrete type written in place.
 That holds where the printed argument reads the same wherever it is emitted:
-keywords, literals, type literals, and a name without type arguments that is in
-scope where the binding is declared. Every other generic binding — a parameter
-inside another type expression such as `Box<T>`, `T[K]`, or `T[]`, or an
-argument that prints as a reference with type arguments, as `import("…").T`,
-as `typeof x`, or as a name out of scope — is emitted as its instantiated
-declared type. That keeps the wrapper and the complete value type, and keeps a
-default's value as a member of the union: `anyOf: [T, V]` with the default,
-where the concrete type written in place emits `T` with the default. The
-pattern body's view of such a binding is not used, because stripping
-`Default<{}>` from `T | {}` lets the union reduce to `{}`. When the builder's
-type argument cannot be found, as when `pattern<Input<number>>` is bound to a
-name before it is called, the only instantiated type on hand is the pattern
-body's view, and the binding is emitted with its concrete value type and
-without its default.
+keywords, literals, type literals, and a name without type arguments that names
+the argument's own type where the binding is declared. The printer writes a bare
+name without asking what it resolves to there, so the name is checked against
+the symbols the argument's type mentions. Every other generic binding — a
+parameter inside another type expression such as `Box<T>`, `T[K]`, or `T[]`, or
+an argument that prints as a reference with type arguments, as `import("…").T`,
+as `typeof x`, or as a name that is out of scope there or names another type —
+is emitted as its instantiated declared type. That keeps the wrapper and the
+complete value type, and keeps a default's value as a member of the union:
+`anyOf: [T, V]` with the default, where the concrete type written in place emits
+`T` with the default. The pattern body's view of such a binding is not used,
+because stripping `Default<{}>` from `T | {}` lets the union reduce to `{}`.
+When the builder's type argument cannot be found, as when
+`pattern<Input<number>>` is bound to a name before it is called, the only
+instantiated type on hand is the pattern body's view, and the binding is emitted
+with its concrete value type and without its default.
 
 Pattern result inference reads returned input bindings through the same
 function when a returned binding carries a scope wrapper.

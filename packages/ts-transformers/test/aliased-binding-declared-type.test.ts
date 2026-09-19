@@ -303,6 +303,31 @@ export default pattern<Input>(({ v }) => ({
       });
     });
 
+    it("keeps the argument's own type where the capturing module declares another of its name", async () => {
+      // The printer writes the argument as a bare `Stored`, which names the
+      // capturing module's own interface there.
+
+      const output = await transformFiles({
+        "/types.ts": `import type { Default } from "commonfabric";
+export interface Stored { remote: string }
+interface Generic<T> { v: T | Default<{}>; }
+export type Input = Generic<Stored>;`,
+        "/main.tsx": `import { computed, pattern } from "commonfabric";
+import type { Input } from "./types.ts";
+interface Stored { local: number }
+const unrelated: Stored = { local: 1 };
+export default pattern<Input>(({ v }) => ({
+  s: computed(() => JSON.stringify([v, unrelated.local])),
+}));`,
+      }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+      const [capture] = callSchemas(parseModule(output["/main.tsx"]!), "lift");
+      expect((capture!.$defs as Record<string, Schema>).Stored).toEqual({
+        type: "object",
+        properties: { remote: { type: "string" } },
+        required: ["remote"],
+      });
+    });
+
     for (
       const [title, input, argument, capture] of [
         [
@@ -466,10 +491,10 @@ ${computedReading("StoredCell")}`,
   });
 
   describe("a capture of a value declared through an alias", () => {
-    it("emits the default of an aliased `PerUser` in a `computed()`", async () => {
+    it("emits the scope and default of an aliased `PerUser` in a `computed()`", async () => {
       // Whether the value's schema sits in place or under its alias's name is
-      // schema generation's choice, so the default is read from wherever it
-      // put the schema.
+      // schema generation's choice, so both are read from wherever it put the
+      // schema.
 
       const [aliased] = await schemasOf(
         `type Nickname = PerUser<string | Default<"">>;
@@ -487,6 +512,7 @@ export default pattern<{ c: Nickname }>(({ c }) => ({
 
       expect(value.type).toBe("string");
       expect(value.default).toBe("");
+      expect(value.scope).toBe("user");
     });
 
     it("emits the author's own type that shares a wrapper's name as that type", async () => {
