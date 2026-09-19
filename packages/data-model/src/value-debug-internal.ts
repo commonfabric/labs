@@ -1,20 +1,17 @@
 /**
  * The debug renderers of `value-debug`, as this package's own modules reach
  * them: each function here forwards to the renderer of the same name, which
- * `value-debug` hands over when it loads. The import map points `@/value-debug`
- * here, so that is what a module of this package writes.
+ * `value-debug` hands over when it loads. A module of this package imports them
+ * as `@/value-debug`.
  *
- * This module imports nothing at run time. A module anywhere in the package
- * can therefore import it without causing a circular load-time dependency,
- * including a module which `value-debug` itself loads, such as the root class
- * every `FabricSpecialObject` extends.
+ * This module imports nothing at run time, so a module anywhere in the package
+ * can import it without causing a circular load-time dependency.
  *
- * What that costs is an order: a renderer works once `value-debug` has been
- * loaded, and throws before then. Every entry in the package's export map
- * loads it, apart from the two which are a single module that renders nothing
- * (`api.ts` and `frozen-builtins.ts`), so a program which imports the package
- * has it. A unit test which imports one module by its path may not, and gets it
- * by importing `@/for-testing-only.ts`.
+ * A renderer works once `value-debug` has loaded, and throws before then. A
+ * program which imports the package has it loaded, whichever entry of the
+ * export map it imports, other than an entry which renders nothing. A unit test
+ * which imports one module by its path may not, and gets it by importing
+ * `@/for-testing-only.ts`.
  */
 
 import type * as valueDebug from "@/value-debug/index.ts";
@@ -42,7 +39,10 @@ export function installDebugRenderers(renderers: DebugRenderers): void {
   installedRenderers = renderers;
 }
 
-/** Whether the renderers are installed, which is to say `value-debug` loaded. */
+/**
+ * Whether the renderers are installed, which they are once `value-debug` has
+ * loaded.
+ */
 export function areDebugRenderersInstalled(): boolean {
   return installedRenderers !== undefined;
 }
