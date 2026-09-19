@@ -2002,6 +2002,8 @@ async function updateOnServer(
 export async function followPieceSource(
   config: PieceConfig,
   origin: string,
+  options: Pick<SetPiecePatternOptions, "dangerouslyAllowIncompatibleSchema"> =
+    {},
   deps: PieceOperationDependencies = {},
 ): Promise<PieceSourceActionResult> {
   const pieces = await (deps.loadPieces ?? loadPieces)(config);
@@ -2025,7 +2027,18 @@ export async function followPieceSource(
     undefined,
     resolvedConfig.pieceScope,
   );
-  const result = await piece.changeSource({ kind: "repoint", url: origin });
+  const action = { kind: "repoint" as const, url: origin };
+  let result = await piece.changeSource(action);
+  if (
+    result.status === "incompatible" &&
+    options.dangerouslyAllowIncompatibleSchema
+  ) {
+    // Confirm only this review and its pinned candidate. Changed source
+    // state or retained input may require a new review by the caller.
+    result = await piece.changeSource(action, {
+      confirmedChange: result.prepared,
+    });
+  }
   if (result.status === "applied") noteWroteTo(config.space);
   return result;
 }

@@ -34,7 +34,7 @@ describe("cf piece follow", () => {
           throw new Error("must not reach the client-side repoint");
         },
       };
-      await expect(followPieceSource(config, "system:system/x.tsx", {
+      await expect(followPieceSource(config, "system:system/x.tsx", {}, {
         // deno-lint-ignore no-explicit-any
         loadPieces: () => Promise.resolve(served as any),
       })).rejects.toThrow(/not served yet/);
@@ -61,6 +61,7 @@ describe("cf piece follow", () => {
       const result = await followPieceSource(
         config,
         "system:system/profile-home.tsx",
+        {},
         {
           // deno-lint-ignore no-explicit-any
           loadPieces: () => Promise.resolve(pieces as any),
@@ -74,15 +75,80 @@ describe("cf piece follow", () => {
     });
   });
 
+  describe("explicit compatibility confirmation", () => {
+    for (const allow of [false, true]) {
+      for (const changesDuringConfirmation of [false, true]) {
+        it(`confirms ${allow ? "once" : "zero times"} when the retained input ${changesDuringConfirmation ? "changes" : "stays fixed"}`, async () => {
+          const calls: unknown[][] = [];
+          // The controller owns this opaque review; the CLI must forward it
+          // unchanged rather than construct a second approval.
+          const prepared = { review: "first candidate" };
+          const incompatible = {
+            status: "incompatible" as const,
+            message: "result.inbox.space: existing result field was removed",
+            prepared,
+          };
+          const changed = {
+            ...incompatible,
+            prepared: { review: "changed candidate" },
+          };
+          const controller = {
+            changeSource: (...args: unknown[]) => {
+              calls.push(args);
+              return Promise.resolve(
+                calls.length === 1
+                  ? incompatible
+                  : changesDuringConfirmation
+                  ? changed
+                  : { status: "applied" as const },
+              );
+            },
+          };
+          const result = await followPieceSource(
+            { ...BASE_OPTIONS, piece: "of:profile" },
+            "system:system/profile-home.tsx",
+            { dangerouslyAllowIncompatibleSchema: allow },
+            {
+              // Only the connection boundary is stubbed; calls above measure
+              // which review the real CLI implementation confirms.
+              // deno-lint-ignore no-explicit-any
+              loadPieces: () =>
+                Promise.resolve(
+                  { get: () => Promise.resolve(controller) } as any,
+                ),
+              resolvePieceAddress: () => Promise.resolve("of:profile"),
+            },
+          );
+          expect(calls.length).toBe(allow ? 2 : 1);
+          expect(result).toEqual(
+            !allow
+              ? incompatible
+              : changesDuringConfirmation
+              ? changed
+              : { status: "applied" },
+          );
+          if (allow) {
+            expect(calls[1][0]).toEqual(calls[0][0]);
+            expect(calls[1][1]).toEqual({ confirmedChange: prepared });
+            expect(
+              (calls[1][1] as { confirmedChange: unknown }).confirmedChange,
+            ).toBe(prepared);
+          }
+        });
+      }
+    }
+  });
+
   describe("followPieceSourceAction()", () => {
     it("reports a follow that landed", async () => {
       const rendered: unknown[] = [];
       const hints: string[] = [];
       await followPieceSourceAction(
-        BASE_OPTIONS,
+        { ...BASE_OPTIONS, dangerouslyAllowIncompatibleSchema: true },
         " system:system/profile-home.tsx ",
         {
-          followPieceSource: (config, origin) => {
+          followPieceSource: (config, origin, options) => {
+            expect(options?.dangerouslyAllowIncompatibleSchema).toBe(true);
             expect(config.piece).toBe("of:profile");
             expect(origin).toBe("system:system/profile-home.tsx");
             return Promise.resolve({ status: "applied" });
@@ -118,6 +184,9 @@ describe("cf piece follow", () => {
       expect(errors).toEqual([
         "The source system:system/x.tsx serves now cannot replace what " +
         "of:profile runs: argument.name: newly required argument field",
+        "Review the incompatibility before retrying with " +
+        "--dangerously-allow-incompatible-schema. Existing links may no " +
+        "longer fit the new pattern.",
       ]);
     });
 

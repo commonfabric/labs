@@ -1,5 +1,23 @@
 # @commonfabric/cli
 
+## Following a piece source
+
+`cf piece follow --cell <piece> <origin>` adopts the origin’s current pattern
+and records the origin for future updates. It refuses incompatible schemas by
+default. After reviewing the reported changes, pass
+`--dangerously-allow-incompatible-schema` to accept that compatibility review.
+The confirmation applies the exact reviewed candidate and revalidates source
+state and retained inputs. A new compatibility review is returned to the caller
+without automatically accepting it.
+
+For a detached profile with the legacy inbox descriptor, the manual migration is
+`cf piece follow --cell <profile> system:system/profile-home.tsx
+--dangerously-allow-incompatible-schema`
+with the profile owner’s identity and API URL. Inspect the incompatibility
+before accepting it; the new inbox contract uses a piece link. The command
+refuses deployments that serve piece lifecycle verbs, where `follow` is not yet
+served.
+
 ## Pattern test read costs
 
 `cf test <file.test.tsx> --verbose --stats-threshold 0` reports read costs for
