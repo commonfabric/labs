@@ -370,6 +370,7 @@ async function readWindowRuns(
   const days = new Map<string, DayRuns>(
     wanted.map(({ day }) => [day, { runs: [], whole: false }]),
   );
+  const seen = new Set<number>();
   const knownNewest = new Map(
     wanted.map(({ day, newestRun }) => [day, newestRun]),
   );
@@ -393,6 +394,13 @@ async function readWindowRuns(
     }
     const runs = listed.workflow_runs ?? [];
     for (const run of runs) {
+      // A run created while the pages are being read pushes the ones behind
+      // it down a place, so the run that ended a page is listed again at the
+      // head of the next. Taken twice it holds two of the day's places, and
+      // a day whose repeated run measures nothing would lose the older run
+      // that measured to it — and then be recorded as measuring nothing.
+      if (seen.has(run.id)) continue;
+      seen.add(run.id);
       if (!measuresMain(run)) continue;
       const at = runDay(run);
       const day = at === undefined ? undefined : days.get(at);

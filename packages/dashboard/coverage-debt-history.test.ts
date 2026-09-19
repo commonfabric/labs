@@ -77,8 +77,15 @@ const PAGE_SIZE = 100;
  * out so that reaching an older day takes another page as it does of the real
  * listing. A day whose value is an `Error` fails the page it sits on, and a
  * day the record does not name has no runs.
+ *
+ * `pages`, where a case needs runs placed across the pages itself rather than
+ * a page to each day, is served as the listing instead; `days` then says only
+ * what each run's artifact holds.
  */
-function fakeGitHub(days: Record<string, FakeRun[] | Error>): FakeGitHub {
+function fakeGitHub(
+  days: Record<string, FakeRun[] | Error>,
+  pages?: unknown[][],
+): FakeGitHub {
   const paths: string[] = [];
   const runsById = new Map<number, FakeRun>();
   for (const runs of Object.values(days)) {
@@ -117,6 +124,9 @@ function fakeGitHub(days: Record<string, FakeRun[] | Error>): FakeGitHub {
       paths.push(path);
       const page = Number(path.match(/[?&]page=(\d+)/)?.[1] ?? 0);
       if (page > 0) {
+        if (pages !== undefined) {
+          return { workflow_runs: pages[page - 1] ?? [] } as T;
+        }
         const day = newestDayFirst[page - 1];
         // Past the last day the record names the listing has ended.
         return { workflow_runs: day === undefined ? [] : pageOf(day) } as T;
@@ -407,6 +417,42 @@ describe("coverage-debt-history", () => {
       expect(history.samples).toEqual([]);
       expect(github.paths.filter((path) => !path.includes("/runs?")))
         .toEqual([]);
+    });
+
+    it("names a run once that two listing pages both hold", async () => {
+      const day = "2026-09-02";
+      const listed = (id: number, at: number) => ({
+        id,
+        created_at: `${day}T${String(23 - at).padStart(2, "0")}:00:00Z`,
+        head_branch: "main",
+        event: "push",
+        conclusion: "success",
+      });
+      const filler = Array.from({ length: PAGE_SIZE - 1 }, (_, at) => ({
+        ...listed(900_000 + at, 23),
+        head_branch: "topic",
+        event: "pull_request",
+      }));
+      // Run 41 ends the first page and, a run having landed between the two
+      // reads, heads the second as well. Counted twice it takes two of the
+      // day's three places and keeps run 43, the one that measured, out of
+      // them — and the day would then be recorded as measuring nothing.
+      const github = fakeGitHub({
+        [day]: [{ id: 41 }, { id: 42 }, { id: 43, metrics: metrics(78166) }],
+      }, [
+        [...filler, listed(41, 0)],
+        [listed(41, 0), listed(42, 1), listed(43, 2)],
+      ]);
+      const history = await refreshCoverageDebt({
+        token: "t",
+        days: 1,
+        now: NOW,
+        github,
+        store: new CoverageDebtStore(file),
+      });
+      expect(history.samples).toEqual([
+        { day, uncoveredLines: 78166, runId: 43 },
+      ]);
     });
 
     it("passes over a run whose date does not read as a day", async () => {
