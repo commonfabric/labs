@@ -906,10 +906,9 @@ outgoing `FabricValue` references, and a `FabricPrimitive` may not.
 
 At runtime the two classes extend one root, `BaseFabricSpecialObject` in
 `fabric-bases/`, so that `isFabricSpecialObject()` recognizes either with a
-single `instanceof`, narrowing to the union. The root's only member is the
-inspector a debugger calls. The root is not a type a caller names, and the data
-model defines no other subclass of it; an instance of one defined elsewhere is
-not a `FabricValue`.
+single `instanceof`, narrowing to the union. The root is not a type a caller
+names, and the data model defines no other subclass of it; an instance of one
+defined elsewhere is not a `FabricValue`.
 
 Each class is **nominal**, not structural: each declares a brand member that
 exists only in the type system (`declare` emits no runtime member, and nothing

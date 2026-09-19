@@ -4,10 +4,10 @@
  * `value-debug` hands over when it loads. The import map points `@/value-debug`
  * here, so that is what a module of this package writes.
  *
- * This module imports nothing at run time, its one import being of types. A
- * module anywhere in the package can therefore import it without causing a
- * circular load-time dependency, including a module which `value-debug` itself
- * loads, such as the root class every `FabricSpecialObject` extends.
+ * This module imports nothing at run time. A module anywhere in the package
+ * can therefore import it without causing a circular load-time dependency,
+ * including a module which `value-debug` itself loads, such as the root class
+ * every `FabricSpecialObject` extends.
  *
  * What that costs is an order: a renderer works once `value-debug` has been
  * loaded, and throws before then. Every entry in the package's export map

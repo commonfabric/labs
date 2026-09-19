@@ -1,3 +1,7 @@
+// `interface.ts` extends its protocol classes from the class here, and nearly
+// every module of the package imports `interface.ts`. So whatever this module
+// imports has to import nothing at run time itself. `value-debug-internal.ts`,
+// which is what `@/value-debug` names, is such a module.
 import {
   areDebugRenderersInstalled,
   toCompactDebugString,
@@ -6,18 +10,11 @@ import {
 /**
  * The runtime root of the two special-object classes, `FabricInstance` and
  * `FabricPrimitive`: the one class both extend, so that a single `instanceof`
- * recognizes either. Its one member is the custom inspector, and it carries no
- * brand. It is not a type a caller names: the pattern-visible
- * `FabricSpecialObject` in `api.ts` is the union of the two subclasses, and
- * `isFabricSpecialObject()` in `types/narrowing.ts` is the check, narrowing to
- * that union. The data model defines no other subclass, and an instance of one
- * defined elsewhere is not a `FabricValue`.
- *
- * This module's one import is of `value-debug-internal.ts`, which itself
- * imports nothing at run time. That is what lets `interface.ts` extend the two
- * protocol classes from this one while every other module, `value-debug`
- * among them, keeps importing `interface.ts` without a circular load-time
- * dependency.
+ * recognizes either. It carries no brand. It is not a type a caller names: the
+ * pattern-visible `FabricSpecialObject` in `api.ts` is the union of the two
+ * subclasses, and `isFabricSpecialObject()` in `types/narrowing.ts` is the
+ * check, narrowing to that union. The data model defines no other subclass,
+ * and an instance of one defined elsewhere is not a `FabricValue`.
  */
 export abstract class BaseFabricSpecialObject {
   /**
