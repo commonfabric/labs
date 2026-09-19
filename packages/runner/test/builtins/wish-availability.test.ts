@@ -200,14 +200,26 @@ describe("wish-availability", () => {
     }
   });
 
-  for (const outcome of ["absent", "failed", "cancelled"] as const) {
-    it(`finishes a shared resolver's ${outcome} load without a storage write`, async () => {
+  for (
+    const { outcome, target } of (["index", "candidate"] as const).flatMap(
+      (target) =>
+        (["absent", "failed", "cancelled"] as const).map((outcome) => ({
+          outcome,
+          target,
+        })),
+    )
+  ) {
+    const candidateLabel = target === "candidate" ? " candidate" : "";
+    it(`finishes a shared resolver's ${outcome}${candidateLabel} load without a storage write`, async () => {
       const manager = EmulatedStorageManager.emulate({ as: user });
       const runtime = makeRuntime(manager);
       const [cancel, addCancel] = useCancelGroup();
       const requested = defer<void>();
       const release = defer<void>();
-      const missing = runtime.getCell(candidateSpace.did(), "missing-index");
+      const missing = runtime.getCell(
+        candidateSpace.did(),
+        `missing-${target}`,
+      );
       const provider = manager.open(candidateSpace.did());
       const originalSync = provider.sync.bind(provider);
       try {
@@ -215,7 +227,11 @@ describe("wish-availability", () => {
         const owner = runtime.getCell(user.did(), "owner");
         const tx = runtime.edit();
         runtime.getHomeSpaceCell(tx).asSchema(undefined).set({
-          defaultPattern: { backlinksIndex: missing },
+          defaultPattern: {
+            backlinksIndex: target === "index"
+              ? missing
+              : { mentionable: [missing] },
+          },
         });
         inputs.withTx(tx).set({
           query: "#notebook",

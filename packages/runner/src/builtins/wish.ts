@@ -677,8 +677,6 @@ function searchMentionablesForHashtag(
     () =>
       mentionables.filter((pieceCell: Cell<any>) => {
         if (!pieceCell) return false;
-        const resolved = resolvePath(pieceCell, [], ctx);
-        if (!ctx.readiness.requireDocument(resolved, ctx.tx)) return false;
 
         const piece = measureWishPhase(
           "mentionable-piece-get",

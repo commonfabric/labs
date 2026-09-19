@@ -40,17 +40,18 @@ const text = wishResult.result.content;
 return { [UI]: <div>{wishResult.result}</div> };
 ```
 
-### Single match auto-confirms
+### Results wait for loading documents
 
 Wish waits for the backing documents of its discovery collections and
 mentionable candidates before selecting a result. Pending document loads leave
 the current state untouched. A confirmed empty collection produces a no-match
-error; a failed document load produces a load error. Completion can wake the
-resolver even when the document is absent and storage writes nothing.
+error; a failed document load produces a load error.
 
 This document readiness check is internal to the runtime. It does not expose
 an existence-query API to patterns or replace schema validation of loaded
 values.
+
+### Single match auto-confirms
 
 When exactly one piece matches, `result` is set immediately with no picker
 shown. The `candidates` array will contain that single item.
