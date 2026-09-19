@@ -24,8 +24,7 @@ export abstract class BaseFabricSpecialObject {
    *
    * Delegates to the canonical debug renderer rather than formatting here, so
    * that this surface improves whenever that one does. Where the renderers are
-   * not installed, the result names the class and nothing more, an inspector
-   * being the wrong place to throw from.
+   * not installed, the result names the class and nothing more.
    */
   [Symbol.for("Deno.customInspect")](): string {
     return areDebugRenderersInstalled()
