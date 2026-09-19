@@ -452,21 +452,20 @@ describe("baselines", () => {
     });
 
     it("names a run once that two pages both list", async () => {
+      // A run created between the two reads pushes the ones behind it down a
+      // place, so run 1099, which ended the first page, heads the second.
+      const first = [...page(99, 1, 1000), run({ id: 1099 })];
       const source = liveBaselineSource({
         list: (path) => {
           const at = Number(path.match(/[?&]page=(\d+)/)?.[1]);
-          // A run created between the two reads pushes run 1099 off the
-          // first page and onto the head of the second.
-          if (at === 1) {
-            return Promise.resolve({ workflow_runs: page(100, 2, 1000) });
-          }
+          if (at === 1) return Promise.resolve({ workflow_runs: first });
           return Promise.resolve({
-            workflow_runs: [run({ id: 1001 }), run({ id: 2000 })],
+            workflow_runs: [run({ id: 1099 }), run({ id: 2000 })],
           });
         },
       });
       expect((await source.runs()).map((one) => one.id))
-        .toEqual([1000, 1001, 2000]);
+        .toEqual([1000, 1099, 2000]);
     });
 
     it("reads the uncovered count out of each metric the artifact holds", async () => {
