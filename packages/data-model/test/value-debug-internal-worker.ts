@@ -12,6 +12,8 @@
 import { BaseFabricSpecialObject } from "@/fabric-bases/BaseFabricSpecialObject.ts";
 import * as internal from "@/value-debug-internal.ts";
 
+import { rendererCalls } from "./value-debug-internal-calls.ts";
+
 /** What a test asks of the worker. */
 export type InternalRequest = {
   /** The module to load before reporting, as a URL, or `null` for none. */
@@ -39,20 +41,6 @@ export type InternalReport = {
 /** A concrete subclass of the root class, to have something to inspect. */
 class Probe extends BaseFabricSpecialObject {}
 
-/**
- * Every renderer the module forwards, each called with the arguments
- * `FORWARDER_ARGUMENTS` in the test file calls the real one with.
- */
-const FORWARDER_CALLS: Readonly<Record<string, () => unknown>> = {
-  debugStr: () => internal.debugStr`a value: $quote${[1, 2]}`,
-  toCompactDebugString: () => internal.toCompactDebugString({ a: 1 }),
-  toDebugKindString: () => internal.toDebugKindString([1]),
-  toIndentedDebugString: () => internal.toIndentedDebugString({ a: [1] }),
-  toLongQuotedDebugString: () => internal.toLongQuotedDebugString("x"),
-  toShortQuotedDebugString: () => internal.toShortQuotedDebugString("x"),
-  toStructuredDebugValue: () => internal.toStructuredDebugValue(new Map()),
-};
-
 const scope = self as unknown as {
   onmessage: ((ev: MessageEvent<InternalRequest>) => void) | null;
   postMessage(report: InternalReport): void;
@@ -67,7 +55,7 @@ scope.onmessage = async (ev) => {
     }
 
     const forwarders: Record<string, ForwarderOutcome> = {};
-    for (const [name, call] of Object.entries(FORWARDER_CALLS)) {
+    for (const [name, call] of Object.entries(rendererCalls(internal))) {
       try {
         forwarders[name] = { returned: call() };
       } catch (e) {

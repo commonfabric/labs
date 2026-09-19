@@ -11,25 +11,19 @@ import { describe, it } from "@std/testing/bdd";
 import { BaseFabricSpecialObject } from "@/fabric-bases/BaseFabricSpecialObject.ts";
 import * as valueDebug from "@/value-debug/index.ts";
 
+import { rendererCalls } from "./value-debug-internal-calls.ts";
 import { reportFromFreshRealm } from "./value-debug-internal-worker-client.ts";
 
 /** The URL of `value-debug`'s own module, for a worker to load. */
 const VALUE_DEBUG_URL =
   new URL("../src/value-debug/index.ts", import.meta.url).href;
 
-/**
- * What each renderer returns, in this realm, for the arguments the worker
- * calls its forwarder with.
- */
-const RENDERER_RESULTS: Readonly<Record<string, unknown>> = {
-  debugStr: valueDebug.debugStr`a value: $quote${[1, 2]}`,
-  toCompactDebugString: valueDebug.toCompactDebugString({ a: 1 }),
-  toDebugKindString: valueDebug.toDebugKindString([1]),
-  toIndentedDebugString: valueDebug.toIndentedDebugString({ a: [1] }),
-  toLongQuotedDebugString: valueDebug.toLongQuotedDebugString("x"),
-  toShortQuotedDebugString: valueDebug.toShortQuotedDebugString("x"),
-  toStructuredDebugValue: valueDebug.toStructuredDebugValue(new Map()),
-};
+/** What each renderer returns, in this realm, for the calls the worker makes. */
+const RENDERER_RESULTS: Readonly<Record<string, unknown>> = Object.fromEntries(
+  Object.entries(rendererCalls(valueDebug)).map((
+    [name, call],
+  ) => [name, call()]),
+);
 
 /**
  * A class of the name and shape the worker inspects an instance of, so that
