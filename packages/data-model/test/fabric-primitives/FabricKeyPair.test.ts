@@ -12,16 +12,16 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { hashStringOf, isValidFabricValue } from "@";
 import {
   CODEC_TYPE_TAGS,
   JSON_CODEC,
   NULL_LIVE_ENVIRONMENT,
   ProblematicValue,
   REALM_CODEC,
-} from "@/codec-common/index.ts";
-import type { RealmCodecValue } from "@/codec-realm/index.ts";
-import { FabricBytes, FabricKeyPair } from "@/fabric-primitives/index.ts";
-import { hashStringOf, isValidFabricValue } from "@/index.ts";
+} from "@/codec-common";
+import type { RealmCodecValue } from "@/codec-realm";
+import { FabricBytes, FabricKeyPair } from "@/fabric-primitives";
 
 /** Fixed public-key bytes for deterministic tests. */
 const PUBLIC_BYTES = new Uint8Array([1, 2, 3]);

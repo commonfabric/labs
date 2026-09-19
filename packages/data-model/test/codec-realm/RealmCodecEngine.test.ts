@@ -13,6 +13,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { defer } from "@commonfabric/utils/defer";
 
+import type { FabricValue } from "@";
 import {
   BaseTerminalCodec,
   NULL_LIVE_ENVIRONMENT,
@@ -20,13 +21,13 @@ import {
   ProblematicValue,
   REALM_CODEC,
   UnknownValue,
-} from "@/codec-common/index.ts";
+} from "@/codec-common";
 import {
   RealmCodecEngine,
   type RealmCodecValue,
   type RealmEncodedValue,
   type RealmTaggedValue,
-} from "@/codec-realm/index.ts";
+} from "@/codec-realm";
 import { RealmDecodeAct } from "@/codec-realm/RealmDecodeAct.ts";
 import { RealmEncodeAct } from "@/codec-realm/RealmEncodeAct.ts";
 import {
@@ -35,7 +36,7 @@ import {
   newDefaultRealmCodecEngine,
   realmFromFabricValue,
 } from "@/codecs.ts";
-import { FabricError } from "@/fabric-instances/index.ts";
+import { FabricError } from "@/fabric-instances";
 import {
   FabricBytes,
   FabricEpochDay,
@@ -45,8 +46,7 @@ import {
   FabricRegExp,
   FabricUnavailable,
   UNAVAILABLE_SYNCING,
-} from "@/fabric-primitives/index.ts";
-import type { FabricValue } from "@/index.ts";
+} from "@/fabric-primitives";
 import type { EchoReport } from "./realm-echo-worker.ts";
 
 /**

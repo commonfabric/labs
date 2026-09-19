@@ -11,18 +11,18 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { deepFreeze, isValidDeepFrozenFabricValue } from "@";
 import {
   CODEC,
   NULL_LIVE_ENVIRONMENT,
   ProblematicStateError,
   UnknownValue,
-} from "@/codec-common/index.ts";
+} from "@/codec-common";
 import {
   BaseFabricInstance,
   DEEP_FREEZE,
   IS_DEEP_FROZEN,
-} from "@/fabric-bases/index.ts";
-import { deepFreeze, isValidDeepFrozenFabricValue } from "@/index.ts";
+} from "@/fabric-bases";
 import { subFreeze, subIsDeepFrozen } from "../fabric-instances/fixtures.ts";
 
 describe("UnknownValue", () => {

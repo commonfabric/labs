@@ -20,13 +20,13 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { FabricError, FabricLink } from "@/fabric-instances/index.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/index.ts";
 import {
   type DebugValueOptions,
   isValidFabricValue,
   toStructuredDebugValue,
-} from "@/index.ts";
+} from "@";
+import { FabricError, FabricLink } from "@/fabric-instances";
+import { FabricEpochNsec } from "@/fabric-primitives";
 
 /**
  * Makes a plain object carrying a genuine own `__proto__` property. An object

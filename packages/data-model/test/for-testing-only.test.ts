@@ -8,12 +8,12 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { fabricAwareEqual } from "@";
 import {
   FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
   FABRIC_PRIMITIVE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
   FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY,
 } from "@/for-testing-only.ts";
-import { fabricAwareEqual } from "@/index.ts";
 
 /** Every table of makers, labeled for the test names. */
 const MAKER_TABLES: ReadonlyArray<

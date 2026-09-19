@@ -19,8 +19,8 @@ import {
   JSON_CODEC,
   NULL_LIVE_ENVIRONMENT,
   ProblematicValue,
-} from "@/codec-common/index.ts";
-import { FabricHash } from "@/fabric-primitives/index.ts";
+} from "@/codec-common";
+import { FabricHash } from "@/fabric-primitives";
 
 /** A fixed 32-byte hash for deterministic tests. */
 const SAMPLE_HASH = new Uint8Array(32);

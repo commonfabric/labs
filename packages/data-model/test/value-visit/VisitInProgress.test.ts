@@ -1,17 +1,13 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import {
-  FabricError,
-  FabricLink,
-  FabricMap,
-} from "@/fabric-instances/index.ts";
-import { FabricBytes } from "@/fabric-primitives/index.ts";
 import type {
   FabricContainerValuePlus,
   FabricValue,
   PrimitiveValueTag,
-} from "@/index.ts";
+} from "@";
+import { FabricError, FabricLink, FabricMap } from "@/fabric-instances";
+import { FabricBytes } from "@/fabric-primitives";
 import {
   type DispatchingVisitorResult,
   DO_RECURSE_KEYS,

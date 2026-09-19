@@ -1,7 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import type { FabricInstance, FabricPrimitive } from "@/api.ts";
 import type {
   FabricArray,
   FabricArrayPlus,
@@ -11,7 +10,8 @@ import type {
   FabricSpecialObject,
   FabricValue,
   FabricValuePlus,
-} from "@/index.ts";
+} from "@";
+import type { FabricInstance, FabricPrimitive } from "@/api.ts";
 
 // The assertions in this file are made when it is type-checked, which the
 // package's `test` task does before it runs anything, not when it runs. Each

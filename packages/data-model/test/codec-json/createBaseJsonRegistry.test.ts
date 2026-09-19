@@ -13,8 +13,8 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { SELF_REP } from "@/codec-common/CodecRegistry.ts";
-import { createBaseJsonRegistry } from "@/codec-json/index.ts";
-import { FabricError } from "@/fabric-instances/index.ts";
+import { createBaseJsonRegistry } from "@/codec-json";
+import { FabricError } from "@/fabric-instances";
 
 describe("createBaseJsonRegistry", () => {
   it("returns a frozen registry", () => {

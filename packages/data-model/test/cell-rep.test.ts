@@ -37,8 +37,8 @@ import {
   setModernCellRepConfig,
   type WireLinkRefPayload,
 } from "@/cell-rep.ts";
-import { FabricLink } from "@/fabric-instances/index.ts";
-import { FabricHash } from "@/fabric-primitives/index.ts";
+import { FabricLink } from "@/fabric-instances";
+import { FabricHash } from "@/fabric-primitives";
 
 /** A fixed 32-byte hash for deterministic tests. */
 const SAMPLE_HASH = new Uint8Array(32);

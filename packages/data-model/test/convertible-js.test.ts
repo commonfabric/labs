@@ -29,27 +29,6 @@ import { isInertPlainObject } from "@commonfabric/utils/objects";
 
 import { DummyLiveEnvironment } from "./fabric-instances/fixtures.ts";
 import {
-  CODEC,
-  CODEC_TYPE_TAGS,
-  ProblematicValue,
-  UnknownValue,
-} from "@/codec-common/index.ts";
-import {
-  BaseFabricInstance,
-  DEEP_CLONE_CORE,
-  DEEP_FREEZE,
-  IS_DEEP_FROZEN,
-  SHALLOW_UNFROZEN_CLONE,
-} from "@/fabric-bases/index.ts";
-import { FabricError, FabricMap, FabricSet } from "@/fabric-instances/index.ts";
-import {
-  FabricBytes,
-  FabricEpochNsec,
-  FabricRegExp,
-} from "@/fabric-primitives/index.ts";
-import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
-import { FrozenMap, FrozenSet } from "@/frozen-builtins.ts";
-import {
   assertValidFabricValueLayer,
   convertibleJsFromFabricValue,
   deepFreeze,
@@ -64,7 +43,28 @@ import {
   shallowCleanPlainObject,
   shallowFabricFromConvertibleJsObjectElseUndefined,
   shallowFabricFromConvertibleJsValue,
-} from "@/index.ts";
+} from "@";
+import {
+  CODEC,
+  CODEC_TYPE_TAGS,
+  ProblematicValue,
+  UnknownValue,
+} from "@/codec-common";
+import {
+  BaseFabricInstance,
+  DEEP_CLONE_CORE,
+  DEEP_FREEZE,
+  IS_DEEP_FROZEN,
+  SHALLOW_UNFROZEN_CLONE,
+} from "@/fabric-bases";
+import { FabricError, FabricMap, FabricSet } from "@/fabric-instances";
+import {
+  FabricBytes,
+  FabricEpochNsec,
+  FabricRegExp,
+} from "@/fabric-primitives";
+import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
+import { FrozenMap, FrozenSet } from "@/frozen-builtins.ts";
 import { LAYER_CORPUS, WeirdError } from "./fabric-value-corpus.ts";
 
 /** A concrete fabric class, `toBeInstanceOf()` wanting a constructor. */

@@ -18,14 +18,6 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
-  CODEC,
-  CODEC_TYPE_TAGS,
-  NULL_LIVE_ENVIRONMENT,
-  ProblematicValue,
-} from "@/codec-common/index.ts";
-import { DEEP_FREEZE, IS_DEEP_FROZEN } from "@/fabric-bases/index.ts";
-import { FabricLink } from "@/fabric-instances/index.ts";
-import {
   cloneIfNecessary,
   deepFreeze,
   FabricInstance,
@@ -33,7 +25,15 @@ import {
   hashOf,
   isDeepFrozen,
   type MutableFabricPlainObjectLayer,
-} from "@/index.ts";
+} from "@";
+import {
+  CODEC,
+  CODEC_TYPE_TAGS,
+  NULL_LIVE_ENVIRONMENT,
+  ProblematicValue,
+} from "@/codec-common";
+import { DEEP_FREEZE, IS_DEEP_FROZEN } from "@/fabric-bases";
+import { FabricLink } from "@/fabric-instances";
 import { subFreeze, subIsDeepFrozen } from "./fixtures.ts";
 import { fabricFromJsonValue, jsonFromFabricValue } from "@/codecs.ts";
 

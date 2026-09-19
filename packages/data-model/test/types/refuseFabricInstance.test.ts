@@ -9,9 +9,9 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { UnknownValue } from "@/codec-common/index.ts";
-import { FabricError, FabricMap } from "@/fabric-instances/index.ts";
-import { type FabricInstance, refuseFabricInstance } from "@/index.ts";
+import { type FabricInstance, refuseFabricInstance } from "@";
+import { UnknownValue } from "@/codec-common";
+import { FabricError, FabricMap } from "@/fabric-instances";
 
 const FABRIC_ERROR = FabricError.fromNativeError(new Error("boom"));
 

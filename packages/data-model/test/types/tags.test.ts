@@ -33,20 +33,6 @@ import { expect } from "@std/expect";
 import type { JsTypeTagIncludingNull, Same } from "@commonfabric/utils/types";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
-import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases/index.ts";
-import { FabricError, FabricMap } from "@/fabric-instances/index.ts";
-import {
-  FABRIC_PRIMITIVE_VALUE_TAGS,
-  FabricBytes,
-  FabricEpochDay,
-  FabricEpochNsec,
-  FabricHash,
-  FabricKeyPair,
-  type FabricPrimitiveValueTag,
-  FabricRegExp,
-  FabricUnavailable,
-} from "@/fabric-primitives/index.ts";
-import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
 import {
   type ConvertibleJsValueTag,
   FABRIC_VALUE_PLUS_TAGS,
@@ -69,7 +55,21 @@ import {
   tagOfFabricValueElseNull,
   VALUE_TAGS,
   type ValueTag,
-} from "@/index.ts";
+} from "@";
+import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { FabricError, FabricMap } from "@/fabric-instances";
+import {
+  FABRIC_PRIMITIVE_VALUE_TAGS,
+  FabricBytes,
+  FabricEpochDay,
+  FabricEpochNsec,
+  FabricHash,
+  FabricKeyPair,
+  type FabricPrimitiveValueTag,
+  FabricRegExp,
+  FabricUnavailable,
+} from "@/fabric-primitives";
+import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
 import { LAYER_CORPUS } from "../fabric-value-corpus.ts";
 
 /**

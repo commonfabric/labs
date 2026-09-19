@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { FabricMap } from "@/fabric-instances/index.ts";
+import { FabricMap } from "@/fabric-instances";
 import {
   BaseValueVisitor,
   DO_VISIT_SUBTYPE,

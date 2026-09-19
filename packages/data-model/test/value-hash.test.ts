@@ -21,7 +21,8 @@ import { expect } from "@std/expect";
 import { createHasher } from "@commonfabric/content-hash";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 
-import { FabricError } from "@/fabric-instances/index.ts";
+import { FabricValue, hashOf, hashStringOf, taggedHashStringOf } from "@";
+import { FabricError } from "@/fabric-instances";
 import {
   FabricBytes,
   FabricEpochDay,
@@ -31,13 +32,7 @@ import {
   FabricRegExp,
   FabricUnavailable,
   UNAVAILABLE_PENDING,
-} from "@/fabric-primitives/index.ts";
-import {
-  FabricValue,
-  hashOf,
-  hashStringOf,
-  taggedHashStringOf,
-} from "@/index.ts";
+} from "@/fabric-primitives";
 import * as nodeCrypto from "@node/crypto";
 
 /**

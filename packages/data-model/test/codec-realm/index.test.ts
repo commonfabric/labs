@@ -8,13 +8,13 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { REALM_CODEC } from "@/codec-common/index.ts";
+import { REALM_CODEC } from "@/codec-common";
 import {
   createBaseRealmRegistry,
   REALM_FORMAT,
   REALM_FORMAT_VERSION,
   RealmCodecEngine,
-} from "@/codec-realm/index.ts";
+} from "@/codec-realm";
 
 describe("codec-realm/index", () => {
   it("exports the format descriptor, keyed by this format's codec symbol", () => {

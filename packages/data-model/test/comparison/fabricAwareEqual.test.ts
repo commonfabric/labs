@@ -17,13 +17,13 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { FabricError, FabricMap, FabricSet } from "@/fabric-instances/index.ts";
-import { FabricBytes, FabricEpochNsec } from "@/fabric-primitives/index.ts";
+import { fabricAwareEqual } from "@";
+import { FabricError, FabricMap, FabricSet } from "@/fabric-instances";
+import { FabricBytes, FabricEpochNsec } from "@/fabric-primitives";
 import {
   FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
   FABRIC_PRIMITIVE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
 } from "@/for-testing-only.ts";
-import { fabricAwareEqual } from "@/index.ts";
 
 /** Fixed `FabricError` state, so two built the same way agree in every slot. */
 const errorState = (message: string) => ({

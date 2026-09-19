@@ -17,19 +17,14 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { deepFreeze, FabricInstance, type FabricValue, isDeepFrozen } from "@";
 import {
   BaseFabricInstance,
   DEEP_CLONE_CORE,
   DEEP_FREEZE,
   IS_DEEP_FROZEN,
   SHALLOW_UNFROZEN_CLONE,
-} from "@/fabric-bases/index.ts";
-import {
-  deepFreeze,
-  FabricInstance,
-  type FabricValue,
-  isDeepFrozen,
-} from "@/index.ts";
+} from "@/fabric-bases";
 
 /**
  * Minimal `BaseFabricInstance` subclass used to exercise the template-method

@@ -8,19 +8,10 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import {
-  codecOf,
-  NULL_LIVE_ENVIRONMENT,
-  UnknownValue,
-} from "@/codec-common/index.ts";
-import { FabricError } from "@/fabric-instances/index.ts";
-import { FabricBytes } from "@/fabric-primitives/index.ts";
-import {
-  deepFreeze,
-  type FabricValue,
-  hashStringOf,
-  valueEqual,
-} from "@/index.ts";
+import { deepFreeze, type FabricValue, hashStringOf, valueEqual } from "@";
+import { codecOf, NULL_LIVE_ENVIRONMENT, UnknownValue } from "@/codec-common";
+import { FabricError } from "@/fabric-instances";
+import { FabricBytes } from "@/fabric-primitives";
 
 /** A bounded, deterministic draw from a sample's private generator. */
 type Draw = (limit: number) => number;

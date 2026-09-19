@@ -1,13 +1,13 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { FabricError, FabricMap } from "@/fabric-instances/index.ts";
+import { toDebugKindString } from "@";
+import { FabricError, FabricMap } from "@/fabric-instances";
 import {
   FabricBytes,
   FabricEpochNsec,
   FabricRegExp,
-} from "@/fabric-primitives/index.ts";
-import { toDebugKindString } from "@/index.ts";
+} from "@/fabric-primitives";
 
 describe("toDebugKindString()", () => {
   it("renders `null` and `undefined` literally", () => {

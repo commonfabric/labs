@@ -14,14 +14,14 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { FabricInstance, FabricPrimitive } from "@";
 import {
   CODEC_TYPE_TAGS,
   JSON_CODEC,
   NULL_LIVE_ENVIRONMENT,
   ProblematicValue,
-} from "@/codec-common/index.ts";
-import { FabricBytes } from "@/fabric-primitives/index.ts";
-import { FabricInstance, FabricPrimitive } from "@/index.ts";
+} from "@/codec-common";
+import { FabricBytes } from "@/fabric-primitives";
 
 describe("FabricBytes", () => {
   it("extends `FabricPrimitive` (not `FabricInstance`)", () => {

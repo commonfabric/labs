@@ -1,21 +1,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { BaseFabricSpecialObject } from "@/fabric-bases/index.ts";
-import {
-  FabricError,
-  FabricLink,
-  FabricMap,
-  FabricSet,
-} from "@/fabric-instances/index.ts";
-import {
-  FabricBytes,
-  FabricEpochDay,
-  FabricEpochNsec,
-  FabricHash,
-  FabricRegExp,
-  FabricUnavailable,
-} from "@/fabric-primitives/index.ts";
 import {
   type FabricValue,
   isFabricArray,
@@ -29,7 +14,22 @@ import {
   isWalkableObjectNotArray,
   isWalkableObjectOrArray,
   toCompactDebugString,
-} from "@/index.ts";
+} from "@";
+import { BaseFabricSpecialObject } from "@/fabric-bases";
+import {
+  FabricError,
+  FabricLink,
+  FabricMap,
+  FabricSet,
+} from "@/fabric-instances";
+import {
+  FabricBytes,
+  FabricEpochDay,
+  FabricEpochNsec,
+  FabricHash,
+  FabricRegExp,
+  FabricUnavailable,
+} from "@/fabric-primitives";
 
 describe("narrowing", () => {
   describe("isFabricSpecialObject()", () => {

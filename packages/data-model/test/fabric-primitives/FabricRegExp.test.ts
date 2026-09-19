@@ -19,14 +19,6 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
-  CODEC_TYPE_TAGS,
-  JSON_CODEC,
-  NULL_LIVE_ENVIRONMENT,
-  ProblematicValue,
-} from "@/codec-common/index.ts";
-import { fabricFromJsonValue, jsonFromFabricValue } from "@/codecs.ts";
-import { FabricRegExp } from "@/fabric-primitives/index.ts";
-import {
   FabricInstance,
   FabricPrimitive,
   hashOf,
@@ -35,7 +27,15 @@ import {
   shallowFabricFromConvertibleJsValue,
   tagOfConvertibleJsValueElseNull,
   VALUE_TAGS,
-} from "@/index.ts";
+} from "@";
+import {
+  CODEC_TYPE_TAGS,
+  JSON_CODEC,
+  NULL_LIVE_ENVIRONMENT,
+  ProblematicValue,
+} from "@/codec-common";
+import { fabricFromJsonValue, jsonFromFabricValue } from "@/codecs.ts";
+import { FabricRegExp } from "@/fabric-primitives";
 
 describe("FabricRegExp", () => {
   it("extends `FabricPrimitive` (not `FabricInstance`)", () => {

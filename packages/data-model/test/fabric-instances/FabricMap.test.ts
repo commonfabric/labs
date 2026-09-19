@@ -14,19 +14,15 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
-  CODEC,
-  CODEC_TYPE_TAGS,
-  NULL_LIVE_ENVIRONMENT,
-} from "@/codec-common/index.ts";
-import { DEEP_FREEZE, IS_DEEP_FROZEN } from "@/fabric-bases/index.ts";
-import { FabricMap, FabricNativeWrapper } from "@/fabric-instances/index.ts";
-import { FrozenMap } from "@/frozen-builtins.ts";
-import {
   deepFreeze,
   FabricInstance,
   type FabricValue,
   isValidDeepFrozenFabricValue,
-} from "@/index.ts";
+} from "@";
+import { CODEC, CODEC_TYPE_TAGS, NULL_LIVE_ENVIRONMENT } from "@/codec-common";
+import { DEEP_FREEZE, IS_DEEP_FROZEN } from "@/fabric-bases";
+import { FabricMap, FabricNativeWrapper } from "@/fabric-instances";
+import { FrozenMap } from "@/frozen-builtins.ts";
 import { subFreeze, subIsDeepFrozen } from "./fixtures.ts";
 
 describe("FabricMap", () => {

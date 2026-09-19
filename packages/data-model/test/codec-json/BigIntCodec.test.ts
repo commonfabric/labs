@@ -19,7 +19,7 @@ import {
   CODEC_TYPE_TAGS,
   NULL_LIVE_ENVIRONMENT,
   ProblematicValue,
-} from "@/codec-common/index.ts";
+} from "@/codec-common";
 import { BigIntCodec } from "@/codec-json/BigIntCodec.ts";
 
 describe("BigIntCodec", () => {

@@ -6,9 +6,9 @@
  * Not a `*.test.ts` file, so the runner does not pick it up as a suite.
  */
 
-import type { RealmEncodedValue } from "@/codec-realm/index.ts";
+import type { RealmEncodedValue } from "@/codec-realm";
 import { fabricFromRealmValue } from "@/codecs.ts";
-import { UNAVAILABLE_SYNCING } from "@/fabric-primitives/index.ts";
+import { UNAVAILABLE_SYNCING } from "@/fabric-primitives";
 
 /** What the worker reports back about one decoded value. */
 export type EchoReport = {

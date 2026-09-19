@@ -21,7 +21,7 @@ import {
   CODEC_TYPE_TAGS,
   NULL_LIVE_ENVIRONMENT,
   SymbolCodec,
-} from "@/codec-common/index.ts";
+} from "@/codec-common";
 import type { JsonCodecValue } from "@/codec-json/interface.ts";
 
 // An `Encoded` that cannot hold a registry key cannot be constructed at, since

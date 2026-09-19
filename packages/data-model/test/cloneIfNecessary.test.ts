@@ -21,12 +21,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { FabricError } from "@/fabric-instances/index.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/index.ts";
-import {
-  FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
-  FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY,
-} from "@/for-testing-only.ts";
 import {
   cloneIfNecessary,
   type CloneOptions,
@@ -37,7 +31,13 @@ import {
   isDeepFrozen,
   isValidDeepFrozenFabricValue,
   isValidFabricValue,
-} from "@/index.ts";
+} from "@";
+import { FabricError } from "@/fabric-instances";
+import { FabricEpochNsec } from "@/fabric-primitives";
+import {
+  FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
+  FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY,
+} from "@/for-testing-only.ts";
 
 describe("cloneIfNecessary()", () => {
   describe(`error cases`, () => {

@@ -15,9 +15,9 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { FabricError } from "@/fabric-instances/index.ts";
-import { FabricBytes, FabricHash } from "@/fabric-primitives/index.ts";
-import { deepFreeze, isDeepFrozen, shallowMutableClone } from "@/index.ts";
+import { deepFreeze, isDeepFrozen, shallowMutableClone } from "@";
+import { FabricError } from "@/fabric-instances";
+import { FabricBytes, FabricHash } from "@/fabric-primitives";
 
 describe("shallowMutableClone()", () => {
   it("returns a fresh, mutable, top-level object copy", () => {

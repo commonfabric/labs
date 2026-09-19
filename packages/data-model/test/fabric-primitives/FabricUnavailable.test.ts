@@ -18,28 +18,28 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
-  BaseTerminalCodec,
-  CODEC_TYPE_TAGS,
-  JSON_CODEC,
-  NULL_LIVE_ENVIRONMENT,
-  ProblematicValue,
-  REALM_CODEC,
-} from "@/codec-common/index.ts";
-import {
-  FabricUnavailable,
-  UNAVAILABLE_ERROR_KINDS,
-  UNAVAILABLE_PENDING,
-  UNAVAILABLE_REASONS,
-  UNAVAILABLE_SYNCING,
-} from "@/fabric-primitives/index.ts";
-import {
   FabricInstance,
   FabricPrimitive,
   shallowFabricFromConvertibleJsValue,
   type UnavailableErrorKind,
   type UnavailableReason,
   valueEqual,
-} from "@/index.ts";
+} from "@";
+import {
+  BaseTerminalCodec,
+  CODEC_TYPE_TAGS,
+  JSON_CODEC,
+  NULL_LIVE_ENVIRONMENT,
+  ProblematicValue,
+  REALM_CODEC,
+} from "@/codec-common";
+import {
+  FabricUnavailable,
+  UNAVAILABLE_ERROR_KINDS,
+  UNAVAILABLE_PENDING,
+  UNAVAILABLE_REASONS,
+  UNAVAILABLE_SYNCING,
+} from "@/fabric-primitives";
 
 /**
  * One instance per reason, each built afresh, keyed by reason. The return

@@ -9,7 +9,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { JSON_CODEC } from "@/codec-common/index.ts";
+import { FabricPrimitive, type FabricPrimitiveSchemaType } from "@";
+import { JSON_CODEC } from "@/codec-common";
 import {
   codecClasses,
   FABRIC_PRIMITIVE_CODEC_TYPE_TAGS,
@@ -17,8 +18,7 @@ import {
   fabricPrimitiveClassesByName,
   fabricPrimitiveClassOfSchemaType,
   isFabricPrimitiveSchemaType,
-} from "@/fabric-primitives/index.ts";
-import { FabricPrimitive, type FabricPrimitiveSchemaType } from "@/index.ts";
+} from "@/fabric-primitives";
 import { LAYER_CORPUS } from "../fabric-value-corpus.ts";
 
 /**

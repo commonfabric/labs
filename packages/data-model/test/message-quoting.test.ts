@@ -14,10 +14,10 @@ import { describe, it } from "@std/testing/bdd";
 
 import { backtickQuote } from "@commonfabric/utils/markdown";
 
-import { NullLiveEnvironment } from "@/codec-common/index.ts";
+import { cloneIfNecessary, hashOf } from "@";
+import { NullLiveEnvironment } from "@/codec-common";
 import { newDefaultJsonCodecEngine } from "@/codecs.ts";
-import { FabricHash } from "@/fabric-primitives/index.ts";
-import { cloneIfNecessary, hashOf } from "@/index.ts";
+import { FabricHash } from "@/fabric-primitives";
 
 /**
  * Builds a class instance whose `constructor.name` holds the given text.

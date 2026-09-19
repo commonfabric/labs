@@ -5,7 +5,7 @@ import {
   CODEC_META_TAGS,
   CODEC_TYPE_TAGS,
   isCodecTypeTag,
-} from "@/codec-common/index.ts";
+} from "@/codec-common";
 
 describe("isCodecTypeTag", () => {
   it("returns `true` for every tag in `CODEC_TYPE_TAGS`", () => {

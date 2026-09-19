@@ -7,6 +7,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { type FabricValue, isDeepFrozen } from "@";
 import {
   BaseNonterminalCodec,
   BaseTerminalCodec,
@@ -15,9 +16,8 @@ import {
   ProblematicStateError,
   ProblematicValue,
   UnknownValue,
-} from "@/codec-common/index.ts";
-import { FabricBytes } from "@/fabric-primitives/index.ts";
-import { type FabricValue, isDeepFrozen } from "@/index.ts";
+} from "@/codec-common";
+import { FabricBytes } from "@/fabric-primitives";
 import {
   Marker,
   NESTED,

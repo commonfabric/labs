@@ -25,6 +25,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { FabricInstance, type FabricValue, isDeepFrozen } from "@";
 import {
   BaseLiveEnvironment,
   BaseNonterminalCodec,
@@ -33,8 +34,8 @@ import {
   ProblematicStateError,
   ProblematicValue,
   UnknownValue,
-} from "@/codec-common/index.ts";
-import { JsonCodecEngine } from "@/codec-json/index.ts";
+} from "@/codec-common";
+import { JsonCodecEngine } from "@/codec-json";
 import { JSON_FORMAT, type JsonCodecValue } from "@/codec-json/interface.ts";
 import {
   createDefaultJsonRegistry,
@@ -47,8 +48,8 @@ import {
   DEEP_FREEZE,
   IS_DEEP_FROZEN,
   SHALLOW_UNFROZEN_CLONE,
-} from "@/fabric-bases/index.ts";
-import { FabricError } from "@/fabric-instances/index.ts";
+} from "@/fabric-bases";
+import { FabricError } from "@/fabric-instances";
 import {
   FabricBytes,
   FabricEpochDay,
@@ -56,8 +57,7 @@ import {
   FabricRegExp,
   FabricUnavailable,
   UNAVAILABLE_PENDING,
-} from "@/fabric-primitives/index.ts";
-import { FabricInstance, type FabricValue, isDeepFrozen } from "@/index.ts";
+} from "@/fabric-primitives";
 import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 /**

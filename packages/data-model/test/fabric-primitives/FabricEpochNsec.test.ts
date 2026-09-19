@@ -15,17 +15,17 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
+  FabricInstance,
+  FabricPrimitive,
+  shallowFabricFromConvertibleJsValue,
+} from "@";
+import {
   CODEC_TYPE_TAGS,
   JSON_CODEC,
   NULL_LIVE_ENVIRONMENT,
   ProblematicValue,
-} from "@/codec-common/index.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/index.ts";
-import {
-  FabricInstance,
-  FabricPrimitive,
-  shallowFabricFromConvertibleJsValue,
-} from "@/index.ts";
+} from "@/codec-common";
+import { FabricEpochNsec } from "@/fabric-primitives";
 
 describe("FabricEpochNsec", () => {
   // Pure type-identity / supertype checks: cross-cutting carve-out per the

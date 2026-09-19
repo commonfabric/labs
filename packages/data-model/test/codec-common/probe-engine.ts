@@ -9,6 +9,7 @@
 // tagged form is a class instead, so "walked" and "not walked" are visibly
 // different things.
 
+import type { FabricValue } from "@";
 import {
   BaseCodecEngine,
   BaseDecodeAct,
@@ -20,8 +21,7 @@ import {
   type LiveEnvironment,
   ProblematicValue,
   type WireFormat,
-} from "@/codec-common/index.ts";
-import type { FabricValue } from "@/index.ts";
+} from "@/codec-common";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /**

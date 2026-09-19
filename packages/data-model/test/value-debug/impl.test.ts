@@ -19,9 +19,6 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { REALM_CODEC } from "@/codec-common/index.ts";
-import { FabricLink } from "@/fabric-instances/index.ts";
-import { FabricBytes, FabricEpochNsec } from "@/fabric-primitives/index.ts";
 import {
   type CompactDebugStringOptions,
   type DebugValueOptions,
@@ -30,7 +27,10 @@ import {
   toIndentedDebugString,
   toLongQuotedDebugString,
   toShortQuotedDebugString,
-} from "@/index.ts";
+} from "@";
+import { REALM_CODEC } from "@/codec-common";
+import { FabricLink } from "@/fabric-instances";
+import { FabricBytes, FabricEpochNsec } from "@/fabric-primitives";
 
 describe("impl", () => {
   describe("toCompactDebugString", () => {

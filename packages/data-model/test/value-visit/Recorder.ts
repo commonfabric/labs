@@ -17,7 +17,7 @@ import type {
   FabricPlainObjectPlus,
   FabricPrimitive,
   PrimitiveValueTag,
-} from "@/index.ts";
+} from "@";
 import {
   type BaselineVisitResult,
   type DispatchingVisitorResult,
