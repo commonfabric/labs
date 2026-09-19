@@ -16,7 +16,6 @@
  */
 
 import { FabricInstance, type FabricValue } from "@/interface.ts";
-import { toCompactDebugString } from "@/value-debug";
 // Used only inside method bodies: this import participates in a module cycle
 // with `deep-freeze.ts` (which imports this module's symbols and class for its
 // generic dispatch), which is safe for call-time function use but must not be
@@ -197,23 +196,6 @@ export abstract class BaseFabricInstance extends FabricInstance {
   //
   // Instance members
   //
-
-  /**
-   * Custom inspector, so that a `console.log()` or a debugger shows what this
-   * value IS. The default rendering is `{}`: state lives in private fields,
-   * which have no enumerable own properties for an inspector to find.
-   *
-   * Delegates to the canonical debug renderer rather than formatting here, so
-   * that this surface improves whenever that one does.
-   *
-   * Duplicated on `BaseFabricPrimitive`. The one class both extend is
-   * `BaseFabricSpecialObject`, and `value-debug` loads that module by way of
-   * `interface.ts`, so an import of `value-debug` from there would cause a
-   * circular load-time dependency.
-   */
-  [Symbol.for("Deno.customInspect")](): string {
-    return toCompactDebugString(this);
-  }
 
   /**
    * Returns a shallow clone of this instance with the requested frozenness.

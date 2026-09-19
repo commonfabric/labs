@@ -16,7 +16,7 @@
     "@/fabric-instances": "./src/fabric-instances/index.ts",
     "@/fabric-primitives": "./src/fabric-primitives/index.ts",
     "@/types": "./src/types/index.ts",
-    "@/value-debug": "./src/value-debug/index.ts",
+    "@/value-debug": "./src/value-debug-internal.ts",
     "@/value-visit": "./src/value-visit/index.ts",
     "@node/crypto": "node:crypto"
   },

@@ -20,6 +20,11 @@
  * codec, and the machinery driving those lives in `codec-common/`.
  */
 
+// Loaded for its effect, and before anything else here: it installs the debug
+// renderers, which the package's modules reach through
+// `value-debug-internal.ts`.
+import "@/value-debug/index.ts";
+
 export {
   BaseFabricInstance,
   DEEP_CLONE_CORE,
