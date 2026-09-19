@@ -7,7 +7,7 @@ import {
   toIndentedDebugString,
   toLongQuotedDebugString,
   toShortQuotedDebugString,
-} from "@/value-debug";
+} from "@";
 
 /** A value whose compact rendering runs past 5000 characters. */
 const BIG = {

@@ -9,17 +9,16 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import type { FabricPrimitiveSchemaType } from "@/api.ts";
-import { JSON_CODEC } from "@/codec-interface/interface.ts";
+import { FabricPrimitive, type FabricPrimitiveSchemaType } from "@";
+import { JSON_CODEC } from "@/codec-common";
 import {
   codecClasses,
+  FABRIC_PRIMITIVE_CODEC_TYPE_TAGS,
   FABRIC_PRIMITIVE_SCHEMA_TYPES,
   fabricPrimitiveClassesByName,
   fabricPrimitiveClassOfSchemaType,
   isFabricPrimitiveSchemaType,
-} from "@/fabric-primitives/impl.ts";
-import { FABRIC_PRIMITIVE_CODEC_TYPE_TAGS } from "@/fabric-primitives/interface.ts";
-import { FabricPrimitive } from "@/interface.ts";
+} from "@/fabric-primitives";
 import { LAYER_CORPUS } from "../fabric-value-corpus.ts";
 
 /**
