@@ -31,8 +31,8 @@ export {
   shallowMutableClone,
 } from "./value-clone.ts";
 
-// Named by its file: `@/value-debug` is `value-debug-internal.ts`, whose
-// functions only forward to these and work once this module has loaded.
+// Not `@/value-debug`, which names late-bound forwarders: the package should
+// export the renderers themselves, and naming them here is what loads them.
 export {
   debugStr,
   toCompactDebugString,
