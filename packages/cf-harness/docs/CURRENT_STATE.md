@@ -17,7 +17,10 @@ The runtime has four main boundaries:
 
 1. The caller supplies prompt-slot roles, model and gateway configuration,
    tools, child profiles, mounts, resource bounds, skills, policy mode, and
-   optional structured-result schemas.
+   optional structured-result schemas. A run configured with one offers
+   `submit_result`, a host-side tool that validates the value and writes the
+   structured-result file, so a run whose prompt-slot role admits no sandbox
+   write can still return one.
 2. The prompt loop performs bounded turns through the selected model provider
    and invokes only the configured tool/profile surface.
 3. Most tool execution uses Docker with a configurable runtime, normally

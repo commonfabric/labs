@@ -15,6 +15,10 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
 import type { HarnessPromptLoopResult } from "@commonfabric/cf-harness/prompt-loop";
+import {
+  createHarnessHandleTable,
+  mintAddressHandle,
+} from "@commonfabric/cf-harness/handle-table";
 import { createSession, Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { PiecesController } from "@commonfabric/piece/ops";
@@ -24,6 +28,7 @@ import {
   type AgentRunRecord,
   AgentRunRecordSchema,
 } from "@commonfabric/runner/agent-run";
+import { renderCellReference } from "@commonfabric/runner/shared";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
@@ -123,6 +128,7 @@ describe("agent runner", () => {
   const submit = async (
     params: Record<string, unknown> = {},
     runtime: Runtime = patternSide,
+    inputIfc?: { confidentiality: string[] },
   ) => {
     const id = `request-${++requests}`;
     const { commonfabric } = createTrustedBuilder(runtime);
@@ -131,6 +137,7 @@ describe("agent runner", () => {
       const finished = BuilderCell.of(["Dune", "Solaris"], {
         type: "array",
         items: { type: "string" },
+        ...(inputIfc !== undefined ? { ifc: inputIfc } : {}),
       });
       return agent({
         task: `recommend a book (${id})`,
@@ -746,6 +753,60 @@ describe("agent runner", () => {
       expect(
         (seen().argv as { name: string }[]).map((cell) => cell.name),
       ).toEqual(["finished"]);
+    });
+
+    it("accepts a handle token at an `asCell` position and writes a link there", async () => {
+      // The position declares the referent's shape, which a token is not: the
+      // run's validation has to leave `asCell` positions to the writer.
+      const schema = {
+        type: "object",
+        properties: {
+          answer: { type: "string" },
+          basedOn: {
+            type: "array",
+            items: { type: "string" },
+            asCell: ["cell"],
+          },
+        },
+        required: ["answer", "basedOn"],
+      };
+      let finished: Cell<unknown> | undefined;
+      await startHarnessRunner(async ({ resultPath }) => {
+        const minted = await mintAddressHandle(
+          createHarnessHandleTable("run-token"),
+          renderCellReference(finished!.getAsNormalizedFullLink()),
+        );
+        await Deno.writeTextFile(
+          resultPath,
+          JSON.stringify({ answer: "Hyperion", basedOn: minted.token }),
+        );
+        const result = loopResult("run-token");
+        return {
+          ...result,
+          runState: { ...result.runState, handleTable: minted.table },
+        };
+      });
+      // A link is written only to a document that carries a label, so the
+      // input is labeled, and the request's ceiling admits that label.
+      const READING = "https://cfc.test/atom/reading";
+      const result = await submit(
+        { resultSchema: schema, maxConfidentiality: [READING] },
+        patternSide,
+        { confidentiality: [READING] },
+      );
+      finished = (recordOf(result).key("inputs").get() as unknown as Record<
+        string,
+        Cell<unknown>
+      >).finished;
+
+      const record = await waitForState(result, "completed");
+
+      expect(record.outcome).toBe("completed");
+      const written = recordOf(result).key("result").resolveAsCell();
+      await written.sync();
+      expect(
+        (written.get() as { basedOn?: string[] }).basedOn,
+      ).toEqual(["Dune", "Solaris"]);
     });
 
     it("fails as `PROVIDER_FAILURE` a run that wrote no result", async () => {

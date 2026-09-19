@@ -350,14 +350,22 @@ and a result link, and observes `pending: false` and `result` on the node.
       `docs/common/conventions/HOME_SPACE.md` — the `#agent_queue` piece and
       `agentRunner` entry beside favorites; `docs/development/LOCAL_DEV_SERVERS.md`
       — how to start a runner against `dev-local`.
-- [ ] A structured result under an enforcing harness tool policy. The task
-      runs under the prompt-slot role `context`, and the harness's
-      `enforce-explicit` and `enforce-strict` tool policies refuse a
-      `context`-role run every tool that writes, so the model cannot write the
-      structured result file. The manual `dev-local` run completes with
-      `CF_HARNESS_CFC_ENFORCEMENT_MODE=observe`. The harness needs a way to
-      take the structured result that is not a sandbox write — its final
-      message, or a dedicated result tool admitted under `context`.
+- [x] A structured result under an enforcing harness tool policy:
+      `submit_result` (`packages/cf-harness/src/tools/submit-result.ts`), a
+      host-side tool offered only when a structured-result schema is
+      configured. It validates the value with the structured-result
+      validation and the host writes the file the file-based path leaves; an
+      invalid value returns `invalid_result` and the model submits again; a
+      later valid submission replaces an earlier one; handle tokens stay
+      tokens. Admitted at every mode and role as the run's return
+      (`structured_result_return`). The runner's executor allows it beside a
+      request's tools and validates with `asCell` positions relaxed. The
+      manual `dev-local` run completes at the default `enforce-strict`.
+- [ ] The harness mode an agent run uses. Under `enforce-strict` a
+      `context`-role run is refused every tool but `submit_result`, reads
+      included, so a run that searches Loom or describes a handle needs
+      `enforce-explicit`. The runner passes no mode today and takes the
+      harness default.
 - [ ] Observed Loom rows reach the result writer. The executor hands the
       writer every cell handle the run's table holds; a Loom row the run
       observed is not yet recorded as a document referent, so a result cannot
@@ -366,8 +374,7 @@ and a result link, and observes `pending: false` and `result` on the node.
 *Exit:* the stage-4 runner test suite passes across two test toolsheds, and a
 manual run against `dev-local` with a real harness and a scripted model moves
 a record from `queued` to `completed` with a result link that resolves. Both
-hold, the second with the harness's tool policy at `observe` (the open item
-above).
+hold, the second at the harness's default `enforce-strict` mode.
 
 ## Stage 5 — Inspection
 

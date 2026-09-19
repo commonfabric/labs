@@ -26,8 +26,6 @@ import {
   createHarnessHandleTable,
   mintAddressHandle,
 } from "../src/handle-table.ts";
-import type { HarnessRunReport } from "../src/contracts/run-report.ts";
-import type { HarnessArtifactStore } from "../src/artifacts.ts";
 import type {
   SandboxCommandRequest,
   SandboxCommandResult,
@@ -108,44 +106,6 @@ class FakeSandboxRuntime implements SandboxRuntime {
       });
     }
     return Promise.resolve({ stdout: "", stderr: "", exitCode: 0 });
-  }
-}
-
-/** Artifact store that keeps the run report in memory, touching no disk. */
-class RecordingArtifactStore implements HarnessArtifactStore {
-  readonly artifactRoot = "/artifacts";
-  readonly runRoot: string;
-  lastRunReport?: HarnessRunReport;
-
-  constructor(runId: string) {
-    this.runRoot = `${this.artifactRoot}/${runId}`;
-  }
-
-  persistRunState(): Promise<string> {
-    return Promise.resolve(`${this.runRoot}/run-state.json`);
-  }
-
-  persistTranscript(): Promise<string> {
-    return Promise.resolve(`${this.runRoot}/transcript.json`);
-  }
-
-  persistCapabilitySnapshot(): Promise<string> {
-    return Promise.resolve(`${this.runRoot}/capabilities.json`);
-  }
-
-  persistCfcPolicySnapshot(): Promise<string> {
-    return Promise.resolve(`${this.runRoot}/policy-snapshot.json`);
-  }
-
-  persistRunReport(report: HarnessRunReport): Promise<string> {
-    this.lastRunReport = report;
-    return Promise.resolve(`${this.runRoot}/run-report.json`);
-  }
-
-  persistToolOutput(toolId: string, outputId: string): Promise<string> {
-    return Promise.resolve(
-      `${this.runRoot}/tool-outputs/${outputId}-${toolId}.json`,
-    );
   }
 }
 

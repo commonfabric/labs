@@ -32,6 +32,7 @@ import { createHarnessHandleTable } from "@commonfabric/cf-harness/handle-table"
 import {
   type AgentObservedHandle,
   AgentResultWriteError,
+  relaxAsCellPositions,
   writeAgentResult,
 } from "@commonfabric/cf-harness/result-writer";
 import type { JSONSchema } from "@commonfabric/api";
@@ -143,7 +144,9 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
     "--structured-result-path",
     resultPath,
     "--structured-result-schema",
-    JSON.stringify(resultSchema),
+    // The run validates everything but the `asCell` positions, where the
+    // model writes a handle token and the writer places a link.
+    JSON.stringify(relaxAsCellPositions(resultSchema)),
     "--fabric-api-url",
     run.host,
     "--fabric-identity",
@@ -265,6 +268,12 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
       error instanceof AgentResultWriteError &&
       error.code === "cfc_commit_refused"
     ) {
+      // The reason faces the operator and never the record.
+      options.report?.(
+        `agent runner: the space's policy refused the result: ${
+          JSON.stringify(error.refusals ?? [])
+        } ${error.rawCauseMessage ?? ""}`,
+      );
       return { outcome: "refused", report };
     }
     // The storage error's own text faces the operator; the record carries

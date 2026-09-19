@@ -375,18 +375,18 @@ configured with under `CF_HARNESS_HOME`; `--model` names a model, and
 tools. A run's workspace and artifacts go under `--work-root`, which defaults to
 `$CF_HARNESS_HOME/agent-runs`.
 
-Two settings of the harness's own decide whether a run can finish. A run's
-sandbox is the harness's Docker `runsc-cfc` sandbox, so
+A run's sandbox is the harness's Docker `runsc-cfc` sandbox, so
 `CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
 `CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` name the two sidecar directories
-Docker's `runsc-cfc` runtime is registered with. And a run's task is bound to
-the prompt-slot role `context`, under which the harness's enforcing tool
-policies refuse every tool that writes — `bash` and `edit_file` among them —
-so the model cannot write the structured result file the run ends on. Until
-the harness takes a structured result some other way, a runner that should
-complete a run is started with `CF_HARNESS_CFC_ENFORCEMENT_MODE=observe`. That
-dial covers the harness's tool policy and sandbox; the fabric session's own
-enforcement is a separate setting and is unchanged by it.
+Docker's `runsc-cfc` runtime is registered with. A run's task is bound to the
+prompt-slot role `context`, and the run returns its structured result through
+the harness's `submit_result` tool, which the harness's default
+`enforce-strict` mode admits under that role. Under that mode and role every
+other tool is refused, reads included, so a run that should use its tools — a
+Loom search, `describe_handle` — needs the runner started with
+`CF_HARNESS_CFC_ENFORCEMENT_MODE=enforce-explicit`, which admits read tools.
+That dial covers the harness's tool policy and sandbox; the fabric session's
+own enforcement is a separate setting and is unchanged by it.
 
 When the home space and the runner's own toolshed are different deployments,
 `--api-url` names the first and `--local-api-url` the second. The

@@ -2208,6 +2208,18 @@ deno task run -- \
   --prompt "Write capture.results.json with the requested structured result."
 ```
 
+A run configured with a schema is offered `submit_result`, and its system prompt
+asks for the result through it: the model passes the whole value as `result`,
+the harness validates it against the schema, and the host writes it to the
+structured-result path. A refused value comes back as `invalid_result` with the
+reason, and the model corrects it and submits again; a later valid submission
+replaces an earlier one. This is the way that works under every enforcement mode
+and prompt-slot role — under `enforce-strict`, a run whose prompt is bound as
+`context` or `quote` is refused `bash`, `edit_file`, and `write_file`, and so
+cannot write the file itself. A run that does hold such a tool may still write
+the file directly; both ways end at the same path. With `--allow-tool`, name
+`submit_result` alongside the run's other tools.
+
 The structured result path must stay inside the workspace. The schema may be
 provided inline with `--structured-result-schema` or read from
 `--structured-result-schema-file`. After the run, cf-harness reads the sidecar,

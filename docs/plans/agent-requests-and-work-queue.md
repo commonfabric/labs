@@ -62,7 +62,10 @@ comment above `RUN_PATTERN_ANSWER_CEILING`). A run carries a read ceiling
 (`--max-confidentiality`, met into the fabric session's `cfcReadMaxConfidentiality`),
 accumulates the labels of everything the model observed as influence
 (`HarnessCfcModelContext`), validates and sanitizes a structured result against a
-caller schema (`--structured-result-schema`, `src/structured-result.ts`), and
+caller schema (`--structured-result-schema`, `src/structured-result.ts`) — which
+the model returns through the host-side `submit_result` tool
+(`src/tools/submit-result.ts`), offered only when a schema is configured, or by
+writing the result file itself where it holds a tool that can — and
 records per-attempt model usage with reported and estimated cost kept apart
 (`HarnessModelUsage`, `src/model/client.ts`; AH-USAGE-1..6). Any new caller is
 expected to produce a `HarnessSessionConfig` and hand it to
@@ -249,6 +252,18 @@ schema-opaque-link sanitizer's string-sealing pass is not run: it withholds
 every free string a schema does not enumerate, which is the rule for a value
 leaving the fabric toward a model and not for text a model authored on its way
 in.
+
+The result reaches the writer through the harness's `submit_result` tool. An
+agent request's task is bound to the prompt-slot role `context`, and under the
+harness's enforcing modes a `context` run is refused every sandbox write, so it
+cannot write a result file; `submit_result` takes the value as its input,
+validates it, and the host records it where the file-based path would. The run
+validates against the schema with its `asCell` positions relaxed
+(`relaxAsCellPositions`), the same relaxation the writer applies, and a handle
+token in the submitted value stays a token for the writer to resolve. Under
+`enforce-strict` a `context` run is refused its read tools as well, so a run
+that is to search or describe a handle runs at `enforce-explicit`; which mode
+an agent run gets by default is an open setting of the runner.
 
 **Every handle the result references becomes a link.** Wherever the result
 names a handle the run holds — as a token, as the canonical link string the

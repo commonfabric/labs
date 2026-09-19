@@ -229,9 +229,11 @@ const wholeTokenPattern = new RegExp(`^${HANDLE_TOKEN_PATTERN.source}$`);
  * anything. A position marked `asCell` accepts an opaque reference, and the
  * model writes a reference as a handle token; what the referent holds is not
  * the result schema's to validate, so validation is asked about everything
- * but those positions.
+ * but those positions. A caller that validates a result before handing it to
+ * the writer — the run's own structured-result validation — validates
+ * against this, so the two agree on what a result may hold.
  */
-const relaxAsCellPositions = (schema: JSONSchema): JSONSchema => {
+export const relaxAsCellPositions = (schema: JSONSchema): JSONSchema => {
   if (!isObjectOrArray(schema)) return schema;
   if (schema.asCell !== undefined) return true;
   return mapSubschemas(
