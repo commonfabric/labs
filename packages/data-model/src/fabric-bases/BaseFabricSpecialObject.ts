@@ -19,7 +19,7 @@ import {
 export abstract class BaseFabricSpecialObject {
   /**
    * Custom inspector, so that a `console.log()` or a debugger shows what this
-   * value IS. The default rendering is `{}`: state lives in private fields,
+   * value _is_. The default rendering is `{}`: state lives in private fields,
    * which have no enumerable own properties for an inspector to find.
    *
    * Delegates to the canonical debug renderer rather than formatting here, so
