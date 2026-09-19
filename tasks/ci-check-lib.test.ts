@@ -35,7 +35,9 @@ import {
   githubGet,
   githubPatch,
   githubPost,
+  GitHubRateLimitError,
   isBaselineCandidateRun,
+  isGitHubRateLimitError,
   isNotFound,
   measuredSetCoverageMetric,
   newestArtifactsByName,
@@ -1227,6 +1229,125 @@ Deno.test("githubGet does not retry non-transient GitHub responses", async () =>
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+/**
+ * Runs `callback` against a `fetch` answering every request with `response()`,
+ * and reports how many requests it made.
+ */
+async function withFetchAnswering(
+  response: () => Response,
+  callback: () => Promise<void>,
+): Promise<number> {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = ((_input, _init) => {
+    calls++;
+    return Promise.resolve(response());
+  }) as typeof fetch;
+  try {
+    await callback();
+    return calls;
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+/** GitHub's answer when the token has spent its hourly request window. */
+function primaryRateLimitResponse(): Response {
+  return new Response('{"message":"API rate limit exceeded for user"}', {
+    status: 403,
+    statusText: "Forbidden",
+    headers: {
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "1789856877",
+    },
+  });
+}
+
+Deno.test("githubGet reports a spent request window as a rate limit, not a refusal", async () => {
+  // The refusal is worded in the response body, which is cancelled unread, so
+  // the headers are the only thing that can tell this from a permission error.
+  const calls = await withFetchAnswering(primaryRateLimitResponse, async () => {
+    const error = await assertRejects(
+      () => githubGet("/repos/commonfabric/labs/actions/runs"),
+      GitHubRateLimitError,
+    );
+    assertStringIncludes(error.message, "GitHub API GET 403 Forbidden");
+  });
+
+  // A window that is spent does not refill inside one job, so it is not retried.
+  assertEquals(calls, 1);
+});
+
+Deno.test("githubGet reports a secondary rate limit once its retries are spent", async () => {
+  const calls = await withFetchAnswering(
+    () =>
+      new Response("slow down", {
+        status: 429,
+        statusText: "Too Many Requests",
+        headers: { "retry-after": "0", "x-ratelimit-remaining": "42" },
+      }),
+    async () => {
+      await assertRejects(
+        () => githubGet("/repos/commonfabric/labs/actions/runs"),
+        GitHubRateLimitError,
+      );
+    },
+  );
+
+  // A secondary limit often clears within the job, so the whole attempt budget
+  // is spent before it is called one.
+  assertEquals(calls, 4);
+});
+
+Deno.test("githubGet stops retrying a spent window answered as a busy signal", async () => {
+  // 429 is the status a slow-down is retried for, and the spent window is the
+  // one case behind it that no retry inside this job can clear.
+  const calls = await withFetchAnswering(
+    () =>
+      new Response("slow down", {
+        status: 429,
+        statusText: "Too Many Requests",
+        headers: { "retry-after": "0", "x-ratelimit-remaining": "0" },
+      }),
+    async () => {
+      await assertRejects(
+        () => githubGet("/repos/commonfabric/labs/actions/runs"),
+        GitHubRateLimitError,
+      );
+    },
+  );
+
+  assertEquals(calls, 1);
+});
+
+Deno.test("githubGet does not call an ordinary refusal a rate limit", async () => {
+  await withFetchAnswering(
+    () => new Response("forbidden", { status: 403, statusText: "Forbidden" }),
+    async () => {
+      const error = await assertRejects(
+        () => githubGet("/repos/commonfabric/labs/actions/runs"),
+        Error,
+      );
+      assertFalse(error instanceof GitHubRateLimitError);
+      assertFalse(isGitHubRateLimitError(error));
+    },
+  );
+});
+
+Deno.test("downloadAndExtractArtifact raises a rate limit rather than reporting no artifact", async () => {
+  // Reported as `null` the limit would read as a run that measured nothing,
+  // which is a verdict about coverage rather than about GitHub.
+  const calls = await withFetchAnswering(primaryRateLimitResponse, async () => {
+    await assertRejects(
+      () => downloadAndExtractArtifact(123, "rate-limited-artifact-"),
+      GitHubRateLimitError,
+      "GitHub artifact download 403 Forbidden",
+    );
+  });
+
+  assertEquals(calls, 1);
 });
 
 Deno.test("GitHub REST errors include status text and omit response bodies", async (t) => {

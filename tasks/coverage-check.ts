@@ -65,6 +65,7 @@ import {
   formatOverrideSuggestion,
   githubGet,
   isBaselineCandidateRun,
+  isGitHubRateLimitError,
   newestArtifactsByName,
   parseAddedLinesFromPatch,
   parseBaselineOverrides,
@@ -141,11 +142,6 @@ export function currentWorkflowRunFromEvent(
     conclusion: "",
     event: Deno.env.get("GITHUB_EVENT_NAME") ?? "",
   };
-}
-
-function isGitHubRateLimitError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /\b(rate limit|rate-limited|ratelimit)\b/i.test(message);
 }
 
 /**
@@ -1008,6 +1004,15 @@ export interface BaselineRunContext {
   prLookupError: unknown | null;
 }
 
+/**
+ * Reads the merged pull request for `sha`, keeping a failure as a value rather
+ * than throwing: a lookup that fails costs the run that pull request's accepted
+ * debt, which is reported, not the whole check.
+ *
+ * A rate limit is the exception, and is rethrown. Kept as a value it would go
+ * on to read as a commit whose pull request accepted nothing, which is a claim
+ * about the baseline rather than about GitHub.
+ */
 export async function fetchPRForCommitWithError(
   sha: string,
 ): Promise<PRLookupResult> {
@@ -1017,6 +1022,7 @@ export async function fetchPRForCommitWithError(
     );
     return { pr: selectMergedPRForCommit(prs), error: null };
   } catch (error) {
+    if (isGitHubRateLimitError(error)) throw error;
     return { pr: null, error };
   }
 }
@@ -1035,6 +1041,15 @@ export function formatErrorForLog(error: unknown): string {
   return message.split("\n")[0];
 }
 
+/**
+ * Lists one run's artifacts, reporting a failure as an empty list: a run whose
+ * artifacts cannot be listed contributes no baseline, and the walk moves on to
+ * the next one.
+ *
+ * A rate limit is the exception, and is rethrown. An empty list says the run
+ * measured nothing, which would hold a changed group against no baseline and
+ * report it as a run nobody has measured yet.
+ */
 export async function fetchArtifactsForRunBestEffort(
   run: WorkflowRun,
   fetchArtifacts: (runId: number) => Promise<Artifact[]> = fetchArtifactsForRun,
@@ -1043,6 +1058,7 @@ export async function fetchArtifactsForRunBestEffort(
   try {
     return await fetchArtifacts(run.id);
   } catch (error) {
+    if (isGitHubRateLimitError(error)) throw error;
     warn(`  Warning: could not fetch artifacts for run ${run.id}: ${error}`);
     return [];
   }

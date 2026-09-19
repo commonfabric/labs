@@ -348,15 +348,56 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * GitHub refusing because the token is over one of its request limits, as
+ * against refusing for any other reason. A caller that has to tell the two
+ * apart reads this type rather than the message, whose only variable parts are
+ * the status and the path: the response body, which is where GitHub words the
+ * refusal, is cancelled unread.
+ */
+export class GitHubRateLimitError extends Error {}
+
+/**
+ * Whether `resp` is GitHub applying a request limit. It answers both its
+ * primary and its secondary limits with 403 or 429, so what separates one from
+ * an ordinary refusal is the headers: the primary limit leaves no requests in
+ * the window, and the secondary one says how long to wait.
+ */
+function isRateLimitResponse(resp: Response): boolean {
+  if (resp.status !== 403 && resp.status !== 429) return false;
+  return isOverPrimaryRateLimit(resp) ||
+    resp.headers.get("retry-after") !== null;
+}
+
+/**
+ * Whether `resp` spent the last request of its window. Such a limit resets
+ * minutes to an hour out, so no retry within one job can clear it.
+ */
+function isOverPrimaryRateLimit(resp: Response): boolean {
+  return resp.headers.get("x-ratelimit-remaining") === "0";
+}
+
 function githubApiError(
   resp: Response,
   path: string,
   method: "GET" | "POST" | "PATCH",
 ): Error {
   const statusText = resp.statusText ? ` ${resp.statusText}` : "";
-  return new Error(
-    `GitHub API ${method} ${resp.status}${statusText}: ${path}`,
-  );
+  const message = `GitHub API ${method} ${resp.status}${statusText}: ${path}`;
+  return isRateLimitResponse(resp)
+    ? new GitHubRateLimitError(message)
+    : new Error(message);
+}
+
+/**
+ * Whether `error` is GitHub applying a request limit. The client above raises
+ * a {@link GitHubRateLimitError} outright; the text match answers for a limit
+ * reported by something else that reads the API.
+ */
+export function isGitHubRateLimitError(error: unknown): boolean {
+  if (error instanceof GitHubRateLimitError) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(rate limit|rate-limited|ratelimit)\b/i.test(message);
 }
 
 /**
@@ -395,6 +436,7 @@ export async function githubGet<T>(path: string): Promise<T> {
     await cancelResponseBody(resp);
     if (
       !RETRYABLE_GITHUB_STATUSES.has(resp.status) ||
+      isOverPrimaryRateLimit(resp) ||
       attempt === GITHUB_GET_MAX_ATTEMPTS
     ) {
       throw githubApiError(resp, path, "GET");
@@ -733,11 +775,21 @@ export async function downloadAndExtractArtifact(
 
     if (!resp.ok) {
       const statusText = resp.statusText ? ` ${resp.statusText}` : "";
-      recordFailure(
-        attempt,
-        `GitHub artifact download ${resp.status}${statusText}: ${artifactPath}`,
-      );
+      const failure =
+        `GitHub artifact download ${resp.status}${statusText}: ${artifactPath}`;
+      recordFailure(attempt, failure);
+      const rateLimited = isRateLimitResponse(resp);
+      const overPrimaryLimit = isOverPrimaryRateLimit(resp);
       await cancelResponseBody(resp);
+      // A limit is the one refusal this must not report as a missing artifact:
+      // a caller told the artifact is absent holds its metric against no
+      // baseline, which is a verdict about coverage rather than about GitHub.
+      if (
+        rateLimited &&
+        (overPrimaryLimit || attempt === GITHUB_GET_MAX_ATTEMPTS)
+      ) {
+        throw new GitHubRateLimitError(failure);
+      }
       if (
         attempt === GITHUB_GET_MAX_ATTEMPTS ||
         !RETRYABLE_ARTIFACT_DOWNLOAD_STATUSES.has(resp.status)

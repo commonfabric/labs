@@ -3959,6 +3959,65 @@ Deno.test("runCoverageRatchet reports a rate limit the baseline walk ran into as
   );
 });
 
+Deno.test("runCoverageRatchet reports a rate-limited baseline artifact read as a rate limit", async () => {
+  // The listing succeeds and the limit is reached on the baseline run's own
+  // artifact listing, which the walk reads best-effort. Swallowed there it
+  // would report a run that measured nothing, and the group would read as one
+  // no `main` run has covered yet.
+  const ran = await withPerfArtifact(() =>
+    runRatchet({
+      listing: listingOf([RUN_AT_BASE]),
+      ownRunReader: true,
+      github: (url) =>
+        url.includes(`/actions/runs/${RUN_AT_BASE.id}/artifacts`)
+          ? new Response('{"message":"API rate limit exceeded for user"}', {
+            status: 403,
+            statusText: "Forbidden",
+            headers: { "x-ratelimit-remaining": "0" },
+          })
+          : jsonResponse([]),
+    })
+  );
+
+  assertEquals(ran.code, 0);
+  assertEquals(ran.payload?.state, "ungated");
+  assertStringIncludes(
+    ran.payload?.body ?? "",
+    "GitHub's API rate limit stopped this run reading the baseline data",
+  );
+  assertFalse(
+    (ran.payload?.body ?? "").includes("No successful `main` run within reach"),
+  );
+});
+
+Deno.test("runCoverageRatchet reports a rate-limited merged-pull-request lookup as a rate limit", async () => {
+  // The walk keeps an ordinary lookup failure as a value, which costs that
+  // commit's accepted debt and no more. A limit kept the same way would let the
+  // run hold a group against a baseline whose acceptance it never read.
+  const ran = await withPerfArtifact(() =>
+    runRatchet({
+      listing: listingOf([RUN_AT_BASE]),
+      ownRunReader: true,
+      github: (url) =>
+        url.includes(`/commits/${SHA_C}/pulls`)
+          ? new Response('{"message":"API rate limit exceeded for user"}', {
+            status: 403,
+            statusText: "Forbidden",
+            headers: { "x-ratelimit-remaining": "0" },
+          })
+          : jsonResponse({ total_count: 0, artifacts: [] }),
+    })
+  );
+
+  assertEquals(ran.code, 0);
+  assertEquals(ran.payload?.state, "ungated");
+  assertStringIncludes(
+    ran.payload?.body ?? "",
+    "GitHub's API rate limit stopped this run reading the baseline data",
+  );
+  assertFalse(ran.logs.includes("PR lookup failed"));
+});
+
 Deno.test("runCoverageRatchet passes a rate-limited main run with no comment to write", async () => {
   const ran = await withPerfArtifact(() =>
     runRatchet({ listing: rateLimited, prNumber: null })

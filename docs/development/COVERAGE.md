@@ -1114,7 +1114,12 @@ Each names the groups, and for each group one of four reasons:
   the base-branch commit, so the two totals count different code.
 - The base-branch commit could not be read from the checkout.
 - GitHub's API rate limit stopped the run reading the baseline data at all, so
-  no group was compared.
+  no group was compared. A limit is read off the response — the status together
+  with the rate-limit headers — rather than off the wording of a refusal, whose
+  body the client cancels unread. The reads that treat an ordinary failure as
+  absent data, a run's artifact listing and the lookup of the pull request that
+  merged its commit among them, let a limit through instead: reported as absent
+  data it would become a claim that no `main` run has measured the group.
 
 For the first three, a later run of the pull request gates those groups, once a
 `main` run has measured the commit it merges. Re-running the Coverage Check job
