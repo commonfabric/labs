@@ -161,8 +161,8 @@ const EXCLUDED_MISSING: JSONSchema = Object.freeze({
  *
  * This is its own marker because `schemaAtPath` also returns `false` for a
  * shape it cannot read a child out of — an `allOf`, or an object schema that
- * omits `type` — where the schema has turned nothing down and the subschema is
- * still reachable below.
+ * omits `type` and does not refuse the properties it does not name — where the
+ * schema has turned nothing down and the subschema is still reachable below.
  */
 const EXCLUDED_REJECTED: JSONSchema = Object.freeze({
   $comment: "rejectedProperty",
@@ -401,6 +401,44 @@ const requiredKeys = (schema: JSONSchema | undefined): readonly string[] =>
     ? schema.required as string[]
     : [];
 
+/**
+ * Whether a part of the schema's `allOf` may admit `key`.
+ *
+ * An eager read merges the keywords beside an `allOf` into each part before it
+ * looks at a key, and the part's own keywords win that merge. So a part admits
+ * a key by naming it with a schema other than `false`, or, where it does not
+ * name the key, by an `additionalProperties` other than `false` — whatever the
+ * schema around it refuses. A part reaches either through a
+ * `$ref`, resolved against the schema's `$defs`, and through the branches of a
+ * combinator of its own.
+ */
+const allOfPartMayAdmit = (schema: JSONSchemaObj, key: string): boolean => {
+  const mayAdmit = (part: JSONSchema): boolean => {
+    const resolved = resolveBranch(part, schema);
+    if (!isObjectOrArray(resolved)) return false;
+    // A part that names the key has decided it, and `false` there refuses it
+    // whatever the part's `additionalProperties` would let through.
+    if (
+      isObjectOrArray(resolved.properties) &&
+      Object.hasOwn(resolved.properties, key)
+    ) {
+      return (resolved.properties as Record<string, JSONSchema>)[key] !== false;
+    }
+    if (
+      resolved.additionalProperties !== undefined &&
+      resolved.additionalProperties !== false
+    ) {
+      return true;
+    }
+    return [
+      ...(resolved.anyOf ?? []),
+      ...(resolved.oneOf ?? []),
+      ...(resolved.allOf ?? []),
+    ].some(mayAdmit);
+  };
+  return (schema.allOf ?? []).some(mayAdmit);
+};
+
 const childSchema = (
   schema: JSONSchema | undefined,
   key: string,
@@ -441,13 +479,10 @@ const childSchema = (
   // that names some reaches `schemaAtPath` as a missing property rather than as
   // `false`, and an eager read drops the property either way.
   //
-  // One that names none and carries `allOf` parts has not: an eager read merges
-  // the keywords beside an `allOf` into each part before it looks at a key, so
-  // a part can name this one, and it is left to the read below. An `allOf`
-  // holding no parts names nothing, and an eager read passes over it.
+  // An `allOf` part that may admit the key is the exception, and the key is
+  // then left to the read below.
   if (
-    schema.additionalProperties === false &&
-    (isObjectOrArray(schema.properties) || !schema.allOf?.length)
+    schema.additionalProperties === false && !allOfPartMayAdmit(schema, key)
   ) {
     return EXCLUDED_REJECTED;
   }

@@ -92,17 +92,20 @@ wrong. Six rules exist only to hold that:
   element value.
 - **A property the schema turns down is settled off the schema, not by reading
   it.** Declaring it `false` turns it down, and so does leaving it unnamed by a
-  schema that refuses the properties it does not name. Either way it is absent
-  to a reader — from `in`, from enumeration and from a plain access alike — and
-  the link under it is never followed. Deciding it by reading and letting the
-  read fail would fetch the document first, which is the cost the declaration
-  was meant to avoid: a selection projection asks for a link's address that way,
-  and a marked collection would otherwise load one document per element.
-  Requiring such a property instead voids the object, since nothing reaches the
-  filtered result at that key. This is narrower than it sounds — schema
-  narrowing also returns `false` where it cannot read a child out of the shape
-  it was given, an `allOf` among them, and there the subschema is still
-  reachable below.
+  schema that refuses the properties it does not name — unless a part of an
+  `allOf` beside it admits the key: by naming it with a schema other than
+  `false`, or, where it does not name the key, by an `additionalProperties`
+  other than `false`. An eager read merges the schema's keywords into each part
+  and lets the part's win. Either way it is absent to a reader — from `in`, from
+  enumeration and from a plain access alike — and the link under it is never
+  followed. Deciding it by reading and letting the read fail would fetch the
+  document first, which is the cost the declaration was meant to avoid: a
+  selection projection asks for a link's address that way, and a marked
+  collection would otherwise load one document per element. Requiring such a
+  property instead voids the object, since nothing reaches the filtered result
+  at that key. This is narrower than it sounds — schema narrowing also returns
+  `false` where it cannot read a child out of the shape it was given, an `allOf`
+  among them, and there the subschema is still reachable below.
 - **A read-only array method visits every element, even past one that does not
   match.** An eager read walks the whole array before it calls the array
   invalid, so each element is a dependency of the reader either way. Stopping at
