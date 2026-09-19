@@ -125,8 +125,11 @@ constituents behind it, so a nested or named intersection is reopened when
 an enclosing one reduces it (`(string & Brand) & number` is nothing); and a
 union whose arms fold to one schema — `void | OpaqueCell<any>`, or two
 branded primitives with the same fallback — keeps every arm, so an
-intersection meeting the survivor still distributes over them (an arm
-accepting nothing is no arm, and is neither counted nor kept).
+intersection reading the survivor still distributes over them (an arm
+accepting nothing is no arm, and is neither counted nor kept). Schemas with
+recorded union or intersection constituents are deduplicated by identity:
+equal fallback schemas can hide disjoint source types, so separate folded
+unions remain separate constraints in an enclosing intersection.
 
 `readonly` marks mutability and contributes no JSON Schema keyword. A
 synthetic `readonly T[]` therefore has the same schema as its wrapped `T[]`.

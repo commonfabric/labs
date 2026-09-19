@@ -123,6 +123,16 @@ describe("SchemaGenerator", () => {
         "(((string & A) | (number & B)) & unknown) & number",
         UNSUPPORTED_NON_OBJECT,
       ],
+      [
+        "returns `false` for disjoint folded unions with string literals first",
+        '((("a" & A) | ("b" & B)) & unknown) & (((1 & C) | (2 & D)) & unknown)',
+        false,
+      ],
+      [
+        "returns `false` for disjoint folded unions with numeric literals first",
+        '(((1 & C) | (2 & D)) & unknown) & ((("a" & A) | ("b" & B)) & unknown)',
+        false,
+      ],
     ];
 
     for (const [description, expression, expected] of cases) {
@@ -132,6 +142,8 @@ describe("SchemaGenerator", () => {
           type Folded = (string & { a: 1 }) | (number & { b: 2 });
           type A = { a: 1 };
           type B = { b: 2 };
+          type C = { c: 3 };
+          type D = { d: 4 };
           type VoidAlias = void;
           type Result = ${expression};
         `;

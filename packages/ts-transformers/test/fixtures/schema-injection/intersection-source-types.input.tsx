@@ -3,11 +3,17 @@ import { type OpaqueCell, toSchema } from "commonfabric";
 // FIXTURE: intersection-source-types
 // Verifies: intersections retain source type distinctions through schema
 // generation. Opaque cells and `void` have different intersection behavior;
-// nested and named branded primitives retain their primitive constraints.
-// Expected: each call becomes the checker's `true` or `false` schema.
+// nested and named branded primitives retain their primitive constraints,
+// including when distinct unions fold to equal schemas.
+// Expected: each call matches the checker-based generator, including `false`
+// for disjoint folded unions in either order.
 
 type Brand = string & { topic: unknown };
 type Folded = (string & { a: 1 }) | (number & { b: 2 });
+type A = { a: 1 };
+type B = { b: 2 };
+type C = { c: 3 };
+type D = { d: 4 };
 type OpaqueCompatible = any & OpaqueCell<any> & string & unknown;
 export const validOpaque: OpaqueCompatible = 123;
 
@@ -42,3 +48,11 @@ export const unionBesideAny = toSchema<
 >();
 export const foldedUnionBesideAny = toSchema<any & Folded & number>();
 export const foldedUnion = toSchema<Folded & number>();
+export const disjointFoldedUnions = toSchema<
+  ((("a" & A) | ("b" & B)) & unknown) &
+    (((1 & C) | (2 & D)) & unknown)
+>();
+export const reversedDisjointFoldedUnions = toSchema<
+  (((1 & C) | (2 & D)) & unknown) &
+    ((("a" & A) | ("b" & B)) & unknown)
+>();

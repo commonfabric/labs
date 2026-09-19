@@ -2115,8 +2115,10 @@ Special path:
   the type-based path merges one (the schema-generator mapping spec states
   the rules, among them that `void` is told from an opaque cell wrapper, and
   a nested, named, or union-folded constituent is reopened, by where a
-  schema came from), and unwraps parentheses. A pattern-scope `.get()` on a
-  `Cell<{ topic: unknown; title: string }>` lowers to a lift with result type
+  schema came from; distinct folded unions retain their separate constraints
+  even when their schemas coincide), and unwraps parentheses. A pattern-scope
+  `.get()` on a `Cell<{ topic: unknown; title: string }>` lowers to a lift
+  with result type
   `Readonly<{ topic: unknown; title: string }>` and a result schema that
   keeps both members; a tuple view of `unknown` keeps
   `items: { type: "unknown" }`. The

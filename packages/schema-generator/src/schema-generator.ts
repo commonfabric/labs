@@ -638,19 +638,30 @@ function isEmptyObjectSchema(schema: MutableJSONSchema): boolean {
 }
 
 /**
- * `parts` with equal schemas folded, parts whose origin kind differs kept
- * apart: `void` and the opaque cell it lowers like are two parts still.
+ * `parts` with equal schemas folded, preserving source kind and the identity
+ * of schemas with recorded union or intersection constituents. Equal fallback
+ * schemas can stand for different constituents; `void` and an opaque cell
+ * also remain distinct despite their equal schemas.
  */
 function dedupeIntersectionParts<T extends MutableJSONSchema>(
   parts: T[],
   context: GenerationContext,
 ): T[] {
-  return dedupeByValueEqual(parts.map((schema) => ({
-    schema,
-    sourceKind: isObjectOrArray(schema)
-      ? context.schemaOrigins?.get(schema)?.kind ?? "schema"
-      : "schema",
-  }))).map((part) => part.schema);
+  const sourceIds = new Map<MutableJSONSchemaObj, number>();
+  return dedupeByValueEqual(parts.map((schema) => {
+    const origin = isObjectOrArray(schema)
+      ? context.schemaOrigins?.get(schema)
+      : undefined;
+    let sourceId = 0;
+    if (
+      isObjectOrArray(schema) &&
+      (origin?.kind === "union" || origin?.kind === "intersection")
+    ) {
+      sourceId = sourceIds.get(schema) ?? sourceIds.size + 1;
+      sourceIds.set(schema, sourceId);
+    }
+    return { schema, sourceKind: origin?.kind ?? "schema", sourceId };
+  })).map((part) => part.schema);
 }
 
 /**

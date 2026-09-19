@@ -14,8 +14,10 @@ const __cfAmdHooks = undefined;
 // FIXTURE: intersection-source-types
 // Verifies: intersections retain source type distinctions through schema
 // generation. Opaque cells and `void` have different intersection behavior;
-// nested and named branded primitives retain their primitive constraints.
-// Expected: each call becomes the checker's `true` or `false` schema.
+// nested and named branded primitives retain their primitive constraints,
+// including when distinct unions fold to equal schemas.
+// Expected: each call matches the checker-based generator, including `false`
+// for disjoint folded unions in either order.
 type Brand = string & {
     topic: unknown;
 };
@@ -24,6 +26,18 @@ type Folded = (string & {
 }) | (number & {
     b: 2;
 });
+type A = {
+    a: 1;
+};
+type B = {
+    b: 2;
+};
+type C = {
+    c: 3;
+};
+type D = {
+    d: 4;
+};
 type OpaqueCompatible = any & OpaqueCell<any> & string & unknown;
 export const validOpaque: OpaqueCompatible = 123;
 export const opaqueCompatible = true as const satisfies __cfHelpers.JSONSchema;
@@ -45,6 +59,8 @@ export const foldedUnion = __cfHelpers.__cf_data({
     additionalProperties: true,
     $comment: "Unsupported intersection pattern: non-object constituent"
 } as const satisfies __cfHelpers.JSONSchema);
+export const disjointFoldedUnions = false as const satisfies __cfHelpers.JSONSchema;
+export const reversedDisjointFoldedUnions = false as const satisfies __cfHelpers.JSONSchema;
 // @ts-ignore: Internals
 function h(...args: any[]) { return __cfHelpers.h.apply(null, args); }
 __cfHardenFn(h);
