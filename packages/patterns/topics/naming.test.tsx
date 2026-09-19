@@ -63,10 +63,8 @@ import {
   Writable,
 } from "commonfabric";
 import {
-  backfillNames,
   nameOf,
   type NamesMap,
-  namesTable,
   recordNames,
   type RecordNamesResult,
 } from "../collection-naming/naming.ts";
