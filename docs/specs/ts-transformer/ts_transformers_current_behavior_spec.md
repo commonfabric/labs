@@ -2088,6 +2088,23 @@ Special path:
   this reference-only element schema. The
   `schema-injection/cell-get-readonly-array-result` fixture pins the emitted
   lift schemas, including a `number[]` control.
+- the node-based generator also applies the default library's generic
+  aliases (`Readonly`, `Partial`, `Required`, `Pick`, `Omit`, `NonNullable`,
+  `Array`, `ReadonlyArray`, `Record`) to their arguments, lowers a tuple to an
+  array of its element union (`undefined` admitted for an optional element, a
+  rest element contributing a spread tuple's elements or an array's items),
+  reduces an intersection as the checker reduces the type and merges it as
+  the type-based path merges one (the schema-generator mapping spec states
+  the rules, among them that `void` is told from an opaque cell wrapper, and
+  a nested, named, or union-folded constituent is reopened, by where a
+  schema came from), and unwraps parentheses. A pattern-scope `.get()` on a
+  `Cell<{ topic: unknown; title: string }>` lowers to a lift with result type
+  `Readonly<{ topic: unknown; title: string }>` and a result schema that
+  keeps both members; a tuple view of `unknown` keeps
+  `items: { type: "unknown" }`. The
+  `schema-injection/cell-get-unknown-member-result` fixture pins the emitted
+  lift schemas, and `schema-injection/intersection-source-types` the
+  intersections.
 - synthetic unions preserve explicit `{ type: "unknown" }` members in `anyOf`
   rather than collapsing them away
 - `Reactive<T>` does not emit an opaque marker. Cell, stream, and opaque

@@ -1,5 +1,9 @@
 import type ts from "typescript";
-import type { JSONSchema } from "@commonfabric/api";
+import type {
+  JSONSchema,
+  MutableJSONSchema,
+  MutableJSONSchemaObj,
+} from "@commonfabric/api";
 import { type Mutable } from "@commonfabric/utils/types";
 
 /**
@@ -83,6 +87,21 @@ export interface GenerationContext {
 
   /** Which $refs have been emitted */
   emittedRefs: Set<string>;
+
+  /**
+   * Source distinctions needed while reducing intersections. Schemas can
+   * coincide for different types, and a fallback can hide its constituents.
+   * Constituents are formatted lazily when an enclosing intersection needs
+   * them; standalone fallbacks retain their normal formatter behavior. The
+   * record is keyed on the schema object itself, so it reaches a reader only
+   * through the object a formatter returned — the one the definitions hold
+   * and a `$ref` resolves to — and a copy carries none of it.
+   */
+  schemaOrigins?: WeakMap<
+    MutableJSONSchemaObj,
+    | { kind: "void" }
+    | { kind: "intersection" | "union"; parts: () => MutableJSONSchema[] }
+  >;
 
   // Stack state (push/pop during recursion)
 

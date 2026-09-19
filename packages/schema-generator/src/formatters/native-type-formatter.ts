@@ -110,6 +110,27 @@ const LIB_DECLARED_NATIVE_TYPES = new Set([
 ]);
 
 /**
+ * Whether `sourceFile` is one of the default library's declaration files, by
+ * the names the libraries are shipped under (`lib.*.d.ts`, the bare
+ * `es20xx.d.ts` / `dom.d.ts` / `jsx.d.ts` this repository bundles, Node's
+ * `@types`).
+ */
+export function isDefaultLibrarySourceFile(
+  sourceFile: ts.SourceFile,
+  _checker: ts.TypeChecker,
+): boolean {
+  // A TypeChecker cannot reach its Program, so the program's own
+  // `isSourceFileDefaultLibrary` is out of reach here and the file's name
+  // decides. (The transformer, which holds the program, asks it directly.)
+  const fileName = sourceFile.fileName;
+  return fileName === "lib.d.ts" ||
+    fileName.endsWith("/lib.d.ts") ||
+    /(^|\/)lib\.[^/]+\.d\.ts$/i.test(fileName) ||
+    /(^|\/)(es\d+(?:\.[^/]+)?|dom|jsx)\.d\.ts$/i.test(fileName) ||
+    /(^|[\\/])node_modules[\\/]@types[\\/]node[\\/]/.test(fileName);
+}
+
+/**
  * Formatter that replaces specific types with a manually specified schema
  *
  * This mostly exists to support native types, but it's also used to replace
@@ -254,24 +275,12 @@ export class NativeTypeFormatter implements TypeFormatter {
     context: GenerationContext,
   ): boolean {
     const symbol = NativeTypeFormatter.#getTypeSymbol(type);
-    return symbol?.declarations?.some((declaration) => {
-      const sourceFile = declaration.getSourceFile();
-      const program = (
-        context.typeChecker as ts.TypeChecker & {
-          getProgram?: () => ts.Program;
-        }
-      ).getProgram?.();
-      if (program?.isSourceFileDefaultLibrary(sourceFile)) {
-        return true;
-      }
-
-      const fileName = sourceFile.fileName;
-      return fileName === "lib.d.ts" ||
-        fileName.endsWith("/lib.d.ts") ||
-        /(^|\/)lib\.[^/]+\.d\.ts$/i.test(fileName) ||
-        /(^|\/)(es\d+(?:\.[^/]+)?|dom|jsx)\.d\.ts$/i.test(fileName) ||
-        /(^|[\\/])node_modules[\\/]@types[\\/]node[\\/]/.test(fileName);
-    }) ?? false;
+    return symbol?.declarations?.some((declaration) =>
+      isDefaultLibrarySourceFile(
+        declaration.getSourceFile(),
+        context.typeChecker,
+      )
+    ) ?? false;
   }
 
   /** Returns whether `typeName` names a native type, which gets no `$defs`. */

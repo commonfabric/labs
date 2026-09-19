@@ -83,14 +83,49 @@ triggers are documented in the ts-transformers behavior spec §12.
 `src/schema-generator.ts`) handles: `TypeLiteral` nodes (properties
 with `questionToken` optionality; string/number index signatures →
 `additionalProperties`, first non-undefined wins, no JSDoc),
-`readonly` type-operator nodes (analyze the wrapped type), `ArrayTypeNode`,
-unions (`true` member short-circuits, `false`
-members filtered, singletons unwrapped), literal nodes
-`TypeReference` nodes (wrapper detection first, then a
+`readonly` type-operator nodes (analyze the wrapped type), parenthesized
+nodes (unwrapped), `ArrayTypeNode`, tuples (an array of the element union,
+`undefined` admitted for an optional element, a rest element contributing
+what lies behind it: a spread tuple's elements, each member's for a union of
+tuples, else an array's items read through a reference — the same lossy
+form as the type path), intersections (reduced as the checker reduces the
+types, then merged as `IntersectionFormatter` merges them; the rules are
+below), unions (`true` member short-circuits, `false` members filtered,
+singletons unwrapped), literal nodes, `TypeReference` nodes (wrapper
+detection first; then the default library's generic aliases — `Readonly`,
+`Partial`, `Required`, `Pick`, `Omit`, `NonNullable`, `Array`,
+`ReadonlyArray`, `Record` — applied structurally to their arguments when the
+name binds through the node or, for an unbindable synthetic reference,
+resolves lexically (`checker.resolveName`) to a library declaration, so an
+authored or imported shadow of the name keeps the general path; then a
 scope-based name-resolution fallback for unbindable synthetic references via
-`checker.getSymbolsInScope` — plus a `Date`-by-name
-special case), keyword types, and a final
-resolve-else-`true` fallback.
+`checker.getSymbolsInScope` — plus a `Date`-by-name special case), keyword
+types, and a final resolve-else-`true` fallback.
+
+An intersection node is settled the way the checker settles the type, each
+constituent read through its reference, and what remains is merged as
+`IntersectionFormatter` merges: identical constituents fold; `never` leaves
+`false`; `any` makes the whole accept anything unless the constituents beside
+it that are no union already contradict each other, which is as far as the
+checker looks before `any` wins; otherwise a union constituent distributes
+and every combination of arms is settled on its own; `unknown` is the
+identity; an empty object part drops out and takes `null` and `undefined`
+with it, as `T & {}` does; primitives are narrowed or found disjoint wherever
+they sit, `"a" & string` being `"a"` and `string & number` nothing; `null` or
+`undefined` beside an object leaves nothing; and a constituent that merge
+refuses — a non-object, or one with an index signature, which an array is —
+yields the same unsupported-pattern fallback the type path emits. Where a
+schema alone no longer says what its type was, the generation context
+records where it came from (`schemaOrigins`): `void` lowers to the opaque
+marker `OpaqueCell<any>` also lowers to, and reduces as `undefined` does
+beside another primitive (`undefined & void` is `undefined`, `string & void`
+nothing) while the wrapper, having no primitive domain, is refused by a
+merge as a non-object constituent; an unsupported-pattern fallback keeps the
+constituents behind it, so a nested or named intersection is reopened when
+an enclosing one reduces it (`(string & Brand) & number` is nothing); and a
+union whose arms fold to one schema — `void | OpaqueCell<any>`, or two
+branded primitives with the same fallback — keeps every arm, so an
+intersection meeting the survivor still distributes over them.
 
 `readonly` marks mutability and contributes no JSON Schema keyword. A
 synthetic `readonly T[]` therefore has the same schema as its wrapped `T[]`.
@@ -98,6 +133,52 @@ In particular, `readonly unknown[]` emits
 `{ type: "array", items: { type: "unknown" } }`, preserving the element's
 reference-only semantics. The synthetic readonly array cases in
 `test/schema-generator.test.ts` cover unknown, string, and object elements.
+
+A cell read of an object type prints as `Readonly<{…}>`, and the general
+name-resolution path resolves that alias to its *uninstantiated* declared
+type — a mapped type over an unbound parameter — which reads as an empty
+object with every member dropped. The alias rules exist so such a read keeps
+its declared members, `unknown` ones included. A mapped view is derived on
+a copy of the definition its argument refers to; the shared `Foo` definition
+other consumers read is untouched. `Partial<Foo>` and `Required<Foo>` map
+over each arm's own keys and so distribute over a union, arm by arm; on an
+array they map the elements, which count as optional: `Partial` admits
+`undefined` into the items, `Required` removes it. `Required` reads its
+argument node wherever the schema has already lost the optionality it acts
+on: a union is viewed member by member, and a tuple's slots are read as the
+checker reads them — spreads expanded, a spread over a union one
+alternative per member (a tuple member keeping its slots, an array member
+held in a rest slot), an optional slot that a required slot follows made
+required with `undefined` in what it holds, and the library's `Readonly`,
+`NonNullable`, `Required`, and `Partial` opened onto the slots they wrap,
+`NonNullable` dropping a union's `null` and `undefined` members first,
+classified by what each opens to (an alias, parentheses), and the last two
+applied there; the wrappers distribute over a union, so a tuple beside an
+object under them keeps its slots — aliases opened along the way, through
+parentheses and `readonly`, a circular one only once. An optional or rest
+slot then loses `undefined` while a required slot keeps it, authored or
+normalized in, spread, wrapped, or in a union alike; a tuple the rules
+cannot open that way (a generic alias) is treated as an array. `Pick` and `Omit` map
+over `keyof T`, and the keys of a union are the keys every arm has, so
+`Pick<A | B, K>` and `Omit<A | B, K>` are one object over the surface the
+arms share: a property accepts what any arm's does and is required only
+where every arm that names it requires it, so `Omit<A | B, "kind">` keeps
+neither arm's own members and a `Pick` of correlated arms no longer pairs
+their values. An index signature (`additionalProperties`, present — a
+schema, `true`, or `false` for a `never`-valued one, which covers every key
+just the same; a closed object carries none) covers every key: a key an arm
+has only through one takes the signature's schema and casts no vote on
+being required, and an `Omit` from a surface every arm covers that way
+keeps just the signature, the named members dissolving into it as they do
+in `keyof T`. A `Pick` naming a key some arm lacks, or a union with an
+arm that is no object, keeps the general path. Unions these rules build —
+a tuple's items, a shared property, a merged signature — fold equal arms by
+value-model equality (`dedupeByValueEqual`), flatten a bare nested union,
+and keep an `unknown` arm beside the others as a synthetic union does.
+`NonNullable` removes `null` and `undefined` from a direct schema (to
+`false`), an array-valued `type`, an `enum`'s values, a union's arms, or a
+referenced definition. The synthetic alias, tuple, intersection, and
+shadowing cases in `test/schema-generator.test.ts` pin all of this.
 
 **Observed node/type divergence — literal encodings.** The node path emits
 `const` (`{ type: "string", const: "x" }`); the type path emits

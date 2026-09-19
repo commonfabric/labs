@@ -9,6 +9,7 @@ import ts from "typescript";
 import { reportUnresolvedDefault } from "../default-diagnostics.ts";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
 import type { SchemaGenerator } from "../schema-generator.ts";
+import { unionFoldedFrom } from "../schema-origins.ts";
 import {
   cloneSchemaDefinition,
   detectWrapperViaNode,
@@ -245,12 +246,16 @@ export class UnionFormatter implements TypeFormatter {
       }
     }
 
-    // If only one schema remains after filtering/merging, return it directly without anyOf wrapper
-    if (anyOf.length === 1) {
-      return anyOf[0]!;
-    }
-
-    return { anyOf };
+    // If only one schema remains after filtering/merging, return it directly
+    // without anyOf wrapper. Emitted schemas can coincide while the source
+    // types still form a union, as `void | OpaqueCell<any>` does and as two
+    // branded primitives do, so the fold above is recorded.
+    return unionFoldedFrom(
+      anyOf.length === 1 ? anyOf[0]! : { anyOf },
+      unionOptions,
+      anyOf.length,
+      context,
+    );
   }
 
   /**
