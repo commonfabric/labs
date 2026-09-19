@@ -5,6 +5,7 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { Identity } from "@commonfabric/identity";
 import {
@@ -32,7 +33,7 @@ const childPath = "/api/patterns/system/child.tsx";
 const parentPath = "/api/patterns/system/parent.tsx";
 
 describe("child-source-resume", () => {
-  for (const mode of ["warm", "cold", "serving"]) {
+  for (const mode of ["warm", "cold", "serving", "serving-user"]) {
     const cold = mode !== "warm";
     for (const detach of [false, true]) {
       it(`retains ${detach ? "owner-edited" : "adopted"} code and inputs on a ${mode} parent restart`, async () => {
@@ -43,6 +44,7 @@ describe("child-source-resume", () => {
         const managers: EmulatedStorageManager[] = [];
         const runtimes: Runtime[] = [];
         const seen: string[][] = [];
+        let parentRootId: string | undefined;
 
         /** Connects an independent runtime and records serving demand roots. */
         const makeRuntime = (serving = false) => {
@@ -62,10 +64,15 @@ describe("child-source-resume", () => {
                 stampWaveRunContext(tx, {
                   actionId: info.actionId,
                   kind: info.kind,
+                  scopeKeyIdentity: info.scopeKeyIdentity,
+                  actionScopeKey: info.actionScopeKey,
                 }),
               runDemanderResolver: (roots) => {
                 seen.push([...roots]);
-                return [];
+                return parentRootId !== undefined &&
+                    roots.includes(parentRootId)
+                  ? [runtime.scopeKeyIdentity]
+                  : [];
               },
             });
           }
@@ -82,12 +89,15 @@ describe("child-source-resume", () => {
                 name: parentPath,
                 contents: `import { pattern } from 'commonfabric';
 import Child from './child.tsx';
-export default pattern(() => ({ child: Child.inSpace('${target}')({ value: 'parent' }) }));`,
+export default pattern(() => ({ child: Child${
+                  mode === "serving-user" ? ".asScope('user')" : ""
+                }.inSpace('${target}')({ value: 'parent' }) }));`,
               },
               { name: childPath, contents: childSource("original") },
             ],
           }, { space: signer.did() });
           const result = runtime.getCell(signer.did(), "parent");
+          parentRootId = result.sourceURI;
           const tx = runtime.edit();
           runtime.runner.run(tx, parent, {}, result, {
             sourceOrigin: "system:system/parent.tsx",
@@ -127,7 +137,9 @@ export default pattern(() => ({ child: Child.inSpace('${target}')({ value: 'pare
           await runtime.patternManager.flushCompileCacheWrites();
           await runtime.storageManager.synced();
           runtime.runner.stop(result);
-          const reader = cold ? makeRuntime(mode === "serving") : runtime;
+          const reader = cold
+            ? makeRuntime(mode.startsWith("serving"))
+            : runtime;
           const resumed = reader.getCellFromLink(
             result.getAsNormalizedFullLink(),
           );
@@ -135,6 +147,11 @@ export default pattern(() => ({ child: Child.inSpace('${target}')({ value: 'pare
           await resumed.pull();
           await reader.scheduler.idleWithPendingCommits();
           const resumedChild = resumed.key("child").resolveAsCell();
+          if (mode === "serving-user") {
+            expect(resumedChild.getAsNormalizedFullLink().scope).toBe("user");
+            expect(reader.runner.accessForTestingOnly.scopedProgramCounts())
+              .toContainEqual({ piece: resumedChild.sourceURI, variants: 1 });
+          }
           await resumedChild.pull();
           expect(getPatternIdentityRef(resumedChild)).toEqual(ref);
           expect(getPieceSourceRevisions(resumedChild)).toEqual(history);
@@ -142,13 +159,29 @@ export default pattern(() => ({ child: Child.inSpace('${target}')({ value: 'pare
             detach ? undefined : "system:system/child.tsx",
           );
           expect(resumedChild.key("marker").get()).toBe("updated owner");
-          if (mode === "serving") {
+          if (mode.startsWith("serving")) {
             const childDemands = seen.filter((roots) =>
               roots.includes(resumedChild.sourceURI)
             );
             expect(childDemands.length).toBeGreaterThan(0);
             for (const roots of childDemands) {
               expect(roots).toContain(resumed.sourceURI);
+            }
+          }
+          if (mode === "serving-user") {
+            const stopReading = resumedChild.sink(() => {});
+            try {
+              const inputTx = reader.edit();
+              resumedChild.getArgumentCell()!.withTx(inputTx).key("value").set(
+                "after restart",
+              );
+              expect((await inputTx.commit()).error).toBeUndefined();
+              await reader.scheduler.idleWithPendingCommits();
+              expect(resumedChild.key("marker").get()).toBe(
+                "updated after restart",
+              );
+            } finally {
+              stopReading();
             }
           }
         } finally {
@@ -230,6 +263,84 @@ export default pattern<{ value: string }>(({ value }) => ({ child: Child${
         }
         await runtime.idle();
         expect(runtime.runner.isRunning(child)).toBe(false);
+      });
+    }
+
+    for (const failLoad of [false, true]) {
+      it(`settles the pending child when ${failLoad ? "loading fails" : "its parent stops during loading"}`, async () => {
+        const { parent, child, pattern } = await create();
+        runtime.runner.stop(parent);
+        const manager = runtime.patternManager;
+        const ref = getPatternIdentityRef(child)!;
+        const originalArtifact = manager.artifactFromIdentitySync.bind(manager);
+        const originalLoad = manager.loadPatternByIdentity.bind(manager);
+        const loaded = await originalLoad(
+          ref.identity,
+          ref.symbol,
+          child.space,
+        );
+        const entered = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<typeof loaded>();
+        const failure = new Error("child source is temporarily unavailable");
+        const failures: { actionId: string; error: unknown }[] = [];
+        runtime.pieceStartCommitFailureObserver = (event) =>
+          failures.push(event);
+        const key = runtime.runner.accessForTestingOnly.getDocKey(child);
+        const settlements: string[] = [];
+        const observe = (event: Event) => {
+          const { marker } = (event as CustomEvent<{
+            marker: { type: string; key: string; outcome: string };
+          }>).detail;
+          if (
+            marker.type === "runner.deferred-start.settled" &&
+            marker.key === key
+          ) {
+            settlements.push(marker.outcome);
+          }
+        };
+        runtime.telemetry.addEventListener("telemetry", observe);
+        const artifact = stub(
+          manager,
+          "artifactFromIdentitySync",
+          (identity, symbol) =>
+            identity === ref.identity
+              ? undefined
+              : originalArtifact(identity, symbol),
+        );
+        const load = stub(manager, "loadPatternByIdentity", (...args) => {
+          if (args[0] !== ref.identity) return originalLoad(...args);
+          entered.resolve();
+          return release.promise;
+        });
+        try {
+          const tx = runtime.edit();
+          runtime.runner.run(tx, pattern, { value: "parent" }, parent);
+          runtime.prepareTxForCommit(tx);
+          expect((await tx.commit()).error).toBeUndefined();
+          await entered.promise;
+          artifact.restore();
+          if (failLoad) release.reject(failure);
+          else {
+            runtime.runner.stop(parent);
+            release.resolve(loaded);
+          }
+          await runtime.idle();
+          expect(runtime.runner.isRunning(child)).toBe(false);
+          expect(settlements).toEqual(["cancelled"]);
+          expect(failures).toEqual(
+            failLoad
+              ? [{ actionId: `piece-start/${child.sourceURI}`, error: failure }]
+              : [],
+          );
+        } finally {
+          if (!artifact.restored) artifact.restore();
+          load.restore();
+          release.resolve(loaded);
+          runtime.telemetry.removeEventListener("telemetry", observe);
+        }
+        expect(await runtime.runner.start(child)).toBe(true);
+        await child.pull();
+        expect(child.key("marker").get()).toBe("original parent");
       });
     }
 
