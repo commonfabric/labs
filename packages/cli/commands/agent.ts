@@ -72,10 +72,60 @@ export function resolveRunnerTools(
     : [...BASE_TOOLS];
 }
 
-/** Runs until the process receives SIGINT or SIGTERM. */
-export async function agentRunnerAction(
+/** What the flags and environment resolve to. */
+export interface AgentRunnerCommandConfig {
+  identityPath: string;
+
+  /** The identity's DID, which is also its home space. */
+  home: string;
+
+  homeHost: string;
+  runnerHost: string;
+  tools: string[];
+  maxConcurrent: number;
+  leaseMs: number;
+  workRoot: string;
+  loomRetrievalConfigPath?: string;
+  harnessArgs?: string[];
+}
+
+/** What the command reaches outside itself through. */
+export interface AgentRunnerCommandDeps {
+  env: (name: string) => string | undefined;
+  loadIdentity: (path: string) => Promise<{ did(): string }>;
+
+  /** Connects, registers, and starts following the queue. */
+  start: (
+    config: AgentRunnerCommandConfig,
+    report: (message: string) => void,
+  ) => Promise<{ stop(): Promise<void> }>;
+
+  /** Resolves when the process is asked to stop. */
+  untilStopped: () => Promise<void>;
+
+  report: (message: string) => void;
+}
+
+/** Helper for the config, which reads an API URL option as an origin. */
+function originOf(flag: string, value: string): string {
+  if (!URL.canParse(value)) {
+    throw new ValidationError(`"${flag}" is not a URL: ${value}`, {
+      exitCode: 1,
+    });
+  }
+  return new URL(normalizeApiUrl(value)).origin;
+}
+
+/**
+ * Resolves the command's options to a configuration.
+ *
+ * @throws ValidationError for a missing identity or API URL, a URL that does
+ * not parse, or a concurrency or lease below one.
+ */
+export async function resolveAgentRunnerConfig(
   options: AgentRunnerCommandOptions,
-): Promise<void> {
+  deps: Pick<AgentRunnerCommandDeps, "env" | "loadIdentity">,
+): Promise<AgentRunnerCommandConfig> {
   if (!options.identity) {
     throw new ValidationError(
       `Missing required option: "--identity", or "CF_IDENTITY".`,
@@ -88,28 +138,62 @@ export async function agentRunnerAction(
       { exitCode: 1 },
     );
   }
-  if (!Number.isInteger(options.maxConcurrent) || options.maxConcurrent < 1) {
-    throw new ValidationError(`"--max-concurrent" takes a whole number ≥ 1.`, {
-      exitCode: 1,
-    });
+  for (
+    const [flag, value] of [
+      ["--max-concurrent", options.maxConcurrent],
+      ["--lease-seconds", options.leaseSeconds],
+    ] as const
+  ) {
+    if (!Number.isInteger(value) || value < 1) {
+      throw new ValidationError(
+        `"${flag}" takes a whole number of 1 or more.`,
+        {
+          exitCode: 1,
+        },
+      );
+    }
   }
-  const identityPath = absPath(options.identity);
-  const identity = await loadIdentity(identityPath);
-  const home = identity.did();
-  const homeHost = new URL(normalizeApiUrl(options.apiUrl)).origin;
+  const homeHost = originOf("--api-url", options.apiUrl);
   const runnerHost = options.localApiUrl !== undefined
-    ? new URL(normalizeApiUrl(options.localApiUrl)).origin
+    ? originOf("--local-api-url", options.localApiUrl)
     : homeHost;
-  const tools = resolveRunnerTools(options);
-  const workRoot = absPath(
-    options.workRoot ??
-      join(
-        Deno.env.get("CF_HARNESS_HOME") ??
-          join(Deno.env.get("HOME") ?? ".", ".cf-harness"),
-        "agent-runs",
-      ),
-  );
-  const report = (message: string) => console.error(message);
+  const identityPath = absPath(options.identity);
+  const identity = await deps.loadIdentity(identityPath);
+  return {
+    identityPath,
+    home: identity.did(),
+    homeHost,
+    runnerHost,
+    tools: resolveRunnerTools(options),
+    maxConcurrent: options.maxConcurrent,
+    leaseMs: options.leaseSeconds * 1000,
+    workRoot: absPath(
+      options.workRoot ??
+        join(
+          deps.env("CF_HARNESS_HOME") ??
+            join(deps.env("HOME") ?? ".", ".cf-harness"),
+          "agent-runs",
+        ),
+    ),
+    ...(options.loomRetrievalConfig !== undefined
+      ? { loomRetrievalConfigPath: absPath(options.loomRetrievalConfig) }
+      : {}),
+    ...(options.model !== undefined
+      ? { harnessArgs: ["--model", options.model] }
+      : {}),
+  };
+}
+
+/**
+ * Connects to the home toolshed, registers the runner, and starts it. The
+ * production `start`.
+ */
+async function startAgentRunner(
+  config: AgentRunnerCommandConfig,
+  report: (message: string) => void,
+): Promise<{ stop(): Promise<void> }> {
+  const { home, homeHost, identityPath } = config;
+  const identity = await loadIdentity(identityPath);
 
   // The home toolshed's connection is a full one: the home default pattern
   // runs here, since the queue's `agentRunner` entry takes writes only
@@ -143,7 +227,10 @@ export async function agentRunnerAction(
   };
 
   const homePattern = await homePieces.ensureDefaultPattern();
-  const queue = agentQueueIndexCell(homePieces.runtime, home);
+  const queue = agentQueueIndexCell(
+    homePieces.runtime,
+    home as `did:${string}:${string}`,
+  );
   await queue.sync();
   if (queue.get() === undefined) {
     throw new Error(
@@ -165,47 +252,78 @@ export async function agentRunnerAction(
   };
 
   const runner = new AgentRunner({
-    homeSpace: home,
+    homeSpace: home as `did:${string}:${string}`,
     homeHost,
-    runnerHost,
+    runnerHost: config.runnerHost,
     runnerId: `${home}#${crypto.randomUUID()}`,
-    tools,
-    maxConcurrent: options.maxConcurrent,
-    leaseMs: options.leaseSeconds * 1000,
+    tools: config.tools,
+    maxConcurrent: config.maxConcurrent,
+    leaseMs: config.leaseMs,
     runtimeForHost,
     registerRunner,
     execute: createHarnessAgentRunExecutor({
       identityKeyPath: identityPath,
       requester: home,
-      workRoot,
-      ...(options.loomRetrievalConfig !== undefined
-        ? { loomRetrievalConfigPath: absPath(options.loomRetrievalConfig) }
+      workRoot: config.workRoot,
+      ...(config.loomRetrievalConfigPath !== undefined
+        ? { loomRetrievalConfigPath: config.loomRetrievalConfigPath }
         : {}),
-      ...(options.model !== undefined
-        ? { harnessArgs: ["--model", options.model] }
+      ...(config.harnessArgs !== undefined
+        ? { harnessArgs: config.harnessArgs }
         : {}),
       report,
     }),
     report,
   });
   await runner.start();
-  report(
-    `agent runner: following ${home} on ${homeHost}, offering ${
-      tools.join(", ")
-    }`,
-  );
+  return {
+    stop: async () => {
+      await runner.stop();
+      for (const runtime of runtimes.values()) await runtime.dispose();
+    },
+  };
+}
 
+/** Resolves on the process's first SIGINT or SIGTERM. */
+async function untilSignalled(): Promise<void> {
   const stopped = Promise.withResolvers<void>();
   const onSignal = () => stopped.resolve();
   Deno.addSignalListener("SIGINT", onSignal);
   Deno.addSignalListener("SIGTERM", onSignal);
-  await stopped.promise;
-  Deno.removeSignalListener("SIGINT", onSignal);
-  Deno.removeSignalListener("SIGTERM", onSignal);
-  report("agent runner: stopping");
-  await runner.stop();
-  for (const runtime of runtimes.values()) {
-    await runtime.dispose();
+  try {
+    await stopped.promise;
+  } finally {
+    Deno.removeSignalListener("SIGINT", onSignal);
+    Deno.removeSignalListener("SIGTERM", onSignal);
+  }
+}
+
+/** The command's production dependencies. */
+export const defaultAgentRunnerCommandDeps: AgentRunnerCommandDeps = {
+  env: (name) => Deno.env.get(name),
+  loadIdentity,
+  start: startAgentRunner,
+  untilStopped: untilSignalled,
+  report: (message) => console.error(message),
+};
+
+/** Runs a runner until the process is asked to stop. */
+export async function agentRunnerAction(
+  options: AgentRunnerCommandOptions,
+  deps: AgentRunnerCommandDeps = defaultAgentRunnerCommandDeps,
+): Promise<void> {
+  const config = await resolveAgentRunnerConfig(options, deps);
+  const running = await deps.start(config, deps.report);
+  deps.report(
+    `agent runner: following ${config.home} on ${config.homeHost}, offering ${
+      config.tools.join(", ")
+    }`,
+  );
+  try {
+    await deps.untilStopped();
+    deps.report("agent runner: stopping");
+  } finally {
+    await running.stop();
   }
 }
 
@@ -229,57 +347,64 @@ The model provider is the one 'cf-harness' is configured with under
 CF_HARNESS_HOME.`,
 );
 
-const runnerCommand = new Command()
-  .name("runner")
-  .description(runnerDescription)
-  .env(
-    "CF_API_URL=<url:string>",
-    "URL of the toolshed serving the home space.",
-    {
+/** The `cf agent` command tree over `deps`. */
+export const createAgentCommand = (
+  deps: AgentRunnerCommandDeps = defaultAgentRunnerCommandDeps,
+) => {
+  const runnerCommand = new Command()
+    .name("runner")
+    .description(runnerDescription)
+    .env(
+      "CF_API_URL=<url:string>",
+      "URL of the toolshed serving the home space.",
+      {
+        prefix: "CF_",
+      },
+    )
+    .option(
+      "-a,--api-url <url:string>",
+      "URL of the toolshed serving the home space.",
+    )
+    .env("CF_IDENTITY=<path:string>", "Path to an identity keyfile.", {
       prefix: "CF_",
-    },
-  )
-  .option(
-    "-a,--api-url <url:string>",
-    "URL of the toolshed serving the home space.",
-  )
-  .env("CF_IDENTITY=<path:string>", "Path to an identity keyfile.", {
-    prefix: "CF_",
-  })
-  .option("-i,--identity <path:string>", "Path to an identity keyfile.")
-  .option(
-    "--local-api-url <url:string>",
-    "URL of the toolshed this runner sits beside. Defaults to --api-url.",
-  )
-  .option(
-    "--loom-retrieval-config <path:string>",
-    "Host-owned JSON file backing the read-only Loom tools.",
-  )
-  .option(
-    "--max-concurrent <n:integer>",
-    "How many runs this process holds at once.",
-    { default: 1 },
-  )
-  .option(
-    "--tools <names:string>",
-    "Comma-separated tool names this runner offers. Defaults to what its " +
-      "configuration backs.",
-  )
-  .option(
-    "--work-root <path:string>",
-    "Directory for run workspaces and artifacts. Defaults to " +
-      "$CF_HARNESS_HOME/agent-runs.",
-  )
-  .option(
-    "--lease-seconds <n:integer>",
-    "How far a claim's lease reaches past the run's last durable write.",
-    { default: DEFAULT_LEASE_SECONDS },
-  )
-  .option("--model <name:string>", "Model name passed to cf-harness.")
-  .action((options) => agentRunnerAction(options));
+    })
+    .option("-i,--identity <path:string>", "Path to an identity keyfile.")
+    .option(
+      "--local-api-url <url:string>",
+      "URL of the toolshed this runner sits beside. Defaults to --api-url.",
+    )
+    .option(
+      "--loom-retrieval-config <path:string>",
+      "Host-owned JSON file backing the read-only Loom tools.",
+    )
+    .option(
+      "--max-concurrent <n:integer>",
+      "How many runs this process holds at once.",
+      { default: 1 },
+    )
+    .option(
+      "--tools <names:string>",
+      "Comma-separated tool names this runner offers. Defaults to what its " +
+        "configuration backs.",
+    )
+    .option(
+      "--work-root <path:string>",
+      "Directory for run workspaces and artifacts. Defaults to " +
+        "$CF_HARNESS_HOME/agent-runs.",
+    )
+    .option(
+      "--lease-seconds <n:integer>",
+      "How far a claim's lease reaches past the run's last durable write.",
+      { default: DEFAULT_LEASE_SECONDS },
+    )
+    .option("--model <name:string>", "Model name passed to cf-harness.")
+    .action((options) => agentRunnerAction(options, deps));
 
-export const agent = new Command()
-  .name("agent")
-  .description("Run and inspect agent requests.")
-  .default("help")
-  .command("runner", runnerCommand);
+  return new Command()
+    .name("agent")
+    .description("Run and inspect agent requests.")
+    .default("help")
+    .command("runner", runnerCommand);
+};
+
+export const agent = createAgentCommand();
