@@ -387,6 +387,7 @@ export default pattern<{ value: string }>(({ value }) => ({ child: Child${
       const argument = child.getArgumentCell()!.getRaw();
       const ref = getPatternIdentityRef(child);
       runtime.runner.stop(parent);
+      expect(runtime.runner.isRunning(child)).toBe(false);
       const changedParent = await runtime.patternManager.compilePattern({
         main: parentPath,
         files: [
@@ -407,6 +408,7 @@ export default pattern<{ value: string }>(({ value }) => ({
       expect((await tx.commit()).error).toBeUndefined();
       await parent.pull();
       await runtime.idle();
+      expect(runtime.runner.isRunning(child)).toBe(true);
       const resumedChild = parent.key("child").resolveAsCell();
       await resumedChild.pull();
       expect(resumedChild.sourceURI).toBe(child.sourceURI);
