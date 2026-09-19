@@ -13,10 +13,9 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import type { FabricValue } from "@/interface.ts";
-import { BaseFabricCodec } from "@/codec-interface/BaseFabricCodec.ts";
-import type { LiveEnvironment } from "@/codec-interface/interface.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
+import { BaseFabricCodec, type LiveEnvironment } from "@/codec-common/index.ts";
+import { FabricRegExp } from "@/fabric-primitives/index.ts";
+import type { FabricValue } from "@/index.ts";
 
 /**
  * Minimal concrete `BaseFabricCodec` for exercising the base class's own

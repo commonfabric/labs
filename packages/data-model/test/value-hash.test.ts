@@ -21,19 +21,23 @@ import { expect } from "@std/expect";
 import { createHasher } from "@commonfabric/content-hash";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 
-import { hashOf, hashStringOf, taggedHashStringOf } from "@/value-hash.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
-import { FabricKeyPair } from "@/fabric-primitives/FabricKeyPair.ts";
-import { FabricValue } from "@/interface.ts";
-import { FabricEpochDay } from "@/fabric-primitives/FabricEpochDay.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
+import { FabricError } from "@/fabric-instances/index.ts";
 import {
+  FabricBytes,
+  FabricEpochDay,
+  FabricEpochNsec,
+  FabricHash,
+  FabricKeyPair,
+  FabricRegExp,
   FabricUnavailable,
   UNAVAILABLE_PENDING,
-} from "@/fabric-primitives/FabricUnavailable.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
+} from "@/fabric-primitives/index.ts";
+import {
+  FabricValue,
+  hashOf,
+  hashStringOf,
+  taggedHashStringOf,
+} from "@/index.ts";
 import * as nodeCrypto from "@node/crypto";
 
 /**

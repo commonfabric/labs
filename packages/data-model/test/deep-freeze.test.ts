@@ -19,13 +19,13 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { FabricError } from "@/fabric-instances/index.ts";
+import { FabricEpochNsec } from "@/fabric-primitives/index.ts";
 import {
   deepFreeze,
   isDeepFrozen,
   isValidDeepFrozenFabricValue,
-} from "@/deep-freeze.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
+} from "@/index.ts";
 
 describe("deep-freeze", () => {
   describe("isDeepFrozen()", () => {

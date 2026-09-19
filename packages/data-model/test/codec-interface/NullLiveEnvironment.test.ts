@@ -16,7 +16,7 @@ import { expect } from "@std/expect";
 import {
   NULL_LIVE_ENVIRONMENT,
   NullLiveEnvironment,
-} from "@/codec-interface/NullLiveEnvironment.ts";
+} from "@/codec-common/index.ts";
 
 describe("NullLiveEnvironment", () => {
   describe("NULL_LIVE_ENVIRONMENT", () => {

@@ -29,41 +29,42 @@ import { isInertPlainObject } from "@commonfabric/utils/objects";
 
 import { DummyLiveEnvironment } from "./fabric-instances/fixtures.ts";
 import {
+  CODEC,
+  CODEC_TYPE_TAGS,
+  ProblematicValue,
+  UnknownValue,
+} from "@/codec-common/index.ts";
+import {
   BaseFabricInstance,
   DEEP_CLONE_CORE,
   DEEP_FREEZE,
   IS_DEEP_FROZEN,
   SHALLOW_UNFROZEN_CLONE,
-} from "@/fabric-bases/BaseFabricInstance.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
-import { UnknownValue } from "@/codec-common/UnknownValue.ts";
-import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import { CODEC } from "@/codec-interface/interface.ts";
-import { deepFreeze, isDeepFrozen } from "@/deep-freeze.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricMap } from "@/fabric-instances/FabricMap.ts";
-import { FabricSet } from "@/fabric-instances/FabricSet.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
+} from "@/fabric-bases/index.ts";
+import { FabricError, FabricMap, FabricSet } from "@/fabric-instances/index.ts";
+import {
+  FabricBytes,
+  FabricEpochNsec,
+  FabricRegExp,
+} from "@/fabric-primitives/index.ts";
 import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
 import { FrozenMap, FrozenSet } from "@/frozen-builtins.ts";
 import {
+  assertValidFabricValueLayer,
+  convertibleJsFromFabricValue,
+  deepFreeze,
   type FabricConvertibleJsValue,
+  fabricFromConvertibleJsValue,
   FabricInstance,
   type FabricPrimitive,
   type FabricValue,
-} from "@/interface.ts";
-import {
-  convertibleJsFromFabricValue,
-  fabricFromConvertibleJsValue,
+  isDeepFrozen,
   isValidFabricConvertibleJsValue,
   shallowCleanArray,
   shallowCleanPlainObject,
   shallowFabricFromConvertibleJsObjectElseUndefined,
   shallowFabricFromConvertibleJsValue,
-} from "@/convertible-js.ts";
-import { assertValidFabricValueLayer } from "@/types";
+} from "@/index.ts";
 import { LAYER_CORPUS, WeirdError } from "./fabric-value-corpus.ts";
 
 /** A concrete fabric class, `toBeInstanceOf()` wanting a constructor. */

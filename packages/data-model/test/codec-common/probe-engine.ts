@@ -9,19 +9,19 @@
 // tagged form is a class instead, so "walked" and "not walked" are visibly
 // different things.
 
-import type { FabricValue } from "@/interface.ts";
-import { BaseCodecEngine } from "@/codec-common/BaseCodecEngine.ts";
-import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
-import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
-import type {
-  CodecForFormat,
-  LiveEnvironment,
-  WireFormat,
-} from "@/codec-interface/interface.ts";
-import { CodecRegistry } from "@/codec-common/CodecRegistry.ts";
-import { BaseDecodeAct } from "@/codec-common/BaseDecodeAct.ts";
-import { BaseEncodeAct } from "@/codec-common/BaseEncodeAct.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
+import {
+  BaseCodecEngine,
+  BaseDecodeAct,
+  BaseEncodeAct,
+  BaseNonterminalCodec,
+  BaseTerminalCodec,
+  type CodecForFormat,
+  CodecRegistry,
+  type LiveEnvironment,
+  ProblematicValue,
+  type WireFormat,
+} from "@/codec-common/index.ts";
+import type { FabricValue } from "@/index.ts";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 /**

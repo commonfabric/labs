@@ -15,9 +15,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import {
+  CODEC_TYPE_TAGS,
+  NULL_LIVE_ENVIRONMENT,
+} from "@/codec-common/index.ts";
 import { SpecialNumberCodec } from "@/codec-json/SpecialNumberCodec.ts";
-import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
 
 describe("SpecialNumberCodec", () => {
   const codec = new SpecialNumberCodec();

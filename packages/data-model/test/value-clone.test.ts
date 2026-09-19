@@ -22,14 +22,15 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { FabricError } from "@/fabric-instances/index.ts";
+import { FabricHash } from "@/fabric-primitives/index.ts";
 import {
   CloneForMutationError,
   cloneWithoutValueAtPath,
   cloneWithValueAtPath,
+  deepFreeze,
+  isDeepFrozen,
 } from "@/index.ts";
-import { deepFreeze, isDeepFrozen } from "@/deep-freeze.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
 
 // deno-lint-ignore no-explicit-any
 const obj = (v: unknown) => v as any;

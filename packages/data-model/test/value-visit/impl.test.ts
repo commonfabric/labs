@@ -3,7 +3,7 @@ import { expect } from "@std/expect";
 
 import type { Primitive } from "@commonfabric/utils/types";
 
-import { type FabricPrimitive } from "@/interface.ts";
+import type { FabricPrimitive } from "@/index.ts";
 import {
   type BaselineVisitResult,
   BaseValueVisitor,

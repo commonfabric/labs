@@ -21,16 +21,24 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { type FabricValue, hashStringOf, valueEqual } from "@/index.ts";
-import { deepFreeze } from "@/deep-freeze.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
-import { FabricUnavailable } from "@/fabric-primitives/FabricUnavailable.ts";
-import { FabricEpochDay } from "@/fabric-primitives/FabricEpochDay.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { UnknownValue } from "@/codec-common/UnknownValue.ts";
-import { codecOf } from "@/codec-common/codecOf.ts";
-import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
+import {
+  codecOf,
+  NULL_LIVE_ENVIRONMENT,
+  UnknownValue,
+} from "@/codec-common/index.ts";
+import { FabricError } from "@/fabric-instances/index.ts";
+import {
+  FabricBytes,
+  FabricEpochDay,
+  FabricRegExp,
+  FabricUnavailable,
+} from "@/fabric-primitives/index.ts";
+import {
+  deepFreeze,
+  type FabricValue,
+  hashStringOf,
+  valueEqual,
+} from "@/index.ts";
 
 describe("valueEqual()", () => {
   describe("shared and cyclic graphs", () => {

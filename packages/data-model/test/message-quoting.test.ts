@@ -16,9 +16,8 @@ import { backtickQuote } from "@commonfabric/utils/markdown";
 
 import { NullLiveEnvironment } from "@/codec-common/index.ts";
 import { newDefaultJsonCodecEngine } from "@/codecs.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
-import { cloneIfNecessary } from "@/value-clone.ts";
-import { hashOf } from "@/value-hash.ts";
+import { FabricHash } from "@/fabric-primitives/index.ts";
+import { cloneIfNecessary, hashOf } from "@/index.ts";
 
 /**
  * Builds a class instance whose `constructor.name` holds the given text.

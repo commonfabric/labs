@@ -24,23 +24,21 @@ import { expect } from "@std/expect";
 
 import type { Constructor } from "@commonfabric/utils/types";
 
-import { toCompactDebugString } from "@/value-debug";
-import { CodecRegistry, SELF_REP } from "@/codec-common/CodecRegistry.ts";
+import { SELF_REP } from "@/codec-common/CodecRegistry.ts";
 import {
+  BaseNonterminalCodec,
+  BaseTerminalCodec,
   CODEC,
+  CodecRegistry,
+  type FabricCodec,
+  type LiveEnvironment,
   type NonterminalCodec,
   type TerminalCodec,
-} from "@/codec-interface/interface.ts";
-import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
-import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
-import type {
-  FabricCodec,
-  LiveEnvironment,
-  WireFormat,
-} from "@/codec-interface/interface.ts";
-import { UnknownValue } from "@/codec-common/UnknownValue.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
-import { type FabricValue } from "@/interface.ts";
+  UnknownValue,
+  type WireFormat,
+} from "@/codec-common/index.ts";
+import { FabricRegExp } from "@/fabric-primitives/index.ts";
+import { type FabricValue, toCompactDebugString } from "@/index.ts";
 
 /**
  * Test codec that matches a single pre-set value (by `===`) and records

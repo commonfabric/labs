@@ -1,7 +1,23 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { BaseFabricSpecialObject } from "@/fabric-bases/index.ts";
 import {
+  FabricError,
+  FabricLink,
+  FabricMap,
+  FabricSet,
+} from "@/fabric-instances/index.ts";
+import {
+  FabricBytes,
+  FabricEpochDay,
+  FabricEpochNsec,
+  FabricHash,
+  FabricRegExp,
+  FabricUnavailable,
+} from "@/fabric-primitives/index.ts";
+import {
+  type FabricValue,
   isFabricArray,
   isFabricContainerValue,
   isFabricObjectOrArray,
@@ -12,20 +28,8 @@ import {
   isKeyableObjectOrArray,
   isWalkableObjectNotArray,
   isWalkableObjectOrArray,
-} from "@/types";
-import type { FabricValue } from "@/interface.ts";
-import { BaseFabricSpecialObject } from "@/fabric-bases/BaseFabricSpecialObject.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricLink } from "@/fabric-instances/FabricLink.ts";
-import { FabricMap } from "@/fabric-instances/FabricMap.ts";
-import { FabricSet } from "@/fabric-instances/FabricSet.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
-import { FabricEpochDay } from "@/fabric-primitives/FabricEpochDay.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
-import { FabricUnavailable } from "@/fabric-primitives/FabricUnavailable.ts";
-import { toCompactDebugString } from "@/value-debug";
+  toCompactDebugString,
+} from "@/index.ts";
 
 describe("narrowing", () => {
   describe("isFabricSpecialObject()", () => {

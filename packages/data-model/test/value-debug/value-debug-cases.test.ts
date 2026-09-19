@@ -43,7 +43,8 @@ import { expect } from "@std/expect";
 
 import { isPlainObject } from "@commonfabric/utils/types";
 
-import { REALM_CODEC } from "@/codec-interface/interface.ts";
+import { REALM_CODEC } from "@/codec-common/index.ts";
+import { BaseFabricSpecialObject } from "@/fabric-bases/index.ts";
 import * as fabricInstances from "@/fabric-instances/index.ts";
 import * as fabricPrimitives from "@/fabric-primitives/index.ts";
 import {
@@ -51,13 +52,10 @@ import {
   type DebugValueOptions,
   FabricInstance,
   FabricPrimitive,
-} from "@/interface.ts";
-import { BaseFabricSpecialObject } from "@/fabric-bases/BaseFabricSpecialObject.ts";
-import {
   toCompactDebugString,
   toIndentedDebugString,
   toStructuredDebugValue,
-} from "@/value-debug";
+} from "@/index.ts";
 
 /** Directory holding the case files. */
 const CASES_DIR = new URL("./value-debug-cases/", import.meta.url);

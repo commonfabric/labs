@@ -5,12 +5,12 @@ import type {
   LiveEnvironment,
   NonterminalCodec,
   TerminalCodec,
-} from "@/codec-interface/interface.ts";
+} from "@/codec-common/index.ts";
 import type {
   FabricInstancePlus,
   FabricValue,
   FabricValuePlus,
-} from "@/interface.ts";
+} from "@/index.ts";
 
 // The assertions in this file are made when it is type-checked, which the
 // package's `test` task does before it runs anything, not when it runs. Each

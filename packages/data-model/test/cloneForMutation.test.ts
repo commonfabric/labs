@@ -16,10 +16,14 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { cloneForMutation, CloneForMutationError } from "@/index.ts";
-import { deepFreeze, isDeepFrozen } from "@/deep-freeze.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
+import { FabricError } from "@/fabric-instances/index.ts";
+import { FabricEpochNsec } from "@/fabric-primitives/index.ts";
+import {
+  cloneForMutation,
+  CloneForMutationError,
+  deepFreeze,
+  isDeepFrozen,
+} from "@/index.ts";
 
 describe("cloneForMutation()", () => {
   describe("empty path", () => {

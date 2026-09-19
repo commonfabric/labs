@@ -13,18 +13,20 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { FabricInstance, type FabricValue } from "@/interface.ts";
 import {
-  DEEP_FREEZE,
-  IS_DEEP_FROZEN,
-} from "@/fabric-bases/BaseFabricInstance.ts";
-import { CODEC } from "@/codec-interface/interface.ts";
-import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
-import { FabricMap } from "@/fabric-instances/FabricMap.ts";
-import { FabricNativeWrapper } from "@/fabric-instances/FabricNativeWrapper.ts";
+  CODEC,
+  CODEC_TYPE_TAGS,
+  NULL_LIVE_ENVIRONMENT,
+} from "@/codec-common/index.ts";
+import { DEEP_FREEZE, IS_DEEP_FROZEN } from "@/fabric-bases/index.ts";
+import { FabricMap, FabricNativeWrapper } from "@/fabric-instances/index.ts";
 import { FrozenMap } from "@/frozen-builtins.ts";
-import { deepFreeze, isValidDeepFrozenFabricValue } from "@/deep-freeze.ts";
+import {
+  deepFreeze,
+  FabricInstance,
+  type FabricValue,
+  isValidDeepFrozenFabricValue,
+} from "@/index.ts";
 import { subFreeze, subIsDeepFrozen } from "./fixtures.ts";
 
 describe("FabricMap", () => {

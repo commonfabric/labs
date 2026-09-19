@@ -19,8 +19,6 @@
 import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
-import { FabricLink } from "@/fabric-instances/FabricLink.ts";
 import {
   type EntityRef,
   entityRefFrom,
@@ -39,6 +37,8 @@ import {
   setModernCellRepConfig,
   type WireLinkRefPayload,
 } from "@/cell-rep.ts";
+import { FabricLink } from "@/fabric-instances/index.ts";
+import { FabricHash } from "@/fabric-primitives/index.ts";
 
 /** A fixed 32-byte hash for deterministic tests. */
 const SAMPLE_HASH = new Uint8Array(32);

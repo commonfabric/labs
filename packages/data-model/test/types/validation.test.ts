@@ -18,21 +18,20 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import type { FabricValue } from "@/interface.ts";
-import { shallowFabricFromConvertibleJsValue } from "@/convertible-js.ts";
+import { FabricError } from "@/fabric-instances/index.ts";
+import { FabricBytes, FabricEpochNsec } from "@/fabric-primitives/index.ts";
 import {
   assertValidFabricValueLayer,
+  type FabricValue,
   isFabricPlainObject,
   isValidFabricConvertibleJsObject,
   isValidFabricPlainObject,
   isValidFabricValue,
   isValidFabricValueLayer,
+  shallowFabricFromConvertibleJsValue,
   tagOfConvertibleJsValueElseNull,
   VALUE_TAGS,
-} from "@/types";
+} from "@/index.ts";
 import { LAYER_CORPUS, PlainClass } from "../fabric-value-corpus.ts";
 
 describe("validation", () => {

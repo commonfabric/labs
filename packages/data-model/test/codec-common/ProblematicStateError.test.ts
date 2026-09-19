@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { ProblematicStateError } from "@/codec-common/ProblematicStateError.ts";
+import { ProblematicStateError } from "@/codec-common/index.ts";
 
 describe("ProblematicStateError", () => {
   it("is an `Error`", () => {

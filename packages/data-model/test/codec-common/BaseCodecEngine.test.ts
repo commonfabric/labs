@@ -7,18 +7,17 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import type { FabricValue } from "@/interface.ts";
 import {
+  BaseNonterminalCodec,
+  BaseTerminalCodec,
   type LiveEnvironment,
   NULL_LIVE_ENVIRONMENT,
-} from "@/codec-interface/index.ts";
-import { isDeepFrozen } from "@/deep-freeze.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
-import { ProblematicStateError } from "@/codec-common/ProblematicStateError.ts";
-import { UnknownValue } from "@/codec-common/UnknownValue.ts";
-import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
-import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
+  ProblematicStateError,
+  ProblematicValue,
+  UnknownValue,
+} from "@/codec-common/index.ts";
+import { FabricBytes } from "@/fabric-primitives/index.ts";
+import { type FabricValue, isDeepFrozen } from "@/index.ts";
 import {
   Marker,
   NESTED,
