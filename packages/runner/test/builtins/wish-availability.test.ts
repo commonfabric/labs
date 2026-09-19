@@ -42,6 +42,106 @@ function makeRuntime(storageManager: Runtime["storageManager"]): Runtime {
 }
 
 describe("wish-availability", () => {
+  for (
+    const scenario of [
+      {
+        name: "a shared search has only absent candidates",
+        query: "#notebook",
+        scope: ["."],
+        headless: true,
+        error: "No mentionables found",
+      },
+      {
+        name: "a direct search has only absent candidates",
+        query: "#notebook",
+        scope: ["."],
+        headless: false,
+        error: "No mentionables found",
+      },
+      {
+        name: "a profile has no discovery collection",
+        query: "#notebook",
+        scope: ["profile"],
+        headless: false,
+        error: "No profile found matching",
+      },
+      {
+        name: "the root target has no supported scope",
+        query: "/",
+        scope: ["profile"],
+        headless: false,
+        error: 'Wish target "/" is not recognized',
+      },
+    ]
+  ) {
+    it(`publishes a terminal error when ${scenario.name}`, async () => {
+      const manager = EmulatedStorageManager.emulate({ as: user });
+      const runtime = makeRuntime(manager);
+      const [cancel, addCancel] = useCancelGroup();
+      try {
+        const inputs = runtime.getCell(user.did(), "inputs");
+        const owner = runtime.getCell(user.did(), "owner");
+        const missing = runtime.getCell(candidateSpace.did(), "absent");
+        const profile = runtime.getCell(fieldSpace.did(), "profile");
+        const profileTx = runtime.edit();
+        profile.withTx(profileTx).set({ initialNameApplied: "Tester" });
+        runtime.prepareTxForCommit(profileTx);
+        expect((await profileTx.commit()).error).toBeUndefined();
+        const tx = runtime.edit();
+        runtime.getHomeSpaceCell(tx).asSchema(undefined).set({
+          defaultPattern: {
+            profiles: [profile],
+            defaultProfile: profile,
+            backlinksIndex: { mentionable: [missing] },
+          },
+        });
+        inputs.withTx(tx).set({
+          query: scenario.query,
+          scope: scenario.scope,
+          headless: scenario.headless,
+        });
+        owner.withTx(tx).set({});
+        runtime.prepareTxForCommit(tx);
+        expect((await tx.commit()).error).toBeUndefined();
+        await manager.synced();
+        let output: Cell<unknown> | undefined;
+        const completed = defer<void>();
+        const resolver = wish(
+          inputs as Cell<[unknown, unknown]>,
+          (_tx, value) => {
+            output = runtime.getCellFromLink(value as Cell<unknown>);
+            addCancel(
+              output.withTx(undefined).key("error").asSchema<string>({
+                type: "string",
+              }).sink((error) => {
+                if (error !== undefined) completed.resolve();
+              }),
+            );
+          },
+          addCancel,
+          [owner],
+          owner,
+          runtime,
+        );
+        resolver.onActionRegistered?.(resolver.action);
+        addCancel(
+          runtime.scheduler.subscribe(resolver.action, { isEffect: true }),
+        );
+        await completed.promise;
+        await runtime.scheduler.idleWithPendingCommits();
+        expect(output).toBeDefined();
+        const state = output!.withTx(undefined);
+        expect(state.key("error").get()).toContain(scenario.error);
+        expect(state.key("candidates").get()).toEqual([]);
+        expect(state.key("result").get()).toBeUndefined();
+      } finally {
+        cancel();
+        await manager.synced();
+        await runtime.dispose();
+      }
+    });
+  }
+
   it("resolves while an unrelated document is still loading", async () => {
     const manager = EmulatedStorageManager.emulate({ as: user });
     const runtime = makeRuntime(manager);

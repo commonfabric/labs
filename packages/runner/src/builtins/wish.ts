@@ -1416,6 +1416,8 @@ function resolveSpaceTarget(
  *    #now)
  * 2. Well-known home space targets (#favorites, #journal, #learned, #profile)
  * 3. Hashtag search (arbitrary #tags in favorites/mentionables)
+ *
+ * Returns at least one resolution or throws a pending-load or resolution error.
  */
 function resolveBase(
   parsed: ParsedWishTarget,
@@ -1516,14 +1518,6 @@ function createSharedHashtagResolver(
     const queryKey = sanitizeQueryKey(query);
     try {
       const baseResolutions = resolveBase(sharedParsed, sharedContext);
-      if (baseResolutions.length === 0) {
-        stateCell.set({
-          result: undefined,
-          candidates: [],
-          [UI]: undefined,
-        });
-        return;
-      }
 
       const resultCells = measureWishPhase(
         "shared-resolve-paths",
@@ -3028,29 +3022,6 @@ export function wish(
             );
             // Persist #now cell across re-runs to avoid non-idempotent loops
             if (ctx.nowCell) nowCell = ctx.nowCell;
-
-            if (baseResolutions.length === 0) {
-              // No matches yet — data may still be loading. Send a pending
-              // result; the reactive system will re-trigger when cells update
-              // (dependencies were registered by the cell.get() calls in the
-              // search functions).
-              measureWishPhase(
-                "send-pending",
-                queryKey,
-                () =>
-                  sendWishState(
-                    tx,
-                    {
-                      result: undefined,
-                      candidates: [],
-                      [UI]: undefined,
-                    } satisfies WishState<any>,
-                    outputScope,
-                    schema,
-                  ),
-              );
-              return;
-            }
 
             const resultCells = measureWishPhase(
               "resolve-paths",
