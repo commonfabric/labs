@@ -1106,18 +1106,31 @@ baseline, the run reports it in four places:
   and the next run that gates every changed group rewrites it into the
   collapsed summary.
 
-Each names the groups, and for each group one of three reasons:
+Each names the groups, and for each group one of four reasons:
 
 - No successful `main` run within reach measured the base-branch commit or an
   ancestor of it.
 - The base branch changed the group between the nearest measured ancestor and
   the base-branch commit, so the two totals count different code.
 - The base-branch commit could not be read from the checkout.
+- GitHub's API rate limit stopped the run reading the baseline data at all, so
+  no group was compared.
 
-A later run of the pull request gates those groups, once a `main` run has
-measured the commit it merges. Re-running the Coverage Check job is enough when
-that `main` run has finished since; updating the branch gives the next run a
-newer commit to merge.
+For the first three, a later run of the pull request gates those groups, once a
+`main` run has measured the commit it merges. Re-running the Coverage Check job
+is enough when that `main` run has finished since; updating the branch gives the
+next run a newer commit to merge.
+
+A run a rate limit stopped passes, and re-running the Coverage Check job once
+the limit has reset is the whole remedy. It passes rather than fails because the
+limit bounds what this repository may ask of GitHub in an hour: it is a property
+of the moment rather than of the pull request, and a re-run started straight
+away meets it again, so failing would hold the pull request on a condition its
+author has no way to clear. That is the one thing separating it from a run
+listing that is not current, whose remedy is a re-run that costs about a minute.
+What makes the pass safe to keep is that it is no longer a quiet one — the run
+reports through the same four places above, so a pull request that was never
+gated does not read as one that was.
 
 The table header in the job's log is the quick check. `excl` beside a group the
 pull request changed means that group was not compared, and a header reading

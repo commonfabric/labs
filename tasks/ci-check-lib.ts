@@ -1508,7 +1508,9 @@ export type CoverageNotGatedReason =
   /** No `main` run within reach measured that commit or an ancestor of it. */
   | "no-baseline"
   /** The base branch changed the group since the nearest measured ancestor. */
-  | "base-branch-moved";
+  | "base-branch-moved"
+  /** GitHub's API rate limit stopped the run reading any baseline data. */
+  | "rate-limited";
 
 /** A source group the pull request changed and the gate did not hold. */
 export interface CoverageNotGatedGroup {
@@ -1546,6 +1548,15 @@ export function coverageListingNotCurrent(
   return groups.some((group) => group.reason === "listing-not-current");
 }
 
+/**
+ * Returns whether `groups` went ungated because a GitHub API rate limit stopped
+ * the run reading the data a comparison needs. That reason is the one whose
+ * remedy waits on GitHub rather than on this repository.
+ */
+function coverageRateLimited(groups: CoverageNotGatedGroup[]): boolean {
+  return groups.some((group) => group.reason === "rate-limited");
+}
+
 /** The headline every surface reporting an ungated run opens with. */
 export const COVERAGE_NOT_GATED_HEADLINE =
   "Test coverage was NOT gated on this run";
@@ -1579,7 +1590,27 @@ function coverageNotGatedReasonText(
       return "`main` changed this group between the nearest measured " +
         `ancestor${ancestor} and ${baseCommitPhrase(baseSha)}.`;
     }
+    case "rate-limited":
+      return "GitHub's API rate limit stopped this run reading the baseline " +
+        "data, so nothing was compared.";
   }
+}
+
+/** What the reader is asked to do about a run that gated nothing. */
+function coverageNotGatedRemedy(groups: CoverageNotGatedGroup[]): string {
+  if (coverageListingNotCurrent(groups)) {
+    return "Re-run the **Coverage Check** job to ask GitHub for the listing " +
+      "again.";
+  }
+  if (coverageRateLimited(groups)) {
+    return "Re-run the **Coverage Check** job once GitHub's API rate limit " +
+      "has reset. The limit is a property of the moment rather than of this " +
+      "pull request, so a re-run started straight away meets it again.";
+  }
+  return "A later run of this pull request gates these groups, once a `main` " +
+    "run has measured the commit it merges. Re-running the **Coverage " +
+    "Check** job is enough when that `main` run has finished since; " +
+    "updating the branch gives the next run a newer commit to merge.";
 }
 
 /**
@@ -1610,14 +1641,7 @@ export function coverageNotGatedNotice(input: CoverageNotGatedInput): string[] {
     );
   }
   out.push("");
-  out.push(
-    listingNotCurrent
-      ? "Re-run the **Coverage Check** job to ask GitHub for the listing again."
-      : "A later run of this pull request gates these groups, once a `main` " +
-        "run has measured the commit it merges. Re-running the **Coverage " +
-        "Check** job is enough when that `main` run has finished since; " +
-        "updating the branch gives the next run a newer commit to merge.",
-  );
+  out.push(coverageNotGatedRemedy(input.groups));
   if (input.measurement?.runUrl) {
     out.push("");
     out.push(`Measured by ${input.measurement.runUrl}.`);

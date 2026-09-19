@@ -841,6 +841,29 @@ Deno.test("buildCoverageNotGatedComment says a listing that is not current faile
   assertFalse(comment.includes("Measured by"));
 });
 
+Deno.test("buildCoverageNotGatedComment sends a rate-limited run back to GitHub", () => {
+  const comment = buildCoverageNotGatedComment({
+    groups: [{ group: "tasks", reason: "rate-limited" }],
+  });
+
+  // The job passed, so the comment reads as the ungated-but-passing one, and
+  // the remedy waits on the limit rather than on a `main` run.
+  assertStringIncludes(
+    comment,
+    "The **Coverage Check** job did not hold `tasks` against a baseline",
+  );
+  assertStringIncludes(
+    comment,
+    "| `tasks` | GitHub's API rate limit stopped this run reading the " +
+      "baseline data, so nothing was compared. |",
+  );
+  assertStringIncludes(
+    comment,
+    "Re-run the **Coverage Check** job once GitHub's API rate limit has reset.",
+  );
+  assertFalse(comment.includes("A later run of this pull request gates"));
+});
+
 Deno.test("coverageNotGatedNotice names no commit for a checkout that had none", () => {
   const notice = coverageNotGatedNotice({
     groups: [
