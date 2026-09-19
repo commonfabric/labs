@@ -3093,6 +3093,182 @@ describe("piece schema compatibility", () => {
     }
   });
 
+  describe("nested anyOf subsets", () => {
+    const flat: JSONSchema = {
+      anyOf: [{ enum: [false, true, "auto"] }, { type: "null" }],
+    };
+
+    for (const depth of [1, 2, 3]) {
+      it(`accepts a source union at nesting depth ${depth}`, () => {
+        let nested: JSONSchema = {
+          anyOf: [{ type: "boolean" }, { type: "null" }],
+        };
+        for (let level = 0; level < depth; level++) {
+          nested = { anyOf: [nested], description: "A boolean or null" };
+        }
+        expect(() => assertSchemaSubset(nested, flat)).not.toThrow();
+        expect(() => assertSchemaSubset(flat, nested)).toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(nested, flat),
+            pattern(flat, nested),
+          )
+        ).not.toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(flat, true),
+            pattern(nested, true),
+          )
+        ).toThrow(/argument:/);
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(true, nested),
+            pattern(true, flat),
+          )
+        ).toThrow(/result:/);
+      });
+    }
+
+    it("retains outer constraints when matching nested alternatives separately", () => {
+      const nested: JSONSchema = {
+        maxLength: 3,
+        anyOf: [{ anyOf: [{ type: "string" }, { type: "null" }] }],
+      };
+      const flat: JSONSchema = {
+        maxLength: 3,
+        anyOf: [{ type: "string" }, { type: "null" }],
+      };
+      expect(() => assertSchemaSubset(nested, flat)).not.toThrow();
+      expect(() => assertSchemaSubset(nested, { ...flat, maxLength: 2 }))
+        .toThrow();
+    });
+
+    it("resolves nested source references in their original root", () => {
+      const nested: JSONSchema = {
+        $defs: { value: { type: "boolean" } },
+        anyOf: [{ anyOf: [{ $ref: "#/$defs/value" }, { type: "null" }] }],
+      };
+      const flat: JSONSchema = {
+        $defs: { value: { enum: [false, true, "auto"] } },
+        anyOf: [{ $ref: "#/$defs/value" }, { type: "null" }],
+      };
+      expect(() => assertSchemaSubset(nested, flat)).not.toThrow();
+      expect(() =>
+        assertSchemaSubset(nested, {
+          ...flat,
+          $defs: { value: { type: "string" } },
+        })
+      ).toThrow();
+    });
+
+    it("refuses a nested source alternative that the flat target excludes", () => {
+      for (const branch of [{ type: "number" }, true] as const) {
+        const nested: JSONSchema = {
+          anyOf: [{ anyOf: [{ type: "boolean" }, branch] }],
+        };
+        expect(() => assertSchemaSubset(nested, flat)).toThrow();
+      }
+    });
+
+    it("preserves a whole-union default while widening nested alternatives", () => {
+      const nested: JSONSchema = {
+        default: false,
+        anyOf: [{ anyOf: [{ type: "boolean" }, { type: "null" }] }],
+      };
+      const defaulted: JSONSchema = { ...flat, default: false };
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(nested, defaulted),
+          pattern(defaulted, nested),
+        )
+      ).not.toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(nested, true),
+          pattern({ ...defaulted, default: true }, true),
+        )
+      ).toThrow(/argument: defaults changed/);
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(true, defaulted),
+          pattern(true, { ...nested, default: true }),
+        )
+      ).toThrow(/result: defaults changed/);
+    });
+
+    for (const referenced of [false, true]) {
+      it(`keeps ${referenced ? "referenced" : "inline"} child defaults at the nested union boundary`, () => {
+        for (
+          const nullBranch of [{ type: "null" }, {
+            type: "null",
+            default: null,
+          }] as const
+        ) {
+          const nested: JSONSchema = {
+            $defs: { value: { type: "boolean", default: false } },
+            anyOf: [{
+              anyOf: [
+                referenced
+                  ? { $ref: "#/$defs/value" }
+                  : { type: "boolean", default: false },
+                nullBranch,
+              ],
+            }],
+          };
+          const defaulted: JSONSchema = {
+            anyOf: [
+              { enum: [false, true, "auto"], default: false },
+              nullBranch,
+            ],
+          };
+          expect(() => assertSchemaSubset(nested, defaulted)).not.toThrow();
+          expect(() =>
+            assertPatternSchemasBackwardCompatible(
+              pattern(nested, true),
+              pattern(defaulted, true),
+            )
+          ).toThrow(/argument:/);
+          expect(() =>
+            assertPatternSchemasBackwardCompatible(
+              pattern(true, defaulted),
+              pattern(true, nested),
+            )
+          ).toThrow(/result:/);
+        }
+      });
+    }
+
+    it("keeps constraints and semantic metadata on a nested union", () => {
+      for (
+        const metadata of [
+          { asCell: ["cell"] },
+          { readOnly: true },
+          { not: { const: false } },
+          { default: false },
+        ] satisfies Exclude<JSONSchema, boolean>[]
+      ) {
+        const nested: JSONSchema = {
+          anyOf: [{
+            ...metadata,
+            anyOf: [{ type: "boolean" }, { type: "null" }],
+          }],
+        };
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(nested, true),
+            pattern(flat, true),
+          )
+        ).toThrow(/argument:/);
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(true, flat),
+            pattern(true, nested),
+          )
+        ).toThrow(/result:/);
+      }
+    });
+  });
+
   describe("finite literal subsets", () => {
     it("does not throw for listed values excluded by the source's declared type", () => {
       for (

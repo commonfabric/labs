@@ -710,6 +710,15 @@ not limit partitioning there. These rules permit adding an option to a nullable
 literal argument while still refusing to remove an admitted option or widen a
 result contract.
 
+When a source alternative contains a nested `anyOf` with only descriptive
+annotations beside it, its children may each satisfy a different target
+alternative. The other source constraints remain in every child proof. A
+wrapper carrying constraints, reference scope, defaults, or semantic metadata
+keeps its own comparison boundary. During evolution, splitting also requires
+each child to supply the wrapper's effective default in the original source
+scope. Whole-branch proofs take precedence, preserving compatible nested
+contracts whose boundaries matter.
+
 An incompatible pattern contract or retained link becomes an
 actionable warning. The UI requires explicit confirmation, and command-line
 tooling requires an explicit flag, before applying it. A materialized retained

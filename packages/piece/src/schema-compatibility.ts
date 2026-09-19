@@ -875,15 +875,14 @@ function schemaSubsetIssue(
       const sources = schemaAlternatives(source, "source", context);
       const targets = schemaAlternatives(target, "target", context);
       for (const sourceAlternative of sources) {
-        const accepted = targets.some((targetAlternative) =>
-          schemaConjunctionSubsetIssue(
+        if (
+          !sourceAlternativeAcceptedBy(
             sourceAlternative,
-            targetAlternative,
+            targets,
             path,
             context,
-          ) === undefined
-        );
-        if (!accepted) {
+          )
+        ) {
           return `${path}: a schema alternative accepted previously is not accepted by the candidate`;
         }
       }
@@ -1723,8 +1722,9 @@ function schemaMayProduceType(
  * {@link sourceEnumAlternatives}, including beside a `type` list or inside
  * `anyOf`. Branch partitions stay beside their base in the conjunction, so
  * their node-level keywords are compared at the branch boundary. Target enums
- * stay whole: a source alternative has to fit inside a single target
- * alternative, and one listing values of several types can fit the whole enum.
+ * stay whole so an alternative listing values of several types can fit the
+ * whole enum. Transparent nested source unions can split further through
+ * {@link sourceAlternativeAcceptedBy}.
  */
 function schemaAlternatives(
   schema: SchemaObject,
@@ -1846,6 +1846,59 @@ function withoutNodeLevelKeywords(schema: SchemaObject): SchemaObject {
     }
   }
   return fragment as SchemaObject;
+}
+
+/**
+ * Proves a source conjunction against the target alternatives. A transparent
+ * nested `anyOf` can send each child to a different target alternative while
+ * retaining the source's other conjuncts. Wrappers carrying constraints or
+ * semantic metadata stay at their own proof boundary. During evolution, each
+ * child must also preserve the wrapper's effective default in its owning root.
+ */
+function sourceAlternativeAcceptedBy(
+  source: readonly JSONSchema[],
+  targets: readonly (readonly JSONSchema[])[],
+  path: string,
+  context: CompatibilityContext,
+): boolean {
+  // Keep whole-branch proofs first, including comparisons of matching nested
+  // contracts whose defaults or metadata require the existing boundaries.
+  if (
+    targets.some((target) =>
+      schemaConjunctionSubsetIssue(source, target, path, context) === undefined
+    )
+  ) return true;
+
+  // Splitting only adds a proof when children can choose different targets.
+  // A single target is already checked recursively by the whole-branch proof;
+  // retrying it at each wrapper would repeat the same work exponentially.
+  if (targets.length < 2) return false;
+
+  return source.some((fragment, index) => {
+    if (
+      typeof fragment === "boolean" || fragment.anyOf === undefined ||
+      Object.keys(fragment).some((key) =>
+        key !== "anyOf" && !DESCRIPTIVE_ANNOTATION_KEYS.has(key)
+      )
+    ) return false;
+    if (
+      context.defaultComparison === "evolution" &&
+      fragment.anyOf.some((branch) =>
+        !schemaDefaultsResolveEqually(fragment, branch, {
+          sourceRoot: context.sourceRoot,
+          targetRoot: context.sourceRoot,
+        })
+      )
+    ) return false;
+    return fragment.anyOf.every((branch) =>
+      sourceAlternativeAcceptedBy(
+        [...source.slice(0, index), branch, ...source.slice(index + 1)],
+        targets,
+        path,
+        context,
+      )
+    );
+  });
 }
 
 /**
