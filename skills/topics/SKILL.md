@@ -63,10 +63,11 @@ reference edge and take no `agentName`.
   state. One invocation session per run, one invocation id per logical mutation,
   a read-back after every write, and no retry on the strength of a timeout,
   which is how one Topic becomes two.
-- A Topic's derived scalars — `lastActivityAt`, `commentCount`, `shortName` —
-  materialize only once the piece has RUN, and `addTopic` does not run it.
-  Finish a headless filing with `deno task cf piece step --cell "$TOPIC"`, or
-  the board reads those fields as their defaults and sorts the new Topic last.
+- A Topic's derived scalars — `lastActivityAt` and `commentCount` — materialize
+  only once the piece has RUN, and `addTopic` does not run it. Finish a headless
+  filing with `deno task cf piece step --cell "$TOPIC"`, or the board reads them
+  as their defaults. Ordering is not at stake: the board falls back to
+  `createdAt` for a topic that has never run.
 - The body is the living document, replaced whole; comments are append-only,
   point-in-time progress; every relevant pull request is an `addLink` with
   `kind: "pr"`; relationships between Topics are references, never pasted fids.
