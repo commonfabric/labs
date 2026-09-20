@@ -972,7 +972,12 @@ const setupProjectionSourceMatchesValue = (
   if (projection === undefined) {
     return false;
   }
-  const targetValue = writeValueForTarget(tx, { ...target, path });
+  // The marker names the redirect this setup projects; the value the
+  // transaction leaves at the path is what says the projection is really
+  // there. A replayed setup re-stages the redirect the document already
+  // holds, which writes nothing, so reading only this transaction's writes
+  // would deny a projection it did establish.
+  const targetValue = effectiveValueForTarget(tx, { ...target, path });
   if (!isWriteRedirectLink(targetValue)) {
     return false;
   }
@@ -1007,9 +1012,12 @@ const setupProjectionSourceMatchesValue = (
 // This is safe because the marker is recorded ONLY by the runtime's result
 // projection — never by an arbitrary `cell.set` — and only when the projection
 // STRUCTURE is established (instantiation), not on value edits (which leave the
-// projection unchanged and so record no marker). Direct untrusted writes, no-op
-// re-writes, and later field edits therefore remain fully enforced; the slot the
-// pattern result is placed into is independently gated by its own
+// projection unchanged and so record no marker). What the exemption follows is
+// the marker, not the presence of a write: a setup replayed over a document
+// that already holds the projected redirect writes nothing and is still the
+// trusted creation step, while a write bearing no marker — a direct untrusted
+// write, a no-op re-write, a later field edit — remains fully enforced. The
+// slot the pattern result is placed into is independently gated by its own
 // `writeAuthorizedBy`, and the owner binding by `currentPrincipalIntegrityReason`.
 // `writeAuthorizedBy` gates *modification* of an existing owner-protected
 // value (§8.15.10); the runtime materializing a runtime-constructed cell's
@@ -3425,6 +3433,43 @@ const previousWriteValueForTarget = (
   },
 ): FabricValue => writeDetailValueForTarget(tx, target, "previousValue");
 
+/**
+ * The value this transaction leaves at `target`: its own write where it made
+ * one, and what it reads there otherwise.
+ *
+ * A staged write carrying the value the document already holds records no
+ * write detail, so the write log alone answers `undefined` at a path the
+ * transaction did touch — the reactivity log's attempted writes carry that
+ * path, but not a value to go with it. A gate asking what a path ends the
+ * transaction holding reads past that gap; one asking whether the transaction
+ * wrote at all reads the write log directly.
+ *
+ * The fallback reads THROUGH the transaction, which is what lets a gate rest
+ * a decision on the answer: a write that changed the path, removed it, or put
+ * something else there is the value that comes back, so the fallback reaches
+ * only a path the transaction leaves as it found it. It is a runtime-internal
+ * verifier read besides, so it stays out of the commit's conflict set and out
+ * of reactivity (spec §18.6.2, §8.9.4). An absent path returns `undefined`,
+ * as does one that descends through a value with no keys; the read decides
+ * both. Any other read failure propagates, so a gate never treats a path it
+ * could not read as one holding nothing.
+ */
+const effectiveValueForTarget = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+    path: readonly string[];
+  },
+): FabricValue => {
+  const written = writeValueForTarget(tx, target);
+  if (written !== undefined) {
+    return written;
+  }
+  return tx.readValueOrThrow(target, { meta: INTERNAL_VERIFIER_META });
+};
+
 const writeInstallsInitialSchemaDefault = (
   tx: IExtendedStorageTransaction,
   target: {
@@ -3832,16 +3877,7 @@ const ifcEntryAppliesToAttemptedWrite = (
       return false;
     }
     const pathTarget = { ...target, path };
-    const written = writeValueForTarget(tx, pathTarget);
-    const value = written !== undefined ? written : (() => {
-      try {
-        return tx.readValueOrThrow(pathTarget, {
-          meta: INTERNAL_VERIFIER_META,
-        });
-      } catch {
-        return undefined;
-      }
-    })();
+    const value = effectiveValueForTarget(tx, pathTarget);
     if (path.length === 0) {
       return value === undefined ||
         wildcardPolicyMatchesValue(tx, target, schema, value, root);
@@ -3872,7 +3908,7 @@ const ifcEntryAppliesToAttemptedWrite = (
         tx,
         target,
         schema,
-        writeValueForTarget(tx, { ...target, path: writePath }),
+        effectiveValueForTarget(tx, { ...target, path: writePath }),
         root,
       )
     );

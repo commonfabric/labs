@@ -36,6 +36,9 @@ import {
   type ModuleEntry,
   type ScanExtent,
   scanLimit,
+  spaceDocumentReader,
+  storedSchemaOf,
+  streamDeclarationOf,
   visibleEntityRows,
 } from "./model.ts";
 
@@ -282,13 +285,13 @@ function declaredSchemaFor(
     };
   }
   // 2. fallback: owner's result-schema property ($ref into $defs).
-  // NOTE: this is a deliberately NARROW resolver — a single top-level
-  // `#/$defs/<name>` lookup for display only. It does NOT decode JSON-pointer
-  // escapes (`~0`/`~1`), follow nested `$ref`s, or re-attach `$defs` to the
-  // resolved subschema, the way the canonical `ContextualFlowControl`
-  // (`@commonfabric/runner/cfc` `resolveSchemaRef`) does. Adopting the runner
-  // here would pull a heavy live-runtime dep into the offline tool; until that's
-  // worth it, a nested/escaped ref simply shows its raw `{ $ref }`.
+  // A deliberately NARROW lookup, for display only: a single top-level
+  // `#/$defs/<name>`, with no pointer-escape decoding, no nested `$ref`, and
+  // no `$defs` re-attached to what it finds, so a nested or escaped ref shows
+  // its raw `{ $ref }`. Nothing is classified through here: a stream is told
+  // from its owner's manifest by the reading in
+  // `@commonfabric/runner/stream-declaration`, which the runtime reads through
+  // as well and which carries none of the live runtime.
   const osch = ownerDoc?.schema;
   if (isObjectNotArray(osch) && isObjectNotArray(osch.properties)) {
     const prop = osch.properties[key];
@@ -356,7 +359,7 @@ function detailFromDoc(
   ctx: DetailContext,
   versions: VersionRow[],
 ): EntityDetail {
-  const c = classifyDocument(doc);
+  const c = classifyDocument(doc, { id, readDocument: ctx.readDocument });
   const value = doc.value;
   const spec = importSpecifier(value);
   const named = ctx.nameOf.get(id);
@@ -446,15 +449,40 @@ function detailFromDoc(
   let code: string | undefined;
   if (isModuleValue(value)) code = value.code;
 
-  // schema / ifc / cfc
-  let schema = doc.schema !== undefined ? annotate(doc.schema) : undefined;
-  let schemaKeys = isObjectNotArray(doc.schema)
-    ? Object.keys(doc.schema)
+  // schema / ifc / cfc. A `schema` meta is the schema itself or a reference
+  // to the schema document holding it; the detail shows the schema either
+  // way and says which.
+  const own = storedSchemaOf(doc, ctx.readDocument);
+  let schema = own === undefined ? undefined : annotate(own.schema);
+  let schemaKeys = own !== undefined && isObjectNotArray(own.schema)
+    ? Object.keys(own.schema)
     : undefined;
-  let schemaSource: string | undefined;
-  let streamPayload: boolean | undefined;
-  // A stream / named owned cell has no own schema — resolve the DECLARED one
-  // from the owner piece that names it.
+  let schemaSource: string | undefined = own?.via === "document"
+    ? `schema document · ${own.ref}`
+    : undefined;
+  let streamPayload: boolean | undefined = own !== undefined &&
+      c.kind === "stream"
+    ? true
+    : undefined;
+  // A stream carries no schema of its own: the one shown is the DECLARED one,
+  // read from the manifest link its owner keeps for it, and the source names
+  // that manifest and, where the link held a reference, the schema document
+  // it was followed into.
+  if (schema === undefined && c.kind === "stream") {
+    const decl = streamDeclarationOf(id, doc, ctx.readDocument);
+    if (decl) {
+      schema = annotate(decl.schema);
+      schemaKeys = isObjectNotArray(decl.schema)
+        ? Object.keys(decl.schema)
+        : undefined;
+      streamPayload = true;
+      schemaSource = `declared in owner manifest · ${decl.owner}` +
+        (decl.via === "document" ? ` · schema document · ${decl.ref}` : "");
+    }
+  }
+  // A named owned cell with no schema read so far — a value cell, or a stream
+  // no manifest declares — takes the DECLARED one from the owner piece that
+  // names it.
   if (schema === undefined && named) {
     const decl = declaredSchemaFor(ctx.docs.get(named.owner), named.key);
     if (decl) {
@@ -578,11 +606,18 @@ export function buildAllDetails(
     }
   }
 
+  // A document the pass did not scan — an owner past the cap, a label or
+  // schema document — is read at the pass's own scope, and a content-addressed
+  // one at space scope, where those live whatever scope the pass describes.
+  const readSpaceDocument = spaceDocumentReader(space, { branch, scope });
+  const readDocument = (id: string): EntityDocument | undefined =>
+    docs.get(id) ?? readSpaceDocument(id);
+
   // Pass 2: context names (key in a piece's value that points at a child) +
   // base labels (refined by import specifier / context name).
   const nameOf = new Map<string, { owner: string; key: string }>();
   for (const [id, doc] of docs) {
-    const c = classifyDocument(doc);
+    const c = classifyDocument(doc, { id, readDocument });
     // Only MODERN piece result values carry semantic names as keys (createProfile,
     // profiles, …). A legacy PROCESS cell's top-level keys are control-plane
     // ($TYPE/resultRef/internal/argument) — naming children by those is noise.
@@ -596,7 +631,7 @@ export function buildAllDetails(
     }
   }
   for (const [id, doc] of docs) {
-    const c = classifyDocument(doc);
+    const c = classifyDocument(doc, { id, readDocument });
     const spec = importSpecifier(doc.value);
     const named = nameOf.get(id);
     let label = c.label;
@@ -608,14 +643,6 @@ export function buildAllDetails(
     labelOf.set(id, { kind: c.kind, label });
   }
 
-  // Content-addressed documents live at space scope only, so a label
-  // document is read there whatever scope the pass describes.
-  const readDocument = (id: string): EntityDocument | undefined => {
-    const scanned = docs.get(id);
-    if (scanned !== undefined) return scanned;
-    const outcome = reconstructOutcome(space, { id, branch, scope: "space" });
-    return outcome.status === "present" ? outcome.document : undefined;
-  };
   const ctx: DetailContext = {
     ownDid,
     labelOf,

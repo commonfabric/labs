@@ -44,6 +44,11 @@ function isPatternSchemaSchema(schema: JSONSchema | undefined): boolean {
     "nodes" in properties;
 }
 
+/**
+ * The stored sentinel a stream position held before its schema declared it.
+ * A stream document written since holds no value; this recognizes the ones
+ * written before.
+ */
 export function isStreamValue(v: unknown): boolean {
   if (!isObjectNotArray(v)) return false;
   const obj = v as Record<string, unknown>;
@@ -87,6 +92,12 @@ export function classifyCallableEntry(
 ): CallableKind | null {
   if (isPatternToolSchema(schema)) {
     return "tool";
+  }
+
+  // A stream position holds no value: the schema its links carry is what
+  // says it is one, so a declared stream is a handler whatever stands at it.
+  if (ContextualFlowControl.declaresStream(schema)) {
+    return "handler";
   }
 
   if (isStreamValue(value) || isHandlerCell(value)) {

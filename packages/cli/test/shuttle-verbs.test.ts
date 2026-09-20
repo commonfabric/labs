@@ -147,6 +147,9 @@ const READS_NOTHING: VerbDeps = {
     getCellValue: () => {
       throw new Error("The cell was listed.");
     },
+    listCallableKeys: () => {
+      throw new Error("The cell's callables were listed.");
+    },
   },
   setCellValue: () => {
     throw new Error("A cell was written.");
@@ -230,6 +233,7 @@ function answering(over: VerbDeps = {}): VerbDeps {
       Promise.resolve({ piece: token, pathAfter: [...path] }),
     listing: {
       getCellValue: () => Promise.resolve({ title: "a" }),
+      listCallableKeys: () => Promise.resolve(new Set<string>()),
       listSpaceSlugs: () => Promise.resolve([]),
       listPieces: () => Promise.resolve([]),
     },
@@ -383,6 +387,7 @@ function walking(value: unknown): VerbDeps {
     listing: {
       ...READS_NOTHING.listing,
       getCellValue: (_config, path) => at(path),
+      listCallableKeys: () => Promise.resolve(new Set<string>()),
     },
   };
 }
@@ -391,9 +396,6 @@ function walking(value: unknown): VerbDeps {
 function cellKeys(keys: string[]): VerbDeps {
   return listedCell(Object.fromEntries(keys.map((key) => [key, "a value"])));
 }
-
-/** Helper for the cases below, which is the sentinel a stream reads as. */
-const STREAM = { $stream: true };
 
 /**
  * Helper for the cases below, which reports a terminal `rows` rows tall and
@@ -407,13 +409,20 @@ function screen(rows: number, deps: VerbDeps, columns = 200): VerbDeps {
   return { ...deps, rows: () => rows, columns: () => columns };
 }
 
-/** Helper for the cases below, which stands `value` in for a listed cell. */
-function listedCell(value: unknown): VerbDeps {
+/**
+ * Helper for the cases below, which stands `value` in for a listed cell and
+ * `callables` in for the keys whose stored links declare a stream.
+ */
+function listedCell(
+  value: unknown,
+  callables: readonly string[] = [],
+): VerbDeps {
   return {
     ...READS_NOTHING,
     listing: {
       ...READS_NOTHING.listing,
       getCellValue: () => Promise.resolve(value),
+      listCallableKeys: () => Promise.resolve(new Set(callables)),
     },
   };
 }
@@ -2252,7 +2261,11 @@ describe("verbs", () => {
       // than off a second read taken later.
 
       const shuttle = atPiece();
-      await runLine("ls", shuttle, listedCell({ "add-reply": STREAM }));
+      await runLine(
+        "ls",
+        shuttle,
+        listedCell({ "add-reply": {} }, ["add-reply"]),
+      );
       expect(shuttle.session.handles?.rows).toEqual([{
         name: "add-reply",
         kind: "callable",
@@ -5255,7 +5268,10 @@ describe("verbs", () => {
       const shuttle = atPiece();
       const nested = answering({
         getCellValue: () => Promise.resolve({ title: { deeper: 1 } }),
-        listing: { getCellValue: () => Promise.resolve({ title: {} }) },
+        listing: {
+          getCellValue: () => Promise.resolve({ title: {} }),
+          listCallableKeys: () => Promise.resolve(new Set<string>()),
+        },
       });
       await runLine("ls", shuttle, nested);
       await runLine("cd %1/deeper", shuttle, nested);
@@ -5293,7 +5309,10 @@ describe("verbs", () => {
       const shuttle = atPiece();
       const spaced = answering({
         getCellValue: () => Promise.resolve({ "first name": {} }),
-        listing: { getCellValue: () => Promise.resolve({ "first name": {} }) },
+        listing: {
+          getCellValue: () => Promise.resolve({ "first name": {} }),
+          listCallableKeys: () => Promise.resolve(new Set<string>()),
+        },
       });
       const listing = textOf(await runLine("ls", shuttle, spaced));
       expect(listing).toBe("%1 'first name'");
@@ -5767,6 +5786,7 @@ describe("verbs", () => {
               order.push("list");
               return Promise.resolve({ title: "a" });
             },
+            listCallableKeys: () => Promise.resolve(new Set<string>()),
           },
         }),
       );
@@ -5833,6 +5853,7 @@ describe("verbs", () => {
       "listSpaceSlugs",
       "listPieces",
       "listing.getCellValue",
+      "listing.listCallableKeys",
       "entityIdExists",
       "warmPiece",
       "setCellValue",
@@ -5928,9 +5949,15 @@ describe("verbs", () => {
             note("listPieces");
             return Promise.resolve([]);
           },
+          // A key, so that the listing goes on to its second read, which a
+          // cancel inside the first has to stop.
           getCellValue: () => {
             note("listing.getCellValue");
-            return Promise.resolve({});
+            return Promise.resolve({ title: "a" });
+          },
+          listCallableKeys: () => {
+            note("listing.listCallableKeys");
+            return Promise.resolve(new Set<string>());
           },
         },
         warmPiece: (config) => {
@@ -6026,6 +6053,7 @@ describe("verbs", () => {
       ["ls", atFacet("slugs"), "listSpaceSlugs"],
       ["ls", atFacet("pieces"), "listPieces"],
       ["ls", onPiece, "listing.getCellValue"],
+      ["ls", onPiece, "listing.listCallableKeys"],
       ['set title "a"', onPiece, "suspend"],
       ['set title "a"', onPiece, "warmPiece"],
       ['set title "a"', onPiece, "setCellValue"],
@@ -6310,7 +6338,11 @@ describe("verbs", () => {
       const gate = inFlight<Record<string, string>>();
       const first = runLine("ls", shuttle, {
         ...READS_NOTHING,
-        listing: { ...READS_NOTHING.listing, getCellValue: gate.read },
+        listing: {
+          ...READS_NOTHING.listing,
+          getCellValue: gate.read,
+          listCallableKeys: () => Promise.resolve(new Set<string>()),
+        },
         signal: stopper.signal,
       });
       await gate.started;

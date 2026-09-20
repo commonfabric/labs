@@ -598,6 +598,26 @@ is the publisher's own rolling aggregate, and for a stronger reason: the
 aggregate is where every catch a test has been credited with lives, over
 unbounded history, and no window of records gives those back.
 
+A stored aggregate the publisher cannot read is passed over for the
+newest one behind it that it can. Nothing but the publisher creates an
+aggregate and it creates one only where it folded, so refusing over the
+newest would be refusing for good, which is why this goes further than a
+consumer does with a manifest: a consumer passes over only a body
+written ahead of it, where the publisher passes over a corrupt body too.
+A body that fails to arrive is not passed over by either, since a read
+that did not happen says nothing about what it would have read.
+
+The walk reaches back over the days the run reads and no further, since
+what a passed-over aggregate holds and the one behind it does not comes
+back from the records the run reads. That bound is approximate in one
+direction, because the runs that wrote the passed-over aggregates read
+windows reaching earlier than their own day, and a run states what it
+passed over and what it folded onto rather than claiming the gap was
+closed. A run that can read no aggregate at all refuses, naming each and
+what stopped it. Refusing costs a stale manifest; starting from an empty
+aggregate would cost a manifest scoring every test at the floor, so a
+run never does that on its own.
+
 The area of the store both are written under is named rather than
 numbered, and does not move when a shape changes. An area that moved
 with the shape would leave the aggregate behind in the old one, which

@@ -16,27 +16,25 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { BaseFabricSpecialObject } from "@/fabric-bases/BaseFabricSpecialObject.ts";
 import type {
   FabricInstance,
   FabricInstancePlus,
   FabricSpecialObject,
   FabricValue,
   FabricValuePlus,
-} from "@/interface.ts";
-import {
-  JSON_CODEC,
-  type LiveEnvironment,
-} from "@/codec-interface/interface.ts";
+} from "@";
 import {
   CODEC,
   codecOf,
+  JSON_CODEC,
+  type LiveEnvironment,
   type NonterminalCodec,
   type TerminalCodec,
-} from "@/codec-common/index.ts";
+} from "@/codec-common";
 import type { JsonCodecValue } from "@/codec-json/interface.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
+import { BaseFabricSpecialObject } from "@/fabric-bases";
+import { FabricError } from "@/fabric-instances";
+import { FabricBytes } from "@/fabric-primitives";
 
 /**
  * Declares a direct subclass of the runtime root as the `FabricSpecialObject`

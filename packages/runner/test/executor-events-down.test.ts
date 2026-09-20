@@ -3173,12 +3173,14 @@ describe("Phase 3 events-down (serving side)", () => {
       clientSigner,
     ));
     const engine = await server.engineForSpace(space);
+    // A stream document holds no value, and nothing on it says what it is:
+    // the handle that reaches it declares the stream, and the served appends
+    // land on the document.
     const mkStream = async (name: string) => {
-      const cell = clientRuntime.getCell<unknown>(space, name, undefined);
+      const cell = clientRuntime.getCell<unknown>(space, name, {
+        asCell: ["stream"],
+      });
       await cell.sync();
-      const tx = clientRuntime.edit();
-      cell.withTx(tx).setRaw({ $stream: true });
-      expect((await tx.commit()).error).toBeUndefined();
       return cell;
     };
     const mkDoc = async (name: string) => {
@@ -3229,16 +3231,14 @@ describe("Phase 3 events-down (serving side)", () => {
       await awaitAdmitted(server, () => readWatermarkSeq(engine) >= pokeSeq);
     }
     const serving = servingRuntime!;
-    const servingS1 = serving.getCell<unknown>(
-      space,
-      `${prefix}-s1`,
-      undefined,
-    );
-    const servingS2 = serving.getCell<unknown>(
-      space,
-      `${prefix}-s2`,
-      undefined,
-    );
+    // The serving side's handles declare the streams too: a send decides
+    // stream-or-write off the handle, and the document holds no value.
+    const servingS1 = serving.getCell<unknown>(space, `${prefix}-s1`, {
+      asCell: ["stream"],
+    });
+    const servingS2 = serving.getCell<unknown>(space, `${prefix}-s2`, {
+      asCell: ["stream"],
+    });
     const servingP = serving.getCell<{ n?: number }>(
       space,
       `${prefix}-counter-p`,

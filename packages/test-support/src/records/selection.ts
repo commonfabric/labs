@@ -45,6 +45,31 @@ export interface ScoreInputs {
  * the change that cannot be read that way, where the same field means
  * different things on either side of it and a reader has to know which.
  * Raise it for one of those, and read the shape below it by this number.
+ *
+ * What a raise costs is every reader deployed below it: such a reader
+ * passes over each manifest written in the new shape, and once
+ * `MANIFESTS_LOOKED_BACK` of them stand in front of the newest one it
+ * can read it has none at all, which for a lane means running the whole
+ * corpus. A branch that has not rebased past the raise is the reader in
+ * that position, so the stretch over which one exists is what the
+ * publisher's cadence and that figure between them decide.
+ *
+ * It asks nothing of the store, in either direction. `SELECTION_AREA`
+ * names the area both a manifest and the publisher's aggregate are
+ * written under and does not move with this; a stored body under this
+ * number is read forward; and the publisher passes over a stored
+ * aggregate above it for the newest one behind that it can read. No
+ * change to this number calls for a bootstrap, which would throw away
+ * the history the stored aggregates hold.
+ *
+ * Lowering it asks one thing of an operator, and only where the number
+ * it is lowered from stood for longer than the publisher's window: the
+ * aggregates written above the new number are then the whole of what
+ * that window reaches, and a run has to be dispatched with a window wide
+ * enough to reach one below them. The publisher's refusal says that the
+ * states behind are out of its reach; which window reaches one of them
+ * comes from listing the area, since the refusal names the day the run
+ * stopped at rather than a day a readable state was written on.
  */
 export const MANIFEST_SCHEMA_VERSION = 2;
 
@@ -82,6 +107,11 @@ export const SELECTION_AREA = "v1";
  * another would obey a manifest the other passed over, and two readers
  * obeying different manifests is what the whole store is arranged to
  * avoid: a dashboard would then report a figure no pull request obeys.
+ *
+ * The publisher's walk back through stored aggregates is bounded by the
+ * days its run reads instead. There is one such reader, so there is no
+ * second one for it to agree with, and what decides how far back it may
+ * go is which records are there to fold over the gap.
  */
 export const MANIFESTS_LOOKED_BACK = 8;
 

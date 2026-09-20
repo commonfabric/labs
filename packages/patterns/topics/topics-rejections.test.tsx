@@ -2,7 +2,7 @@
  * Rejection-path tests for the Topics mutating verbs (verb contract rule 4,
  * docs/plans/pattern-verb-contract.md: rejection is a value, never a silent
  * no-op). Every action here makes a verb throw, so the runtime errors are
- * required (`expectRuntimeErrors: 35` — exact count, so a rejection quietly
+ * required (`expectRuntimeErrors: 37` — exact count, so a rejection quietly
  * reverting to a silent return fails the suite); each assertion then verifies
  * the write did NOT land. Happy and legacy paths live in topics.test.tsx — including the UI
  * composer wrappers, whose silent guards are correct behavior (an empty draft
@@ -39,7 +39,15 @@ export default pattern(() => {
   // already is below: a verb lives on the topic's own interface, and the board
   // demands a projection that carries none of them. A caller reaches a topic by
   // its own address and calls it there, so that is where the rejection belongs.
-  const seedTopic = Topic({ title: "Seed", body: "" });
+  // The number cell is held so the refused `recordName` below can be shown
+  // not to have written it; nothing published would show that while
+  // `SHOW_TOPIC_NUMBERS` is off.
+  const seedNumberStore = new Writable<string | undefined>(undefined);
+  const seedTopic = Topic({
+    title: "Seed",
+    body: "",
+    shortName: seedNumberStore,
+  });
 
   // addTopic: empty title; blank (provided) agentName. An *omitted* agentName
   // rejects too, and `action_add_topic_unsigned` below is where that is
@@ -54,10 +62,11 @@ export default pattern(() => {
     legacyBoard.addTopic.send({ title: "must not land", agentName: " " });
   });
 
-  // One unnamed topic, filed straight into the list past `addTopic` — the
-  // state an operator leaves behind before a backfill. Without it there is
-  // nothing a backfill could name, and the assertion that the namespace stayed
-  // empty would hold however the guard behaved.
+  // One unnumbered topic, filed straight into the list past `addTopic` — the
+  // state a board from before the namespace holds its topics in. Without it
+  // there is nothing a wrongly-running backfill could number, and the
+  // assertion that the namespace stayed empty would hold however the guard
+  // behaved.
   const action_file_an_unnamed_topic = action(() => {
     legacyTopics.push(Topic({ title: "Unnamed", createdAt: 1 }));
   });
@@ -67,6 +76,24 @@ export default pattern(() => {
   // is a mutation nobody is accountable for.
   const action_backfill_unsigned = action(() => {
     legacyBoard.backfillNames.send({ agentName: "   " });
+  });
+
+  // One topic that already stores a number, for `recordName`'s permanence
+  // guard. Composed with the number rather than given one by a board, which is
+  // the one route a test can take: only the topic writes this input, so a test
+  // that wanted a board to have numbered it would need the board's own step,
+  // and that step is what naming.test.tsx drives.
+  const numberedStore = new Writable<string | undefined>("7");
+  const numberedTopic = Topic({ title: "Numbered", shortName: numberedStore });
+
+  // recordName: a payload outside the name grammar, and a second number over a
+  // topic that already stores one. A number is permanent and never reused, so
+  // the second is not a correction to apply.
+  const action_record_non_name = action(() => {
+    seedTopic.recordName.send({ name: "x1" });
+  });
+  const action_record_second_number = action(() => {
+    numberedTopic.recordName.send({ name: "8" });
   });
 
   // addComment: empty body; blank agentName.
@@ -389,26 +416,38 @@ export default pattern(() => {
 
   const assert_legacy_board_empty = assert(() => legacyBoard.topicCount === 0);
 
-  // The refused backfill wrote no name, which is the half a throw alone does
+  // The refused backfill wrote no number, which is the half a throw alone does
   // not prove: the verb rejects before it reaches the namespace. The board
-  // holds one unnamed topic, so a backfill that ran would write `1` and the
-  // table would name it. Removing the verb's guard reds every clause here: the
-  // count moves only if the create's rejection also stopped landing, the
-  // namespace gains the key the run wrote, and the table follows the
-  // namespace.
+  // holds one unnumbered topic, so a backfill that ran would write `1` into
+  // the namespace and the table would name it. Removing the verb's guard reds
+  // every clause here: the count moves only if the create's rejection also
+  // stopped landing, the namespace gains the key the run wrote, and the table
+  // follows the namespace.
   const assert_unnamed_topic_went_unnamed = assert(() =>
     legacyBoard.topicCount === 1 &&
     Object.keys(legacyNames.get()).length === 0 &&
     (legacyBoard.namesTable ?? []).length === 0
   );
 
+  // Each refused `recordName` left the stored number as it was: the topic that
+  // had none still stores none, and the one that had `7` still stores `7`
+  // rather than the `8` the call named. Read through the cells the topics were
+  // composed with, not through what they publish: `SHOW_TOPIC_NUMBERS` gates
+  // the publication, so a topic shows no number whatever it holds, and an
+  // assertion over `shortName` would pass with either guard removed. Drop
+  // either guard and one of these clauses reads the refused write back.
+  const assert_numbers_unwritten = assert(() =>
+    seedNumberStore.get() === undefined &&
+    numberedStore.get() === "7"
+  );
+
   return {
     // Every rejection below MUST surface as a thrown handler error —
-    // thirty-five throwing actions, thirty-five runtime errors. The exact count
+    // thirty-seven throwing actions, thirty-seven runtime errors. The exact count
     // means a
     // single verb quietly reverting to a silent early-return fails this suite;
     // the no-write assertions then prove the throw also blocked the write.
-    expectRuntimeErrors: 35,
+    expectRuntimeErrors: 37,
     [TESTS]: [
       { action: action_seed_topic },
       { assertion: assert_seeded },
@@ -421,6 +460,9 @@ export default pattern(() => {
       { action: action_file_an_unnamed_topic },
       { action: action_backfill_unsigned },
       { assertion: assert_unnamed_topic_went_unnamed },
+      { action: action_record_non_name },
+      { action: action_record_second_number },
+      { assertion: assert_numbers_unwritten },
       { action: action_blank_comment },
       { assertion: assert_seed_topic_untouched },
       { action: action_comment_unsigned },

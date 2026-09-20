@@ -515,7 +515,8 @@ async function ls(
     shuttle.config,
     place,
     shuttle.connection,
-    deps.listing,
+    // The listing reads twice, and the cancel has to reach the read between.
+    { ...deps.listing, signal: deps.signal },
   );
   if (listed.kind !== "ran") return listed;
   // Everything from here is adoption — the numbering `%3` reads against, and

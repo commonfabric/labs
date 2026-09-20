@@ -51,6 +51,16 @@ interface FakeRun {
 
   /** Whether the artifact is listed but its download fails. */
   zipFails?: boolean;
+
+  /** What the run is, over the successful `main` push it is by default. */
+  over?: Partial<
+    {
+      head_branch: string;
+      event: string;
+      conclusion: string;
+      created_at: string;
+    }
+  >;
 }
 
 interface FakeGitHub extends CoverageDebtGitHub {
@@ -58,27 +68,68 @@ interface FakeGitHub extends CoverageDebtGitHub {
   readonly paths: string[];
 }
 
+/** Runs the listing puts on one page, which is what the collection asks for. */
+const PAGE_SIZE = 100;
+
 /**
- * Answers for the days named, and with no runs at all for any other day. A day
- * whose value is an `Error` fails when its runs are listed.
+ * One listing of the days named, newest day first and a page to each day: the
+ * day's runs ahead of runs no coverage number can come from, filling the page
+ * out so that reaching an older day takes another page as it does of the real
+ * listing. A day whose value is an `Error` fails the page it sits on, and a
+ * day the record does not name has no runs.
+ *
+ * `pages`, where a case needs runs placed across the pages itself rather than
+ * a page to each day, is served as the listing instead; `days` then says only
+ * what each run's artifact holds.
  */
-function fakeGitHub(days: Record<string, FakeRun[] | Error>): FakeGitHub {
+function fakeGitHub(
+  days: Record<string, FakeRun[] | Error>,
+  pages?: unknown[][],
+): FakeGitHub {
   const paths: string[] = [];
   const runsById = new Map<number, FakeRun>();
   for (const runs of Object.values(days)) {
     if (Array.isArray(runs)) for (const run of runs) runsById.set(run.id, run);
   }
+  const newestDayFirst = Object.keys(days).sort().reverse();
+
+  /** The page the day sits on: its runs, newest first, then the filler. */
+  const pageOf = (day: string) => {
+    const listed = days[day];
+    if (listed instanceof Error) throw listed;
+    const runs = (listed ?? []).map((run, at) => ({
+      id: run.id,
+      created_at: `${day}T${String(23 - at).padStart(2, "0")}:00:00Z`,
+      head_branch: "main",
+      event: "push",
+      conclusion: "success",
+      ...run.over,
+    }));
+    while (runs.length < PAGE_SIZE) {
+      runs.push({
+        id: 900_000 + runs.length,
+        created_at: `${day}T00:00:00Z`,
+        head_branch: "topic",
+        event: "pull_request",
+        conclusion: "success",
+      });
+    }
+    return runs;
+  };
+
   return {
     paths,
     // deno-lint-ignore require-await
     json: async <T>(path: string): Promise<T> => {
       paths.push(path);
-      const day = path.match(/created=(\d{4}-\d{2}-\d{2})/)?.[1];
-      if (day !== undefined) {
-        const listed = days[day];
-        if (listed instanceof Error) throw listed;
-        const runs = listed ?? [];
-        return { workflow_runs: runs.map((run) => ({ id: run.id })) } as T;
+      const page = Number(path.match(/[?&]page=(\d+)/)?.[1] ?? 0);
+      if (page > 0) {
+        if (pages !== undefined) {
+          return { workflow_runs: pages[page - 1] ?? [] } as T;
+        }
+        const day = newestDayFirst[page - 1];
+        // Past the last day the record names the listing has ended.
+        return { workflow_runs: day === undefined ? [] : pageOf(day) } as T;
       }
       const runId = Number(path.match(/\/runs\/(\d+)\/artifacts/)?.[1] ?? 0);
       const run = runsById.get(runId);
@@ -314,6 +365,187 @@ describe("coverage-debt-history", () => {
       );
     });
 
+    it("asks for a listing carrying none of the indexed filters", async () => {
+      const github = fakeGitHub({
+        "2026-09-02": [{ id: 51, metrics: metrics(78166) }],
+      });
+      await refreshCoverageDebt({
+        token: "t",
+        days: 1,
+        now: NOW,
+        github,
+        store: new CoverageDebtStore(file),
+      });
+      const listings = github.paths.filter((path) => path.includes("/runs?"));
+      expect(listings.length).toBeGreaterThan(0);
+      for (const path of listings) {
+        const query = new URLSearchParams(path.split("?")[1]);
+        expect(query.get("exclude_pull_requests")).toBe("true");
+        // Any one of these has GitHub answer out of the search index, which
+        // serves a window of runs weeks old with nothing to mark it.
+        for (
+          const filter of [
+            "actor",
+            "branch",
+            "check_suite_id",
+            "created",
+            "event",
+            "head_sha",
+            "status",
+          ]
+        ) {
+          expect(query.get(filter)).toBeNull();
+        }
+      }
+    });
+
+    it("reads a day's number from none but a successful main push", async () => {
+      const github = fakeGitHub({
+        "2026-09-02": [
+          { id: 52, metrics: metrics(70000), over: { conclusion: "failure" } },
+          { id: 53, metrics: metrics(71000), over: { event: "pull_request" } },
+          { id: 54, metrics: metrics(72000), over: { head_branch: "topic" } },
+        ],
+      });
+      const history = await refreshCoverageDebt({
+        token: "t",
+        days: 1,
+        now: NOW,
+        github,
+        store: new CoverageDebtStore(file),
+      });
+      expect(history.samples).toEqual([]);
+      expect(github.paths.filter((path) => !path.includes("/runs?")))
+        .toEqual([]);
+    });
+
+    it("names a run once that two listing pages both hold", async () => {
+      const day = "2026-09-02";
+      const listed = (id: number, at: number) => ({
+        id,
+        created_at: `${day}T${String(23 - at).padStart(2, "0")}:00:00Z`,
+        head_branch: "main",
+        event: "push",
+        conclusion: "success",
+      });
+      const filler = Array.from({ length: PAGE_SIZE - 1 }, (_, at) => ({
+        ...listed(900_000 + at, 23),
+        head_branch: "topic",
+        event: "pull_request",
+      }));
+      // Run 41 ends the first page and, a run having landed between the two
+      // reads, heads the second as well. Counted twice it takes two of the
+      // day's three places and keeps run 43, the one that measured, out of
+      // them — and the day would then be recorded as measuring nothing.
+      const github = fakeGitHub({
+        [day]: [{ id: 41 }, { id: 42 }, { id: 43, metrics: metrics(78166) }],
+      }, [
+        [...filler, listed(41, 0)],
+        [listed(41, 0), listed(42, 1), listed(43, 2)],
+      ]);
+      const history = await refreshCoverageDebt({
+        token: "t",
+        days: 1,
+        now: NOW,
+        github,
+        store: new CoverageDebtStore(file),
+      });
+      expect(history.samples).toEqual([
+        { day, uncoveredLines: 78166, runId: 43 },
+      ]);
+    });
+
+    it("passes over a run whose date does not read as a day", async () => {
+      const github = fakeGitHub({
+        "2026-09-02": [
+          { id: 57, metrics: metrics(70000), over: { created_at: "soon" } },
+          { id: 58, metrics: metrics(78166) },
+        ],
+      });
+      const history = await refreshCoverageDebt({
+        token: "t",
+        days: 1,
+        now: NOW,
+        github,
+        store: new CoverageDebtStore(file),
+      });
+      expect(history.samples).toEqual([
+        { day: "2026-09-02", uncoveredLines: 78166, runId: 58 },
+      ]);
+      expect(history.error).toBeUndefined();
+    });
+
+    it("leaves a day unread when the listing stopped short of it", async () => {
+      const store = new CoverageDebtStore(file);
+      // The page today's older runs would be on cannot be read, so the day
+      // has been shown no usable run and has not been shown whole either.
+      const cut = fakeGitHub({
+        "2026-09-02": [],
+        "2026-09-01": new Error("HTTP 502"),
+      });
+      const first = await refreshCoverageDebt({
+        token: "t",
+        days: 2,
+        now: NOW,
+        github: cut,
+        store,
+      });
+      expect(first.samples).toEqual([]);
+      expect((first.error as Error).message).toBe("HTTP 502");
+
+      const whole = fakeGitHub({
+        "2026-09-02": [{ id: 55, metrics: metrics(78166) }],
+        "2026-09-01": [{ id: 56, metrics: metrics(78404) }],
+      });
+      const second = await refreshCoverageDebt({
+        token: "t",
+        days: 2,
+        now: NOW,
+        github: whole,
+        store,
+      });
+      expect(second.samples).toEqual([
+        { day: "2026-09-01", uncoveredLines: 78404, runId: 56 },
+        { day: "2026-09-02", uncoveredLines: 78166, runId: 55 },
+      ]);
+    });
+
+    it("stops at the run-listing page budget", async () => {
+      // Page 151 keeps the listing full past the 150-page budget, and page 152
+      // ends it, so the fixture cannot leave the case running forever.
+      const fullPage = Array.from({ length: PAGE_SIZE }, (_, at) => ({
+        id: at + 1,
+        created_at: "not a date",
+        head_branch: "topic",
+        event: "pull_request",
+        conclusion: "success",
+      }));
+      const github = fakeGitHub({}, Array(151).fill(fullPage));
+      const warnings: unknown[][] = [];
+      const warn = console.warn;
+      console.warn = (...parts: unknown[]) => void warnings.push(parts);
+      try {
+        const history = await refreshCoverageDebt({
+          token: "t",
+          days: 1,
+          now: NOW,
+          github,
+          store: new CoverageDebtStore(file),
+        });
+        expect(history.samples).toEqual([]);
+      } finally {
+        console.warn = warn;
+      }
+
+      expect(github.paths.length).toBe(150);
+      const last = new URLSearchParams(github.paths[149].split("?")[1]);
+      expect(last.get("page")).toBe("150");
+      expect(warnings).toEqual([[
+        "coverage debt: read 150 pages of runs without reaching " +
+        "2026-09-02; the days it did not reach are left for a later refresh.",
+      ]]);
+    });
+
     it("passes over a cold run, a run with no artifact, and one it cannot parse", async () => {
       const github = fakeGitHub({
         "2026-09-02": [
@@ -389,7 +621,11 @@ describe("coverage-debt-history", () => {
         { day: "2026-09-02", uncoveredLines: 78166, runId: 71 },
       ]);
       expect(second.paths.length).toBe(1);
-      expect(second.paths[0]).toContain("created=2026-09-02");
+      const query = new URLSearchParams(second.paths[0].split("?")[1]);
+      expect(query.get("page")).toBe("1");
+      for (const filter of ["branch", "event", "status", "created"]) {
+        expect(query.get(filter)).toBeNull();
+      }
     });
 
     it("reads today again once a newer run has landed", async () => {
@@ -445,7 +681,7 @@ describe("coverage-debt-history", () => {
       expect((await Deno.stat(file)).mtime?.getTime()).toBe(written);
     });
 
-    it("reads a day it has already read once, and today every time", async () => {
+    it("opens no run when today's newest is the one it read before", async () => {
       const store = new CoverageDebtStore(file);
       const days = {
         "2026-09-01": [{ id: 31, metrics: metrics(78404) }],
@@ -468,10 +704,10 @@ describe("coverage-debt-history", () => {
         store,
       });
       expect(history.samples.length).toBe(2);
-      expect(second.paths.some((path) => path.includes("2026-09-01")))
-        .toBe(false);
-      expect(second.paths.some((path) => path.includes("2026-09-02")))
-        .toBe(true);
+      // Only the listing: the day already read is not among the days asked
+      // about, and today's newest run is the one its sample came from.
+      expect(second.paths.filter((path) => !path.includes("/runs?")))
+        .toEqual([]);
     });
 
     it("keeps a day with no usable run, and does not ask about it again", async () => {
@@ -493,8 +729,9 @@ describe("coverage-debt-history", () => {
         store,
       });
       expect(history.samples).toEqual([]);
-      expect(second.paths.some((path) => path.includes("2026-09-01")))
-        .toBe(false);
+      // The day is settled, so nothing of it is opened a second time.
+      expect(second.paths.filter((path) => !path.includes("/runs?")))
+        .toEqual([]);
     });
 
     it("reports a failed read and asks again on the next refresh", async () => {

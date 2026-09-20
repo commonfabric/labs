@@ -1048,6 +1048,23 @@ describe("build", () => {
       expect(parseAggregate(JSON.stringify(ahead))).toBeUndefined();
     });
 
+    it("reads a body already parsed as it reads the text of one", () => {
+      // A reader asking this and `writtenAhead` about one body parses it
+      // once, and an aggregate is the whole corpus.
+      const aggregate = emptyAggregate("2026-08-20");
+      aggregate.states[KEY] = { ...emptyState(), mainCatches: 4 };
+      const text = JSON.stringify(aggregate);
+      expect(parseAggregate(JSON.parse(text))).toEqual(aggregate);
+      expect(parseAggregate(text)).toEqual(aggregate);
+    });
+
+    it("refuses a value that is not a body at all", () => {
+      // What a caller that could not parse the text hands this, beside
+      // the aggregate above, which it reads.
+      expect(parseAggregate(undefined)).toBeUndefined();
+      expect(parseAggregate(emptyAggregate("2026-08-20"))).toBeDefined();
+    });
+
     it("reads a day a stored state holds under the stamp it carries", () => {
       // The days in a stored state were sealed by whatever rules were in
       // force then, and a state written before the stamps carries none,

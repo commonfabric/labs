@@ -2180,10 +2180,10 @@ describe("stage D seal-into-wave", () => {
       experimental: { serverExecution: true },
     });
     try {
-      const streamCell = servingRuntime.getCell<{ $stream: boolean }>(
+      const streamCell = servingRuntime.getCell<unknown>(
         space,
         "m3-emitter-stream",
-        undefined,
+        { asCell: ["stream"] },
       );
       const seed = servingRuntime.getCell<{ value: number }>(
         space,
@@ -2192,7 +2192,6 @@ describe("stage D seal-into-wave", () => {
       );
       {
         const tx = servingRuntime.edit();
-        streamCell.withTx(tx).set({ $stream: true });
         seed.withTx(tx).set({ value: 7 });
         expect((await tx.commit()).error).toBeUndefined();
       }
@@ -2300,16 +2299,11 @@ describe("stage D seal-into-wave", () => {
       experimental: { serverExecution: true },
     });
     try {
-      const streamCell = servingRuntime.getCell<{ $stream: boolean }>(
+      const streamCell = servingRuntime.getCell<unknown>(
         space,
         "symbol-payload-stream",
-        undefined,
+        { asCell: ["stream"] },
       );
-      {
-        const tx = servingRuntime.edit();
-        streamCell.withTx(tx).set({ $stream: true });
-        expect((await tx.commit()).error).toBeUndefined();
-      }
       const wave = new WaveAccumulator({
         space,
         basisSeq: Engine.serverSeq(engine),

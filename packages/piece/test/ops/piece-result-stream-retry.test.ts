@@ -65,7 +65,7 @@ async function runRetryScenario(
       activeRuntime.unsafeTrustPattern(pattern, {
         reason: "piece result stream retry test fixture",
       }),
-      { event: { $stream: true } },
+      {},
       undefined,
       { start: true },
     );

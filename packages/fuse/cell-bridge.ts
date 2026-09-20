@@ -4674,9 +4674,18 @@ export class CellBridge {
         resolvedCandidate = candidate;
       }
 
+      // The cell itself is the last thing asked, the way the CLI's detector
+      // asks it: a stream's document holds no value for either candidate to
+      // carry, and the link-derived cell answers from its stored links. It is
+      // asked only of a position that resolved to nothing or to a link, since
+      // a stream holds no value of its own and the question costs a read of
+      // the cell; a position holding a value is not one.
       const childSchema = expandSchemaReference(childCell.schema);
       let callableKind = classifyCallableEntry(candidate, childSchema) ??
-        classifyCallableEntry(resolvedCandidate, childSchema);
+        classifyCallableEntry(resolvedCandidate, childSchema) ??
+        (resolvedCandidate === undefined || isSigilLink(resolvedCandidate)
+          ? classifyCallableEntry(childCell, childSchema)
+          : null);
 
       if (!callableKind) {
         try {

@@ -450,6 +450,93 @@ See `packages/patterns/examples/ui-variants-demo.tsx` for a full example.
 > `uiVariant()` helper for render paths outside `cf-render` is a planned
 > follow-up and does not exist yet.
 
+### Views a host draws itself
+
+A rendering is not the only thing a piece can offer. `[VIEWS]` is a single
+output key holding **named groups of facts and streams** for a host that draws
+with its own toolkit instead of rendering VDOM — a native application, say, or
+one built on a different renderer. It is a sibling concept to the variants
+above rather than a member of them: not a size, and not a shell slot.
+
+One key rather than one key per view is what keeps discovery cheap: a host
+learns what is on offer in one round, where probing well-known names one at a
+time would make the common case slow. Two different schemas carry that, and
+telling them apart is the thing to get right.
+
+- **The pattern's own result schema** names every group and everything in it.
+  A pattern declares `[VIEWS]` as the groups it offers — `{ inboxView:
+  InboxView }` — and the emitted schema carries each group by name, each
+  member's type, and each `Stream<T>`'s payload schema, which is where a host
+  reads the event contract from. Declaring the field `unknown` instead is a
+  compile error at the root of a result, for the same reason it is one under
+  `[UI]`: see [`unknown`](../concepts/types-and-schemas/unknown.md).
+- **A consumer's demand schema** is what that host reads with, and it is free
+  to ask for less. Below the root, a consumer may describe a group as
+  `unknown` and receive an opaque reference in place of the derived value —
+  which is how a host learns *which* groups are on offer without the runtime
+  computing any of them, and then reads for real only the one it will draw.
+
+```tsx
+import {
+  handler,
+  NAME,
+  pattern,
+  type Stream,
+  UI,
+  VIEWS,
+  type Writable,
+} from "commonfabric";
+
+interface ThreadRow {
+  at: number;
+  title: string;
+}
+
+interface InboxView {
+  threads: ThreadRow[];
+  forQuery: string;
+  setSearch: Stream<{ query: string }>;
+}
+
+const setSearch = handler<{ query: string }, { query: Writable<string> }>(
+  ({ query }, state) => state.query.set(query),
+);
+
+export default pattern<
+  { threads: ThreadRow[]; query: Writable<string> },
+  { [NAME]: string; [VIEWS]: { inboxView: InboxView } }
+>((state) => ({
+  [NAME]: "Inbox",
+  // The floor, reading the same values a host would draw itself.
+  [UI]: <div>{state.query}</div>,
+  // Every offered group, under one key.
+  [VIEWS]: {
+    inboxView: {
+      threads: state.threads,
+      forQuery: state.query,
+      setSearch: setSearch(state),
+    },
+  },
+}));
+```
+
+`pattern()` types `[VIEWS]` as an object and no further: what a group holds is
+the pattern's to declare and its consumer's to demand through a schema. Two
+properties of a group follow from who draws it.
+
+- **`[UI]` stays the floor.** A host that knows none of the offered groups —
+  or holds a schema the value does not satisfy — renders `[UI]`, so a piece
+  that offers a group exports a complete `[UI]` as well.
+- **A group carries facts, not renderings.** A timestamp beside any label it
+  also offers, a count beside any "show 40 earlier", a named tint rather than a
+  colour. A host that formats in its own idiom needs the fact; one that cannot
+  still has the label.
+
+A group is named output like any other, so nothing here needs a new mechanism:
+TypeScript checks it, `resultSchema` carries it — streams and their payload
+schemas included — and a member declared for one host under design reaches no
+other host, because a reader receives only what its own demand declares.
+
 ### The piece context menu
 
 Right-clicking a rendered piece opens `cf-piece-menu` for it. **View source**

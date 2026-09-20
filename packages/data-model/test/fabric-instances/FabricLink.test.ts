@@ -18,24 +18,24 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
+  cloneIfNecessary,
+  deepFreeze,
   FabricInstance,
   FabricPrimitive,
+  hashOf,
+  isDeepFrozen,
   type MutableFabricPlainObjectLayer,
-} from "@/interface.ts";
+} from "@";
 import {
-  DEEP_FREEZE,
-  IS_DEEP_FROZEN,
-} from "@/fabric-bases/BaseFabricInstance.ts";
-import { FabricLink } from "@/fabric-instances/FabricLink.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
-import { deepFreeze, isDeepFrozen } from "@/deep-freeze.ts";
+  CODEC,
+  CODEC_TYPE_TAGS,
+  NULL_LIVE_ENVIRONMENT,
+  ProblematicValue,
+} from "@/codec-common";
+import { DEEP_FREEZE, IS_DEEP_FROZEN } from "@/fabric-bases";
+import { FabricLink } from "@/fabric-instances";
 import { subFreeze, subIsDeepFrozen } from "./fixtures.ts";
-import { cloneIfNecessary } from "@/value-clone.ts";
-import { CODEC } from "@/codec-interface/interface.ts";
-import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
 import { fabricFromJsonValue, jsonFromFabricValue } from "@/codecs.ts";
-import { hashOf } from "@/value-hash.ts";
 
 describe("FabricLink", () => {
   it("extends `FabricInstance` (not `FabricPrimitive`)", () => {

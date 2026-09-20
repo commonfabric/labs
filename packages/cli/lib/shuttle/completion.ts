@@ -118,7 +118,8 @@ async function childOperands(
       shuttle.config,
       place,
       shuttle.connection,
-      deps.listing,
+      // The listing reads twice, and the cancel has to reach the read between.
+      { ...deps.listing, signal: deps.signal },
     );
   } catch {
     return [];

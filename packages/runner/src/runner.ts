@@ -229,7 +229,10 @@ import { normalizeSandboxResult } from "./sandbox/result-normalization.ts";
 import { isCellScope, narrowestScope } from "./scope.ts";
 import { SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
-import { rawMetaWriteAuthorization } from "./meta-seam.ts";
+import {
+  asPatternIdentityRef,
+  rawMetaWriteAuthorization,
+} from "./meta-seam.ts";
 export {
   extractDefaultValues,
   mergeObjects,
@@ -12598,19 +12601,6 @@ export function setPatternRepository(
     repository,
     rawMetaWriteAuthorization,
   );
-}
-
-/** Narrow a raw meta value to a `{ identity, symbol }` pattern ref, or undefined. */
-export function asPatternIdentityRef(
-  raw: unknown,
-): { identity: string; symbol: string } | undefined {
-  if (
-    isObjectOrArray(raw) && typeof raw.identity === "string" &&
-    typeof raw.symbol === "string"
-  ) {
-    return { identity: raw.identity, symbol: raw.symbol };
-  }
-  return undefined;
 }
 
 /**

@@ -36,6 +36,7 @@
 // the outbox; `memo.*`/`outbox.*` counters are live.
 import { debugStr } from "@commonfabric/data-model";
 import {
+  canResolveScopeKey,
   type CellScope,
   type ConfirmedRead,
   type DeliveryAttention,
@@ -114,8 +115,10 @@ import type {
 import {
   ensurePieceRunningVerdict,
   type EnsurePieceVerdict,
+  type OwningRootAddress,
 } from "../ensure-piece-running.ts";
 import { ensureSpaceRootPattern } from "../ensure-space-root.ts";
+import { asPatternIdentityRef } from "../meta-seam.ts";
 import {
   stampWaveRunContext,
   WaveAccumulator,
@@ -171,6 +174,16 @@ const timing = getLogger("executor", { enabled: false });
  * retry arm forever, invisible in the aggregate `structureLoadDeferred`
  * and logged only at debug level). */
 export const STRUCTURE_LOAD_STUCK_AFTER = 8;
+
+/** What one demanded root's structure-load attempt resolved: the verdict its
+ * caller acts on, and every chain terminus the attempt read a pattern pointer
+ * at — the demanded instance's, plus the space fallback's where that ran. A
+ * `no-pattern-meta` verdict is the joint answer of those documents, so a
+ * caller putting the question again puts it to all of them. */
+type StructureLoadAttempt = {
+  verdict: EnsurePieceVerdict;
+  termini: readonly OwningRootAddress[];
+};
 
 /** Consecutive cycles a feed record's store refresh may fail before the
  * loop gives the space up to a `loop-failed` park (see
@@ -4800,24 +4813,27 @@ export class SpaceServer implements TransactionSealDestination {
             this.#indexResolvedRoot(key, rootId);
             runtime.scheduler.invalidateActionsForDemandRoots([rootId]);
           };
-          const verdict = await this.#attemptStructureLoad(
+          const attempt = await this.#attemptStructureLoad(
             runtime,
             root,
             onOwningRoot,
           );
+          const verdict = attempt.verdict;
           if (!this.#active || this.#runtime !== runtime) return;
           if (verdict.started) {
             this.#pendingStructureLoads.delete(key);
             this.#structureLoadDeferralStreaks.delete(key);
           } else if (verdict.reason === "no-pattern-meta") {
-            // Each traversal syncs the complete addresses it reads. Re-ask
-            // before terminalizing so metadata arriving during the first
-            // traversal can start the piece.
-            const confirmed = await this.#confirmNoPatternMeta(
+            // Each traversal syncs the complete addresses it reads. Put the
+            // question again before terminalizing, so metadata arriving
+            // during the first traversal can start the piece — to the engine
+            // where it can answer, and to the chain where it cannot.
+            const confirmed = (await this.#confirmNoPatternMeta(
               runtime,
               root,
+              attempt,
               onOwningRoot,
-            );
+            )).verdict;
             if (!this.#active || this.#runtime !== runtime) return;
             if (confirmed.started) {
               this.#pendingStructureLoads.delete(key);
@@ -5066,8 +5082,9 @@ export class SpaceServer implements TransactionSealDestination {
     runtime: Runtime,
     root: { id: string; scope?: string },
     onOwningRoot: (rootId: string) => void,
-  ): Promise<EnsurePieceVerdict> {
+  ): Promise<StructureLoadAttempt> {
     const scope = root.scope ?? "space";
+    const termini: OwningRootAddress[] = [];
     const verdict = await ensurePieceRunningVerdict(runtime, {
       space: this.#options.space,
       id: root.id as never,
@@ -5078,11 +5095,12 @@ export class SpaceServer implements TransactionSealDestination {
       signal: this.#structureLoadAbort.signal,
       onOwningRoot,
     });
+    if (verdict.root !== undefined) termini.push(verdict.root);
     if (
       verdict.started || scope === "space" ||
       verdict.reason !== "no-pattern-meta"
     ) {
-      return verdict;
+      return { verdict, termini };
     }
     const spaceVerdict = await ensurePieceRunningVerdict(runtime, {
       space: this.#options.space,
@@ -5094,25 +5112,76 @@ export class SpaceServer implements TransactionSealDestination {
       signal: this.#structureLoadAbort.signal,
       onOwningRoot,
     });
+    if (spaceVerdict.root !== undefined) termini.push(spaceVerdict.root);
     // Merge observed docs: the re-arm must watch both instances' reads.
     for (const id of verdict.observedDocIds) {
       if (!spaceVerdict.observedDocIds.includes(id)) {
         spaceVerdict.observedDocIds.push(id);
       }
     }
-    return spaceVerdict;
+    return { verdict: spaceVerdict, termini };
   }
 
   /**
-   * Re-read the owning chain and scoped fallback before a terminal decision.
-   * The traversal syncs each address before reading its metadata.
+   * Re-read the owning chain and scoped fallback before a terminal decision,
+   * unless the engine answers for them first.
+   *
+   * The traversal syncs each address before reading its metadata, which is
+   * what makes the re-ask worth avoiding. This tenure runs beside the engine
+   * its replica syncs from, so a pattern pointer the engine holds at none of
+   * `attempt`'s termini is one no traversal can read at them either: the
+   * attempt's own verdict stands, and the terminal park that follows is
+   * re-armed by a commit touching an observed doc exactly as it would have
+   * been. A pointer the engine does hold means the replica read behind it,
+   * and the re-ask is what picks it up.
    */
   #confirmNoPatternMeta(
     runtime: Runtime,
     root: { id: string; scope?: string },
+    attempt: StructureLoadAttempt,
     onOwningRoot: (rootId: string) => void,
-  ): Promise<EnsurePieceVerdict> {
+  ): Promise<StructureLoadAttempt> {
+    if (this.#enginePatternIdentityAbsent(runtime, attempt.termini)) {
+      this.#options.stats.structureLoadConfirmationsSkipped += 1;
+      return Promise.resolve(attempt);
+    }
     return this.#attemptStructureLoad(runtime, root, onOwningRoot);
+  }
+
+  /**
+   * Whether the engine holds no pattern pointer at any of `termini`.
+   *
+   * The engine is read at the instance the serving replica itself resolves
+   * `scope` to — the manager's own session identity, which is what an
+   * unstamped structure-load read keys by — because a document read under
+   * another instance answers a different question. Anything this tenure
+   * cannot address that way reads as `false`: a terminus in a foreign space,
+   * a scope the session cannot key, a database already closed. So does a
+   * pointer the engine holds. The caller's other arm is the conservative one,
+   * and everything it cannot settle belongs there.
+   */
+  #enginePatternIdentityAbsent(
+    runtime: Runtime,
+    termini: readonly OwningRootAddress[],
+  ): boolean {
+    const { engine, space } = this.#options;
+    if (termini.length === 0 || !engine.database.open) return false;
+    const identity = runtime.storageManager.scopeKeyIdentity();
+    for (const terminus of termini) {
+      if (terminus.space !== space) return false;
+      if (!canResolveScopeKey(terminus.scope, identity)) return false;
+      const document = Engine.read(engine, {
+        id: terminus.id as never,
+        scopeKey: resolveScopeKey(terminus.scope, identity),
+      });
+      if (
+        document !== null &&
+        asPatternIdentityRef(document.patternIdentity) !== undefined
+      ) {
+        return false;
+      }
+    }
+    return true;
   }
 
   /**

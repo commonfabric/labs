@@ -9,6 +9,25 @@ files' subject matter without being bench files themselves — the Topics browse
 measurement and the Topics board demo below are both of that kind — so that a
 reader looking for how a workload is measured finds all of it in one place.
 
+## Report the measured boundary
+
+Record the revision, resolved runtime posture, machine and tool versions, fixture
+size, and demanded outputs with the result. Report the observed sample count from
+benchmark JSON; a requested iteration count is not necessarily the number of
+samples the harness collects. Keep warmup and diagnostic invocations distinct
+from the samples included in the reported timing statistic.
+
+Name each timer's actual start and end. An explicit timer around an awaited
+operation includes call setup and promise resumption that an internal timer may
+exclude. Nested phase timers are not an additive decomposition of wall-clock
+time. Collect read accounting separately with instrumentation disabled for timing;
+stable read counts alone establish neither stable latency nor a speedup.
+
+Use repeated interleaved arms and matched fresh fixtures for comparative latency
+claims. For retention claims, warm the runtime and take repeated post-GC samples
+that separate surviving state from setup garbage; one cold-runtime heap delta
+cannot establish retained memory cost.
+
 ## The pipeline
 
 The Benchmarks workflow (`.github/workflows/benchmarks.yml`) runs every four

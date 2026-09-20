@@ -4993,19 +4993,23 @@ interface ReadPathVerb {
 
 /**
  * Classify a `cf cell get` path whose last segment CERTAINLY lands on a
- * verb. The guard refuses only on the two definite stored signals: the
- * link-derived schema answers as a stream (`isHandlerCell` on the
- * `asSchemaFromLinks` cell — that schema comes from stored links, never from
- * a caller-supplied cast), or the stored value reads as the
- * `{$stream: true}` sentinel. It NEVER refuses on the forced-stream probe:
- * the probe is deliberately permissive for the dispatcher and the listing —
- * over-inclusion there is an extra listing row or a call the caller asked
- * for — but the cast's stream schema survives link resolution for inline
- * values and schema-less links (`resolveLink` keeps the caller's schema and
- * `Cell.isStream`'s schema branch answers from it), so a read guard built on
- * it would refuse plain data outputs. Reads fail open: a classification
- * failure, an uncertain shape, or a tool binding (readable data, exactly as
- * the llm-dialog read tool treats it) all read normally.
+ * verb. The guard refuses on two definite stored signals, both read off the
+ * child by `detectCallableKind`: the link-derived schema declaring a stream
+ * (`isHandlerCell` on the `asSchemaFromLinks` cell — that schema comes from
+ * the stored links, never from a caller-supplied cast), and the stored value
+ * being the retired `{ $stream: true }` sentinel, which `detectCallableKind`
+ * reads through `getRaw()` until no stored document holds one. A stream's
+ * document written since holds no value, so for it the schema is the whole
+ * of what can say what it is. It
+ * NEVER refuses on the forced-stream probe: the probe is deliberately
+ * permissive for the dispatcher and the listing — over-inclusion there is an
+ * extra listing row or a call the caller asked for — but the cast's stream
+ * schema survives link resolution for inline values and schema-less links
+ * (`resolveLink` keeps the caller's schema and `Cell.isStream`'s schema
+ * branch answers from it), so a read guard built on it would refuse plain
+ * data outputs. Reads fail open: a classification failure, an uncertain
+ * shape, or a tool binding (readable data, exactly as the llm-dialog read
+ * tool treats it) all read normally.
  *
  * `callable` is true only for root-level names — the dispatcher's resolution
  * paths all start at a root — so the refusal message can redirect honestly.
@@ -5043,6 +5047,61 @@ async function classifyReadPathVerb(
   } catch {
     return null;
   }
+}
+
+/**
+ * Which of `keys`, directly under `addressedPath` on a piece's cell, stand at
+ * a verb's dispatch surface. Each is decided the way {@link classifyReadPathVerb}
+ * decides a read: from the child's link-derived schema, with nothing read at
+ * the position, since a stream's document holds no value to read.
+ *
+ * This fails open the way the guard does: a key the classification fails on,
+ * or a piece it cannot reach, yields no callables, and the listing shows each
+ * key by what it holds. It runs beside a value read of the same cell that
+ * has already succeeded, so what a failure here costs is an annotation and
+ * never the listing.
+ */
+export async function listCallableKeys(
+  config: PieceConfig,
+  addressedPath: (string | number)[],
+  keys: readonly string[],
+  options: { input?: boolean } = {},
+  deps: PieceOperationDependencies = {},
+): Promise<ReadonlySet<string>> {
+  const callables = new Set<string>();
+  if (keys.length === 0) return callables;
+  try {
+    const pieces = await (deps.loadPieces ?? loadPieces)(config);
+    const { config: resolvedConfig, path } = await resolvePieceTargetWithPieces(
+      config,
+      addressedPath,
+      pieces,
+      deps,
+    );
+    const piece = await (deps.loadPieceForRead ?? loadPieceForRead)(
+      pieces,
+      resolvedConfig.piece,
+      false,
+      resolvedConfig.pieceScope,
+    );
+    const rootCell = await piece[options.input ? "input" : "result"]
+      .getCell();
+    const parentCell = path.length > 0 ? rootCell.key(...path) : rootCell;
+    for (const key of keys) {
+      try {
+        const child = parentCell.key(key);
+        const derived = child.asSchemaFromLinks?.() ?? child;
+        if (detectCallableKind(undefined, derived) === "handler") {
+          callables.add(key);
+        }
+      } catch {
+        // Not certainly a verb: the listing shows the key by what it holds.
+      }
+    }
+  } catch {
+    // The cell could not be reached for this read; see above.
+  }
+  return callables;
 }
 
 /**

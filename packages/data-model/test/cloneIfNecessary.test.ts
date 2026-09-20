@@ -24,21 +24,20 @@ import { expect } from "@std/expect";
 import {
   cloneIfNecessary,
   type CloneOptions,
+  FabricInstance,
+  FabricPrimitive,
+  type FabricSpecialObject,
+  type FabricValue,
+  isDeepFrozen,
+  isValidDeepFrozenFabricValue,
   isValidFabricValue,
-} from "@/index.ts";
-import type { FabricValue } from "@/index.ts";
-import { isDeepFrozen, isValidDeepFrozenFabricValue } from "@/deep-freeze.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
+} from "@";
+import { FabricError } from "@/fabric-instances";
+import { FabricEpochNsec } from "@/fabric-primitives";
 import {
   FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
   FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY,
 } from "@/for-testing-only.ts";
-import {
-  FabricInstance,
-  FabricPrimitive,
-  type FabricSpecialObject,
-} from "@/interface.ts";
 
 describe("cloneIfNecessary()", () => {
   describe(`error cases`, () => {

@@ -289,8 +289,8 @@ and therefore cheap, and a flake that appears in the morning should not
 wait until the small hours to be prioritized. Manual dispatch is there so
 that somebody who has just fixed something can refresh without waiting.
 
-Each run reads the newest aggregate, fetches only the objects whose runs
-are not already folded into it, folds them, ages the counters, scores
+Each run reads the newest aggregate it can, fetches only the objects whose
+runs are not already folded into it, folds them, ages the counters, scores
 everything, and creates one manifest object and one aggregate object. It
 reads and folds two hundred objects at a time, so what it holds is bounded
 by the number of tests rather than by the number of runs.
@@ -355,7 +355,7 @@ still the newest one and consumers keep using it. A manifest going stale
 degrades selection quality slowly rather than failing anything, which is
 the right direction for a system nothing should gate on.
 
-That is why a run that cannot read the aggregate a previous run left
+That is why a run that cannot read any aggregate a previous run left
 refuses to publish rather than starting from nothing. The aggregate is
 where a test's catches live, and they accumulate over unbounded history:
 a run that lost it and carried on would publish a manifest scoring every
@@ -363,10 +363,43 @@ test at the floor, and because it succeeded that manifest would be the
 one every lane obeys. A stale manifest is recoverable; a confident wrong
 one is not.
 
+Refusing over the newest state alone would be permanent, though. Nothing
+but the publisher creates a state object, and it creates one only where
+it folded, so a newest state it cannot read is one every later run comes
+to in the same condition: a body written in a shape from further ahead,
+which is what lowering `MANIFEST_SCHEMA_VERSION` leaves behind, or a
+body that arrives and is not an aggregate, which the store's create-only
+credentials mean nothing can replace. So a run passes over a state it
+cannot read and folds onto the newest one behind it that it can, saying
+which it passed over and why.
+
+A read that does not arrive is neither of those and is refused, the same
+as a listing that fails. It says nothing about the object, and a run
+that passed over on it would write a state superseding the one it
+skipped, turning one bad read into a permanent one.
+
+The days the run reads are what bound the walk. What a passed-over state
+folded and the one behind it did not comes back from the records, so a
+state named for a day before the first day of the window is not one the
+walk reaches, and `--days` is what reaches it. That bound is what the
+run can state rather than an exact account of the gap: the runs that
+wrote the passed-over states read windows of their own, reaching a day
+earlier than their own day for as many days as their window held, and a
+record that arrived for one of those earlier days after the state behind
+it was written is outside what this run reads. The run says so where it
+happens, naming what it passed over and what it folded onto. The newest
+state is read whatever day it carries, since taking it is not a choice
+between two aggregates.
+
 A cold start cannot read the whole window in one job, and is asked for
 deliberately: the bootstrap is a manual dispatch with the bootstrap input
 set, run once, and an incremental run that finds no aggregate at all says
-so and stops. After that the incremental path keeps up.
+so and stops. After that the incremental path keeps up. A store holding
+no aggregate is the whole of what asks for a bootstrap. A change to what
+a manifest or an aggregate holds does not, and neither does a stored
+aggregate this publisher cannot read: both leave the catches where they
+are, and a bootstrap would publish from an empty aggregate and drop
+them.
 
 A bootstrap replaces the score history rather than extending it. It folds
 into an empty aggregate, so the state object it creates holds what its
@@ -502,13 +535,41 @@ replaces score history with only the selected window.
   Then require the three acceptance checks above. A change to what a manifest
   or an aggregate holds is not a cold start: the area is named rather than
   numbered, so it does not move, and both are read forward.
-- If listing or pagination fails, the newest state cannot be read, or its schema
-  is invalid, that is not absence. The publisher refuses to write by design.
-  Leave the append-only manifests and state objects intact: they and the raw
-  record history are the recovery sources. The current tool has no operator
-  option to select or restore an older state, so recovery requires a reviewed
-  path that reads preserved state and folds forward, landed on `main`; do not
-  improvise one with object deletion, renaming, or bootstrap.
+- If the run's log names a state it passed over and a state it folded onto,
+  that pair says which aggregate the run took and nothing more: it is printed
+  before the run reads a record or creates anything, so a later listing,
+  read, or creation that failed leaves the pair in the log of a run that
+  published nothing. What says a run published is its `created ...` line
+  naming the manifest object, together with the run's own conclusion. Where
+  both are there the recovery happened, and what a passed-over state folded
+  from days outside that run's window is not in the manifest; a second
+  dispatch changes none of that. Either way the log is reporting that the
+  newest states stopped being readable, which is the thing to go and find
+  the cause of.
+- If the log says every state it looked at was one it could not read, read
+  the fault it names against each. A state written in a shape from further
+  ahead means a publisher below that shape is deployed; land a `main` that
+  reads the shape it names and dispatch again. Where the log adds that the
+  states behind those are named for days before the first day the run reads,
+  widening `days` is what reaches them: dispatch with a window reaching a day
+  the listing above shows a readable state was created on. Either way leave
+  the append-only manifests and state objects intact — they and the raw
+  record history are the recovery sources — and do not reach for bootstrap or
+  for object deletion or renaming.
+- If a widened window reaches no readable state either, work back through
+  the listing, dispatching with a window that reaches the day each older
+  state was created on, until one is folded onto or the listing runs out. A
+  state written in a shape from further ahead is history out of reach rather
+  than history lost, and reads as soon as a publisher at that shape is
+  deployed, so a store holding one is never a cold start. A store whose
+  every state is a body that arrived and is not an aggregate holds no
+  history any publisher can reach, and that alone is the condition under
+  which this is a cold start: dispatch once with bootstrap on, and then
+  require the three acceptance checks above.
+- If listing a state, or reading one, fails outright, that is neither absence
+  nor an unreadable state: the run learned nothing about the object, and
+  refuses on that rather than taking the one behind it. Dispatch again once
+  the store serves the read.
 
 To run it by hand against the store without creating anything:
 
