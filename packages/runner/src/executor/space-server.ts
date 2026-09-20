@@ -5013,7 +5013,7 @@ export class SpaceServer implements TransactionSealDestination {
   async #loadStructureRootDocs(
     runtime: Runtime,
     rootKeys: ReadonlySet<string>,
-    rowByKey: ReadonlyMap<string, { id: string; scope?: string }>,
+    rowByKey: ReadonlyMap<string, { id: string; scope?: CellScope }>,
   ): Promise<void> {
     const pending: Promise<unknown>[] = [];
     for (const key of rootKeys) {
@@ -5025,7 +5025,7 @@ export class SpaceServer implements TransactionSealDestination {
       const cell = runtime.getCellFromLink({
         space: this.#options.space,
         id: root.id as URI,
-        scope: (root.scope ?? "space") as CellScope,
+        scope: root.scope ?? "space",
         path: [],
       });
       // A sync that rejects is not this pass's to report: the root's own
