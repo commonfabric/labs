@@ -475,11 +475,16 @@ shape-label contract version, so a memo without that protection is reissued.
 Each reader instead observes the
 materialized result through the ordinary cell read guard. The result array
 carries the canonical join of all returned row labels, including rows that the
-query contract skips; its membership and length are therefore withheld when
-any contributor exceeds the reader's ceiling. A `withheld` count carries that
-same label. An aggregate is withheld as a whole. Shared row-label failures
-omit row ordinals and data-derived details. These rules let multiple runtime
-ceilings share one materialization without revealing private row counts or
+query contract skips, as an `enumerate` label. Its membership and length are
+therefore withheld when any contributor exceeds the reader's ceiling. An
+addressed row payload carries that row's own labels without inheriting the
+array's membership label. A `withheld` count carries the same join as a value
+label. These store declarations retain their confidentiality across refreshes:
+removing or relabeling a row does not release the array's historical membership
+label. A reader admitted by every current row may therefore still be refused
+the array and its length. An aggregate is withheld as a whole. Shared row-label
+failures omit row ordinals and data-derived details. These rules let multiple
+runtime ceilings share one materialization without revealing private row counts or
 replacing one reader's filtered rows with another's.
 
 **Under server execution the ceiling travels with the session.** A client

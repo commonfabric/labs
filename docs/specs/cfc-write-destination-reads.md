@@ -55,7 +55,12 @@ record before staging a request and compares that snapshot with the destination
 when an abandoned publication settles. Both reads carry `writeDestinationRead`:
 they decide whether the write still owns this exact destination state, without
 dereferencing row links or carrying a destination value into the query or its
-output. This lets trusted publication machinery update a shared result whose
+output. The initial snapshot and the pending publication's destination diff
+also suppress scheduling dependencies: the query's inputs trigger another
+request, while the previous output does not. Keeping that comparison out of
+scheduling prevents a previous result's membership label from tainting the
+public pending flag through a trigger read. Conflict detection remains in
+force. This lets trusted publication machinery update a shared result whose
 shape label withholds it from the observing runtime.
 
 The marker is opt-in at a call site, never derived from the shape of a read,

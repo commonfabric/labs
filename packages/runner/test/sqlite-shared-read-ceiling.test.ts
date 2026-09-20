@@ -15,6 +15,7 @@ import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef } from "@commonfabric/memory/v2";
 
 import type { CfcConfClause } from "../src/cfc/clause.ts";
+import { cfcLabelViewForDereferenceTraces } from "../src/cfc/label-view.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
@@ -173,6 +174,91 @@ describe("sqlite shared read ceiling", () => {
     const rerun = await run(wide);
     expect(rerun.key("requestHash").get()).toBe(hash);
     expect(() => result.key("result").get()).toThrow(/read ceiling/);
+  });
+
+  it("keeps the array membership label out of an addressed row's payload observation", async () => {
+    const result = await run(writer);
+    const tx = writer.edit();
+    expect(result.key("result").key(0).key("body").withTx(tx).get()).toBe(
+      "mine",
+    );
+    const view = cfcLabelViewForDereferenceTraces(
+      tx,
+      tx.getCfcState().dereferenceTraces,
+    );
+    const confidentiality = (view?.entries ?? []).flatMap((entry) =>
+      entry.label.confidentiality ?? []
+    );
+    expect(confidentiality).toContain(signer.did());
+    expect(confidentiality).not.toContain(BOB);
+    expect((await tx.commit()).error).toBeUndefined();
+  });
+
+  it("refreshes a labeled shared result without observing its previous rows", async () => {
+    const carol = "did:mailto:carol@example.test";
+    const runtime = reader([signer.did(), BOB, carol]);
+    const { commonfabric: cf } = createTrustedBuilder(runtime);
+    const tx = runtime.edit();
+    const tick = runtime.getCell<number>(
+      signer.did(),
+      "refresh tick",
+      undefined,
+      tx,
+    );
+    tick.set(0);
+    const pattern = cf.pattern<{ tick: number }>(({ tick }) =>
+      // deno-lint-ignore no-explicit-any
+      cf.sqliteQuery({ db, sql: SQL, reactOn: tick } as any)
+    );
+    const result = runtime.run(
+      tx,
+      pattern,
+      { tick },
+      runtime.getCell(
+        signer.did(),
+        "refresh result",
+        pattern.resultSchema,
+        tx,
+      ),
+    );
+    expect((await tx.commit()).error).toBeUndefined();
+    const cancel = result.key("pending").sink(() => {});
+    try {
+      await runtime.settled();
+      expect(result.key("error").get()).toBeUndefined();
+      const previous = result.key("requestHash").get();
+      expect(result.key("pending").get()).toBe(false);
+      const refresh = runtime.edit();
+      refresh.recordSqliteWrite!(signer.did(), {
+        op: "sqlite",
+        db,
+        sql: "UPDATE emails SET to_addr = ? WHERE id = 2",
+        params: ["carol@example.test"],
+      });
+      tick.withTx(refresh).set(1);
+      expect((await refresh.commit()).error).toBeUndefined();
+      await runtime.settled();
+      expect(errors).toEqual([]);
+      expect(result.key("error").get()).toBeUndefined();
+      expect(result.key("pending").get()).toBe(false);
+      expect(result.key("requestHash").get()).not.toBe(previous);
+      expect(result.key("result").get()).toEqual([
+        { id: 1, to_addr: "", body: "mine" },
+        { id: 2, to_addr: "carol@example.test", body: "private message" },
+      ]);
+      const narrowed = reader([signer.did(), carol]).getCellFromLink(
+        result.getAsNormalizedFullLink(),
+      );
+      await narrowed.sync();
+      expect(() => narrowed.key("result").key("length").get()).toThrow(
+        /read ceiling/,
+      );
+      expect(narrowed.key("result").key(1).key("body").get()).toBe(
+        "private message",
+      );
+    } finally {
+      cancel();
+    }
   });
 
   it("withholds an aggregate value under a narrower observation ceiling", async () => {

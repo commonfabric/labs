@@ -30,6 +30,7 @@ import type { Action } from "../scheduler.ts";
 import type { RawBuiltinResult } from "../module.ts";
 import type { Runtime } from "../runtime.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
+import { TransactionWrapper } from "../storage/extended-storage-transaction.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import type { CellScope } from "../builder/types.ts";
 import { setPatternCell, setResultCell } from "../result-utils.ts";
@@ -49,11 +50,17 @@ import {
 import { speculationRunContextOf } from "../speculation/overlay-destination.ts";
 import { parseCfLinkToSigil } from "./sqlite/cf-link.ts";
 import { type IFCLabel, mergeLabel } from "../cfc/label-view-core.ts";
+import { cfcLabelViewFromMetadata } from "../cfc/label-view-state.ts";
+import { readStoredCfcMetadata } from "../cfc/metadata.ts";
 import {
+  cfcConfidentialityForObservationNode,
   joinCfcObservedConfidentiality,
   meetCfcObservationCeilings,
 } from "../cfc/observation.ts";
-import { writeDestinationRead } from "../storage/reactivity-log.ts";
+import {
+  ignoreReadForScheduling,
+  writeDestinationRead,
+} from "../storage/reactivity-log.ts";
 import {
   cloneIfNecessary,
   fabricFromConvertibleJsValue,
@@ -1103,8 +1110,10 @@ export function sqliteQuery(
     );
     // The destination snapshot decides whether an abandoned publication may
     // replace this exact record. Its values never enter the query or an output.
+    // A destination comparison must not make the previous rows a dependency
+    // whose next invalidation would taint this request's public pending flag.
     const storedBeforeClaim = result.withTx(tx).getRaw({
-      meta: writeDestinationRead,
+      meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
     }) as QueryState | undefined;
     const decision = sqliteQueryMemoDecision({
       stored: storedBeforeClaim,
@@ -1120,7 +1129,12 @@ export function sqliteQuery(
       return;
     }
     if (decision === "dedupe") return;
-    result.withTx(tx).set({ pending: true, requestHash: hash });
+    // Diffing the pending publication likewise observes only its destination.
+    // The query's inputs, read above, are what schedule another request.
+    result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set({
+      pending: true,
+      requestHash: hash,
+    });
 
     const sql = inputs.sql;
     requestStaged = true;
@@ -1424,7 +1438,7 @@ export function sqliteQuery(
                 staticConfidentialityOf(labelSchema),
                 ...rowLabels.labels.map((label) => label?.confidentiality),
               ]);
-            let writeSchema = needsEntryRowSchema
+            const rowWriteSchema = needsEntryRowSchema
               ? {
                 type: "object",
                 additionalProperties: true,
@@ -1437,30 +1451,6 @@ export function sqliteQuery(
                 },
               }
               : labelSchema;
-            if (shapeConfidentiality.length > 0) {
-              // A shared array's length and membership reveal its rows even
-              // without dereferencing them. The complete row-label join also
-              // protects a count of rows a query contract deliberately skips.
-              const properties = (writeSchema?.properties ?? {}) as Record<
-                string,
-                Record<string, unknown>
-              >;
-              const shapeIfc = { confidentiality: shapeConfidentiality };
-              writeSchema = {
-                ...writeSchema,
-                type: "object",
-                additionalProperties: true,
-                properties: {
-                  ...properties,
-                  result: {
-                    ...properties.result,
-                    type: "array",
-                    ifc: shapeIfc,
-                  },
-                  withheld: { type: "number", ifc: shapeIfc },
-                },
-              };
-            }
             // Every row is an entity document of its own under the result
             // cell, keyed as `resultRowKeys()` decides: a key stands still
             // across runs for a row that did not change, so the diff finds
@@ -1490,6 +1480,46 @@ export function sqliteQuery(
                 return;
               }
               const base = result.getAsNormalizedFullLink();
+              let writeSchema = rowWriteSchema;
+              if (shapeConfidentiality.length > 0) {
+                // A shared array's length and membership reveal its rows even
+                // without dereferencing them. The complete row-label join also
+                // protects a count of rows a query contract deliberately skips.
+                const properties = (writeSchema?.properties ?? {}) as Record<
+                  string,
+                  Record<string, unknown>
+                >;
+                // The store's declaration is grow-only, including across
+                // refreshes that remove a row or change its label. Known row
+                // payloads keep their own labels; only membership and the
+                // withheld count inherit this cumulative floor.
+                const priorShape = cfcConfidentialityForObservationNode({
+                  labelView: cfcLabelViewFromMetadata(
+                    readStoredCfcMetadata(wtx, base),
+                    [...base.path, "result"],
+                  ),
+                });
+                const shapeIfc = {
+                  confidentiality: joinCfcObservedConfidentiality([
+                    priorShape,
+                    shapeConfidentiality,
+                  ]),
+                };
+                writeSchema = {
+                  ...writeSchema,
+                  type: "object",
+                  additionalProperties: true,
+                  properties: {
+                    ...properties,
+                    result: {
+                      ...properties.result,
+                      type: "array",
+                      ifc: { ...shapeIfc, observes: "enumerate" },
+                    },
+                    withheld: { type: "number", ifc: shapeIfc },
+                  },
+                };
+              }
               // The stored link is bare. The row's schema, per-column labels
               // and row label included, goes on the write alone, whose policy
               // input is what carries the labels to the row document. A link

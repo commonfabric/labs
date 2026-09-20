@@ -255,6 +255,9 @@ A space- or user-shared result materializes independently of runtime ceilings.
 Its array shape and rows retain their confidentiality labels, and a read
 outside the observing runtime's ceiling is withheld. A shared result containing
 private rows can therefore withhold the whole array, including its length.
+That membership label retains its confidentiality across refreshes, even after
+rows are removed or relabeled. An addressed row's payload keeps its own label
+without inheriting the array's membership label.
 
 Declare the scope on the query:
 
