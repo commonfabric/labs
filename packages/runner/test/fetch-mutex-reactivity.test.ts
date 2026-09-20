@@ -248,8 +248,8 @@ describe("fetch-json mutex mechanism: reactive fetch state", () => {
       pending?: boolean;
     };
 
-    // The error reads back from the result cell with its `name`, `message`,
-    // and `stack` intact.
+    // The error reads back from the result cell with a `name` of `Error`, a
+    // `message` naming the HTTP status, and a string `stack`.
     expect(data.error).toBeDefined();
     const fe = data.error as {
       name: string;

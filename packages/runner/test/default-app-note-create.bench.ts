@@ -14,10 +14,8 @@
  *   "New Note" flow), then a second event removes it again so the list size
  *   stays constant across bench iterations.
  *
- * The default-app CPU profiles (docs/history/development/performance/
- * default-app-note-create.md) show per-note-create costs that grow linearly
- * with existing note count (traverse calls +~41/note, dirty-dependency visits
- * +~28/note). The @0/@32/@128 size variants make that growth visible.
+ * The @0/@32/@128 size variants show how the cost of a create+remove cycle
+ * moves with the existing note count.
  *
  * Complements:
  * - scheduler-event-preflight.bench.ts (synthetic preflight shape)

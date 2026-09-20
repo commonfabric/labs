@@ -60,7 +60,7 @@ describe("Pattern run via the ESM module loader", () => {
     const compiled = await runtime.patternManager.compilePattern(program);
     // The exported pattern is hardened (transitively frozen) at the module
     // boundary, yet its rehydration program still associates afterward: the
-    // association lives in a `WeakMap` side-table, and a write to one does not
+    // association lives in a `WeakMap` side-table, and a write to it does not
     // mutate the frozen object.
     expect(Object.isFrozen(compiled)).toBe(true);
     expect(getPatternProgram(compiled)?.main).toEqual("/main.tsx");

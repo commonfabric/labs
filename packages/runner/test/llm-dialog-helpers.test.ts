@@ -1189,7 +1189,7 @@ Deno.test("simplifySchemaForContext applies the depth cap inside prefixItems", (
 });
 
 Deno.test("simplifySchemaForContext handles Stream with nested detail structure", () => {
-  // The schema of a `Stream<{ detail: { value: string } }>`.
+  // The `editContent` property is a `Stream<{ detail: { value: string } }>`.
   const schema: any = {
     type: "object",
     properties: {

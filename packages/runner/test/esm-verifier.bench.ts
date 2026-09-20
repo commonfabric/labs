@@ -332,11 +332,11 @@ for (const [specifier, body] of parkingBodies) {
 }
 
 //
-// Shadow-detection pass overhead
+// Shadow-detection pass overhead, dominant module
 //
 // Compare `verifyCompiledModuleBody()` (two passes: shadow-scan + classify)
-// against the single-pass verifier above. The delta is the overhead of the
-// shadow-detection pass.
+// against the single-pass verifier above, to gauge what the shadow-detection
+// pass costs.
 //
 
 // Use only the dominant large module (first parking body by size) for the

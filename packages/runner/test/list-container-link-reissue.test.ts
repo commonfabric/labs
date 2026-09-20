@@ -58,8 +58,8 @@ import { flatMap } from "../src/builtins/flatmap.ts";
 //      reconcile commits, and the link comes back. That control is what pins
 //      the rejection, rather than the emptied spot, as the cause.
 //
-// `map`, `filter` and `flatMap` carry the same guard and the same single
-// `sendResult` call site.
+// `map`, `filter` and `flatMap` carry the same guard, and all three issue the
+// link through `issueResultContainerSetup()`.
 
 const signer = await Identity.fromPassphrase("list container link reissue");
 const space = signer.did();
