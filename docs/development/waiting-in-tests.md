@@ -124,7 +124,14 @@ Waits split into two groups with different primitives.
   value back to the caller in the same binding notification, so it must be a
   `PageConditionValue`: a plain JSON value. Maps, functions, class instances,
   cycles, and other lossy JSON inputs are rejected at the boundary instead of
-  being changed silently.
+  being changed silently. A wait that runs out reports the page it ran out
+  against: the predicate source and its arguments, the document URL and title,
+  `x-root-view`, whether `globalThis.app` is present and the view it holds,
+  outstanding runtime requests, and a console tail. That report is
+  `waitForCondition`'s own message, so a helper that wraps the failure with a
+  message of its own carries the report one level down, in the cause. Read the
+  cause before adding a probe of your own; what it prints is usually the thing
+  the probe was going to collect.
 - `awaitViewSettled(page)` resolves once the worker has settled reactively, the
   resulting vdom batch has crossed to the main thread and been applied, and Lit
   has finished its update cycle. This is the "is the control interactive yet"

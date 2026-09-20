@@ -1,5 +1,8 @@
 import { assertEquals, assertThrows } from "@std/assert";
-import { resolveSpaceStoreUrl } from "../v2/storage-path.ts";
+import {
+  configuredStorePath,
+  resolveSpaceStoreUrl,
+} from "../v2/storage-path.ts";
 
 Deno.test("resolveSpaceStoreUrl uses a dedicated engine subdirectory in directory mode", () => {
   const root = new URL("file:///tmp/cf-memory/");
@@ -53,4 +56,38 @@ Deno.test("resolveSpaceStoreUrl rejects malformed unicode subjects with validati
     Error,
     "Invalid memory space identifier for store path",
   );
+});
+
+Deno.test("configuredStorePath reads a store location in either form", () => {
+  // The form a server's own configuration uses. The path comes back as the URL
+  // spells it, so the trailing separator the default carries survives.
+  assertEquals(
+    configuredStorePath("file:///srv/cache/memory/"),
+    "/srv/cache/memory/",
+  );
+  assertEquals(
+    configuredStorePath("file:///srv/cache/memory"),
+    "/srv/cache/memory",
+  );
+
+  // A percent-escape in the URL is one character of the path it names.
+  assertEquals(
+    configuredStorePath("file:///srv/a%20b/memory"),
+    "/srv/a b/memory",
+  );
+
+  // A path written by hand is already a path, and is handed back untouched.
+  assertEquals(configuredStorePath("/srv/cache/memory"), "/srv/cache/memory");
+  assertEquals(configuredStorePath("/srv/cache/memory/"), "/srv/cache/memory/");
+  assertEquals(configuredStorePath("relative/memory/"), "relative/memory/");
+
+  // A location this cannot read as a local path comes back as it stands, for the
+  // caller to report as holding nothing rather than to throw over. Two shapes
+  // reach that: another scheme, and a `file:` URL that does not parse.
+  assertEquals(
+    configuredStorePath("https://example.com/store"),
+    "https://example.com/store",
+  );
+  assertEquals(configuredStorePath("file://[/store"), "file://[/store");
+  assertEquals(configuredStorePath(""), "");
 });
