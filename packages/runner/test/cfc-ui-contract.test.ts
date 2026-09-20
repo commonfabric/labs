@@ -218,8 +218,8 @@ describe("CFC UI contract matching", () => {
   });
 
   it("collects contracts declared in tuple (prefixItems) slots at their index", () => {
-    // CT-1895: contracts in tuple element schemas were never collected, so
-    // a declared UI contract on a slot went unenforced.
+    // A contract declared in a tuple element schema is collected under its
+    // slot index, so a UI contract declared on a slot is enforced.
     const contracts = uiContractsFromSchema({
       type: "array",
       prefixItems: [
@@ -240,9 +240,9 @@ describe("CFC UI contract matching", () => {
   });
 
   it("keeps the items wildcard entry beside prefixItems", () => {
-    // PR #4969 review: dropping the `*` entry silently dropped the tail
-    // elements' declared contract (fail-open). The `*` stays — it
-    // over-enforces the rest contract on tuple slots, the fail-safe
+    // The `*` entry carries the tail elements' declared contract; a schema
+    // walk that dropped it would leave that contract unenforced (fail-open).
+    // It over-enforces the rest contract on tuple slots, the fail-safe
     // direction.
     const contracts = uiContractsFromSchema({
       type: "array",

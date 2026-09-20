@@ -185,8 +185,8 @@ describe("CFC labelMap component origins", () => {
   });
 
   it("mints declared entries for tuple (prefixItems) slots at their index", async () => {
-    // CT-1895: walkIfcSchema never descended prefixItems, so an ifc on a
-    // tuple slot minted no labelMap entry — tuple data under-tainted.
+    // The IFC schema walk descends `prefixItems`, so an `ifc` on a tuple slot
+    // mints a labelMap entry and the tuple data carries its declared taint.
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL("https://example.com"),

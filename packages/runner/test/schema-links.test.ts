@@ -98,11 +98,10 @@ describe("Schema - Link Resolution", () => {
       });
     });
 
-    it("warns (not silently) when a narrower-scope link follow is blocked (CT-1642)", () => {
+    it("logs at warn level when a narrower-scope link follow is blocked", () => {
       // Same setup as above: a session-scoped cell read through a user-scoped
-      // schema. The follow is correctly blocked (-> undefined); CT-1642 is that
-      // it used to log only at logger.info, which the traverse logger (level
-      // "warn") swallowed. Assert the drop now surfaces at warn level.
+      // schema. The follow is blocked (-> undefined), and the drop is logged at
+      // warn level, which is the level the traverse logger lets through.
       const traverseLogger = (globalThis as {
         commonfabric?: {
           logger?: Record<string, {
