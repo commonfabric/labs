@@ -52,6 +52,16 @@ a record: archive it to `docs/history/plans/` following the procedure in
   commit SHA answers for the bytes, the text loads by handle into a child the
   chooser never reads, and a split-mint provenance mark records where it came
   from without declassifying anything.
+- [Mention references at scale](mention-references-at-scale.md) asks what `#42`
+  costs when a collection has a million members, and separates the three
+  concerns one static array currently serves: authoring a mention, resolving
+  one for display or navigation, and completing one while somebody types. It
+  carries what the editor does today with citations, what `wish` and
+  `slug:resolve` can and cannot answer, the facility that does not exist — a UI
+  component cannot ask a pattern a question and await an answer, though the
+  receipt that would carry one is written by default and read back by the CLI —
+  three options with their costs at a thousand and a million members, and the
+  owner questions each of them turns on. Proposed; nothing in it is built.
 - [Collection naming: the first customer](collection-naming-topics.md)
   builds [Naming in collections](../specs/collection-naming.md) on a parallel
   exemplar board — a naming library, a member namespace the CLI and the shell
