@@ -2499,8 +2499,10 @@ export default pattern<TopicInput, TopicOutput>(
     //
     // Each filtered view goes inside `computed()`: a method call on an opaque
     // pattern value is not lowerable on its own. The retraction rule is the
-    // same in all three — a stamped record is not there to read — and only
-    // `lastActivityAt` below is deliberately exempt from it.
+    // same in both — a stamped record is not there to read — and only
+    // `lastActivityAt` below is deliberately exempt from it. Whatever else
+    // needs the retraction rule reads one of those two, or the count beside
+    // them, rather than applying it a second time.
 
     // A count of what is there to read, so retracted comments are excluded —
     // the board's card would otherwise promise more comments than the topic
@@ -2524,12 +2526,11 @@ export default pattern<TopicInput, TopicOutput>(
     const linksView = computed(() =>
       links.get().filter((l) => l.removedAt === undefined)
     );
-    const hasLinks = computed(() =>
-      links.get().filter((l) => l.removedAt === undefined).length > 0
-    );
-    const hasComments = computed(() =>
-      comments.get().filter((c) => c.removedAt === undefined).length > 0
-    );
+    // Each presence boolean reads the derivation above it rather than the
+    // records: `linksView` answers for a length alone, and `commentCount`
+    // is already the count of comments there are to read.
+    const hasLinks = linksView.length > 0;
+    const hasComments = commentCount > 0;
     const hasBody = body.get().trim().length > 0;
 
     // Inbound: who points at this topic, looked up in the board's pivot rather
@@ -2929,16 +2930,12 @@ export default pattern<TopicInput, TopicOutput>(
 
     // A link's URL, asked of `cellFromUrl` once per link. Most answer with no
     // cell — they are web pages — and those simply are not mentions.
-    // One map over an explicitly reactive receiver rather than two chained
-    // ones, which is #6465's shape, adopted here because this rule needs the
-    // whole link record: a retracted link stops resolving, so the reference
-    // it contributed to `mentions` goes with it instead of outliving the
-    // link that made it. The intermediate url-only array could not carry
-    // `removedAt` to say so.
-    const linksToResolve = computed(() =>
-      links.get().filter((l) => l.removedAt === undefined)
-    );
-    const linkTargets = linksToResolve.map((link) =>
+    // The receiver is `linksView`, the same active links the Links card
+    // renders, and it carries the whole link record rather than the URLs
+    // alone: a retracted link stops resolving, so the reference it
+    // contributed to `mentions` goes with it instead of outliving the link
+    // that made it. A url-only array could not carry `removedAt` to say so.
+    const linkTargets = linksView.map((link) =>
       cellFromUrl({ url: link.url ?? "" })
     );
     // Outbound: what this topic points at. Only this half depends on the
