@@ -118,9 +118,15 @@ largest single run drops from 279 accesses to 79, while `comment` carries the
 same 20 accesses under both postures despite its two-run difference.
 
 So the difference is a small countable set of runs that do not happen under
-server execution: four in `backlink` carrying about 138 accesses each, two in
-`comment` carrying no measurable reads. The absent runs are exactly the ones
-that had no source location.
+server execution: four fewer in `backlink`, which carry 554 fewer accesses
+between them, and two fewer in `comment`, which carry none that this sample
+can measure. The absent runs are exactly the ones that had no source location.
+
+No per-run figure is available, and dividing the 554 by the four would invent
+one. The sampler aggregates source-less runs, so there is no distribution over
+those four to divide — and what can be seen of the population they came from
+says it is not uniform: the OFF `backlink` row's largest single run is 279 of
+its 668 accesses, 42% of the row in one run of 46.
 
 **What those four runs are is not recorded, and identifying them needs an
 instrumentation change.** A run carrying a source location is bucketed under it
@@ -253,9 +259,12 @@ for the load.*
 Comparing each round's mean, seven of the ten timed cases separate between the
 postures, six of them with ON slower. The count is not stable under the choice
 of statistic: on each round's 75th percentile it is eight and seven, and on
-each round's fastest iteration four and four. None of it is usable anyway, and
-the reason is not that this machine was busy. It is that the rig cannot hold
-the two postures to the same conditions.
+each round's fastest iteration four and four. One of the ten, the scale
+benchmark's board-load case, has a single ON round rather than two, its other
+having failed — the conditions section says how, and that case carries no
+counters either way. None of it is usable anyway, and the reason is not that
+this machine was busy. It is that the rig cannot hold the two postures to the
+same conditions.
 
 **The arms did not run under the same load.** One-minute load average, pooled
 over each posture's rounds, against 10 logical CPUs:
@@ -328,9 +337,22 @@ toolshed binary serving a baked shell, driven by Chrome — runs a coherent arm
 at all. That was settled before any round ran, and separately from what the
 rounds found.
 
-*Source: `postureReadbacks` and each round's `posturePayload`. The refusal
-described at the end of this section was observed on a terminal and is not in
-the results file; it is a property of the reader named there.*
+*Source: `postureReadbacks` and each round's `posturePayload`;
+`machine.browser` and `machine.sandbox` for the browser and the session.
+Two things in this section were observed on a terminal and are not in the
+results file: the launch probe's own steps, and the refusal described at the
+end. The refusal is a property of the reader named there.*
+
+Chrome launches under Astral in the session that ran this, which had to be
+shown rather than assumed: a browser failing to start inside a macOS agent
+sandbox is an artifact of the sandbox and not a result, so a measurement whose
+record is silent on it leaves a reader unable to tell a checked environment
+from an unchecked one. The session was established as unsandboxed by what it
+could do — writes outside the workspace, Apple Events, the GUI launchd domain,
+direct network — and a headless launch through the repository's own
+`Browser.launch` then selected the installed Chrome, navigated a `data:` URL,
+read a user agent of Chrome 153 back out of the page, and closed. Every one of
+the eight rounds below launched browsers through that same path.
 
 A toolshed binary built with `EXPERIMENTAL_SERVER_EXECUTION=true` serves a
 deployment whose posture reads back as declared: `/api/meta` reports both

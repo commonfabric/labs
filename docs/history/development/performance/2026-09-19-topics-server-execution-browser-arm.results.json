@@ -5,7 +5,9 @@
   "logicalCpus": 10,
   "model": "Mac17,2",
   "os": "Darwin 27.0.0",
-  "note": "Shared machine under unrelated load throughout; see loadSeries."
+  "note": "Shared machine under unrelated load throughout; see loadSeries.",
+  "browser": "Google Chrome 153, the installed browser Astral was pointed at.",
+  "sandbox": "The session was unsandboxed. Established by capability rather than by configuration: writes outside the workspace, Apple Events, the GUI launchd domain and direct network all succeeded."
  },
  "design": {
   "postureVerifiedPerRound": true,
