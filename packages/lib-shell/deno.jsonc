@@ -7,7 +7,6 @@
   "exports": {
     ".": "./src/index.ts",
     "./credentials": "./src/credentials.ts",
-    "./invites": "./src/invites.ts",
     "./runtime": "./src/runtime.ts"
   }
 }
