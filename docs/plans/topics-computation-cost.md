@@ -180,16 +180,24 @@ implementation and prototypes can begin earlier.
       regression read budgets, run all relevant authored/package/integration
       tests, preserve compatibility baselines, pass the
       [pattern update gates](../specs/pattern-update-testing.md), and update
-      maintained docs. Those gates report an inserted `.map` rather than gating
-      it: a mapped row's anonymous sub-pattern is a transformer-derived hoist,
-      hoist ids are builder node ids that ordinary edits renumber, and a hoist
-      today's source no longer defines is held back and reported instead of
-      failing. A hoist that does apply is compared like everything else, so
-      what the gates stop covering is the inserted map itself, not row
-      behavior in general. Either keep a new `.map()` call after the existing
-      ones in the Topics sources, or have T6 check map-rendered rows directly.
-      Produce matched before/after demos and reports. Establish and record how
-      to check the hoist requirement under
+      maintained docs. Those gates do not establish that an inserted `.map`
+      preserves behavior, for two reasons their spec gives. The comparison
+      excludes renderings, and a mapped row's sub-pattern is a recorded
+      instantiation whose whole result is a vnode, recognized as a rendering
+      by shape wherever it sits — so such a hoist contributes nothing to the
+      comparison even when it applies. And insertion renumbers the later
+      hoists of its kind, which the gates need not notice: a hoist whose
+      stored arguments today's schema refuses is held back and reported, and
+      one today's source no longer defines is held back the same way, but
+      inserting ahead of existing hoists leaves every stored id defined and
+      may leave its arguments acceptable, so neither holdback has to fire.
+      What stays gated is every hoist that applies and is not a rendering,
+      the moved-`.for()` class among it. Either keep a new `.map()` call after
+      the existing ones in the Topics sources, where the ids already recorded
+      do not move and the new hoist has no recorded instantiation to replay,
+      or have T6 check map-rendered rows directly. Produce matched
+      before/after demos and reports. Establish and record how to check the
+      hoist requirement under
       [compatibility requirements](#compatibility-requirements), with evidence
       from the stored data of deployed board and topic generations, among them a
       read-only copy of the primary Topics instances obtained through Gideon.
