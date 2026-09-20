@@ -62,8 +62,10 @@ namespace holds for it, by sending that number to the topic's own
 `recordName` — the one thing a member must provide for `recordNames` in
 `naming.ts` to reach it, and the verb an operator can also call directly. A
 board cannot confirm that asking inside the transaction that makes it, so the
-step returns `assigned`, `named` and `pending`, and a run leaving a non-empty
-`pending` is completed by running it again. The per-topic `cf piece link` of
+step returns `assigned`, `named` and `pending`. Once numbers are shown again, a
+run leaving a non-empty `pending` is completed by running it again; while they
+are hidden `pending` holds every topic on every run and `assigned` is the half
+that settles, as the paragraph above says. The per-topic `cf piece link` of
 `namesTable` that decision 13 accepted is no longer part of any Topics
 procedure; the operator procedure as it now stands, including what it has not
 been rehearsed for, is
@@ -142,8 +144,10 @@ Addressing is untouched: the board allocates a number on every create, records
 it in `names`, lists it beside its topic in `namesTable`, `addTopic` returns the
 name it allocated, and `top/<n>` resolves. What the hiding costs is the two
 reads that go through a topic — its own `shortName` and its `index` row — so the
-namespace is where a number is read while numbers are hidden, and item 3's bind
-check reads the topic's stored `boardNames` argument instead. The exemplar in
+namespace is where a number is read while numbers are hidden. Item 3's check is
+the topic's own stored number, read from its durable `shortName` input, which
+the switch does not gate; the `boardNames` argument that check once read is gone
+with the input. The exemplar in
 `packages/patterns/collection-naming/` shows its numbers in the header, on the
 cards, and in the editor, and its tests are unchanged.
 
@@ -528,12 +532,19 @@ Mike's call, after S4.
       namespace and needs `--dangerously-allow-incompatible-schema` until a
       general mechanism for adding a property to existing data exists.
    3. Update each topic to a pattern that declares the `shortName` input and
-      the `recordName` verb, then run `backfillNames` until its `pending` list
-      comes back empty. Every topic takes the source update BEFORE the step
-      runs: a send to a path holding no stream is an ordinary write, so the
-      step's event lands as data in an un-updated topic's result. Run the
-      source updates from a host: laptop runs died 4-6 minutes in during the
-      2026-08-28 migration.
+      the `recordName` verb, then run `backfillNames` until its `assigned` list
+      comes back empty. `assigned` rather than `pending`, and the difference
+      matters while numbers are hidden: the step reads a topic's published
+      `shortName` to tell a stored number from none, `SHOW_TOPIC_NUMBERS` gates
+      exactly that, so `pending` holds every topic on every run and waiting for
+      it to empty would wait forever. An empty `assigned` says the namespace
+      holds every listed topic; what each topic stores is read from its own
+      durable input, `cf cell get --cell "$TOPIC" shortName --input`. The
+      operator procedure has the whole of it. Every topic takes the source
+      update BEFORE the step runs: a send to a path holding no stream is an
+      ordinary write, so the step's event lands as data in an un-updated
+      topic's result. Run the source updates from a host: laptop runs died 4-6
+      minutes in during the 2026-08-28 migration.
    4. Verify by reading both the board's index and the member addresses. In
       the rerun the fixed board's index agreed with its members at all three
       reads; the two reads that disagreed were on the instrument board

@@ -293,11 +293,15 @@ cf piece call --cell <board> addTopic \
 # -> { "result": { "name": "1", "topic": { "$link": "/of:fid1:..." } } }
 cf cell get --cell <board> names
 # -> { "1": {} }
-# Idempotent, so a board whose topics all report their numbers reports three
-# empty lists. Re-run while `pending` is non-empty: the step can ask a topic to
-# store its number and cannot confirm that it did.
+# Idempotent. While `SHOW_TOPIC_NUMBERS` is off the step cannot see what a topic
+# stores, so `named` is empty and `pending` holds every topic however many runs
+# have gone by: re-run until `assigned` is empty, and read one topic's stored
+# number from its own input. The three empty lists below are what this returns
+# once numbers are shown again.
 cf piece call --cell <board> backfillNames '{"agentName":"Sol"}'
 # -> { "result": { "assigned": [], "named": ["1","2"], "pending": [] } }
+cf cell get --cell <topic> shortName --input
+# -> "1"
 cf cell get --cell <board> topics --input \
   --select title,createdAt,lastActivityAt,commentCount
 cf piece call --cell <topic> addComment \

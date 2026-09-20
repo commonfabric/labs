@@ -976,6 +976,21 @@ export const TOPICS_THEME = {
  * `recordName` reads the ungated input and declines a number already stored.
  * `BackfillNamesResult` in `./main.tsx` says what an operator reads instead.
  *
+ * WHAT TURNING IT ON WILL NEED IN TESTS, which is the part nothing else will
+ * remind anyone of. This is a module constant, so a pattern test cannot vary
+ * it: it is baked into the compiled program, and every Topics test therefore
+ * runs the `false` branch only. Nothing today guards the `true` branch of the
+ * publication below, and nothing can. When this flips, three things become
+ * assertable and should be asserted in `./naming.test.tsx` in the same change:
+ * a topic publishing the number it stores; the board's `index` row and mention
+ * universe row carrying it; and `backfillNames` reporting a stored number
+ * under `named` with an empty `pending`, which is the report this switch
+ * currently costs. Several cases there read numbers out of cells the test
+ * supplies purely because nothing published carries one; those can then read
+ * the publication directly. The library's own already-recorded branch is held
+ * meanwhile in `../collection-naming/naming.test.tsx`, over stand-in members
+ * that publish a name, because Topics cannot reach it.
+ *
  * TODO(mike): Turn this on once every topic on the deployed Topics board has a
  * number. Doing so restores the step's report by itself; nothing else changes.
  */
