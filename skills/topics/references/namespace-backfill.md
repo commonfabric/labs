@@ -120,7 +120,9 @@ space holding real data.
 3. **`backfillNames`, as many times as it takes.** It numbers every Topic the
    namespace does not hold, in filing order, and asks every Topic reporting no
    number to store the one the namespace holds for it. Over Topics that all
-   report their numbers it writes no key and sends no event.
+   report their numbers it writes no key and sends no event — which, while
+   numbers are hidden, is no Topic at all. "What a re-run writes" below says
+   what each run costs instead.
 
 ### The command
 
@@ -151,12 +153,48 @@ landed under `named` and asks for the rest.
 Topic's published `shortName` to tell a stored number from none, and
 `SHOW_TOPIC_NUMBERS` gates exactly that, so every Topic reads as storing nothing
 however much it holds: `named` comes back empty and `pending` comes back holding
-every Topic on the board, run after run. The asking writes nothing —
-`recordName` reads the Topic's own input, which no switch gates, and declines a
-number already stored — so running the step again is safe and idle; what it
-cannot do is tell you it is done.
+every Topic on the board, run after run. What it cannot do is tell you it is
+done.
 
-So until the switch is on, read three things instead of `pending`:
+### What a re-run writes
+
+A re-run is safe. It is not idle, and on a board the size of the deployed one
+the difference matters, because `pending` holding every Topic means every run
+asks every Topic again. Per case:
+
+- **The asking itself is a write.** A send is an ordinary write to the target's
+  stream — `Cell.send` in `packages/runner/src/cell.ts` delegates to `set` — and
+  every send in one run lands in the board's own transaction. So a run over a
+  board of 125 Topics writes 125 events and dispatches 125 handlings, whatever
+  those handlings then decide. That cost is per run and does not fall as Topics
+  store their numbers, because the step cannot see that they have.
+- **A Topic that already stores its number writes nothing further.**
+  `recordName` compares the number asked for against its own input — which no
+  switch gates — and returns before `upgradeTopicState` and before the write.
+  This is the case "safe to repeat" is true of, and while numbers are hidden it
+  is most of the board after the first run.
+- **A Topic whose write did not land writes now.** That is what a re-run is for:
+  the obstruction cleared, the asking arrives again, and the number is stored. A
+  run is idle only over a board where nothing is outstanding.
+- **A Topic that stores a different number refuses, and a refusal is not
+  silence.** `recordName` rejects rather than overwriting, so that Topic's
+  handling fails and is logged, once per run for as long as the disagreement
+  stands. The same goes for a Topic parked at a state version no source supports
+  — though only when the verb would otherwise write, since the already-stored
+  return comes first.
+- **A Topic whose source has no `recordName` yet takes the payload as data.**
+  The send lands at `recordName` in that Topic's result document rather than
+  running anything
+  ([#7661](https://github.com/commontoolsinc/labs/issues/7661)), and it is
+  written again on every run until that Topic's source moves. This is why step 2
+  comes before step 3.
+
+So: re-run when something is outstanding, not as a matter of course. Each run
+costs one board transaction, one event and one handling per Topic, and one
+logged failure per Topic in a state the verb refuses. None of it corrupts
+anything, and none of it is free.
+
+Until the switch is on, read three things instead of `pending`:
 
 - **`assigned` empty** means every listed Topic is numbered in `names`. That is
   the whole of the namespace half, and it is what `top/<n>` resolves through.
@@ -287,11 +325,22 @@ Topic stores:
 deno task cf cell get "$TOPICS_BOARD" index --step --select @,title,shortName
 ```
 
-Audit only Topics whose source has already been migrated. Input reads use the
-current pattern's projection: a Topic whose pattern does not declare `shortName`
-refuses this targeted read with `Cannot access path "shortName"`, and so does a
-targeted `deno task cf cell set --input` write to it. Updating the Topic's
-pattern is what makes the path reachable at all.
+Audit only Topics whose source has already been migrated. Every targeted use of
+an input path goes through one guard — `assertPieceInputPath` in
+`packages/piece/src/ops/piece-input-path.ts`, which refuses a path the current
+pattern's input schema does not select — so against a Topic whose pattern does
+not declare `shortName`, reading it, writing it with
+`deno task cf cell set --input`, and binding a link at it all fail the same way:
+
+```
+Cannot access path "shortName" - property "shortName" not found in the current
+pattern's input schema. Update the target pattern with cf piece setsrc to
+declare this input before linking, reading, or writing it.
+```
+
+That is step 2 restated by the runtime, and it is why step 2 is a prerequisite
+rather than a nicety: updating the Topic's pattern is what makes the path
+reachable at all.
 
 ### Traps
 
@@ -304,8 +353,10 @@ persist compilation artifacts before setup accepts it, so reset the clone with
 **A number is permanent, and only the verb enforces that.** `recordName` refuses
 a number that disagrees with one the Topic already stores, and writes nothing
 when it agrees. A targeted `deno task cf cell set --input` write to `shortName`
-has no such guard and will overwrite or blank a stored number, so reach for the
-verb:
+carries no such guard and will overwrite or blank a stored number. The path
+check above does not stand in for it: that one asks whether the pattern declares
+`shortName` at all, and on a migrated Topic it passes and the write lands. So
+reach for the verb:
 
 ```bash
 deno task cf piece call --cell "$TOPIC" recordName '{"name":"42"}'
