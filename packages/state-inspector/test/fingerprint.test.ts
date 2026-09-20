@@ -444,6 +444,16 @@ Deno.test("enumerates a store past the spread-argument ceiling", () => {
     seedBulk(path, 200_000);
     const space = openSpace(path);
     try {
+      // Pin the PREMISE first. The classification below is true of the base
+      // fixture alone, so on its own it would pass just as well if the bulk
+      // seed silently planted nothing — a lower count, a rolled-back
+      // transaction, an enumeration that stops early without reporting itself
+      // truncated — and the crash this case exists for would come back
+      // unnoticed. `extent.total` is the row count before any cap, so it says
+      // what the scope listing actually carried; the listing itself stops at
+      // `DEFAULT_SCAN_LIMIT`, which is why asking for it stays cheap.
+      assertEquals(listEntityModels(space).extent.total, 200_004);
+
       // Reached through `allEntities`, and cheap per entity: it skips every
       // model that is not a piece, so this pins the enumeration without paying
       // to hash six figures of documents.
