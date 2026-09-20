@@ -84,7 +84,7 @@ this category default off unless their section says otherwise.
 
 The mapping from environment variable to flag is defined once, canonically, as
 `EXPERIMENTAL_ENV_VARS` in
-[`packages/runner/src/runtime-presets.ts`](../../packages/runner/src/runtime-presets.ts),
+[`packages/runner/src/experimental-posture.ts`](../../packages/runner/src/experimental-posture.ts),
 and read by `experimentalOptionsFromEnv(envReader)`. The toolshed, the CLI, and
 the background piece service all go through that one mapping, so their wirings
 cannot drift; the shell reads the same variables from its build-time defines
@@ -1626,7 +1626,7 @@ preset in
 [`packages/runner/src/runtime-presets.ts`](../../packages/runner/src/runtime-presets.ts),
 and the environment-backed flags reach the runtime through the one canonical
 mapping, `experimentalOptionsFromEnv`, in
-[`packages/runner/src/runtime-presets.ts`](../../packages/runner/src/runtime-presets.ts). That mapping accepts
+[`packages/runner/src/experimental-posture.ts`](../../packages/runner/src/experimental-posture.ts). That mapping accepts
 exactly `"true"` and `"false"`: an unset variable stays `undefined`, which the
 runtime reads as "use the built-in default", and any other value is ignored with
 a warning. (The distinction between unset and an explicit `false` matters,
@@ -1639,7 +1639,7 @@ Server Process (Deno)
   |
   +-- ENV: EXPERIMENTAL_* = "true" | "false"
   |
-  +-- runner/runtime-presets.ts --> experimentalOptionsFromEnv(Deno.env.get)
+  +-- runner/experimental-posture.ts --> experimentalOptionsFromEnv(Deno.env.get)
   +-- toolshed/runtime-options.ts --> runtimePresets.productionServer({ experimental, ... })
   +-- toolshed/index.ts           --> new Runtime(toolshedRuntimeOptions(...))
 ```
@@ -1707,7 +1707,7 @@ cf / pieces controller / agents host / github host / cast-admin
   +-- GET <apiUrl>/api/meta  --> { experimental: { <flag>: <boolean>, ... } }
   |     the posture the SERVER runs at
   |
-  +-- runner/runtime-presets.ts --> experimentalOptionsForDeployedClient()
+  +-- runner/experimental-posture.ts --> experimentalOptionsForDeployedClient()
   |     explicit EXPERIMENTAL_* > server declaration > built-in default
   |
   +-- runtimePresets.remoteClient({ experimental, ... })
@@ -1748,7 +1748,7 @@ Three rules govern what a client does with a declaration:
   also how you disagree with a deployment on purpose.
 - **Only a server-authoritative flag is adopted.**
   `EXPERIMENTAL_FLAG_AUTHORITY` in
-  [`packages/runner/src/runtime-presets.ts`](../../packages/runner/src/runtime-presets.ts)
+  [`packages/runner/src/experimental-posture.ts`](../../packages/runner/src/experimental-posture.ts)
   classifies every flag as `"server"` or `"client"`, type-gated the same way as
   the environment mapping, so a new flag does not compile until someone decides
   whether a `cf` binary follows the deployment on it. Every flag is `"server"`
@@ -1871,8 +1871,11 @@ control point, and then reads the effective state back so that
 
 First-party construction config is centralized in
 [`packages/runner/src/runtime-presets.ts`](../../packages/runner/src/runtime-presets.ts),
-which is the place to touch when adding or changing a flag that construction
-config reaches:
+while flag parsing, environment mappings, and deployed-client adoption live in
+[`packages/runner/src/experimental-posture.ts`](../../packages/runner/src/experimental-posture.ts).
+The browser-safe `@commonfabric/runner/experimental-posture` export provides
+those functions to standalone hosts without loading the runtime implementation.
+`runtime-presets.ts` re-exports them for existing callers:
 
 - `EXPERIMENTAL_ENV_VARS` is
   the single environment-variable mapping for `ExperimentalOptions`, typed as

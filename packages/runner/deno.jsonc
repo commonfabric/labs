@@ -38,6 +38,7 @@
     "./entity-kind": "./src/entity-kind.ts",
     "./fabric-special-object-brand": "./src/fabric-special-object-brand.ts",
     "./experimental-posture": "./src/experimental-posture.ts",
+    "./space-host": "./src/space-host.ts",
     "./fabric-url": "./src/fabric-url.ts",
     "./meta-seam": "./src/meta-seam.ts",
     "./slugs": "./src/slugs.ts",
