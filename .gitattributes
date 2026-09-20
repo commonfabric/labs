@@ -15,7 +15,8 @@ docs/history/INDEX.md merge=union
 # only add lines, so every state it produces is one that
 # `deno task check-test-aliases` still judges: that gate fails a line that does
 # not parse, an identity mapped twice, a cycle, a committed file that went
-# missing, and one whose committed content is no longer a prefix of its own.
+# missing, and one whose committed content is no longer a prefix of the
+# working file.
 tasks/test-identity-aliases/*.jsonl merge=union
 
 # Keep generated measurement data available without expanding it in code review.
