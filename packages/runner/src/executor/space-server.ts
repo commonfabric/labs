@@ -727,7 +727,14 @@ export class SpaceServer implements TransactionSealDestination {
   /** Cancellation boundary for structure work owned by this tenure. */
   readonly #structureLoadAbort = new AbortController();
 
-  /** Documents changed by admissions during the active structure attempt. */
+  /** Documents changed by admissions over a whole demand pass — from the
+   * pull that opens it through its last root's traversal, not one root's
+   * attempt. The pull is what registers each root's watch, and a registered
+   * watch is what lets a traversal read from the replica rather than fetch,
+   * so a root's reading is taken over that whole span and an admission
+   * anywhere in it is one the reading may not carry. Narrowing this back to
+   * a per-root lifetime would let a commit landing after the pull terminalize
+   * a root on a verdict that predates it. */
   #structureLoadChangedDocs: Set<string> | undefined;
 
   /**
@@ -4992,12 +4999,13 @@ export class SpaceServer implements TransactionSealDestination {
    *
    * The pass's structure loads are sequential — each root's traversal may
    * START a piece, and a start's writes belong to the wave that asked for it
-   * — and each begins by syncing the root document it was handed. Awaiting
-   * them one at a time puts each of those syncs in a `session.watch.add` of
-   * its own, so a pass over a board's roots costs a round trip per root
-   * inside the wave's settle. Issued together, the replica's refresh queue
-   * coalesces them into one add, and the traversals that follow find their
-   * documents already held.
+   * — and each begins by syncing the root document it was handed, and, where
+   * a scoped demand reads meta-less, the space instance it falls back to.
+   * Awaiting them one at a time puts each of those syncs in a
+   * `session.watch.add` of its own, so a pass over a board's roots costs a
+   * round trip per root inside the wave's settle. Issued together, the
+   * replica's refresh queue coalesces them into one add, and the traversals
+   * that follow find their documents already held.
    *
    * What this changes is when the pass waits, not what it reads: every
    * address here is one a load would have synced anyway, through the same
@@ -5022,16 +5030,26 @@ export class SpaceServer implements TransactionSealDestination {
       if (!firstDemand && !this.#pendingStructureLoads.has(key)) continue;
       if (this.#terminalStructureLoads.has(key)) continue;
       if (neverAPieceRootId(root.id)) continue;
-      const cell = runtime.getCellFromLink({
-        space: this.#options.space,
-        id: root.id as URI,
-        scope: root.scope ?? "space",
-        path: [],
-      });
-      // A sync that rejects is not this pass's to report: the root's own
-      // traversal issues the same sync a moment later and its failure arm
-      // counts and logs what went wrong.
-      pending.push(cell.sync().catch(() => {}));
+      const scope = root.scope ?? "space";
+      // A scoped demand that reads meta-less falls back to the SPACE
+      // instance, so both are addresses a load may sync and both belong in
+      // the pull. They are one address when the demand is space-scoped.
+      const scopes: CellScope[] = scope === "space" ? ["space"] : [
+        scope,
+        "space",
+      ];
+      for (const instance of scopes) {
+        const cell = runtime.getCellFromLink({
+          space: this.#options.space,
+          id: root.id as URI,
+          scope: instance,
+          path: [],
+        });
+        // A sync that rejects is not this pass's to report: the root's own
+        // traversal issues the same sync a moment later and its failure arm
+        // counts and logs what went wrong.
+        pending.push(cell.sync().catch(() => {}));
+      }
     }
     if (pending.length === 0) return;
     this.#options.stats.demand.structureRootsPreloaded += pending.length;

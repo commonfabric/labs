@@ -282,11 +282,12 @@ export type ServingLoopStats = {
 
     /** Root documents the pass pulled TOGETHER before its sequential
      * structure loads ran (`SpaceServer.#loadStructureRootDocs`). Each is a
-     * document one of those loads syncs as its first step, so issuing them
-     * in one pull is what lets the replica's refresh queue coalesce them
-     * into a single `session.watch.add` instead of one per root inside the
-     * wave's settle. Counted per document per pass, so a root whose load
-     * stays owed across passes counts once for each. */
+     * document one of those loads syncs — the instance the demand names, and
+     * the space instance a scoped demand falls back to — so issuing them in
+     * one pull is what lets the replica's refresh queue coalesce them into a
+     * single `session.watch.add` instead of one per address inside the wave's
+     * settle. Counted per DOCUMENT per pass, so a scoped root contributes two
+     * and a root whose load stays owed across passes counts again in each. */
     structureRootsPreloaded: number;
 
     pushGrowthWakes: number;

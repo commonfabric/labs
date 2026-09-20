@@ -7,8 +7,9 @@ reason: "Measurement of the serving loop's demand-pass structure loads on the to
 
 # The demand pass's first structure load, measured and cut (2026-09-20)
 
-[`2026-09-server-execution-topics-benchmarks.md`](2026-09-server-execution-topics-benchmarks.md)
-§5 item 1 names two halves. The first — confirming no-pattern-metadata from
+The 2026-09-09 server-execution topics benchmark record — landing separately
+as `2026-09-server-execution-topics-benchmarks.md`, and not in this tree when
+this was written — names two halves in its §5 item 1. The first — confirming no-pattern-metadata from
 the co-hosted engine instead of re-traversing — shipped as #7749 and moved
 nothing. This record is the second: taking the never-a-piece roots off the
 wave's settle path. It holds what the cost turned out to be, an attempt that
@@ -44,7 +45,7 @@ per round. Each run probed `/api/meta` and `/api/health/stats` before the
 workload and differenced the stats afterwards.
 
 The seed is the workload because it is where the cost is: on the 30-topic
-navigation benchmark the record above puts 88 s of a 90 s run in the seed.
+navigation benchmark that record puts 88 s of a 90 s run in the seed.
 
 ## Where the demand pass's time goes
 
@@ -108,18 +109,18 @@ to its own turn and the terminal arm's invalidation has to test that span.
 
 | round | arm | `watchAddSync` count | `demandPassMs` | terminal | deferred |
 | --- | --- | --- | --- | --- | --- |
-| 1 | base | 966 | 10 206 | 659 | 0 |
+| 1 | base | 966 | 10 206 | 659 | 1 |
 | 1 | fix | 760 | 9 884 | 661 | 0 |
-| 2 | base | 984 | 13 137 | 658 | 0 |
-| 2 | fix | 774 | 12 979 | 669 | 0 |
-| 3 | base | 987 | 13 361 | 659 | 0 |
+| 2 | base | 984 | 13 137 | 658 | 2 |
+| 2 | fix | 774 | 12 979 | 669 | 2 |
+| 3 | base | 987 | 13 361 | 659 | 2 |
 | 3 | fix | 764 | 8 721 | 662 | 0 |
 | 4 | base | 963 | 10 603 | 659 | 0 |
 | 4 | fix | 723 | 6 577 | 660 | 0 |
 | 5 | base | 1 022 | 19 355 | 661 | 0 |
-| 5 | fix | 739 | 10 029 | 661 | 0 |
+| 5 | fix | 739 | 10 029 | 661 | 3 |
 | 6 | base | 986 | 13 008 | 661 | 0 |
-| 6 | fix | 753 | 7 121 | 663 | 0 |
+| 6 | fix | 753 | 7 121 | 663 | 9 |
 
 `storage.v2/watchRefresh/watchAddSync` count: base mean 984.7 over 963 to
 1 022, fix mean 752.2 over 723 to 774. The per-round deltas are −206, −210,
@@ -131,17 +132,28 @@ round or across all twelve runs.
 largest of them belong to the rounds whose base arm caught the machine's load,
 so this record states the direction and no size.
 
-Nothing else moved. `structureLoadTerminal` is 659.5 against 662.7,
-`ensurePieceCalls` — the traversals themselves — 2 979 against 2 980, and
-`structureLoadDeferred`, `structureLoadFailures` and `structureLoadStuck` are
-zero in all twelve runs. The last of those is what says the widened
-invalidation span costs nothing on this workload: it defers no root.
+`structureLoadTerminal` is 659.5 against 662.7 and `ensurePieceCalls` — the
+traversals themselves — 2 979 against 2 980, so the same roots terminalize and
+the same traversals run. `structureLoadFailures` and `structureLoadStuck` are
+zero in all twelve runs.
+
+`structureLoadDeferred` is not, and the widened invalidation span shows in it.
+The base arm defers 1, 2, 2, 0, 0 and 0; the fix arm 0, 2, 0, 0, 3 and 9, and
+the two largest belong to rounds 5 and 6, which are the rounds carrying that
+span. A deferral there is the guard doing what it was widened to do — a commit
+touched a root's document between the pull that read it and the root's own
+turn, so the reading is not trusted and the root retries inside the same
+settle. What it is not is free, and this record does not claim it is: against
+661 and 663 terminal parks it is 3 and 9 retries, and those two rounds carry
+the lowest fix-arm watch-add counts of the six, so the retries did not eat the
+saving. `structureLoadStuck` staying zero is what says none of them became a
+root that stops resolving.
 
 ## What this does not establish
 
 The rounds measure one workload at one size against one seeding client. A
 browser navigation's demand pass reaches the same code with a different arrival
-pattern — the record above counts about 15 terminal confirmations per
+pattern — the benchmark record counts about 15 terminal confirmations per
 navigation against 23 per seeded topic — and nothing here measures it.
 
 The saving is bounded by how the roots arrive. A pass with one new root

@@ -77,7 +77,7 @@ describe("SpaceServer", () => {
    * A client runtime is held open for the case's whole length, because a space
    * with no live client session parks itself idle.
    */
-  async function openFixture() {
+  async function openFixture(scope: "space" | "user" = "space") {
     const engine = await server.engineForSpace(space);
     const commit = Engine.applyCommit(engine, {
       space,
@@ -90,7 +90,7 @@ describe("SpaceServer", () => {
         operations: rootIds.map((id) => ({
           op: "set",
           id,
-          scope: "space",
+          scope,
           value: { value: { plain: 1 } },
         })),
       },
@@ -119,7 +119,7 @@ describe("SpaceServer", () => {
       experimental: { serverExecution: true },
       servingPosture: true,
     });
-    const scopeKey = resolveScopeKey("space", { principal: service.did() });
+    const scopeKey = resolveScopeKey(scope, { principal: service.did() });
     // Every root sync, in the order it was ISSUED, and the order each one
     // RESOLVED. Issued together the two orders differ; issued one at a time
     // they interleave, because each sync resolves before the next is made.
@@ -149,7 +149,7 @@ describe("SpaceServer", () => {
       get(target, key, receiver) {
         if (key === "demandedInstancesForSpace") {
           return () =>
-            rootIds.map((id) => ({ id, scope: "space", scopeKey, root: true }));
+            rootIds.map((id) => ({ id, scope, scopeKey, root: true }));
         }
         const value = Reflect.get(target, key, receiver);
         return typeof value === "function" ? value.bind(target) : value;
@@ -205,6 +205,26 @@ describe("SpaceServer", () => {
         expect(fixture.stats.demand.structureRootsPreloaded).toBe(
           rootIds.length,
         );
+      });
+
+      it("pulls a scoped root's space instance alongside the instance the demand names", async () => {
+        // A scoped demand that reads meta-less falls back to the space
+        // instance, so a load may sync two addresses for one root. Both
+        // belong in the pull; leaving the fallback out of it would leave that
+        // root's second sync a round trip of its own.
+
+        const fixture = await openFixture("user");
+
+        expect(await settle(fixture.serving.activate())).toBe(true);
+        await awaitEach(
+          cycles,
+          () => fixture.stats.structureLoadTerminal === rootIds.length,
+        );
+
+        expect(fixture.stats.demand.structureRootsPreloaded).toBe(
+          rootIds.length * 2,
+        );
+        expect(fixture.stats.structureLoadFailures).toBe(0);
       });
 
       it("defers a root a commit touched while the pull that read it was in flight", async () => {
