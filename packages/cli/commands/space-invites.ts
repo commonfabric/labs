@@ -1,13 +1,134 @@
 /** Generic invitation commands use the same signed client as browser shells. */
+import { resolve } from "@std/path";
 import { Command, ValidationError } from "@cliffy/command";
 import { isDIDKey } from "@commonfabric/identity/did";
 import {
   buildInviteLink,
+  createInviteCredentials,
+  type InviteAccess,
+  inviteCodeVerifier,
   normalizeInviteHost,
+  SPACE_INVITE_CAPABILITY,
   SpaceInviteClient,
 } from "@commonfabric/runner/space-invites";
 import { loadIdentity } from "../lib/identity.ts";
 import { parseSpaceOptions } from "./piece.ts";
+
+interface InviteRequestBinding {
+  host: string;
+  space: string;
+  issuer: string;
+  access: InviteAccess;
+  ttlSeconds: number;
+  maxUses: number;
+}
+
+interface PreparedInviteRequest extends InviteRequestBinding {
+  version: 1;
+  inviteId: string;
+  code: string;
+}
+
+async function prepareInviteRequest(
+  binding: InviteRequestBinding,
+  requestedPath?: string,
+): Promise<{ request: PreparedInviteRequest; requestFile: string }> {
+  const request: PreparedInviteRequest = {
+    version: 1,
+    ...binding,
+    ...createInviteCredentials(),
+  };
+  inviteCodeVerifier(request);
+  let requestFile: string;
+  if (requestedPath !== undefined) {
+    requestFile = resolve(requestedPath);
+  } else {
+    const state = Deno.env.get("XDG_STATE_HOME");
+    const home = Deno.env.get("HOME");
+    if (!state && !home) {
+      throw new ValidationError(
+        "Specify --request-file when no user state directory is configured.",
+      );
+    }
+    const directory = state
+      ? resolve(state, "commonfabric", "space-invites")
+      : resolve(home!, ".local", "state", "commonfabric", "space-invites");
+    await Deno.mkdir(directory, { recursive: true, mode: 0o700 });
+    const info = await Deno.lstat(directory);
+    if (
+      !info.isDirectory || info.isSymlink ||
+      (info.mode !== null && (info.mode & 0o077) !== 0)
+    ) {
+      throw new ValidationError(
+        "Invitation request directory must be a private directory (0700).",
+      );
+    }
+    requestFile = resolve(directory, `${request.inviteId}.json`);
+  }
+  let file: Deno.FsFile;
+  try {
+    file = await Deno.open(requestFile, {
+      createNew: true,
+      write: true,
+      mode: 0o600,
+    });
+  } catch (error) {
+    if (
+      !(error instanceof Deno.errors.AlreadyExists) ||
+      requestedPath === undefined
+    ) throw error;
+    const info = await Deno.lstat(requestFile);
+    if (
+      !info.isFile || info.isSymlink ||
+      (info.mode !== null && (info.mode & 0o077) !== 0)
+    ) {
+      throw new ValidationError(
+        "Invitation request file must be a private regular file (0600).",
+      );
+    }
+    let stored: unknown;
+    try {
+      stored = JSON.parse(await Deno.readTextFile(requestFile));
+    } catch {
+      throw new ValidationError("Invalid invitation request file.");
+    }
+    if (
+      stored === null || typeof stored !== "object" || !("version" in stored) ||
+      stored.version !== 1 ||
+      !("inviteId" in stored) || typeof stored.inviteId !== "string" ||
+      !("code" in stored) || typeof stored.code !== "string"
+    ) {
+      throw new ValidationError("Invalid invitation request file.");
+    }
+    for (const [key, value] of Object.entries(binding)) {
+      if (Reflect.get(stored, key) !== value) {
+        throw new ValidationError(
+          "Invitation request file does not match the host, space, signing identity, or creation options.",
+        );
+      }
+    }
+    const retained: PreparedInviteRequest = {
+      version: 1,
+      ...binding,
+      inviteId: stored.inviteId,
+      code: stored.code,
+    };
+    try {
+      inviteCodeVerifier(retained);
+    } catch {
+      throw new ValidationError("Invalid invitation request file.");
+    }
+    return { request: retained, requestFile };
+  }
+  using ownedFile = file;
+  const bytes = new TextEncoder().encode(JSON.stringify(request) + "\n");
+  let written = 0;
+  while (written < bytes.length) {
+    written += await ownedFile.write(bytes.subarray(written));
+  }
+  await ownedFile.sync();
+  return { request, requestFile };
+}
 
 /** Builds the `cf space invite` command group. */
 export function buildSpaceInviteCommand() {
@@ -18,12 +139,14 @@ export function buildSpaceInviteCommand() {
     if (!isDIDKey(config.space)) {
       throw new ValidationError("Invitations require an explicit space DID.");
     }
+    const signer = await loadIdentity(config.identity);
     return {
       config,
+      issuer: signer.did(),
       client: new SpaceInviteClient({
         host: config.apiUrl,
         space: config.space,
-        signer: await loadIdentity(config.identity),
+        signer,
       }),
     };
   };
@@ -55,6 +178,10 @@ export function buildSpaceInviteCommand() {
       { default: 1 },
     )
     .option(
+      "--request-file <path:string>",
+      "Persist or reuse a private creation request for exact retries.",
+    )
+    .option(
       "--shell <origin:string>",
       "Shell origin for a fragment-secret join link.",
     )
@@ -65,18 +192,36 @@ export function buildSpaceInviteCommand() {
       if (options.ttl === undefined) {
         throw new ValidationError("--ttl is required.");
       }
+      if (
+        options.ttl < 1 || options.ttl > SPACE_INVITE_CAPABILITY.maxTtlSeconds
+      ) {
+        throw new ValidationError("--ttl must be between 1 and 2592000.");
+      }
+      if (
+        options.maxUses < 1 || options.maxUses > SPACE_INVITE_CAPABILITY.maxUses
+      ) {
+        throw new ValidationError("--max-uses must be between 1 and 1000.");
+      }
       const shell = options.shell === undefined
         ? undefined
         : normalizeInviteHost(options.shell);
-      const { client: api, config } = await client(options);
-      const invite = await api.create({
+      const { client: api, config, issuer } = await client(options);
+      const { request, requestFile } = await prepareInviteRequest({
+        host: normalizeInviteHost(config.apiUrl),
+        space: config.space,
+        issuer,
         access: options.access,
         ttlSeconds: options.ttl,
         maxUses: options.maxUses,
-      });
+      }, options.requestFile);
+      console.error(
+        `Invite request saved: ${requestFile} (reuse with --request-file)`,
+      );
+      const invite = await api.create(request);
       console.log(
         JSON.stringify({
           ...invite,
+          requestFile,
           ...(shell
             ? {
               link: buildInviteLink(shell, {

@@ -107,6 +107,10 @@ export const NO_OPTION_CANDIDATES = new Map<string, string>([
   ["space invite create:max-uses", "a distinct identity count"],
   ["space invite create:shell", "a caller-selected shell origin"],
   [
+    "space invite create:request-file",
+    "a private creation request path, supplied explicitly",
+  ],
+  [
     "space invite redeem:code-file",
     "a secret input path or stdin marker, supplied explicitly",
   ],
