@@ -3162,6 +3162,63 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
+  it("allows link writes that strengthen a stored confidentiality declaration", async () => {
+    const { runtime, storageManager } = createRuntime("enforce-explicit");
+    const targetSchema = (confidentiality: string[]): JSONSchema => ({
+      type: "object",
+      properties: {
+        linked: { type: "string", ifc: { confidentiality } },
+      },
+      required: ["linked"],
+    });
+    try {
+      const seed = runtime.edit();
+      const source = runtime.getCell(signer.did(), "strengthening source", {
+        type: "string",
+        ifc: { confidentiality: ["source-reader"] },
+      }, seed);
+      source.set("linked content");
+      const target = runtime.getCell(
+        signer.did(),
+        "strengthening target",
+        targetSchema(["source-reader"]),
+        seed,
+      );
+      target.set({ linked: "initial content" });
+      expect((await seed.commit()).error).toBeUndefined();
+
+      const tx = runtime.edit();
+      const strengthened = target.withTx(tx).asSchema(
+        targetSchema(["source-reader", "additional-reader"]),
+      );
+      strengthened.set({ linked: source.withTx(tx) } as never);
+      expect((await tx.commit()).error).toBeUndefined();
+
+      const verify = runtime.edit();
+      try {
+        expect(target.withTx(verify).key("linked").get()).toBe(
+          "linked content",
+        );
+        const metadata = readStoredCfcMetadata(
+          verify,
+          toMemorySpaceAddress(target.getAsNormalizedFullLink()),
+        );
+        const declared = metadata?.labelMap.entries.find((entry) =>
+          entry.path.join("/") === "linked" && entry.origin === "declared"
+        );
+        expect(declared?.label.confidentiality).toEqual([
+          "source-reader",
+          "additional-reader",
+        ]);
+      } finally {
+        verify.abort();
+      }
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("validates link writes against affected stored schema claims", async () => {
     const { runtime, storageManager } = createRuntime();
     try {
@@ -3232,27 +3289,37 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       });
       expect((await targetSeed.commit()).ok).toBeDefined();
 
-      const tx = runtime.edit();
-      tx.setCfcEnforcementMode("enforce-explicit");
-      const linkedSource = runtime.getCell(
-        signer.did(),
-        "cfc-link-write-guard-source",
-        undefined,
-        tx,
-      );
-      const guardedTarget = runtime.getCell(
-        signer.did(),
-        "cfc-link-write-guard-target",
-        undefined,
-        tx,
-      );
-      guardedTarget.key("linked").set(linkedSource as never);
+      for (
+        const schema of [
+          undefined,
+          {
+            type: "object",
+            properties: { linked: { type: "object" } },
+          } as const,
+        ]
+      ) {
+        const tx = runtime.edit();
+        tx.setCfcEnforcementMode("enforce-explicit");
+        const linkedSource = runtime.getCell(
+          signer.did(),
+          "cfc-link-write-guard-source",
+          undefined,
+          tx,
+        );
+        const guardedTarget = runtime.getCell(
+          signer.did(),
+          "cfc-link-write-guard-target",
+          schema,
+          tx,
+        );
+        guardedTarget.key("linked").set(linkedSource as never);
 
-      tx.prepareCfc();
-      const result = await tx.commit();
-      expect(result.error?.message).toContain(
-        "writeAuthorizedBy requires a trusted builtin identity at /linked",
-      );
+        tx.prepareCfc();
+        const result = await tx.commit();
+        expect(result.error?.message).toContain(
+          "writeAuthorizedBy requires a trusted builtin identity at /linked",
+        );
+      }
     } finally {
       await runtime.dispose();
       await storageManager.close();

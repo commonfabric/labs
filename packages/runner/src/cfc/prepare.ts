@@ -2935,7 +2935,7 @@ const linkWritePolicyOnlySchema = (
   return Object.keys(ifc).length === 0 ? {} : { ifc } as JSONSchema;
 };
 
-const storedSchemaClaimsForLinkWrites = (
+const schemaClaimsForLinkWrites = (
   schema: JSONSchema,
   inputs: readonly LinkWritePolicyInput[],
 ): JSONSchema => {
@@ -6827,13 +6827,16 @@ export const prepareBoundaryCommit = (
     }
 
     const linkWriteInputs = linkWrites.get(key) ?? [];
+    // The full stored-to-candidate merge validates migrations above. Its
+    // affected claims overlay the candidate for input verification; the
+    // policy-only fragment does not carry a document's required-field shape.
     const verificationSchema = storedSchema !== undefined &&
         linkWriteInputs.length > 0
       ? undefinedCandidate
-        ? storedSchemaClaimsForLinkWrites(storedSchema, linkWriteInputs)
+        ? schemaClaimsForLinkWrites(storedSchema, linkWriteInputs)
         : mergeCfcSchemaEnvelopes(
           schema,
-          storedSchemaClaimsForLinkWrites(storedSchema, linkWriteInputs),
+          schemaClaimsForLinkWrites(mergedSchema, linkWriteInputs),
           { generatedOutputPaths: generatedOutputPaths.get(key) },
         )
       : schema;
