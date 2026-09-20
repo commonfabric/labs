@@ -45,6 +45,23 @@ export interface TransplantChanges {
   entryChanges: Map<bigint, Set<string>>;
 }
 
+/**
+ * Records in `changes` that the entry `name` under the directory `parentIno`
+ * changed. Recording an entry already recorded changes nothing.
+ */
+export function recordEntryChange(
+  changes: TransplantChanges,
+  parentIno: bigint,
+  name: string,
+): void {
+  let names = changes.entryChanges.get(parentIno);
+  if (!names) {
+    names = new Set();
+    changes.entryChanges.set(parentIno, names);
+  }
+  names.add(name);
+}
+
 /** Returns whether `a` and `b` hold the same bytes. */
 function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
@@ -599,8 +616,8 @@ export class FsTree {
    *
    * Returns the kernel caches that went stale; see {@link TransplantChanges}.
    *
-   * @throws If either root does not exist, or the two differ in kind, or a name
-   *   present in both subtrees has, in one of them, an entry with no node.
+   * @throws If either root does not exist, or the two differ in kind, or a
+   *   path present in both trees has, in either, an entry with no node.
    */
   transplantSubtree(oldIno: bigint, newIno: bigint): TransplantChanges {
     const oldNode = this.#inodes.get(oldIno);
@@ -814,8 +831,8 @@ export class FsTree {
    * share a kind. Leaves `newIno`'s node in place for the caller to discard
    * once its content has been adopted.
    *
-   * @throws If a name present in both directories has, in one of them, an
-   *   entry with no node.
+   * @throws If a name present in both directories has, in either, an entry
+   *   with no node.
    */
   #transplantNode(
     oldIno: bigint,
@@ -853,8 +870,9 @@ export class FsTree {
         const oldChildNode = this.#inodes.get(oldChildIno);
         const newChildNode = this.#inodes.get(newChildIno);
         if (!oldChildNode || !newChildNode) {
+          const missingIno = oldChildNode ? newChildIno : oldChildIno;
           throw new Error(
-            `Transplant child ${oldChildIno} or ${newChildIno} does not exist`,
+            `Transplant child "${name}" names inode ${missingIno}, which does not exist`,
           );
         }
         if (oldChildNode.kind === newChildNode.kind) {
@@ -880,7 +898,7 @@ export class FsTree {
       oldNode.children.set(name, newChildIno);
       this.#parents.set(newChildIno, oldIno);
       this.#retrackSubtree(newChildIno, oldIno, name);
-      FsTree.recordEntryChange(changes, oldIno, name);
+      recordEntryChange(changes, oldIno, name);
       entriesChanged = true;
     }
 
@@ -889,7 +907,7 @@ export class FsTree {
       // Present in the old tree, gone from the replacement: remove it.
       this.#clearSubtree(oldChildIno);
       oldNode.children.delete(name);
-      FsTree.recordEntryChange(changes, oldIno, name);
+      recordEntryChange(changes, oldIno, name);
       entriesChanged = true;
     }
 
@@ -963,27 +981,5 @@ export class FsTree {
     this.#cfcEntryIndexes.delete(ino);
     this.#unsortedCfcEntryDirectories.delete(ino);
     this.#untrackPath(ino);
-  }
-
-  //
-  // Static members
-  //
-
-  /**
-   * Records in `changes` that the entry `name` under the directory `parentIno`
-   * changed, which mutates `changes` in place. Recording an entry already
-   * recorded changes nothing.
-   */
-  static recordEntryChange(
-    changes: TransplantChanges,
-    parentIno: bigint,
-    name: string,
-  ): void {
-    let names = changes.entryChanges.get(parentIno);
-    if (!names) {
-      names = new Set();
-      changes.entryChanges.set(parentIno, names);
-    }
-    names.add(name);
   }
 }

@@ -8,7 +8,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { CfcProjectionAnnotator } from "./annotations.ts";
-import { FsTree, type TransplantChanges } from "./tree.ts";
+import { FsTree } from "./tree.ts";
 import type { JsonType } from "./types.ts";
 
 const decoder = new TextDecoder();
@@ -621,10 +621,9 @@ describe("FsTree", () => {
         expect(() => tree.transplantSubtree(dir, 9_999n)).toThrow();
       });
 
-      it("throws when a name in both directories has an entry with no node", () => {
-        // The public API keeps a directory's entries and the inode map in
-        // step, so this reaches past it, through the exposed map, to drop the
-        // replacement child's node while leaving its entry listed.
+      it("throws, naming the replacement's inode, when a name in both directories has no node in the replacement", () => {
+        // Drops the replacement child's node through the exposed inode map
+        // while leaving its entry listed, which is the state the check reports.
 
         const tree = new FsTree();
         const oldIno = build(tree, tree.rootIno, "input", {
@@ -640,7 +639,24 @@ describe("FsTree", () => {
         tree.inodes.delete(pendingChildIno);
 
         expect(() => tree.transplantSubtree(oldIno, pendingIno)).toThrow(
-          /Transplant child \d+ or \d+ does not exist/,
+          `Transplant child "data" names inode ${pendingChildIno}, which does not exist`,
+        );
+      });
+
+      it("throws, naming the live inode, when a name in both directories has no node in the live tree", () => {
+        // Drops the live child's node through the exposed inode map while
+        // leaving its entry listed, which is the state the check reports.
+
+        const tree = new FsTree();
+        const oldIno = tree.addDir(tree.rootIno, "input");
+        const oldChildIno = tree.addFile(oldIno, "data", "old", "string");
+        const pendingIno = build(tree, tree.rootIno, ".input.pending", {
+          dir: { data: { file: "new" } },
+        });
+        tree.inodes.delete(oldChildIno);
+
+        expect(() => tree.transplantSubtree(oldIno, pendingIno)).toThrow(
+          `Transplant child "data" names inode ${oldChildIno}, which does not exist`,
         );
       });
 
@@ -961,65 +977,6 @@ describe("FsTree", () => {
         const tree = new FsTree();
         const ino = tree.addFile(tree.rootIno, "plain.txt", "hi", "string");
         expect(tree.isGenerated(ino)).toBe(false);
-      });
-    });
-  });
-
-  describe("static members", () => {
-    describe("recordEntryChange()", () => {
-      it("records a name under a directory with no entry changes yet", () => {
-        const changes: TransplantChanges = {
-          changedInodes: new Set(),
-          entryChanges: new Map(),
-        };
-        FsTree.recordEntryChange(changes, 7n, "title");
-        expect(changes.entryChanges).toEqual(
-          new Map([[7n, new Set(["title"])]]),
-        );
-      });
-
-      it("adds a name to the set a directory already has", () => {
-        const names = new Set(["title"]);
-        const changes: TransplantChanges = {
-          changedInodes: new Set(),
-          entryChanges: new Map([[7n, names]]),
-        };
-        FsTree.recordEntryChange(changes, 7n, "count");
-        expect(changes.entryChanges.get(7n)).toBe(names);
-        expect(names).toEqual(new Set(["title", "count"]));
-      });
-
-      it("keeps each directory's names apart", () => {
-        const changes: TransplantChanges = {
-          changedInodes: new Set(),
-          entryChanges: new Map(),
-        };
-        FsTree.recordEntryChange(changes, 7n, "title");
-        FsTree.recordEntryChange(changes, 8n, "count");
-        expect(changes.entryChanges).toEqual(
-          new Map([[7n, new Set(["title"])], [8n, new Set(["count"])]]),
-        );
-      });
-
-      it("leaves the changes as they were for an entry already recorded", () => {
-        const changes: TransplantChanges = {
-          changedInodes: new Set(),
-          entryChanges: new Map(),
-        };
-        FsTree.recordEntryChange(changes, 7n, "title");
-        FsTree.recordEntryChange(changes, 7n, "title");
-        expect(changes.entryChanges).toEqual(
-          new Map([[7n, new Set(["title"])]]),
-        );
-      });
-
-      it("leaves `changedInodes` as it was", () => {
-        const changes: TransplantChanges = {
-          changedInodes: new Set([3n]),
-          entryChanges: new Map(),
-        };
-        FsTree.recordEntryChange(changes, 7n, "title");
-        expect(changes.changedInodes).toEqual(new Set([3n]));
       });
     });
   });

@@ -64,7 +64,7 @@ import {
   isVNode,
   stringifyEntryValue,
 } from "./tree-builder.ts";
-import { FsTree, type TransplantChanges } from "./tree.ts";
+import { FsTree, recordEntryChange, type TransplantChanges } from "./tree.ts";
 
 /**
  * Expands a schema stored as a content-addressed reference into the schema it
@@ -2921,7 +2921,7 @@ export class CellBridge {
     if (pendingIno === undefined) {
       if (oldIno !== undefined) {
         this.#tree.clear(oldIno);
-        FsTree.recordEntryChange(changes, parentIno, liveName);
+        recordEntryChange(changes, parentIno, liveName);
       }
       return;
     }
@@ -2949,7 +2949,7 @@ export class CellBridge {
       if (movedIno !== undefined) {
         annotator?.annotateEntry(parentIno, liveName, movedIno);
       }
-      FsTree.recordEntryChange(changes, parentIno, liveName);
+      recordEntryChange(changes, parentIno, liveName);
     }
   }
 
@@ -2963,7 +2963,7 @@ export class CellBridge {
     }
     for (const [parentIno, names] of from.entryChanges) {
       for (const name of names) {
-        FsTree.recordEntryChange(into, parentIno, name);
+        recordEntryChange(into, parentIno, name);
       }
     }
   }
@@ -3112,11 +3112,11 @@ export class CellBridge {
           // the result directory and its .json sibling.
           if (existingIno !== undefined) {
             this.#tree.clear(existingIno);
-            FsTree.recordEntryChange(changes, pieceIno, propName);
+            recordEntryChange(changes, pieceIno, propName);
           }
           if (jsonIno !== undefined) {
             this.#tree.clear(jsonIno);
-            FsTree.recordEntryChange(changes, pieceIno, `${propName}.json`);
+            recordEntryChange(changes, pieceIno, `${propName}.json`);
           }
 
           // Build the projection under a staging container, then reconcile it
@@ -3147,7 +3147,7 @@ export class CellBridge {
           this.#fsProjectionEntries.set(pieceIno, newFsNames);
 
           this.#buildHandlersFile(pieceIno, callables, cfcAnnotator);
-          FsTree.recordEntryChange(changes, pieceIno, ".handlers");
+          recordEntryChange(changes, pieceIno, ".handlers");
 
           const state = this.#spaces.get(spaceName);
           if (state) {
@@ -3231,9 +3231,9 @@ export class CellBridge {
         }
         // First hydration: the prop directory and its `.json` sibling are new
         // to any cache, so their entries under the piece are invalidated.
-        FsTree.recordEntryChange(changes, pieceIno, propName);
+        recordEntryChange(changes, pieceIno, propName);
         if (this.#tree.lookup(pieceIno, `${propName}.json`) !== undefined) {
-          FsTree.recordEntryChange(changes, pieceIno, `${propName}.json`);
+          recordEntryChange(changes, pieceIno, `${propName}.json`);
         }
       }
       this.#markPiecePropHydrated(pieceIno, propName);
@@ -3241,11 +3241,11 @@ export class CellBridge {
       this.#markPiecePropCleared(pieceIno, propName);
       if (existingIno !== undefined) {
         this.#tree.clear(existingIno);
-        FsTree.recordEntryChange(changes, pieceIno, propName);
+        recordEntryChange(changes, pieceIno, propName);
       }
       if (jsonIno !== undefined) {
         this.#tree.clear(jsonIno);
-        FsTree.recordEntryChange(changes, pieceIno, `${propName}.json`);
+        recordEntryChange(changes, pieceIno, `${propName}.json`);
       }
       if (propName === "result") {
         this.#clearFsProjectionEntries(pieceIno, changes);
@@ -3255,7 +3255,7 @@ export class CellBridge {
       // `.handlers` is rebuilt on the piece directory, outside the prop
       // subtree the transplant reconciled, so its entry is invalidated here.
       this.#buildHandlersFile(pieceIno, callables, cfcAnnotator);
-      FsTree.recordEntryChange(changes, pieceIno, ".handlers");
+      recordEntryChange(changes, pieceIno, ".handlers");
     }
 
     this.#touchPieceDirIfEntriesChanged(pieceIno, pieceNamesBefore);
@@ -3667,7 +3667,7 @@ export class CellBridge {
         this.#syncPieceList(state, spaceName).catch((e) => {
           console.error(`[${spaceName}] Piece list sync error: ${e}`);
         });
-      }, CellBridge.#NEXT_MACROTASK_DELAY_MS);
+      }, CellBridge.#YIELD_DELAY_MS);
     });
     state.unsubscribes.push(piecesListCancel);
     state.pieceListSubscribed = true;
@@ -4472,7 +4472,7 @@ export class CellBridge {
       if (ino !== undefined) {
         this.#tree.clear(ino);
         if (changes && name !== ".fs.pending") {
-          FsTree.recordEntryChange(changes, pieceIno, name);
+          recordEntryChange(changes, pieceIno, name);
         }
       }
     }
@@ -4482,7 +4482,7 @@ export class CellBridge {
       const ino = this.#tree.lookup(pieceIno, name);
       if (ino !== undefined) {
         this.#tree.clear(ino);
-        if (changes) FsTree.recordEntryChange(changes, pieceIno, name);
+        if (changes) recordEntryChange(changes, pieceIno, name);
       }
     }
   }
@@ -4595,7 +4595,7 @@ export class CellBridge {
         if (movedIno !== undefined) {
           annotator?.annotateEntry(pieceIno, name, movedIno);
         }
-        FsTree.recordEntryChange(changes, pieceIno, name);
+        recordEntryChange(changes, pieceIno, name);
       }
     }
     for (const name of oldNames) {
@@ -4603,7 +4603,7 @@ export class CellBridge {
       const oldIno = this.#tree.lookup(pieceIno, name);
       if (oldIno !== undefined) {
         this.#tree.clear(oldIno);
-        FsTree.recordEntryChange(changes, pieceIno, name);
+        recordEntryChange(changes, pieceIno, name);
       }
     }
     this.#tree.clear(stageIno);
@@ -5300,7 +5300,7 @@ export class CellBridge {
               `[${spaceName}] Error renaming piece in FUSE tree: ${e}`,
             );
           }
-        }, CellBridge.#NEXT_MACROTASK_DELAY_MS);
+        }, CellBridge.#YIELD_DELAY_MS);
       });
       cancels.push(cancelRootSub);
     } catch (e) {
@@ -5591,13 +5591,6 @@ export class CellBridge {
   static readonly #MAX_HYDRATION_RETRIES = 3;
 
   /**
-   * Delay, in milliseconds, of a timer set only to yield: its callback runs in
-   * a later macrotask, after the cell sink notification that set it has
-   * returned.
-   */
-  static readonly #NEXT_MACROTASK_DELAY_MS = 0;
-
-  /**
    * How long, in milliseconds, a piece's `input` or `result` cell must go
    * without a further change before the prop is rebuilt. The reactive graph may
    * report several intermediate values before it settles, and each one restarts
@@ -5607,11 +5600,18 @@ export class CellBridge {
 
   /**
    * Delay, in milliseconds, before the first reconnect attempt after a
-   * disconnect. Each failed attempt doubles it, up to
+   * disconnect. Each failed attempt doubles the delay, up to
    * `#RECONNECT_MAX_DELAY_MS`.
    */
   static readonly #RECONNECT_BASE_DELAY_MS = 2000;
 
   /** Longest delay, in milliseconds, between two reconnect attempts. */
   static readonly #RECONNECT_MAX_DELAY_MS = 30_000;
+
+  /**
+   * Delay, in milliseconds, of a timer set only to yield: its callback runs in
+   * a later macrotask, after the cell sink notification that set it has
+   * returned.
+   */
+  static readonly #YIELD_DELAY_MS = 0;
 }
