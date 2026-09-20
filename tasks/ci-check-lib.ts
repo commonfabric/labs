@@ -502,9 +502,11 @@ async function readRefusalBody(resp: Response): Promise<string> {
     return "";
   } finally {
     clearTimeout(expire);
-    // Releases the connection, and settles a read still outstanding against a
-    // body that never arrived.
-    await reader.cancel().catch(() => {});
+    // Ask the connection to release, and settle a read still outstanding
+    // against a body that never arrived. Do not wait for an underlying source
+    // whose cancellation itself never settles: that would escape the budget
+    // this cleanup follows.
+    void reader.cancel().catch(() => {});
   }
 }
 

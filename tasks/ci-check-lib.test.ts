@@ -1486,7 +1486,7 @@ Deno.test("GitHub REST errors include status text and omit response bodies", asy
   }
 });
 
-Deno.test("GitHub REST errors survive response cancellation failures", async () => {
+Deno.test("GitHub REST errors do not wait for response cancellation", async () => {
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = ((_input, _init) =>
@@ -1494,7 +1494,7 @@ Deno.test("GitHub REST errors survive response cancellation failures", async () 
         new Response(
           new ReadableStream({
             cancel() {
-              throw new Error("response cancellation failed");
+              return new Promise(() => {});
             },
           }),
           { status: 404, statusText: "Not Found" },
