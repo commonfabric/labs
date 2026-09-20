@@ -63,12 +63,16 @@ rather than raising a conflict. Keeping both is right when the two lines can
 coexist, and merging is then silent. When they cannot — both sides mapped the
 same old identity, or together they close a cycle — the merge is still silent
 and `deno task check-test-aliases` is what reports it, so a failing gate after a
-merge that raised no conflict is this case. Resolve it in the merge by keeping
-the line that belongs and dropping the other: append-only holds the content at
-the merge base, which both sides share, and a line either side added after that
-is not yet history. Deciding which belongs is a question about the renames, not
-about the files — two mappings from one identity mean one of the two renames is
-not what happened.
+merge that raised no conflict is this case. Resolve it on your branch rather
+than in the file's history. The gate takes its merge base against
+`origin/main`, so on
+the merge ref every line already on main counts as committed and dropping one
+breaks append-only; the line you can still change is the one your branch added.
+Drop that line and append what the two renames together actually mean — and
+appending a second mapping for an identity already mapped is not that, since
+three mappings fail where two did. Which line belongs is a question about the
+renames, not about the files: two mappings from one identity mean one of the two
+renames is not what happened.
 `deno task check-test-aliases` holds the directory to append-only,
 no-double-mapping, acyclic rules: each file only ever grows, none goes
 away, and no identity is mapped twice across all of them. It also fails a
