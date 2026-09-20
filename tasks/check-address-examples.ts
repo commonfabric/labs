@@ -73,6 +73,14 @@
  * names. A directive naming a string no address example in its file carries is
  * reported too, so that an exemption cannot outlive its example.
  *
+ * A directive opens its own line, and is read from the file as written rather
+ * than from the prose read out of it. Both are what keep an exemption
+ * something a writer states: a line of prose that mentions the directive is
+ * not one, and neither is a string a program carries, whatever the prose
+ * reader makes of the text around it. A directive belongs above the table or
+ * the paragraph it speaks for, since a line inside a table row does not open
+ * one; `docs/specs/cell-reference-grammar.md` has the worked example.
+ *
  * The string a directive names is an address example, and so begins with `/`.
  * That is what lets this file spell the directive out without exempting
  * anything.
@@ -258,11 +266,16 @@ export function addressExample(content: string): string | null {
 //
 
 /**
- * A directive, the rooted string it names, and the reason after it. The reason
- * runs to the end of the line, less the `-->` that closes an HTML comment
- * around it.
+ * A directive, the rooted string it names, and the reason after it.
+ *
+ * A directive opens its own line. Before it may come an indent and one of the
+ * things a writer puts in front of prose — an HTML comment's `<!--`, a line
+ * comment's `//`, a block comment's `/*` or its continuation `*` — and nothing
+ * else. The reason runs to the end of the line, less the `-->` that closes an
+ * HTML comment around it.
  */
-const DIRECTIVE = /check-address-examples-ignore:[ \t]*(\/\S*)[ \t]*([^\n]*)/g;
+const DIRECTIVE =
+  /^[ \t]*(?:<!--|\/\*+|\/\/|\*)?[ \t]*check-address-examples-ignore:[ \t]*(\/\S*)[ \t]*([^\n]*)/gm;
 
 /** A string a file's directives exempt, and the reason given for it. */
 export interface Exemption {
@@ -286,7 +299,16 @@ function lineAt(text: string, index: number): number {
   return line;
 }
 
-/** Every string the directives in `text` exempt, by the string they name. */
+/**
+ * Every string the directives in `text` exempt, by the string they name.
+ *
+ * `text` is the file as written rather than the prose read out of it. Blanking
+ * code to spaces keeps every character where the file put it, which leaves a
+ * comment opener inside a string literal looking exactly like one at the head
+ * of a line; the file itself still tells them apart. So a directive is read
+ * from the file, and an exemption cannot be written by data a program happens
+ * to carry.
+ */
 export function exemptions(text: string): Map<string, Exemption> {
   const found = new Map<string, Exemption>();
   for (const match of text.matchAll(DIRECTIVE)) {
@@ -300,13 +322,16 @@ export function exemptions(text: string): Map<string, Exemption> {
 // The check
 //
 
-/** A file this check reads, and the prose it reads from it. */
+/** A file this check reads. */
 export interface Document {
   /** Repo-relative path, e.g. `skills/cf/SKILL.md`. */
   path: string;
 
-  /** The file's prose, at the file's own offsets. */
-  prose: string;
+  /** Which reader it gets. */
+  kind: GovernedKind;
+
+  /** The file as written. */
+  text: string;
 }
 
 /** Something the check reports. */
@@ -327,12 +352,16 @@ export interface Finding {
 /**
  * Every finding in `documents`: an address example the parser refuses, a
  * directive with no reason, and a directive whose string no example carries.
- * Pure — all input and output happens in `main`.
+ *
+ * Examples come from the prose and exemptions from the file, which is what
+ * keeps a directive out of reach of the one thing the prose reader is
+ * deliberately loose about. Pure — all input and output happens in `main`.
  */
 export function collectFindings(documents: readonly Document[]): Finding[] {
   const findings: Finding[] = [];
-  for (const { path, prose } of documents) {
-    const exempt = exemptions(prose);
+  for (const { path, kind, text } of documents) {
+    const prose = kind === "markdown" ? text : commentsOf(text);
+    const exempt = exemptions(text);
     const used = new Set<string>();
     for (const span of codeSpans(prose)) {
       const example = addressExample(span.content);
@@ -392,7 +421,7 @@ async function gitLsFiles(root: string, args: string[]): Promise<string[]> {
 }
 
 /**
- * Every governed file under `root`, with its prose.
+ * Every governed file under `root`, with its text.
  *
  * Membership comes from git, so a file the repository does not track — build
  * output, a scratch note — is not read, and a governed file added in the same
@@ -410,10 +439,10 @@ export async function readDocuments(root: string): Promise<Document[]> {
     if (gone.has(path)) return;
     const kind = governedKind(path);
     if (kind === null) return;
-    const source = await Deno.readTextFile(`${root}/${path}`);
     documents.push({
       path,
-      prose: kind === "markdown" ? source : commentsOf(source),
+      kind,
+      text: await Deno.readTextFile(`${root}/${path}`),
     });
   }));
   documents.sort((a, b) => a.path.localeCompare(b.path));

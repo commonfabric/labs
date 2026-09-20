@@ -67,9 +67,14 @@ async function captureConsole(
   return { out: out.join("\n"), err: err.join("\n") };
 }
 
-/** One Markdown document named `doc.md`, carrying `prose`. */
-function markdown(prose: string): Document[] {
-  return [{ path: "doc.md", prose }];
+/** One Markdown document named `doc.md`, carrying `text`. */
+function markdown(text: string): Document[] {
+  return [{ path: "doc.md", kind: "markdown", text }];
+}
+
+/** One TypeScript file named `src/demo.ts`, carrying `text`. */
+function typescript(text: string): Document[] {
+  return [{ path: "src/demo.ts", kind: "source", text }];
 }
 
 /**
@@ -347,16 +352,57 @@ describe("check-address-examples", () => {
       // and not a template. Where a scan took them for one, the comment after
       // was consumed with them and its address never reached the parser.
 
-      const quoted = commentsOf(
-        `const q = /"/; ${LINE_OPENER} Use \`/@bakery/glaze-tracker\` then say "no".\n`,
+      const quoted = typescript(
+        `const q = /"/; ${LINE_OPENER} Use \`/@bakery/glaze-tracker\` then "no".\n`,
       );
-      const ticked = commentsOf(
+      const ticked = typescript(
         "const p = /`/;\n" +
           `${LINE_OPENER} Read \`/@bakery/glaze-tracker\`.\n`,
       );
 
-      expect(collectFindings([{ path: "a.ts", prose: quoted }]).length).toBe(1);
-      expect(collectFindings([{ path: "b.ts", prose: ticked }]).length).toBe(1);
+      expect(collectFindings(quoted).length).toBe(1);
+      expect(collectFindings(ticked).length).toBe(1);
+    });
+
+    it("returns a finding past a directive a string literal carries", () => {
+      // An exemption is something a writer states, so it is read from the file
+      // rather than from the prose read out of it. Blanking code to spaces
+      // leaves an opener inside a literal looking like one at the head of a
+      // line, and the file still tells the two apart.
+
+      const documents = typescript(
+        `const note = "${LINE_OPENER} check-address-examples-ignore: ` +
+          `/@bakery/glaze-tracker string data";\n` +
+          `${LINE_OPENER} Use \`/@bakery/glaze-tracker\`.\n`,
+      );
+
+      expect(collectFindings(documents).length).toBe(1);
+    });
+
+    it("returns a finding past a directive named in a sentence", () => {
+      // A directive opens its own line, so prose about one is prose.
+
+      const documents = typescript(
+        `${LINE_OPENER} It is spelled check-address-examples-ignore: /@bakery/x/y here.\n` +
+          `${LINE_OPENER} Use \`/@bakery/x/y\`.\n`,
+      );
+
+      expect(collectFindings(documents).length).toBe(1);
+    });
+
+    it("returns nothing for a directive a comment opens its line with", () => {
+      const inLine = typescript(
+        `${LINE_OPENER} check-address-examples-ignore: /@bakery/glaze-tracker quoted as refused\n` +
+          `${LINE_OPENER} Use \`/@bakery/glaze-tracker\`.\n`,
+      );
+      const inBlock = typescript(
+        `${BLOCK_OPENER}*\n * check-address-examples-ignore: /@bakery/glaze-tracker quoted as ` +
+          `refused\n ${"*" + "/"}\n` +
+          `${LINE_OPENER} Use \`/@bakery/glaze-tracker\`.\n`,
+      );
+
+      expect(collectFindings(inLine)).toEqual([]);
+      expect(collectFindings(inBlock)).toEqual([]);
     });
 
     it("returns a finding for an example split across a line break", () => {
@@ -399,8 +445,12 @@ describe("check-address-examples", () => {
 
     it("returns findings in file and line order", () => {
       const documents: Document[] = [
-        { path: "second.md", prose: "`/@b/x/y`\n" },
-        { path: "first.md", prose: "One.\n`/@a/x/y`\n`/@c/x/y`\n" },
+        { path: "second.md", kind: "markdown", text: "`/@b/x/y`\n" },
+        {
+          path: "first.md",
+          kind: "markdown",
+          text: "One.\n`/@a/x/y`\n`/@c/x/y`\n",
+        },
       ];
 
       expect(

@@ -55,7 +55,9 @@ render:
 <!-- check-address-examples-ignore: <the string> <why it is written> -->
 ```
 
-The directive governs the file it sits in, wherever in that file it sits.
+The directive governs the file it sits in, wherever in that file it sits, and
+opens its own line — a line inside a table row does not open one, so it goes
+above the table or the paragraph it speaks for.
 `docs/specs/cell-reference-grammar.md` carries one above its table of refused
 forms. `tasks/check-address-examples.ts` states what counts as an address
 example and what does not.
