@@ -24,6 +24,13 @@ changed no runtime behavior and authorized no live-space update.
 | Headless fixtures       | Browser matrix's linked headless results                              | Nine tests passed at the same revision. Render/rematerialization windows differ from continuously mounted browser updates and are not treated as equivalent count windows. |
 | Retained heap           | Raw final counts                                                      | The cold-runtime probe remained inconclusive: deltas ranged from -1,776,576 to +310,144 bytes. It does not qualify retention or allocation improvements.                   |
 
+Handler timings use `b.start()` before the call to `prepared.dispatch()` and
+`b.end()` after that awaited call returns. They include call setup, scheduler
+and commit work, and promise resumption. The internal elapsed timer spans
+`send()` through its commit callback; phase timers can enclose one another and
+are not additive. Preparation, reset/reseeding, post-callback drains, and
+correctness assertions are outside both intervals.
+
 The final count pass used revision
 [`f3494fe9547d6589dad8e382e2392f14b8e0cebf`](https://github.com/commonfabric/labs/tree/f3494fe9547d6589dad8e382e2392f14b8e0cebf),
 the same revision as the browser and handler timing records, with Deno 2.9.4 on
