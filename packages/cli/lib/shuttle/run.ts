@@ -90,10 +90,11 @@ export interface ShuttleDeps {
  * for again (`external.ts`).
  */
 function startingExternal(): ExternalLocation {
-  return new ExternalLocation(
-    toFileUrl(`${Deno.cwd()}/`),
-    Deno.env.get("HOME"),
-  );
+  // The directory is handed over as it stands. `ExternalLocation` is what
+  // makes a location read as a container, so a separator added here would be
+  // a second answer to a question already answered — and at the filesystem
+  // root it is a separator appended to one.
+  return new ExternalLocation(toFileUrl(Deno.cwd()), Deno.env.get("HOME"));
 }
 
 /**

@@ -926,6 +926,17 @@ describe("verbs", () => {
       });
     });
 
+    it("leaves the external working location where it stood", async () => {
+      // The other direction of the independence `xcd` is asserted for. The
+      // two positions move independently, and a claim made in one direction
+      // only is one a change to this verb could break without failing.
+
+      const shuttle = shuttleIn();
+      const before = shuttle.external.render();
+      await runLine("cd slugs", shuttle, READS_NOTHING);
+      expect(shuttle.external.render()).toBe(before);
+    });
+
     it("returns the reason a place gave an operand it would not take, and moves nowhere", async () => {
       const shuttle = shuttleIn();
       const before = shuttle.place.place;

@@ -1,6 +1,10 @@
 /**
- * What `tab` finishes: the token a line ends in, completed against the verbs
- * and against what stands where shuttle stands.
+ * What `tab` finishes: the token a line ends in, completed against the verbs,
+ * against what stands where shuttle stands, and against the words the ambient
+ * record names its settable dimensions by.
+ *
+ * The three have one property in common and it is why they are the three:
+ * each is a list this process can write without asking the fabric for it.
  *
  * Decision 3 (`docs/plans/shuttle/README.md`) names completion as part of what
  * serves the audience it puts second, and this is that: a person who knows

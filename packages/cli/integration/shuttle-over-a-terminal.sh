@@ -320,6 +320,9 @@ xpwd
 xcd ../elsewhere
 xpwd
 LINES
+# Read before the session so the claim step 32 makes about the seed is a
+# claim about this directory and not about whatever the shell reported.
+STARTED_IN=$(pwd)
 EDITOR="$EDITOR_SCRIPT" python3 "$DRIVER" "$SCRIPT" "$TRANSCRIPT" -- \
   $CF sh $ARGS >/dev/null
 DRIVE_STATUS=$?
@@ -926,13 +929,22 @@ step "32. The external working location starts at the process's own directory, a
 # The half no unit test reaches: the location is seeded from `Deno.cwd()` at
 # startup, so what proves the seeding is a shell started from a real directory
 # rather than one handed a location by a case.
-STARTED=$(said 78 "xpwd")
-contains "file:///" "$STARTED" \
-  "xpwd writes the location as a whole address on the plane that reads a path"
-MOVED=$(said 79 "xcd ../elsewhere")
-contains "/elsewhere/" "$MOVED" \
-  "xcd writes where it landed, a plain relative path staying on the same plane"
-check "$MOVED" "$(said 80 "xpwd")" \
+#
+# The expected address is built from the directory this harness was standing
+# in, not matched against a shape. A shape would pass for any `file:` seed at
+# all — a fixed path, or the home directory — which is every way the seeding
+# could regress while still writing something that looks right.
+EXPECT_SEED=$(python3 -c \
+  'import pathlib, sys; print(pathlib.Path(sys.argv[1]).as_uri() + "/")' \
+  "$STARTED_IN")
+check "$EXPECT_SEED" "$(said 78 "xpwd")" \
+  "xpwd writes the directory the shell was started from, whole"
+EXPECT_MOVED=$(python3 -c \
+  'import pathlib, sys; print((pathlib.Path(sys.argv[1]).parent / "elsewhere").as_uri() + "/")' \
+  "$STARTED_IN")
+check "$EXPECT_MOVED" "$(said 79 "xcd ../elsewhere")" \
+  "xcd writes where it landed, the walk taken against that directory"
+check "$EXPECT_MOVED" "$(said 80 "xpwd")" \
   "xpwd afterwards writes what the move wrote, the two being one spelling"
 
 # What step 11 does not reach: a piece that changes under a shell already

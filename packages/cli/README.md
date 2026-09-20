@@ -302,7 +302,7 @@ writes the place as `//<space>/<piece>@<scope>/…`.
 | `unwatch <handle>`            | Disarms the watch a `watches` row numbered. The row carries the cell its watch is armed on, so it names the watch it showed.                                                                                                                                                                                                                                                                                                                                                                                                      |
 | `more`                        | Writes the next page of a listing or a value that did not fit, a listing continuing under the numbers it already gave its rows.                                                                                                                                                                                                                                                                                                                                                                                                   |
 | `xpwd`                        | The external working location, whole — the one working position outside the fabric.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `xcd <path>`                  | Moves the external working location, and writes where it landed. The operand is read on that plane already, so `xcd ../foo` and `xcd /tmp` stay on the plane it stands on, and a whole schemed path — `xcd file:~/data`, `xcd https://example.test/a/b/` — moves it to another. A scheme is legal only on an absolute complete path.                                                                                                                                                                                              |
+| `xcd <path>`                  | Moves the external working location, and writes where it landed. The operand is read on that plane already, so `xcd ../foo` and `xcd /tmp` stay on the plane it stands on. A whole schemed path names its own plane, which may be the one it stands on (`xcd file:~/data`) or another (`xcd https://example.test/a/b/`). A scheme is legal only on an absolute complete path.                                                                                                                                                     |
 | `where [<dimension> <value>]` | With no operand, the whole ambient record: the connection, the place `pwd` prints, the external location `xpwd` prints, and what this run is watching. With a dimension and a value, it sets the light ones — `where scope @session` moves the scope as `cd .@session` does, and `where external file:/tmp` moves the external location as `xcd` does. The api endpoint, the identity and the space are fixed at launch, and restarting is what switches them.                                                                    |
 | `help [<verb>]`               | Lists the verbs, or writes one verb's page. `<verb> --help` writes the same page.                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
@@ -353,10 +353,12 @@ members of one collection start two.
 Shuttle holds a second working position, outside the fabric: `xcd` moves it and
 `xpwd` prints it. Its argument is on that plane already, so a plain path moves
 it without naming a scheme — `xcd ../foo`, `xcd /tmp` — and a whole schemed path
-moves it to another plane. A scheme is legal only on an absolute complete path,
-so `xcd file:/tmp/out` names a place and `xcd file:out` is refused. The two
-positions move independently: `cd` leaves the external location where it was,
-and `xcd` leaves the place where it was.
+names its own plane, which may be the one it stands on or another. A scheme is
+legal only on an absolute complete path, so `xcd file:/tmp/out` names a place
+and `xcd file:out` is refused. A run starts on the `file:` plane, at the
+directory the shell was started from. The two positions move independently: `cd`
+leaves the external location where it was, and `xcd` leaves the place where it
+was.
 
 A line is split POSIX-style — whitespace separates, quotes group — so a value
 holding a space is one operand when it is quoted, and anything shuttle prints as

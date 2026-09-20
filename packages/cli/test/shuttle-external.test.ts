@@ -209,6 +209,51 @@ describe("external", () => {
       expect(location.render()).toBe("https://example.test/a/");
     });
 
+    it("keeps a blank at either end of a token on a URL plane", () => {
+      // A URL parser drops them at both ends: at the front that reads past a
+      // scheme, and at the back it quietly renames `a ` to `a`.
+
+      const location = at("https://example.test/a/");
+      location.xcd("b ");
+      expect(location.render()).toBe("https://example.test/a/b%20/");
+    });
+
+    it("reads a scheme however it is spelled, a scheme being case-blind", () => {
+      const location = at("file:///tmp/");
+      location.xcd("FILE:~/work");
+      expect(location.render()).toBe(`file://${HOME}/work/`);
+    });
+
+    it("stands at the root without a separator written twice", () => {
+      // A caller that appends one to a directory it already has would hand
+      // the root a second, and what makes a location a container is here
+      // rather than at a caller.
+
+      expect(new ExternalLocation(new URL("file:///"), HOME).render())
+        .toBe("file:///");
+    });
+
+    it("counts the home on its own as a whole path", () => {
+      const location = at("file:///tmp/");
+      location.xcd("file:~");
+      expect(location.render()).toBe(`file://${HOME}/`);
+    });
+
+    it("keeps a token that is nothing but blanks", () => {
+      const location = at("https://example.test/a/");
+      location.xcd("  ");
+      expect(location.render()).toBe("https://example.test/a/%20%20/");
+    });
+
+    it("refuses a relative path opening at a home the run was given none of", () => {
+      // The refusal reached through the relative branch rather than the
+      // schemed one, which is a second way in to the same question.
+
+      const homeless = new ExternalLocation(new URL("file:///tmp/"), undefined);
+      expect(refusal(homeless.xcd("~/work"))).toContain("no home");
+      expect(homeless.render()).toBe("file:///tmp/");
+    });
+
     it("refuses a path opening at a home the run was given none of", () => {
       const homeless = new ExternalLocation(new URL("file:///tmp/"), undefined);
       expect(refusal(homeless.xcd("file:~/work"))).toContain("no home");

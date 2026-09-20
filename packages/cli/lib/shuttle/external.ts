@@ -39,7 +39,7 @@ import { type RecordEntry } from "./record.ts";
 const HOME_SCHEME = "file";
 
 /**
- * The character a URL parser drops from the front of a reference before it
+ * The character a URL parser drops from either end of a reference before it
  * reads anything else, and the only one of those that reaches this module:
  * the rest of that set is the characters a terminal acts on, which
  * {@link ExternalLocation.xcd} refuses before anything reads them.
@@ -121,14 +121,6 @@ function notAbsolute(token: string): string {
 }
 
 /**
- * The refusal a path opening `~` gets where the expansion cannot be made.
- *
- * `~` is this run's own home and nothing else: no plane in the family spells
- * somebody else's, so the spelling is refused rather than guessed at. A run
- * whose environment named no home is the second way there is nothing to write
- * out, and it earns the same refusal for the same reason.
- */
-/**
  * The refusal a token gets that names a scheme and an absolute path and still
  * spells no place, `token` being that spelling.
  *
@@ -159,19 +151,25 @@ const NAMES_ANOTHER_MACHINE =
   "names a place shuttle does not reach. Write the path on its own.";
 
 /**
- * Returns `path` with a leading run of blanks written as its own characters,
- * so a URL reference cannot be read past them.
+ * Returns `path` with the blanks at either end written as their own
+ * characters, so a URL reference cannot be read past them.
  *
- * A URL parser drops leading blanks before it reads anything else, which
- * turns ` file:out.json` into a schemed reference — past the check that would
- * have refused the scheme, and onto another plane. Encoding them leaves the
- * token naming what it says it names, which is what the same token does on
- * the plane that reads a path.
+ * A URL parser drops the blanks at both ends before it reads anything else.
+ * At the front that turns ` file:out.json` into a schemed reference — past
+ * the check that would have refused the scheme, and onto another plane; at
+ * the back it quietly renames `a ` to `a`. Encoding them leaves the token
+ * naming what it says it names, which is what the same token does on the
+ * plane that reads a path.
  */
-function withLeadingBlanksKept(path: string): string {
-  let past = 0;
-  while (path[past] === BLANK) past += 1;
-  return past === 0 ? path : `${"%20".repeat(past)}${path.slice(past)}`;
+function withBlanksKept(path: string): string {
+  let opens = 0;
+  while (opens < path.length && path[opens] === BLANK) opens += 1;
+  if (opens === path.length) return "%20".repeat(opens);
+  let closes = path.length;
+  while (closes > opens && path[closes - 1] === BLANK) closes -= 1;
+  return `${"%20".repeat(opens)}${path.slice(opens, closes)}${
+    "%20".repeat(path.length - closes)
+  }`;
 }
 
 /**
@@ -185,6 +183,14 @@ const ACTS_ON_A_TERMINAL =
   "A place outside the fabric is not named with a character a terminal acts " +
   "on, so a token holding one names no place.";
 
+/**
+ * The refusal a path opening `~` gets where the expansion cannot be made.
+ *
+ * `~` is this run's own home and nothing else: no plane in the family spells
+ * somebody else's, so the spelling is refused rather than guessed at. A run
+ * whose environment named no home is the second way there is nothing to write
+ * out, and it earns the same refusal for the same reason.
+ */
 const NAMES_NO_HOME =
   "`~` names this run's own home and nobody else's, so a path opening `~` " +
   "with a name after it names no place — and neither does one opening `~` " +
@@ -297,7 +303,10 @@ export class ExternalLocation {
   ): Landing {
     // An authority is a URL's own spelling wherever it appears, so the `//`
     // form is read as one on either plane and `~` has no meaning inside it.
-    const onFilePlane = scheme === HOME_SCHEME && !rest.startsWith("//");
+    // A scheme is case-insensitive, so the comparison is made on one case.
+    // The token keeps its own spelling into the URL, which normalizes it.
+    const onFilePlane = scheme.toLowerCase() === HOME_SCHEME &&
+      !rest.startsWith("//");
     const path = onFilePlane ? expandHome(rest, this.#home) : rest;
     if (path === undefined) {
       return { kind: "refused", reason: NAMES_NO_HOME };
@@ -328,7 +337,7 @@ export class ExternalLocation {
       if (this.#at.protocol !== `${HOME_SCHEME}:`) {
         return {
           kind: "external",
-          at: new URL(withLeadingBlanksKept(path), this.#at),
+          at: new URL(withBlanksKept(path), this.#at),
         };
       }
       const expanded = expandHome(path, this.#home);
