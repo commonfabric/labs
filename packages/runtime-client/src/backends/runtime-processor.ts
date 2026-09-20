@@ -1814,10 +1814,13 @@ export class RuntimeProcessor {
     const { schema: _schema, ...cellRef } = request.cell;
     const cell = getCell(this.#runtime, cellRef);
     // This reads the label with `cfcLabelViewForCell()`, which reads what the
-    // store holds now and does not sync the cell. Keeping the cell current is
-    // the caller's job. A caller that needs the label as it changes subscribes
-    // with `includeCfcLabel`. We redact `Caveat.source` from the label for
-    // display.
+    // store holds now and does not sync the cell. When the store holds no
+    // label metadata for the cell, `cfcLabel` in the response is `undefined`.
+    // That covers a document the store has not loaded as well as a cell with
+    // no label. Keeping the cell current is the caller's job. A caller that
+    // needs the label as it changes subscribes with `includeCfcLabel`, and
+    // each update then carries the label as read for that update. We redact
+    // `Caveat.source` from the label for display.
     const totalStart = performance.now();
     const cfcLabel = cfcLabelViewForCell(cell);
     const response = {
