@@ -152,6 +152,47 @@ async function fixture(publicHost?: string) {
 }
 
 describe("space-invites", () => {
+  it("rejects oversized bodies, invalid spaces, and signed malformed JSON before admission", async () => {
+    const f = await fixture();
+    try {
+      for (
+        const [space, body, status] of [
+          [f.space, "x".repeat(4097), 413],
+          ["not-a-did", "{}", 400],
+          [f.space, "{", 400],
+        ] as const
+      ) {
+        const url = new URL(`/api/spaces/${space}/invites/list`, f.host);
+        const headers = await signFirstPartyHttpRequest({
+          url,
+          method: "POST",
+          body,
+          signer: f.owner,
+        });
+        const response = await fetch(url, { method: "POST", body, headers });
+        expect(response.status).toBe(status);
+        expect(await response.json()).toEqual({ code: "invalid-request" });
+      }
+      expect(await f.client(f.owner).list()).toEqual([]);
+      expect(await f.client(f.owner).receipts()).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+  it("redacts private storage failures at the HTTP boundary", async () => {
+    const f = await fixture();
+    try {
+      await Deno.writeTextFile(
+        resolveSpaceStoreUrl(f.store, f.space),
+        "private storage diagnostic: invalid SQLite file",
+      );
+      const response = await f.raw("list", {});
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ code: "service-error" });
+    } finally {
+      await f.close();
+    }
+  });
   it("admits a persisted browser identity through HTTP before it has target READ", async () => {
     const f = await fixture();
     try {

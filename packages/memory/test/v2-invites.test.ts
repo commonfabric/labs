@@ -154,6 +154,68 @@ async function processAttempt(
 }
 
 describe("invites", () => {
+  it("rejects invalid service envelopes without creating admission or receipt state", async () => {
+    const f = await fixture();
+    try {
+      for (
+        const invalid of [
+          { now: -1 },
+          { now: 1.5 },
+          { now: Number.NaN },
+          { principal: "not-a-did" },
+          { space: "not-a-did" },
+        ]
+      ) {
+        expect(() =>
+          executeInvite(f.engine, {
+            host,
+            space,
+            principal: f.owner,
+            now: initialTime,
+            operation: "list",
+            body: {},
+            ...invalid,
+          })
+        ).toThrow("invalid-request");
+      }
+      expect(f.run({ operation: "list", body: {} })).toEqual([]);
+      expect(f.run({ operation: "receipts", body: {} })).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+  it("rejects malformed redemption and owner query identifiers without consuming a use", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create();
+      for (
+        const operation of [
+          {
+            operation: "redeem",
+            body: { inviteId: "invalid", code: invite.code },
+          },
+          {
+            operation: "redeem",
+            body: { inviteId: invite.inviteId, code: "invalid" },
+          },
+          { operation: "receipts", body: { inviteId: "invalid" } },
+          { operation: "revoke", body: { inviteId: "invalid" } },
+        ] satisfies InviteOperation[]
+      ) {
+        expect(() => f.run(operation)).toThrow("invalid-request");
+      }
+      expect(f.run({ operation: "list", body: {} })).toMatchObject([
+        { inviteId: invite.inviteId, usedCount: 0, remainingUses: 1 },
+      ]);
+      expect(f.run({ operation: "redeem", body: invite }, f.guest))
+        .toMatchObject({
+          outcome: "redeemed",
+          currentAccess: "READ",
+        });
+    } finally {
+      await f.close();
+    }
+  });
   it("grants access and retains one receipt when the final use is retried after restart", async () => {
     const f = await fixture();
     try {

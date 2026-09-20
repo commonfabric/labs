@@ -4,6 +4,7 @@ import {
   buildInviteLink,
   createInviteCredentials,
   inviteCodeVerifier,
+  isInviteSecret,
   normalizeInviteHost,
   parseInviteLink,
 } from "../space-invites.ts";
@@ -11,6 +12,26 @@ import {
 const space = "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8MuKWGmRfDCwAZDGBnSpXXX";
 
 describe("space-invites", () => {
+  it("rejects malformed origins, links, and secret encodings", () => {
+    expect(() => normalizeInviteHost("not an origin")).toThrow("invalid-host");
+    for (const secret of [undefined, 32, "", "A".repeat(42), "A".repeat(44)]) {
+      expect(isInviteSecret(secret)).toBe(false);
+    }
+    expect(isInviteSecret("A".repeat(43))).toBe(true);
+    const link = buildInviteLink("https://shell.example", {
+      host: "https://service.example",
+      space,
+      ...createInviteCredentials(),
+    });
+    for (const invalidSpace of ["other", "did:key:z0invalid"]) {
+      const malformed = new URL(link);
+      malformed.searchParams.set("space", invalidSpace);
+      expect(() => parseInviteLink(malformed)).toThrow("invalid-link");
+    }
+    expect(() => parseInviteLink("private input is not a URL")).toThrow(
+      "invalid-link",
+    );
+  });
   it("keeps the bearer code exclusively in the fragment and round trips its destination", () => {
     const invite = {
       host: "https://example.com",

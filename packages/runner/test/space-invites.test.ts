@@ -4,10 +4,56 @@ import { Identity } from "@commonfabric/identity";
 import {
   createInviteCredentials,
   SpaceInviteClient,
+  SpaceInviteError,
 } from "../src/space-invites.ts";
 import { verifyFirstPartyHttpRequest } from "../src/toolshed-http-auth.ts";
 
 describe("space-invites", () => {
+  it("refuses incomplete creation credentials before sending", async () => {
+    const signer = await Identity.generate();
+    let requests = 0;
+    const client = new SpaceInviteClient({
+      host: "https://example.com",
+      space: signer.did(),
+      signer,
+      fetch: () => {
+        requests++;
+        return Promise.resolve(Response.json({}));
+      },
+    });
+    const credentials = createInviteCredentials();
+    for (
+      const partial of [
+        { inviteId: credentials.inviteId },
+        { code: credentials.code },
+      ]
+    ) {
+      await expect(
+        client.create({ ...partial, access: "READ", ttlSeconds: 60 }),
+      )
+        .rejects.toThrow("invalid-request");
+    }
+    expect(requests).toBe(0);
+  });
+  it("reports malformed service errors as uncertainty without reflecting response bodies", async () => {
+    const signer = await Identity.generate();
+    for (
+      const body of [
+        "private upstream diagnostic",
+        JSON.stringify({ code: 17 }),
+      ]
+    ) {
+      const client = new SpaceInviteClient({
+        host: "https://example.com",
+        space: signer.did(),
+        signer,
+        fetch: () => Promise.resolve(new Response(body, { status: 500 })),
+      });
+      await expect(client.list()).rejects.toEqual(
+        new SpaceInviteError("service-error"),
+      );
+    }
+  });
   it("signs the exact credential body and preserves supplied creation credentials", async () => {
     const signer = await Identity.generate();
     const credentials = createInviteCredentials();
