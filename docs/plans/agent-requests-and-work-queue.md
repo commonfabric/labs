@@ -356,11 +356,12 @@ is a consequence rather than a rule.
 
 Set aside for a shared runner later: a service identity with a delegated read
 binding naming the requester as acting principal, the way the serving
-runtime's loopback sessions carry `actingAs: "space-owner"` (`protocol.md`
-§7). It is the shape the server-execution spec prefers and it needs the
-per-document grant story that protocol.md lists as owed (OW13). Ruled out
-outright: the service identity alone, which resolves `user:<serviceDID>` and
-reads empty instances.
+runtime's loopback sessions carry `actingAs: "space-owner"`
+([`protocol.md`](../specs/server-side-execution/protocol.md) §7). It is the
+shape the server-execution spec prefers and it needs the per-document grant
+story that `protocol.md` lists as owed (OW13). Ruled out outright: the
+service identity alone, which resolves `user:<serviceDID>` and reads empty
+instances.
 
 The sandbox never holds a fabric credential; that is the existing
 fabric-session property and nothing here changes it.
@@ -519,15 +520,25 @@ and the scheduled-work plan already proposes a per-space ledger there; that is
 later work and it reads the same records.
 
 **Ruled: records in the requesting space, indexed from the home space.** The
-record is created in the same transaction as the request, in the requester's
-`PerUser` instance, next to the builtin cell that derives from it. The
-requester's home space carries one index piece (`#agent_queue`, an underscore
-because the hashtag extractor ends at a hyphen) holding `{link, host}` entries
+record is created by the request's post-commit effect, once the transaction
+staging the request is durable, in the requester's `PerUser` instance, next to
+the builtin cell that derives from it; the index entry follows in a second
+transaction, since the home space is not the requesting space. A request with
+no requesting identity to resolve a home space for is refused before it is
+staged, so no record exists that no index names; a record whose index write is
+refused is ended by the effect as `refused`, and the builtin derives that. The
+requester's home space carries one index piece holding `{link, host}` entries
 to records across spaces and toolsheds, written through the sanctioned
-`.inSpace` crossing that home-space wish bootstrap already uses, and
-discovered by consumers with `wish({ query: "#agent_queue", scope: ["~"] })` —
-the aggregation shape [Loom resource discovery](loom-resource-discovery.md)
-chose for the same problem. Set aside: a dedicated per-user queue space
+`.inSpace` crossing that home-space wish bootstrap already uses. The home
+default pattern holds the piece in a field of its own, `agentQueue`, and
+consumers discover it with `wish({ query: "#agent_queue" })`, a well-known
+home-space target that `wish` resolves to that field the way it resolves
+`#journal` and `#learned`. A hashtag search does not reach it: under
+`scope: ["~"]` that search reads the user's favorites and nothing else in the
+home space, and the index is not a favorite, which the user could remove. The
+index is the aggregation shape
+[Loom resource discovery](loom-resource-discovery.md) chose for the same
+problem. Set aside: a dedicated per-user queue space
 pointed at from the profile, which costs a minted space per user and puts the
 record and the builtin cell in different spaces.
 
@@ -542,6 +553,7 @@ AgentRun (PerUser, in the requesting space)
   state          queued | claimed | running | completed | failed | refused | cancelled
   stateSince
   claim?         { runner, leaseUntil }        while claimed or running
+  attempts       claims made so far; runner-written, incremented by each claim
   cancel         stream                         the one write a client makes
   result?        link to the result document the harness wrote
   outcome?       completed | failed | refused | cancelled
@@ -594,7 +606,13 @@ the harness's estimate table, and the record says `estimatedCostUsd`, not
 **Idempotency.** The record's identity is the request's `requestHash`, so the
 same request in the same instance yields the same record and a memo hit yields
 no record at all — the request settled from the stored result. A pattern that
-wants a fresh run includes an input that changes.
+wants a fresh run includes an input that changes. The same identity covers a
+request whose transaction committed and whose post-commit effect did not run,
+because the process ended between the two: the node's next run finds the
+stored `requestHash` with no record and no result, stages the request again as
+`generateObject` does for a stored hash that has neither result nor error, and
+the effect creates the record then. Creation is keyed by `requestHash`, so an
+effect that runs twice finds the first run's record and makes no second one.
 
 **Labels.** The request fields carry the request transaction's join. The
 terminal fields are written by the runner in the same session that wrote the
@@ -608,7 +626,7 @@ result. Until it does, they fail closed to the result's label.
 
 The runner subscribes to the user's index, claims the oldest `queued` record
 it may run, and runs it. The claim is a commit: `state: claimed`,
-`claim.runner`, `claim.leaseUntil`. Two runners racing for one record
+`claim.runner`, `claim.leaseUntil`, and `attempts` incremented. Two runners racing for one record
 conflict on the basis and one loses, which is the transaction system's
 ordinary answer and needs no lock.
 
@@ -620,10 +638,13 @@ the way a detached `cf piece call` subscribes to its receipt rather than
 polling.
 
 **Crash recovery.** A lease is the honest tool here: a runner that dies
-mid-run leaves a `running` record with a `leaseUntil` in the past, and the
-next runner to see it re-queues it once, recording the retry on the record
-(AH-LIFE-5: bounded, visible, and only where replay is safe — a run that had
-not yet started a side effect). A second expiry fails the record. The lease is
+after its claim commits leaves a `claimed` or `running` record with a
+`leaseUntil` in the past — `claimed` when it died before the run started — and
+the next runner to see either re-queues it once. The bound is the record's
+`attempts` count, which every claim increments in the same commit: an expired
+record with `attempts` of one goes back to `queued`, and one with `attempts`
+of two is failed (AH-LIFE-5: bounded, visible, and only where replay is safe —
+a run that had not yet started a side effect). The lease is
 renewed on every durable write the run makes, so it measures silence rather
 than time since start — the trap
 [`docs/features/fetch-request-deadlines.md`](../features/fetch-request-deadlines.md)
@@ -643,8 +664,8 @@ sums; nothing in the first take depends on it.
   in `packages/cli`, over the home index. Described in the package README
   because `deno task check-command-docs` requires it, and given completion
   candidates because `check-completion-slots` does.
-- **A Home tab**, "Agent runs": a pattern over `wish({ query: "#agent_queue",
-  scope: ["~"] })` rendering state, age, and usage per record, with a cancel
+- **A Home tab**, "Agent runs": a pattern over
+  `wish({ query: "#agent_queue" })` rendering state, age, and usage per record, with a cancel
   action and a "no runner registered" notice read from `agentRunner`. The
   same pattern is what a third-party space embeds if it wants to show its own
   runs.
