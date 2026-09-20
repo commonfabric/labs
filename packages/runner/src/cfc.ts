@@ -34,11 +34,9 @@ import {
   externalResolutionMissCount,
   onSchemaRegistryClear,
 } from "./schema-registry.ts";
+import type { ResolvedExternalReference } from "./cfc/schema-primitives.ts";
 import { isSchemaScope, narrowerScopeCap } from "./scope.ts";
-import {
-  declaredHandleKind as declaredHandleKindOf,
-  type ResolvedExternalReference,
-} from "./stream-declaration.ts";
+import { declaredHandleKind as declaredHandleKindOf } from "./stream-declaration.ts";
 export {
   CFC_ATOM_TYPE,
   CFC_CONCEPT_KIND,

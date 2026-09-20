@@ -7,7 +7,8 @@
  * reading. It carries none of the runtime, so a reader holding stored
  * documents and no live cells can take it as it is; the one thing that
  * differs between the two, how an external schema reference is resolved,
- * arrives as a function.
+ * arrives as a function. The readings it is built on — a local definition,
+ * an external reference — are `cfc/schema-primitives.ts`.
  */
 
 import type {
@@ -16,12 +17,13 @@ import type {
   JSONSchema,
   JSONSchemaObj,
 } from "@commonfabric/api";
-import {
-  isExternalSchemaRef,
-  parseExternalSchemaRef,
-} from "@commonfabric/data-model-schema/schema-refs";
-import { decodeJsonPointer } from "@commonfabric/utils/json-pointer";
+import { isExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
 import { isObjectOrArray } from "@commonfabric/utils/types";
+
+import {
+  type ExternalReferenceResolver,
+  localDefinition,
+} from "./cfc/schema-primitives.ts";
 
 /** The handle kind `schema` declares by its own root `asCell`, if any. */
 function rootAsCellKind(schema: JSONSchema | undefined): CellKind | undefined {
@@ -30,114 +32,6 @@ function rootAsCellKind(schema: JSONSchema | undefined): CellKind | undefined {
   }
   const front = schema.asCell[0] as AsCellEntry | undefined;
   return typeof front === "string" ? front : front?.kind;
-}
-
-/**
- * The definition name a `#/$defs/<name>` reference names, or `undefined` for
- * any other reference.
- */
-export function localDefinitionName(ref: string): string | undefined {
-  if (!ref.startsWith("#")) return undefined;
-  const path = decodeJsonPointer(ref);
-  return path.length === 3 && path[0] === "#" && path[1] === "$defs" &&
-      path[2] !== ""
-    ? path[2]
-    : undefined;
-}
-
-/**
- * The definition `root` carries under `name` in its `$defs`, or `undefined`
- * where it carries none, or carries something there that is not a schema.
- */
-export function definitionNamed(
-  root: JSONSchema | undefined,
-  name: string,
-): JSONSchema | undefined {
-  if (!isObjectOrArray(root)) return undefined;
-  const defs = root.$defs;
-  if (!isObjectOrArray(defs) || !Object.hasOwn(defs, name)) return undefined;
-  const definition = (defs as Record<string, unknown>)[name];
-  return isObjectOrArray(definition) || typeof definition === "boolean"
-    ? definition as JSONSchema
-    : undefined;
-}
-
-/**
- * The definition a `#/$defs/<name>` reference names in `root`, or `undefined`
- * for any other reference or a name `root` does not define. A miss is quiet:
- * this is asked of every position a read passes, and most carry no `$defs`
- * closure at all.
- */
-export function localDefinition(
-  root: JSONSchema | undefined,
-  ref: string,
-): JSONSchema | undefined {
-  const name = localDefinitionName(ref);
-  return name === undefined ? undefined : definitionNamed(root, name);
-}
-
-/**
- * What an external schema reference resolved to: the schema it names, and
- * the document the local references inside that schema resolve against —
- * the referenced document itself, whose `$defs` those references name.
- */
-export interface ResolvedExternalReference {
-  readonly schema: JSONSchema;
-
-  /** The document a local `$ref` in `schema` names a definition of. */
-  readonly root: JSONSchema;
-}
-
-/**
- * Resolves a schema whose root `$ref` is an external (`cid:`) reference,
- * given the schema carrying it. `undefined` where the reference names
- * nothing the reader can supply, and where the reader refuses the schema's
- * form; either way the position declares nothing. The runtime answers this
- * from its schema registry, and a reader over stored documents from the
- * documents it holds, through {@link externalReferenceResolverOver}.
- */
-export type ExternalReferenceResolver = (
-  schema: JSONSchemaObj,
-) => ResolvedExternalReference | undefined;
-
-/**
- * An {@link ExternalReferenceResolver} over `readSchemaDocument`, which
- * supplies a schema document's value by its tagged hash. A reference resolves
- * to the document it names, or to the `#/$defs/<name>` member of it where the
- * fragment names one, with the keywords written beside the `$ref` read over
- * what it resolved to: that is how the runtime reads a reference with
- * siblings, and the document is what the local references inside it name
- * definitions of. A reference naming no document the reader supplies, or a
- * member the document does not carry, resolves to nothing.
- *
- * A keyword beside the reference is read over the target as written. The
- * runtime goes further for one carrying a local reference of its own, whose
- * definitions belong to the referring document rather than the referenced one;
- * a declaration is a root keyword, so that case does not reach the reading
- * this serves.
- */
-export function externalReferenceResolverOver(
-  readSchemaDocument: (taggedHash: string) => JSONSchema | undefined,
-): ExternalReferenceResolver {
-  return (schema) => {
-    const { $ref, ...siblings } = schema;
-    const parsed = parseExternalSchemaRef($ref as string);
-    if (parsed === undefined) return undefined;
-    const root = readSchemaDocument(parsed.taggedHash);
-    if (root === undefined) return undefined;
-    const target = parsed.defName === undefined
-      ? root
-      : definitionNamed(root, parsed.defName);
-    if (target === undefined) return undefined;
-    if (Object.keys(siblings).length === 0) return { schema: target, root };
-    // A boolean target takes the keywords beside the reference as well: the
-    // schema admitting everything is the empty object, and the one admitting
-    // nothing is its negation.
-    const body = typeof target === "boolean"
-      ? (target ? {} : { not: {} })
-      : target;
-    return { schema: { ...body, ...siblings } as JSONSchema, root };
-  };
 }
 
 /** What a reading of a declaration is given besides the schema. */

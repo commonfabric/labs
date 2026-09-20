@@ -57,10 +57,12 @@ import {
   SCHEMA_DOCUMENT_REF_PREFIX,
 } from "@commonfabric/data-model-schema/schema-refs";
 import {
-  declaredHandleKind,
   definitionNamed,
   type ExternalReferenceResolver,
   externalReferenceResolverOver,
+} from "@commonfabric/runner/cfc/schema-primitives";
+import {
+  declaredHandleKind,
   followExternalReferences,
 } from "@commonfabric/runner/stream-declaration";
 import { isObjectNotArray } from "@commonfabric/utils/types";

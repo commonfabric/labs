@@ -17,10 +17,10 @@ import {
 } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
-  declaredHandleKind,
   type ExternalReferenceResolver,
   externalReferenceResolverOver,
-} from "../src/stream-declaration.ts";
+} from "../src/cfc/schema-primitives.ts";
+import { declaredHandleKind } from "../src/stream-declaration.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 
 const signer = await Identity.fromPassphrase("stream-declaration");
@@ -510,6 +510,9 @@ describe("stream declaration", () => {
           declared({ $ref: "cid:anything", asCell: ["stream"] } as JSONSchema),
         )
           .toBe("stream");
+        // Whatever kind the keyword declares.
+        expect(declared({ $ref: "cid:plain", asCell: ["cell"] } as JSONSchema))
+          .toBe("cell");
       });
 
       it("declares nothing for a document the reader lacks, or a chain that loops", () => {
