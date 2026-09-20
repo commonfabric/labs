@@ -59,7 +59,7 @@ retains that output field for comparisons; it is no longer a runtime option.
 
 ## Remaining work
 
-The [fast-follow plan](../../../plans/lazy-materialization-fast-follow.md) still
+The [fast-follow plan](../../plans/lazy-materialization-fast-follow.md) still
 requires matched timings, mounted browser/headless measurements, same-space and
 cross-space comparisons, and a report of their limitations. These synthetic
 fixtures do not reproduce the copied lunch poll's current-day filtering or

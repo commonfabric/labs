@@ -1,21 +1,28 @@
+---
+status: historical
+created: 2026-09-11
+archived: 2026-09-19
+reason: "Completed default-on evidence and measurement work; handler integration remains explicitly deferred and flag retirement remains outside the arc."
+---
+
 # Lazy materialization fast-follow
 
-Status: F0 and F2 complete, F2 as an explicit deferral; F1 complete to that
-boundary; F3 evidence assembled with the eager-mode limitation documented. F4 is
-optional owner-led work outside this arc. F5 measurements and guidance remain
-pending and do not depend on switch retirement.
+Status: completed to the documented handler-deferral boundary. F0, F2, F3, and
+F5 are complete; F1's three unverified bullets remain explicitly deferred. F4 is
+optional owner-led work outside this arc. The
+[closeout record](../development/performance/2026-09-19-lazy-fast-follow-closeout.md)
+collects the evidence, measurement limits, and conditions for future work.
 
-This follow-up to the
-[computation-cost](../history/plans/pattern-computation-cost.md) arc owns the
-handler investigation, default-on behavior evidence, and the D1/D2 measurements
-transferred by its
-[implementation record](../history/plans/pattern-computation-cost-implementation.md).
-It does not authorize a live lunch-poll update.
+This follow-up to the [computation-cost](pattern-computation-cost.md) arc owns
+the handler investigation, default-on behavior evidence, and the D1/D2
+measurements transferred by its
+[implementation record](pattern-computation-cost-implementation.md). It does not
+authorize a live lunch-poll update.
 
-The [lazy materialization design](lazy-cell-materialization.md) defines the
-schema-observing view and snapshot contracts. Lift arguments use that view under
-the default-on `lazyMaterialization` flag. The handler path in
-[`runner.ts`](../../packages/runner/src/runner.ts) still reads its argument
+The [lazy materialization design](../../plans/lazy-cell-materialization.md)
+defines the schema-observing view and snapshot contracts. Lift arguments use
+that view under the default-on `lazyMaterialization` flag. The handler path in
+[`runner.ts`](../../../packages/runner/src/runner.ts) still reads its argument
 without marking the transaction for lazy materialization. Its closed-world event
 validation, cold-input handling, receipts, and effects make it a separate
 integration problem.
@@ -39,14 +46,14 @@ Mark a step complete only with its linked evidence. Capture decisions and
 completed investigations in `docs/history/`; update the live contract documents
 in the same PR as behavior changes.
 
-| Step | Depends on                  | Deliverable                                                                  | State                                                                                                                                                                                                                                           |
-| ---- | --------------------------- | ---------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| F0   | Computation-cost acceptance | Fixed baseline and remaining-call-site inventory                             | Done: [F0 baseline](../history/development/performance/2026-09-11-lazy-materialization-f0-baseline.md)                                                                                                                                          |
-| F1   | F0                          | Handler materialization contract and measured prototype                      | Done as far as the deferral needed, three bullets carried forward: [F1 record](../history/development/performance/2026-09-11-lazy-handler-context-prototype.md)                                                                                 |
-| F2   | F1                          | Reviewed handler integration, or an explicit evidence-backed deferral        | Done: deferred, with the blocker and the conditions for revisiting in the [F1 record](../history/development/performance/2026-09-11-lazy-handler-context-prototype.md)                                                                          |
-| F3   | F0                          | Default-on evidence and documented fallback limitations                      | Done: [rollout evidence](../history/development/performance/2026-09-11-lazy-materialization-f3-rollout-evidence.md) and [reload diagnosis](../history/development/performance/2026-09-15-lazy-reload-diagnosis.md); eager mode is not qualified |
-| F4   | Owner decision              | Optional removal of the lift rollout switch                                  | Outside this arc; owner-led proposal, not a completion gate                                                                                                                                                                                     |
-| F5   | F2, F3                      | Repeat default-on measurement matrix, update guidance, and archive this plan | Pending; independent of F4                                                                                                                                                                                                                      |
+| Step | Depends on                  | Deliverable                                                                  | State                                                                                                                                                                                                                           |
+| ---- | --------------------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F0   | Computation-cost acceptance | Fixed baseline and remaining-call-site inventory                             | Done: [F0 baseline](../development/performance/2026-09-11-lazy-materialization-f0-baseline.md)                                                                                                                                  |
+| F1   | F0                          | Handler materialization contract and measured prototype                      | Done as far as the deferral needed, three bullets carried forward: [F1 record](../development/performance/2026-09-11-lazy-handler-context-prototype.md)                                                                         |
+| F2   | F1                          | Reviewed handler integration, or an explicit evidence-backed deferral        | Done: deferred, with the blocker and the conditions for revisiting in the [F1 record](../development/performance/2026-09-11-lazy-handler-context-prototype.md)                                                                  |
+| F3   | F0                          | Default-on evidence and documented fallback limitations                      | Done: [rollout evidence](../development/performance/2026-09-11-lazy-materialization-f3-rollout-evidence.md) and [reload diagnosis](../development/performance/2026-09-15-lazy-reload-diagnosis.md); eager mode is not qualified |
+| F4   | Owner decision              | Optional removal of the lift rollout switch                                  | Outside this arc; owner-led proposal, not a completion gate                                                                                                                                                                     |
+| F5   | F2, F3                      | Repeat default-on measurement matrix, update guidance, and archive this plan | Done with explicit measurement limits: [closeout](../development/performance/2026-09-19-lazy-fast-follow-closeout.md)                                                                                                           |
 
 F1/F2 and F3 can proceed independently. F4 does not depend on making handlers
 lazy: F1 identified no shared contract that would require that order. The
@@ -67,11 +74,11 @@ unmarked transactions still require.
       in separate windows. Preserve their different accounting boundaries.
 
 The
-[F0 baseline](../history/development/performance/2026-09-11-lazy-materialization-f0-baseline.md)
+[F0 baseline](../development/performance/2026-09-11-lazy-materialization-f0-baseline.md)
 holds the inventory, the posture table, and the per-phase handler dispatch
 measurement from `packages/runner/test/handler-dispatch-cost.bench.ts`; the
 completed-attempt and reactive-body reads the step names are in the
-[representative lunch poll rehearsal](../history/development/performance/2026-09-12-representative-lunch-poll-rehearsal.md).
+[representative lunch poll rehearsal](../development/performance/2026-09-12-representative-lunch-poll-rehearsal.md).
 Its retention probe was inconclusive and is recorded as such; the representative
 copy was not re-run and its limitations carry forward. Two of its findings shape
 F1: the dependency preflight, not the argument read, is the largest fixed cost
@@ -121,7 +128,7 @@ which a view would narrow.
       handler exception hidden in a completed lift rollout.
 
 The
-[F1 record](../history/development/performance/2026-09-11-lazy-handler-context-prototype.md)
+[F1 record](../development/performance/2026-09-11-lazy-handler-context-prototype.md)
 holds the contract, the prototype, its tests, and the measurements. The outcome
 is a deferral: the prototype preserves the event contract, but its measured
 consequence is a win only for a handler that reads a whole list and touches
@@ -148,20 +155,20 @@ must not accidentally inherit it.
 ### F3 — Default-on evidence and fallback limits
 
 The
-[rollout evidence](../history/development/performance/2026-09-11-lazy-materialization-f3-rollout-evidence.md)
+[rollout evidence](../development/performance/2026-09-11-lazy-materialization-f3-rollout-evidence.md)
 records revisions, execution postures, observed failures, and coverage limits.
 The
-[integration evidence](../history/development/performance/2026-09-14-lazy-off-integration.md)
+[integration evidence](../development/performance/2026-09-14-lazy-off-integration.md)
 records passing eager-posture suites without qualifying rollback. The
-[reload diagnosis](../history/development/performance/2026-09-15-lazy-reload-diagnosis.md)
+[reload diagnosis](../development/performance/2026-09-15-lazy-reload-diagnosis.md)
 shows that eager execution can deliver an unavailable nullable input and fail
 with browser errors. Rendering the notes alone does not qualify that fallback.
 The
-[navigation-policy diagnosis](../history/development/performance/2026-09-15-notebook-reload-navigation-policy.md)
+[navigation-policy diagnosis](../development/performance/2026-09-15-notebook-reload-navigation-policy.md)
 explains the corrected notebook selection; the default-on scenario passes.
 
 The
-[derived-state correction decision](../history/development/2026-09-14-derived-state-correction.md)
+[derived-state correction decision](../development/2026-09-14-derived-state-correction.md)
 permits two exact stale fetch-status transitions during vintage replay. Other
 state-loss findings must be investigated rather than covered by that exception.
 
@@ -176,29 +183,28 @@ Cubic review. Live deployment remains separately coordinated.
 
 ### F5 — Measure and close
 
-Measurement progress: the
-[default-on browser matrix](../history/development/performance/2026-09-18-default-on-browser/README.md)
-covers three vote-list sizes in both profile locations, with separate headless
-evidence and rendered screenshots. The
-[fresh-store follow-up](../history/development/performance/2026-09-18-default-on-fresh-store/README.md)
-records timing variability despite stable reactive-body counts. Comparative
-latency claims require controlled repetitions and phase attribution; these
-records do not qualify a speedup. Guidance and final disposition of remaining
-measurement limits are still pending.
+- [x] Repeat the handler and collection count matrix on a pinned default-on
+      revision; all 18 handler cases and nine collection cases matched the
+      earlier default-on baseline's count fields. Record graph size and the
+      inconclusive cold-heap probe separately from timing.
+- [x] Repeat headless fixtures and mounted browser measurements at three sizes
+      and both browser profile locations, with accounting disabled for timing.
+      Preserve their different demand boundaries instead of treating headless
+      render/rematerialization windows as equivalent to mounted browser updates.
+- [x] Publish the evidence and its remaining limits, clarify benchmark reporting
+      guidance, and archive this plan under the documentation lifecycle.
 
-- [ ] Repeat F0 on a pinned revision with the current default-on flag posture,
-      using matched inputs and demanded surfaces. Report changes in access count
-      separately from changes in per-access cost, handler cost, initialization
-      and maintenance.
-- [ ] Repeat mounted headless/browser and same-/cross-space comparisons; keep
-      instrumentation disabled for timing and retain correctness assertions.
-- [ ] Publish the evidence and any remaining limitation, update author/runtime
-      guidance, and archive this plan under the
-      [documentation lifecycle](../README.md).
+The
+[closeout record](../development/performance/2026-09-19-lazy-fast-follow-closeout.md)
+links the browser, fresh-store, handler-timing, and final count records. Timings
+varied even with matching reactive read counts; no general speedup, allocation,
+or retention improvement was qualified. Comparative latency and warmed-memory
+measurements remain prerequisites to those claims, not claims made by completing
+this evidence collection. No live-space update was performed.
 
 ## Out of scope
 
 Sync-selector narrowing and network transfer reduction remain with
-[shaped reads and verb results](shaped-reads-and-verb-results.md). This plan
-does not infer production latency from local-copy timings, change unrelated
-event semantics, or authorize writes to the live lunch poll.
+[shaped reads and verb results](../../plans/shaped-reads-and-verb-results.md).
+This plan does not infer production latency from local-copy timings, change
+unrelated event semantics, or authorize writes to the live lunch poll.
