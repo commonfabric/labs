@@ -207,6 +207,16 @@ export interface ListingDeps {
 
   /** Names which of that cell's keys stand at a verb's dispatch surface. */
   readonly listCallableKeys?: typeof listCallableKeys;
+
+  /**
+   * The line's cancel. A listing inside a piece is two reads, and it is one
+   * act to the guard the verb runs it under, so the rule that every read has
+   * a check in front of it with nothing awaited between (`VerbDeps.signal`,
+   * `vocabulary.ts`) reaches the second read only through this. A listing
+   * cancelled between its reads comes back empty, which that guard drops on
+   * the way back.
+   */
+  readonly signal?: AbortSignal;
 }
 
 /**
@@ -410,6 +420,9 @@ async function listKeys(
     pieceDeps,
   );
   const keys = keysOf(level);
+  // The check in front of the second read: the first was awaited, and a
+  // cancel that landed meanwhile is one this read must not go out after.
+  if (deps.signal?.aborted) return { rows: [] };
   const callables = keys.length === 0
     ? new Set<string>()
     : await (deps.listCallableKeys ?? listCallableKeys)(

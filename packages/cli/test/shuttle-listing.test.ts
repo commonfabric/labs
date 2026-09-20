@@ -7,7 +7,7 @@
  * which read a position takes, what a row carries, and how a row prints — with
  * no socket, no server and no piece behind any of it. What those reads do once
  * called is not this file's subject; that a listing hands each of them the
- * connection this process holds is, and three cases pin it.
+ * connection this process holds is, and four cases pin it.
  *
  * The connection is a borrowed one throughout. A listing never opens or closes
  * one, so which arm a case stands it up through decides nothing here, and the
@@ -564,6 +564,20 @@ describe("listing", () => {
           getCellValue: async (config, _path, _options, deps) => {
             loaded = await deps?.loadPieces?.(config);
             return {};
+          },
+        });
+        expect(loaded).toBe(held.pieces);
+      });
+
+      it("hands the callable listing the connection this process holds", async () => {
+        const held = heldConnection();
+        let loaded: PiecesController | undefined;
+        await listPlace(CONFIG, atPiece().place, held.connection, {
+          ...READS_NOTHING,
+          getCellValue: () => Promise.resolve({ title: 1 }),
+          listCallableKeys: async (config, _path, _keys, _options, deps) => {
+            loaded = await deps?.loadPieces?.(config);
+            return new Set();
           },
         });
         expect(loaded).toBe(held.pieces);

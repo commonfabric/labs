@@ -233,6 +233,7 @@ function answering(over: VerbDeps = {}): VerbDeps {
       Promise.resolve({ piece: token, pathAfter: [...path] }),
     listing: {
       getCellValue: () => Promise.resolve({ title: "a" }),
+      listCallableKeys: () => Promise.resolve(new Set<string>()),
       listSpaceSlugs: () => Promise.resolve([]),
       listPieces: () => Promise.resolve([]),
     },
@@ -5267,7 +5268,10 @@ describe("verbs", () => {
       const shuttle = atPiece();
       const nested = answering({
         getCellValue: () => Promise.resolve({ title: { deeper: 1 } }),
-        listing: { getCellValue: () => Promise.resolve({ title: {} }) },
+        listing: {
+          getCellValue: () => Promise.resolve({ title: {} }),
+          listCallableKeys: () => Promise.resolve(new Set<string>()),
+        },
       });
       await runLine("ls", shuttle, nested);
       await runLine("cd %1/deeper", shuttle, nested);
@@ -5305,7 +5309,10 @@ describe("verbs", () => {
       const shuttle = atPiece();
       const spaced = answering({
         getCellValue: () => Promise.resolve({ "first name": {} }),
-        listing: { getCellValue: () => Promise.resolve({ "first name": {} }) },
+        listing: {
+          getCellValue: () => Promise.resolve({ "first name": {} }),
+          listCallableKeys: () => Promise.resolve(new Set<string>()),
+        },
       });
       const listing = textOf(await runLine("ls", shuttle, spaced));
       expect(listing).toBe("%1 'first name'");
@@ -5779,6 +5786,7 @@ describe("verbs", () => {
               order.push("list");
               return Promise.resolve({ title: "a" });
             },
+            listCallableKeys: () => Promise.resolve(new Set<string>()),
           },
         }),
       );
@@ -5845,6 +5853,7 @@ describe("verbs", () => {
       "listSpaceSlugs",
       "listPieces",
       "listing.getCellValue",
+      "listing.listCallableKeys",
       "entityIdExists",
       "warmPiece",
       "setCellValue",
@@ -5940,9 +5949,15 @@ describe("verbs", () => {
             note("listPieces");
             return Promise.resolve([]);
           },
+          // A key, so that the listing goes on to its second read, which a
+          // cancel inside the first has to stop.
           getCellValue: () => {
             note("listing.getCellValue");
-            return Promise.resolve({});
+            return Promise.resolve({ title: "a" });
+          },
+          listCallableKeys: () => {
+            note("listing.listCallableKeys");
+            return Promise.resolve(new Set<string>());
           },
         },
         warmPiece: (config) => {
@@ -6038,6 +6053,7 @@ describe("verbs", () => {
       ["ls", atFacet("slugs"), "listSpaceSlugs"],
       ["ls", atFacet("pieces"), "listPieces"],
       ["ls", onPiece, "listing.getCellValue"],
+      ["ls", onPiece, "listing.listCallableKeys"],
       ['set title "a"', onPiece, "suspend"],
       ['set title "a"', onPiece, "warmPiece"],
       ['set title "a"', onPiece, "setCellValue"],
