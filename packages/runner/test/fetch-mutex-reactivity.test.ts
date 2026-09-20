@@ -248,9 +248,8 @@ describe("fetch-json mutex mechanism: reactive fetch state", () => {
       pending?: boolean;
     };
 
-    // Regression guard for the `memory/v2/patch.ts` `structuredClone()`
-    // class-stripping bug, which made errors round-trip back as `{ ... }`
-    // with message/stack lost.
+    // The error reads back from the result cell with a `name` of `Error`, a
+    // `message` naming the HTTP status, and a string `stack`.
     expect(data.error).toBeDefined();
     const fe = data.error as {
       name: string;
@@ -304,12 +303,10 @@ describe("fetch-json mutex mechanism: reactive fetch state", () => {
     expect(data.pending).toBe(false);
   });
 
-  it("should include computed options on the first fetch (CT-1246)", async () => {
+  it("includes computed options on the first fetch", async () => {
     const fetchJson = byRef("fetchJson");
 
-    // Options come from a computed — this is the scenario that triggers the bug.
-    // Without the fix, the first fetch fires before the computed settles,
-    // sending the request without the Accept header.
+    // Options come from a computed.
     const testRecipe = pattern<{ url: string }>(
       ({ url }) => {
         const options = computed(() => ({
@@ -342,8 +339,8 @@ describe("fetch-json mutex mechanism: reactive fetch state", () => {
       c.url.includes("/api/stars")
     );
 
-    // The key assertion: every fetch call should include the computed headers.
-    // Before the fix, the first call would have undefined options (no headers).
+    // The key assertion: every fetch call carries the computed headers, the
+    // first included.
     expect(relevantCalls.length).toBeGreaterThan(0);
     for (const call of relevantCalls) {
       expect(call.init?.headers).toBeDefined();

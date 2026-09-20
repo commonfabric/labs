@@ -14,10 +14,8 @@
  *   "New Note" flow), then a second event removes it again so the list size
  *   stays constant across bench iterations.
  *
- * The default-app CPU profiles (docs/history/development/performance/
- * default-app-note-create.md) show per-note-create costs that grow linearly
- * with existing note count (traverse calls +~41/note, dirty-dependency visits
- * +~28/note). The @0/@32/@128 size variants make that growth visible.
+ * The @0/@32/@128 size variants show how the cost of a create+remove cycle
+ * moves with the existing note count.
  *
  * Complements:
  * - scheduler-event-preflight.bench.ts (synthetic preflight shape)
@@ -48,7 +46,7 @@ const noteSchema = {
   },
   // All three fields are always populated by noteValue(); marking them required
   // makes the schema-materialized callback input match the `Note` type under
-  // lift's function-first schema-mode overload (CT-1625).
+  // lift's function-first schema-mode overload.
   required: ["title", "content", "tags"],
   additionalProperties: false,
 } as const satisfies JSONSchema;
