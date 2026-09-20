@@ -1,5 +1,12 @@
 /** Exercises occurrence identity and the computed default-pattern registry. */
-import { action, assert, pattern, TESTS, Writable } from "commonfabric";
+import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
+import {
+  childNodes,
+  clickButton,
+  findElement,
+  hasText,
+  propValue,
+} from "../test/vnode-helpers.ts";
 import Loom from "./main.tsx";
 import type { Panel, PublishedDocument } from "./schemas.tsx";
 
@@ -50,9 +57,22 @@ export default pattern(() => {
     loom.duplicatePanel.send({ panel: documentPanel })
   );
   const duplicateUrl = action(() => loom.duplicatePanel.send({ panel: url }));
+  const stageFromUI = action(() => clickButton(loom[UI], "Stage all"));
   return {
     [TESTS]: [
       { assertion: assert(() => loom.panels.length === 0) },
+      {
+        assertion: assert(() => {
+          const slots = childNodes(findElement(loom[UI], "cf-toolbar"));
+          const start = slots.find((child) =>
+            propValue(child, "slot") === "start"
+          );
+          const end = slots.find((child) => propValue(child, "slot") === "end");
+          return hasText(start, "Shared Loom") &&
+            hasText(end, "Stage all") && hasText(end, "Clear stage") &&
+            hasText(end, "Clear focus");
+        }),
+      },
       { action: add },
       { assertion: assert(() => loom.panels.length === 1) },
       { assertion: assert(() => loom.pieceRegistry.length === 1) },
@@ -120,6 +140,26 @@ export default pattern(() => {
           return copy.kind === "url" &&
             copy.url === "https://example.org/updated";
         }),
+      },
+      { render: loom[UI] },
+      { action: stageFromUI },
+      { render: loom[UI] },
+      {
+        assertion: assert(() =>
+          loom.presentation.stagedPanels.length === loom.panels.length
+        ),
+      },
+      {
+        assertion: assert(() =>
+          loom.presentation.stagedPanels[0].equals(loom.panels[0]) &&
+          loom.presentation.stagedPanels[4].equals(loom.panels[4])
+        ),
+      },
+      {
+        assertion: assert(() =>
+          hasText(loom[UI], "Staged for everyone") &&
+          !hasText(loom[UI], "Not staged")
+        ),
       },
     ],
   };

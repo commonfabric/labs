@@ -282,24 +282,26 @@ export default pattern<LoomInput, LoomOutput>(
         <cf-theme>
           <cf-screen>
             <cf-toolbar slot="header">
-              <h1>{title}</h1>
-              <cf-button
-                onClick={() =>
-                  present.send({ stagedPanels: [...panels.get()] })}
-              >
-                Stage all
-              </cf-button>
-              <cf-button onClick={() => present.send({ stagedPanels: [] })}>
-                Clear stage
-              </cf-button>
-              <cf-button
-                onClick={() =>
-                  present.send({
-                    stagedPanels: [...presentation.get().stagedPanels],
-                  })}
-              >
-                Clear focus
-              </cf-button>
+              <h1 slot="start">{title}</h1>
+              <cf-hstack slot="end" gap="2" wrap>
+                <cf-button
+                  onClick={() =>
+                    present.send({ stagedPanels: [...panels.get()] })}
+                >
+                  Stage all
+                </cf-button>
+                <cf-button onClick={() => present.send({ stagedPanels: [] })}>
+                  Clear stage
+                </cf-button>
+                <cf-button
+                  onClick={() =>
+                    present.send({
+                      stagedPanels: [...presentation.get().stagedPanels],
+                    })}
+                >
+                  Clear focus
+                </cf-button>
+              </cf-hstack>
             </cf-toolbar>
             <cf-vscroll>
               <cf-vstack gap="4" padding="4">
@@ -307,7 +309,7 @@ export default pattern<LoomInput, LoomOutput>(
                   <cf-card>
                     <cf-hstack gap="2">
                       <cf-button onClick={selectPanel({ panel, viewerState })}>
-                        {viewerState.get().selectedPanel?.equals(panel)
+                        {viewerState.key("selectedPanel").equals(panel)
                           ? "Selected in this session"
                           : "Select"}
                       </cf-button>

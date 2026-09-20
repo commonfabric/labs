@@ -5,8 +5,10 @@ import {
   multiUserTest,
   pattern,
   TESTS,
+  UI,
   Writable,
 } from "commonfabric";
+import { clickButton, hasText } from "../test/vnode-helpers.ts";
 import Loom from "./main.tsx";
 import type { LoomOutput, Panel } from "./schemas.tsx";
 
@@ -24,6 +26,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
   const select = action(() =>
     setup.loom.viewerState.set({ selectedPanel: panel })
   );
+  const stage = action(() => clickButton(setup.loom[UI], "Stage all"));
   return {
     [TESTS]: [
       { action: add },
@@ -34,6 +37,21 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
       {
         assertion: assert(() =>
           setup.loom.viewerState.key("selectedPanel").equals(panel)
+        ),
+      },
+      { render: setup.loom[UI] },
+      { action: stage },
+      { label: "alice-staged" },
+      { render: setup.loom[UI] },
+      {
+        assertion: assert(() =>
+          hasText(setup.loom[UI], "Staged for everyone") &&
+          !hasText(setup.loom[UI], "Not staged")
+        ),
+      },
+      {
+        assertion: assert(() =>
+          setup.loom.presentation.stagedPanels.length === 2
         ),
       },
     ],
@@ -59,6 +77,12 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
       {
         assertion: assert(() =>
           setup.loom.viewerState.key("selectedPanel").equals(panel)
+        ),
+      },
+      { await: "alice-staged" },
+      {
+        assertion: assert(() =>
+          setup.loom.presentation.stagedPanels.length === 2
         ),
       },
     ],
