@@ -64,11 +64,11 @@ import {
   cf,
   cfApply,
   cfJson,
+  declaredRetirableLinks,
   deepEqual,
   isAbsentPathError,
   normalizeFid,
   PRESERVED_FIELDS,
-  RETIRABLE_LINK_FIELDS,
   retiredKeys,
   STRUCTURAL_LINK_SOURCES,
   type TopicsExport,
@@ -174,25 +174,11 @@ async function liveValue(field: string): Promise<unknown> {
 // export cannot: whether a retirable link field is still live here, and
 // whether this piece holds a permanent value the export predates.
 //
-// A targeted input read refuses a path the current pattern does not declare,
-// and `liveValue` reports that refusal as `undefined`. It reports a declared
-// path holding nothing the same way, so the probe cannot tell those two apart
-// on its own — which matters only for a retirable field, where reading it as
-// undeclared would retire a link the target still uses. The pattern identity
-// settles it: when it matches the export's, the target runs the very source
-// the export was taken from, so every field the export holds is one this
-// target declares. It is only under `--allow-identity-mismatch`, where the
-// source has deliberately moved, that the probe decides.
+// Asked of the target every time, never inferred from the export's vintage or
+// from the pattern identity matching; `declaredRetirableLinks` says why, and
+// what the probe cannot see.
 const rawArgument = (row.rawArgument ?? {}) as Record<string, unknown>;
-const declaredLinks: string[] = [];
-for (const field of RETIRABLE_LINK_FIELDS) {
-  if (!Object.hasOwn(rawArgument, field)) continue;
-  if (liveIdentity === row.patternIdentity) {
-    declaredLinks.push(field);
-    continue;
-  }
-  if (await liveValue(field) !== undefined) declaredLinks.push(field);
-}
+const declaredLinks = await declaredRetirableLinks(rawArgument, liveValue);
 const preserved: Record<string, unknown> = {};
 for (const field of PRESERVED_FIELDS) {
   const live = await liveValue(field);

@@ -6,6 +6,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   buildRestoreDocument,
+  declaredRetirableLinks,
   deepEqual,
   findLink,
   isAbsentPathError,
@@ -319,6 +320,65 @@ describe("topics-rehearsal-lib", () => {
     it("throws on a link-valued field it does not understand", () => {
       expect(() => buildRestoreDocument({ attachments: [link] }, resolved))
         .toThrow("attachments");
+    });
+  });
+
+  describe("declaredRetirableLinks", () => {
+    const link = { "$link": "of:fid1:source" };
+    const probe = (answers: Record<string, unknown>) => (field: string) =>
+      Promise.resolve(answers[field]);
+
+    it("reads a bound link as declared", async () => {
+      expect(
+        await declaredRetirableLinks(
+          { title: "t", boardNames: link },
+          probe({ boardNames: [{ name: "1" }] }),
+        ),
+      ).toEqual(["boardNames"]);
+    });
+
+    it("reads a declared input's own default as declared", async () => {
+      // An unbound but declared `boardNames` answers with the `Default<[]>`
+      // its input carries, which is what tells it apart from a path the
+      // pattern does not declare at all. The 2026-09-05 clone rehearsal
+      // measured that read.
+      expect(
+        await declaredRetirableLinks(
+          { title: "t", boardNames: link },
+          probe({ boardNames: [] }),
+        ),
+      ).toEqual(["boardNames"]);
+    });
+
+    it("retires a link the target's own source no longer declares", async () => {
+      // The case this change creates, and the one an export's vintage cannot
+      // settle: a topic migrated past `boardNames` keeps the stored link in
+      // its raw argument, so an export taken from it AFTERWARDS holds a link
+      // at a path its own source does not declare — with the pattern identity
+      // matching, because no migration separates the two. Classifying that as
+      // declared sends the restore to `cf piece link` against a path that
+      // refuses, after the content write has landed.
+      expect(
+        await declaredRetirableLinks(
+          { title: "t", boardNames: link },
+          probe({}),
+        ),
+      ).toEqual([]);
+    });
+
+    it("asks only about retirable fields the export holds", async () => {
+      let asked = 0;
+      const counted = (field: string) => {
+        asked++;
+        return Promise.resolve(field === "myName" ? "Ada" : undefined);
+      };
+      expect(
+        await declaredRetirableLinks(
+          { title: "t", mentionable: link, myName: link },
+          counted,
+        ),
+      ).toEqual(["myName"]);
+      expect(asked).toBe(1);
     });
   });
 

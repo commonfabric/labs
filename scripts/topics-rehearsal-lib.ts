@@ -316,6 +316,47 @@ export const RETIRABLE_LINK_FIELDS = ["myName", "boardNames"] as const;
  */
 export const PRESERVED_FIELDS = ["shortName"] as const;
 
+/**
+ * The {@link RETIRABLE_LINK_FIELDS} the TARGET declares, out of those the
+ * export holds — `buildRestoreDocument`'s `declaredLinks`, decided by asking
+ * the target rather than by the field's name or the export's vintage.
+ *
+ * `read` is a targeted read of the target's durable input at one field,
+ * answering `undefined` where the read does not land. Anything else means the
+ * target declares the path: a declared input carrying a default answers with
+ * that default even when nothing is bound there — Topics' `boardNames` reads
+ * `[]` for an unbound topic, which the 2026-09-05 clone rehearsal measured —
+ * while a path the current pattern does not declare is refused outright.
+ *
+ * THE EXPORT'S OWN VINTAGE CANNOT DECIDE THIS, and neither can the pattern
+ * identity matching. A topic migrated past an input keeps the stored link in
+ * its raw argument document, unreachable through the new projection
+ * (`packages/cli/test/piece-link-input-visibility.test.ts`), and an export
+ * taken from it afterwards therefore holds a link at a path its own source
+ * does not declare, with the identity matching. Reasoning from identity to
+ * "declared" sends the restore to `cf piece link` against that path, which
+ * refuses — after the content write has landed.
+ *
+ * The bound on the probe: a declared input that carries NO default and holds
+ * nothing reads the same as an undeclared one, so it is reported here as
+ * undeclared and retired. That direction is the safe one and costs nothing —
+ * the target holds no value at such a path, so retiring it removes nothing —
+ * and the run names every field it retired. The other direction ends the
+ * restore with the document already replaced.
+ */
+export async function declaredRetirableLinks(
+  rawArgument: Record<string, unknown>,
+  read: (field: string) => Promise<unknown>,
+): Promise<string[]> {
+  const declared: string[] = [];
+  for (const field of RETIRABLE_LINK_FIELDS) {
+    if (!Object.hasOwn(rawArgument, field)) continue;
+    if (rawArgument[field] === undefined) continue;
+    if (await read(field) !== undefined) declared.push(field);
+  }
+  return declared;
+}
+
 /** What the target's current pattern declares and currently holds. */
 export interface RestoreTarget {
   /**
