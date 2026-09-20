@@ -35,7 +35,9 @@ import {
   githubGet,
   githubPatch,
   githubPost,
+  GitHubRateLimitError,
   isBaselineCandidateRun,
+  isGitHubRateLimitError,
   isNotFound,
   measuredSetCoverageMetric,
   newestArtifactsByName,
@@ -841,6 +843,29 @@ Deno.test("buildCoverageNotGatedComment says a listing that is not current faile
   assertFalse(comment.includes("Measured by"));
 });
 
+Deno.test("buildCoverageNotGatedComment sends a rate-limited run back to GitHub", () => {
+  const comment = buildCoverageNotGatedComment({
+    groups: [{ group: "tasks", reason: "rate-limited" }],
+  });
+
+  // The job passed, so the comment reads as the ungated-but-passing one, and
+  // the remedy waits on the limit rather than on a `main` run.
+  assertStringIncludes(
+    comment,
+    "The **Coverage Check** job did not hold `tasks` against a baseline",
+  );
+  assertStringIncludes(
+    comment,
+    "| `tasks` | GitHub's API rate limit stopped this run reading the " +
+      "baseline data, so nothing was compared. |",
+  );
+  assertStringIncludes(
+    comment,
+    "Re-run the **Coverage Check** job once GitHub's API rate limit has reset.",
+  );
+  assertFalse(comment.includes("A later run of this pull request gates"));
+});
+
 Deno.test("coverageNotGatedNotice names no commit for a checkout that had none", () => {
   const notice = coverageNotGatedNotice({
     groups: [
@@ -1206,6 +1231,243 @@ Deno.test("githubGet does not retry non-transient GitHub responses", async () =>
   }
 });
 
+/**
+ * Runs `callback` against a `fetch` answering every request with `response()`,
+ * and reports how many requests it made.
+ */
+async function withFetchAnswering(
+  response: () => Response,
+  callback: () => Promise<void>,
+): Promise<number> {
+  const originalFetch = globalThis.fetch;
+  let calls = 0;
+  globalThis.fetch = ((_input, _init) => {
+    calls++;
+    return Promise.resolve(response());
+  }) as typeof fetch;
+  try {
+    await callback();
+    return calls;
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+}
+
+/** GitHub's answer when the token has spent its hourly request window. */
+function primaryRateLimitResponse(): Response {
+  return new Response('{"message":"API rate limit exceeded for user"}', {
+    status: 403,
+    statusText: "Forbidden",
+    headers: {
+      "x-ratelimit-remaining": "0",
+      "x-ratelimit-reset": "1789856877",
+    },
+  });
+}
+
+Deno.test("githubGet reports a spent request window as a rate limit, not a refusal", async () => {
+  // The refusal is worded in the response body, which is cancelled unread, so
+  // the headers are the only thing that can tell this from a permission error.
+  const calls = await withFetchAnswering(primaryRateLimitResponse, async () => {
+    const error = await assertRejects(
+      () => githubGet("/repos/commonfabric/labs/actions/runs"),
+      GitHubRateLimitError,
+    );
+    assertStringIncludes(error.message, "GitHub API GET 403 Forbidden");
+  });
+
+  // A window that is spent does not refill inside one job, so it is not retried.
+  assertEquals(calls, 1);
+});
+
+Deno.test("githubGet reports a secondary rate limit once its retries are spent", async () => {
+  const calls = await withFetchAnswering(
+    () =>
+      new Response("slow down", {
+        status: 429,
+        statusText: "Too Many Requests",
+        headers: { "retry-after": "0", "x-ratelimit-remaining": "42" },
+      }),
+    async () => {
+      await assertRejects(
+        () => githubGet("/repos/commonfabric/labs/actions/runs"),
+        GitHubRateLimitError,
+      );
+    },
+  );
+
+  // A secondary limit often clears within the job, so the whole attempt budget
+  // is spent before it is called one.
+  assertEquals(calls, 4);
+});
+
+Deno.test("githubGet stops retrying a spent window answered as a busy signal", async () => {
+  // 429 is the status a slow-down is retried for, and the spent window is the
+  // one case behind it that no retry inside this job can clear.
+  const calls = await withFetchAnswering(
+    () =>
+      new Response("slow down", {
+        status: 429,
+        statusText: "Too Many Requests",
+        headers: { "retry-after": "0", "x-ratelimit-remaining": "0" },
+      }),
+    async () => {
+      await assertRejects(
+        () => githubGet("/repos/commonfabric/labs/actions/runs"),
+        GitHubRateLimitError,
+      );
+    },
+  );
+
+  assertEquals(calls, 1);
+});
+
+Deno.test("githubGet reads a busy signal carrying no headers as a rate limit", async () => {
+  // GitHub documents the rate-limit headers as optional, and 429 means too
+  // many requests whatever it sends beside it. Read as an ordinary failure it
+  // would reach the coverage walk as a run that measured nothing.
+  const calls = await withFetchAnswering(
+    () =>
+      new Response("slow down", {
+        status: 429,
+        statusText: "Too Many Requests",
+      }),
+    async () => {
+      await assertRejects(
+        () => githubGet("/repos/commonfabric/labs/actions/runs"),
+        GitHubRateLimitError,
+      );
+    },
+  );
+
+  assertEquals(calls, 4);
+});
+
+Deno.test("githubGet waits out a secondary limit that arrives as a refusal", async () => {
+  // The same condition spelled 403 rather than 429. Retrying is what can still
+  // hold the pull request to its baseline, so the status it arrives under must
+  // not decide whether the wait is observed.
+  const calls = await withFetchAnswering(
+    () =>
+      new Response("slow down", {
+        status: 403,
+        statusText: "Forbidden",
+        headers: { "retry-after": "0", "x-ratelimit-remaining": "42" },
+      }),
+    async () => {
+      await assertRejects(
+        () => githubGet("/repos/commonfabric/labs/actions/runs"),
+        GitHubRateLimitError,
+      );
+    },
+  );
+
+  assertEquals(calls, 4);
+});
+
+Deno.test("githubGet reads a secondary limit out of a refusal that sends no headers", async () => {
+  // GitHub documents a secondary limit as arriving with neither rate-limit
+  // header, and its message as what tells it from a permission failure. Read
+  // as a permission failure it would reach the coverage walk as absent data.
+  const calls = await withFetchAnswering(
+    () =>
+      new Response(
+        '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}',
+        { status: 403, statusText: "Forbidden" },
+      ),
+    async () => {
+      const error = await assertRejects(
+        () => githubGet("/repos/commonfabric/labs/actions/runs"),
+        GitHubRateLimitError,
+      );
+      // The body classified the refusal and stayed out of what is reported.
+      assertEquals(
+        error.message,
+        "GitHub API GET 403 Forbidden: /repos/commonfabric/labs/actions/runs",
+      );
+    },
+  );
+
+  // A wait to observe, so the attempts are spent before it is called a limit.
+  assertEquals(calls, 4);
+});
+
+Deno.test("githubGet classifies a refusal that carries no body from its headers", async () => {
+  // Nothing to read, so the headers are the whole of the evidence — and they
+  // are enough here.
+  const calls = await withFetchAnswering(
+    () =>
+      new Response(null, {
+        status: 403,
+        statusText: "Forbidden",
+        headers: { "x-ratelimit-remaining": "0" },
+      }),
+    async () => {
+      await assertRejects(
+        () => githubGet("/repos/commonfabric/labs/actions/runs"),
+        GitHubRateLimitError,
+      );
+    },
+  );
+
+  assertEquals(calls, 1);
+});
+
+Deno.test("githubGet reports the status when a refusal's body fails mid-read", async () => {
+  // Reading the body is how a refusal is classified, never how it is
+  // reported, so a body that breaks costs the classification its evidence and
+  // the failure nothing.
+  await withFetchAnswering(
+    () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new Error("the body failed"));
+          },
+        }),
+        { status: 404, statusText: "Not Found" },
+      ),
+    async () => {
+      const error = await assertRejects(
+        () => githubGet("/repos/commonfabric/labs/missing"),
+        Error,
+      );
+      assertEquals(
+        error.message,
+        "GitHub API GET 404 Not Found: /repos/commonfabric/labs/missing",
+      );
+    },
+  );
+});
+
+Deno.test("githubGet does not call an ordinary refusal a rate limit", async () => {
+  await withFetchAnswering(
+    () => new Response("forbidden", { status: 403, statusText: "Forbidden" }),
+    async () => {
+      const error = await assertRejects(
+        () => githubGet("/repos/commonfabric/labs/actions/runs"),
+        Error,
+      );
+      assertFalse(error instanceof GitHubRateLimitError);
+      assertFalse(isGitHubRateLimitError(error));
+    },
+  );
+});
+
+Deno.test("downloadAndExtractArtifact raises a rate limit rather than reporting no artifact", async () => {
+  // Reported as `null` the limit would read as a run that measured nothing,
+  // which is a verdict about coverage rather than about GitHub.
+  const calls = await withFetchAnswering(primaryRateLimitResponse, async () => {
+    await assertRejects(
+      () => downloadAndExtractArtifact(123, "rate-limited-artifact-"),
+      GitHubRateLimitError,
+      "GitHub artifact download 403 Forbidden",
+    );
+  });
+
+  assertEquals(calls, 1);
+});
+
 Deno.test("GitHub REST errors include status text and omit response bodies", async (t) => {
   const responseBody =
     "upstream request: data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB";
@@ -1272,7 +1534,7 @@ Deno.test("GitHub REST errors include status text and omit response bodies", asy
   }
 });
 
-Deno.test("GitHub REST errors survive response cancellation failures", async () => {
+Deno.test("GitHub REST errors do not wait for response cancellation", async () => {
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = ((_input, _init) =>
@@ -1280,7 +1542,7 @@ Deno.test("GitHub REST errors survive response cancellation failures", async () 
         new Response(
           new ReadableStream({
             cancel() {
-              throw new Error("response cancellation failed");
+              return new Promise(() => {});
             },
           }),
           { status: 404, statusText: "Not Found" },

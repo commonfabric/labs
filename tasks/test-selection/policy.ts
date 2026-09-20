@@ -60,9 +60,9 @@ export const FULL_RUN_LABEL = "ci: full";
 
 /**
  * What one execution of a test nothing has measured is charged, where the
- * suite it belongs to has no measured test to take a figure from. Charging
- * nothing instead would make the packer treat every unmeasured test as
- * free, and free work all fits in the first lane it is offered.
+ * suite it belongs to has no measured unit to take a figure from. Above
+ * zero, so that the packer charges work it knows nothing about for some
+ * time: free work all fits in the first lane it is offered.
  */
 export const UNMEASURED_COST_SECONDS = 1;
 
@@ -448,9 +448,9 @@ export const DIALS: readonly Dial[] = [
     unit: "seconds",
     setBy: "chosen",
     why: "Up when a lane holding new tests runs long; down when it finishes " +
-      "early. It is reached for only by a suite with no measured test at " +
-      "all, since a suite that has any charges an unmeasured one what its " +
-      "middle test costs.",
+      "early. It is reached for only by a suite with no measured unit at " +
+      "all, since a suite that has any charges an unmeasured one the larger " +
+      "of its units' mean and their ninetieth percentile.",
   },
   {
     name: "VALUE_FLOOR",

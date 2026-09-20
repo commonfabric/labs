@@ -1,8 +1,7 @@
 # Stream markers out of stored data
 
-**Status:** stages 1 and 2 are implemented in open pull requests, #7583 and
-#7589, stacked in that order on `main`; neither has merged. Stage 3 is not
-started. Investigated against `main` at `59e8a2540` (2026-09-15); line
+**Status:** stage 1 has landed, as #7583. Stage 2 is open as #7589, rebased
+onto `main` past it. Stage 3 is not started. Investigated against `main` at `59e8a2540` (2026-09-15); line
 references are to that tree unless an item names a stage branch. A file is
 named by its path under `packages/` the first time and by its basename after
 that (`runner.ts` is `packages/runner/src/runner.ts`, `builder/pattern.ts` is
@@ -254,9 +253,9 @@ replaces the value read there.
 ## Stages
 
 Three PRs. The first keeps the value fallback so nothing that still holds a
-sentinel breaks; the last removes it. Stage 1 is open as #7583 and stage 2 as
-#7589, stacked on it. A checked item is done in that PR; an unchecked item
-under stage 1 or 2 is still owed there. Where a stage does something other
+sentinel breaks; the last removes it. Stage 1 landed as #7583, and stage 2 is
+open as #7589. A checked item is done in that PR; an unchecked item under
+stage 2 is still owed there. Where a stage does something other
 than what the list first said, the item says what it does now and why.
 
 ### Stage 1 — Runner: stop writing, stop needing (#7583)
@@ -268,10 +267,8 @@ than what the list first said, the item says what it does now and why.
       alias schema for stream-kind cells, with no `default`. The stamp goes in
       front of an `asCell` the schema already carries (`["opaque"]` on a
       stream's own schema) rather than replacing it.
-- [ ] Setup writes nothing onto a stream's derived document but the `result`
-      back-link (`runner.ts:2986`). #7583 writes a `schema` meta beside it
-      through a `declaredStreamSchema` helper; that write and the helper go,
-      per decision 3.
+- [x] Setup writes nothing onto a stream's derived document but the `result`
+      back-link (`runner.ts:2986`), per decision 3.
 - [x] Handler dispatch follows decision 2, without rule 1's schema assertion,
       which stage 3 adds. `describeHandlerStreamFailure`,
       `isMissingStreamMarkerFailure` and the `runner.ts:10492` throw are gone,
@@ -297,13 +294,14 @@ than what the list first said, the item says what it does now and why.
       case that added the proxy fallback and that `sidebar.tsx:84` still works
       around. Under this design it works only because the stored alias link
       carries the stamp.
-- [ ] `when` and `unless` carry the stamp on the link they write when the
-      selected branch declares a stream, as `ifElse` now does
-      (`builtins/if-else.ts` asks for `includeSchema` off
-      `declaresStream(resolvedRef.schema)`), and one test per builtin asserts
-      the emitted link's schema. Without it a stream chosen through either
-      resolves to a link with no stamp and no value, and its `send()` becomes
-      a value write once stage 3 lands.
+- [x] `when` and `unless` carry the stamp on the link they write when the
+      selected branch declares a stream, as `ifElse` does (each asks for
+      `includeSchema` off `declaresStream(resolvedRef.schema)`). One test per
+      builtin, over a sub-pattern's stream and the pattern's own
+      (`stream-declaration.test.ts`), pins it by what the stamp is for: with
+      nothing stored at the position, the selected field reads as a stream
+      and a `send()` through it dispatches, which holds only if the link
+      carries the declaration.
 - [x] Not foreseen: every read path treats a declared stream position as a
       handle whether or not the data names it — the eager traversal, the
       schema view, the defaults path — with `required` checks exempting such
@@ -317,14 +315,18 @@ than what the list first said, the item says what it does now and why.
 
 ### Stage 2 — Consumers, tests, docs (#7589)
 
-- [ ] State inspector: classify a document as `stream` by following its
+- [x] State inspector: a document classifies as `stream` by following its
       `result` back-link to the owner's `internal` manifest and reading the
-      stamped link there; keep the value check until stage 3. #7589 classifies
-      from a `schema` meta on the document and has `classifyDocument` take a
-      document reader to follow a `cid:` reference. The reader stays, since
-      the manifest walk needs it and a manifest link's schema can itself be a
-      `cid:` reference; the meta check goes, and the detail view names the
-      manifest it read.
+      stamped link there, through the reading the runtime applies. That
+      reading is `@commonfabric/runner/stream-declaration`, a module carrying
+      none of the runtime, which the runtime and the inspector both go
+      through, each supplying how it resolves an external schema reference:
+      the registry, or the space's documents. The value check stays until
+      stage 3.
+      `classifyDocument` takes
+      the document's id, which the manifest entry is matched by, and a
+      document reader, which the walk reads the owner and a manifest link's
+      `cid:` reference through. The detail view names the manifest it read.
 - [x] Shuttle listing: a key is a `callable` off the child's link-derived
       schema, the same signal the CLI read guard refuses on, through a new
       `listCallableKeys` read (`packages/cli/lib/piece.ts`) that runs beside the
@@ -342,11 +344,10 @@ than what the list first said, the item says what it does now and why.
       projection of a bare stream document, which `#materializeTreeValue`
       already leaves empty rather than failing. Both are follow-ups if anyone
       wants them.
-- [ ] CLI read guard: the comment at `packages/cli/lib/piece.ts:4694` keeps
-      naming both of its signals, the link-derived schema and the stored value,
+- [x] CLI read guard: the comment at `packages/cli/lib/piece.ts:4694` names
+      both of its signals, the link-derived schema and the stored value,
       because `detectCallableKind` reads the value through `getRaw()`
       (`packages/cli/lib/callable.ts:1226`) until stage 3 removes that read.
-      Stage 2's rewrite of the comment claims one signal and reverts to two.
 - [x] Piece menu: already schema-first with a parent-schema fallback
       (`cf-piece-menu.ts:1851`); remove `isRawStreamMarker`.
 - [x] Test fixtures, in part. Every fixture that built a stream through a real
@@ -376,8 +377,9 @@ than what the list first said, the item says what it does now and why.
       comment: its handler branches on `innerValue.$stream` and reports "Stream
       not found" for a stream set up under stage 1. It is a manual fixture that
       no CI job dispatches; stage 3 rewrites it (see there).
-- [x] Not foreseen: a stream declared through a `$ref` into the schema's own
-      `$defs`, or through a composition whose branches agree (`allOf` with
+- [x] Not foreseen, and landed with stage 1: a stream declared through a
+      `$ref` into the schema's own `$defs`, or through a composition whose
+      branches agree (`allOf` with
       plain constraints beside it, a uniform `anyOf`/`oneOf`), was not a
       declared stream to `Cell.isStream`, which read only a root `asCell`; the
       stored sentinel had been carrying those sends. The piece controller
@@ -411,8 +413,12 @@ than what the list first said, the item says what it does now and why.
       value read. It covers links a handler or lift wrote into data before
       stage 1, which no setup pass rewrites (`data-updating.ts:1283` stamps
       only a new write), and the llm-dialog dispatch at
-      `builtins/llm-dialog.ts:2067`. One function, shared with the inspector's
-      classification; the follow-up deletes it.
+      `builtins/llm-dialog.ts:2067`. The walk is a few lines over each
+      reader's own substrate — `ownerStreamSchema` (`link-utils.ts`) over
+      cells, the inspector's `streamDeclarationOf`
+      (`state-inspector/model.ts`) over stored documents — and what they
+      share is the reading of the manifest link they find,
+      `runner/src/stream-declaration.ts`; the follow-up deletes both walks.
 - [ ] Decide compatibility for pieces last set up before stage 1, before the
       value branch goes. Owner resolution covers a bare address whose owner
       manifest is stamped; a piece set up before stage 1 has an unstamped
@@ -422,7 +428,17 @@ than what the list first said, the item says what it does now and why.
       accept the break: sends through those links become value writes rather
       than events. The follow-up below re-materializes every stream under a
       new id in any case, so the question is whether old pieces break once or
-      twice. Record the choice here.
+      twice. Record the choice here. The choice rests on live data rather than
+      on fixtures, since a fixture today's setup produces is already stamped:
+      sample pieces set up before stage 1 on a deployed space and count how
+      many have stamped owner manifests; measure whether the cold-start repair
+      re-stamps them in practice on a routine pattern update; pin a test over
+      hand-written pre-stage-1 stored state — unstamped manifest, unstamped
+      stored link, sentinel present — that sends still dispatch as events;
+      and land the dispatch assertion of decision 2, rule 1, before the value
+      branch goes, so that a link nothing declares refuses loudly rather than
+      writing a value. Where the follow-up is coming anyway, migrating once
+      there may cost less than breaking twice.
 - [ ] Handler dispatch asserts that the parsed `$event` link's schema declares
       a stream (decision 2, rule 1).
 - [ ] `detectCallableKind` stops reading the value

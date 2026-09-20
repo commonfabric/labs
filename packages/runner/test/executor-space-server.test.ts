@@ -1445,11 +1445,12 @@ describe("stage G SpaceServer recovery seams", () => {
           "lt6-stream-early",
         ]
       ) {
-        const stream = creator.getCell<unknown>(space, name, undefined);
+        // A stream document holds no value, and nothing on it says what it
+        // is: the handle that reaches it declares the stream.
+        const stream = creator.getCell<unknown>(space, name, {
+          asCell: ["stream"],
+        });
         await stream.sync();
-        const tx = creator.edit();
-        stream.withTx(tx).setRaw({ $stream: true });
-        expect((await tx.commit()).error).toBeUndefined();
       }
       for (
         const name of [
@@ -1504,11 +1505,11 @@ describe("stage G SpaceServer recovery seams", () => {
       }): Promise<{
         entry: NonNullable<StreamEventsDocValue["entries"]>[number];
       }> => {
-        const streamCell = serving.getCell<unknown>(
-          space,
-          arm.stream,
-          undefined,
-        );
+        // The serving side's handle declares the stream: a send decides
+        // stream-or-write off the handle, and the document holds no value.
+        const streamCell = serving.getCell<unknown>(space, arm.stream, {
+          asCell: ["stream"],
+        });
         const probeCell = serving.getCell<{ handled?: number }>(
           space,
           arm.probe,

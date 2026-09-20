@@ -5,9 +5,10 @@ remains is removing the flag and the eager path for lift arguments; handler
 materialization is settled under Stage 5.
 
 Switch retirement is optional work for the flag owner. The separate
-[lazy materialization fast-follow](lazy-materialization-fast-follow.md) owns
-default-on measurements and guidance and can complete without retirement. This
-document retains the view and snapshot design and its implementation record.
+[lazy materialization fast-follow record](../history/plans/lazy-materialization-fast-follow.md)
+contains the dated investigation and measurement evidence. Current read semantics
+are described in the [feature contract](../features/lazy-cell-materialization.md).
+This document retains the view and snapshot design and its implementation record.
 
 `Cell.get()` materializes everything its schema selects, in one pass, before the
 reader touches any of it. A lift declaring a list of a thousand entries gets a
@@ -449,7 +450,7 @@ diffing and the scheduler's own reads keep eager semantics.
 - [x] The reads taken up to the refusal stay registered, including the one that
       failed, so the node runs again when its inputs change.
 - [x] Handlers materialize eagerly, by decision rather than by omission. The
-      [fast-follow](lazy-materialization-fast-follow.md) built and measured a
+      [fast-follow](../history/plans/lazy-materialization-fast-follow.md) built and measured a
       lazy bound-context prototype and deferred it: a view narrows the read
       log a handler's commit is checked against, and its measured win is
       confined to a shape the collection guidance already steers away from.
@@ -479,7 +480,7 @@ diffing and the scheduler's own reads keep eager semantics.
       read of such a link used to answer `undefined`.
       `gideon-tests/proxy-length-repro` pins it.
 - [ ] Owner-led: decide whether and when to remove the default-on flag. The
-      [fast-follow plan](lazy-materialization-fast-follow.md) supplies evidence;
+      [fast-follow plan](../history/plans/lazy-materialization-fast-follow.md) supplies evidence;
       its completion does not depend on this optional retirement.
 
 ## Testing

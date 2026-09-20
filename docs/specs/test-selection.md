@@ -183,6 +183,41 @@ and is charged nothing. Such a test has either barely run or is failing
 everywhere, and one failing everywhere holds up the default branch, which
 is a louder alarm than any lane's budget and is answered first.
 
+That rule is about an identity the store holds, whose executions inside
+the window all failed. A unit the store holds no identity for at all — a
+file that is new, or one whose every test was renamed — is a different
+case and is not charged nothing.
+
+Such a unit is charged from what its own suite's measured units cost, as
+the larger of two readings of them: their mean, and their ninetieth
+percentile. The suites are orders of magnitude apart, so one figure across
+all of them describes none of them, and a suite's own units are the whole
+of the evidence about what another of them will take. A suite holding no
+measured unit has none of that evidence, and each of its units takes
+`UNMEASURED_COST_SECONDS`, which is above zero so that a packer treats a
+suite it knows nothing about as taking time.
+
+Both readings, because a lane holding one such unit and a lane holding
+twenty are short of time for different reasons.
+
+A suite's units are bimodal: many fast ones, a few slow ones, and little
+in between. The middle of them therefore falls where no unit sits, and
+describes neither the fast units nor the slow. The ninetieth percentile is
+where a test's own cost is read, and against one unit it is short one time
+in ten.
+
+What a lane holding twenty is packed against is their total, which sits
+near twenty times the mean whatever shape they came from. So a figure
+under the mean falls short of that total with a probability that climbs
+towards one as the count grows, however safe the same figure is against
+one unit. Which of the two readings is the larger is decided by how heavy
+the suite's tail is.
+
+No one figure covers a unit from the far end of a tail, and one that did
+would charge a lane many times what it holds. What answers that is the
+rule below, that a consumer reporting a projected time says how much of it
+rests on stand-ins.
+
 ## Flakes
 
 A flake is a test that disagrees with itself. `flakeRate` is how often it
@@ -597,6 +632,26 @@ A manifest declaring an earlier shape is read forward field by field. So
 is the publisher's own rolling aggregate, and for a stronger reason: the
 aggregate is where every catch a test has been credited with lives, over
 unbounded history, and no window of records gives those back.
+
+A stored aggregate the publisher cannot read is passed over for the
+newest one behind it that it can. Nothing but the publisher creates an
+aggregate and it creates one only where it folded, so refusing over the
+newest would be refusing for good, which is why this goes further than a
+consumer does with a manifest: a consumer passes over only a body
+written ahead of it, where the publisher passes over a corrupt body too.
+A body that fails to arrive is not passed over by either, since a read
+that did not happen says nothing about what it would have read.
+
+The walk reaches back over the days the run reads and no further, since
+what a passed-over aggregate holds and the one behind it does not comes
+back from the records the run reads. That bound is approximate in one
+direction, because the runs that wrote the passed-over aggregates read
+windows reaching earlier than their own day, and a run states what it
+passed over and what it folded onto rather than claiming the gap was
+closed. A run that can read no aggregate at all refuses, naming each and
+what stopped it. Refusing costs a stale manifest; starting from an empty
+aggregate would cost a manifest scoring every test at the floor, so a
+run never does that on its own.
 
 The area of the store both are written under is named rather than
 numbered, and does not move when a shape changes. An area that moved

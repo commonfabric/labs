@@ -17,6 +17,7 @@ import {
   mergeSamples,
   type Observation,
   parseContext,
+  percentile90,
   readCostsForward,
   sampledPercentile90,
   sampleDuration,
@@ -602,10 +603,11 @@ describe("score", () => {
 });
 
 /**
- * The ninetieth percentile of a list, by nearest rank, over the whole list
- * rather than a bounded sample of it.
+ * The ninetieth percentile of a list, by nearest rank, worked out here
+ * rather than through the module under test so that the two are two
+ * answers to compare.
  */
-function percentile90(values: readonly number[]): number {
+function exactPercentile90(values: readonly number[]): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.max(0, Math.ceil(0.9 * sorted.length) - 1)]!;
@@ -667,7 +669,8 @@ describe("a day's bounded sample of its slowest runs", () => {
     const durations = Array.from({ length: 20 }, (_, i) => (i + 1) * 10);
     const samples = empty();
     for (const ms of durations) sampleDuration(samples, ms);
-    expect(sampledPercentile90(samples)).toBe(percentile90(durations));
+    expect(sampledPercentile90(samples))
+      .toBe(exactPercentile90(durations));
   });
 
   it("over-estimates rather than under-estimates past what it kept", () => {
@@ -677,6 +680,38 @@ describe("a day's bounded sample of its slowest runs", () => {
     const samples = empty();
     for (let i = 1; i <= 1000; i++) sampleDuration(samples, i);
     expect(sampledPercentile90(samples)).toBeGreaterThanOrEqual(900);
+  });
+});
+
+describe("the ninetieth percentile of a population", () => {
+  it("answers over the whole of one given whole", () => {
+    // What a caller holding every value asks for. Each size is checked
+    // against the nearest rank worked out separately, since an
+    // off-by-one here moves every cost the model reads.
+    for (let size = 1; size <= 40; size++) {
+      const values = Array.from({ length: size }, (_, i) => (i + 1) * 10);
+      expect(percentile90(values, values.length))
+        .toBe(exactPercentile90(values));
+    }
+  });
+
+  it("takes the rank over the population and not over what it holds", () => {
+    // A population of ten, of which only the slowest four are given.
+    // Those four are the seventh to the tenth, and the ninetieth
+    // percentile of ten is the ninth, so it is among them: 90. Reading
+    // the rank over the four given instead would answer 100.
+    expect(percentile90([70, 80, 90, 100], 10)).toBe(90);
+  });
+
+  it("gives the smallest it holds where the rank falls outside them", () => {
+    // The ninetieth of a thousand is the nine hundredth, and only the
+    // slowest four are here. Answering with the smallest of those
+    // over-estimates, which is the direction a budget survives.
+    expect(percentile90([970, 980, 990, 1000], 1000)).toBe(970);
+  });
+
+  it("has no percentile for a population of nothing", () => {
+    expect(percentile90([], 0)).toBe(0);
   });
 });
 

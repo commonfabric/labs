@@ -9,6 +9,7 @@ import {
   newestAtOrBefore,
   newestFirstAtOrBefore,
   selectionPrefix,
+  stateDayOf,
   stateObjectName,
   statePrefix,
 } from "./store.ts";
@@ -105,15 +106,32 @@ describe("store", () => {
     });
 
     it("leads a state object's name with its day", () => {
-      expect(stateObjectName("2026-08-20", "01K3", NO_ENV)).toBe(
-        `${AREA}/state/2026-08-20-01K3.json.gz`,
-      );
+      const name = stateObjectName("2026-08-20", "01K3", NO_ENV);
+      expect(name).toBe(`${AREA}/state/2026-08-20-01K3.json.gz`);
+      expect(stateDayOf(name)).toBe("2026-08-20");
     });
 
     it("reads no generation time out of a name that is not one", () => {
       expect(generatedAtOf(`${AREA}/state/x.json.gz`))
         .toBeUndefined();
       expect(generatedAtOf("something-else")).toBeUndefined();
+    });
+
+    it("reads no day out of a name that is not a state object's", () => {
+      // The publisher walks the state listing by the day each name
+      // carries, so anything else under the prefix has to drop out of
+      // that walk rather than sort into it. A listing has no folders in
+      // it, so a name carrying one is an object among the states rather
+      // than one of them.
+      expect(stateDayOf(`${AREA}/state/x.json.gz`)).toBeUndefined();
+      expect(stateDayOf(`${AREA}/state/held/2026-08-20-01K3.json.gz`))
+        .toBeUndefined();
+      expect(stateDayOf(`${AREA}/state/2026-08-20-.json.gz`)).toBeUndefined();
+      expect(
+        stateDayOf(
+          manifestObjectName("2026-08-20T04:00:00.000Z", "01K3", NO_ENV),
+        ),
+      ).toBeUndefined();
     });
   });
 

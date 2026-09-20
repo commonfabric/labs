@@ -1,11 +1,13 @@
 /**
  * A member namespace for a collection pattern: the table that gives each
- * member its name by identity, the backfill that names what the collection
- * held before it numbered anything, the declaration the collection publishes
- * so a consumer learns the policy rather than assuming one, and — re-exported
- * from `allocator.ts`, so that one import reaches the whole namespace — the
- * allocator its create verb calls. Nothing here knows what kind of piece a
- * member is: a member is a cell, compared by identity and never read through.
+ * member its name by identity, the two backfills over what the collection held
+ * before it numbered anything — one writing the namespace alone, one also
+ * asking each member to store its own name — the declaration the collection
+ * publishes so a consumer learns the policy rather than assuming one, and —
+ * re-exported from `allocator.ts`, so that one import reaches the whole
+ * namespace — the allocator its create verb calls. Nothing here knows what
+ * kind of piece a member is beyond the one verb `recordNames()` sends to: a
+ * member is a cell, compared by identity and never read through.
  *
  * The namespace is one map cell on the collection, `{ "42": <member> }`,
  * written one key at a time. A name is a decimal string, dense from `1`, one
@@ -255,6 +257,146 @@ export function backfillNames(
     next = incrementName(next);
   }
   return written;
+}
+
+/**
+ * What one `recordNames()` run reports, as three lists of names in filing
+ * order. Together they cover every listed member the run could name, which is
+ * every position holding an object: a position holding anything else is in none
+ * of them.
+ */
+export interface RecordNamesResult {
+  /**
+   * The names the run wrote into the namespace. Empty when the namespace
+   * already named every listed member, which is what a second run writes.
+   */
+  assigned: string[];
+
+  /**
+   * The names of the members that already report them. The run sent these
+   * members nothing and wrote nothing for them.
+   */
+  named: string[];
+
+  /**
+   * The names the run asked members to store, one send each. A send's effect
+   * is invisible to the transaction that makes it, so the run confirms none of
+   * them.
+   *
+   * Empty is the finished state: every listed member reports its name and the
+   * run asked for nothing. Non-empty is not a failure — it is the set to run
+   * the step over again, and the run after reports whichever asking landed
+   * under `named` and asks for the rest. A name that stays here across runs is
+   * a member whose own verb is refusing it, which `recordName` does for a
+   * member that already stores a different name.
+   *
+   * All of that rests on a member publishing the name it stores. A collection
+   * that withholds that publication leaves this list holding every listed
+   * member on every run, because no member can be seen to have stored
+   * anything: `named` stays empty and the step cannot say it is finished. The
+   * run is still safe to repeat, and still not idle: `recordName` reads the
+   * member's own input rather than its publication, so a member already
+   * storing the name writes nothing further while one whose name never landed
+   * stores it now — and the asking is itself a write to the member's stream
+   * either way.
+   * Topics withholds it today, behind `SHOW_TOPIC_NUMBERS` in
+   * `../topics/topic.tsx`, and `BackfillNamesResult` there says what an
+   * operator reads instead.
+   */
+  pending: string[];
+}
+
+/**
+ * Names every member of `members` the namespace does not name, and asks each
+ * listed member to store the name the namespace holds for it by sending that
+ * name to the member's own `recordName` verb. A member that already reports
+ * that name is sent nothing, so a run over a fully recorded list writes nothing
+ * at all — no key and no event.
+ *
+ * "Names" here is the names table's own notion: the namespace names a member
+ * when it holds it under a key the grammar admits, which is what `namesTable`
+ * builds a row from and what `nameOf` finds. A member the namespace holds ONLY
+ * under a foreign key — one a client wrote over the memory protocol, which
+ * `isMemberName()` does not admit — has no name by that lookup, so it is named
+ * here like any other unnamed member, and the foreign entry is left where it
+ * is. This is where the two walks differ: `backfillNames()` counts a member
+ * present at any key as named and skips it, which leaves it with no name and no
+ * row. Nothing this collection writes produces a foreign key; only a foreign
+ * writer does.
+ *
+ * The member contract this rests on is `recordName({ name })`: a member that
+ * stores its own name provides it, takes the name the collection allocated,
+ * and refuses a name that disagrees with one it already stores. A member whose
+ * pattern declares no such verb stores the payload as ordinary data at that
+ * name in its result, because a send to a path holding no stream is an
+ * ordinary write — `Cell.send` in `packages/runner/src/cell.ts` delegates to
+ * `set`. So a collection calls this only where every member declares the verb.
+ *
+ * What the result can and cannot say follows from where the writes land. The
+ * namespace is this collection's own document, so `assigned` is what this
+ * transaction wrote. A member's stored name is the member's own document,
+ * which only the member can write, so `pending` is a list of requests: the
+ * names asked for, none of them confirmed. A name that keeps appearing there
+ * across runs is a member whose own verb is refusing it, which `recordName`
+ * does for a member that already stores a different name.
+ *
+ * Called from a verb body for the reason `assignName()` is: the keyset read
+ * and the key writes are one transaction, so a create that lands while this
+ * runs serializes with it rather than colliding on a name.
+ */
+export function recordNames(
+  members: {
+    // The stored values, for each member's own report of its name, and the
+    // position's cell, for the verb this sends to. The verb is named
+    // structurally because no collection's member type is in scope here.
+    get(): readonly ({ shortName?: string } | undefined)[];
+    key(index: number): {
+      resolveAsCell(): {
+        key(verb: "recordName"): { send(event: { name: string }): void };
+      };
+    };
+  },
+  names: NamesMapCell,
+): RecordNamesResult {
+  const map = names.get() ?? {};
+  // Every name the namespace holds, to the member it names. A key outside the
+  // grammar is not a name, so an entry under one names nothing here — the same
+  // view `namesTable()` publishes and `nameOf()` reads.
+  const entries = Object.entries(map)
+    .filter(([name]) => isMemberName(name)) as [string, object | undefined][];
+  const listed = members.get();
+  const assigned: string[] = [];
+  const named: string[] = [];
+  const pending: string[] = [];
+  const handled: object[] = [];
+  let next = nextNameAmong(Object.keys(map));
+  for (let index = 0; index < listed.length; index++) {
+    const value = listed[index];
+    // Only a position holding an object can hold a member, for the reason
+    // `backfillNames()` gives.
+    if (!isObject(value)) continue;
+    const member = members.key(index).resolveAsCell();
+    // Each member once, however many positions hold it: membership is asked
+    // of IDENTITY, never of position, so a collection listing one member
+    // twice asks it for its name once.
+    if (handled.some((other) => equals(member, other))) continue;
+    handled.push(member);
+    let name = entries.find(([, other]) => equals(member, other))?.[0];
+    if (name === undefined) {
+      name = next;
+      names.key(name).set(member);
+      entries.push([name, member]);
+      assigned.push(name);
+      next = incrementName(name);
+    }
+    if (value?.shortName === name) {
+      named.push(name);
+      continue;
+    }
+    member.key("recordName").send({ name });
+    pending.push(name);
+  }
+  return { assigned, named, pending };
 }
 
 /**

@@ -466,7 +466,6 @@ describe("delivery shaping (scheduler integration)", () => {
   function streamWithHandler(runtime: Runtime, cause: string) {
     const tx = runtime.edit();
     const c = runtime.getCell(space, cause, undefined, tx);
-    c.set({ events: { $stream: true } });
     const stream = c.asSchema(STREAM_SCHEMA).key("events");
     const linkRef = stream.getAsNormalizedFullLink();
     const received: unknown[] = [];
@@ -742,7 +741,6 @@ describe("delivery shaping (scheduler integration)", () => {
     try {
       const tx = runtime.edit();
       const c = runtime.getCell(space, "w4/collapse-time", undefined, tx);
-      c.set({ events: { $stream: true } });
       const linkRef = c.asSchema(STREAM_SCHEMA).key("events")
         .getAsNormalizedFullLink();
       await tx.commit();

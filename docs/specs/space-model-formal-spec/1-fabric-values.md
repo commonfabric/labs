@@ -904,8 +904,8 @@ one axis: whether the data model treats an instance as a primitive. A
 caller sees of it, is that a `FabricInstance` may hold and expose arbitrary
 outgoing `FabricValue` references, and a `FabricPrimitive` may not.
 
-At runtime the two classes extend one memberless root, `BaseFabricSpecialObject`
-in `fabric-bases/`, so that `isFabricSpecialObject()` recognizes either with a
+At runtime the two classes extend one root, `BaseFabricSpecialObject` in
+`fabric-bases/`, so that `isFabricSpecialObject()` recognizes either with a
 single `instanceof`, narrowing to the union. The root is not a type a caller
 names, and the data model defines no other subclass of it; an instance of one
 defined elsewhere is not a `FabricValue`.
@@ -3618,7 +3618,8 @@ The implementation is split across several files for separation of concerns:
 | `fabric-bases/` | The abstract bases a concrete `FabricValue` extends, one per branch of the type hierarchy: `BaseFabricInstance.ts`, `BaseFabricPrimitive.ts` (plus an `index.ts` barrel). These are the implementer's half of the hierarchy; `interface.ts` is the client's, and reaching it does not reach these. |
 | `fabric-instances/` | Concrete `FabricInstance` subclasses, each in its own file: `FabricNativeWrapper.ts`, `FabricError.ts`, `FabricLink.ts`, `FabricMap.ts`, `FabricSet.ts`. `impl.ts` holds the set of instance classes and what derives from it, `codecClasses()` among them, and `index.ts` is the barrel. `UnknownValue` and `ProblematicValue` are `FabricInstance`s too, and members of that set, but live in `codec-common/`, existing only as products of a decode fault. |
 | `fabric-primitives/` | Concrete `FabricPrimitive` subclasses, each in its own file: `FabricBytes.ts`, `FabricHash.ts`, `FabricEpochNsec.ts`, `FabricEpochDay.ts`, `FabricKeyPair.ts`, `FabricRegExp.ts`, `FabricUnavailable.ts`. `interface.ts` holds the tag vocabularies that range over those classes and imports nothing, the classes being its importers; `impl.ts` holds the set of classes and what derives from it, `codecClasses()` and the schema `type` names among them; and `index.ts` is the barrel. |
-| `for-testing-only.ts` | What the package offers to tests alone, under an export-map entry of its own and in no barrel: makers of examples of every concrete `FabricPrimitive` and `FabricInstance` class, each table typed so that a class with no entry stops the build, and one shared instance per primitive maker. The makers keep a stated contract: a new object per call, equal objects from one maker, and unequal objects from two makers of one class, of which every class has at least two. A test that ranges over the classes takes its values from here and holds no table of its own. |
+| `for-testing-only.ts` | What the package offers to tests alone, under an export-map entry of its own and in no barrel: makers of examples of every concrete `FabricPrimitive` and `FabricInstance` class, each table typed so that a class with no entry stops the build, and one shared instance per primitive maker. The makers keep a stated contract: a new object per call, equal objects from one maker, and unequal objects from two makers of one class, of which every class has at least two. A test that ranges over the classes takes its values from here and holds no table of its own. Loading it also loads `value-debug/`, which is how a unit test that imports a module by its path gets the debug renderers installed. |
+| `value-debug-internal.ts` | The debug renderers as the package's own modules reach them, and what the import-map key `@/value-debug` names: one forwarder per renderer, each calling the renderer of the same name which `value-debug/` installs as it loads. It imports nothing at run time, so any module may import it without a circular load-time dependency, the root class in `fabric-bases/` included. A forwarder throws until `value-debug/` has loaded. Every export-map entry which loads a module that renders loads `value-debug/` too, by way of the `fabric-bases/` barrel, so a program which imports the package has the renderers; `index.ts` re-exports them from `value-debug/` itself. |
 
 ---
 
@@ -4009,7 +4010,9 @@ in the layers above it. The two get there by different routes, and the
 difference matters to anyone tracing a value through the wire format.
 
 - **`$stream` is an ordinary key.** The JSON layer attaches no meaning to it: a
-  record carrying it round-trips as the record it is.
+  record carrying it round-trips as the record it is. Nothing writes it any
+  more — a stream position is declared by its schema and stores no value — so
+  what remains of it is the documents written before that.
 - **The link-ref envelope is not.** `/` is reserved — the prefix is wholly owned
   by the encoding system in the wire format (Section 9 of `3-json-encoding.md`),
   so a `/`-keyed record reaching the wire is a tagged value, a built-in escape,
@@ -4028,12 +4031,14 @@ from the very rule that gives `/` its meaning.
 | Convention | Where Produced and Recognized | Example | Unified Form |
 |------------|-------------------------------|---------|--------------|
 | Link-ref envelope | Links (`runner/src/sigil-types.ts`, chokepointed on `data-model/cell-rep`) | `{ "/": { "link@1": { id, path, space } } }` | `{ "/Link@1": { id, path, space } }` |
-| `$stream` marker | Streams (`runner/src/builder/types.ts`) | `{ "$stream": true }` | `{ "/Stream@1": null }` |
+| `$stream` marker | Retired; still recognized as a fallback by the readers that classify a position from its stored value, until no stored document holds one (`runner/src/builder/types.ts`, `runner/src/query-result-proxy.ts`, `runner/src/cell.ts`, `fuse/callables.ts`, `cli/lib/shuttle/listing.ts`, `state-inspector/model.ts`) | `{ "$stream": true }` | none — the schema declares the stream |
 
-> **Note on `$stream`:** `$stream` is a stateless marker — it signals that a
-> cell path is a stream endpoint rather than carrying decodable state. Under the
-> unified encoding it becomes `{ "/Stream@1": null }` (a stateless tagged type
-> per Section 5 of `3-json-encoding.md`), preserving its marker semantics.
+> **Note on `$stream`:** the marker is retired rather than renamed. A stream
+> position is declared by `asCell: ["stream"]` on its schema — carried by the
+> links that reach it, and by the manifest link its owner keeps for it — and
+> stores nothing, so no `/Stream@1` tagged type replaces it. What the wire
+> still meets is the sentinel in documents written before the declaration was
+> stored, and readers recognize that until none remain.
 
 > **The link-ref envelope has a named owner.** `sigil-types.ts` states that the
 > envelope and its tag belong to `data-model/cell-rep`, the chokepoint that

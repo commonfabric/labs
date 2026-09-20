@@ -62,6 +62,7 @@ export type { Cell, Stream } from "./cell.ts";
 // `@commonfabric/runner/meta-seam` subpath, so an import of it names the seam
 // it opens.
 export {
+  asPatternIdentityRef,
   isMetaField,
   META_FIELDS,
   META_LINK_FIELDS,
@@ -202,7 +203,6 @@ export {
 } from "./source-reconciler.ts";
 export {
   applyPieceSourceTransition,
-  asPatternIdentityRef,
   extractDefaultValues,
   getPatternIdentityRef,
   getPatternRepository,
@@ -299,6 +299,7 @@ export {
   TYPE,
   UI,
   type UnsafeBinding,
+  VIEWS,
   type VNode,
   WebhookConfigSchema,
 } from "./builder/types.ts";

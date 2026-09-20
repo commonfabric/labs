@@ -6,8 +6,7 @@
 
 import type { Constructor } from "@commonfabric/utils/types";
 
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
-import { UnknownValue } from "@/codec-common/UnknownValue.ts";
+import { ProblematicValue, UnknownValue } from "@/codec-common";
 import type { FabricClassWithNonterminalCodec } from "@/codec-interface/interface.ts";
 
 import { FabricError } from "./FabricError.ts";

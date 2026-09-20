@@ -67,7 +67,7 @@ describe("SpaceServer", () => {
     describe("activate()", () => {
       for (
         const phase of [
-          "during confirmation",
+          "during a structure load",
           "across a deadline",
           "at the post-input deadline",
           "at the re-armed retry deadline",
@@ -170,7 +170,7 @@ describe("SpaceServer", () => {
               cell.tx?.tx.immediate
             ) {
               transactions.add(cell.tx.tx);
-              if (transactions.size === 2 && held === 0) {
+              if (transactions.size === 1 && held === 0) {
                 held++;
                 await release.promise;
               }

@@ -1,6 +1,11 @@
 import { env, Page, waitForCondition } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
-import { clickNthCfButton, waitForText } from "./cfc-browser-helpers.ts";
+import {
+  clickNthCfButton,
+  settleView,
+  waitForSettledText,
+  waitForText,
+} from "./cfc-browser-helpers.ts";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assertEquals } from "@std/assert";
@@ -39,6 +44,21 @@ describe("nested counter integration test", () => {
     resultWaiter = { target, deferred };
     return deferred.promise;
   };
+
+  // Load the piece's view in the browser. Every test calls this for itself,
+  // because each has to pass as the only test running in its file. Calling it
+  // from a test rather than from a suite hook also keeps the console errors
+  // the load reports under that test's check: `ShellIntegration` clears them
+  // in a `beforeEach`, which runs after a suite's `beforeAll`.
+  const showPiece = (): Promise<void> =>
+    shell.goto({
+      frontendUrl: FRONTEND_URL,
+      view: {
+        spaceName: SPACE_NAME,
+        pieceId: piece.id,
+      },
+      identity,
+    });
 
   beforeAll(async () => {
     identity = await Identity.generate({ implementation: "noble" });
@@ -84,14 +104,7 @@ describe("nested counter integration test", () => {
 
   it("should load the nested counter piece and verify initial state", async () => {
     const page = shell.page();
-    await shell.goto({
-      frontendUrl: FRONTEND_URL,
-      view: {
-        spaceName: SPACE_NAME,
-        pieceId: piece.id,
-      },
-      identity,
-    });
+    await showPiece();
 
     await waitForText(page, "#counter-result", "Counter is the 0th number");
 
@@ -101,6 +114,15 @@ describe("nested counter integration test", () => {
 
   it("should click the increment button and update the counter", async () => {
     const page = shell.page();
+    await showPiece();
+    await settleView(page);
+
+    // The text below counts up from this value, so the test writes it rather
+    // than reading whatever the counter happens to hold. The write follows the
+    // navigation: one that precedes it is refused on the server-execution arm
+    // for naming this process's own speculation.
+    await piece.result.set(0, ["value"]);
+    await waitForCounter(page, "Counter is the 0th number");
 
     // Click increment button (second button - first is decrement)
     await clickNthCfButton(page, "[data-cf-button]", 1);
@@ -112,6 +134,8 @@ describe("nested counter integration test", () => {
 
   it("should update counter value via direct operations and verify UI", async () => {
     const page = shell.page();
+    await showPiece();
+    await settleView(page);
 
     // Set value to 5 via direct operation
     await piece.result.set(5, ["value"]);
@@ -123,31 +147,40 @@ describe("nested counter integration test", () => {
       "Value should be 5 in backend",
     );
 
-    // Navigate to the piece to see if UI reflects the change
-    await shell.goto({
-      frontendUrl: FRONTEND_URL,
-      view: {
-        spaceName: SPACE_NAME,
-        pieceId: piece.id,
-      },
-      identity,
-    });
-
+    // The counter was on screen before the write, so this is the write
+    // reaching an open view rather than a fresh load reading stored state.
     await waitForCounter(page, "Counter is the 5th number");
   });
 
   it("should verify nested counter has multiple counter displays", async () => {
     const page = shell.page();
+    await showPiece();
+    await settleView(page);
 
-    // Both nested counter displays (there are two) must show the same value.
-    await waitForCondition(page, (probe, expected) => {
+    // A number no other test writes, so both displays carrying it is this
+    // test's own doing.
+    await piece.result.set(7, ["value"]);
+
+    // The pattern renders one counter twice over one cell, so both displays
+    // reach the written value. Two displays agreeing on a number neither of
+    // them moved to would not show that they share a cell. The predicate
+    // settles the view on each check, the rendering being the effect of the
+    // write above and nothing else driving the page between checks.
+    await waitForCondition(page, async (probe, expected) => {
+      const settle = (globalThis as typeof globalThis & {
+        commonfabric?: { viewSettled?: () => Promise<void> };
+      }).commonfabric?.viewSettled;
+      if (!settle) return false;
+      await settle();
       const results = probe.collect("#counter-result");
       return results.length === 2 &&
         results.every((el) => probe.deepText(el).trim() === expected);
-    }, { args: ["Counter is the 5th number"] });
+    }, { args: ["Counter is the 7th number"] });
   });
 });
 
+// The counter text every test below waits for is the effect of a write or a
+// click, so each check settles the view rather than watching the DOM alone.
 async function waitForCounter(page: Page, text: string) {
-  await waitForText(page, "#counter-result", text);
+  await waitForSettledText(page, "#counter-result", text);
 }

@@ -13,19 +13,21 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { defer } from "@commonfabric/utils/defer";
 
-import type { FabricValue } from "@/interface.ts";
-import { REALM_CODEC } from "@/codec-interface/interface.ts";
-import { BaseTerminalCodec } from "@/codec-interface/index.ts";
-import { UnknownValue } from "@/codec-common/UnknownValue.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
-import { ProblematicStateError } from "@/codec-common/ProblematicStateError.ts";
-import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
+import type { FabricValue } from "@";
 import {
+  BaseTerminalCodec,
+  NULL_LIVE_ENVIRONMENT,
+  ProblematicStateError,
+  ProblematicValue,
+  REALM_CODEC,
+  UnknownValue,
+} from "@/codec-common";
+import {
+  RealmCodecEngine,
   type RealmCodecValue,
   type RealmEncodedValue,
   type RealmTaggedValue,
-} from "@/codec-realm/interface.ts";
-import { RealmCodecEngine } from "@/codec-realm/RealmCodecEngine.ts";
+} from "@/codec-realm";
 import { RealmDecodeAct } from "@/codec-realm/RealmDecodeAct.ts";
 import { RealmEncodeAct } from "@/codec-realm/RealmEncodeAct.ts";
 import {
@@ -34,17 +36,17 @@ import {
   newDefaultRealmCodecEngine,
   realmFromFabricValue,
 } from "@/codecs.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
-import { FabricEpochDay } from "@/fabric-primitives/FabricEpochDay.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
-import { FabricKeyPair } from "@/fabric-primitives/FabricKeyPair.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
+import { FabricError } from "@/fabric-instances";
 import {
+  FabricBytes,
+  FabricEpochDay,
+  FabricEpochNsec,
+  FabricHash,
+  FabricKeyPair,
+  FabricRegExp,
   FabricUnavailable,
   UNAVAILABLE_SYNCING,
-} from "@/fabric-primitives/FabricUnavailable.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
+} from "@/fabric-primitives";
 import type { EchoReport } from "./realm-echo-worker.ts";
 
 /**

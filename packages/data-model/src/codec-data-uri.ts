@@ -12,7 +12,7 @@ import {
 } from "@commonfabric/utils/base64url";
 import { NullLiveEnvironment } from "./codec-common/index.ts";
 import { fabricFromJsonValue, jsonFromFabricValue } from "./codecs.ts";
-import type { FabricValue } from "./index.ts";
+import type { FabricValue } from "@/interface.ts";
 
 /**
  * A URI in string form. Structurally identical to (and hence

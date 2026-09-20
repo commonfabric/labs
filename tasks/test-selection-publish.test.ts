@@ -20,6 +20,7 @@ import {
   gunzipToText,
   parseManifest,
   type RunContext,
+  testIdentityKey,
   type TestRecord,
 } from "@commonfabric/test-support/records";
 import {
@@ -29,7 +30,8 @@ import {
   reportFromText,
 } from "./test-selection/build.ts";
 import { emptyState } from "./test-selection/score.ts";
-import { stateObjectName } from "./test-selection/store.ts";
+import { CATCH_WEIGHT_MAIN } from "./test-selection/policy.ts";
+import { stateObjectName, statePrefix } from "./test-selection/store.ts";
 import { MANIFEST_SCHEMA_VERSION } from "./test-selection/manifest.ts";
 import type { Suite } from "./test-topology/suite.ts";
 import { join } from "@std/path";
@@ -88,15 +90,18 @@ const twoSuites = () =>
     { ...TOPOLOGY[0]!, id: "runner-unit" },
   ]);
 
-/** Everything a call said on the standard output, as one string. */
-async function saying(call: () => Promise<unknown>): Promise<string> {
+/** Everything a call said on one console stream, as one string. */
+async function saying(
+  call: () => Promise<unknown>,
+  stream: "log" | "warn" = "log",
+): Promise<string> {
   const lines: string[] = [];
-  const log = console.log;
-  console.log = (line: string) => lines.push(line);
+  const said = console[stream];
+  console[stream] = (line: string) => lines.push(line);
   try {
     await call();
   } finally {
-    console.log = log;
+    console[stream] = said;
   }
   return lines.join("\n");
 }
@@ -1352,9 +1357,8 @@ describe("publish() over a day that has been compacted", () => {
 
 describe("publish() over an aggregate holding tests the tree has lost", () => {
   const NOW = new Date("2026-08-20T12:00:00.000Z");
-  // Named through the store rather than written out: the schema version
-  // is a segment of the path, so a spelled-out one would stop being the
-  // place the publisher looks the next time the version moves.
+  // Named through the store rather than written out, so that a spelled-out
+  // path cannot drift from the one the publisher looks under.
   const STATE = stateObjectName("2026-08-19", "0");
   const DELETED = JSON.stringify(["unit", "memory", "space > erases"]);
   const SILENT = JSON.stringify(["unit", "memory", "space > unreported"]);
@@ -1461,6 +1465,185 @@ describe("publish() over an aggregate it cannot make sense of", () => {
     expect(await publish(["--days", "1"], broken, NOW, suites, noBaselines))
       .toBe(1);
     expect(created.size).toBe(after);
+  });
+});
+
+describe("publish() over a state written further ahead than it reads", () => {
+  // Nothing but the publisher creates a state, and it creates one only
+  // where it folded, so a newest state it cannot read is one every later
+  // run comes to in the same condition. These turn on whether such a
+  // state stops the publisher or is passed over for the one behind it.
+
+  const NOW = new Date("2026-08-20T12:00:00.000Z");
+  const KEPT = JSON.stringify(["unit", "memory", "space > writes"]);
+  const AHEAD = MANIFEST_SCHEMA_VERSION + 1;
+
+  /** A state carrying one identity's catches, in the shape given. */
+  function carrying(schema: number, day: string): string {
+    return JSON.stringify({
+      schema,
+      day,
+      folded: [],
+      compacted: [],
+      states: { [KEPT]: { ...emptyState(), mainCatches: 2 } },
+      files: { [KEPT]: "packages/memory/test/space.test.ts" },
+    });
+  }
+
+  it("folds onto the newest state behind it and keeps its catches", async () => {
+    const behind = stateObjectName("2026-08-20", "0");
+    const over = stateObjectName("2026-08-20", "1");
+    const { store, created } = fakeStore({
+      ...seed(),
+      [behind]: carrying(MANIFEST_SCHEMA_VERSION, "2026-08-20"),
+      [over]: carrying(AHEAD, "2026-08-20"),
+    });
+    // The two lines the recovery procedure reads a run's log for: which
+    // state it could not use, and which it took instead.
+    const said = await saying(() =>
+      publish(["--days", "1"], store, NOW, suites, noBaselines)
+    );
+    expect(said).toContain(`passing over ${over}: it is written in shape`);
+    expect(said).toContain(`folding onto ${behind}`);
+    const entry = (await publishedManifest(created)).entries.find((one) =>
+      testIdentityKey(one.test) === KEPT
+    );
+    // Two main catches stood in the state that was folded onto, and the
+    // window holds one more. A run that had lost that state would carry
+    // the window's alone, and one that folded the window twice would
+    // carry four.
+    expect(entry?.inputs.catches).toBe(CATCH_WEIGHT_MAIN * 3);
+  });
+
+  it("names both shapes and what to deploy when nothing behind it reads", async () => {
+    const { store, created } = fakeStore({
+      ...seed(),
+      [stateObjectName("2026-08-20", "1")]: carrying(AHEAD, "2026-08-20"),
+    });
+    const said = await saying(
+      () => publish(["--days", "1"], store, NOW, suites, noBaselines),
+      "warn",
+    );
+    expect(said).toContain(
+      `it is written in shape ${AHEAD}, and this publisher reads shape ` +
+        `${MANIFEST_SCHEMA_VERSION}`,
+    );
+    expect(said).toContain(
+      `deploy a publisher that reads shape ${AHEAD} or above`,
+    );
+    // The remedy that would lose the history the state holds is named as
+    // the one not to reach for.
+    expect(said).toContain("do not bootstrap");
+    expect(created.size).toBe(0);
+  });
+
+  it("passes over a body that arrived and is not JSON at all", async () => {
+    // A truncated or half-written body is the other way a stored state
+    // is one no publisher will ever read, beside a shape from further
+    // ahead, and nothing can replace it under create-only credentials.
+    const garbage = stateObjectName("2026-08-20", "1");
+    const { store, created } = fakeStore({
+      ...seed(),
+      [stateObjectName("2026-08-20", "0")]: carrying(
+        MANIFEST_SCHEMA_VERSION,
+        "2026-08-20",
+      ),
+      [garbage]: "{not json at all",
+    });
+    const said = await saying(() =>
+      publish(["--days", "1"], store, NOW, suites, noBaselines)
+    );
+    expect(said).toContain(
+      `passing over ${garbage}: it is not an aggregate this publisher`,
+    );
+    const entry = (await publishedManifest(created)).entries.find((one) =>
+      testIdentityKey(one.test) === KEPT
+    );
+    expect(entry?.inputs.catches).toBe(CATCH_WEIGHT_MAIN * 3);
+  });
+
+  it("refuses a state the store names and will not give", async () => {
+    // A read that does not arrive says nothing about the object, so the
+    // state behind it is not taken in its place: the run that did so
+    // would write a state superseding the one it skipped.
+    const missing = stateObjectName("2026-08-20", "1");
+    const { store, created } = fakeStore({
+      ...seed(),
+      [stateObjectName("2026-08-20", "0")]: carrying(
+        MANIFEST_SCHEMA_VERSION,
+        "2026-08-20",
+      ),
+      [missing]: carrying(MANIFEST_SCHEMA_VERSION, "2026-08-20"),
+    });
+    const refusing: StoreAccess = {
+      ...store,
+      readText: (name) =>
+        name === missing
+          ? Promise.reject(new Error("HTTP 503"))
+          : store.readText(name),
+    };
+    const said = await saying(
+      () => publish(["--days", "1"], refusing, NOW, suites, noBaselines),
+      "warn",
+    );
+    expect(said).toContain(`reading ${missing} failed`);
+    expect(created.size).toBe(0);
+  });
+
+  it("reads an area holding no state object as a first run", async () => {
+    // An object under the prefix named some other way is not one of the
+    // publisher's states, so it is neither read as an aggregate nor
+    // counted as evidence that one is stored.
+    const { store, created } = fakeStore({
+      ...seed(),
+      [`${statePrefix()}/notes.json.gz`]: "{}",
+    });
+    const said = await saying(
+      () => publish(["--days", "1"], store, NOW, suites, noBaselines),
+      "warn",
+    );
+    expect(said).toContain("no aggregate exists yet");
+    expect(said).not.toContain("notes.json.gz");
+    expect(created.size).toBe(0);
+  });
+
+  it("refuses a state from before the days it reads", async () => {
+    const { store, created } = fakeStore({
+      ...seed(),
+      [stateObjectName("2026-08-18", "0")]: carrying(
+        MANIFEST_SCHEMA_VERSION,
+        "2026-08-18",
+      ),
+      [stateObjectName("2026-08-20", "1")]: carrying(AHEAD, "2026-08-20"),
+    });
+    const said = await saying(
+      () => publish(["--days", "1"], store, NOW, suites, noBaselines),
+      "warn",
+    );
+    expect(said).toContain(
+      "named for days before 2026-08-20, which is the first day this run " +
+        "reads",
+    );
+    expect(created.size).toBe(0);
+  });
+
+  it("reaches that state once the window reads its day", async () => {
+    const { store, created } = fakeStore({
+      ...seed(),
+      [stateObjectName("2026-08-18", "0")]: carrying(
+        MANIFEST_SCHEMA_VERSION,
+        "2026-08-18",
+      ),
+      [stateObjectName("2026-08-20", "1")]: carrying(AHEAD, "2026-08-20"),
+    });
+    expect(await publish(["--days", "3"], store, NOW, suites, noBaselines))
+      .toBe(0);
+    const entry = (await publishedManifest(created)).entries.find((one) =>
+      testIdentityKey(one.test) === KEPT
+    );
+    // The state named for a day the wider window reaches carried two of
+    // these, and the window carries the third.
+    expect(entry?.inputs.catches).toBe(CATCH_WEIGHT_MAIN * 3);
   });
 });
 

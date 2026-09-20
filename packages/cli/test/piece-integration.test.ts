@@ -51,6 +51,7 @@ let pieceId = "";
 let sessionResultPieceId = "";
 let coldSessionResultPieceId = "";
 let staleSessionResultPieceId = "";
+let staleInputResultPieceId = "";
 let coldSelectionResultPieceId = "";
 let staleSelectionResultPieceId = "";
 let sessionScopedPieceId = "";
@@ -153,6 +154,10 @@ describe("cf cell get (integration)", { ignore: !API_URL }, () => {
       rootPath: REPO_ROOT,
     }, { start: false });
     staleSessionResultPieceId = await newPiece(spaceConfig, {
+      mainPath: SESSION_RESULT_PATTERN,
+      rootPath: REPO_ROOT,
+    }, { start: false });
+    staleInputResultPieceId = await newPiece(spaceConfig, {
       mainPath: SESSION_RESULT_PATTERN,
       rootPath: REPO_ROOT,
     }, { start: false });
@@ -303,14 +308,23 @@ describe("cf cell get (integration)", { ignore: !API_URL }, () => {
 
   it("steps and reads an input path of an unstarted piece", async () => {
     // The input side of the same fork: the stepped read starts the piece and
-    // pulls the requested input path, without the whole-result pull.
+    // pulls the requested input path, without the whole-result pull. The piece
+    // and the write are this test's own, because the assertion is that the
+    // read returns the written value rather than the pattern's default, and a
+    // value a sibling wrote is there only when that sibling also ran.
     const sessionFlags =
-      `--api-url ${API_URL} --identity ${identityPath} --space ${spaceConfig.space} --piece ${staleSessionResultPieceId}`;
+      `--api-url ${API_URL} --identity ${identityPath} --space ${spaceConfig.space} --piece ${staleInputResultPieceId}`;
+    const write = await integrationCf(
+      `cell set ${sessionFlags} values --input`,
+      { stdin: '["input-while-stopped"]' },
+    );
+    expect(write.code, write.stderr.join("\n")).toBe(0);
+
     const { code, stdout, stderr } = await integrationCf(
       `cell get ${sessionFlags} values --input --step`,
     );
     expect(code, stderr.join("\n")).toBe(0);
-    expect(JSON.parse(stdout.join(""))).toEqual(["updated-while-stopped"]);
+    expect(JSON.parse(stdout.join(""))).toEqual(["input-while-stopped"]);
   });
 
   it("selects a cold session-scoped computed result", async () => {

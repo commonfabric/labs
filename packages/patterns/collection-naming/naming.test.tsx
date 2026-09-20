@@ -15,6 +15,8 @@ import {
   namesTable,
   nextNameAmong,
   ownName,
+  recordNames,
+  type RecordNamesResult,
   SEQUENCE_NAMING,
 } from "./naming.ts";
 
@@ -195,6 +197,42 @@ export default pattern(() => {
     SEQUENCE_NAMING.name === undefined
   );
 
+  // `recordNames` over members that publish the names the namespace holds for
+  // them, which is what a collection showing its member names hands it. The
+  // branch under test is the one that tells an already-recorded member from an
+  // unrecorded one: the first member reports `1` and is reported under `named`
+  // with nothing sent, the second reports nothing and is asked. Remove that
+  // branch and both come back under `pending`.
+  //
+  // Held here rather than in Topics' own tests because Topics cannot reach it:
+  // `SHOW_TOPIC_NUMBERS` gates a topic's published name, so every topic there
+  // reads as recording none however much it stores. The members below are
+  // stand-ins that publish one, which is what a member does wherever names are
+  // shown — the exemplar's item, and Topics once the switch is on.
+  // Each member is its own cell: a member has to be an addressable document
+  // for the walk to resolve it and for a send to reach it, and an element of
+  // an inline array is neither.
+  const recordedOne = new Writable<{ shortName?: string }>({ shortName: "1" });
+  const recordedTwo = new Writable<{ shortName?: string }>({});
+  const recordedMembers = new Writable<{ shortName?: string }[]>([]);
+  const recordedNames = new Writable<NamesMap>({});
+  const recordedRuns = new Writable<RecordNamesResult[]>([]);
+  const action_seed_recorded_members = action(() => {
+    recordedMembers.push(recordedOne);
+    recordedMembers.push(recordedTwo);
+    recordedNames.key("1").set(recordedOne);
+    recordedNames.key("2").set(recordedTwo);
+  });
+  const action_record_over_published_names = action(() => {
+    recordedRuns.push(recordNames(recordedMembers, recordedNames));
+  });
+  const assert_published_names_are_reported_named = assert(() =>
+    recordedRuns.get().length === 1 &&
+    recordedRuns.get()[0]?.assigned?.length === 0 &&
+    recordedRuns.get()[0]?.named?.join(",") === "1" &&
+    recordedRuns.get()[0]?.pending?.join(",") === "2"
+  );
+
   return {
     [TESTS]: [
       { assertion: assert_sequence_rule },
@@ -216,6 +254,9 @@ export default pattern(() => {
       { action: action_fill_the_table_map },
       { assertion: assert_table_publishes_only_names },
       { assertion: assert_reverse_lookup },
+      { action: action_seed_recorded_members },
+      { action: action_record_over_published_names },
+      { assertion: assert_published_names_are_reported_named },
       { assertion: assert_declaration },
     ],
   };

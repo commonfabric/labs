@@ -1043,8 +1043,10 @@ anything outside the fabric is named by an explicit scheme.
 - Shuttle maintains two working positions: the fabric cwd and one
   **external working location**. `xcd` sets it — `xcd file:~/data`,
   `xcd https://foo.com/a/b/` — and, its argument being already on the
-  external plane, moves it with a plain relative path: `xcd ../foo`.
-  `xpwd` prints it. In operands, a relative external path is rooted with
+  external plane, moves it with a plain relative path: `xcd ../foo`. It
+  writes where it landed, where `cd` writes nothing: the prompt carries the
+  place and carries nothing about this position, so a move nothing reports is
+  one a person has to ask about. `xpwd` prints it. In operands, a relative external path is rooted with
   the `x:` base — `> x:../out.json`, `< x:data.json`. `x:` is a base name
   rather than a scheme: it roots a relative path at the external location
   whatever that location's scheme, so no operand ever changes plane by

@@ -1,31 +1,13 @@
 import { getLogger } from "@commonfabric/utils/logger";
-import { isObjectOrArray } from "@commonfabric/utils/types";
 import type { Cell } from "./cell.ts";
 import {
   areNormalizedLinksSame,
   getMetaLink,
   type NormalizedFullLink,
 } from "./link-utils.ts";
+import { asPatternIdentityRef } from "./meta-seam.ts";
 import type { Runtime } from "./runtime.ts";
 import type { IExtendedStorageTransaction } from "./storage/interface.ts";
-
-/**
- * Read a result cell's `{ identity, symbol }` pattern pointer. Inlined (rather
- * than imported from runner.ts) to avoid a module-init cycle:
- * built-in → scheduler/events → ensure-piece-running → runner → built-in.
- */
-function readPatternIdentity(
-  cell: Cell<unknown>,
-): { identity: string; symbol: string } | undefined {
-  const raw = cell.getMetaRaw("patternIdentity");
-  if (
-    isObjectOrArray(raw) && typeof raw.identity === "string" &&
-    typeof raw.symbol === "string"
-  ) {
-    return { identity: raw.identity, symbol: raw.symbol };
-  }
-  return undefined;
-}
 
 const logger = getLogger("ensure-piece-running", {
   enabled: false,
@@ -83,6 +65,21 @@ async function followResultCellChain(
 }
 
 /**
+ * The address of the result document a chain resolved to — the one whose
+ * `patternIdentity` decides the verdict.
+ *
+ * The scope and space travel with the id because a `result` backlink may
+ * cross either, so the document is not always addressable from the scope the
+ * traversal started in. A caller that reads that pattern pointer anywhere
+ * else — against the store the replica syncs from, say — addresses it from
+ * here.
+ */
+export type OwningRootAddress = Pick<
+  NormalizedFullLink,
+  "space" | "id" | "scope"
+>;
+
+/**
  * A classified `ensurePieceRunning` outcome (server-execution v2 stage
  * P2-F): the serving loop's demand cycle needs to tell a doc that is
  * LOADED but carries no pattern meta (the OW19 terminal class —
@@ -117,10 +114,10 @@ export type EnsurePieceVerdict = {
    * assuming. Present whenever a start ran. */
   graphIsInstalled?: () => boolean;
 
-  /** The owning result doc's id (the chain terminus) where the chain
+  /** The owning result doc (the chain terminus) where the chain
    * resolved — present for `started`, `no-pattern-meta`, and
    * `pattern-unloadable`. */
-  rootId?: string;
+  root?: OwningRootAddress;
 
   /** Every doc id the traversal read (the demanded root plus chain
    * links): the demand cycle's commit-triggered re-arm watches these. */
@@ -190,11 +187,15 @@ export async function ensurePieceRunningVerdict(
       if (resultCell === undefined) {
         return { started: false, reason: "chain-cycle", observedDocIds };
       }
-      const rootId = resultCell.getAsNormalizedFullLink().id;
+      const { space, id: rootId, scope } = resultCell
+        .getAsNormalizedFullLink();
+      const root: OwningRootAddress = { space, id: rootId, scope };
 
       // If rootCell is a result cell, it will carry a `{ identity, symbol }`
       // pattern pointer.
-      const identityRef = readPatternIdentity(resultCell);
+      const identityRef = asPatternIdentityRef(
+        resultCell.getMetaRaw("patternIdentity"),
+      );
       if (!identityRef) {
         logger.debug("ensure-piece", () => [
           `No pattern identity found in result metadata`,
@@ -202,7 +203,7 @@ export async function ensurePieceRunningVerdict(
         return {
           started: false,
           reason: "no-pattern-meta",
-          rootId,
+          root,
           observedDocIds,
         };
       }
@@ -227,7 +228,7 @@ export async function ensurePieceRunningVerdict(
         return {
           started: false,
           reason: "pattern-unloadable",
-          rootId,
+          root,
           observedDocIds,
         };
       }
@@ -253,7 +254,7 @@ export async function ensurePieceRunningVerdict(
         started: true,
         graphIsInstalled: () =>
           runtime.runner.pieceGraphIsInstalled(resultCell),
-        rootId,
+        root,
         observedDocIds,
       };
     } catch (error) {
