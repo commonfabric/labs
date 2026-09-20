@@ -389,14 +389,7 @@ Deno.test("an entity with no value is recorded, not dropped", () => {
   );
 });
 
-/**
- * Seeds the base space plus `count` extra documents in one transaction.
- *
- * `seed` writes a row per statement, which is fine for the handful of docs the
- * cases above need and far too slow for the six figures this one takes. The
- * shape of each bulk doc does not matter — only how many of them the scope
- * listing carries back.
- */
+/** Seeds the base space and adds `count` documents in one transaction. */
 function seedBulk(path: string, count: number): void {
   seed(path);
   const db = new Database(path);
@@ -418,45 +411,20 @@ function seedBulk(path: string, count: number): void {
   db.close();
 }
 
-/**
- * A store larger than a spread can carry still enumerates.
- *
- * `allEntities` used to accumulate each scope's listing with
- * `out.push(...listing.entities)`. A spread passes every element as a separate
- * ARGUMENT, and V8 refuses that somewhere between 125,000 and 130,000 — so the
- * whole module threw `RangeError: Maximum call stack size exceeded` on a store
- * big enough to be worth fingerprinting. The real Estuary Topics store reached
- * ~562,000 entities and could not be cloned at all, which took out the
- * `space-clone-rehearsal.md` procedure that production pattern updates are
- * required to go through.
- *
- * 200,000 is chosen to sit clear of that ceiling rather than on it: the exact
- * limit is a function of the stack size, so a case seeded just past the
- * observed threshold would pass on a machine with a roomier one and prove
- * nothing there. It is still an order of magnitude inside `ENUMERATION_CAP`,
- * which is 1,000,000 — this is a store the module promises to handle, not an
- * abuse of it.
- */
 Deno.test("enumerates a store past the spread-argument ceiling", () => {
+  // `200_000` entities exceed V8's default spread-argument limit while staying
+  // below `ENUMERATION_CAP`. The margin accommodates variations in stack size.
+
   const dir = Deno.makeTempDirSync({ prefix: "fingerprint-bulk-" });
   try {
     const path = `${dir}/space.sqlite`;
     seedBulk(path, 200_000);
     const space = openSpace(path);
     try {
-      // Pin the PREMISE first. The classification below is true of the base
-      // fixture alone, so on its own it would pass just as well if the bulk
-      // seed silently planted nothing — a lower count, a rolled-back
-      // transaction, an enumeration that stops early without reporting itself
-      // truncated — and the crash this case exists for would come back
-      // unnoticed. `extent.total` is the row count before any cap, so it says
-      // what the scope listing actually carried; the listing itself stops at
-      // `DEFAULT_SCAN_LIMIT`, which is why asking for it stays cheap.
+      // `.extent.total` includes rows beyond the listing's display cap.
       assertEquals(listEntityModels(space).extent.total, 200_004);
 
-      // Reached through `allEntities`, and cheap per entity: it skips every
-      // model that is not a piece, so this pins the enumeration without paying
-      // to hash six figures of documents.
+      // This exercises `allEntities()` without hashing every document.
       const { generated, named } = generatedInternalCellIds(space);
       assertEquals([...generated], ["of:generated"]);
       assertEquals([...named], ["of:named"]);

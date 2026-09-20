@@ -56,22 +56,11 @@ export function hashEntityValue(
 }
 
 /**
- * Every entity in the space, across EVERY scope.
+ * Enumerates every scope in the space, refusing listings that exceed `cap`.
  *
- * `listEntityModels` defaults to `scope: "space"`, which on a real store
- * silently omits all PerUser/PerSession state (579 of 6,379 entities on the
- * Estuary Topics store when this was written; that store now holds ~562,000).
- * Per-scope state is durable content a migration can damage just as easily, so
- * the fingerprint walks the scopes `listScopes` reports rather than assuming
- * one.
- *
- * The per-scope entities are appended one at a time rather than spread into
- * `push`. A spread passes every element as a separate ARGUMENT, which V8
- * refuses somewhere above a hundred thousand of them — so `push(...entities)`
- * throws `RangeError: Maximum call stack size exceeded` on exactly the stores
- * this module exists to protect. {@link ENUMERATION_CAP} is 1,000,000 on
- * purpose, and an implementation that cannot carry a tenth of that is not
- * holding the cap's promise; the loop costs nothing and has no ceiling.
+ * `listEntityModels()` defaults to the shared space scope. Per-user and
+ * per-session state is durable content too, so this walk uses every scope
+ * reported by `listScopes()`.
  */
 function allEntities(
   space: SpaceDb,
@@ -91,6 +80,7 @@ function allEntities(
           `${cap} cap; refusing to fingerprint a truncated enumeration.`,
       );
     }
+    // Appending individually avoids V8's argument limit for large scopes.
     for (const entity of listing.entities) out.push(entity);
   }
   return out;
