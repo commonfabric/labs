@@ -164,3 +164,64 @@ All code that gets merged into the `main` branch will be immediately deployed to
 production.
 
 If you break it, you are responsible for fixing it.
+
+## Space invitations
+
+`GET /api/space-invites` advertises protocol version 1 and its host limits:
+1,000 distinct identities per invitation and 2,592,000 seconds (30 days) of
+admission lifetime. `maxUses` defaults to 1. Unsupported hosts return 404;
+clients must report that state without falling back to wildcard grants.
+
+All invitation operations are signed JSON POSTs under
+`/api/spaces/:space/invites/`: `create`, `redeem`, `list`, `revoke`, and
+`receipts`. They use the existing CF1 proof, binding method, authority, path,
+body hash, and signer DID, with a maximum 300-second lifetime and 60 seconds of
+future clock skew. Bodies are limited to 4 KiB and unknown fields are refused.
+Redemption does not require an existing target-space session. Its recipient is
+always the proof signer. Creation, listing, revocation, and receipt listing
+require a current explicit OWNER entry in the space ACL. First redemption also
+requires the issuer to remain an explicit OWNER.
+
+Configure `API_URL` as the canonical public HTTPS origin, or loopback HTTP in
+local development. It is the audience authority and verifier origin for this
+service, including behind a reverse proxy. Forwarded headers cannot override it.
+Signed POST CORS permits the CF1 headers without cookies; deploy the service at
+a host reachable by the intended shell. Request logging records no bodies. Codes
+belong only in POST bodies and browser fragments, never URL queries.
+
+The reusable client is `SpaceInviteClient` from
+`@commonfabric/runner/space-invites`. The same export provides
+`createInviteCredentials`, `inviteCodeVerifier`, `buildInviteLink`, and
+`parseInviteLink`. `issue` accepts a prepared request containing `inviteId`,
+`codeVerifier`, `access`, `ttlSeconds`, and optional `maxUses`. Retain the
+credentials before calling it so an uncertain response can be retried with the
+same ID. The convenience `create` accepts the same access/lifetime/limit options
+and optional paired `inviteId` and `code`, and returns flat active metadata plus
+`code`. `redeem` accepts only `inviteId` and `code`; `list` and `receipts`
+return arrays; `revoke` returns `{ "revoked": true }`.
+
+Successful redemption returns `outcome` (`redeemed` or `already-redeemed`),
+`redemption` (`inviteId` and `did`), and `currentAccess` (`READ`, `WRITE`,
+`OWNER`, or null). Current access is an observation, and the ordinary session
+checks it again. A receipt-first retry never regrants removed access. New
+identities see `invite-unavailable` for unknown, wrong-code, expired, revoked,
+exhausted, or issuer-invalid invitations. Proof failures use `invalid-proof`;
+owner failures use `not-owner`. Transport failures remain transport failures.
+
+Admission uses private tables in the target space's SQLite engine, inside the
+same serialized transaction as its ACL-only public commit. A unique receipt pair
+consumes one use, including when the recipient already has sufficient access.
+Stronger explicit or wildcard access remains intact. Exhaustion, revocation, and
+expiration remove the active verifier; successful receipt pairs remain.
+Expiration is checked on each operation, with lazy physical cleanup. Unredeemed
+retired IDs have secret-free rejection markers for 361 seconds, covering replay
+of every still-fresh accepted create proof.
+
+A full SQLite backup includes private invite tables and receipts atomically.
+Restore the complete store; restoring only the graph must not be used to
+reconstruct active invitations. Ordinary graph exports contain neither the
+active rows nor receipt tables. Administrative whole-store snapshots contain
+private verifiers and must receive the same protection as the live store.
+Deletion of an active row does not erase retained backups, WAL pages, or old
+filesystem bytes. Expiry and revocation stop admission; removing a member is a
+separate ACL operation.

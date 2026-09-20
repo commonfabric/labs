@@ -41,6 +41,7 @@ import {
   type VerifyResult,
 } from "@commonfabric/state-inspector";
 
+import { buildSpaceInviteCommand } from "./space-invites.ts";
 import { hasJsonArgument } from "../lib/json-output.ts";
 import { buildRecreateRootCommand, buildSetHomeCommand } from "./piece.ts";
 
@@ -471,4 +472,5 @@ export const space = new Command()
     buildRecreateRootCommand("space recreate-root"),
   )
   /* space set-home */
-  .command("set-home", buildSetHomeCommand("space set-home"));
+  .command("set-home", buildSetHomeCommand("space set-home"))
+  .command("invite", buildSpaceInviteCommand());

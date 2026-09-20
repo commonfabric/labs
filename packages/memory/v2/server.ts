@@ -107,6 +107,12 @@ import {
 import { classifyCommitTelemetry } from "./commit-telemetry.ts";
 import * as Engine from "./engine.ts";
 import {
+  executeInvite,
+  type InviteRequest,
+  type InviteResult,
+} from "./invites.ts";
+import { SpaceInviteError } from "../space-invites.ts";
+import {
   executionLeaseHolder,
   liveExecutionLeaseHolder,
 } from "./execution-lease.ts";
@@ -2342,6 +2348,38 @@ export class Server {
     ) {
       await this.flushSessions();
     }
+  }
+
+  /** Executes an authenticated invitation operation with ordinary ACL publication. */
+  async invite(request: InviteRequest): Promise<InviteResult["result"]> {
+    return await this.#withSpacePublicationLock(request.space, async () => {
+      if (!(await this.#spaceStoreExists(request.space))) {
+        throw new SpaceInviteError(
+          request.operation === "redeem" ? "invite-unavailable" : "not-owner",
+        );
+      }
+      const engine = await this.#openEngine(request.space);
+      const { result, commit } = executeInvite(engine, {
+        ...request,
+        implicitOwner: request.principal === request.space ||
+          this.#isServicePrincipal(request.principal),
+      });
+      if (commit !== undefined) {
+        this.#invalidateAclCapabilities(request.space);
+        this.#revokeDeauthorizedSessions(engine, request.space);
+        this.markSpaceDirty(request.space, [
+          toDirtyKey(aclDocId(request.space)),
+        ]);
+        this.#notifyCommitAdmitted({
+          space: request.space,
+          seq: commit.seq,
+          class: "system",
+          sessionId: "invite-service",
+          writes: [{ id: aclDocId(request.space), scopeKey: "space" }],
+        });
+      }
+      return result;
+    });
   }
 
   async readDocument(
