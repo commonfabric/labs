@@ -35,6 +35,7 @@ import type { readWish } from "../wish.ts";
 import { type Announce } from "./announce.ts";
 import { type HeldConnection } from "./connection.ts";
 import { type Editing } from "./editor.ts";
+import { type ExternalLocation } from "./external.ts";
 import { resolveHandle } from "./handles.ts";
 import type { ValueLens } from "./lens.ts";
 import { type ListingDeps, type RowKind } from "./listing.ts";
@@ -108,6 +109,16 @@ export interface Shuttle {
 
   /** Where shuttle stands, which `cd` moves and every other verb reads. */
   readonly place: CurrentPlace;
+
+  /**
+   * The one working position outside the fabric, which `xcd` moves.
+   *
+   * It stands beside the place rather than inside it because the two move
+   * independently: the fabric is the ambient plane, so a bare relative
+   * operand is read against the place and never against this one
+   * (`external.ts`).
+   */
+  readonly external: ExternalLocation;
 
   /** The one connection this process holds. */
   readonly connection: HeldConnection;
