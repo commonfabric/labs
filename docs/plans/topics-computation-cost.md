@@ -115,7 +115,10 @@ implementation and prototypes can begin earlier.
         without invalidating T5's comparison.
   - [x] The baseline report in `docs/history/`, separating pivot production,
         per-topic lookup, activity, and rendering costs, and recording the
-        probe's baseline and the environment and source versions.
+        probe's baseline and the environment and source versions. Three of
+        those four costs have baseline figures; rendering has none, for the
+        reason under [measurement and acceptance](#measurement-and-acceptance)
+        below.
 - [ ] **T1 — Share individual-topic derivations.** Reuse `commentCount` for
       `hasComments`; evaluate sharing the active-link view with `hasLinks` and
       link resolution. Preserve narrow compatibility schemas and stable links.
@@ -309,6 +312,18 @@ sibling edits. Include unresolved linked inputs, cold recovery, and two-client
 observation. Existing naming, rejection, render-shape, view-identity, and
 multi-user tests are part of acceptance, not replaced by benchmarks.
 
+**No tier produces a rendering baseline, and none of the candidates below can
+be held to one.** A topic's rendering derivations — active comments, active
+links, the presence booleans, and the link-resolution inputs — are `computed`
+expressions in the topic's body or lifts neither instrument names. The headless
+tier starts the four Topics lifts directly and instantiates no pattern body, so
+they never run there; in the browser they run and fall into the sample's
+aggregated `remaining` row, which keeps no run's identity. Closing this needs
+the browser helper to retain something per source-less run and its timing rows
+to be recorded, which T0 did not do. Until then a candidate's effect on
+rendering cost is unmeasured rather than measured at zero, and T1, whose target
+is exactly these derivations, has no rendering baseline to improve on.
+
 The headless tier records completed body and transaction-attempt reads with
 their distinct [boundaries](../features/read-accounting.md#execution-boundary),
 executions, graph size in nodes and edges, elapsed time, and available storage
@@ -345,6 +360,15 @@ in
 whose `startupAndLatencyDerivation` block holds each one's observations and
 arithmetic. No continuous-integration job checks them; a candidate is held to
 them by whoever measures it.
+
+**Measure a candidate against these the way they were derived.** Each comes
+from the interval `timeTopicsOperation()` brackets, which turns telemetry and
+read accounting off before timing. A `measureTopicsReads()` sample of the same
+operation leaves both on, and its elapsed time carries their overhead: in the
+rounds these limits come from, the read-accounted reopen took 153 ms where the
+timed interval beside it took 122 ms, so that sample alone would breach the
+135 ms reopen limit for an operation that meets it. A read-accounted elapsed
+time is not comparable to these limits and must not be checked against them.
 
 | Measure | Limit | Bench case | Board size | Largest observed |
 | --- | --- | --- | --- | --- |

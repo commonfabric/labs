@@ -49,13 +49,18 @@ after which a topic that has never run sorts by when it was filed, and
 baseline taken two source changes back still serves as T5's comparison point is
 T5's question, and this record does not decide it.
 
-**Counters and timings are not equally good here.** The browser tier's two
-client-execution rounds of each bench agree field by field. The headless matrix
-ran one round per case, so it is the read-budget derivation and the repeat
-subset, not the matrix, that establish those counters repeat; the section on
-the gated measures says what each covers. The timings were all taken on a
-shared machine under unrelated load, and the sections that give them say what
-the load was.
+**Counters and timings are not equally good here, and the counters repeat only
+where a section says they do.** The browser tier's two client-execution rounds
+of the navigation bench agree field by field. Its two scale rounds do not:
+seven non-timing fields differ between them — five in the reopen sample's
+`remaining` row, its `runsWithoutSource` count, and the node count its graph
+started from — although all four located lifts read the same zero in both. The
+section on that workload gives each round separately. The headless
+matrix ran one round per case, so it is the read-budget derivation and the
+repeat subset, not the matrix, that establish those counters repeat; the
+section on the gated measures says what each covers. The timings were all taken
+on a shared machine under unrelated load, and the sections that give them say
+what the load was.
 
 **Attempt reads come from the headless tier only.** The browser helper records
 completed-body reads and not transaction attempts, because the runtime client's
@@ -195,11 +200,14 @@ described above.
 One of those columns can be divided by its run count and two cannot, and on
 the page they look identical. In the low-degree column at 512 topics the
 largest single run made 1,032 accesses, which is also the column's 528,384
-divided by its 512 runs, so every run made 1,032. The high-degree column holds
-the same 528,384 over the same 512 runs but its largest single run made 1,539,
-and the single-bucket column holds 526,847 with a largest run of 1,539 again;
-in both the quotient describes no run that happened. This record divides only
-where the largest run equals the mean.
+divided by its 512 runs, so every run made 1,032. The other two cannot be
+divided, for different reasons. The high-degree column holds the same 528,384
+over the same 512 runs, but its largest single run made 1,539, so the runs are
+not uniform and the quotient is a figure no run is known to have made — 1,032
+is a whole number there and some run may well have made it, which is exactly
+what this record cannot establish. The single-bucket column holds 526,847 over
+512 runs, which is not a whole number, so no run made it. This record divides
+only where the largest run equals the mean.
 
 ## Activity
 
@@ -209,8 +217,8 @@ workload demands both on every topic of a four-topic board and nothing else. In
 each row below the largest single run is exactly a quarter of the total, so the
 four runs are equal and the per-run figure is the total divided by four.
 
-Scaling comments, with three links per topic — proxy accesses at
-initialization, over four runs:
+Scaling comments — proxy accesses at initialization, over four runs. Every row
+has three links per topic except the first, which has one:
 
 | comments per topic | `presentCommentCountOf` | `lastActivityOf` |
 | --- | --- | --- |
@@ -218,6 +226,11 @@ initialization, over four runs:
 | 10 | 84 | 216 |
 | 100 | 804 | 1,656 |
 | 1,000 | 8,004 | 16,056 |
+
+The step from the first row to the second therefore changes links as well as
+comments, so 48 and 216 are not a comment-only comparison. It does not reach
+the comment-count column: the links table below holds that column at 28 across
+a hundredfold change in links, so links do not move it.
 
 Scaling links, with three comments per topic:
 
@@ -353,7 +366,12 @@ location and none carried one that failed to parse, while the first opens
 carried 416 parseable locations and attributed three lift runs on every one of
 the 16 — 260 parseable locations across the ten controls at a hundred topics
 and 156 across the six at eight. A first open also carries runs without a
-location, 216 and 126 of them, alongside its parseable ones.
+location, 216 and 126 of them, alongside its parseable ones. Those two
+observations do not conflict, and the reason is the whole point of the second
+trial: the attribution check fails a sample only when everything it is given
+fails to parse, so a first open passes it on the strength of its parseable
+locations, while a reopen, whose runs without a location were the whole
+population rather than part of it, had nothing for the check to place.
 
 The third is the outcome: with the two cases told apart, 20 trials of the
 hundred-topic reopen recorded 20 zeros and no refusals. Thirteen saw one run
@@ -441,10 +459,13 @@ owns that script.
   reason quoted above.
 - **A reconnect**, for the reason given above.
 - **Network bytes and subscription events**, which neither tier counts.
-- **Any posture but the default.** Every figure in this record was taken with
-  lazy materialization on and server execution off. The headless tier can
-  measure lazy materialization off and the effect of doing so is recorded
-  separately; no figure here is from that posture.
+- **Any posture but the default.** Every headless figure here was taken with
+  lazy materialization pinned on and server execution off, which is what the
+  probe's mode records. The browser rounds record server execution off and no
+  lazy-materialization setting at all, as the section on that tier says; this
+  record does not state what they held. The headless tier can measure lazy
+  materialization off, and the effect of doing so is recorded separately; no
+  headless figure here is from that posture.
 
 ## Where the startup and latency limits went
 
