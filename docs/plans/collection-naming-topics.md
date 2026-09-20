@@ -125,8 +125,9 @@ namespace.
 **Decided 2026-09-17: Topics shows no numbers until every topic has one.** Mike
 ruled it, and ruled the mechanism too. The deployed board numbers each topic it
 creates, while a topic filed before the namespace has no number until the
-production backfill and bind (item 3 below) reach it, so only some topics showed
-a number, and that confused the people reading the board.
+production backfill (item 3 below) reaches it and that topic stores what the
+step asked it to, so only some topics showed a number, and that confused the
+people reading the board.
 
 `SHOW_TOPIC_NUMBERS` in `packages/patterns/topics/topic.tsx` is off, and a topic
 then publishes no `shortName`. Withholding the publication rather than each
