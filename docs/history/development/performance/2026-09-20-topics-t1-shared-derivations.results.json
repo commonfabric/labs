@@ -310,5 +310,51 @@
     "casesWhoseCountsDiffer": 0,
     "comparedOn": "every recorded field except elapsedMs and the memory gauges (heapUsedBytes, heapTotalBytes, heapSizeLimitBytes, rssBytes, externalBytes, memory), which vary per run and are not counts",
     "establishes": "that nothing this stage changed reached the four lifts the board demands; it does not establish that the topic body reads less, because the probe instantiates no pattern body"
+  },
+  "behavior": {
+    "authoredTopicsSuites": {
+      "assertions": 194,
+      "identicalInBothArms": true,
+      "byFile": {
+        "topics": 56,
+        "topics-rejections": 38,
+        "naming": 31,
+        "state-version": 28,
+        "author-migration": 13,
+        "view-identity": 9,
+        "multi-user": 7,
+        "render-shape": 6,
+        "author-migration-multi-user": 6
+      }
+    },
+    "headlessIntegration": {
+      "readBudgetFiles": 4,
+      "readBudgetSteps": 34,
+      "otherFiles": [
+        "topic-author-migration",
+        "topic-board-fixture",
+        "topics-headless-fixture"
+      ],
+      "otherSteps": 93,
+      "failed": 0
+    },
+    "browserIntegration": {
+      "files": [
+        "topic-retraction-controls",
+        "topic-board-seed",
+        "topic-create-onscreen",
+        "topic-board-demo",
+        "topics-navigation",
+        "topic-board-child-contract"
+      ],
+      "failed": 0,
+      "note": "run against a toolshed built from the checkout under test; these suites start no server and otherwise drive whatever holds API_URL's default port"
+    },
+    "gates": {
+      "cfcheckPatternFiles": 361,
+      "patternCompatPatterns": 289,
+      "patternVintageVintages": 8,
+      "failed": 0
+    }
   }
 }

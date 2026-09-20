@@ -13,8 +13,10 @@ comments. This records what that changed, and how it was measured.
 
 Every figure below is in
 [`2026-09-20-topics-t1-shared-derivations.results.json`](2026-09-20-topics-t1-shared-derivations.results.json)
-beside this file. The two arms are `394db11c23`, T1's merge base, and
-`933632931c`, the change.
+beside this file — the six derivation samples under `samples`, the probe
+comparison under `boardDemandComparison`, and the suite counts under
+`behavior`. The two arms are `394db11c23`, T1's merge base, and `933632931c`,
+the change.
 
 ## Why a new instrument was needed
 
@@ -91,10 +93,10 @@ become two.
 
 The same runs give initialization elapsed times that do not support one. The
 after arm at 100 comments and 100 links took 1,401 ms against the before arm's
-618 ms — the wrong direction — and a separate series on a more loaded machine
-put the same arm between 531 ms and 4,131 ms. These runs shared a machine with
-other work throughout. The read counts are deterministic and repeat exactly
-across rounds; the timings are recorded in the extract and are not a result.
+618 ms — the wrong direction from what the read counts predict. These runs
+shared a machine with other work throughout, and a machine under memory
+pressure for part of it. The read counts are deterministic and repeat exactly
+across rounds; the timings sit in the extract beside them and are not a result.
 
 ## Demand narrowed rather than broadening
 
