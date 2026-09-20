@@ -356,7 +356,8 @@ describe("topics-rehearsal-lib", () => {
   });
 
   describe("declaredRetirableLinks", () => {
-    const link = { "$link": "of:fid1:source" };
+    // No export fixture here on purpose: the probe asks the TARGET, and what
+    // the export holds is not a parameter of the question.
     const probe = (answers: Record<string, unknown>) => (field: string) =>
       Promise.resolve(answers[field]);
 
