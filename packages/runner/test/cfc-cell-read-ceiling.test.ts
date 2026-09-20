@@ -9,6 +9,12 @@ import { toMemorySpaceAddress } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  writeSeedEnvelopeDoc,
+} from "./cfc-seed-envelope.ts";
+
 const signer = await Identity.fromPassphrase("cell read ceiling");
 const A = { type: "https://commonfabric.org/cfc/atom/User", subject: "A" };
 const B = { type: "https://commonfabric.org/cfc/atom/User", subject: "B" };
@@ -124,6 +130,97 @@ describe("cfc-cell-read-ceiling", () => {
     expect(() => projected.getRaw({ nonRecursive: true })).toThrow(
       /read ceiling/,
     );
+  });
+
+  it("withholds an array's length without labeling an addressed element", async () => {
+    const tx = writer.edit();
+    const cell = writer.getCell(signer.did(), "array membership", {
+      type: "array",
+      items: { type: "string" },
+      ifc: { confidentiality: [B], observes: "enumerate" },
+    }, tx);
+    cell.set(["public element"]);
+    expect((await tx.commit()).error).toBeUndefined();
+    const reader = readerFor([A]);
+    const projected = reader.getCellFromLink(cell.getAsNormalizedFullLink());
+    await projected.sync();
+
+    expect(projected.key(0).get()).toBe("public element");
+    expect(() => projected.key("length").get()).toThrow(/read ceiling/);
+    const readTx = reader.edit();
+    try {
+      const address = toMemorySpaceAddress(
+        projected.key("length").getAsNormalizedFullLink(),
+      );
+      expect(() => readTx.read(address)).toThrow(/read ceiling/);
+    } finally {
+      readTx.abort();
+    }
+  });
+
+  it("reads a public array length without consuming its element-content label", async () => {
+    const tx = writer.edit();
+    const cell = writer.getCell(signer.did(), "private array contents", {
+      type: "array",
+      items: { type: "string" },
+      ifc: { confidentiality: [B], observes: "value" },
+    }, tx);
+    cell.set(["private element"]);
+    expect((await tx.commit()).error).toBeUndefined();
+    const projected = readerFor([A]).getCellFromLink(
+      cell.getAsNormalizedFullLink(),
+    );
+    await projected.sync();
+
+    expect(projected.key("length").get()).toBe(1);
+    expect(() => projected.key(0).get()).toThrow(/read ceiling/);
+  });
+
+  it("withholds an array length carrying its own stored label", async () => {
+    const tx = writer.edit();
+    const cell = writer.getCell(
+      signer.did(),
+      "labeled native length",
+      undefined,
+      tx,
+    );
+    const link = cell.getAsNormalizedFullLink();
+    writeSeedEnvelopeDoc(tx, signer.did());
+    seedStoredEnvelope(tx, { ...toMemorySpaceAddress(link), path: [] }, {
+      value: ["public element"],
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{ path: ["length"], label: { confidentiality: [B] } }],
+        },
+      },
+    });
+    expect((await tx.commit()).error).toBeUndefined();
+    const projected = readerFor([A]).getCellFromLink(link);
+    await projected.sync();
+
+    expect(projected.key(0).get()).toBe("public element");
+    expect(() => projected.key("length").get()).toThrow(/read ceiling/);
+  });
+
+  it("reads an object's length field independently of its membership label", async () => {
+    const tx = writer.edit();
+    const cell = writer.getCell(signer.did(), "ordinary length field", {
+      type: "object",
+      properties: { length: { type: "number" } },
+      ifc: { confidentiality: [B], observes: "enumerate" },
+    }, tx);
+    cell.set({ length: 17 });
+    expect((await tx.commit()).error).toBeUndefined();
+    const projected = readerFor([A]).getCellFromLink(
+      cell.getAsNormalizedFullLink(),
+    );
+    await projected.sync();
+
+    expect(projected.key("length").get()).toBe(17);
+    expect(() => projected.get()).toThrow(/read ceiling/);
   });
 
   it("withholds a concrete label under an unresolved database-owner ceiling", async () => {

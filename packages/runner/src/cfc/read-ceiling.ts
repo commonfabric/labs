@@ -21,14 +21,19 @@ import type {
   IReadOptions,
 } from "../storage/interface.ts";
 import {
+  internalVerifierRead,
   isInternalVerifierRead,
   isLinkResolutionProbe,
   isWriteDestinationRead,
 } from "../storage/reactivity-log.ts";
 import type { CfcConfClause } from "./clause.ts";
-import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
+import {
+  cfcLabelViewFromMetadata,
+  rebaseCfcLabelView,
+} from "./label-view-state.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import { atomsOutsideCeiling } from "./observation.ts";
+import { readConsumesEntry } from "./observation-classes.ts";
 
 /** What a read does with a row the runtime's ceiling does not admit. */
 export type CfcReadOnExceed = "fail" | "skip";
@@ -156,8 +161,30 @@ export function assertCfcReadCeiling(
     isWriteDestinationRead(options?.meta)
   ) return;
   const metadata = readStoredCfcMetadata(tx, address);
-  const view = cfcLabelViewFromMetadata(metadata, address.path);
-  const confidentiality = (view?.entries ?? []).flatMap((entry) =>
+  let entries = cfcLabelViewFromMetadata(metadata, address.path)?.entries ?? [];
+  if (address.path.at(-1) === "length") {
+    const parentPath = address.path.slice(0, -1);
+    // Only an array's native length observes its parent's membership. The
+    // verifier probe distinguishes it from an ordinary object field without
+    // exposing or consuming the parent's payload.
+    const parent = tx.readOrThrow({ ...address, path: parentPath }, {
+      meta: internalVerifierRead,
+      nonRecursive: true,
+    });
+    if (Array.isArray(parent)) {
+      const parentEntries = cfcLabelViewFromMetadata(metadata, parentPath)
+        ?.entries ?? [];
+      const membershipEntries = parentEntries.filter((entry) =>
+        entry.path.length === 0 && readConsumesEntry("shape", entry)
+      );
+      const lengthEntries = rebaseCfcLabelView({
+        version: 1,
+        entries: parentEntries.filter((entry) => entry.path.length > 0),
+      }, ["length"])?.entries ?? [];
+      entries = [...membershipEntries, ...lengthEntries];
+    }
+  }
+  const confidentiality = entries.flatMap((entry) =>
     entry.label.confidentiality ?? []
   );
   if (atomsOutsideCeiling(confidentiality, ceiling).length > 0) {
