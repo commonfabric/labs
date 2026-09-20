@@ -150,10 +150,9 @@ describe("Engine in SES mode", () => {
       ],
     };
 
-    // The type libraries no longer declare `Proxy`, so this is now turned away
-    // at type check rather than by the snapshot verifier behind it. Either
-    // rejection keeps proxy-backed data out of a top-level snapshot; naming the
-    // constructor simply stops being expressible first.
+    // The type libraries declare no `Proxy` value, so naming the constructor
+    // is turned away at type check, which runs ahead of the snapshot verifier.
+    // Either rejection keeps proxy-backed data out of a top-level snapshot.
     await expect(engine.compileToRecordGraph(program)).rejects.toThrow(
       /Cannot find name 'Proxy'|Mutable top-level data must be wrapped in __cf_data|Only verified plain data|Only trusted builder calls/,
     );
@@ -471,8 +470,8 @@ describe("Engine in SES mode", () => {
   });
 
   it("compiles and evaluates a patternTool whose pattern is hoisted to module scope", async () => {
-    // CT-1655: patternTool's `pattern(...)` argument is hoisted to a module-scope
-    // const by BuilderCallHoistingTransformer. Compile + evaluate end-to-end (not
+    // patternTool's `pattern(...)` argument is hoisted to a module-scope const
+    // by BuilderCallHoistingTransformer. Compile + evaluate end-to-end (not
     // just transformer goldens) to confirm the hoisted pattern doesn't trip a
     // module-load error and the tool survives. The pattern returns a plain-data
     // object (as patternTool patterns do); `count` is supplied per-call.

@@ -682,16 +682,30 @@ export function sampleDuration(samples: DaySamples, durationMs: number): void {
 }
 
 /**
- * The ninetieth percentile of a day, from its bounded sample. Exact while
- * the percentile's rank falls inside what was kept; past that it is the
- * smallest kept sample, which is an over-estimate.
+ * The ninetieth percentile of a population of `count` values, of which
+ * `largest` holds the largest in ascending order. Exact while the
+ * percentile's rank falls inside what `largest` holds, which a caller
+ * holding the whole population always satisfies; past that it is the
+ * smallest value given, which is an over-estimate.
+ *
+ * The rank is taken over `count` rather than over what is in hand, so a
+ * caller that kept only part of a population says how large the whole of
+ * it was.
  */
+export function percentile90(
+  largest: readonly number[],
+  count: number,
+): number {
+  if (count === 0) return 0;
+  const rank = Math.ceil(0.9 * count);
+  const fromTop = count - rank;
+  const index = largest.length - 1 - fromTop;
+  return largest[Math.max(0, index)] ?? 0;
+}
+
+/** The ninetieth percentile of a day, from its bounded sample. */
 export function sampledPercentile90(samples: DaySamples): number {
-  if (samples.count === 0) return 0;
-  const rank = Math.ceil(0.9 * samples.count);
-  const fromTop = samples.count - rank;
-  const index = samples.slowest.length - 1 - fromTop;
-  return samples.slowest[Math.max(0, index)] ?? 0;
+  return percentile90(samples.slowest, samples.count);
 }
 
 /** One list of a day's durations, as the day's bounded sample of them. */

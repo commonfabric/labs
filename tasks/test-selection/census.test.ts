@@ -323,11 +323,47 @@ describe("what the tree says and the manifest does not", () => {
       .toEqual(["glaze > sets"]);
   });
 
-  it("charges an unmeasured unit what its suite's middle unit costs", () => {
-    // Three units, holding one, three and one test. What a stand-in
-    // stands for is a whole unit, so the middle of 2, 30 and 200 is what
-    // it costs — not the middle of the seven tests inside them, which
-    // would charge a new file a fraction of what running it takes.
+  /**
+   * A suite of `measured` units costing what the numbers say, plus one
+   * more the manifest has never seen, and what that one is charged.
+   */
+  function standInCostOf(measured: readonly number[]): number | undefined {
+    const units = measured.map((_, at) => `packages/bakery/u${at}.test.ts`);
+    const wide = suite({
+      id: "workspace-unit",
+      units: [...units, "packages/bakery/rest.test.ts"],
+    });
+    const manifest = manifestOf(measured.map((cost, at) => ({
+      test: { k: "unit", s: "bakery", n: `u${at} > sets` },
+      unit: units[at]!,
+      cost,
+    })));
+    return census([wide], manifest, new Set()).manifest.entries.find((entry) =>
+      entry.unit === "packages/bakery/rest.test.ts"
+    )?.cost;
+  }
+
+  it("charges an unmeasured unit the ninetieth percentile of its suite", () => {
+    // Eight units at a second, one at two and one at three. The
+    // ninetieth percentile of those is 2 and their mean is 1.3, so the
+    // percentile is what stands. A figure at the mean, or at the middle
+    // of 1, leaves a lane no time for the unit it drew.
+    expect(standInCostOf([1, 1, 1, 1, 1, 1, 1, 1, 2, 3])).toBe(2);
+  });
+
+  it("charges the suite's mean where its tail carries that above the percentile", () => {
+    // Nine units at a second and one at a hundred. The ninetieth
+    // percentile of those is 1, and twenty such units come to 218 rather
+    // than to 20, so the mean is what holds a lane's total.
+    expect(standInCostOf([1, 1, 1, 1, 1, 1, 1, 1, 1, 100])).toBe(10.9);
+  });
+
+  it("charges an unmeasured unit what a whole unit costs, not one test", () => {
+    // Three units holding one, three and one test: 2 seconds, three
+    // tests of 70, and 50. What a stand-in stands for is a whole unit,
+    // so the figures are 2, 210 and 50, whose ninetieth percentile is
+    // 210. Read from the five tests instead, the same five costs give
+    // 70, which is a third of what running the file takes.
     const wide = suite({
       id: "workspace-unit",
       units: [
@@ -342,29 +378,51 @@ describe("what the tree says and the manifest does not", () => {
       {
         test: { k: "unit", s: "bakery", n: "proof > rises" },
         unit: "packages/bakery/proof.test.ts",
-        cost: 10,
+        cost: 70,
       },
       {
         test: { k: "unit", s: "bakery", n: "proof > doubles" },
         unit: "packages/bakery/proof.test.ts",
-        cost: 10,
+        cost: 70,
       },
       {
         test: { k: "unit", s: "bakery", n: "proof > slumps" },
         unit: "packages/bakery/proof.test.ts",
-        cost: 10,
+        cost: 70,
       },
       {
         test: { k: "unit", s: "bakery", n: "knead > folds" },
         unit: "packages/bakery/knead.test.ts",
-        cost: 200,
+        cost: 50,
       },
     ]);
     const seen = census([wide], manifest, new Set());
     const standing = seen.manifest.entries.find((entry) =>
       entry.unit === "packages/bakery/rest.test.ts"
     );
-    expect(standing?.cost).toBe(30);
+    expect(standing?.cost).toBe(210);
+  });
+
+  it("charges every unmeasured unit of a suite the same figure", () => {
+    // What the packer is told about one of them cannot depend on how
+    // many others the tree holds, since none of them is measured.
+    const wide = suite({
+      id: "workspace-unit",
+      units: [
+        "packages/bakery/glaze.test.ts",
+        "packages/bakery/rest.test.ts",
+        "packages/bakery/knead.test.ts",
+      ],
+    });
+    const manifest = manifestOf([
+      { unit: "packages/bakery/glaze.test.ts", cost: 7 },
+    ]);
+    const seen = census([wide], manifest, new Set());
+    expect(
+      seen.manifest.entries.filter((entry) =>
+        entry.unit !== "packages/bakery/glaze.test.ts"
+      ).map((entry) => entry.cost),
+    ).toEqual([7, 7]);
   });
 
   it("replaces what the publisher's own tree said, and its packing", () => {

@@ -27,6 +27,7 @@ import { UI } from "@commonfabric/runner";
 
 import type { SpaceConfig } from "../lib/piece.ts";
 import { HeldConnection } from "../lib/shuttle/connection.ts";
+import { ExternalLocation } from "../lib/shuttle/external.ts";
 import { CurrentPlace } from "../lib/shuttle/place.ts";
 import { ShuttleSession } from "../lib/shuttle/session.ts";
 import type { FrameCursor } from "../lib/shuttle/lens.ts";
@@ -72,6 +73,7 @@ function shuttleIn(): Shuttle {
   return {
     config: CONFIG,
     place: new CurrentPlace(SPACE),
+    external: new ExternalLocation(new URL("file:///work/"), "/home/someone"),
     connection: new HeldConnection({
       kind: "borrowed",
       pieces: {
@@ -262,7 +264,7 @@ describe("prompt", () => {
           text: "`pw` is not a verb. The verbs are `call`, `cd`, " +
             "`describe`, `edit`, `get`, `help`, `link`, `ls`, `more`, " +
             "`pwd`, `set`, `unwatch`, `verbs`, `watch`, `watches`, " +
-            "`where`, and `wish`.",
+            "`where`, `wish`, `xcd`, and `xpwd`.",
         },
         { kind: "edit", text: AT_ROOT, column: 18 },
         { kind: "finish" },

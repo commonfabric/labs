@@ -13,15 +13,14 @@ const space = signer.did();
 
 describe("compile-cache write-back after a runtime-version bump", () => {
   it("recovery write-back persists despite pre-existing docs on a cold replica", async () => {
-    // CT-1824 regression: a runtime-version bump sends loads through the
-    // cold-load recovery path (recompile + write-back). The write-back
-    // re-writes version-independent source docs that already exist from the
-    // original compile — documents a cold replica may not have read at their
-    // true version. A commit carrying such a stale read is refused; the
-    // conflict's `readyToRetry` catch-up gate is the designed remedy, and
-    // editWithRetry must await it like the scheduler does
-    // (scheduler/action-run.ts) rather than re-running against the same
-    // stale replica until the budget runs out and the cache never heals.
+    // A runtime-version bump sends loads through the cold-load recovery path
+    // (recompile + write-back). The write-back re-writes version-independent
+    // source docs that already exist from the original compile — documents a
+    // cold replica may not have read at their true version. A commit carrying
+    // such a stale read is refused; the conflict's `readyToRetry` catch-up
+    // gate is the designed remedy, and `editWithRetry()` awaits it, as the
+    // scheduler does (`scheduler/run.ts`). A retry that ran against the same
+    // stale replica would exhaust the budget, and the cache would never heal.
 
     const server = newSharedServer();
     const program = {

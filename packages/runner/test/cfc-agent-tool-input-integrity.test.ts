@@ -879,9 +879,9 @@ describe("CFC trusted agent: tool-input requiredIntegrity (Epic D2)", () => {
   });
 
   it("descends into tuple (prefixItems) slot floors", async () => {
-    // CT-1895: the gate never descended prefixItems, so a floor declared on
-    // a tuple slot was never enforced — a model-supplied literal in that
-    // slot executed the tool.
+    // The gate descends `prefixItems`, so a floor declared on a tuple slot is
+    // enforced: a model-supplied literal in that slot does not execute the
+    // tool.
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
