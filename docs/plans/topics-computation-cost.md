@@ -95,15 +95,15 @@ on T0 gates a stage's acceptance, as
 [measurement and acceptance](#measurement-and-acceptance) requires;
 implementation and prototypes can begin earlier.
 
-- [ ] **T0 — Establish the baseline and demonstration.** Build the two tiers
+- [x] **T0 — Establish the baseline and demonstration.** Build the two tiers
       [measurement and acceptance](#measurement-and-acceptance) defines. Exit:
       every deliverable below is checked off and the acceptance limits are set.
-  - [ ] The headless tier's fixture.
-  - [ ] The probe script and its baseline.
-  - [ ] The CI read-budget test, and the negative controls the command that
+  - [x] The headless tier's fixture.
+  - [x] The probe script and its baseline.
+  - [x] The CI read-budget test, and the negative controls the command that
         derives its limits runs.
-  - [ ] Browser instrumentation.
-  - [ ] Browser workloads, extending the
+  - [x] Browser instrumentation.
+  - [x] Browser workloads, extending the
         [scale](../../packages/patterns/integration/topic-board-scale.bench.ts)
         and
         [navigation](../../packages/patterns/integration/topic-board-navigation.bench.ts)
@@ -113,9 +113,12 @@ implementation and prototypes can begin earlier.
         [`topic-board-demo.test.ts`](../../packages/patterns/integration/topic-board-demo.test.ts),
         which states which of its properties a candidate may change
         without invalidating T5's comparison.
-  - [ ] The baseline report in `docs/history/`, separating pivot production,
+  - [x] The baseline report in `docs/history/`, separating pivot production,
         per-topic lookup, activity, and rendering costs, and recording the
-        probe's baseline and the environment and source versions.
+        probe's baseline and the environment and source versions. Three of
+        those four costs have baseline figures; rendering has none, for the
+        reason under [measurement and acceptance](#measurement-and-acceptance)
+        below.
 - [ ] **T1 — Share individual-topic derivations.** Reuse `commentCount` for
       `hasComments`; evaluate sharing the active-link view with `hasLinks` and
       link resolution. Preserve narrow compatibility schemas and stable links.
@@ -309,6 +312,18 @@ sibling edits. Include unresolved linked inputs, cold recovery, and two-client
 observation. Existing naming, rejection, render-shape, view-identity, and
 multi-user tests are part of acceptance, not replaced by benchmarks.
 
+**No tier produces a rendering baseline, and none of the candidates below can
+be held to one.** A topic's rendering derivations — active comments, active
+links, the presence booleans, and the link-resolution inputs — are `computed`
+expressions in the topic's body or lifts neither instrument names. The headless
+tier starts the four Topics lifts directly and instantiates no pattern body, so
+they never run there; in the browser they run and fall into the sample's
+aggregated `remaining` row, which keeps no run's identity. Closing this needs
+the browser helper to retain something per source-less run and its timing rows
+to be recorded, which T0 did not do. Until then a candidate's effect on
+rendering cost is unmeasured rather than measured at zero, and T1, whose target
+is exactly these derivations, has no rendering baseline to improve on.
+
 The headless tier records completed body and transaction-attempt reads with
 their distinct [boundaries](../features/read-accounting.md#execution-boundary),
 executions, graph size in nodes and edges, elapsed time, and available storage
@@ -329,12 +344,60 @@ before its limit is set, and the limit is the largest observed value plus 10%.
 Each gated measure has a negative control: a regression variant that grows that
 measure and must exceed its limit. The command that derives the limits runs each
 control against the limit it derived. Startup and latency limits are recorded in
-this section and are not gated in CI. An accepted candidate must preserve
-semantics, improve its targeted scaling/work measure, and stay within the read,
-graph, startup, and latency limits. If measurement noise prevents a latency
-conclusion, say so; if a cost exceeds its limit, revise or defer the candidate
-rather than silently moving the limit. A new tradeoff needs a documented
-decision and rationale.
+this section, below, and are not gated in CI. An accepted candidate must
+preserve semantics, improve its targeted scaling/work measure, and stay within
+the read, graph, startup, and latency limits. If measurement noise prevents a
+latency conclusion, say so; if a cost exceeds its limit, revise or defer the
+candidate rather than silently moving the limit. A new tradeoff needs a
+documented decision and rationale.
+
+### The startup and latency limits
+
+Four limits, derived by the same rule the gated counts use — the largest
+observed value plus 10%, rounded up — from the browser tier's rounds recorded
+in
+[the baseline report](../history/development/performance/2026-09-20-topics-computation-cost-baseline.md),
+whose `startupAndLatencyDerivation` block holds each one's observations and
+arithmetic. No continuous-integration job checks them; a candidate is held to
+them by whoever measures it.
+
+**Measure a candidate against these the way they were derived.** Each comes
+from the interval `timeTopicsOperation()` brackets, which turns telemetry and
+read accounting off before timing. A `measureTopicsReads()` sample of the same
+operation leaves both on, and its elapsed time carries their overhead: in the
+rounds these limits come from, the read-accounted reopen took 153 ms where the
+timed interval beside it took 122 ms, so that sample alone would breach the
+135 ms reopen limit for an operation that meets it. A read-accounted elapsed
+time is not comparable to these limits and must not be checked against them.
+
+| Measure | Limit | Bench case | Board size | Largest observed |
+| --- | --- | --- | --- | --- |
+| Startup: board render | 1,273 ms | navigation `board` segment | 30 topics | 1,157.0 ms |
+| Startup: cold board load | 4,852 ms | scale `100` | 100 topics | 4,410.1 ms |
+| Latency: warm update | 140 ms | navigation `comment` segment | 30 topics | 126.8 ms |
+| Latency: reopen | 135 ms | scale `reopen 100` | 100 topics | 122.0 ms |
+
+**Every one of the four was derived under client execution**, with server
+execution off. The runs that produced them record no lazy-materialization
+setting; that flag defaults on. A candidate measured under any other posture is
+not measured against these.
+
+**They are loose, and deliberately so.** They were derived on a shared machine
+under unrelated load — a one-minute load average with a median of 19.15 over
+the navigation rounds and 21.13 over the scale rounds, against 10 logical CPUs.
+Contention inflates the observations a ceiling is derived from, so these will
+not catch a small regression. Treat a breach as a real signal and a pass as
+weak evidence; re-derive on a quieter machine before tightening any of them.
+
+**No server-execution latency limit exists, because no tier can produce one.**
+The headless tier has nothing for that posture to engage, and the browser tier
+co-hosts the toolshed it measures against, so under the ON posture that
+toolshed's derivation competes with the browser it serves.
+[The browser arm](../history/development/performance/2026-09-19-topics-server-execution-browser-arm.md)
+records the measurement and why its timings support no posture conclusion. A
+rig with the server off the browser's hardware is what would change this; the
+scheduled Benchmarks workflow runs client execution, which is where candidate
+latency is obtainable.
 
 ## Stored-state and deployment procedure
 
