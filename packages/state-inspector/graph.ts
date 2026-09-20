@@ -186,7 +186,7 @@ export function buildSpaceGraph(
     return key;
   };
 
-  const readSpaceDocument = spaceDocumentReader(space, branch);
+  const readSpaceDocument = spaceDocumentReader(space, { branch, scope });
   const readDocument = (id: string) => docs.get(id) ?? readSpaceDocument(id);
   for (const [id, doc] of docs) {
     const m = modelFromDocument(doc, { id, scope, moduleIndex, readDocument });

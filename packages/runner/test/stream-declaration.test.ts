@@ -19,6 +19,7 @@ import { Runtime } from "../src/runtime.ts";
 import {
   declaredHandleKind,
   type ExternalReferenceResolver,
+  externalReferenceResolverOver,
 } from "../src/stream-declaration.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 
@@ -471,6 +472,44 @@ describe("stream declaration", () => {
     it("declares nothing where the resolver refuses the reference", () => {
       expect(declaredHandleKind(external, { resolveExternal: () => undefined }))
         .toBeUndefined();
+    });
+
+    describe("a resolver over schema documents", () => {
+      const documents: Record<string, JSONSchema> = {
+        evt: event,
+        wrapper: { $ref: "cid:evt", description: "An event" } as JSONSchema,
+        defs: { $defs: { Ev: event } } as JSONSchema,
+        plain: { type: "number" } as JSONSchema,
+        loop: { $ref: "cid:loop" } as JSONSchema,
+      };
+      const resolveExternal = externalReferenceResolverOver((hash) =>
+        documents[hash]
+      );
+      const declared = (schema: JSONSchema) =>
+        declaredHandleKind(schema, { resolveExternal });
+
+      it("follows a reference whose document is itself a reference", () => {
+        expect(declared({ $ref: "cid:wrapper" } as JSONSchema)).toBe("stream");
+      });
+
+      it("selects the definition a fragment names", () => {
+        expect(declared({ $ref: "cid:defs#/$defs/Ev" } as JSONSchema))
+          .toBe("stream");
+        expect(declared({ $ref: "cid:defs#/$defs/Missing" } as JSONSchema))
+          .toBeUndefined();
+      });
+
+      it("reads a keyword beside the reference over the document", () => {
+        expect(
+          declared({ $ref: "cid:plain", asCell: ["stream"] } as JSONSchema),
+        )
+          .toBe("stream");
+      });
+
+      it("declares nothing for a document the reader lacks, or a chain that loops", () => {
+        expect(declared({ $ref: "cid:absent" } as JSONSchema)).toBeUndefined();
+        expect(declared({ $ref: "cid:loop" } as JSONSchema)).toBeUndefined();
+      });
     });
   });
 

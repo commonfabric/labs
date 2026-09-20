@@ -60,6 +60,8 @@ import {
   declaredHandleKind,
   definitionNamed,
   type ExternalReferenceResolver,
+  externalReferenceResolverOver,
+  followExternalReferences,
 } from "@commonfabric/runner/stream-declaration";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
@@ -69,7 +71,6 @@ import {
   decodedLinkOf,
   linksWithPaths,
   type LinkWalkBounds,
-  parseSigilLink,
   summarize,
 } from "./decode.ts";
 import {
@@ -185,7 +186,7 @@ export interface EntityModel {
 
 /** The target id of a SigilLink value, if it is one. */
 function linkId(v: unknown): string | undefined {
-  return parseSigilLink(v)?.id ?? undefined;
+  return decodedLinkOf(v)?.id ?? undefined;
 }
 
 /** Owned child cell ids from a piece's `internal` manifest. */
@@ -242,22 +243,24 @@ function isStreamValue(v: unknown): boolean {
 export type DocumentReader = (id: string) => EntityDocument | undefined;
 
 /**
- * A reader over `space` at `branch`, and at `atSeq` where one is given, so
- * that what a historical read reads past resolves against the same snapshot.
- * Content-addressed documents live at space scope only, so that is where it
- * reads whatever scope the caller is describing.
+ * A reader over `space` at `branch`, reading an ordinary document at `scope`
+ * and a content-addressed one at space scope, which is the only scope those
+ * live at whatever scope the caller describes. It reads at `atSeq` where one
+ * is given, so that what a historical read reads past resolves against the
+ * same snapshot.
  */
 export function spaceDocumentReader(
   space: SpaceDb,
-  branch = "",
-  atSeq?: number,
+  opts: { branch?: string; scope?: string; atSeq?: number } = {},
 ): DocumentReader {
+  const branch = opts.branch ?? "";
+  const scope = opts.scope ?? "space";
   return (id) => {
     const outcome = reconstructOutcome(space, {
       id,
       branch,
-      scope: "space",
-      ...(atSeq === undefined ? {} : { atSeq }),
+      scope: id.startsWith(SCHEMA_DOCUMENT_REF_PREFIX) ? "space" : scope,
+      ...(opts.atSeq === undefined ? {} : { atSeq: opts.atSeq }),
     });
     return outcome.status === "present" ? outcome.document : undefined;
   };
@@ -321,21 +324,18 @@ export function storedSchemaOf(
 
 /**
  * How the declaration reading follows an external reference here: into the
- * schema document the space holds, through `readDocument`, under the grammar
- * {@link resolveSchemaMember} applies. A reference the space cannot supply,
- * and a member outside the grammar, resolve to nothing, and the position
- * declares nothing.
+ * schema document the space holds, through `readDocument`, read the way the
+ * runtime reads one. A reference the space cannot supply resolves to nothing,
+ * and the position declares nothing.
  */
 function externalReferenceResolver(
   readDocument?: DocumentReader,
 ): ExternalReferenceResolver {
-  return (schema) => {
-    const resolved = resolveSchemaMember(schema, readDocument);
-    return resolved === undefined ? undefined : {
-      schema: resolved.schema as JSONSchema,
-      root: resolved.root as JSONSchema,
-    };
-  };
+  return externalReferenceResolverOver((taggedHash) =>
+    readDocument?.(`${SCHEMA_DOCUMENT_REF_PREFIX}${taggedHash}`)?.value as
+      | JSONSchema
+      | undefined
+  );
 }
 
 /** Where a stream's declaration was read, and the schema found there. */
@@ -374,8 +374,19 @@ export function streamDeclarationOf(
     }
     const schema = link.schema as JSONSchema | undefined;
     if (declaredHandleKind(schema, { resolveExternal }) !== "stream") continue;
-    const resolved = resolveSchemaMember(schema, readDocument);
-    return resolved === undefined ? undefined : { ...resolved, owner };
+    // The declaration held, so the chain of references it was read through
+    // resolves; what is shown is the schema at its end, and the source names
+    // the last document followed into.
+    const reached = followExternalReferences(schema, { resolveExternal });
+    if (reached === undefined) return undefined;
+    const ref = reached.followed.at(-1);
+    return {
+      schema: reached.schema,
+      root: reached.root,
+      via: ref === undefined ? "own" : "document",
+      ...(ref === undefined ? {} : { ref }),
+      owner,
+    };
   }
   return undefined;
 }
@@ -645,7 +656,11 @@ export function modelEntity(
     id: address.id,
     scope: address.scope ?? "space",
     moduleIndex,
-    readDocument: spaceDocumentReader(space, address.branch, address.atSeq),
+    readDocument: spaceDocumentReader(space, {
+      branch: address.branch,
+      scope: address.scope,
+      atSeq: address.atSeq,
+    }),
   });
 }
 
@@ -994,7 +1009,7 @@ export function listEntityModels(
     reconstructOutcome(space, { id, branch, scope });
   const documentOf = (o: ReconstructOutcome): EntityDocument | undefined =>
     o.status === "present" ? o.document : undefined;
-  const readDocument = spaceDocumentReader(space, branch);
+  const readDocument = spaceDocumentReader(space, { branch, scope });
   // An entity that is HERE and cannot be read. A tombstone is not one: it says
   // what happened to it.
   const isUnreadable = (o: ReconstructOutcome): boolean =>
@@ -1189,7 +1204,7 @@ export function describePiece(
     return { error: `entity ${absentEntity(outcome.status).label}` };
   }
   const doc = outcome.document;
-  const readDocument = spaceDocumentReader(space, branch);
+  const readDocument = spaceDocumentReader(space, { branch, scope });
   const c = classifyDocument(doc, { id, readDocument });
   if (c.kind !== "piece") return { error: `not a piece (kind=${c.kind})` };
 

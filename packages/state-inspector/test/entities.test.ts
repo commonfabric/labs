@@ -1,13 +1,15 @@
 /**
  * Hermetic test for the unified entity model + encoded commit decoding. Seeds a
  * modern piece (patternIdentity → module, argument, internal manifest), an
- * owned cell, five streams, and a free cell, then checks classification +
- * lineage. Four of the streams hold no value and are known by the manifest
+ * owned cell, eight streams, and a free cell, then checks classification +
+ * lineage. Seven of the streams hold no value and are known by the manifest
  * link their owner keeps for each: declared inline on the link, by reference
  * to a schema document, through a `$ref` into the link schema's own `$defs`,
- * and through a `cid:…#/$defs/<name>` fragment. Beside them, a back-link-only
- * document whose owner's manifest carries a declaration outside the grammar,
- * and one whose owner the space does not hold, classify as owned cells.
+ * through a `cid:…#/$defs/<name>` fragment, by a keyword beside the
+ * reference, through a schema document that is itself a reference, and one
+ * whose back-link is stored in the modern codec form. Beside them, a
+ * back-link-only document whose owner the space does not hold classifies as
+ * an owned cell.
  *
  * It also seeds one entity for each way an entity ends up carrying no document
  * — a tombstone, a payload that does not decode, and a `set` that stored no
@@ -18,6 +20,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { Database } from "@db/sqlite";
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
+import { FabricLink } from "@commonfabric/data-model/fabric-instances";
 
 import { openSpace } from "../db.ts";
 import { listCommits } from "../queries.ts";
@@ -97,8 +100,10 @@ function seed(path: string) {
       argument: link("of:input"),
       // The manifest links declare the streams: one inline, one by reference
       // to a schema document, one through a `$ref` into the link schema's own
-      // `$defs`, one through a fragment into a schema document, and one that
-      // puts a keyword beside a `cid:` reference, which the grammar refuses.
+      // `$defs`, one through a fragment into a schema document, one by a
+      // keyword beside a `cid:` reference, read over the document the way the
+      // runtime reads it, one through a schema document that is itself a
+      // reference, and one whose own back-link is stored in the modern form.
       internal: [
         { partialCause: "query", link: link("of:owned") },
         {
@@ -129,6 +134,14 @@ function seed(path: string) {
             $ref: "cid:streamschema",
             asCell: ["stream"],
           }),
+        },
+        {
+          partialCause: "wrapped",
+          link: link("of:stream-wrapped", { $ref: "cid:streamwrapper" }),
+        },
+        {
+          partialCause: "modern",
+          link: link("of:stream-modern", { asCell: ["stream"] }),
         },
       ],
       patternIdentity: { identity: MODULE_IDENTITY, symbol: "default" },
@@ -269,6 +282,32 @@ function seed(path: string) {
     JSON.stringify({ result: link("of:nowhere") }),
     26,
   );
+  // A schema document whose value is itself a reference, as decomposition
+  // leaves an annotated wrapper around the definition it externalized.
+  commit.run(27, session, 27, "{}");
+  op.run(
+    "cid:streamwrapper",
+    27,
+    "set",
+    JSON.stringify({
+      value: { $ref: "cid:streamschema", description: "An event" },
+    }),
+    27,
+  );
+  commit.run(28, session, 28, "{}");
+  op.run("of:stream-wrapped", 28, "set", backLinked, 28);
+  // The same back-link stored in the modern codec form, which restores as a
+  // `FabricLink` rather than a sigil.
+  commit.run(29, session, 29, "{}");
+  op.run(
+    "of:stream-modern",
+    29,
+    "set",
+    jsonFromFabricValue({
+      result: new FabricLink({ id: "of:piece", path: [] }),
+    }),
+    29,
+  );
 
   db.close();
 }
@@ -310,6 +349,8 @@ Deno.test("unified entity model + encoded commit decode", async (t) => {
           "of:stream-defs",
           "of:stream-frag",
           "of:stream-hybrid",
+          "of:stream-wrapped",
+          "of:stream-modern",
         ]);
         // patternIdentity resolves to the module entity by matching value.identity.
         assertEquals(byId["of:piece"].lineage.pattern?.moduleId, "of:mod");
@@ -326,9 +367,13 @@ Deno.test("unified entity model + encoded commit decode", async (t) => {
         assertEquals(byId["of:stream-ref"].owned, true);
         assertEquals(byId["of:stream-defs"].kind, "stream");
         assertEquals(byId["of:stream-frag"].kind, "stream");
-        // A declaration outside the schema-meta grammar declares nothing, and
-        // a back-link naming no document the space holds finds no owner.
-        assertEquals(byId["of:stream-hybrid"].kind, "owned-cell");
+        // A keyword beside the reference is read over the document, a schema
+        // document that is itself a reference is followed, and a back-link in
+        // the modern codec form names the owner as a sigil does.
+        assertEquals(byId["of:stream-hybrid"].kind, "stream");
+        assertEquals(byId["of:stream-wrapped"].kind, "stream");
+        assertEquals(byId["of:stream-modern"].kind, "stream");
+        // A back-link naming no document the space holds finds no owner.
         assertEquals(byId["of:stream-orphan"].kind, "owned-cell");
         assertEquals(
           listEntityModels(space, { kind: "stream" }).entities.map((e) => e.id)
@@ -337,8 +382,11 @@ Deno.test("unified entity model + encoded commit decode", async (t) => {
             "of:stream",
             "of:stream-defs",
             "of:stream-frag",
+            "of:stream-hybrid",
             "of:stream-inline",
+            "of:stream-modern",
             "of:stream-ref",
+            "of:stream-wrapped",
           ],
         );
         assertEquals(byId["of:owned"].kind, "owned-cell");
@@ -363,7 +411,7 @@ Deno.test("unified entity model + encoded commit decode", async (t) => {
           );
           assertEquals(piece.pattern?.symbol, "default");
           assertEquals(piece.input?.id, "of:input");
-          assertEquals(piece.ownedCells.length, 6);
+          assertEquals(piece.ownedCells.length, 8);
           assertEquals(piece.ownedCells[0].id, "of:owned");
           assert(piece.resultKeys.includes("$NAME"));
         },

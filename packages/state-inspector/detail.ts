@@ -606,9 +606,10 @@ export function buildAllDetails(
     }
   }
 
-  // Content-addressed documents live at space scope only, so a label or
-  // schema document is read there whatever scope the pass describes.
-  const readSpaceDocument = spaceDocumentReader(space, branch);
+  // A document the pass did not scan — an owner past the cap, a label or
+  // schema document — is read at the pass's own scope, and a content-addressed
+  // one at space scope, where those live whatever scope the pass describes.
+  const readSpaceDocument = spaceDocumentReader(space, { branch, scope });
   const readDocument = (id: string): EntityDocument | undefined =>
     docs.get(id) ?? readSpaceDocument(id);
 
