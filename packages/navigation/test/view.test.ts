@@ -97,6 +97,10 @@ describe("view", () => {
     // addresses in circulation carry, so the shell opens it as well. A name
     // and a DID both answer to the mark, and the mark reaches a space naming
     // no piece as well as one naming a member.
+    //
+    // check-address-examples-ignore: /@<space>/<collection>/<member> a page
+    // URL, which keeps the mark the cell reference grammar retired.
+
     expect(urlToAppView(new URL("http://common.test/@space/top/42"))).toEqual({
       spaceName: "space",
       pieceSlug: "top",

@@ -73,6 +73,7 @@
     // asking for it.
     "fix-pattern-tiers": "deno run --allow-read --allow-write ./tasks/check-pattern-tiers.ts --write",
     "check-skill-facts": "deno run --allow-read --allow-run=git ./tasks/check-skill-facts.ts",
+    "check-address-examples": "deno run --allow-read --allow-run=git ./tasks/check-address-examples.ts",
     "check-verb-session-sync": "deno run --allow-read ./tasks/check-verb-session-sync.ts",
     // Building the CLI's command tree is what this walks, and mounting it
     // resolves the whole CLI — including the SQLite library `cf inspect`

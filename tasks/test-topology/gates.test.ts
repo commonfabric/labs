@@ -224,6 +224,7 @@ describe("the repository's gate suites", () => {
       .map((gate) => gate.name)
       .toSorted();
     expect(everything).toEqual([
+      "check-address-examples",
       "check-conflict-markers",
       "check-control-characters",
       "check-local-program",

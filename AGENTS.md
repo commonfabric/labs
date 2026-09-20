@@ -350,6 +350,13 @@ Each of these gates fails CI on its own, and none of them run as part of
 - `deno task check-skill-facts` — a path or import cited by a skill, an
   `AGENTS.md`, a rule, or a hook script under `.claude/scripts/` that stopped
   resolving
+- `deno task check-address-examples` — a cell address written into a document, a
+  skill, or a source comment that the reference parser refuses. A grammar change
+  retires a spelling and says nothing about the places teaching it, so the
+  tree's examples are held to the parser itself. What counts as an address
+  example, and the directive that exempts a string written on purpose — the
+  retired form quoted as retired, a spelling of the shell's page URL, a grammar
+  line — are stated in `tasks/check-address-examples.ts`
 - `deno task check-verb-session-sync` — a `cf` command or act reference in
   `docs/common/verbs/the-verb-session.md` or
   `docs/common/verbs/session-walkthrough.md` that its demo script does not back;

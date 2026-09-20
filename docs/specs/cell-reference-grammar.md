@@ -239,6 +239,8 @@ free-form — `createSession` in `packages/identity/src/session.ts` takes any
 string as a derivation seed — so any rule that relies on a space never being
 named `user` is a rule the fabric does not enforce.
 
+<!-- check-address-examples-ignore: /@session/<handle>@user the collision this requirement answers, quoted as what the grammar refuses -->
+
 Source: #6775's measured case, `/@session/<handle>@user`, in which two
 `@`-introduced tokens written with scope words name opposite dimensions.
 
@@ -915,6 +917,8 @@ the same cells. The relative rows at the end need a context, and theirs is
 | `.#result/title`, read where the context's document is the arguments document | the context's          | the context's | the context's | `title`, from the result document's root    | the result document; the member's counterpart of `.`                                                                                 |
 
 Refused, and why:
+
+<!-- check-address-examples-ignore: /@bakery/glaze-tracker the table below is written out of what the parser refuses -->
 
 | Written                               | Refusal                                                                                                                     |
 | ------------------------------------- | --------------------------------------------------------------------------------------------------------------------------- |

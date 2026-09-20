@@ -303,6 +303,10 @@ export function addressArgument(ref: CallableResultRef): string {
  * are named.
  */
 export function canonicalAddress(ref: CallableResultRef): string {
+  // check-address-examples-ignore: //<space>/<id>@scope the doc comment writes
+  // the shape a caller reads the parts out of, with a hole in the scope slot,
+  // rather than one address.
+
   return renderCellReference({ ...ref, path: [] });
 }
 

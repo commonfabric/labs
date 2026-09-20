@@ -39,6 +39,27 @@ missing from its index is a document nobody will find.
 `deno task docs-links --orphan` names those. Run it after moving or renaming
 more than one document; it is not a CI gate, so nothing else will tell you.
 
+## Cell addresses here are parsed
+
+`deno task check-address-examples` hands every rooted address a document writes
+in backticks to the reference parser, and fails on one the parser refuses — a
+spelling a grammar change retired, most often. It reaches skills and source
+comments on the same terms.
+
+A string written on purpose — the retired form quoted as retired, a spelling of
+the shell's page URL, a grammar line with a hole in the scope slot — is
+exempted by a directive naming it, inside an HTML comment so that it does not
+render:
+
+```text
+<!-- check-address-examples-ignore: <the string> <why it is written> -->
+```
+
+The directive governs the file it sits in, wherever in that file it sits.
+`docs/specs/cell-reference-grammar.md` carries one above its table of refused
+forms. `tasks/check-address-examples.ts` states what counts as an address
+example and what does not.
+
 ## Code blocks here are compiled
 
 `deno task check-docs` type-checks the TypeScript and TSX blocks under `docs/`,
