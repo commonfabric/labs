@@ -1,6 +1,13 @@
 /**
- * Running a shuttle: one connection, one place, and the prompt over both, for
- * as long as the person keeps typing.
+ * Running a shuttle: one connection, two positions, and the prompt over all
+ * three, for as long as the person keeps typing.
+ *
+ * The positions are the fabric place and the external working location, and
+ * they are composed differently because they are built from different things.
+ * A place stands in a space, so it cannot be built before the connect that
+ * resolves one; the external location stands outside the fabric and is
+ * seeded from this process's own working directory, so it is built from what
+ * the process already holds and asks nothing of anybody.
  *
  * This is what `cf sh` calls. The terminal opens first and the connection
  * inside it, because the terminal is where the connection's own writing has to
@@ -27,7 +34,7 @@
  * and what arrives is the connection it settled on.
  */
 
-import { toFileUrl } from "@std/path";
+import { toFileUrl } from "@std/path/posix";
 
 import { loadPieces, type SpaceConfig } from "../piece.ts";
 import { newSessionId } from "../session.ts";
