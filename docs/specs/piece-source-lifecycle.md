@@ -699,16 +699,18 @@ membership in an enum containing both `false` and `true`. This permits argument
 widening from `boolean` to `boolean | "auto"` and the reverse result narrowing.
 Source enums containing several JSON value types are partitioned by type,
 including beside a type list or within nested `anyOf` branches, with sibling
-constraints and branch metadata retained. Each partition must satisfy a target
-alternative. Target enums remain whole, and an enum containing a value outside
-the JSON type vocabulary, such as a `FabricPrimitive`, remains subject to the
-conservative object proof. During
-pattern evolution, a branch stays whole if partitioning would change the
-effective default it supplies, including defaults inherited from a child branch
-or a reference. Link proofs compare target defaults only, so source defaults do
-not limit partitioning there. These rules permit adding an option to a nullable
-literal argument while still refusing to remove an admitted option or widen a
-result contract.
+constraints and branch metadata retained. A source `type` list is partitioned
+into one branch per named type in those same places, so a union written as a
+type list and the same union written as `anyOf` branches prove alike wherever
+either is spelled. Each partition must satisfy a target alternative. Target
+enums remain whole, and an enum containing a value outside the JSON type
+vocabulary, such as a `FabricPrimitive`, remains subject to the conservative
+object proof. During pattern evolution, a branch stays whole if partitioning
+would change the effective default it supplies, including defaults inherited
+from a child branch or a reference. Link proofs compare target defaults only,
+so source defaults do not limit partitioning there. These rules permit adding
+an option to a nullable literal argument while still refusing to remove an
+admitted option or widen a result contract.
 
 When a source alternative contains a nested `anyOf` with only descriptive
 annotations other than `$comment` beside it, its children may each satisfy a
