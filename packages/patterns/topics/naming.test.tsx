@@ -577,9 +577,12 @@ export default pattern(() => {
   const settledVersion = new Writable<number | Default<0>>(
     TOPIC_STATE_VERSION,
   );
+  //
+  // No board here, deliberately: this case drives `recordNames` over the list
+  // and the namespace directly, and a board would neither be read nor reach
+  // the walk. The board-shaped path is the `older` board above.
   const settledNames = new Writable<NamesMap>({});
   const settledTopics = new Writable<TopicDemand[] | Default<[]>>([]);
-  const settled = Topics({ topics: settledTopics, names: settledNames });
   const action_file_a_settled_topic = action(() => {
     settledTopics.push(
       Topic({
