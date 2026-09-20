@@ -11,6 +11,12 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
+
+import {
+  createCfHarnessCliCapabilities,
+  parseCfHarnessCliArgs,
+  runCfHarnessCli,
+} from "../src/cli.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import { CAPABILITY_PROBE_SENTINEL } from "../src/diagnostics.ts";
@@ -347,6 +353,100 @@ describe("submit_result", () => {
       answer: "Hyperion",
       source: token,
     });
+  });
+
+  it("accepts the result tool in the CLI allowlist and capability description", async () => {
+    const parsed = await parseCfHarnessCliArgs([
+      "--workspace",
+      dir,
+      "--prompt",
+      "Recommend a book.",
+      "--allow-tool",
+      "describe_handle",
+      "--allow-tool",
+      "submit_result",
+      "--structured-result-schema",
+      JSON.stringify(RESULT_SCHEMA),
+      "--structured-result-path",
+      "result.json",
+    ], { env: {} });
+
+    expect(parsed).toMatchObject({
+      allowedToolIds: ["describe_handle", "submit_result"],
+    });
+    expect(createCfHarnessCliCapabilities().parentToolIds).toContain(
+      "submit_result",
+    );
+  });
+
+  it("offers the configured result tool when the CLI resumes a run", async () => {
+    const runId = "run-resumed-result";
+    const runRoot = join(dir, "artifacts", runId);
+    const runState = {
+      runId,
+      status: "failed" as const,
+      createdAt: "2026-09-20T12:00:00.000Z",
+      updatedAt: "2026-09-20T12:00:01.000Z",
+      cfcEnforcementMode: "enforce-strict" as const,
+      currentDir: "/workspace",
+      policyEvents: [],
+      toolOutputs: [],
+    };
+    const transcript = [{
+      role: "user" as const,
+      content: "Recommend a book.",
+    }];
+    const errors: string[] = [];
+    let resultAvailable: boolean | undefined;
+    await Deno.mkdir(join(dir, "workspace"));
+    await Deno.writeTextFile(
+      resultPath,
+      JSON.stringify({ answer: "Hyperion" }),
+    );
+
+    const exitCode = await runCfHarnessCli([
+      "--resume-run",
+      runRoot,
+      "--workspace",
+      join(dir, "workspace"),
+      "--gateway-auth-mode",
+      "none",
+      "--structured-result-schema",
+      JSON.stringify(RESULT_SCHEMA),
+      "--structured-result-path",
+      "result.json",
+    ], {
+      env: {},
+      io: { stdout: () => {}, stderr: (text) => errors.push(text) },
+      readRunArtifacts: () =>
+        Promise.resolve({
+          runRoot,
+          runStatePath: join(runRoot, "run-state.json"),
+          transcriptPath: join(runRoot, "transcript.json"),
+          runState,
+          transcript,
+        }),
+      createPromptLoop: ({ engine }) => {
+        resultAvailable = engine?.structuredResultAvailable;
+        return {
+          runPrompt: () => Promise.reject(new Error("unexpected fresh run")),
+          runTranscript: ({ transcript: resumed }) => {
+            expect(resumed).toEqual(transcript);
+            return Promise.resolve({
+              model: "gpt-5.4",
+              modelTurns: 1,
+              finalAssistantText: "Done.",
+              transcript: [...resumed],
+              runState: { ...runState, status: "completed" },
+            });
+          },
+        };
+      },
+    });
+
+    expect(errors).toEqual([]);
+    expect(exitCode).toBe(0);
+    expect(resultAvailable).toBe(true);
   });
 
   it("returns `not_configured` when invoked outside a run that takes a result", async () => {

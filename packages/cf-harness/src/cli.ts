@@ -497,7 +497,7 @@ Options:
   --workspace <path>            Workspace host path (defaults to current directory)
   --cwd <path>                  Initial working directory inside the workspace
   --focus-root <path>           Narrow exploration to a workspace subpath when possible
-  --allow-tool <tool>           Restrict available tools (repeatable: bash | read_file | view_image | web_fetch | read_skill_resource | run_skill_script | edit_file | write_file | delegate_task | describe_handle | finish_task | run_pattern | assign_slug | search_patterns | record_feedback | search_skills | acquire_skill | research | loom_compose | loom_inspect | loom_authoring_context | loom_search | loom_page_discover | loom_page_inspect | loom_page_read | loom_people | loom_calendar_list | loom_context | loom_profile);
+  --allow-tool <tool>           Restrict available tools (repeatable: bash | read_file | view_image | web_fetch | read_skill_resource | run_skill_script | edit_file | write_file | delegate_task | describe_handle | finish_task | submit_result | run_pattern | assign_slug | search_patterns | record_feedback | search_skills | acquire_skill | research | loom_compose | loom_inspect | loom_authoring_context | loom_search | loom_page_discover | loom_page_inspect | loom_page_read | loom_people | loom_calendar_list | loom_context | loom_profile);
                                 run_pattern, assign_slug, and acquire_skill additionally require the three --fabric-* session flags,
                                 search_patterns and record_feedback require --pattern-index-url,
                                 search_skills and acquire_skill require --skills-registry-url,
@@ -675,6 +675,7 @@ const CLI_PARENT_TOOL_IDS = [
   "delegate_task",
   "describe_handle",
   "finish_task",
+  "submit_result",
   "loom_compose",
   "loom_inspect",
   "loom_authoring_context",
