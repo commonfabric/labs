@@ -365,7 +365,8 @@ describe("runtime-processor", () => {
       const grantedSpace = "did:key:z6MkGrantedSpaceForProviderTest";
       try {
         // Path-`[]` full-document write: the ACL document's required write shape
-        // (INV-12). See the note in the resolver test above.
+        // (INV-12 of `docs/specs/memory-v2/09-invariants.md`). See the note in
+        // the resolver test above.
         const tx = runtime.edit();
         tx.writeOrThrow({
           space: grantedSpace as MemorySpace,
@@ -4404,10 +4405,9 @@ describe("runtime-processor", () => {
     });
 
     it("strips label views from raw sigil links in inbound values", () => {
-      // Raw sigil links inside inbound values (hand-crafted JSON, or a
-      // CellHandle serialized into CustomEvent.detail via toJSON) bypass the
-      // CellRef path — the value walker must drop their label views too
-      // (codex/cubic review on the Stage 0 PR).
+      // A raw sigil link inside an inbound value is not a `CellRef`, so it
+      // does not pass through `cellRefToSigilLink()`. The value walker must
+      // drop its label view too.
 
       const linkWithView = {
         "/": {
@@ -4627,11 +4627,11 @@ describe("runtime-processor", () => {
 
   describe("`RuntimeProcessor` VDom event label-view ingress", () => {
     it("strips label views from sigil links in inbound VDOM events", () => {
-      // CustomEvent.detail is JSON.stringify'd on the main thread (invoking
-      // CellHandle.toJSON) and re-enters the worker here, bypassing
-      // getCell/cellRefToSigilLink — a handler writing event.detail.sourceCell
-      // would persist the ref's view through the sigil-link write path. The
-      // worker strips inbound views at this ingress too (codex/cubic review).
+      // A sigil link in an event's `detail` enters the worker here, and passes
+      // through neither `getCell()` nor `cellRefToSigilLink()`. A handler
+      // that wrote `event.detail.sourceCell` would hand the write path
+      // whatever view the link carried, so the worker strips inbound views at
+      // this ingress too.
 
       const dispatched: unknown[] = [];
       const processor = buildProcessor();
@@ -5265,9 +5265,9 @@ describe("runtime-processor", () => {
   });
 
   describe("`RuntimeProcessor` per-space piece contexts", () => {
-    // Federation PR2: one worker serves piece operations for many spaces.
-    // getSpaceCtx resolves the per-space PiecesController, lazily for
-    // foreign spaces, over the shared runtime/storage.
+    // One worker serves piece operations for many spaces. `#getSpaceCtx()`
+    // resolves the per-space `PiecesController`, lazily for a space other
+    // than the home one, over the shared runtime.
 
     function makeProcessorState() {
       const { runtime } = createRuntime();
@@ -5723,9 +5723,9 @@ describe("runtime-processor", () => {
   });
 
   describe("`RuntimeProcessor` vdom mount render policy", () => {
-    // S16 phase D: the host's render confidentiality ceiling must reach every
-    // mount's reconciler — a ceiling configured at initialization that never
-    // arrives at the egress surface is silently unbounded rendering.
+    // The host's render confidentiality ceiling must reach every mount's
+    // reconciler — a ceiling configured at initialization that never arrives
+    // at the egress surface is silently unbounded rendering.
 
     type RootRenderPolicy =
       WorkerReconciler["accessForTestingOnly"]["rootRenderPolicy"];
@@ -6839,9 +6839,9 @@ describe("runtime-processor", () => {
       });
 
       it("replaces a client's own mount when it mounts that id again", async () => {
-        // Scoping the key changed which mounts collide, not what a collision
-        // does: one client re-using its own mount id still replaces what was
-        // there, and is left holding one mount rather than two.
+        // Scoping the key decides which mounts collide, not what a collision
+        // does: one client re-using its own mount id replaces what was there,
+        // and is left holding one mount rather than two.
         const { runtime, processor, link } = await mountState();
         const { client } = testClient(1);
         const hadPostMessage = "postMessage" in globalThis;

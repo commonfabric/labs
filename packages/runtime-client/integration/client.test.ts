@@ -461,13 +461,10 @@ describe("RuntimeClient", () => {
     });
 
     it("late subscribers receive initial value from existing subscription", async () => {
-      // Regression test for bug where text interpolation {value} would show blank
-      // when used alongside cf-input bound to the same cell. The issue was that
-      // late subscribers (those joining an existing subscription) would miss the
-      // initial value that was already sent to earlier subscribers.
-      //
-      // Fix: connection.subscribe() copies cached value from existing subscriber
-      // to new subscriber when joining an existing subscription.
+      // A late subscriber is one that joins a subscription another handle
+      // opened, so no backend request is made for it.
+      // `RuntimeConnection.subscribe()` copies the cached value from an
+      // existing subscriber to the one joining.
 
       const session = await createTestSession();
       await using rt = await createRuntimeClient(session);
@@ -488,8 +485,7 @@ describe("RuntimeClient", () => {
       await cell.sync();
 
       // Create two CellHandles with the SAME schema - this produces the same
-      // subscription key (space:id:path:schema). In the real bug, this happens
-      // when cf-input and text interpolation both call asSchema(stringSchema).
+      // subscription key, which the schema is part of.
       const cellA = cell.asSchema<{ message: string }>(schema);
       const cellB = cell.asSchema<{ message: string }>(schema);
 
@@ -525,15 +521,13 @@ describe("RuntimeClient", () => {
       );
 
       // Now subscribe cellB - this is the "late subscriber" that joins an
-      // existing subscription. Before the fix, its initial callback would
-      // receive undefined because no new backend request was made.
+      // existing subscription, so no new backend request is made.
       const cancelB = cellB.subscribe((v) => {
         valuesB.push(v);
         checkBothUpdated();
       });
 
-      // The fix ensures cellB immediately receives the cached value
-      // synchronously in the subscribe() call
+      // cellB receives the cached value synchronously, in the subscribe() call
       assertEquals(
         valuesB.length,
         1,
@@ -1593,12 +1587,12 @@ export default pattern<Record<string, never>>(() => {
 
   describe("CFC render-policy threading (S15)", () => {
     // Guards the field-by-field copy in RuntimeClient.initialize() and the
-    // RuntimeProcessor.initialize() -> WorkerReconciler plumbing: during
-    // #3994's own review cycle the initialize() payload DROPPED
-    // renderDeclassificationPolicy, so {renderDeclassificationPolicy: "deny"}
-    // silently behaved as "allow" (fail open). This exercises the REAL
-    // threading end to end: initialize -> worker InitializationData ->
-    // RuntimeProcessor -> every mount's reconciler.
+    // RuntimeProcessor.initialize() -> WorkerReconciler plumbing. An
+    // initialize() payload that dropped renderDeclassificationPolicy would
+    // make {renderDeclassificationPolicy: "deny"} behave as "allow" (fail
+    // open). This exercises the REAL threading end to end: initialize ->
+    // worker InitializationData -> RuntimeProcessor -> every mount's
+    // reconciler.
     const SECRET_TEXT = "Sensitive diagnosis: migraine";
     const SECRET_ATOM = "s15-threading-secret";
     const BLOCKED_TEXT = "Content hidden by policy";
@@ -1704,12 +1698,12 @@ export default pattern<Record<string, never>>(() => {
 
   describe("CFC label-metadata seam (inv-12 Stage 0)", () => {
     it('fails closed on the raw meta:"cfc" cell/get seam over real IPC', async () => {
-      // The retired seam returned the raw ["cfc"] envelope (unredacted
-      // Caveat.source et al.) via getMetaRaw. "cfc" is no longer a MetaField,
-      // but the wire is untyped JSON — a client that still sends it must get
-      // an error response, never raw label metadata. This drives the REAL
-      // worker IPC path (request -> handleCellGet guard -> error response ->
-      // rejected promise), not a mocked processor.
+      // `cfc` is not a `MetaField`, but a request arrives as data, so a client
+      // can send it. Such a request must get an error response, never the raw
+      // label metadata that `getMetaRaw()` would read for it, which includes
+      // `Caveat.source`. This drives the REAL worker IPC path (request ->
+      // handleCellGet guard -> error response -> rejected promise), not a
+      // mocked processor.
       const session = await createTestSession();
       await using rt = await createRuntimeClient(session);
 
@@ -1861,9 +1855,9 @@ export default pattern<Record<string, never>>(() => {
         await owner.client.idle();
         await mirror.sync();
 
-        // Both documents watch the same cell. Before this change the second
-        // subscribe was a no-op on the first's, so the second document heard
-        // nothing and the first's unsubscribe silenced both.
+        // Both documents watch the same cell, and each has a subscription of
+        // its own. Were the second subscribe to join the first's, the first's
+        // unsubscribe would silence both.
         const firstSeen: number[] = [];
         const secondSeen: number[] = [];
         const sawOne = defer<void>();

@@ -497,8 +497,8 @@ export function browserWorkerParamsFromInitializationData(
 }
 
 /**
- * Builds the H3b display-boundary resolver for a worker's renders. When a
- * ceiling is in force, each render egress resolves principal-form atoms
+ * Builds the display-boundary resolver for a worker's renders. When a ceiling
+ * is in force, each render egress resolves principal-form atoms
  * (Space-via-HasRole) RUNNER-side; the reconciler only fits the result.
  *
  * Reader membership is sourced ONLY from verified facts, never from a cell's
@@ -546,7 +546,7 @@ export function renderConfidentialityResolverFor(
     actingPrincipal,
     trustConfig: runtime.cfcTrustConfig,
     memberSpaces,
-    // Share the reconciler's provider instance when supplied (so Stage-2 ACL
+    // Share the reconciler's provider instance when supplied (so ACL
     // subscriptions and the resolver's reads observe the same cells); else
     // build a private one — both read the same underlying runtime documents.
     membershipProvider: membershipProvider ??
@@ -558,9 +558,9 @@ export function renderConfidentialityResolverFor(
  * The §4.9.3 membership provider for a worker's renders — the reactive half of
  * the render lookup. Built once per worker (same lifetime as the resolver) and
  * threaded to BOTH `renderConfidentialityResolverFor` (as the resolver's
- * lookup) and the reconciler (for Stage-2 ACL-change subscriptions), so the two
- * share one instance. Undefined when no ceiling is configured — no render
- * gating, so no membership lookup. Service DIDs are not threaded to the worker
+ * lookup) and the reconciler (for ACL-change subscriptions), so the two share
+ * one instance. Undefined when no ceiling is configured — no render gating, so
+ * no membership lookup. Service DIDs are not threaded to the worker
  * (design §9), so service principals fail closed.
  */
 export function renderMembershipProviderFor(
@@ -1217,8 +1217,9 @@ export class RuntimeProcessor {
    * user — no per-space signer, matching the storage connections.
    *
    * `space` is required: piece operations carry their space explicitly,
-   * with no implicit default at this layer. (The runtime guard catches
-   * out-of-date callers that still omit it.)
+   * with no implicit default at this layer. A request arrives as data, so
+   * its `space` can be missing despite the type. This method throws when it
+   * is.
    */
   #getSpaceCtx(space: DID): PiecesController {
     const target: DID | undefined = space;
@@ -1812,17 +1813,11 @@ export class RuntimeProcessor {
     // schema is client-supplied view context, not trusted label provenance.
     const { schema: _schema, ...cellRef } = request.cell;
     const cell = getCell(this.#runtime, cellRef);
-    // Pure, non-blocking read of the CURRENT local store — no sync. getCfcLabel
-    // is the display-label seam, and its only callers are reactive UI components
-    // (cf-cfc-label, cf-cfc-authorship, cf-profile-badge) that subscribe to the
-    // cell and re-read the label whenever it changes. They own liveness: a
-    // not-yet-loaded doc is also not rendered, so an empty label is the correct
-    // deferred answer and self-heals when the subscription delivers the doc
-    // (which carries its `cfc` metadata). The earlier per-call source-chain sync
-    // re-loaded already-present docs and, under multi-writer churn, blocked on
-    // in-flight watch refreshes — ~99.97% of this IPC's cost, p95 >1s at 4
-    // browsers. The enforcement path reads labels through other seams; here we
-    // only redact `Caveat.source` for display (audit item 28b, inv-12).
+    // This reads the label with `cfcLabelViewForCell()`, which reads what the
+    // store holds now and does not sync the cell. Keeping the cell current is
+    // the caller's job. A caller that needs the label as it changes subscribes
+    // with `includeCfcLabel`. We redact `Caveat.source` from the label for
+    // display.
     const totalStart = performance.now();
     const cfcLabel = cfcLabelViewForCell(cell);
     const response = {
@@ -2733,8 +2728,8 @@ export class RuntimeProcessor {
       // Best-effort source view for LIVE patterns: resolve the running
       // pattern by identity and read its authored files (source is per
       // module, so the symbol only selects a representative artifact). A
-      // source-free by-identity reload carries no program — omit it (same
-      // graceful degradation as the prior meta-cell read's try/catch).
+      // source-free by-identity reload carries no program, so that pattern is
+      // omitted.
       const program = this.#runtime.patternManager.getPatternProgramBySync(
         ref.identity,
         ref.symbol,
@@ -2762,9 +2757,10 @@ export class RuntimeProcessor {
   async handleUploadBlob(
     request: UploadBlobRequest,
   ): Promise<UploadBlobResponse> {
-    // Guard for untyped callers: the request must name the blob's space
-    // (required since the federation work) — fail with a named error
-    // rather than a confusing server 404 on /undefined/blobs/….
+    // A request arrives as data, so its `space` is checked here. A request
+    // whose `space` is not a DID fails with a named error. Without the check,
+    // a request with no `space` would build an upload URL whose path begins
+    // `/undefined/blobs/`.
     if (!isDID(request.space)) {
       throw new Error("uploadBlob requires a space DID");
     }
@@ -3090,10 +3086,10 @@ export class RuntimeProcessor {
       return;
     }
 
-    // CustomEvent.detail was JSON.stringify'd on the main thread (invoking
-    // CellHandle.toJSON), so sigil links in it bypass getCell /
-    // cellRefToSigilLink — strip any main-thread cfcLabelView copies before
-    // a handler can write them (inv-12 Stage 0; codex/cubic review).
+    // `request.event` comes from the main thread and can hold sigil links. A
+    // sigil link is not a `CellRef`, so it passes through neither `getCell()`
+    // nor `cellRefToSigilLink()`, which are what drop a ref's `cfcLabelView`.
+    // We strip the view from each link here, before a handler can write one.
     const dispatched = mount.reconciler.dispatchEvent(
       request.handlerId,
       stripSigilCfcLabelViews(request.event) as typeof request.event,
@@ -3347,10 +3343,9 @@ export class RuntimeProcessor {
 
       pieceCreatedCallback: (piece) => {
         const writeContext = runtime.getWriteDebugContext();
-        // Register the piece in ITS space's list: a piece created by a
-        // running foreign-space pattern routes to that space's controller
-        // (the context exists — it started the pattern). Fallback to
-        // the home controller, the sole pre-multi-space behavior.
+        // Register the piece in its own space's list. The piece goes to the
+        // controller serving its space, when there is one. Otherwise it goes
+        // to the home controller.
         const pieces = (piece.space && processor?.piecesFor(piece.space)) ??
           homePieces;
         if (!pieces) return;
