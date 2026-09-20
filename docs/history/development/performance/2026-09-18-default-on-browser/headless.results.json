@@ -1,0 +1,136 @@
+{
+  "revision": "f3494fe9547d6589dad8e382e2392f14b8e0cebf",
+  "serverExecution": false,
+  "lazyMaterialization": "default-on",
+  "command": "EXPERIMENTAL_SERVER_EXECUTION=false deno task cf test packages/patterns/integration/fixtures/lunch-poll-read-scale --verbose",
+  "summary": "9 passed, 0 failed (145491ms)",
+  "windows": {
+    "preseeded-profiles.test.tsx": [],
+    "main.test.tsx": [
+      {
+        "window": "initialization",
+        "attemptAccesses": 0,
+        "maxBodyAccesses": 0
+      },
+      {
+        "window": "step 1",
+        "attemptAccesses": 0,
+        "maxBodyAccesses": 0
+      },
+      {
+        "window": "step 2",
+        "attemptAccesses": 2,
+        "maxBodyAccesses": 2
+      },
+      {
+        "window": "step 3",
+        "attemptAccesses": 36,
+        "maxBodyAccesses": 13
+      },
+      {
+        "window": "step 4",
+        "attemptAccesses": 4858,
+        "maxBodyAccesses": 224
+      },
+      {
+        "window": "step 5",
+        "attemptAccesses": 2,
+        "maxBodyAccesses": 2
+      },
+      {
+        "window": "step 6",
+        "attemptAccesses": 958,
+        "maxBodyAccesses": 224
+      },
+      {
+        "window": "step 7",
+        "attemptAccesses": 159,
+        "maxBodyAccesses": 151
+      }
+    ],
+    "1184-votes.test.tsx": [
+      {
+        "window": "initialization",
+        "attemptAccesses": 0,
+        "maxBodyAccesses": 0
+      },
+      {
+        "window": "step 1",
+        "attemptAccesses": 0,
+        "maxBodyAccesses": 0
+      },
+      {
+        "window": "step 2",
+        "attemptAccesses": 2,
+        "maxBodyAccesses": 2
+      },
+      {
+        "window": "step 3",
+        "attemptAccesses": 115,
+        "maxBodyAccesses": 92
+      },
+      {
+        "window": "step 4",
+        "attemptAccesses": 44071,
+        "maxBodyAccesses": 3554
+      },
+      {
+        "window": "step 5",
+        "attemptAccesses": 2,
+        "maxBodyAccesses": 2
+      },
+      {
+        "window": "step 6",
+        "attemptAccesses": 5963,
+        "maxBodyAccesses": 3554
+      },
+      {
+        "window": "step 7",
+        "attemptAccesses": 2379,
+        "maxBodyAccesses": 2371
+      }
+    ],
+    "296-votes.test.tsx": [
+      {
+        "window": "initialization",
+        "attemptAccesses": 0,
+        "maxBodyAccesses": 0
+      },
+      {
+        "window": "step 1",
+        "attemptAccesses": 0,
+        "maxBodyAccesses": 0
+      },
+      {
+        "window": "step 2",
+        "attemptAccesses": 2,
+        "maxBodyAccesses": 2
+      },
+      {
+        "window": "step 3",
+        "attemptAccesses": 52,
+        "maxBodyAccesses": 29
+      },
+      {
+        "window": "step 4",
+        "attemptAccesses": 12724,
+        "maxBodyAccesses": 890
+      },
+      {
+        "window": "step 5",
+        "attemptAccesses": 2,
+        "maxBodyAccesses": 2
+      },
+      {
+        "window": "step 6",
+        "attemptAccesses": 1952,
+        "maxBodyAccesses": 890
+      },
+      {
+        "window": "step 7",
+        "attemptAccesses": 603,
+        "maxBodyAccesses": 595
+      }
+    ]
+  }
+}

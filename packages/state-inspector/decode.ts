@@ -8,7 +8,7 @@
 // In both, links/refs/streams appear as plain-data sigils:
 //   link   { "/": { "link@1": { id, space?, path?, scope?, schema? } } }
 //   ref    { "/": "of:…" | "computed:…" | "fid1:…" }
-//   stream { "$stream": true }
+//   stream { "$stream": true }   (legacy: a stream document now holds no value)
 // `decodeStored()` routes on the presence of that prefix, whichever codec
 // version it names; everything else here is pure JSON walking + recognition (no
 // live runtime/Cell needed). In the encoded form embedded links are

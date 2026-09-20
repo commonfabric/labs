@@ -114,7 +114,7 @@ describe("wish-home-isolation", () => {
           attributionFromScope: true,
           scopeKeyIdentity: { principal: user.did(), sessionId: user.did() },
         });
-        action(tx);
+        action.action(tx);
         expect((await tx.commit()).error).toBeUndefined();
       }
       expect(observed.map((state) => (state as { name: string }).name))

@@ -8,7 +8,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { fabricAwareEqual } from "@/comparison/fabricAwareEqual.ts";
+import { fabricAwareEqual } from "@";
 import {
   FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
   FABRIC_PRIMITIVE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,

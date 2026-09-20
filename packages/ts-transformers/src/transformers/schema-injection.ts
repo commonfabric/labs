@@ -349,14 +349,18 @@ function applyCapabilitySummaryToArgument(
     }
     return overlaid;
   }
-  const innerTypeNode = extractCellLikeInnerTypeNode(argumentNode) ??
-    typeToSchemaTypeNode(
-      argumentType && isCellLikeType(argumentType, checker)
-        ? unwrapCellLikeType(argumentType, checker)
-        : undefined,
-      checker,
-      sourceFile,
-    );
+  let innerTypeNode = extractCellLikeInnerTypeNode(argumentNode);
+  if (!innerTypeNode && argumentType && isCellLikeType(argumentType, checker)) {
+    // A cell reached through an alias has no authored inner node, so its value
+    // type is printed. Schema generation can read some prints only from the
+    // type behind them — a name the emitting module does not import, the brand
+    // arm of an expanded `Default` — so the node is registered with its type.
+    const valueType = unwrapCellLikeType(argumentType, checker);
+    innerTypeNode = typeToSchemaTypeNode(valueType, checker, sourceFile);
+    if (innerTypeNode && valueType) {
+      context?.state.typeRegistry.set(innerTypeNode, valueType);
+    }
+  }
   const shouldWrap = !!innerTypeNode;
   const preservedWrapper = shouldWrap
     ? preservedWrapperFor(argumentNode, argumentType, checker)

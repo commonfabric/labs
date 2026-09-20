@@ -21,6 +21,7 @@ import type { PiecesController } from "@commonfabric/piece/ops";
 import type { SpaceConfig } from "../lib/piece.ts";
 import { completeLine } from "../lib/shuttle/completion.ts";
 import { HeldConnection } from "../lib/shuttle/connection.ts";
+import { ExternalLocation } from "../lib/shuttle/external.ts";
 import { CurrentPlace } from "../lib/shuttle/place.ts";
 import { ShuttleSession } from "../lib/shuttle/session.ts";
 import { moved } from "./shuttle-place-helpers.ts";
@@ -68,6 +69,7 @@ function shuttleIn(): Shuttle {
   return {
     config: CONFIG,
     place: new CurrentPlace(SPACE),
+    external: new ExternalLocation(new URL("file:///work/"), "/home/someone"),
     connection: new HeldConnection({
       kind: "borrowed",
       pieces: {
@@ -203,6 +205,8 @@ describe("completion", () => {
         "watches",
         "where",
         "wish",
+        "xcd",
+        "xpwd",
       ];
       expect([...VERB_WORDS]).toEqual(words);
       for (const word of words) {
@@ -412,6 +416,31 @@ describe("completion", () => {
 
     it("writes nothing for `wish`, whose operand is a name the fabric holds", async () => {
       expect(await completeLine(shuttleIn(), "wish sl", READS_NOTHING))
+        .toBeUndefined();
+    });
+
+    it("writes the dimension `where` sets, which is a word this process holds", async () => {
+      // The third of the three surfaces, and it is one for the same reason
+      // the other two are: the words are a table this process already has,
+      // so answering costs no read.
+
+      expect(await completeLine(shuttleIn(), "where sc", READS_NOTHING))
+        .toBe("where scope");
+      expect(await completeLine(shuttleIn(), "where ex", READS_NOTHING))
+        .toBe("where external");
+    });
+
+    it("writes nothing for the value `where` sets a dimension to", async () => {
+      // What the slot takes depends on the dimension named before it — a
+      // scope word for one, a path outside the fabric for the other — and a
+      // slot declares what it offers for the position rather than for the
+      // line that reached it, so there is no answer right for both.
+
+      expect(await completeLine(shuttleIn(), "where scope @ses", READS_NOTHING))
+        .toBeUndefined();
+      expect(
+        await completeLine(shuttleIn(), "where external ../f", READS_NOTHING),
+      )
         .toBeUndefined();
     });
 

@@ -2,10 +2,9 @@
  * This directory holds the abstract base classes that a concrete `FabricValue`
  * extends: `BaseFabricInstance` for one branch of the type hierarchy,
  * `BaseFabricPrimitive` for the other, and `BaseFabricSpecialObject`, the
- * memberless runtime root of both branches that `isFabricSpecialObject()`
- * checks against. Each of the first two carries the static guard enforcing
- * that its branch is in fact reached through it, and a custom inspector so that
- * a value whose whole state is private fields still renders as what it is.
+ * runtime root of both branches that `isFabricSpecialObject()` checks against.
+ * The root carries the custom inspector. Each of the first two carries the
+ * static guard enforcing that its branch is in fact reached through it.
  * `BaseFabricInstance` additionally carries the clone template methods and the
  * symbol-keyed freeze protocol that the generic utilities dispatch through.
  *
@@ -19,6 +18,13 @@
  * Nothing here knows about codecs or wire formats. A value class binds its own
  * codec, and the machinery driving those lives in `codec-common/`.
  */
+
+// Loaded for its effect: it installs the debug renderers, which the package's
+// modules reach through `value-debug-internal.ts`. This barrel is where that
+// happens because every export-map entry which loads a module that renders
+// loads this barrel too, a property `test/value-debug-internal-entries.test.ts`
+// checks entry by entry.
+import "@/value-debug/index.ts";
 
 export {
   BaseFabricInstance,

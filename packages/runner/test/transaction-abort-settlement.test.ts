@@ -85,13 +85,13 @@ describe("an aborted transaction", () => {
     const origin = runtime.getCell<unknown>(
       space,
       "abort lineage origin stream",
-      undefined,
+      { asCell: ["stream"] },
       setupTx,
     );
     const followUp = runtime.getCell<unknown>(
       space,
       "abort lineage follow-up stream",
-      undefined,
+      { asCell: ["stream"] },
       setupTx,
     );
     const delivered = runtime.getCell<unknown[]>(
@@ -100,8 +100,6 @@ describe("an aborted transaction", () => {
       undefined,
       setupTx,
     );
-    origin.withTx(setupTx).set({ $stream: true });
-    followUp.withTx(setupTx).set({ $stream: true });
     delivered.withTx(setupTx).set([]);
     await setupTx.commit();
 

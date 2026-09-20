@@ -4233,7 +4233,7 @@ describe("runner utils", () => {
           partialCause: { stream: "increment" },
           path: [],
           scope: "space",
-          schema: true,
+          schema: { asCell: ["stream"] },
         },
       };
       const pattern: Pattern = {
@@ -4257,7 +4257,7 @@ describe("runner utils", () => {
         derivedInternalCells: [
           {
             partialCause: { stream: "increment" },
-            schema: { default: { $stream: true } },
+            schema: { asCell: ["stream"] },
             scope: "space",
           },
         ],

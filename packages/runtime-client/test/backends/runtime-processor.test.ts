@@ -160,8 +160,8 @@ const createRuntime = (
 const fid = (seed: string) => taggedHashStringOf(seed);
 
 describe("runtime-processor", () => {
-  describe("renderConfidentialityResolverFor", () => {
-    it("returns undefined when no ceiling is configured", async () => {
+  describe("renderConfidentialityResolverFor()", () => {
+    it("returns `undefined` when no ceiling is configured", async () => {
       const { runtime, storageManager } = createRuntime();
       try {
         expect(
@@ -306,7 +306,8 @@ describe("runtime-processor", () => {
         // Seeded as a path-`[]` full-document write — the shape hydration
         // delivers, and the one `ACLManager` uses. A value-surface write is
         // decomposed into `op: "patch"`, which the memory server refuses for the
-        // ACL document (INV-12), so the runner's write chokepoint rejects it.
+        // ACL document (INV-12 of `docs/specs/memory-v2/09-invariants.md`), so
+        // the runner's write chokepoint rejects it.
         const tx = runtime.edit();
         tx.writeOrThrow({
           space: grantedSpace as MemorySpace,
@@ -348,8 +349,8 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("renderMembershipProviderFor", () => {
-    it("returns undefined when no ceiling is configured", async () => {
+  describe("renderMembershipProviderFor()", () => {
+    it("returns `undefined` when no ceiling is configured", async () => {
       const { runtime, storageManager } = createRuntime();
       try {
         expect(renderMembershipProviderFor(runtime, cfcSigner, undefined))
@@ -993,7 +994,7 @@ describe("runtime-processor", () => {
       expect(result).toEqual({ slug: undefined });
     });
 
-    it("accepts bare and of:-schemed pieceIds as the same entity", async () => {
+    it("accepts bare and `of:`-schemed `pieceId`s as the same entity", async () => {
       // CellHandle.id() emits the full schemed URI while PieceHandle.id() emits
       // the bare routing form; the pieceId intake must resolve both to the SAME
       // entity. Without normalization, "of:fid1:H" parses as a hash whose tag
@@ -1111,7 +1112,7 @@ describe("runtime-processor", () => {
       };
     }
 
-    it("carries either spelling of a pieceId to the same entity", async () => {
+    it("carries either spelling of a `pieceId` to the same entity", async () => {
       const bare = fid("ordinary-piece");
       const requestedRef: CellRef = {
         id: `of:${bare}` as CellRef["id"],
@@ -1591,7 +1592,7 @@ describe("runtime-processor", () => {
     ] as const;
 
     for (const { handler, request } of cases) {
-      it(`${handler}() resolves the piece in the scope the request names`, async () => {
+      it(`\`${handler}()\` resolves the piece in the scope the request names`, async () => {
         const { processor, scopes } = makeProcessor();
         await expect(
           processor[handler]({ ...request, scope: "user" } as never),
@@ -1657,7 +1658,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("toConsoleDebugValue", () => {
+  describe("toConsoleDebugValue()", () => {
     /** A cell reference as it is rendered, whatever entity it names. */
     const CELL_LINK = /^\[Cell: of:fid1:[^\]]+\]$/;
 
@@ -1998,7 +1999,7 @@ describe("runtime-processor", () => {
     });
 
     describe("primitives", () => {
-      it("returns null and undefined unchanged", () => {
+      it("returns `null` and `undefined` unchanged", () => {
         expect(toConsoleDebugValue(null)).toBe(null);
         expect(toConsoleDebugValue(undefined)).toBe(undefined);
       });
@@ -2146,8 +2147,8 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor diagnosis helpers", () => {
-    it("passes detectNonIdempotent duration through to scheduler.runDiagnosis", async () => {
+  describe("`RuntimeProcessor` diagnosis helpers", () => {
+    it("passes the `detectNonIdempotent()` duration through to `scheduler.runDiagnosis()`", async () => {
       const expected = {
         nonIdempotent: [],
         cycles: [],
@@ -2319,8 +2320,8 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor blob upload IPC", () => {
-    it("posts FabricBytes contents to the blob route and returns an absolute URL", async () => {
+  describe("`RuntimeProcessor` blob upload IPC", () => {
+    it("posts `FabricBytes` contents to the blob route and returns an absolute URL", async () => {
       const originalFetch = globalThis.fetch;
       let requestedUrl: string | undefined;
       let requestedPayload: unknown;
@@ -2389,8 +2390,8 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor home pattern IPC", () => {
-    it("routes the home root through ensureDefaultPattern even when the legacy pattern meta is present", async () => {
+  describe("`RuntimeProcessor` home pattern IPC", () => {
+    it("routes the home root through `ensureDefaultPattern()` even when the legacy `pattern` meta is present", async () => {
       // The sharpest pin of the always-controller contract: even with a legacy
       // `pattern` meta present and the update flag unset, the handler reaches
       // ensureDefaultPattern — the leg carrying the cold-start setup repair —
@@ -2488,7 +2489,7 @@ describe("runtime-processor", () => {
         expect(result.piece.cell).toEqual(ref);
       });
 
-      it("resolves the stored root without starting it when start is false", async () => {
+      it("resolves the stored root without starting it when `start` is `false`", async () => {
         const ref: CellRef = {
           id: "of:stored-root" as CellRef["id"],
           space: "did:key:test-space" as CellRef["space"],
@@ -2527,7 +2528,7 @@ describe("runtime-processor", () => {
         ]);
       });
 
-      it("creates the root for a space that has none, even when start is false", async () => {
+      it("creates the root for a space that has none, even when `start` is `false`", async () => {
         const ref: CellRef = {
           id: "of:created-root" as CellRef["id"],
           space: "did:key:test-space" as CellRef["space"],
@@ -2565,7 +2566,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor cell pull IPC", () => {
+  describe("`RuntimeProcessor` cell pull IPC", () => {
     it("waits for producer commit durability before returning a cell value", async () => {
       const ref: CellRef = {
         id: "of:lazy-cell" as CellRef["id"],
@@ -2604,7 +2605,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor CFC label IPC", () => {
+  describe("`RuntimeProcessor` CFC label IPC", () => {
     /**
      * Mints a cell carrying a label view whose one caveat names a source, the
      * shape the display redaction exists to rewrite. A read hands the response
@@ -3609,7 +3610,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor CFC commit preparation", () => {
+  describe("`RuntimeProcessor` CFC commit preparation", () => {
     const ref: CellRef = {
       id: "of:cfc-client-write" as CellRef["id"],
       space: "did:key:test" as CellRef["space"],
@@ -4340,7 +4341,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("runtime-client CellRef conversion", () => {
+  describe("runtime-client `CellRef` conversion", () => {
     it("does not forward an inbound label view into worker sigil links", () => {
       // A `cfcLabelView` riding an inbound `CellRef` is a main-thread display
       // artifact — round-tripped through `CellHandle.deserialize()` and back —
@@ -4404,10 +4405,9 @@ describe("runtime-processor", () => {
     });
 
     it("strips label views from raw sigil links in inbound values", () => {
-      // Raw sigil links inside inbound values (hand-crafted JSON, or a
-      // CellHandle serialized into CustomEvent.detail via toJSON) bypass the
-      // CellRef path — the value walker must drop their label views too
-      // (codex/cubic review on the Stage 0 PR).
+      // A raw sigil link inside an inbound value is not a `CellRef`, so it
+      // does not pass through `cellRefToSigilLink()`. The value walker must
+      // drop its label view too.
 
       const linkWithView = {
         "/": {
@@ -4498,7 +4498,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor.getLoggerCounts", () => {
+  describe("RuntimeProcessor.getLoggerCounts()", () => {
     // The handler reads process-global logger state, so each case raises its own
     // flag and clears it again rather than leaving one for the next. It also
     // reads the runtime's CFC counters, which travel in the same response so a
@@ -4560,7 +4560,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("assertFabricLoggerFlags", () => {
+  describe("assertFabricLoggerFlags()", () => {
     it("accepts metadata that vets, and a flag raised without any", () => {
       // A `Logger` takes `Record<string, unknown>` and constrains it no further,
       // so what it holds is established here or not at all.
@@ -4625,13 +4625,13 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor VDom event label-view ingress", () => {
+  describe("`RuntimeProcessor` VDom event label-view ingress", () => {
     it("strips label views from sigil links in inbound VDOM events", () => {
-      // CustomEvent.detail is JSON.stringify'd on the main thread (invoking
-      // CellHandle.toJSON) and re-enters the worker here, bypassing
-      // getCell/cellRefToSigilLink — a handler writing event.detail.sourceCell
-      // would persist the ref's view through the sigil-link write path. The
-      // worker strips inbound views at this ingress too (codex/cubic review).
+      // A sigil link in an event's `detail` enters the worker here, and passes
+      // through neither `getCell()` nor `cellRefToSigilLink()`. A handler
+      // that wrote `event.detail.sourceCell` would hand the write path
+      // whatever view the link carried, so the worker strips inbound views at
+      // this ingress too.
 
       const dispatched: unknown[] = [];
       const processor = buildProcessor();
@@ -4683,7 +4683,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor pattern coverage IPC", () => {
+  describe("`RuntimeProcessor` pattern coverage IPC", () => {
     const report = {
       spans: [{
         fileName: "/main.tsx",
@@ -4708,7 +4708,7 @@ describe("runtime-processor", () => {
       ).toEqual({ data: report });
     });
 
-    it("reports null when the worker was built without a collector", () => {
+    it("reports `null` when the worker was built without a collector", () => {
       const processor = buildProcessor();
       expect(
         processor.getPatternCoverage({
@@ -4717,7 +4717,7 @@ describe("runtime-processor", () => {
       ).toEqual({ data: null });
     });
 
-    it("routes a GetPatternCoverage request through the dispatcher", async () => {
+    it("routes a `GetPatternCoverage` request through the dispatcher", async () => {
       const processor = buildProcessor({
         runtime: { patternCoverage: { toData: () => report } },
         // handleRequest dispatches to this.getPatternCoverage; the stub carries
@@ -4731,7 +4731,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor event attention IPC", () => {
+  describe("`RuntimeProcessor` event attention IPC", () => {
     const space = "did:key:z6Mk-runtime-processor-attention" as never;
     const sidecarId = "of:stream-events:runtime-processor-attention";
     const attention = {
@@ -5055,7 +5055,7 @@ describe("runtime-processor", () => {
   });
 
   describe("worker/host server-execution posture agreement", () => {
-    it("threads the host's declared serverExecution flag through the params mapper verbatim", () => {
+    it("threads the host's declared `serverExecution` flag through the params mapper verbatim", () => {
       const params = browserWorkerParamsFromInitializationData(
         {
           apiUrl: "http://worker.test/",
@@ -5113,7 +5113,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("browserWorkerParamsFromInitializationData", () => {
+  describe("browserWorkerParamsFromInitializationData()", () => {
     it("threads CFC initialization settings through the preset into runtime options", () => {
       const telemetry = { marker() {} } as unknown as Parameters<
         typeof browserWorkerParamsFromInitializationData
@@ -5264,10 +5264,10 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor per-space piece contexts", () => {
-    // Federation PR2: one worker serves piece operations for many spaces.
-    // getSpaceCtx resolves the per-space PiecesController, lazily for
-    // foreign spaces, over the shared runtime/storage.
+  describe("`RuntimeProcessor` per-space piece contexts", () => {
+    // One worker serves piece operations for many spaces. `#getSpaceCtx()`
+    // resolves the per-space `PiecesController`, lazily for a space other
+    // than the home one, over the shared runtime.
 
     function makeProcessorState() {
       const { runtime } = createRuntime();
@@ -5471,7 +5471,7 @@ describe("runtime-processor", () => {
         }
       });
 
-      it("leaves a loopback entry on apiUrl when the page did not reach loopback", async () => {
+      it("leaves a loopback entry on `apiUrl` when the page did not reach loopback", async () => {
         // loom's daemon writes its own toolshed URL into the table, so a space
         // it serves reads as `http://localhost:8001`. A page served over the
         // tailnet cannot reach that, and WebKit refuses the ws:// socket it
@@ -5722,10 +5722,10 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor vdom mount render policy", () => {
-    // S16 phase D: the host's render confidentiality ceiling must reach every
-    // mount's reconciler — a ceiling configured at initialization that never
-    // arrives at the egress surface is silently unbounded rendering.
+  describe("`RuntimeProcessor` vdom mount render policy", () => {
+    // The host's render confidentiality ceiling must reach every mount's
+    // reconciler — a ceiling configured at initialization that never arrives
+    // at the egress surface is silently unbounded rendering.
 
     type RootRenderPolicy =
       WorkerReconciler["accessForTestingOnly"]["rootRenderPolicy"];
@@ -5807,7 +5807,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor handleVDomEvent dropped-event warning", () => {
+  describe("`RuntimeProcessor.handleVDomEvent()` dropped-event warning", () => {
     // handleVDomEvent forwards a main-thread DOM event to the owning mount's
     // reconciler. The reconciler's dispatchEvent returns false when no handler
     // is registered for the handlerId, meaning the event was dropped. The
@@ -5846,7 +5846,7 @@ describe("runtime-processor", () => {
       return warnings;
     }
 
-    it("warns with mountId and handlerId when the handler is missing", () => {
+    it("warns with `mountId` and `handlerId` when the handler is missing", () => {
       const calls: unknown[][] = [];
       const state = makeState(false, calls);
       const warnings = captureWarn(() =>
@@ -5880,7 +5880,7 @@ describe("runtime-processor", () => {
       expect(warnings.length).toBe(0);
     });
 
-    it("warns when no mount exists for the event's mountId", () => {
+    it("warns when no mount exists for the event's `mountId`", () => {
       const calls: unknown[][] = [];
       const state = makeState(true, calls);
       const warnings = captureWarn(() =>
@@ -5898,7 +5898,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor.handleNotification", () => {
+  describe("RuntimeProcessor.handleNotification()", () => {
     // A real processor whose `vdomMounts` holds a stub that records what the
     // reconciler is asked to do.
 
@@ -5919,7 +5919,7 @@ describe("runtime-processor", () => {
       return { processor, events, acks };
     }
 
-    it("routes a VDomEvent notification to the mount's reconciler", () => {
+    it("routes a `VDomEvent` notification to the mount's reconciler", () => {
       const { processor, events } = fakeProcessor();
       processor.handleNotification({
         type: ClientNotificationType.VDomEvent,
@@ -5931,7 +5931,7 @@ describe("runtime-processor", () => {
       expect(events).toEqual([{ handlerId: 7, event: { type: "click" } }]);
     });
 
-    it("routes a VDomBatchApplied notification to the mount's reconciler", () => {
+    it("routes a `VDomBatchApplied` notification to the mount's reconciler", () => {
       const { processor, acks } = fakeProcessor();
       processor.handleNotification({
         type: ClientNotificationType.VDomBatchApplied,
@@ -6025,7 +6025,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor SQLite IPC", () => {
+  describe("`RuntimeProcessor` SQLite IPC", () => {
     const ref: CellRef = {
       id: "of:database" as CellRef["id"],
       space: "did:key:test" as CellRef["space"],
@@ -6415,7 +6415,7 @@ describe("runtime-processor", () => {
       ]]);
     });
 
-    it("uses durable labels for Cells bound to direct SQLite writes", async () => {
+    it("uses durable labels for `Cell`s bound to direct SQLite writes", async () => {
       const signer = await Identity.fromPassphrase(
         `sqlite-durable-label-${crypto.randomUUID()}`,
       );
@@ -6630,7 +6630,7 @@ describe("runtime-processor", () => {
     });
   });
 
-  describe("RuntimeProcessor multi-client namespacing", () => {
+  describe("`RuntimeProcessor` multi-client namespacing", () => {
     // One worker runs one runtime and serves several documents at once. Every
     // id a client supplies is minted inside that document -- a VDOM mount id
     // comes from a counter that starts at 1 in each of them -- so what one
@@ -6839,9 +6839,9 @@ describe("runtime-processor", () => {
       });
 
       it("replaces a client's own mount when it mounts that id again", async () => {
-        // Scoping the key changed which mounts collide, not what a collision
-        // does: one client re-using its own mount id still replaces what was
-        // there, and is left holding one mount rather than two.
+        // Scoping the key decides which mounts collide, not what a collision
+        // does: one client re-using its own mount id replaces what was there,
+        // and is left holding one mount rather than two.
         const { runtime, processor, link } = await mountState();
         const { client } = testClient(1);
         const hadPostMessage = "postMessage" in globalThis;

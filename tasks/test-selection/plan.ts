@@ -294,6 +294,27 @@ function openedUnit(entry: ManifestEntry): string {
 }
 
 /**
+ * The part of a lane's load one identity's own cost decides: that cost
+ * times its suite's correction times the times it runs. What a lane pays
+ * around it — its suite's overhead, its unit's, and its capabilities'
+ * setup — is charged once per lane rather than per identity, so none of
+ * that is here.
+ *
+ * Exported because a reader asking how much of a lane's projected time a
+ * given set of identities accounts for has to read it the way the packer
+ * charged it, and a second reading of the same quantity would answer a
+ * share of one total in the units of another.
+ */
+export function ownLoad(
+  manifest: Manifest,
+  entry: ManifestEntry,
+  repeats: number,
+): number {
+  return entry.cost *
+    (manifest.calibration.suites[entry.suite]?.correction ?? 1) * repeats;
+}
+
+/**
  * What adding this identity to this lane would cost: its own time times
  * its suite's correction, plus its suite's overhead where the lane is not
  * holding that suite already and its suite's per-unit overhead where the
@@ -308,8 +329,7 @@ function marginalCost(
   repeats: number,
 ): number {
   const fitted = manifest.calibration.suites[entry.suite];
-  const correction = fitted?.correction ?? 1;
-  let cost = entry.cost * correction * repeats;
+  let cost = ownLoad(manifest, entry, repeats);
   if (!lane.suites.has(entry.suite)) cost += fitted?.overhead ?? 0;
   if (!lane.units.has(openedUnit(entry))) cost += fitted?.unitOverhead ?? 0;
   for (const capability of input.capabilities.get(entry.suite) ?? []) {

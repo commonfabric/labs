@@ -38,7 +38,7 @@ import {
 } from "./pieces-controller.ts";
 import { waitForRuntimeSynced } from "./cfc-browser-helpers.ts";
 import { defer, type Deferred } from "@commonfabric/utils/defer";
-import { toIndentedDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 
 const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
 
@@ -76,6 +76,55 @@ const editorCellRawIs = (probe: ProbeApi, expected: string): boolean => {
   return (raw ?? "") === expected;
 };
 
+/**
+ * Waits until the piece's `cf-code-editor` has its CodeMirror view up.
+ *
+ * A failure says whether the custom element was ever defined, which separates
+ * a component bundle that never loaded from a view that was never built on a
+ * host that did. The wait's own report of the page rides underneath as the
+ * cause, and is not rebuilt here: what reaches this point is not always an
+ * `Error`, and rendering it would cost that report rather than add to it.
+ */
+async function waitForEditorReady(page: Page): Promise<void> {
+  try {
+    await waitForCondition(page, editorReady);
+  } catch (cause) {
+    const defined = await page.evaluate(
+      () => customElements.get("cf-code-editor") !== undefined,
+    ).catch(() => undefined);
+    if (defined === undefined) throw cause;
+    throw new Error(
+      `cf-code-editor never became ready; its custom element was ${
+        defined ? "defined" : "never defined"
+      } on the page.`,
+      { cause },
+    );
+  }
+}
+
+/**
+ * Opens the piece `pieceId` in the shell and waits until its `cf-code-editor`
+ * is up, answering the page it landed on.
+ *
+ * Every test that drives the page opens it here, which is what makes two
+ * things true of each of them: no test depends on another having navigated,
+ * and the errors a navigation raises fall inside the test that caused them.
+ */
+async function openPiece(
+  shell: ShellIntegration,
+  pieceId: string,
+  identity: Identity,
+): Promise<Page> {
+  await shell.goto({
+    frontendUrl: FRONTEND_URL,
+    view: { spaceName: SPACE_NAME, pieceId },
+    identity,
+  });
+  const page = shell.page();
+  await waitForEditorReady(page);
+  return page;
+}
+
 /** Wait until the editor's document text equals `expected`. */
 async function waitForEditorContent(
   page: Page,
@@ -84,10 +133,14 @@ async function waitForEditorContent(
   try {
     await waitForCondition(page, editorContentIs, { args: [expected] });
   } catch (cause) {
-    const actual = await getEditorContent(page).catch(() => "<unreadable>");
+    // The editor's document text is the one fact the wait's own report does
+    // not carry, and it is worth a message over that report. Where there is no
+    // editor to read it from, that report stands on its own.
+    const actual = await getEditorContent(page).catch(() => undefined);
+    if (actual === undefined) throw cause;
     throw new Error(
-      `Editor content did not become ${JSON.stringify(expected)}; ` +
-        `last content: ${JSON.stringify(actual)}`,
+      debugStr`Editor content did not become $quote,long${expected}; ` +
+        debugStr`last content: $quote,long${actual}`,
       { cause },
     );
   }
@@ -200,51 +253,8 @@ describe("cf-code-editor cursor stability", () => {
     await awaitViewSettled(page);
   }
 
-  it("should load the cf-code-editor piece", async () => {
-    const page = shell.page();
-    await shell.goto({
-      frontendUrl: FRONTEND_URL,
-      view: {
-        spaceName: SPACE_NAME,
-        pieceId: piece.id,
-      },
-      identity,
-    });
-    try {
-      await waitForCondition(page, editorReady);
-    } catch (cause) {
-      const seen = await page.evaluate(() => {
-        function find(root: Document | ShadowRoot): Element | null {
-          for (const element of root.querySelectorAll("*")) {
-            if (element.matches("cf-code-editor")) return element;
-            if (element.shadowRoot) {
-              const found = find(element.shadowRoot);
-              if (found) return found;
-            }
-          }
-          return null;
-        }
-        const editor = find(document) as
-          | (Element & { _editorView?: unknown })
-          | null;
-        return {
-          hostFound: editor !== null,
-          hostUpgraded: customElements.get("cf-code-editor") !== undefined,
-          editorViewReady: editor?._editorView !== undefined,
-          bodyText: (document.body?.innerText ?? "").slice(0, 400),
-        };
-      }).catch(() => undefined);
-      throw new Error(
-        `cf-code-editor never became ready. Last probe: ${
-          toIndentedDebugString(seen)
-        }`,
-        { cause },
-      );
-    }
-  });
-
   it("should sync Cell value to editor", async () => {
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
     const text = "initial";
 
     // Clear any initial state first and wait for editor to show empty
@@ -262,7 +272,7 @@ describe("cf-code-editor cursor stability", () => {
   });
 
   it("should maintain cursor position during normal typing with Cell echo", async () => {
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
 
@@ -309,7 +319,7 @@ describe("cf-code-editor cursor stability", () => {
   });
 
   it("should maintain cursor during rapid typing (multiple chars in debounce window)", async () => {
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -343,7 +353,7 @@ describe("cf-code-editor cursor stability", () => {
   });
 
   it("should maintain cursor when typing mid-document", async () => {
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
     const initialText = "Start End";
@@ -393,7 +403,7 @@ describe("cf-code-editor cursor stability", () => {
     // The "blur" strategy commits only on an explicit blur and arms no timer,
     // so the edit stays pending across the external write with nothing that can
     // fire mid-test; the blur at the end flushes it.
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
     await configureTiming(page, { strategy: "blur" });
@@ -437,7 +447,7 @@ describe("cf-code-editor cursor stability", () => {
     // This test verifies that external updates are applied when the user
     // is NOT actively typing (no debounce window active). Also tests
     // cursor clamping when content is shortened.
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
 
@@ -469,7 +479,7 @@ describe("cf-code-editor cursor stability", () => {
   });
 
   it("should not apply Cell echo if content matches (own change)", async () => {
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -501,7 +511,7 @@ describe("cf-code-editor cursor stability", () => {
   });
 
   it("should handle backspace and maintain cursor", async () => {
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -536,7 +546,7 @@ describe("cf-code-editor cursor stability", () => {
 
   it("should apply external update and move cursor after editor blur", async () => {
     // This is a NEGATIVE test: cursor SHOULD move when user is not actively editing
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -567,7 +577,7 @@ describe("cf-code-editor cursor stability", () => {
 
   it("should apply external update after debounce window fully expires", async () => {
     // After debounce completes, external updates should apply
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -588,7 +598,7 @@ describe("cf-code-editor cursor stability", () => {
 
   it("should handle multiple rapid external updates correctly", async () => {
     // Stress test: rapid Cell updates should all apply correctly
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
 
@@ -610,7 +620,7 @@ describe("cf-code-editor cursor stability", () => {
 
   it("should handle undo operation and maintain correct state", async () => {
     // Undo triggers updateListener - verify echo detection doesn't cause issues
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -662,7 +672,7 @@ describe("cf-code-editor cursor stability", () => {
 
   it("should handle text selection (anchor != head) during external update", async () => {
     // Test that selections are preserved/clamped correctly
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
 
@@ -690,7 +700,9 @@ describe("cf-code-editor cursor stability", () => {
         }
 
         const cfEditor = findCfCodeEditor(document);
-        if (cfEditor && cfEditor._editorView) {
+        if (!cfEditor) throw new Error('no cf-code-editor at ' + document.URL);
+        if (!cfEditor._editorView) throw new Error('cf-code-editor has no view');
+        {
           cfEditor._editorView.dispatch({
             selection: { anchor: 6, head: 11 }
           });
@@ -716,7 +728,8 @@ describe("cf-code-editor cursor stability", () => {
         }
 
         const cfEditor = findCfCodeEditor(document);
-        if (!cfEditor || !cfEditor._editorView) return null;
+        if (!cfEditor) throw new Error('no cf-code-editor at ' + document.URL);
+        if (!cfEditor._editorView) throw new Error('cf-code-editor has no view');
         const sel = cfEditor._editorView.state.selection.main;
         return { anchor: sel.anchor, head: sel.head };
       })()
@@ -746,7 +759,8 @@ describe("cf-code-editor cursor stability", () => {
         }
 
         const cfEditor = findCfCodeEditor(document);
-        if (!cfEditor || !cfEditor._editorView) return null;
+        if (!cfEditor) throw new Error('no cf-code-editor at ' + document.URL);
+        if (!cfEditor._editorView) throw new Error('cf-code-editor has no view');
         const sel = cfEditor._editorView.state.selection.main;
         return { anchor: sel.anchor, head: sel.head };
       })()
@@ -773,7 +787,7 @@ describe("cf-code-editor cursor stability", () => {
     // This tests the race condition where a Cell update arrives exactly
     // when the debounce timer fires. Either side may win the race; the
     // invariant is that editor and Cell converge and the cursor stays valid.
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -819,7 +833,7 @@ describe("cf-code-editor cursor stability", () => {
     // so every keystroke's edit stays pending and each external write is
     // delivered into the pending window; the blur at the end flushes the
     // accumulated edit.
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
     await configureTiming(page, { strategy: "blur" });
@@ -880,7 +894,7 @@ describe("cf-code-editor cursor stability", () => {
     // The "blur" strategy commits only on an explicit blur and arms no timer,
     // so the edit stays pending for the whole sequence with nothing that can
     // fire mid-test; the blur at the end flushes the accumulated edit.
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
     await configureTiming(page, { strategy: "blur" });
@@ -957,7 +971,7 @@ describe("cf-code-editor cursor stability", () => {
     // The "blur" strategy commits only on an explicit blur and arms no timer,
     // so the edit stays pending and the stored value stays empty throughout;
     // the blur at the end flushes the accumulated edit.
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
     await configureTiming(page, { strategy: "blur" });
@@ -1020,7 +1034,7 @@ describe("cf-code-editor cursor stability", () => {
   it("ADVERSARIAL: Very long content replacement should clamp cursor correctly", async () => {
     // Test: set very long content, position cursor at end, then replace with short content.
     // Cursor should be clamped, not left at an invalid position.
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
 
@@ -1052,7 +1066,7 @@ describe("cf-code-editor cursor stability", () => {
     // Edge case: Cell echoes back content that's ALMOST the same as what
     // was typed but with a small modification (e.g., trailing whitespace trimmed).
     // The content comparison should detect this and apply the update.
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -1081,7 +1095,7 @@ describe("cf-code-editor cursor stability", () => {
   it("ADVERSARIAL: Typing during blur should not lose content", async () => {
     // Edge case: user types, then blurs before debounce completes.
     // The blur handler should flush any pending content.
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -1104,7 +1118,7 @@ describe("cf-code-editor cursor stability", () => {
   it("ADVERSARIAL: Special characters should not break echo detection", async () => {
     // Test with unicode, emoji, newlines - characters that might affect the
     // content comparison
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -1131,7 +1145,7 @@ describe("cf-code-editor cursor stability", () => {
 
   it("ADVERSARIAL: Repeated identical Cell updates should be no-ops", async () => {
     // Sending the same content repeatedly to Cell should not cause cursor jumps
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
 
@@ -1168,7 +1182,7 @@ describe("cf-code-editor cursor stability", () => {
   it("ADVERSARIAL: Typing exactly at debounce expiry should commit correctly", async () => {
     // Type, wait until the first debounce commits, then type again.
     // Both inputs should be committed.
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
     await focusEditor(page);
@@ -1197,7 +1211,7 @@ describe("cf-code-editor cursor stability", () => {
   it("ADVERSARIAL: Rapid focus/blur cycles during typing should not corrupt content", async () => {
     // Focus, type, blur, focus, type - rapidly cycling while typing
     // Should maintain content integrity. Each blur flushes the pending edit.
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
 
@@ -1230,7 +1244,7 @@ describe("cf-code-editor cursor stability", () => {
   it("ADVERSARIAL: External update between blur and debounce should apply correctly", async () => {
     // Type, blur (triggers immediate commit), then send external update
     // External update should apply since user is no longer typing
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
 
@@ -1256,7 +1270,9 @@ describe("cf-code-editor cursor stability", () => {
         }
 
         const cfEditor = findCfCodeEditor(document);
-        if (cfEditor && cfEditor._editorView) {
+        if (!cfEditor) throw new Error('no cf-code-editor at ' + document.URL);
+        if (!cfEditor._editorView) throw new Error('cf-code-editor has no view');
+        {
           cfEditor._editorView.contentDOM.blur();
         }
       })()
@@ -1275,7 +1291,7 @@ describe("cf-code-editor cursor stability", () => {
     // properly cancels pending updates and resets state.
     // Note: We can't easily create a second Cell in this test harness,
     // but we can verify the value property change path works.
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
 
     await resetEditorState(page);
 
@@ -1376,13 +1392,6 @@ describe("cf-code-editor backlink title sync", () => {
         contentWaiter = undefined;
       }
     });
-
-    await shell.goto({
-      frontendUrl: FRONTEND_URL,
-      view: { spaceName: SPACE_NAME, pieceId: piece.id },
-      identity,
-    });
-    await waitForCondition(shell.page(), editorReady);
   });
 
   afterAll(async () => {
@@ -1403,7 +1412,7 @@ describe("cf-code-editor backlink title sync", () => {
   //
 
   it("preserves a remote title change over a pending local edit", async () => {
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
     const pieceId = "backlink-pending-edit-piece";
     const pill = `[[📝 Target (${pieceId})]]`;
     const renamedPill = `[[📝 New Target (${pieceId})]]`;
@@ -1453,7 +1462,7 @@ describe("cf-code-editor backlink title sync", () => {
   });
 
   it("persists a remote title change under the blur strategy without user interaction", async () => {
-    const page = shell.page();
+    const page = await openPiece(shell, piece.id, identity);
     const pieceId = "backlink-blur-piece";
     const pill = `[[📝 Target (${pieceId})]]`;
     const renamedPill = `[[📝 New Target (${pieceId})]]`;
@@ -1512,7 +1521,8 @@ async function getCursorPosition(page: Page): Promise<number> {
       }
 
       const cfEditor = findCfCodeEditor(document);
-      if (!cfEditor || !cfEditor._editorView) return -1;
+      if (!cfEditor) throw new Error('no cf-code-editor at ' + document.URL);
+      if (!cfEditor._editorView) throw new Error('cf-code-editor has no view');
 
       return cfEditor._editorView.state.selection.main.head;
     })()
@@ -1521,7 +1531,11 @@ async function getCursorPosition(page: Page): Promise<number> {
 }
 
 /**
- * Get current content from the cf-code-editor
+ * Answers the cf-code-editor's current document text.
+ *
+ * @throws If the page carries no editor, or its CodeMirror view is not up. An
+ *   absent editor and an empty document are different states, and this
+ *   distinguishes them.
  */
 async function getEditorContent(page: Page): Promise<string> {
   const result = await page.evaluate(`
@@ -1541,7 +1555,8 @@ async function getEditorContent(page: Page): Promise<string> {
       }
 
       const cfEditor = findCfCodeEditor(document);
-      if (!cfEditor || !cfEditor._editorView) return "";
+      if (!cfEditor) throw new Error('no cf-code-editor at ' + document.URL);
+      if (!cfEditor._editorView) throw new Error('cf-code-editor has no view');
 
       return cfEditor._editorView.state.doc.toString();
     })()
@@ -1570,7 +1585,9 @@ async function focusEditor(page: Page): Promise<void> {
       }
 
       const cfEditor = findCfCodeEditor(document);
-      if (cfEditor && cfEditor._editorView) {
+      if (!cfEditor) throw new Error('no cf-code-editor at ' + document.URL);
+      if (!cfEditor._editorView) throw new Error('cf-code-editor has no view');
+      {
         cfEditor._editorView.focus();
       }
     })()
@@ -1623,7 +1640,9 @@ async function blurEditor(page: Page): Promise<void> {
       }
 
       const cfEditor = findCfCodeEditor(document);
-      if (cfEditor && cfEditor._editorView) {
+      if (!cfEditor) throw new Error('no cf-code-editor at ' + document.URL);
+      if (!cfEditor._editorView) throw new Error('cf-code-editor has no view');
+      {
         cfEditor._editorView.contentDOM.blur();
       }
     })()
@@ -1654,7 +1673,11 @@ async function configureTiming(
       }
 
       const cfEditor = findCfCodeEditor(document);
-      if (cfEditor && cfEditor._cellController) {
+      if (!cfEditor) throw new Error('no cf-code-editor at ' + document.URL);
+      if (!cfEditor._cellController) {
+        throw new Error('cf-code-editor has no cell controller');
+      }
+      {
         cfEditor._cellController.updateTimingOptions(options);
       }
     })(${JSON.stringify(options)})
@@ -1732,7 +1755,9 @@ async function setCursorPosition(page: Page, position: number): Promise<void> {
       }
 
       const cfEditor = findCfCodeEditor(document);
-      if (cfEditor && cfEditor._editorView) {
+      if (!cfEditor) throw new Error('no cf-code-editor at ' + document.URL);
+      if (!cfEditor._editorView) throw new Error('cf-code-editor has no view');
+      {
         cfEditor._editorView.dispatch({
           selection: { anchor: pos, head: pos }
         });
@@ -1764,7 +1789,9 @@ async function clearEditor(page: Page): Promise<void> {
       }
 
       const cfEditor = findCfCodeEditor(document);
-      if (cfEditor && cfEditor._editorView) {
+      if (!cfEditor) throw new Error('no cf-code-editor at ' + document.URL);
+      if (!cfEditor._editorView) throw new Error('cf-code-editor has no view');
+      {
         const view = cfEditor._editorView;
         // Clear editor content using the Cell sync annotation to prevent
         // updateListener from scheduling Cell writes.

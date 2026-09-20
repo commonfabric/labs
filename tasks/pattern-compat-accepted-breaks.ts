@@ -158,6 +158,33 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     },
   },
   {
+    // Three cells' declared defaults take effect. Each is typed
+    // `Stored | Default<Record<PropertyKey, never>>` and reaches the schema
+    // generator through a scope alias, where default recovery from the
+    // resolved union had taken the propertyless plain arm for a marker-less
+    // brand, so no baseline carries the `default: {}` the declarations always
+    // meant. A piece holding one of them unset reads `{}` where it read
+    // `undefined`. The proof reports one issue per role, so it names only
+    // `adminRegistry`; the other four paths are found by peeling.
+    pattern: "cfc-group-chat-demo/main.tsx",
+    baselines: [
+      "20260729T022742Z-piF14M8QDh5pSPw1",
+      "20260821T064855Z-7vNcdzNpQKWFJXVr",
+      "20260831T222745Z-kIL5Ew24PVUYtyxy",
+    ],
+    paths: [
+      "argument.adminRegistry",
+      "result.adminRegistry",
+      "argument.myProfile",
+      "result.myProfile",
+      "argument.rooms",
+      "result.rooms",
+    ],
+    reason:
+      "the declared `Default<{}>` of the admin registry, the profile, and the room list is honored where the recorded contracts carry no default",
+    record: "docs/history/admin-registry-default-honored-break.md",
+  },
+  {
     // The Join verb's event opens: `Record<PropertyKey, never>` compiled to
     // a closed empty object the runner's closed-world gate now enforces, so
     // the rendered button's serialized DOM event was refused and the roster

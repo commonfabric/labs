@@ -10,7 +10,8 @@
  * unless the PR description accepts the increase. Fails (exit 1) when a changed
  * group regresses, and when the workflow's run listing, which is where that
  * `main` run is found, turns out not to be current. A changed group with no
- * baseline to be held against passes, and the run says so wherever it reports.
+ * baseline to be held against passes, and the run says so wherever it reports;
+ * so does a run GitHub's API rate limit stopped from reading a baseline at all.
  *
  * Environment:
  *   GITHUB_TOKEN        - Required.
@@ -64,6 +65,7 @@ import {
   formatOverrideSuggestion,
   githubGet,
   isBaselineCandidateRun,
+  isGitHubRateLimitError,
   newestArtifactsByName,
   parseAddedLinesFromPatch,
   parseBaselineOverrides,
@@ -142,11 +144,6 @@ export function currentWorkflowRunFromEvent(
   };
 }
 
-function isGitHubRateLimitError(error: unknown): boolean {
-  const message = error instanceof Error ? error.message : String(error);
-  return /\b(rate limit|rate-limited|ratelimit)\b/i.test(message);
-}
-
 /**
  * The perf-metrics artifact this run publishes: its coverage metrics, and the
  * compile cache states that stamp them. A later run reads the stamp to decide
@@ -172,6 +169,23 @@ async function writePerfMetricsArtifact(
   );
 }
 
+/**
+ * Raised where a GitHub API rate limit stops the check reading the data a
+ * baseline comparison needs. {@link runCoverageRatchet} catches it, so that the
+ * skip is decided and reported in the one place that knows what the run was
+ * going to be gated on.
+ */
+export class CoverageRateLimitedError extends Error {}
+
+/**
+ * Runs one read of the GitHub API, turning a rate limit into a
+ * {@link CoverageRateLimitedError} that ends the check. Any other failure is
+ * the caller's to handle and is rethrown.
+ *
+ * The perf-metrics artifact is written before giving up, so that a run cut
+ * short still publishes what it measured, stamped with its compile cache
+ * states, for a later run to read as a baseline.
+ */
 export async function githubApiOrSkip<T>(
   description: string,
   operation: () => Promise<T>,
@@ -186,10 +200,9 @@ export async function githubApiOrSkip<T>(
       `  Warning: GitHub API rate limit while ${description}: ${error}`,
     );
     await writePerfMetricsArtifact(artifact);
-    console.log(
-      "Skipping coverage check because GitHub API rate limits prevent collecting the baseline data.",
+    throw new CoverageRateLimitedError(
+      `GitHub API rate limits prevented ${description}.`,
     );
-    Deno.exit(0);
   }
 }
 
@@ -991,6 +1004,15 @@ export interface BaselineRunContext {
   prLookupError: unknown | null;
 }
 
+/**
+ * Reads the merged pull request for `sha`, keeping a failure as a value rather
+ * than throwing: a lookup that fails costs the run that pull request's accepted
+ * debt, which is reported, not the whole check.
+ *
+ * A rate limit is the exception, and is rethrown. Kept as a value it would go
+ * on to read as a commit whose pull request accepted nothing, which is a claim
+ * about the baseline rather than about GitHub.
+ */
 export async function fetchPRForCommitWithError(
   sha: string,
 ): Promise<PRLookupResult> {
@@ -1000,6 +1022,7 @@ export async function fetchPRForCommitWithError(
     );
     return { pr: selectMergedPRForCommit(prs), error: null };
   } catch (error) {
+    if (isGitHubRateLimitError(error)) throw error;
     return { pr: null, error };
   }
 }
@@ -1018,6 +1041,15 @@ export function formatErrorForLog(error: unknown): string {
   return message.split("\n")[0];
 }
 
+/**
+ * Lists one run's artifacts, reporting a failure as an empty list: a run whose
+ * artifacts cannot be listed contributes no baseline, and the walk moves on to
+ * the next one.
+ *
+ * A rate limit is the exception, and is rethrown. An empty list says the run
+ * measured nothing, which would hold a changed group against no baseline and
+ * report it as a run nobody has measured yet.
+ */
 export async function fetchArtifactsForRunBestEffort(
   run: WorkflowRun,
   fetchArtifacts: (runId: number) => Promise<Artifact[]> = fetchArtifactsForRun,
@@ -1026,6 +1058,7 @@ export async function fetchArtifactsForRunBestEffort(
   try {
     return await fetchArtifacts(run.id);
   } catch (error) {
+    if (isGitHubRateLimitError(error)) throw error;
     warn(`  Warning: could not fetch artifacts for run ${run.id}: ${error}`);
     return [];
   }
@@ -2330,61 +2363,96 @@ export function buildCoverageJobSummary(
 }
 
 /**
- * Ends a check whose run listing is not current. No `main` run found through
- * such a listing can be trusted, so nothing is compared. A pull request the
- * gate applies to fails, because reading the listing again is the remedy and a
- * pass would say its coverage had been checked. A run the gate compares nothing
- * for passes with the warning: a `main` run, a pull request that changed no
- * source group, and one whose description resets the baseline. Such a pull
- * request still gets a resolved comment payload, so that a failure an earlier
- * run reported does not stay open on it.
+ * The changed source groups a check that ended before it compared anything was
+ * going to be gated on, named as an `ACCEPT_COVERAGE_DEBT` line names them. A
+ * description that resets the baseline accepts every group, so it leaves none.
  */
-async function reportListingNotCurrent(
+function groupsLeftUngated(
   input: CoverageRatchetInput,
-  listing: BaselineRunListing,
-): Promise<number> {
-  const groups: CoverageNotGatedGroup[] = input.prOverrides
-      .coverageBaselineReset
-    ? []
-    : [...input.perfArtifact.metrics.keys()]
-      .filter((metric) =>
-        shouldGateCoverageDebtMetric(metric, input.changedCoverageGroups)
-      )
-      .map((metric) => coverageMetricGroupName(metric))
-      .filter((group): group is string => group !== null)
-      .sort()
-      .map((group) => ({ group, reason: "listing-not-current" as const }));
+  reason: CoverageNotGatedReason,
+): CoverageNotGatedGroup[] {
+  if (input.prOverrides.coverageBaselineReset) return [];
+  return [...input.perfArtifact.metrics.keys()]
+    .filter((metric) =>
+      shouldGateCoverageDebtMetric(metric, input.changedCoverageGroups)
+    )
+    .map((metric) => coverageMetricGroupName(metric))
+    .filter((group): group is string => group !== null)
+    .sort()
+    .map((group) => ({ group, reason }));
+}
 
-  if (input.prNumber === null || groups.length === 0) {
-    console.warn(
-      "  Warning: skipping the baseline comparison, which this run would " +
-        "not have been gated on.",
-    );
-    if (input.prNumber !== null) {
-      await writeCoverageResolved(
-        input.prNumber,
-        [],
-        input.prFiles,
-        input.coverageLcov,
-        { reset: input.prOverrides.coverageBaselineReset },
-      );
-    }
-    return 0;
-  }
+/**
+ * Reports a check that compared nothing for a run the gate was never going to
+ * hold: a `main` run, a pull request that changed no source group, and one
+ * whose description resets the baseline. Such a pull request still gets a
+ * resolved comment payload, so that a failure an earlier run reported does not
+ * stay open on it.
+ */
+async function reportNothingToGate(
+  input: CoverageRatchetInput,
+): Promise<void> {
+  console.warn(
+    "  Warning: skipping the baseline comparison, which this run would " +
+      "not have been gated on.",
+  );
+  if (input.prNumber === null) return;
+  await writeCoverageResolved(
+    input.prNumber,
+    [],
+    input.prFiles,
+    input.coverageLcov,
+    { reset: input.prOverrides.coverageBaselineReset },
+  );
+}
 
-  const notGated: CoverageNotGatedInput = {
-    groups,
-    measurement: { runUrl: workflowRunUrl(input.currentRunId) },
-  };
-  reportNotGated(notGated, console.error);
-  await writeCoverageNotGated(input.prNumber, notGated);
+/**
+ * Says on every surface that a check ended without gating the groups it
+ * applied to: the log, an annotation on the run, the job summary, and the pull
+ * request's coverage comment.
+ */
+async function reportUngatedRun(
+  prNumber: number,
+  groups: CoverageNotGatedGroup[],
+  measurement: CoverageMeasurement,
+  log: (message: string) => void,
+): Promise<void> {
+  const notGated: CoverageNotGatedInput = { groups, measurement };
+  reportNotGated(notGated, log);
+  await writeCoverageNotGated(prNumber, notGated);
   await appendJobSummary(
     buildCoverageJobSummary({
       rows: [],
       failures: [],
       notGated: groups,
-      measurement: notGated.measurement,
+      measurement,
     }),
+  );
+}
+
+/**
+ * Ends a check whose run listing is not current. No `main` run found through
+ * such a listing can be trusted, so nothing is compared. A pull request the
+ * gate applies to fails, because reading the listing again is the remedy and a
+ * pass would say its coverage had been checked. A run the gate compares nothing
+ * for passes with the warning.
+ */
+async function reportListingNotCurrent(
+  input: CoverageRatchetInput,
+  listing: BaselineRunListing,
+): Promise<number> {
+  const groups = groupsLeftUngated(input, "listing-not-current");
+
+  if (input.prNumber === null || groups.length === 0) {
+    await reportNothingToGate(input);
+    return 0;
+  }
+
+  await reportUngatedRun(
+    input.prNumber,
+    groups,
+    { runUrl: workflowRunUrl(input.currentRunId) },
+    console.error,
   );
   console.error(
     "\nFailing because the workflow's run listing is not current, so no " +
@@ -2393,6 +2461,41 @@ async function reportListingNotCurrent(
       }). Re-run this job to read the listing again.`,
   );
   return 1;
+}
+
+/**
+ * Ends a check a GitHub API rate limit stopped from reading baseline data.
+ *
+ * The run passes. The limit bounds what this repository may ask of GitHub in an
+ * hour, so it is a property of the moment rather than of the pull request, and
+ * a re-run started straight away meets it again; failing would hold the pull
+ * request on a condition its author has no way to clear. What makes the pass
+ * safe is that it is not a quiet one — every changed group the gate applied to
+ * is reported as not gated, on every surface a run that found no baseline
+ * reports to.
+ */
+async function reportRateLimited(
+  input: CoverageRatchetInput,
+  error: CoverageRateLimitedError,
+): Promise<number> {
+  const groups = groupsLeftUngated(input, "rate-limited");
+
+  if (input.prNumber === null || groups.length === 0) {
+    await reportNothingToGate(input);
+    return 0;
+  }
+
+  await reportUngatedRun(
+    input.prNumber,
+    groups,
+    { runUrl: workflowRunUrl(input.currentRunId) },
+    console.log,
+  );
+  console.log(
+    `\nPassing without a coverage gate: ${error.message} Re-run this job ` +
+      "once the limit has reset to hold these groups against a baseline.",
+  );
+  return 0;
 }
 
 //
@@ -2662,9 +2765,27 @@ export interface CoverageRatchetInput {
  * A changed source group regressing fails a pull request, and so does a run
  * listing that is not current, since no baseline found through one can be
  * trusted. A changed group with no comparable baseline passes, and says so on
- * every surface it reports to. A `main` run is informational and always passes.
+ * every surface it reports to, as does a run a GitHub API rate limit stopped
+ * from reading any baseline at all. A `main` run is informational and always
+ * passes.
  */
 export async function runCoverageRatchet(
+  input: CoverageRatchetInput,
+): Promise<number> {
+  try {
+    return await ratchetAgainstBaselines(input);
+  } catch (error) {
+    if (!(error instanceof CoverageRateLimitedError)) throw error;
+    return await reportRateLimited(input, error);
+  }
+}
+
+/**
+ * The comparison itself: reads the baselines, scores every metric against the
+ * one it was given, and reports the result. Gives up by raising a
+ * {@link CoverageRateLimitedError} where GitHub's rate limit stops a read.
+ */
+async function ratchetAgainstBaselines(
   input: CoverageRatchetInput,
 ): Promise<number> {
   const { prNumber, perfArtifact, prOverrides, changedCoverageGroups } = input;

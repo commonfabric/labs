@@ -9,7 +9,10 @@ import type { RuntimeProgram } from "../src/harness/types.ts";
 import type { RuntimeTelemetryEvent } from "../src/telemetry.ts";
 import { createModuleCompartmentGlobals } from "../src/sandbox/mod.ts";
 import { createCallbackCompartmentGlobals } from "../src/sandbox/compartment-globals.ts";
-import { evaluateFunctionSourceInSES } from "../src/sandbox/ses-runtime.ts";
+import {
+  ensureSESLockdown,
+  evaluateFunctionSourceInSES,
+} from "../src/sandbox/ses-runtime.ts";
 import { createBuilder } from "../src/builder/factory.ts";
 import type { Module } from "../src/builder/types.ts";
 
@@ -21,6 +24,12 @@ describe("SES security regressions", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
 
   beforeEach(() => {
+    // A compartment-globals factory builds a gated `Date` over the intrinsics
+    // SES lockdown tames, so it requires a locked-down realm. A lane can run
+    // any one case of this file on its own, so every case establishes that
+    // realm here rather than depending on another case; see
+    // docs/development/unit-test-coding-style.md.
+    ensureSESLockdown();
     storageManager = StorageManager.emulate({ as: signer });
     runtime = new Runtime({
       apiUrl: new URL(import.meta.url),

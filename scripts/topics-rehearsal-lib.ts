@@ -254,10 +254,10 @@ export interface TopicsExport {
  * aside and re-linked after the apply.
  *
  * Three today: `mentionable` (the board's derived mention index),
- * `boardCrossrefs` (its reference pivot), and `boardNames` (its names table,
- * which a topic reads its own member name out of). The mention index publishes
- * display rows with stable strings and unread member references, matching
- * the wiring the board supplies when it creates a topic.
+ * `boardCrossrefs` (its reference pivot), and `boardNames` (its names table).
+ * The mention index publishes display rows with stable strings and unread
+ * member references, matching the wiring the board supplies when it creates a
+ * topic.
  *
  * Adding a wiring input to the topic pattern means adding it here. Leaving it
  * out is not silent: `buildRestoreDocument` throws on any link-valued field it
@@ -265,6 +265,10 @@ export interface TopicsExport {
  * dropping it would destroy it. The restore drill
  * (`packages/cli/integration/topics-restore-drill.sh`) is what turns that
  * throw into a failing check rather than a surprise mid-incident.
+ *
+ * A field stays here after the pattern stops declaring it, because whether it
+ * is live is a fact about the TARGET rather than about the field's name — see
+ * {@link RETIRABLE_LINK_FIELDS}.
  */
 export const STRUCTURAL_LINK_SOURCES: Record<string, string> = {
   mentionable: "mentionable",
@@ -275,10 +279,104 @@ export const STRUCTURAL_LINK_SOURCES: Record<string, string> = {
 export const STRUCTURAL_LINK_FIELDS = Object.keys(STRUCTURAL_LINK_SOURCES);
 
 /**
- * Retired link-valued fields, recognized so that a restore sets one aside by
- * name rather than reaching the unknown-link throw below.
+ * Link-valued fields the topic pattern may no longer declare, which a restore
+ * retires for a target that does not declare them and re-establishes for one
+ * that does.
+ *
+ * The condition is the point. A restore runs against targets of two vintages
+ * at once during a migration: one whose pattern still declares the field and
+ * holds a live link there, and one already moved to a pattern without it.
+ * Retiring by name alone deletes the first kind's working link — the apply
+ * replaces the whole document, so a field left out of both lists is simply
+ * gone — while re-linking the second kind's sends `cf piece link` at a path
+ * its pattern does not have, which refuses after the apply has landed. So the
+ * caller says which fields the target declares and this decides per target;
+ * `buildRestoreDocument`'s `declaredLinks` is that answer.
+ *
+ * `myName` predates the agentName attribution and no pattern declares it.
+ * `boardNames` named the board's table a topic read its number from, before a
+ * topic stored its own.
  */
-export const LEGACY_LINK_FIELDS = ["myName"] as const;
+export const RETIRABLE_LINK_FIELDS = ["myName", "boardNames"] as const;
+
+/**
+ * Fields a restore carries forward from the LIVE piece rather than from the
+ * export, when the export does not name them.
+ *
+ * `cf piece apply` replaces the whole document, so a field the export cannot
+ * describe is removed by a restore that says nothing about it. For content
+ * that is the intent — the export is the state being restored to. For a value
+ * the piece owns permanently it is destruction: the export predates the field,
+ * and no later run puts the value back.
+ *
+ * One today: `shortName`, the number the topic's board allocated. A number is
+ * permanent and never reused, so the live value is the only right one, and a
+ * restore that cleared it would leave the board's namespace pointing at a
+ * topic that no longer knows its own number.
+ */
+export const PRESERVED_FIELDS = ["shortName"] as const;
+
+/**
+ * The {@link RETIRABLE_LINK_FIELDS} the TARGET declares —
+ * `buildRestoreDocument`'s `declaredLinks`, decided by asking the target
+ * rather than by the field's name or the export's vintage.
+ *
+ * Every retirable field is asked about, which is why the export is not a
+ * parameter here. What the export carries bounds neither side of the
+ * question: the apply replaces the whole document, so a field the export
+ * never mentioned is gone from the target just as surely as one it mentioned
+ * and neither list named. A restore runs against targets of two vintages at
+ * once, and the export can be the newer of the two as easily as the older.
+ *
+ * `read` is a targeted read of the target's durable input at one field,
+ * answering `undefined` where the read does not land. Anything else means the
+ * target declares the path: a declared input carrying a default answers with
+ * that default even when nothing is bound there — Topics' `boardNames` reads
+ * `[]` for an unbound topic, which the 2026-09-05 clone rehearsal measured —
+ * while a path the current pattern does not declare is refused outright.
+ *
+ * THE EXPORT'S OWN VINTAGE CANNOT DECIDE THIS, and neither can the pattern
+ * identity matching. A topic migrated past an input keeps the stored link in
+ * its raw argument document, unreachable through the new projection
+ * (`packages/cli/test/piece-link-input-visibility.test.ts`), and an export
+ * taken from it afterwards therefore holds a link at a path its own source
+ * does not declare, with the identity matching. Reasoning from identity to
+ * "declared" sends the restore to `cf piece link` against that path, which
+ * refuses — after the content write has landed.
+ *
+ * The bound on the probe: a declared input that carries NO default and holds
+ * nothing reads the same as an undeclared one, so it is reported here as
+ * undeclared and retired. That direction is the safe one and costs nothing —
+ * the target holds no value at such a path, so retiring it removes nothing —
+ * and the run names every field it retired. The other direction ends the
+ * restore with the document already replaced.
+ */
+export async function declaredRetirableLinks(
+  read: (field: string) => Promise<unknown>,
+): Promise<string[]> {
+  const declared: string[] = [];
+  for (const field of RETIRABLE_LINK_FIELDS) {
+    if (await read(field) !== undefined) declared.push(field);
+  }
+  return declared;
+}
+
+/** What the target's current pattern declares and currently holds. */
+export interface RestoreTarget {
+  /**
+   * The link-valued fields the target's CURRENT pattern declares. A
+   * {@link RETIRABLE_LINK_FIELDS} entry named here is re-established; one not
+   * named here is left retired. Omitted, every retirable field is retired,
+   * which is the answer for a target already migrated past all of them.
+   */
+  declaredLinks?: readonly string[];
+
+  /**
+   * The target's live values at {@link PRESERVED_FIELDS}, for carrying
+   * forward. A field absent here is one the target holds no value at.
+   */
+  preserved?: Record<string, unknown>;
+}
 
 export interface RestoreDocument {
   /** The complete input document a restore applies. */
@@ -287,8 +385,12 @@ export interface RestoreDocument {
   /** Link fields present in the raw argument that the caller re-links. */
   structural: string[];
 
-  /** Deprecated link fields present in the raw argument, left retired. */
+  /** Retirable link fields the target no longer declares, left retired. */
   legacy: string[];
+
+  /** Preserved fields taken from the live piece because the export names
+   * none, which a whole-document apply would otherwise remove. */
+  carried: string[];
 }
 
 /**
@@ -300,21 +402,48 @@ export interface RestoreDocument {
  * resolved values; the known link fields are reported for the caller to
  * handle; and an unrecognized link-valued field throws, because writing it as
  * data would corrupt it and dropping it would destroy it.
+ *
+ * `target` is what the same whole-document apply costs when the export and the
+ * target are of different vintages, which it takes in both directions. A
+ * retirable link field is re-established or left retired according to what the
+ * target declares rather than its name — including one the export never named,
+ * which the walk over the export cannot reach and the apply would therefore
+ * erase; it is relinked from the board's path, or refused before the apply
+ * where no board path re-establishes it. A {@link PRESERVED_FIELDS} value the
+ * target holds and the export does not name is carried forward instead of
+ * being written away. An export that names such a field with a different value
+ * is refused: the fields are permanent, so two values mean the export and the
+ * target are not the same piece, and guessing between them is not this
+ * script's to do.
  */
 export function buildRestoreDocument(
   rawArgument: Record<string, unknown>,
   resolved: { comments: unknown[]; links: unknown[] },
+  target: RestoreTarget = {},
 ): RestoreDocument {
+  const declared = target.declaredLinks ?? [];
   const doc: Record<string, unknown> = {};
   const structural: string[] = [];
   const legacy: string[] = [];
+  const carried: string[] = [];
   for (const [field, value] of Object.entries(rawArgument)) {
     if (value === undefined) continue;
+    const retirable = (RETIRABLE_LINK_FIELDS as readonly string[])
+      .includes(field);
     if ((LINKED_ARRAY_FIELDS as readonly string[]).includes(field)) {
       doc[field] = resolved[field as (typeof LINKED_ARRAY_FIELDS)[number]];
-    } else if ((STRUCTURAL_LINK_FIELDS as readonly string[]).includes(field)) {
+    } else if (retirable && !declared.includes(field)) {
+      // The target's pattern does not declare it, so there is nothing to
+      // re-link to and the apply leaving it out is the whole retirement.
+      legacy.push(field);
+    } else if (
+      (STRUCTURAL_LINK_FIELDS as readonly string[]).includes(field)
+    ) {
       structural.push(field);
-    } else if ((LEGACY_LINK_FIELDS as readonly string[]).includes(field)) {
+    } else if (retirable) {
+      // Declared by the target but with no board path to re-link from, which
+      // is the shape of a field retired on the board's side first. Reported
+      // rather than written: it is a link, so the apply cannot carry it.
       legacy.push(field);
     } else {
       const linkPath = findLink(value);
@@ -328,7 +457,39 @@ export function buildRestoreDocument(
       doc[field] = value;
     }
   }
-  return { doc, structural, legacy };
+  // A retirable field the TARGET declares and the export never named. The walk
+  // above cannot reach it — it walks the export — and the apply replaces the
+  // whole document, so leaving it here is how a newer export erases an older
+  // target's working link. The relink needs nothing from the export, because
+  // it links to the board's own path.
+  for (const field of declared) {
+    if (Object.hasOwn(rawArgument, field)) continue;
+    if (!(STRUCTURAL_LINK_FIELDS as readonly string[]).includes(field)) {
+      throw new Error(
+        `${field} is declared by the target and absent from the export, and ` +
+          "no board path re-establishes it; applying this document would " +
+          "destroy a link nothing can put back",
+      );
+    }
+    structural.push(field);
+  }
+  for (const field of PRESERVED_FIELDS) {
+    const live = target.preserved?.[field];
+    if (live === undefined) continue;
+    const exported = doc[field];
+    if (exported === undefined) {
+      doc[field] = live;
+      carried.push(field);
+    } else if (!deepEqual(exported, live)) {
+      throw new Error(
+        `${field} is ${JSON.stringify(live)} on the target and ` +
+          `${JSON.stringify(exported)} in the export; it is permanent, so ` +
+          "the two are not the same piece and this restore will not choose " +
+          "between them",
+      );
+    }
+  }
+  return { doc, structural, legacy, carried };
 }
 
 /** The path below any node where a `$link` marker appears, or null. Used to

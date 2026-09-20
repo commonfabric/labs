@@ -2,8 +2,7 @@ import { backtickQuote } from "@commonfabric/utils/markdown";
 import { isPlainObject, isUnsafeObjectKey } from "@commonfabric/utils/types";
 
 import type { FabricValue } from "@/interface.ts";
-import { BaseDecodeAct } from "@/codec-common/BaseDecodeAct.ts";
-import { ProblematicStateError } from "@/codec-common/ProblematicStateError.ts";
+import { BaseDecodeAct, ProblematicStateError } from "@/codec-common";
 import { CODEC_META_TAGS } from "@/codec-interface/codec-meta-tags.ts";
 import { debugStr } from "@/value-debug";
 import { ENCODING_PREFIX_TAG, type JsonCodecValue } from "./interface.ts";

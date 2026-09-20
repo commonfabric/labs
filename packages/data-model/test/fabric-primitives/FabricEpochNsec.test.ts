@@ -14,13 +14,18 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
-import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
-import { JSON_CODEC } from "@/codec-interface/interface.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { shallowFabricFromConvertibleJsValue } from "@/index.ts";
-import { FabricInstance, FabricPrimitive } from "@/interface.ts";
+import {
+  FabricInstance,
+  FabricPrimitive,
+  shallowFabricFromConvertibleJsValue,
+} from "@";
+import {
+  CODEC_TYPE_TAGS,
+  JSON_CODEC,
+  NULL_LIVE_ENVIRONMENT,
+  ProblematicValue,
+} from "@/codec-common";
+import { FabricEpochNsec } from "@/fabric-primitives";
 
 describe("FabricEpochNsec", () => {
   // Pure type-identity / supertype checks: cross-cutting carve-out per the

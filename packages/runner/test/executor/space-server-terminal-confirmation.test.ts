@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
+import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import {
   getServerExecutionConfig,
   resolveScopeKey,
@@ -17,6 +18,8 @@ import { newSharedServer } from "../memory-v2-test-utils.ts";
 const owner = await Identity.fromPassphrase("terminal confirmation owner");
 const service = await Identity.fromPassphrase("terminal confirmation service");
 const space = owner.did();
+const elsewhere = (await Identity.fromPassphrase("terminal confirmation other"))
+  .did();
 const ids = [
   "of:confirmation-a",
   "of:confirmation-b",
@@ -50,9 +53,21 @@ describe("SpaceServer", () => {
     }
   });
 
-  /** Creates a durable owning chain and exposes only its root as demand. */
-  async function openFixture(scope: "space" | "user" = "space") {
+  /**
+   * Creates a durable owning chain and exposes only its root as demand.
+   *
+   * Each document's `result` backlink names the next one. The last document
+   * names `onward` where that is given, so the chain resolves there instead.
+   */
+  async function openFixture(
+    scope: "space" | "user" = "space",
+    onward?: { space: MemorySpace; id: URI },
+  ) {
     const engine = await server.engineForSpace(space);
+    const next = [
+      ...ids.slice(1).map((id) => ({ space, id })),
+      ...(onward === undefined ? [] : [onward]),
+    ];
     const manager = EmulatedStorageManager.connectTo(server, { as: service });
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -75,14 +90,15 @@ describe("SpaceServer", () => {
           scope,
           value: {
             value: { plain: 1 },
-            ...(index === ids.length - 1 ? {} : {
-              result: runtime.getCellFromLink({
-                space,
-                id: ids[index + 1],
-                scope,
-                path: [],
-              }).getAsWriteRedirectLink(),
-            }),
+            ...(index < next.length
+              ? {
+                result: runtime.getCellFromLink({
+                  ...next[index],
+                  scope,
+                  path: [],
+                }).getAsWriteRedirectLink(),
+              }
+              : {}),
           },
         })),
       },
@@ -137,6 +153,73 @@ describe("SpaceServer", () => {
         serving!.noteDemandChanged();
       },
     };
+  }
+
+  /**
+   * Installs a loadable pattern at the chain's terminus in the engine while
+   * the serving replica keeps the copy it already holds.
+   *
+   * The terminus is synced onto the serving runtime before the instantiation
+   * commit, and the shared server's fan-out is manual, so that commit sits
+   * undelivered until `server.flushSessions` spreads it. What the replica
+   * then reads is behind the store on the one document a structure-load
+   * verdict turns on, which is the state the confirming re-traversal exists
+   * for. The commit itself resolves on that same frame, so the caller awaits
+   * it through the returned teardown rather than here; admission — which the
+   * engine is authoritative from — is what this waits on.
+   */
+  async function installStalePattern(
+    fixture: Awaited<ReturnType<typeof openFixture>>,
+  ): Promise<() => Promise<void>> {
+    const manager = EmulatedStorageManager.connectTo(server, { as: owner });
+    const creator = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: manager,
+      experimental: { serverExecution: true },
+    });
+    const terminus = { space, id: ids[2], scope: "space" as const, path: [] };
+    // The compiler's own commits have to reach both replicas, so the tenure's
+    // notice observer stands aside while they publish. It is back in place
+    // before the instantiation commit, the one the serving replica must not
+    // see.
+    const publications: Promise<void>[] = [];
+    server.setServerExecutionObserver({
+      commitAdmitted: () => publications.push(server.idle()),
+    });
+    try {
+      const compiled = await settle(creator.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents:
+            "import { pattern } from 'commonfabric'; export default pattern(() => ({ total: 10 }));",
+        }],
+      }, { space }));
+      const root = creator.getCellFromLink(terminus);
+      await settle(root.sync());
+      await settle(Promise.all(publications));
+      await settle(fixture.runtime.getCellFromLink(terminus).sync());
+      const admitted = Promise.withResolvers<void>();
+      server.setServerExecutionObserver({
+        commitAdmitted: (notice) => {
+          serving?.enqueueCommit(notice);
+          admitted.resolve();
+        },
+      });
+      const tx = creator.edit();
+      creator.run(tx, compiled, {}, root);
+      const committed = tx.commit();
+      await settle(admitted.promise);
+      return async () => {
+        expect((await settle(committed)).error).toBeUndefined();
+        await settle(creator.dispose());
+        await settle(manager.close());
+      };
+    } catch (error) {
+      await creator.dispose();
+      await manager.close();
+      throw error;
+    }
   }
 
   describe("instance members", () => {
@@ -275,11 +358,12 @@ describe("SpaceServer", () => {
       }
 
       for (const scope of ["space", "user"] as const) {
-        it(`confirms a cold ${scope} chain using only its traversed addresses`, async () => {
+        it(`settles a cold ${scope} chain from the engine without a second traversal`, async () => {
           const fixture = await openFixture(scope);
           expect(await settle(fixture.serving.activate())).toBe(true);
           expect(fixture.stats.structureLoadTerminal).toBe(1);
-          expect(fixture.syncCount()).toBe(scope === "space" ? 6 : 8);
+          expect(fixture.stats.structureLoadConfirmationsSkipped).toBe(1);
+          expect(fixture.syncCount()).toBe(scope === "space" ? 3 : 4);
           expect(server.demandSetSizesForSpace(space).perSession).toMatchObject(
             [
               {
@@ -301,6 +385,115 @@ describe("SpaceServer", () => {
         });
       }
 
+      it("re-asks a chain whose terminus is in another space", async () => {
+        // The engine co-hosted with this tenure holds its own space alone, so
+        // it cannot answer for a terminus in another one: both traversals
+        // sync all four documents.
+
+        const fixture = await openFixture("space", {
+          space: elsewhere,
+          id: "of:confirmation-elsewhere",
+        });
+        expect(await settle(fixture.serving.activate())).toBe(true);
+        expect(fixture.stats.structureLoadTerminal).toBe(1);
+        expect(fixture.stats.structureLoadConfirmationsSkipped).toBe(0);
+        expect(fixture.syncCount()).toBe(8);
+      });
+
+      it("re-asks the chain once the engine's database has closed", async () => {
+        // The server closes, and its engine with it, between the first
+        // traversal's last read and the confirmation. Nothing past the load
+        // pass can run against a closed engine, so the settle that follows
+        // it waits until the tenure has parked.
+
+        const fixture = await openFixture();
+        const sync = fixture.manager.syncCell.bind(fixture.manager);
+        let closed = false;
+        fixture.manager.syncCell = async (cell, options) => {
+          const result = await sync(cell, options);
+          if (
+            cell.getAsNormalizedFullLink().id === ids[2] &&
+            cell.tx?.tx.immediate && !closed
+          ) {
+            closed = true;
+            await server.close();
+          }
+          return result;
+        };
+        const release = Promise.withResolvers<void>();
+        const idle = fixture.runtime.idle.bind(fixture.runtime);
+        fixture.runtime.idle = async () => {
+          if (closed) await release.promise;
+          return await idle();
+        };
+        try {
+          expect(await settle(fixture.serving.activate())).toBe(true);
+          expect(fixture.stats.structureLoadTerminal).toBe(1);
+          expect(fixture.stats.structureLoadConfirmationsSkipped).toBe(0);
+          expect(fixture.syncCount()).toBe(6);
+        } finally {
+          const parked = fixture.serving.park("confirmation-test");
+          release.resolve();
+          await settle(parked);
+        }
+      });
+
+      it("re-asks the chain and starts a piece the replica is behind on", async () => {
+        const fixture = await openFixture();
+        const disposeCreator = await installStalePattern(fixture);
+        const release = Promise.withResolvers<void>();
+        try {
+          const reAsked = Promise.withResolvers<void>();
+          const sync = fixture.manager.syncCell.bind(fixture.manager);
+          let rootSyncs = 0;
+          fixture.manager.syncCell = async (cell, options) => {
+            if (
+              cell.getAsNormalizedFullLink().id === ids[0] &&
+              cell.tx?.tx.immediate && ++rootSyncs === 2
+            ) {
+              reAsked.resolve();
+              await release.promise;
+            }
+            return await sync(cell, options);
+          };
+          let starts = 0;
+          const start = fixture.runtime.start.bind(fixture.runtime);
+          fixture.runtime.start = async (cell) => {
+            starts++;
+            return await start(cell);
+          };
+          expect(await settle(fixture.serving.activate())).toBe(true);
+
+          // The first traversal read the replica's copy, which predates the
+          // pattern; the engine holds it, so the decision goes to the chain.
+          await settle(reAsked.promise);
+          expect(fixture.stats.structureLoadConfirmationsSkipped).toBe(0);
+          expect(starts).toBe(0);
+
+          // The frame the replica was missing lands between the traversals.
+          await settle(server.flushSessions([space]));
+          release.resolve();
+          await clock.settle();
+
+          expect(starts).toBe(1);
+          expect(fixture.stats.structureLoadTerminal).toBe(0);
+          expect(fixture.stats.structureLoadFailures).toBe(0);
+          expect(
+            fixture.runtime.runner.pieceGraphIsInstalled(
+              fixture.runtime.getCellFromLink({
+                space,
+                id: ids[2],
+                scope: "space",
+                path: [],
+              }),
+            ),
+          ).toBe(true);
+        } finally {
+          release.resolve();
+          await disposeCreator();
+        }
+      });
+
       it("confirms again when a departed demand returns", async () => {
         const fixture = await openFixture();
         expect(await settle(fixture.serving.activate())).toBe(true);
@@ -313,10 +506,11 @@ describe("SpaceServer", () => {
         await clock.tick(300);
         await clock.settle();
         expect(fixture.stats.structureLoadTerminal).toBe(2);
-        expect(fixture.syncCount()).toBe(12);
+        expect(fixture.stats.structureLoadConfirmationsSkipped).toBe(2);
+        expect(fixture.syncCount()).toBe(6);
       });
 
-      it("retires a decision when demand leaves during confirmation", async () => {
+      it("retires a decision when demand leaves during a structure load", async () => {
         const fixture = await openFixture();
         const release = Promise.withResolvers<void>();
         const sync = fixture.manager.syncCell.bind(fixture.manager);
@@ -326,7 +520,7 @@ describe("SpaceServer", () => {
           const result = await sync(cell, options);
           if (
             cell.getAsNormalizedFullLink().id === ids[1] &&
-            cell.tx?.tx.immediate && ++reads === 2
+            cell.tx?.tx.immediate && ++reads === 1
           ) {
             held++;
             await release.promise;
@@ -345,43 +539,88 @@ describe("SpaceServer", () => {
           await clock.tick(300);
           await clock.settle();
           expect(fixture.stats.structureLoadTerminal).toBe(decisions + 1);
-          expect(fixture.syncCount()).toBe(12);
+          expect(fixture.syncCount()).toBe(6);
         } finally {
           release.resolve();
         }
       });
 
-      for (const pass of [1, 2]) {
-        it(`retries a failed chain sync in traversal ${pass} without terminalizing`, async () => {
-          const fixture = await openFixture();
-          const sync = fixture.manager.syncCell.bind(fixture.manager);
-          let matching = 0;
-          let failing = true;
-          fixture.manager.syncCell = async (cell, options) => {
-            if (
-              cell.getAsNormalizedFullLink().id === ids[1] &&
-              cell.tx?.tx.immediate &&
-              ++matching >= pass && failing
-            ) {
-              throw new Error("injected chain sync failure");
-            }
-            return await sync(cell, options);
-          };
+      it("retries a failed chain sync in traversal 1 without terminalizing", async () => {
+        const fixture = await openFixture();
+        const sync = fixture.manager.syncCell.bind(fixture.manager);
+        let failing = true;
+        fixture.manager.syncCell = async (cell, options) => {
+          if (
+            cell.getAsNormalizedFullLink().id === ids[1] &&
+            cell.tx?.tx.immediate && failing
+          ) {
+            throw new Error("injected chain sync failure");
+          }
+          return await sync(cell, options);
+        };
+        expect(await settle(fixture.serving.activate())).toBe(true);
+        const failures = fixture.stats.structureLoadFailures;
+        expect(failures).toBeGreaterThan(0);
+        expect(fixture.stats.structureLoadTerminal).toBe(0);
+        failing = false;
+        await settle(
+          server.writeDocument(space, "of:confirmation-retry", { plain: 2 }),
+        );
+        expect(fixture.stats.structureLoadTerminal).toBe(1);
+        expect(fixture.stats.structureLoadFailures).toBe(failures);
+      });
+
+      it("retries a failed chain sync in traversal 2 and starts the piece", async () => {
+        const fixture = await openFixture();
+        const disposeCreator = await installStalePattern(fixture);
+        const sync = fixture.manager.syncCell.bind(fixture.manager);
+        let matching = 0;
+        let failing = true;
+        fixture.manager.syncCell = async (cell, options) => {
+          if (
+            cell.getAsNormalizedFullLink().id === ids[1] &&
+            cell.tx?.tx.immediate && ++matching >= 2 && failing
+          ) {
+            throw new Error("injected chain sync failure");
+          }
+          return await sync(cell, options);
+        };
+        let starts = 0;
+        const start = fixture.runtime.start.bind(fixture.runtime);
+        fixture.runtime.start = async (cell) => {
+          starts++;
+          return await start(cell);
+        };
+        try {
           expect(await settle(fixture.serving.activate())).toBe(true);
           const failures = fixture.stats.structureLoadFailures;
           expect(failures).toBeGreaterThan(0);
+          expect(starts).toBe(0);
           expect(fixture.stats.structureLoadTerminal).toBe(0);
           failing = false;
+          await settle(server.flushSessions([space]));
           await settle(
             server.writeDocument(space, "of:confirmation-retry", { plain: 2 }),
           );
-          expect(fixture.stats.structureLoadTerminal).toBe(1);
+          expect(starts).toBe(1);
+          expect(fixture.stats.structureLoadTerminal).toBe(0);
           expect(fixture.stats.structureLoadFailures).toBe(failures);
-        });
+        } finally {
+          await disposeCreator();
+        }
+      });
+
+      for (const pass of [1, 2]) {
+        // Traversal 2 runs only where the engine holds a pattern pointer the
+        // serving replica has not caught up to, so that case stages one:
+        // without it the first traversal's verdict stands on its own.
 
         for (const failure of [false, true]) {
           it(`discards traversal ${pass} ${failure ? "failure" : "success"} after tenure ends`, async () => {
             const fixture = await openFixture();
+            const disposeCreator = pass === 2
+              ? await installStalePattern(fixture)
+              : undefined;
             const release = Promise.withResolvers<void>();
             const sync = fixture.manager.syncCell.bind(fixture.manager);
             let matching = 0;
@@ -413,6 +652,7 @@ describe("SpaceServer", () => {
               expect(fixture.stats.structureLoadDeferred).toBe(0);
             } finally {
               release.resolve();
+              await disposeCreator?.();
             }
           });
         }

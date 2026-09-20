@@ -909,7 +909,7 @@ describe("Phase 5 cross-space serving", () => {
           operations: [{
             op: "set",
             id: streamDocId,
-            value: { value: { $stream: true } } as never,
+            value: { schema: { asCell: ["stream"] } } as never,
           }],
         },
       });
@@ -933,7 +933,7 @@ describe("Phase 5 cross-space serving", () => {
       const servingStream = serving.getCell<unknown>(
         foreignSpace,
         "xspace-send-stream",
-        undefined,
+        { asCell: ["stream"] },
       );
       await servingStream.sync();
       const homeAnchor = serving.getCell<{ n: number }>(
@@ -1498,6 +1498,7 @@ describe("Phase 5 cross-space serving", () => {
         undefined,
         tx,
       );
+      defaultCell.set({ profiles: [] });
       (homeCell as Cell<Record<string, unknown>>).key("defaultPattern").set(
         defaultCell as never,
       );
@@ -1608,7 +1609,7 @@ describe("Phase 5 cross-space serving", () => {
           acting: { user: principal, session: sessionId },
         });
         sent.length = 0;
-        action(tx);
+        action.action(tx);
         expect(sent.length).toBe(1);
         const state = sent[0].state;
         const sidecar = state.key(UI as never).key("props").key("$cell")
@@ -1717,6 +1718,7 @@ describe("Phase 5 cross-space serving", () => {
         undefined,
         tx,
       );
+      defaultCell.set({ profiles: [] });
       (homeCell as Cell<Record<string, unknown>>).key("defaultPattern").set(
         defaultCell as never,
       );
@@ -1848,7 +1850,7 @@ describe("Phase 5 cross-space serving", () => {
           acting: { user: principal, session: sessionId },
         });
         sent.length = 0;
-        action(tx);
+        action.action(tx);
         expect(sent.length).toBe(1);
         const sidecar = sent[0].state.key(UI as never).key("props").key("$cell")
           .resolveAsCell();

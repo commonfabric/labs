@@ -152,9 +152,10 @@ export function stringifyEntryValue(
 }
 
 /**
- * Replace stream markers and handler sigil links with handler sigils for JSON.
+ * Replace stream handles, and the retired `{ $stream: true }` sentinel, with
+ * handler sigils for JSON.
+ * <stream handle>   → { "/handler": "<key>" }
  * { $stream: true } → { "/handler": "<key>" }
- * { "/": { "link@1": { path: ["internal", ...] } } } → { "/handler": "<key>" }
  *
  * Only creates a new object when replacements are present.
  * Returns the original reference otherwise, preserving circular-ref
@@ -415,13 +416,19 @@ async function yieldToEventLoop(): Promise<void> {
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
 }
 
+/**
+ * The value an object's `.json` sibling spells out. At the root, a caller's
+ * classifier names the entries that are callables, by key, from what the
+ * piece's callable discovery found; below the root that classifier does not
+ * apply, and a stream is told by the handle standing at it, so a nested
+ * stream reads as a handler sigil rather than as the handle's own JSON.
+ */
 function aggregateJsonValue(
   value: unknown,
   depth: number,
   classifyCallableEntry?: (key: string, value: unknown) => CallableKind | null,
 ): unknown {
-  if (depth !== 0) return value;
-  return classifyCallableEntry
+  return depth === 0 && classifyCallableEntry
     ? transformCallableValues(value, classifyCallableEntry)
     : transformStreamValues(value);
 }
@@ -552,6 +559,10 @@ function buildJsonTreeNode(
 
   for (const [key, val] of Object.entries(obj)) {
     if (isStreamValue(val) || isHandlerCell(val)) continue;
+    // At the root, a key the classifier names a callable is projected as its
+    // callable file, whatever stands at it, so what stands there is not
+    // projected as a value beside that file.
+    if (depth === 0 && build.classifyCallableEntry?.(key, val)) continue;
     if (build.skipEntry?.(val)) continue;
     build.queue.push({
       parentIno: dirIno,

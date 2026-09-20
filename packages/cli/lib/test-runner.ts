@@ -602,7 +602,8 @@ function matchesTimingPrefix(name: string, prefixes: string[]): boolean {
   );
 }
 
-function printLoggerStats(
+/** Prints timing and call-count summaries, using absolute or baseline deltas. */
+export function printLoggerStats(
   elapsedMs: number,
   useDelta: boolean,
   label?: string,
@@ -1404,13 +1405,12 @@ export async function runTestPattern(
       );
       const pieceRegistry = (defaultPatternCell as any).key("pieceRegistry");
       pieceRegistry.set([]);
-      const addPiece = runtime.getCell(
+      const addPiece = runtime.getCell<unknown>(
         space,
         "test-default-add-piece",
-        undefined,
+        { asCell: ["stream"] },
         setupTx,
       );
-      addPiece.setRaw({ $stream: true });
       (defaultPatternCell as any).key("addPiece").set(addPiece);
       const testPieceRegistrationCount = (defaultPatternCell as any).key(
         "testPieceRegistrationCount",

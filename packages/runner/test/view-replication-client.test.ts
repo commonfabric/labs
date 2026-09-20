@@ -169,7 +169,7 @@ describe("view replication client", () => {
         derivedInternalCells: [
           {
             partialCause: "hidden-stream",
-            schema: { default: { $stream: true } },
+            schema: { asCell: ["stream"] },
             scope: "space",
           },
           ...["output", "side-output", "offscreen"].map((partialCause) => ({

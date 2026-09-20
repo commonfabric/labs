@@ -28,6 +28,7 @@
 // snapshot across operators).
 
 import { Command, ValidationError } from "@cliffy/command";
+import { configuredStorePath } from "@commonfabric/memory/v2/storage-path";
 import {
   clonePaths,
   contentFingerprint,
@@ -56,25 +57,13 @@ function out(json: boolean, data: unknown, render: () => void): void {
 function liveStoreDirs(): string[] {
   const dirs: string[] = [];
   const memoryDir = Deno.env.get("MEMORY_DIR");
-  if (memoryDir) {
-    dirs.push(
-      memoryDir.startsWith("file://") ? fromFileUrl(memoryDir) : memoryDir,
-    );
-  }
+  if (memoryDir) dirs.push(configuredStorePath(memoryDir));
   const dbPath = Deno.env.get("DB_PATH");
   if (dbPath) dirs.push(dbPath.replace(/\/[^/]*$/, ""));
   // The toolshed's default when neither is set is `./cache/memory/` relative to
   // its working directory; a clone landing there would be served unintentionally.
   dirs.push(`${Deno.cwd()}/cache/memory`);
   return dirs;
-}
-
-function fromFileUrl(url: string): string {
-  try {
-    return decodeURIComponent(new URL(url).pathname);
-  } catch {
-    return url;
-  }
 }
 
 /**

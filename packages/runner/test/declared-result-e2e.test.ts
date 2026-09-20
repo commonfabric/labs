@@ -2,13 +2,12 @@
  * A CTS-authored `action<Event, Result>` verb, compiled through the real
  * pipeline (`patternManager.compilePattern` → js-compiler → CTS transformers →
  * SES evaluation), delivers its returned value into the event receipt under
- * the `plainResultReceipts` experimental flag (default-on since the flip) —
- * the composition of this
- * package's plain-return projection (scheduler-event-receipts.test.ts, which
- * exercises only the raw trusted-builder `handler`) with the api's declared-
- * result authoring surface. This is the readback half of WS-C's exit
- * criterion, pinned at the runner in addition to the end-to-end fixture
- * (docs/history/plans/pattern-verb-contract-implementation.md, D4).
+ * the `plainResultReceipts` experimental flag (on by default) — the
+ * composition of this package's plain-return projection
+ * (scheduler-event-receipts.test.ts, which exercises only the raw
+ * trusted-builder `handler`) with the api's declared-result authoring surface.
+ * This readback is pinned at the runner in addition to the end-to-end fixture
+ * (`run_three_topic_fixture` in `packages/cli/integration/integration.sh`).
  *
  * The incidental-cell-return case pins the receipt write's conversion: `set()`
  * returns its cell for chaining, so an expression-body
@@ -161,11 +160,11 @@ async function waitForSchedulerCondition(
   // unreachable condition would spin forever — hanging the suite to the CI
   // job timeout with no test name. Each round drains the scheduler and
   // yields one real timer turn — transport pumps and the emulated server's
-  // fan-out flush (which resolves awaited commits at marker coverage,
-  // CT-1950) ride zero-delay timers, which are exempt from the fake clock's
-  // test-armed freeze — so a condition the system will ever reach is reached
-  // within a bounded number of rounds, and one it never reaches throws
-  // `message` instead of hanging.
+  // fan-out flush (which resolves awaited commits at marker coverage) ride
+  // zero-delay timers, which are exempt from the fake clock's test-armed
+  // freeze — so a condition the system will ever reach is reached within a
+  // bounded number of rounds, and one it never reaches throws `message`
+  // instead of hanging.
   for (let round = 0; round < 200 && !condition(); round++) {
     await runtime.idle();
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -181,7 +180,7 @@ async function waitForSchedulerCondition(
 // `$ctx` bindings — does NOT live at the `{ resultFor: { $ctx: {}, $event } }`
 // address the trusted-builder tests use. The route a real caller takes, and
 // the one these tests take, is `cell.send` with a caller event id, then
-// reading `tx.handlingReceiptLink` from the commit callback (WS-D; production
+// reading `tx.handlingReceiptLink` from the commit callback (production
 // consumer: `packages/cli/lib/callable.ts`).
 type ReceiptLink = NonNullable<
   IExtendedStorageTransaction["handlingReceiptLink"]
@@ -321,9 +320,8 @@ describe("compiled CTS action<E, R> results in receipts", () => {
     );
     await runtime.scheduler.idleWithPendingCommits();
 
-    // The handling commits — the chained cell return must not fail the
-    // action ("Cannot clone: CellImpl", the raw-write bug) — and the body
-    // ran.
+    // The handling commits, so the chained cell return did not fail the
+    // action, and the body ran.
     expect(outcomes[0].status).toBe("done");
     expect(await root.key("count").pull()).toBe(1);
 
