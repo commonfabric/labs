@@ -519,6 +519,17 @@ describe("stream declaration", () => {
         expect(declared({ $ref: "cid:absent" } as JSONSchema)).toBeUndefined();
         expect(declared({ $ref: "cid:loop" } as JSONSchema)).toBeUndefined();
       });
+
+      it("declares nothing for a boolean document read alone, or a fragment into one", () => {
+        expect(declared({ $ref: "cid:anything" } as JSONSchema))
+          .toBeUndefined();
+        expect(declared({ $ref: "cid:anything#/$defs/Ev" } as JSONSchema))
+          .toBeUndefined();
+      });
+
+      it("resolves a reference that is not well formed to nothing", () => {
+        expect(resolveExternal({ $ref: "cid:" })).toBeUndefined();
+      });
     });
   });
 

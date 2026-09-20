@@ -155,15 +155,3 @@ export function declaredHandleKind(
     active.delete(schema);
   }
 }
-
-/**
- * Whether `schema` declares a stream position: the handle kind it declares
- * ({@link declaredHandleKind}) is `stream`. Such a position holds no value,
- * and its handle is minted from the schema alone.
- */
-export function declaresStream(
-  schema: JSONSchema | undefined,
-  resolveExternal?: ExternalReferenceResolver,
-): boolean {
-  return declaredHandleKind(schema, { resolveExternal }) === "stream";
-}
