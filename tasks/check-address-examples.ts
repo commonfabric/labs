@@ -20,8 +20,9 @@
  *
  * ## What counts as an address example
  *
- * A code span — text between matching runs of backticks, in a Markdown file
- * or inside a source comment — whose content is all four of:
+ * A code span — a backtick, the run up to the next backtick, and that
+ * backtick, in a Markdown file or inside a source comment — whose content is
+ * all four of:
  *
  * - **rooted**: it begins with `/`. `isReference` in the CLI's reference module
  *   is where a leading slash decides that a token is written as a reference; a
@@ -38,6 +39,10 @@
  *   this tree writes a string that stands for several — an optional part, or
  *   characters left out — and such a string has no one reading to hand the
  *   parser.
+ *
+ * Which text is prose is the other half of the rule: all of a Markdown file,
+ * and in TypeScript the regions a comment opener reaches, which `commentsOf`
+ * below defines and states the bound on.
  *
  * A `<placeholder>` is left as written and judged as the string it is, which is
  * the reading its author means: `<space>` is name-shaped, so `/@<space>/top/42`
@@ -111,67 +116,126 @@ export function governedKind(path: string): GovernedKind | null {
 // open.
 //
 
-const LINE_COMMENT = /\/\/[^\n]*/;
-const BLOCK_COMMENT = /\/\*[\s\S]*?\*\//;
-const TEMPLATE = /`(?:[^`\\]|\\[\s\S])*`/;
-const STRING = /"(?:[^"\\\n]|\\[\s\S])*"|'(?:[^'\\\n]|\\[\s\S])*'/;
-
-/**
- * One match per comment or literal, whichever opens first. Each match consumes
- * its own text, so a literal holding comment-shaped text carries it away and no
- * comment is found inside it.
- *
- * Regular-expression literals are not modeled: a `/\//` reads as a line comment
- * and a quote inside one reads as a string opening. What that costs is comment
- * text scanned where there is none, which can only add a finding a reader can
- * see is not a comment.
- */
-const COMMENT_OR_LITERAL = new RegExp(
-  [LINE_COMMENT, BLOCK_COMMENT, TEMPLATE, STRING]
-    .map((part) => part.source)
-    .join("|"),
-  "g",
-);
-
 /** `text` with every character but the line breaks replaced by a space. */
 function blanked(text: string): string {
   return text.replace(/[^\n]/g, " ");
 }
 
 /**
+ * Where a comment opener at `at` reaches, or `null` where `at` opens neither
+ * kind.
+ *
+ * A line opener runs to the end of its line. A block opener runs to its first
+ * closer, and to the end of its line where the text holds no closer after it:
+ * a block comment always has one, so an opener without a closer is prose or a
+ * literal rather than a comment, and reading it to the end of the file would
+ * turn everything below a comment that mentions the characters into prose.
+ */
+function commentRegionEnd(source: string, at: number): number | null {
+  const opener = source[at + 1];
+  const newline = source.indexOf("\n", at);
+  const endOfLine = newline === -1 ? source.length : newline;
+  if (opener === "/") return endOfLine;
+  if (opener === "*") {
+    const close = source.indexOf("*/", at + 2);
+    return close === -1 ? endOfLine : close + 2;
+  }
+  return null;
+}
+
+/**
  * `source` with everything but its comments blanked out, each remaining
  * character where it was in the file.
  *
- * A template literal is blanked along with the rest: it is code, and the
- * addresses a program builds are the business of the tests that run it.
+ * What it keeps is the union of the regions every comment opener reaches, and
+ * a comment opener is the only thing it recognizes. That is what makes the
+ * result a superset of the file's comments: a comment's own opener contributes
+ * a region holding all of it, whatever else was matched before it, so nothing
+ * can consume a comment or cut one short.
+ *
+ * The cost is stated rather than avoided. A `//` or a `/*` inside a string, a
+ * template literal or a regular expression opens a region here too, so the
+ * code after it is read as prose, and an address written in that code is
+ * checked. Over this tree that adds one candidate and removes none. The
+ * direction is the one this check needs: a candidate too many is a finding a
+ * reader can see is not prose, and a candidate too few is a finding nobody
+ * ever sees.
  */
 export function commentsOf(source: string): string {
   const parts: string[] = [];
   let at = 0;
-  for (const match of source.matchAll(COMMENT_OR_LITERAL)) {
-    const token = match[0];
-    parts.push(blanked(source.slice(at, match.index)));
-    parts.push(
-      token.startsWith("//") || token.startsWith("/*") ? token : blanked(token),
-    );
-    at = match.index + token.length;
+  let covered = 0;
+  for (
+    let slash = source.indexOf("/");
+    slash !== -1;
+    slash = source.indexOf("/", slash + 1)
+  ) {
+    const end = commentRegionEnd(source, slash);
+    if (end === null || end <= covered) continue;
+    const start = Math.max(slash, covered);
+    if (start > at) parts.push(blanked(source.slice(at, start)));
+    parts.push(source.slice(start, end));
+    at = end;
+    covered = end;
   }
   parts.push(blanked(source.slice(at)));
   return parts.join("");
 }
 
 /**
- * A code span: a run of backticks, the shortest content that reaches a closing
- * run of the same length, and that closing run. The content may hold line
- * breaks, so a span an author wrapped is one match rather than none — which a
- * line-oriented search cannot do.
- *
- * A run of three or more opens a fenced block, and the match then spans the
- * whole block. Its content is a transcript or a scaffold, where a token takes
- * its meaning from the block's language, so `addressExample` declines it on the
- * whitespace inside it.
+ * A line break inside a code span, with the indent after it and the `*` a
+ * block comment opens a continuation line with.
  */
-const CODE_SPAN = /(?<!`)(`+)(?!`)([^]*?)(?<!`)\1(?!`)/g;
+const SPAN_WRAP = /\n[ \t]*(?:\*[ \t]*)?/y;
+
+/** A code span that could hold an address example. */
+export interface CodeSpan {
+  /** The text between the backticks, the wrap still in it. */
+  content: string;
+
+  /** Offset of the opening backtick in the text it was found in. */
+  at: number;
+}
+
+/**
+ * Every code span in `text` that could hold an address example: a backtick
+ * followed by `/`, the run up to the next backtick, and that backtick.
+ *
+ * Rooted and free of whitespace are conditions of the search as well as of the
+ * rule, and that is what makes a span local: a stray backtick — one inside a
+ * regular expression, a string, or an escape — shifts nothing, where pairing
+ * each backtick with the next makes every span after such a character read as
+ * ending somewhere it does not. `addressExample` is still what decides, and
+ * holds every candidate to the whole rule.
+ *
+ * A line break continues a span only where the next line resumes the token, so
+ * the walk is deterministic, never backtracks, and visits each character a
+ * bounded number of times.
+ */
+export function* codeSpans(text: string): Generator<CodeSpan> {
+  for (let at = text.indexOf("`"); at !== -1; at = text.indexOf("`", at + 1)) {
+    if (text[at + 1] !== "/") continue;
+    let content = "";
+    for (let i = at + 1; i < text.length; i++) {
+      const character = text[i];
+      if (character === "`") {
+        yield { content, at };
+        break;
+      }
+      if (character === "\n") {
+        SPAN_WRAP.lastIndex = i;
+        SPAN_WRAP.exec(text);
+        const next = text[SPAN_WRAP.lastIndex];
+        if (next === undefined || next === "`" || /\s/.test(next)) break;
+        content += text.slice(i, SPAN_WRAP.lastIndex);
+        i = SPAN_WRAP.lastIndex - 1;
+        continue;
+      }
+      if (/\s/.test(character)) break;
+      content += character;
+    }
+  }
+}
 
 /**
  * The address example a code span's content holds, or `null` when the content
@@ -180,7 +244,7 @@ const CODE_SPAN = /(?<!`)(`+)(?!`)([^]*?)(?<!`)\1(?!`)/g;
 export function addressExample(content: string): string | null {
   // A line break inside a span, and the `*` a block comment opens its
   // continuation lines with, are the wrapping rather than the string.
-  const token = content.replace(/\n[ \t]*\*?[ \t]*/g, "").trim();
+  const token = content.replace(/\n[ \t]*(?:\*[ \t]*)?/g, "").trim();
   if (!token.startsWith("/")) return null;
   if (/\s/.test(token)) return null;
   if (/[\[\]]|…|\.\.\./.test(token)) return null;
@@ -270,8 +334,8 @@ export function collectFindings(documents: readonly Document[]): Finding[] {
   for (const { path, prose } of documents) {
     const exempt = exemptions(prose);
     const used = new Set<string>();
-    for (const match of prose.matchAll(CODE_SPAN)) {
-      const example = addressExample(match[2]);
+    for (const span of codeSpans(prose)) {
+      const example = addressExample(span.content);
       if (example === null) continue;
       if (exempt.has(example)) {
         used.add(example);
@@ -282,7 +346,7 @@ export function collectFindings(documents: readonly Document[]): Finding[] {
       } catch (error) {
         findings.push({
           file: path,
-          line: lineAt(prose, match.index),
+          line: lineAt(prose, span.at),
           example,
           message: error instanceof Error ? error.message : String(error),
         });
