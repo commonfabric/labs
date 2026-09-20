@@ -429,11 +429,12 @@ const assertNoDivergentIfcBranches = (
     );
   }
 
-  // Recurse over the shared keyword vocabulary, `prefixItems` and
-  // `additionalProperties` included, so a divergent-ifc shape cannot hide
-  // under any keyword the shared walker supports. The vocabulary includes
-  // the combinators, so this is also the descent into a carrier admitted
-  // above.
+  // Recurse over the shared walker's default keyword vocabulary,
+  // `prefixItems` and `additionalProperties` included, so a divergent-ifc
+  // shape cannot hide under any keyword that walk visits. It passes no walk
+  // options, so `$defs` bodies are not descended here. The vocabulary
+  // includes the combinators, so this is also the descent into a carrier
+  // admitted above.
   forEachSubschema(object, (child, keyword, key, index) => {
     const childPath = keyword === "properties"
       ? `${path}/${key}`
@@ -588,8 +589,8 @@ const mergeSchemaNode = (
   }
 
   // Object-valued rest claims merge like items; boolean forms keep the
-  // spread's right-wins behavior (this merge does not decide closed-object
-  // union semantics).
+  // spread's right-wins behavior: the right side's value when it has one,
+  // else the left's.
   let mergedAdditionalProperties = left.additionalProperties;
   if (leftAdditional !== undefined && rightAdditional !== undefined) {
     mergedAdditionalProperties = mergeSchemaNode(

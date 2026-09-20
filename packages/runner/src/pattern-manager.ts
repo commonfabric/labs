@@ -379,8 +379,7 @@ function sourcePackagePaths(
  * The class deliberately does NOT set `this.name`, so `String(error)` in the
  * `closure-replication-failed` line reads `Error: <reason>`, exactly as it
  * does for a plain `Error` carrying the same reason. That is the form
- * `verification-coverage.md` quotes the line in, and so the form a search of
- * the logs for this failure matches.
+ * `verification-coverage.md` quotes the line in.
  */
 class ClosureReplicationSupplyError extends Error {
   constructor(reason: string, readonly wantedIdentity: string) {
@@ -625,7 +624,8 @@ export class PatternManager {
     Map<string, ParkedReplication>
   >();
 
-  /** Record a durable closure persist's target for
+  /**
+   * Records a durable closure persist's target for
    * `#replicateClosures()`' fallback-origin read — under EVERY module
    * identity of the persisted set, not just the persist call's entry: the
    * write functions persist one addressable doc per module, and the
@@ -642,7 +642,8 @@ export class PatternManager {
    * `fromSpace` DOES wake it: the re-issue's PRIMARY read consults that
    * space. The re-issue is fire-and-forget via `queueMicrotask`: this
    * method runs inside the persistence promise a compile AWAITS, so the
-   * hook must add neither latency nor a throw to that chain. */
+   * hook must add neither latency nor a throw to that chain.
+   */
   #recordPersistedClosureSpaces(
     identities: Iterable<string>,
     space: MemorySpace,
@@ -1109,8 +1110,8 @@ export class PatternManager {
    * parks under the WANTED identity and `#recordPersistedClosureSpaces`
    * re-issues it when a matching supply records — see
    * `#parkedFailedReplications`. Genuine absence — an identity no server-side
-   * persist ever records — stays a loud one-shot failure, since no record ever
-   * wakes its park.)
+   * persist ever records — logs one loud failure per attempt and is never
+   * re-issued, because only a matching persist record wakes a park.)
    */
   replicatePatternToSpace(
     pattern: Pattern | Module,
@@ -1326,7 +1327,8 @@ export class PatternManager {
       return { complete: true, sourceDocs, compiledDocs };
     };
 
-    /** One full read attempt: the caller-named origin, then the FALLBACK
+    /**
+     * One full read attempt: the caller-named origin, then the FALLBACK
      * ORIGINS (see `#persistedClosureSpaces`): the caller-named origin is a
      * provenance heuristic and can be closure-less through no fault of any
      * writer — `loadPatternByIdentity` serves patterns from the in-memory
@@ -1336,8 +1338,9 @@ export class PatternManager {
      * identities and the CFC integrity gate stays fail-closed), so retry
      * the read against the recorded persist targets before failing. Loud
      * on use: the lane log shows when the heuristic origin was dry. An
-     * incomplete result carries the PRIMARY origin's reason, which becomes
-     * the message of the `closure-replication-failed` line. */
+     * incomplete result carries the PRIMARY origin's reason, which the
+     * `closure-replication-failed` line reports.
+     */
     const readOriginWithFallbacks = async (): Promise<
       Awaited<ReturnType<typeof readOrigin>>
     > => {
@@ -1407,8 +1410,10 @@ export class PatternManager {
       // REGISTERED at snapshot time". That covers a supplier that has not
       // started, a supplier that completed inside the read window, and a
       // load that resolved with its repair persist floating. All three
-      // end in the same place: the throw below parks the failure for
-      // event-driven re-supply (see `#parkedFailedReplications`).
+      // end in the same place: the throw below reaches the catch in
+      // `#issueReplication()`, which hands the failure to
+      // `#registerFailedReplication()`. A first attempt is re-issued at once
+      // when a usable record already exists; every other failure parks.
       const inFlightCompilations = Array.from(
         this.#inProgressCompilations.values(),
         ({ promise }) => promise,
@@ -1759,9 +1764,10 @@ export class PatternManager {
    * rather than the single `Pattern` that `compilePattern` returns. A caller
    * that gets that namespace from the lower-level
    * `Engine.compileAndEvaluateModules` skips registration: map/filter/flatMap
-   * ops then have no content-addressed entry ref and fall back to a
-   * defer-corrupted embedded graph instead of their canonical `$patternRef`
-   * artifact.
+   * ops then have no content-addressed entry ref, so a node's inputs doc
+   * carries the op's embedded graph instead of a `$patternRef` to the
+   * canonical artifact (`#keylessOpRefsByInputsDoc` says what reading that
+   * graph back costs).
    *
    * Registration is fused with evaluation here on purpose, so it cannot be
    * forgotten — mirroring what the runtime's own `compilePattern` /
@@ -2673,10 +2679,10 @@ export class PatternManager {
    * via `#patternFromEvaluation`, and the namespace load seam
    * `compileAndRegisterModules` (used by the CLI test harness and the
    * multi-user worker) calls it too. Skipping it leaves anonymous
-   * map/filter/flatMap ops un-indexed, so `getArtifactEntryRef` misses and the
-   * op falls back to its embedded graph instead of the content-addressed
-   * canonical artifact. The embedded round-trip corrupts nested output-alias
-   * defer levels. It is deliberately NOT folded into
+   * map/filter/flatMap ops un-indexed, so `getArtifactEntryRef` misses and a
+   * node's inputs doc carries the op's embedded graph instead of a
+   * `$patternRef` to the canonical artifact (see `#keylessOpRefsByInputsDoc`).
+   * It is deliberately NOT folded into
    * `Engine.compileAndEvaluateModules`, since that primitive is also used to
    * inspect serialized/verified output without running (engine unit tests),
    * where the side effect of stamping entry refs is unwanted —
@@ -2867,7 +2873,7 @@ export class PatternManager {
   }
 
   /**
-   * Write the module set into `space` and AWAIT it, tracking the in-flight
+   * Writes the module set into `space` and AWAITS it, tracking the in-flight
    * promise in `#compileCacheWrites` + `#pendingCacheWriteBacks` (so graceful
    * shutdown and closure replication can observe it). A failure PROPAGATES and
    * fails the compile: refs-only pattern JSON makes a durable closure in

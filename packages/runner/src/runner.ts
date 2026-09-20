@@ -460,8 +460,8 @@ const recordOutputSchemaPolicyInputs = (
     const bindingLink = parseLink(outputBinding, bindingBase);
     // Output-redirect resolution is result-plumbing machinery
     // (machineryRead, same family as sendValueToBinding's walk): its reads
-    // must not consume `*`-path membership templates (bot review on this
-    // PR — these resolve the SAME redirects immediately before the send).
+    // must not consume `*`-path membership templates (these resolve the
+    // SAME redirects immediately before the send).
     const link = tx.runWithAmbientReadMeta(
       machineryRead,
       () =>
@@ -1532,15 +1532,13 @@ const relaxedHandlerSchemaCache = new WeakMap<object, JSONSchema>();
  * `$ref` names (`generateHandlerSchema` hoists the event schema's `$defs`
  * onto the handler schema, so that schema is the root local refs resolve
  * against). Closure inside a combinator root (`allOf`/`anyOf`/`oneOf`) is
- * deliberately NOT detected, which is the same boundary the CLI gate's
- * absence rule draws. Generated event schemas never emit combinator roots,
- * and the miss direction is safe: an undetected closure gets open-schema
- * delivery, never a false rejection. Everything else returns `undefined`:
+ * deliberately NOT detected. The miss direction is safe: an undetected
+ * closure gets open-schema delivery, never a false rejection. Everything
+ * else returns `undefined`:
  *
  * - An OPEN event schema: the schema read path delivers the declared fields
  *   and ignores the rest, and a payload that misses the schema reads back as
- *   an absent event. Closure is the schema's opt-in, and generated event
- *   schemas do not carry it.
+ *   an absent event. Closure is the schema's opt-in.
  * - An ABSENT payload is deliverable as `undefined` regardless of closure:
  *   absence is the CLI gate's question, and defaults never materialize for
  *   an absent event.
@@ -3674,8 +3672,7 @@ export class Runner {
       // here — the reuse paths returned earlier). A keyless identity never
       // lands durably, so request the swap through the session channel once the
       // setup commit lands — the watcher's own ordering, with the watcher's own
-      // guards deciding whether anything changed. Real patterns keep the
-      // durable-stamp path.
+      // guards deciding whether anything changed.
       if (PatternManager.isKeylessPatternIdentity(entryRef.identity)) {
         const sessionSwap = this.#sessionPatternSwaps.get(key);
         if (sessionSwap !== undefined) {
@@ -7536,18 +7533,18 @@ export class Runner {
   }
 
   /**
-   * The scheduler observation identity (pieceId + owning space) for a piece's
-   * result cell. Pattern readers subscribe with this so the timing shapers can
-   * group and rate-cap a pattern's wakes; without it, cell-flip shaping
-   * silently does not apply to the piece. It is derived purely from the result
-   * cell, so it is available even when scheduler state is not rehydrated.
-   * The pieceId bucket is per scope INSTANCE (key-vocabulary.md §5's
-   * serving-hazard list): name-keyed buckets collapse shaper groups and rate
-   * caps across principals — cross-principal budget consumption, and a timing
-   * channel correlating one principal's activity with another's wakes.
+   * Returns the scheduler observation identity for a piece's result cell.
+   * Pattern readers subscribe with this so the timing shapers can group and
+   * rate-cap a pattern's wakes; without it, cell-flip shaping silently does not
+   * apply to the piece. Its `pieceId` and owner space are derived purely from
+   * the result cell, so they are available even when scheduler state is not
+   * rehydrated. The pieceId bucket is per scope INSTANCE (key-vocabulary.md
+   * §5's serving-identity sites): name-keyed buckets collapse shaper groups and
+   * rate caps across principals — cross-principal budget consumption, and a
+   * timing channel correlating one principal's activity with another's wakes.
    * Resolved against the runtime's own identity; partition-unchanged at
-   * cardinality 1 (key-vocabulary.md §2 — the resolver also gives a
-   * scope-less link the `space` key, the same instance by definition).
+   * cardinality 1 (key-vocabulary.md §2 — the resolver also gives a scope-less
+   * link the `space` key, the same instance by definition).
    */
   #schedulerObservationIdentity(
     resultCell: Cell<any>,
@@ -9749,11 +9746,11 @@ export class Runner {
     const receiptsEnabled =
       this.#runtime.experimental.commitPreconditions === true &&
       // Events-down (runtime-mapping.md, row N26): receipt create-only
-      // exactly-once is SUBSUMED by the stream's `eventWatermark` (events.md
-      // §4), and the two mechanisms must not be active for the same event —
-      // client handler runs divert to the overlay anyway, and a serving run's
-      // create-only mark would ride the WAVE commit as a precondition the
-      // watermark already covers.
+      // exactly-once is SUBSUMED by the stream's `eventWatermark`
+      // (events.md §4), and the two mechanisms must not be active for the same
+      // event — client handler runs divert to the overlay anyway, and a
+      // serving run's create-only mark would ride the WAVE commit as a
+      // precondition the watermark already covers.
       this.#runtime.experimental.serverExecution !== true;
     // The serving-side receipt/result write (events.md §4 "Result carriage"):
     // the watermark subsumes the receipt's EXACTLY-ONCE role, not its
@@ -9784,7 +9781,7 @@ export class Runner {
     // the same fail-closed stance cfc/grants.ts takes when its gate is off.
     //
     // Under EXPERIMENTAL_SERVER_EXECUTION the receipt IS being written — by the
-    // SERVING side (the serving-side write above). The address is
+    // SERVING side (see the write above). The address is
     // cause-derived, so the client's diverted ECHO of the same event mints the
     // same address the serving run writes; publishing it on the echo's
     // transaction is what hands an unchanged caller (the CLI verb dispatch) a
@@ -9836,7 +9833,8 @@ export class Runner {
         // the client-written one — `{}` as the existence witness, the handler's
         // plain return under `plainResultReceipts` — and the cell identity is
         // the same cause-derived address, so the verb contract's readback
-        // (`cf call`'s `.result`) reads either alike.
+        // (`cf call`'s `.result`) reads a serving-written receipt the same
+        // way it reads a client-written one.
         //
         // Write-once is CAS, not a wire precondition: no markCreateOnly (a
         // create-only mark must not ride a wave commit whose event the
@@ -10600,7 +10598,7 @@ export class Runner {
       pattern,
       schedulerObservationIdentity: {
         // Per scope INSTANCE, matching schedulerObservationIdentity above
-        // (key-vocabulary.md §5's list).
+        // (key-vocabulary.md §5's serving-identity sites).
         pieceId: `${
           resolveScopeKey(instanceLink.scope, this.#runtime.scopeKeyIdentity)
         }:${instanceLink.id}`,
