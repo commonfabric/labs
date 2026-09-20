@@ -1358,12 +1358,24 @@ export class XSchedulerGraph extends LitElement {
   }
 
   /**
-   * Create a short, readable label from an action ID.
-   * Format: prefix:...last4/path
+   * Creates a short, readable label from an action ID. A label no longer than
+   * `maxLen` is returned unchanged.
+   * Format: `prefix:...last4/path`
+   *
+   * The prefix and the `...last4` of the entity are never cut, and the path
+   * takes the whole cut: it is cut to the room those two leave and ends in
+   * `...`, and is left out when that room holds less than `/...`. The result
+   * is therefore longer than `maxLen` when the prefix and the `...last4` alone
+   * are, and only then. A label with no entity and path to tell apart is cut
+   * from its end instead, to `maxLen` including the `...`. `maxLen` is at
+   * least 3, the length of that `...`.
    *
    * Examples:
-   * - "sink:did:key:z6Mkk.../of:fid1:abc.../value" → "sink:...c.../value"
-   * - "parentAction" → "parentAction"
+   * - `sink:did:key:z6Mkk/of:fid1:abcdwxyz/value` → `sink:...wxyz/value`
+   * - the same label when `maxLen === 12` → `sink:...wxyz`
+   * - `computation:did:key:z6Mkk/of:fid1:abcdwxyz/value` →
+   *   `computation:...wxyz`
+   * - `parentAction` → `parentAction`
    */
   static #truncateLabel(label: string, maxLen = 20): string {
     // Simple case - short enough already
@@ -1425,13 +1437,14 @@ export class XSchedulerGraph extends LitElement {
           ? "..." + entityPart.slice(-4)
           : entityPart;
         const path = pathParts.length > 0 ? "/" + pathParts.join("/") : "";
-        const result = prefix + shortEntity + path;
+        const head = prefix + shortEntity;
+        if (head.length + path.length <= maxLen) return head + path;
 
-        // If still too long, truncate path
-        if (result.length > maxLen) {
-          return result.slice(0, maxLen - 3) + "...";
-        }
-        return result;
+        // The path takes the whole cut. What is left of it keeps at least its
+        // `/` in front of the `...`, so that the `...` cannot be read as
+        // belonging to the entity.
+        const room = maxLen - head.length;
+        return room >= 4 ? head + path.slice(0, room - 3) + "..." : head;
       }
     }
 

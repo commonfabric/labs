@@ -63,12 +63,6 @@ describe("XSchedulerGraph", () => {
             ),
           ).toBe("sink:...DDDD/some...");
         });
-
-        it("cuts the assembled label to a given `maxLen`", () => {
-          expect(
-            truncateLabel(`sink:${SPACE}/of:fid1:AAAABBBBCCCCDDDD/value`, 12),
-          ).toBe("sink:...D...");
-        });
       });
 
       describe("given no schemed entity segment", () => {
@@ -87,6 +81,69 @@ describe("XSchedulerGraph", () => {
         it("keeps an entity of four characters or fewer whole", () => {
           expect(truncateLabel("ab/cdefghijklmnopqrstu")).toBe(
             "ab/cdefghijklmnop...",
+          );
+        });
+      });
+
+      describe("given a label whose assembled form is longer than `maxLen`", () => {
+        // The prefix and the entity tail are never cut, so the path takes the
+        // whole cut. `sink:...DDDD` is 12 characters long and `action:...HHHH`
+        // is 14, which is what places each `maxLen` below.
+
+        it("returns the prefix and the entity tail alone when the two are exactly `maxLen` long", () => {
+          expect(
+            truncateLabel(`sink:${SPACE}/of:fid1:AAAABBBBCCCCDDDD/value`, 12),
+          ).toBe("sink:...DDDD");
+        });
+
+        it("returns the prefix and the entity tail alone, uncut, when the two are longer than `maxLen`", () => {
+          expect(
+            truncateLabel(
+              `action:${SPACE}/computed:fid1:EEEEFFFFGGGGHHHH/count`,
+              12,
+            ),
+          ).toBe("action:...HHHH");
+        });
+
+        it("returns the path cut to the room that the prefix and the entity tail leave", () => {
+          expect(
+            truncateLabel(`${SPACE}/of:fid1:AAAABBBBCCCCDDDD/value`, 12),
+          ).toBe("...DDDD/v...");
+          expect(
+            truncateLabel(`sink:${SPACE}/of:fid1:AAAABBBBCCCCDDDD/value`, 17),
+          ).toBe("sink:...DDDD/v...");
+        });
+
+        it("returns `/...` for the path when there is room for nothing more", () => {
+          expect(
+            truncateLabel(`sink:${SPACE}/of:fid1:AAAABBBBCCCCDDDD/value`, 16),
+          ).toBe("sink:...DDDD/...");
+        });
+
+        it("returns no path when there is less room than `/...` takes", () => {
+          expect(
+            truncateLabel(`sink:${SPACE}/of:fid1:AAAABBBBCCCCDDDD/value`, 15),
+          ).toBe("sink:...DDDD");
+          expect(
+            truncateLabel(`sink:${SPACE}/of:fid1:AAAABBBBCCCCDDDD/value`, 13),
+          ).toBe("sink:...DDDD");
+        });
+
+        it("returns no path at the default bound for a `computation:` label", () => {
+          // `computation:...DDDD` is 19 characters long, one short of the
+          // default bound.
+
+          expect(
+            truncateLabel(
+              `computation:${SPACE}/of:fid1:AAAABBBBCCCCDDDD/value`,
+            ),
+          ).toBe("computation:...DDDD");
+        });
+
+        it("returns the prefix and the entity tail of a label that is already in assembled form", () => {
+          expect(truncateLabel("sink:...DDDD/value", 12)).toBe("sink:...DDDD");
+          expect(truncateLabel("action:...HHHH/count", 12)).toBe(
+            "action:...HHHH",
           );
         });
       });
