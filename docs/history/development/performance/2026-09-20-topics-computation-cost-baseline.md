@@ -13,7 +13,7 @@ rendering — across the two tiers it defines. It is the last of T0's
 deliverables, and it draws on runs the earlier ones recorded rather than taking
 new ones.
 
-Every figure below is in
+Every measured figure below is in
 [`2026-09-20-topics-computation-cost-baseline.results.json`](2026-09-20-topics-computation-cost-baseline.results.json)
 beside this file, which also names, per block, the run each figure was
 extracted from. Those runs are recorded in three places, and the extract's
@@ -28,8 +28,10 @@ extracted from. Those runs are recorded in three places, and the extract's
 - delivered documents, from the `experiment/topic-own-entry-lookup` branch,
   which is on `origin`.
 
-One set of figures here has no data file, and the section that gives them says
-so.
+Two kinds of number here sit outside that file. One is a set of measurements,
+and the section that gives them says so. The other is not measurements at all:
+the source-drift counts in the next section are diffstats between revisions
+that section names, and git reproduces them from those revisions.
 
 ## Read this before the figures
 
@@ -55,12 +57,20 @@ of the navigation bench agree field by field. Its two scale rounds do not:
 seven non-timing fields differ between them — five in the reopen sample's
 `remaining` row, its `runsWithoutSource` count, and the node count its graph
 started from — although all four located lifts read the same zero in both. The
-section on that workload gives each round separately. The headless
-matrix ran one round per case, so it is the read-budget derivation and the
-repeat subset, not the matrix, that establish those counters repeat; the
-section on the gated measures says what each covers. The timings were all taken
-on a shared machine under unrelated load, and the sections that give them say
-what the load was.
+section on that workload gives each round separately. The headless matrix ran
+one round per case, so it is not the matrix that establishes those counters
+repeat. Two things do, each over part of it. The read-budget derivation runs
+each of its eleven gated cases five times, and the section on the gated
+measures says what follows from that. The other is the repeat subset, which is
+not in this record:
+four `high-degree` `all-backlinks` cases run five times each, reported in
+[the lazy-materialization record](2026-09-18-topics-lazy-materialization.md)
+as each producing one distinct set of counters across its five rounds, equal
+to the matrix arm's for the same case. No case outside those two sets has a
+repeated sample behind it here.
+
+The timings were all taken on a shared machine under unrelated load, and the
+sections that give them say what the load was.
 
 **Attempt reads come from the headless tier only.** The browser helper records
 completed-body reads and not transaction attempts, because the runtime client's
@@ -193,9 +203,13 @@ per source:
 | 128 | 128 | 33,792 | 33,792 | 33,407 |
 | 512 | 512 | 528,384 | 528,384 | 526,847 |
 
-The largest of those cases settles a graph of 3,595 nodes and 532,488 edges,
-and its phase took 94,931.5 milliseconds — one sample, on the loaded machine
-described above.
+The low-degree and high-degree cases at 512 topics agree on the figures this
+table gives — the same 528,384 accesses over the same 512 runs — and each
+settles a graph of 3,595 nodes and 532,488 edges. They are not identical:
+their largest single runs differ, which the paragraph below turns on, and so
+do their registered-dependency counts. They differ most in time. Low-degree's
+phase took 94,931.5 milliseconds and high-degree's 65,126.2, each one sample
+on the loaded machine described above.
 
 One of those columns can be divided by its run count and two cannot, and on
 the page they look identical. In the low-degree column at 512 topics the
