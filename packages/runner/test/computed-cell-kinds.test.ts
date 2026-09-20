@@ -342,10 +342,9 @@ describe("computed cell kinds", () => {
     });
 
     it("keeps outputs exposed writable on the result surface computed", () => {
-      // ACCEPTED consequence of the polarity flip: result-surface exposure no
-      // longer disqualifies. An embedder writing through the exposed handle
-      // has that write ack-and-dropped on conflict; the derivation
-      // re-establishes the value.
+      // Exposure on the result surface does not disqualify. An embedder
+      // writing through the exposed handle has that write ack-and-dropped on
+      // conflict; the derivation re-establishes the value.
       const exposeHandle = lift(
         (x: number) => ({ h: x }),
         { type: "number" } as const,
@@ -581,7 +580,7 @@ describe("computed cell kinds", () => {
 
     it("grant-free tuple (prefixItems) slots stay computed", () => {
       // Covered by the provably-handle-free gate (no grant anywhere in the
-      // schema); pins that tuple schemas don't regress that shortcut.
+      // schema); pins that a tuple schema takes that shortcut.
       const double = lift((x: number) => x * 2);
       const bump = handler(
         true as const,
@@ -604,9 +603,8 @@ describe("computed cell kinds", () => {
     });
 
     it("a capture in a grant-free tuple slot stays computed beside a granting slot", () => {
-      // CT-1895: prefixItems used to be an unmodeled keyword, so a grant in
-      // ANY slot collected the whole subtree. The aligned walk now proves the
-      // capture in slot 1 unreachable through the slot-0 grant.
+      // The walk aligns each tuple slot with the element bound there, so the
+      // grant in slot 0 does not reach the capture in slot 1.
       const double = lift((x: number) => x * 2);
       const bump = handler(
         true as const,

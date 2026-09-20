@@ -169,17 +169,35 @@ implementation and prototypes can begin earlier.
 - [ ] **T4 — Evaluate large-thread aggregates.** Compare a maintained active
       comment count and activity maxima with the T1 implementation. Use explicit
       Cell receivers and measure score/predicate production; do not rely on
-      unsupported ordinary-array `.map(...).sum()` chains. A maintained count or
-      activity maximum carrying a callback is a new operator, so it too lives in
-      a pattern in a module of its own, instantiated the same way. Exit: adopt
-      only the candidates with justified end-to-end tradeoffs. Depends on T0 and
-      T1.
+      unsupported ordinary-array `.map(...).sum()` chains. Write the aggregates
+      as `.count(predicate)`, `.minBy(score)` and `.maxBy(score)`: the
+      argument-free `count()` takes no callback and so hoists nothing, which
+      leaves nothing to measure. A maintained count or activity maximum
+      carrying a callback is a new operator, so it too lives in a pattern in a
+      module of its own, instantiated the same way. Exit: adopt only the
+      candidates with justified end-to-end tradeoffs. Depends on T0 and T1.
 - [ ] **T5 — Harden accepted changes and prepare release artifacts.** Add
       regression read budgets, run all relevant authored/package/integration
       tests, preserve compatibility baselines, pass the
       [pattern update gates](../specs/pattern-update-testing.md), and update
-      maintained docs. Produce matched before/after demos and reports. Establish
-      and record how to check the hoist requirement under
+      maintained docs. Those gates do not establish that an inserted `.map`
+      preserves behavior, for two reasons their spec gives. The comparison
+      excludes renderings, and a mapped row's sub-pattern is a recorded
+      instantiation whose whole result is a vnode, recognized as a rendering
+      by shape wherever it sits — so such a hoist contributes nothing to the
+      comparison even when it applies. And insertion renumbers the later
+      hoists of its kind, which the gates need not notice: a hoist whose
+      stored arguments today's schema refuses is held back and reported, and
+      one today's source no longer defines is held back the same way, but
+      inserting ahead of existing hoists leaves every stored id defined and
+      may leave its arguments acceptable, so neither holdback has to fire.
+      What stays gated is every hoist that applies and is not a rendering,
+      the moved-`.for()` class among it. Either keep a new `.map()` call after
+      the existing ones in the Topics sources, where the ids already recorded
+      do not move and the new hoist has no recorded instantiation to replay,
+      or have T6 check map-rendered rows directly. Produce matched
+      before/after demos and reports. Establish and record how to check the
+      hoist requirement under
       [compatibility requirements](#compatibility-requirements), with evidence
       from the stored data of deployed board and topic generations, among them a
       read-only copy of the primary Topics instances obtained through Gideon.
