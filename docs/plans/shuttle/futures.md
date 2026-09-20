@@ -106,8 +106,11 @@ they are re-scheduled later, never re-litigated — and the main document's
 decisions point here where they defer.
 
 - **A live view of a piece.** A frame carrying what a piece is — its
-  arguments, a summary of its result, its callables and its pattern
-  identity — and keeping it current as the piece computes. What `describe`
+  arguments, a summary of its result, its callables with their doc
+  annotations, and its pattern identity — and keeping it current as the
+  piece computes. Those four are what `describe` writes and what
+  [`views.md`](views.md) names, and a view that carried fewer would be a
+  reading of its own rather than that one made live. What `describe`
   writes is that reading already, so what is deferred here is the
   liveness: a piece is many cells, and watching one frame's worth of them
   is the seam question issue

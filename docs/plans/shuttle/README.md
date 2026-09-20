@@ -467,9 +467,10 @@ way.
 
 None blocking v1. The B3 seam-proving gate and its two preparatory
 experiments are recorded in decision 25 and issue
-[#6534](https://github.com/commonfabric/labs/issues/6534); a live view of
-a piece is deferred whole ([`futures.md`](futures.md)), what a piece is
-being `describe`'s reading rather than a view's (decision 26).
+[#6534](https://github.com/commonfabric/labs/issues/6534). Reading what a
+piece is belongs to `describe` rather than to a view (decision 26), so what
+stands deferred is a *live* view of one, and that whole
+([`futures.md`](futures.md)).
 
 ## Non-goals for v1
 
