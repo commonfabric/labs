@@ -59,7 +59,16 @@ from appending to the same file, and so from conflicting when they merge.
 Two renames that land in one alias file — the same test file, or test files
 sharing a last path segment — do still append to it, and `.gitattributes` gives
 the directory's files the `union` merge driver, which keeps both sides' lines
-rather than raising a conflict.
+rather than raising a conflict. Keeping both is right when the two lines can
+coexist, and merging is then silent. When they cannot — both sides mapped the
+same old identity, or together they close a cycle — the merge is still silent
+and `deno task check-test-aliases` is what reports it, so a failing gate after a
+merge that raised no conflict is this case. Resolve it in the merge by keeping
+the line that belongs and dropping the other: append-only holds the content at
+the merge base, which both sides share, and a line either side added after that
+is not yet history. Deciding which belongs is a question about the renames, not
+about the files — two mappings from one identity mean one of the two renames is
+not what happened.
 `deno task check-test-aliases` holds the directory to append-only,
 no-double-mapping, acyclic rules: each file only ever grows, none goes
 away, and no identity is mapped twice across all of them. It also fails a

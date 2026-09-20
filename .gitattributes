@@ -13,10 +13,10 @@ docs/history/INDEX.md merge=union
 # test file, or test files sharing a last path segment — still append to it, and
 # the union driver keeps both instead of raising a conflict. A union merge can
 # only add lines, so every state it produces is one that
-# `deno task check-test-aliases` still judges: that gate fails a line that does
-# not parse, an identity mapped twice, a cycle, a committed file that went
-# missing, and one whose committed content is no longer a prefix of the
-# working file.
+# `deno task check-test-aliases` still judges, and that gate is what reports two
+# appended lines that cannot coexist — the same identity mapped twice, or a
+# cycle closed between them. docs/development/test-records.md says how to
+# resolve one.
 tasks/test-identity-aliases/*.jsonl merge=union
 
 # Keep generated measurement data available without expanding it in code review.
