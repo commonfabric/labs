@@ -22,6 +22,14 @@
  * Nothing here opens anything: where a token lands is decided before any of
  * it reaches disk, and the reading is the same whether the place is there or
  * not.
+ *
+ * Every plane in the family writes `/`, and so does this module: the home it
+ * is handed is a path in that spelling, and the arithmetic below is posix
+ * arithmetic. A platform whose own paths are written another way reaches here
+ * with no home rather than with a home this cannot use, and every `~` it is
+ * handed is refused with that as the reason. Making the plane read such a
+ * platform's paths is a change to the shape of this module — the home stops
+ * being a string and becomes a URL — rather than a fallback at the caller.
  */
 
 import { fromFileUrl, resolve, toFileUrl } from "@std/path/posix";
