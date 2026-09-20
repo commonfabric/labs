@@ -168,8 +168,8 @@ races the keys against the line in flight — and, decisively, it *owns* the
 key stream: one key it has asked for is one no view running beside it could
 read. So a view is a state of that loop rather than a program beside it,
 drawn through the terminal module the prompt already writes its lines
-through. That holds for every view here, the list view and the piece
-overview included.
+through. That holds for every view here, and for the list view when it
+arrives.
 
 ## Live discipline
 

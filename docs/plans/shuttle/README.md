@@ -294,7 +294,12 @@ invisible, the prompt renders the whole ambient record — place and scope
 26. **A piece reads through one verb, and `describe` is it.** The four
     things a reader wants of a piece — its arguments, a summary of its
     result, its callables with their doc annotations, and its pattern
-    identity — are one reading, and `describe` writes it. A second surface
+    identity — are one reading, and `describe` writes it. This decision
+    ruled a second surface onto those four on 2026-08-29, before that verb
+    existed: `describe` reached the shell on 2026-09-07, in B2, and the two
+    were written several slices apart. The dates are here so the overview
+    is not proposed a second time by a reader who finds the ruling and not
+    the verb. A second surface
     onto the same four is an overlap in purpose that a difference in form
     does not pay for: a frame over them would add a way to refresh in
     place, where a shell refreshes by running the line again, and a way to
