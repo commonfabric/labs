@@ -11,6 +11,21 @@ import {
 import { verifyFirstPartyHttpRequest } from "../src/toolshed-http-auth.ts";
 
 describe("space-invites", () => {
+  it("rejects an array error body even when its prototype supplies a code", async () => {
+    const signer = await Identity.generate();
+    const body = Object.setPrototypeOf([], { code: "not-owner" });
+    const response = new Response(null, { status: 500 });
+    response.json = () => Promise.resolve(body);
+    const client = new SpaceInviteClient({
+      host: "https://example.com",
+      space: signer.did(),
+      signer,
+      fetch: () => Promise.resolve(response),
+    });
+    await expect(client.list()).rejects.toEqual(
+      new SpaceInviteError("service-error"),
+    );
+  });
   it("retains generated credentials for an exact retry after a lost create response", async () => {
     const signer = await Identity.generate();
     const requests: Record<string, unknown>[] = [];

@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import { fromFileUrl, toFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { type ACL, aclDocId } from "../acl.ts";
@@ -104,59 +105,149 @@ async function processAttempt(
   // This streaming test needs a readiness barrier, so it uses the same temporary
   // frozen-lock discipline as isolated-deno's non-streaming command helper.
   const directory = await Deno.makeTempDir();
-  const lock = `${directory}/deno.lock`;
-  await Deno.copyFile(new URL("../../../deno.lock", import.meta.url), lock);
-  const child = new Deno.Command(Deno.execPath(), {
-    args: [
-      "run",
-      "-A",
-      `--lock=${lock}`,
-      "--frozen=true",
-      fromFileUrl(new URL("./invite-process.ts", import.meta.url)),
-      JSON.stringify({
-        url: f.url.href,
-        request: {
-          host,
-          space,
-          principal,
-          now: initialTime,
-          operation,
-          body: operation === "redeem"
-            ? { inviteId: invite.inviteId, code: invite.code }
-            : { inviteId: invite.inviteId },
-        },
-        mode,
-      }),
-    ],
-    stdin: "piped",
-    stdout: "piped",
-    stderr: "piped",
-  }).spawn();
-  const output = child.stdout.getReader();
-  const ready = await output.read();
-  expect(new TextDecoder().decode(ready.value)).toBe("ready\n");
-  return {
-    async start() {
-      const writer = child.stdin.getWriter();
-      await writer.write(new Uint8Array([1]));
-      await writer.close();
-    },
-    async finish() {
-      let text = "";
-      for (;;) {
-        const item = await output.read();
-        if (item.done) break;
-        text += new TextDecoder().decode(item.value);
-      }
-      const status = await child.status;
-      const stderr = await new Response(child.stderr).text();
+  let child: Deno.ChildProcess | undefined;
+  let output: ReadableStreamDefaultReader<Uint8Array> | undefined;
+  let stderr: Promise<string> | undefined;
+  let cleaned = false;
+  const close = async () => {
+    if (cleaned) return;
+    cleaned = true;
+    try {
+      await child?.[Symbol.asyncDispose]();
+      await output?.cancel();
+      await stderr;
+    } finally {
       await Deno.remove(directory, { recursive: true });
-      return { text, status, stderr };
-    },
+    }
   };
+  try {
+    const lock = `${directory}/deno.lock`;
+    await Deno.copyFile(new URL("../../../deno.lock", import.meta.url), lock);
+    const process = child = new Deno.Command(Deno.execPath(), {
+      args: [
+        "run",
+        "-A",
+        `--lock=${lock}`,
+        "--frozen=true",
+        fromFileUrl(new URL("./invite-process.ts", import.meta.url)),
+        JSON.stringify({
+          url: f.url.href,
+          request: {
+            host,
+            space,
+            principal,
+            now: initialTime,
+            operation,
+            body: operation === "redeem"
+              ? { inviteId: invite.inviteId, code: invite.code }
+              : { inviteId: invite.inviteId },
+          },
+          mode,
+        }),
+      ],
+      stdin: "piped",
+      stdout: "piped",
+      stderr: "piped",
+    }).spawn();
+    const reader = output = process.stdout.getReader();
+    const errors = stderr = new Response(process.stderr).text();
+    const ready = await reader.read();
+    expect(new TextDecoder().decode(ready.value)).toBe("ready\n");
+    return {
+      [Symbol.asyncDispose]: close,
+      async start() {
+        const writer = process.stdin.getWriter();
+        try {
+          await writer.write(new Uint8Array([1]));
+          await writer.close();
+        } catch (error) {
+          await close();
+          throw error;
+        } finally {
+          writer.releaseLock();
+        }
+      },
+      async finish() {
+        try {
+          let text = "";
+          for (;;) {
+            const item = await reader.read();
+            if (item.done) break;
+            text += new TextDecoder().decode(item.value);
+          }
+          return { text, status: await process.status, stderr: await errors };
+        } finally {
+          await close();
+        }
+      },
+    };
+  } catch (error) {
+    await close();
+    throw error;
+  }
 }
 
 describe("invites", () => {
+  it("cleans up a child that exits before readiness and an unstarted attempt", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create();
+      const directory = await Deno.makeTempDir();
+      {
+        using _directory = stub(
+          Deno,
+          "makeTempDir",
+          () => Promise.resolve(directory),
+        );
+        await expect(processAttempt(
+          { ...f, url: new URL("./", f.url) },
+          invite,
+          f.guest,
+        )).rejects.toThrow();
+      }
+      await expect(Deno.stat(directory)).rejects.toBeInstanceOf(
+        Deno.errors.NotFound,
+      );
+      {
+        await using _attempt = await processAttempt(f, invite, f.guest);
+      }
+      expect(f.run({ operation: "receipts", body: {} })).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+  it("requires explicit ownership for administration while preserving implicit owner access on redemption", async () => {
+    const f = await fixture();
+    try {
+      const invite = f.create();
+      const envelope = {
+        host,
+        space,
+        principal: f.guest,
+        now: initialTime,
+        implicitOwner: true,
+      };
+      expect(() =>
+        executeInvite(f.engine, {
+          ...envelope,
+          operation: "create",
+          body: invite.request,
+        })
+      ).toThrow("not-owner");
+      expect(executeInvite(f.engine, {
+        ...envelope,
+        operation: "redeem",
+        body: invite,
+      })).toMatchObject({
+        result: { outcome: "redeemed", currentAccess: "OWNER" },
+      });
+      expect(Engine.read(f.engine, { id: aclDocId(space) })?.value).toEqual({
+        [f.owner]: "OWNER",
+      });
+    } finally {
+      await f.close();
+    }
+  });
   it("checks an unavailable operation with one invocation", () => {
     let calls = 0;
     unavailable(() => {
@@ -382,6 +473,8 @@ describe("invites", () => {
     const second = await Engine.open({ url: f.url });
     try {
       const invite = f.create();
+      // These calls verify sequential visibility across connections.
+      // Competing child processes below exercise simultaneous redemption.
       const results = await Promise.allSettled([
         Promise.resolve().then(() =>
           executeInvite(f.engine, {
@@ -416,8 +509,8 @@ describe("invites", () => {
     const f = await fixture();
     try {
       const invite = f.create();
-      const first = await processAttempt(f, invite, f.guest);
-      const second = await processAttempt(f, invite, f.second);
+      await using first = await processAttempt(f, invite, f.guest);
+      await using second = await processAttempt(f, invite, f.second);
       await Promise.all([first.start(), second.start()]);
       const outcomes = await Promise.all([first.finish(), second.finish()]);
       expect(outcomes.map((o) => o.status.code)).toEqual([0, 0]);
@@ -435,7 +528,12 @@ describe("invites", () => {
     const f = await fixture();
     try {
       const invite = f.create();
-      const before = await processAttempt(f, invite, f.guest, "before-commit");
+      await using before = await processAttempt(
+        f,
+        invite,
+        f.guest,
+        "before-commit",
+      );
       await before.start();
       expect((await before.finish()).status.code).toBe(73);
       await f.reopen();
@@ -443,8 +541,12 @@ describe("invites", () => {
       expect(Engine.read(f.engine, { id: aclDocId(space) })?.value).toEqual({
         [f.owner]: "OWNER",
       });
-      f.engine.database.exec("DROP TRIGGER crash_redemption");
-      const after = await processAttempt(f, invite, f.guest, "after-commit");
+      await using after = await processAttempt(
+        f,
+        invite,
+        f.guest,
+        "after-commit",
+      );
       await after.start();
       expect((await after.finish()).status.code).toBe(74);
       await f.reopen();
@@ -535,8 +637,8 @@ describe("invites", () => {
     const f = await fixture();
     try {
       const invite = f.create();
-      const redeem = await processAttempt(f, invite, f.guest);
-      const revoke = await processAttempt(
+      await using redeem = await processAttempt(f, invite, f.guest);
+      await using revoke = await processAttempt(
         f,
         invite,
         f.owner,

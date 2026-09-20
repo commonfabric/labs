@@ -182,7 +182,8 @@ export class SpaceInviteClient {
     if (!response.ok) {
       const error: unknown = await response.json().catch(() => undefined);
       throw new SpaceInviteError(
-        error !== null && typeof error === "object" && "code" in error &&
+        error !== null && typeof error === "object" && !Array.isArray(error) &&
+          Object.hasOwn(error, "code") && "code" in error &&
           typeof error.code === "string"
           ? error.code
           : "service-error",
