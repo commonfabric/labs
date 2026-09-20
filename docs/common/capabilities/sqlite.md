@@ -250,11 +250,11 @@ export const liveOrders = (orders: SqliteDb) => ({
 ## Session-scoped results
 
 Where the runtime carries a read ceiling — a lens on what this particular run
-may observe — the result of every query it issues has to be **session-scoped**,
-and a query whose result is broader is refused before anything is written. A
-space- or user-shared result is one cell that every runtime on the space
-resolves, so one runtime cannot narrow it for itself; a session-scoped result
-is the run's own.
+may observe — a **session-scoped** result filters its rows under that ceiling.
+A space- or user-shared result materializes independently of runtime ceilings.
+Its array shape and rows retain their confidentiality labels, and a read
+outside the observing runtime's ceiling is withheld. A shared result containing
+private rows can therefore withhold the whole array, including its length.
 
 Declare the scope on the query:
 
@@ -269,8 +269,8 @@ export const recentOrders = (orders: SqliteDb) =>
 
 `PerSession<>` on the result field and `.asScope("session")` on the query do
 the same thing, and a session-scoped database makes its queries session-scoped
-without a declaration. A run under a ceiling that gets a refusal instead of
-rows is usually a query that declared no scope.
+without a declaration. Use a session-scoped result when each session needs its
+own filtered row set.
 
 ## Labeled columns
 

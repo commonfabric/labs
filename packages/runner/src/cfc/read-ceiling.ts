@@ -1,21 +1,34 @@
 /**
- * The runtime-wide read ceiling: a confidentiality ceiling every `db.query`
- * the runtime issues reads under, whether or not the query declares one of
- * its own. Declared through `RuntimeOptions.cfcReadMaxConfidentiality` and
+ * The runtime-wide read ceiling: a confidentiality ceiling every cell payload
+ * read and `db.query` uses, whether or not the query declares one of its own.
+ * Declared through `RuntimeOptions.cfcReadMaxConfidentiality` and
  * `cfcReadOnExceed`, validated and frozen here at construction.
  *
  * A pattern can declare a per-query ceiling, but the only carrier a pattern
  * can read is a cell in the space, which every runtime on the space shares.
  * A ceiling that has to differ per runtime — a per-device lens, a per-run
  * clearance — therefore cannot live in a pattern's inputs. It lives on the
- * runtime, and the query builtin meets it with whatever the query declares,
- * so the query can tighten the runtime's ceiling and never widen it.
+ * runtime. Session-scoped queries meet it with their declared ceiling; shared
+ * queries materialize labeled results which the runtime measures on cell reads.
  */
 
 import { readCeilingShapeError } from "@commonfabric/memory/v2";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
+import type {
+  IExtendedStorageTransaction,
+  IMemorySpaceAddress,
+  IReadOptions,
+} from "../storage/interface.ts";
+import {
+  isInternalVerifierRead,
+  isLinkResolutionProbe,
+  isWriteDestinationRead,
+} from "../storage/reactivity-log.ts";
 import type { CfcConfClause } from "./clause.ts";
+import { cfcLabelViewFromMetadata } from "./label-view-state.ts";
+import { readStoredCfcMetadata } from "./metadata.ts";
+import { atomsOutsideCeiling } from "./observation.ts";
 
 /** What a read does with a row the runtime's ceiling does not admit. */
 export type CfcReadOnExceed = "fail" | "skip";
@@ -111,4 +124,43 @@ export function buildCfcReadCeiling(
     maxConfidentiality: Object.freeze(clauses),
     onExceed,
   });
+}
+
+/**
+ * A value withheld because its stored label exceeds the runtime read ceiling.
+ */
+export class CfcReadCeilingError extends Error {
+  constructor() {
+    super("the runtime read ceiling withholds this value");
+    this.name = "CfcReadCeilingError";
+  }
+}
+
+/**
+ * Measures a payload read against its runtime ceiling before returning content.
+ * Labels come from the stored envelope, including descendants of a raw object
+ * read. Link-resolution and write-destination probes are runtime machinery;
+ * the content read that follows a resolved link is measured at its target.
+ */
+export function assertCfcReadCeiling(
+  tx: IExtendedStorageTransaction,
+  address: IMemorySpaceAddress,
+  ceiling: readonly CfcConfClause[] | undefined,
+  options?: IReadOptions,
+): void {
+  if (
+    ceiling === undefined ||
+    (address.path.length > 0 && address.path[0] !== "value") ||
+    isInternalVerifierRead(options?.meta) ||
+    isLinkResolutionProbe(options?.meta) ||
+    isWriteDestinationRead(options?.meta)
+  ) return;
+  const metadata = readStoredCfcMetadata(tx, address);
+  const view = cfcLabelViewFromMetadata(metadata, address.path);
+  const confidentiality = (view?.entries ?? []).flatMap((entry) =>
+    entry.label.confidentiality ?? []
+  );
+  if (atomsOutsideCeiling(confidentiality, ceiling).length > 0) {
+    throw new CfcReadCeilingError();
+  }
 }

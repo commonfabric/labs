@@ -49,7 +49,11 @@ import {
 import { speculationRunContextOf } from "../speculation/overlay-destination.ts";
 import { parseCfLinkToSigil } from "./sqlite/cf-link.ts";
 import { type IFCLabel, mergeLabel } from "../cfc/label-view-core.ts";
-import { meetCfcObservationCeilings } from "../cfc/observation.ts";
+import {
+  joinCfcObservedConfidentiality,
+  meetCfcObservationCeilings,
+} from "../cfc/observation.ts";
+import { writeDestinationRead } from "../storage/reactivity-log.ts";
 import {
   cloneIfNecessary,
   fabricFromConvertibleJsValue,
@@ -901,7 +905,12 @@ export function sqliteQuery(
     const runContext = waveRunContextOf(tx);
     const servedRun = runContext !== undefined;
     const runIdentity = runContext?.scopeKeyIdentity;
-    const readCeiling = effectiveReadCeiling(runtime, runContext);
+    // A shared result has one materialization, independent of the observing
+    // runtime. Session results can filter at the query; shared results retain
+    // all rows admitted by the query contract and are guarded on cell reads.
+    const readCeiling = scope === "session"
+      ? effectiveReadCeiling(runtime, runContext)
+      : { maxConfidentiality: undefined, onExceed: undefined };
     if (
       crossSpace && servedRun &&
       (!runIdentity?.principal ||
@@ -1003,34 +1012,6 @@ export function sqliteQuery(
 
     if (!inputs?.db || typeof inputs.sql !== "string") return;
 
-    // A result read under the runtime's ceiling is this runtime's view of the
-    // rows, and a runtime is one session, so the result has to be one this
-    // session reads alone: a space- or user-scoped result is one cell every
-    // runtime on the space (or every session of the user) resolves, and the
-    // pattern's output link that names it is shared too, with its scope. A
-    // runtime cannot narrow that link for itself — the first writer's scope
-    // stands — so two runtimes of different ceilings sharing one result
-    // would either fight over it, each reading the other's request hash as
-    // new inputs, or read each other's rows between rounds. The scope has to
-    // come from the pattern, where every runtime reads the same declaration;
-    // a query that declares none is refused here, before it is staged: no
-    // claim and no rows, and the refusal reaches the runtime's error
-    // handlers rather than the result cell, which another runtime may be
-    // serving. After the inputs guard, so a scope the db handle carries is
-    // read from the handle rather than refused before the handle loads.
-    if (readCeiling.maxConfidentiality !== undefined && scope !== "session") {
-      throw new Error(
-        "sqlite: this run reads under a read ceiling (the runtime's " +
-          "`cfcReadMaxConfidentiality`, or the one its session carries), " +
-          "which applies only to a " +
-          `session-scoped query result; this result is ${scope}-scoped. ` +
-          "Declare the result per session — `PerSession<>` on the query's " +
-          'result type, the `scope: "session"` query option, ' +
-          '`.asScope("session")` on the query, or a session-scoped db — so ' +
-          "each session reads rows of its own",
-      );
-    }
-
     // A `db` that does not read back as a handle reaches the result cell as
     // this query's error, on the same terms as an unencodable parameter
     // below. The guard above admits any truthy value, and an object read
@@ -1075,6 +1056,9 @@ export function sqliteQuery(
       sql: inputs.sql,
       params: params ?? null,
       reactOn: inputs.reactOn ?? null,
+      // Shared materializations include their shape-label contract in the
+      // identity so a memo without that protection cannot stand as a hit.
+      ...(scope !== "session" ? { sharedResultLabelVersion: 1 } : {}),
       // Phase 3 read-surface options join the request identity so changing
       // them re-issues the query (pre-existing queries re-hash once — benign).
       maxConfidentiality: inputs.maxConfidentiality ?? null,
@@ -1117,7 +1101,11 @@ export function sqliteQuery(
       result,
       runIdentity,
     );
-    const storedBeforeClaim = result.withTx(tx).get();
+    // The destination snapshot decides whether an abandoned publication may
+    // replace this exact record. Its values never enter the query or an output.
+    const storedBeforeClaim = result.withTx(tx).getRaw({
+      meta: writeDestinationRead,
+    }) as QueryState | undefined;
     const decision = sqliteQueryMemoDecision({
       stored: storedBeforeClaim,
       hash,
@@ -1176,7 +1164,9 @@ export function sqliteQuery(
               // belongs to nobody, and reading that as a takeover would leave
               // the pattern holding the finished query's rows under a statement
               // it no longer runs.
-              const stored = result.withTx(settleTx).get();
+              const stored = result.withTx(settleTx).getRaw({
+                meta: writeDestinationRead,
+              }) as QueryState | undefined;
               // A newer accepted action can select a memo without changing
               // its stored value. Publication ownership permits this binding
               // to link that result; field ownership preserves the memo.
@@ -1252,7 +1242,7 @@ export function sqliteQuery(
             runtime.editWithRetry((wtx) => {
               markEffectCompletion(wtx, effectKey);
               applyRunIdentity(wtx);
-              if (result.withTx(wtx).get()?.requestHash !== hash) return;
+              if (result.withTx(wtx).key("requestHash").get() !== hash) return;
               result.withTx(wtx).set({
                 pending: false,
                 error,
@@ -1384,7 +1374,15 @@ export function sqliteQuery(
                 : undefined,
             });
             if ("error" in rowLabels) {
-              await failQuery(rowLabels.error);
+              await failQuery(
+                scope === "session"
+                  ? rowLabels.error
+                  : rowLabels.error.startsWith(
+                      "sqlite: rowLabel rule failed on row ",
+                    )
+                  ? "sqlite: rowLabel rule could not safely label a result row"
+                  : rowLabels.error.replace(/row \d+/g, "row"),
+              );
               return;
             }
             const withheld = rowLabels.withheld;
@@ -1420,7 +1418,13 @@ export function sqliteQuery(
             );
             const needsEntryRowSchema = resultRows.some(Array.isArray) &&
               (labelSchema !== undefined || anyPerRow);
-            const writeSchema = needsEntryRowSchema
+            const shapeConfidentiality = scope === "session"
+              ? []
+              : joinCfcObservedConfidentiality([
+                staticConfidentialityOf(labelSchema),
+                ...rowLabels.labels.map((label) => label?.confidentiality),
+              ]);
+            let writeSchema = needsEntryRowSchema
               ? {
                 type: "object",
                 additionalProperties: true,
@@ -1433,6 +1437,30 @@ export function sqliteQuery(
                 },
               }
               : labelSchema;
+            if (shapeConfidentiality.length > 0) {
+              // A shared array's length and membership reveal its rows even
+              // without dereferencing them. The complete row-label join also
+              // protects a count of rows a query contract deliberately skips.
+              const properties = (writeSchema?.properties ?? {}) as Record<
+                string,
+                Record<string, unknown>
+              >;
+              const shapeIfc = { confidentiality: shapeConfidentiality };
+              writeSchema = {
+                ...writeSchema,
+                type: "object",
+                additionalProperties: true,
+                properties: {
+                  ...properties,
+                  result: {
+                    ...properties.result,
+                    type: "array",
+                    ifc: shapeIfc,
+                  },
+                  withheld: { type: "number", ifc: shapeIfc },
+                },
+              };
+            }
             // Every row is an entity document of its own under the result
             // cell, keyed as `resultRowKeys()` decides: a key stands still
             // across runs for a row that did not change, so the diff finds
@@ -1458,7 +1486,7 @@ export function sqliteQuery(
               // Stale-writeback guard: a newer query (different inputs -> different
               // hash) may have superseded this one while the RPC was in flight.
               // Only write back if the result cell still records THIS request.
-              if (result.withTx(wtx).get()?.requestHash !== hash) {
+              if (result.withTx(wtx).key("requestHash").get() !== hash) {
                 return;
               }
               const base = result.getAsNormalizedFullLink();

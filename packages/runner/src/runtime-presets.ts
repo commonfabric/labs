@@ -896,7 +896,7 @@ export interface RemoteClientPresetParams extends CoreParams {
   cfcWriteFloor?: CfcWriteFloorMode;
 
   /**
-   * The runtime-wide read ceiling for this one session's `db.query` reads
+   * The runtime-wide read ceiling for this session's cell and `db.query` reads
    * (`RuntimeOptions.cfcReadMaxConfidentiality`): a harness running one
    * pattern under one clearance sets it here. Under server execution the
    * client's sessions declare it and the space server's runtime reads under

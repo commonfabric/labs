@@ -65,11 +65,6 @@ async function fixture(scope: "space" | "session") {
   const server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
   const errors: unknown[] = [];
   const clientErrors: unknown[] = [];
-  // Resolved by the first refusal each side reports: what a case waits on
-  // instead of idling a runtime that, once a run is refused, has nothing
-  // left to settle.
-  const serverRefused = Promise.withResolvers<void>();
-  const clientRefused = Promise.withResolvers<void>();
   const requests: string[] = [];
   const clients: Array<
     { runtime: Runtime; manager: EmulatedStorageManager; cancel?: () => void }
@@ -109,7 +104,6 @@ async function fixture(scope: "space" | "session") {
         };
         runtime.scheduler.onError((error) => {
           errors.push(error);
-          serverRefused.resolve();
         });
         return {
           runtime,
@@ -136,7 +130,6 @@ async function fixture(scope: "space" | "session") {
         experimental: { serverExecution: true },
         errorHandlers: [(error) => {
           clientErrors.push(error);
-          clientRefused.resolve();
         }],
         ...options,
       });
@@ -211,7 +204,7 @@ export default pattern<{ sql: ${scoped} }, { query: any }>(({ sql }) => {
         runtime.run(start, pattern, argument, result);
         expect((await start.commit()).error).toBeUndefined();
       }
-      client.cancel = result.sink(() => {});
+      client.cancel = result.key("query").key("pending").sink(() => {});
       return { runtime, result };
     };
     return {
@@ -220,8 +213,6 @@ export default pattern<{ sql: ${scoped} }, { query: any }>(({ sql }) => {
       requests,
       errors,
       clientErrors,
-      refused: () =>
-        Promise.all([serverRefused.promise, clientRefused.promise]),
       host,
       async issued(count: number) {
         await waitUntil(
@@ -270,16 +261,22 @@ describe("executor-sqlite-read-ceiling", () => {
     }
   });
 
-  it("refuses, on the serving runtime, a query whose result is not session-scoped for a bounded session's run", async () => {
-    // The same refusal the bounded client's own run gets: a shared result
-    // cannot hold one session's filtered rows, so the query is refused
-    // before it is staged — on both runtimes — and nothing is issued.
+  it("materializes a shared served query while withholding its rows from the bounded client", async () => {
     const f = await fixture("space");
     try {
-      await f.refused();
-      expect(String(f.errors[0])).toMatch(/reads under a read ceiling/);
-      expect(String(f.clientErrors[0])).toMatch(/reads under a read ceiling/);
-      expect(f.requests).toEqual([]);
+      await waitForCellValue(
+        f.first.runtime,
+        f.first.result.key("query").key("pending"),
+        (pending) => pending === false,
+      );
+      expect(() => f.first.result.key("query").get()).toThrow(/read ceiling/);
+      const second = await f.join(bob);
+      const all = await f.settled(second);
+      expect(all.error).toBeUndefined();
+      expect(bodies(all)).toEqual(["mine", "shared"]);
+      await f.issued(1);
+      expect(f.errors).toEqual([]);
+      expect(f.clientErrors).toEqual([]);
     } finally {
       await f.close();
     }

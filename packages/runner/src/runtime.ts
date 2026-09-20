@@ -79,6 +79,8 @@ import {
   type SinkMaxConfidentiality,
   type TrustSnapshot,
 } from "./cfc/mod.ts";
+import { assertCfcReadCeiling } from "./cfc/read-ceiling.ts";
+import { meetCfcObservationCeilings } from "./cfc/observation.ts";
 import {
   cfcPolicyManifestDocId,
   type PolicyArtifactManifestV1,
@@ -706,49 +708,43 @@ export interface RuntimeOptions {
   cfcSinkMaxConfidentiality?: SinkMaxConfidentiality;
 
   /**
-   * Runtime-wide read ceiling: the confidentiality every `db.query` this
-   * runtime issues reads under. A query declaring no ceiling of its own reads
-   * under this one; a query declaring one (the `maxConfidentiality` option or
+   * Runtime-wide read ceiling: the confidentiality every cell payload read
+   * and `db.query` this runtime issues reads under. A session-scoped query
+   * declaring no ceiling of its own reads under this one; a session-scoped
+   * query declaring one (the `maxConfidentiality` option or
    * the Row schema's `MaxConfidentiality`) reads under the meet of the two,
    * so a query tightens this ceiling and never widens it. Placeholder atoms
    * (`{ __ctDbOwner: true }`, `{ __ctCurrentPrincipal: true }`) resolve per
    * query, as they do in a query's own ceiling. Defaults to none: the owner
    * view, every row returned.
    *
-   * Per runtime rather than per pattern because the only carrier a pattern
-   * can read is a cell in the space, shared by every runtime on it; a lens
-   * that differs per device or per run has to ride the runtime. For the same
-   * reason the ceiling applies only to a query whose result is
-   * session-scoped by the pattern's own declaration (`PerSession<>`,
-   * `.asScope("session")`, or a session-scoped db): a space- or user-shared
-   * result is one cell every runtime on the space resolves, and a runtime
-   * cannot narrow it for itself. A query with a broader result is refused
-   * through the runtime's error handlers, and nothing shared is written.
+   * Per runtime rather than per pattern because a pattern's inputs live in
+   * shared cells. Session-scoped queries meet this ceiling into row filtering;
+   * shared queries materialize under their own declared contract, independent
+   * of the observing runtime. A shared result's array shape carries the join
+   * of all row labels, including rows its declared contract skips, so cell
+   * reads withhold row counts and membership as well as protected payloads.
    *
-   * The refusal bounds what THIS runtime queries; it does not reach a
-   * shared cell another runtime already filled. A pattern whose output is
-   * space-scoped and that an unbounded runtime ran first leaves its result
-   * in a cell this runtime resolves like any other shared value, refusal or
-   * not — so a bounded runtime must run its patterns with session-scoped
-   * outputs, and what protects a shared cell is the cell's own label under
-   * the commit-boundary gates, not this option. Carrying the ceiling into
-   * the cell read path (a labeled cell that does not fit reads as withheld)
-   * is the follow-up that closes that seam.
+   * Cell and transaction payload reads measure the stored label at the
+   * requested path, including descendants when returning an object. A value
+   * outside the ceiling throws `CfcReadCeilingError` before returning content;
+   * `cfcReadOnExceed` applies only to SQLite row filtering. Ordinary cells have
+   * no database context for resolving placeholder atoms: use concrete clauses
+   * for cell observation. An unresolved placeholder cannot admit a concrete
+   * label merely because that label names a database owner.
    *
-   * Governs the runtime that performs the query — a client runtime executing
-   * its own patterns, or a serving runtime for every run it serves — and the
-   * sqlite read surface only: every `db.query`, aggregates included. Cell
-   * reads are governed by the commit-boundary gates, and a host's direct
-   * sqlite bridge refuses labeled tables outright. Validated and deep-frozen
-   * at construction; an empty list, which admits nothing, is refused (omit
-   * the option for no ceiling).
+   * Governs client runtimes and served runs; a serving runtime meets its own
+   * ceiling with the carried session ceiling. A host's direct sqlite bridge
+   * refuses labeled tables outright. Validated and deep-frozen at construction;
+   * an empty list, which admits nothing, is refused (omit the option for no
+   * ceiling).
    *
    * A client under server execution executes no query of its own: the
    * space server's runtime serves them. Its ceiling travels with its
    * sessions instead — declared through the storage manager
    * (`setSessionReadCeiling`) into every signed `session.open` descriptor
    * before a session opens — and the serving loop stamps it onto every run
-   * it serves as one of those sessions, whose queries then read under the
+   * it serves as one of those sessions, whose cell reads and queries use the
    * serving runtime's option met with it. Such a client refuses a storage
    * manager that cannot carry the ceiling, and a server that does not
    * record one (`sessionReadCeiling` absent from its protocol flags).
@@ -2346,6 +2342,16 @@ export class Runtime {
       (tx as { debugActionId?: string }).debugActionId = debugActionId;
     }
     const wrapped = new ExtendedStorageTransaction(tx, {
+      checkReadCeiling: (readingTx, address, options) => {
+        const carried = waveRunContextOf(readingTx)?.readCeiling;
+        const ceiling = carried === undefined
+          ? this.cfcReadMaxConfidentiality
+          : meetCfcObservationCeilings(
+            this.cfcReadMaxConfidentiality,
+            carried.maxConfidentiality,
+          );
+        assertCfcReadCeiling(readingTx, address, ceiling, options);
+      },
       resolvePolicyManifest: (
         reference,
         tx,

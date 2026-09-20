@@ -173,7 +173,7 @@ export interface WaveRunContext {
    * resolve no scoped addresses at all). */
   scopeKeyIdentity?: ScopeKeyIdentity;
 
-  /** The read ceiling this run's `db.query` reads are bounded by: the
+  /** The read ceiling this run's cell and `db.query` reads are bounded by: the
    * ceiling of the session the run acts as (`scopeKeyIdentity.sessionId`),
    * read from the memory server's session record at the stamp
    * (`Server.sessionReadCeiling`) — declared by the client in its signed

@@ -451,37 +451,36 @@ contract, required to be policy-permitted and auditable — and it never applies
 to aggregates (a withheld row already contributed server-side; a count cannot
 be un-counted), where the mode is rejected outright.
 
-**Runtime read ceiling.** A ceiling can also come from the runtime rather
-than the query: `RuntimeOptions.cfcReadMaxConfidentiality` (with
-`cfcReadOnExceed` beside it) is a ceiling every `db.query` the runtime issues
-reads under, aggregates included. A query declaring no ceiling reads under
-the runtime's; a query declaring one — the `maxConfidentiality` option or the
-Row schema's `MaxConfidentiality` — reads under the **meet** of the two
-(`meetCfcObservationCeilings`: a row fits the meet iff it fits each), so a
-query tightens the runtime's ceiling and never widens it. Placeholder atoms
-resolve per query, against the same acting principal and db owner as the
-query's own. The query's `onExceed` stands; the runtime's supplies the default
-beneath it, and `fail` beneath that. `skip` is refused on an aggregate
-projection exactly as the query option is. Absent, the runtime applies no
-ceiling (the owner view); an empty list, which admits nothing, is refused at
-construction.
+**Runtime read ceiling.** `RuntimeOptions.cfcReadMaxConfidentiality` bounds
+cell payload reads as well as SQLite results. An ordinary cell read measures
+its stored label, including descendants of an object, and withholds a value
+outside the ceiling. Absent is the owner view; an empty list is refused at
+construction. Concrete clauses are required for ordinary cells: database-owner
+and current-principal placeholders have a binding only at the SQLite query
+boundary and do not admit a concrete label on an unrelated persisted cell.
 
-The option exists because the only carrier a pattern can read is a cell in
-the space, which every runtime on the space shares: a ceiling that has to
-differ per runtime — a device's lens, a run's clearance — cannot ride a
-pattern's inputs. For the same reason it applies only to a query whose result
-is **session-scoped** by the pattern's own declaration (`PerSession<>` on the
-result, `.asScope("session")` on the query, the `scope: "session"` query
-option, or a session-scoped db): a space- or user-shared result is one cell
-every runtime on the space resolves, its link — scope included — is shared
-too, and a runtime cannot narrow it for itself. A query under a runtime
-ceiling whose result is broader is refused before anything shared is written,
-through the runtime's error handlers rather than the result cell, which
-another runtime may be serving. Under served execution the serving runtime
-performs the query, so its option governs every run it serves; a client
-runtime's option governs the queries it executes itself. The runtime's
-ceiling joins the request hash, so a settled result is a hit only for a
-runtime reading under the same ceiling.
+A **session-scoped** query result (`PerSession<>`, `.asScope("session")`,
+`scope: "session"`, or a session-scoped db) meets the runtime ceiling with the
+query's declared ceiling before materialization. Placeholder atoms resolve
+against the acting principal and database owner. The query's `onExceed` stands;
+`cfcReadOnExceed` supplies its default, with `fail` beneath that. The runtime
+ceiling joins the request hash because the filtered result belongs to one
+session. A runtime `skip` falls back to `fail` for aggregates; a query's own
+`skip` on an aggregate is refused.
+
+A **shared** query result materializes under its query-declared ceiling and
+mode, independently of runtime ceilings. The runtime ceiling does not join its
+request hash or filter its stored rows. The hash includes the shared result's
+shape-label contract version, so a memo without that protection is reissued.
+Each reader instead observes the
+materialized result through the ordinary cell read guard. The result array
+carries the canonical join of all returned row labels, including rows that the
+query contract skips; its membership and length are therefore withheld when
+any contributor exceeds the reader's ceiling. A `withheld` count carries that
+same label. An aggregate is withheld as a whole. Shared row-label failures
+omit row ordinals and data-derived details. These rules let multiple runtime
+ceilings share one materialization without revealing private row counts or
+replacing one reader's filtered rows with another's.
 
 **Under server execution the ceiling travels with the session.** A client
 runtime under server execution (`experimental.serverExecution` on, without
@@ -674,9 +673,9 @@ re-derives.
    `skip` never applies to aggregates.
 5. **Read, ceiling exceeded:** `onExceed` decides — fail the query (default)
    or skip the row (declared opt-in, row-returning queries only). The
-   runtime's ceiling, where one is declared, meets the query's first; a query
-   under a runtime ceiling whose result is not session-scoped ⟶ refuse the
-   query before it is staged.
+   runtime's ceiling meets the query's for session-scoped results. A shared
+   result retains its query-contract materialization and is withheld on cell
+   observation when its stored label exceeds the runtime ceiling.
 6. **Write, unattributable:** fail closed (Phase 2's set) — except the
    3.c-covered shapes with unlabeled inputs against a server that advertises
    commit evaluation (rule-input UPDATE, INSERT…SELECT, upsert, columnless

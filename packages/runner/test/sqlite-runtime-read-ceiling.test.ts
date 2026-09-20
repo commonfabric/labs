@@ -1,12 +1,7 @@
 /**
- * The runtime-wide read ceiling (`RuntimeOptions.cfcReadMaxConfidentiality`
- * and `cfcReadOnExceed`) applied by `sqliteQuery`. A query declaring no
- * ceiling reads under the runtime's; a query declaring its own reads under
- * the meet of the two, so a pattern can never widen past the runtime's. The
- * ceiling applies to a session-scoped result only, which is what keeps two
- * runtimes of different ceilings over one space from reading each other's
- * rows; a broader result is refused. Spec: docs/specs/sqlite-builtin/06-cfc.md
- * ("Runtime read ceiling").
+ * Runtime read ceilings filter session-scoped query results. Shared queries
+ * materialize under their declared contract and enforce each reader's ceiling
+ * at cell observation. Spec: docs/specs/sqlite-builtin/06-cfc.md.
  */
 
 import { expect } from "@std/expect";
@@ -141,6 +136,7 @@ async function runQuery(
   db: SqliteDbRef,
   query: Record<string, unknown>,
   cause = `read-ceiling-${crypto.randomUUID()}`,
+  observer = runtime,
 ): Promise<{ state: QueryState; cell: ReturnType<Runtime["getCell"]> }> {
   const { commonfabric: cf } = createTrustedBuilder(runtime);
   const p = cf.pattern(() =>
@@ -153,8 +149,26 @@ async function runQuery(
   const resultCell = runtime.getCell(space, cause, p.resultSchema, tx);
   const result = runtime.run(tx, p, {}, resultCell);
   await tx.commit();
-  const state = await waitForCellValue<QueryState>(runtime, result, settled);
-  return { state, cell: result };
+  if (observer === runtime) {
+    const state = await waitForCellValue<QueryState>(runtime, result, settled);
+    return { state, cell: result };
+  }
+  await waitForCellValue<boolean>(
+    runtime,
+    result.key("pending"),
+    (v) => v === false,
+  );
+  const observation = observer.edit();
+  try {
+    const value = result.withTx(observation).get() as QueryState;
+    const state = {
+      ...value,
+      result: value.result?.map((row) => ({ ...row })),
+    };
+    return { state, cell: result };
+  } finally {
+    observation.abort();
+  }
 }
 
 describe("sqliteQuery under a runtime read ceiling", () => {
@@ -508,6 +522,7 @@ describe("sqliteQuery under a runtime read ceiling", () => {
     let aggregateDb: SqliteDbRef;
     let storageManager: ReturnType<typeof StorageManager.emulate>;
     let runtime: Runtime | undefined;
+    let observer: Runtime | undefined;
     let errors: ErrorWithContext[];
 
     beforeEach(async () => {
@@ -527,12 +542,14 @@ describe("sqliteQuery under a runtime read ceiling", () => {
         owner: signer.did(),
       };
       runtime = undefined;
+      observer = undefined;
       errors = [];
     });
 
     afterEach(async () => {
       await runtime?.idle();
       await runtime?.dispose();
+      await observer?.dispose();
       await storageManager.close();
     });
 
@@ -565,9 +582,21 @@ describe("sqliteQuery under a runtime read ceiling", () => {
         cfcReadMaxConfidentiality: [{ __ctDbOwner: true }],
         cfcReadOnExceed: "skip",
       });
-      const { state } = await runQuery(rt, space, db, { sql: ROWS_SQL });
+      observer = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      const { state, cell } = await runQuery(
+        rt,
+        space,
+        db,
+        { sql: ROWS_SQL },
+        undefined,
+        observer,
+      );
       expect(state.error).toBeUndefined();
       expect(bodies(state)).toEqual(["mine"]);
+      expect(() => cell.get()).toThrow(/read ceiling/);
     });
 
     it("resolves a placeholder inside an `anyOf` of the runtime's ceiling", async () => {
@@ -579,11 +608,23 @@ describe("sqliteQuery under a runtime read ceiling", () => {
         cfcReadMaxConfidentiality: [{ anyOf: [{ __ctDbOwner: true }, BOB] }],
         cfcReadOnExceed: "skip",
       });
-      const { state } = await runQuery(rt, space, aggregateDb, {
-        sql: "SELECT id, to_addr, body FROM shared ORDER BY id",
+      observer = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
       });
+      const { state, cell } = await runQuery(
+        rt,
+        space,
+        aggregateDb,
+        {
+          sql: "SELECT id, to_addr, body FROM shared ORDER BY id",
+        },
+        undefined,
+        observer,
+      );
       expect(state.error).toBeUndefined();
       expect(bodies(state)).toEqual(["shared"]);
+      expect(() => cell.get()).toThrow(/read ceiling/);
     });
 
     it("refuses a query's `onExceed: null` rather than reading it as absent", async () => {
@@ -755,7 +796,7 @@ describe("sqliteQuery under a runtime read ceiling", () => {
       expect(bodies(state)).toEqual(["seed"]);
     });
 
-    it("refuses a query whose result is not session-scoped, writing nothing", async () => {
+    it("withholds a shared query result at observation without a scope refusal", async () => {
       const rt = await start({
         cfcReadMaxConfidentiality: [signer.did()],
         cfcReadOnExceed: "skip",
@@ -775,12 +816,18 @@ describe("sqliteQuery under a runtime read ceiling", () => {
       rt.run(tx, p, {}, cell);
       await tx.commit();
       // The query runs once a reader demands it.
-      cell.sink(() => {});
-      await rt.idle();
-      expect(errors.map((e) => String(e))).toEqual([
-        expect.stringMatching(/session-scoped/),
-      ]);
-      expect(cell.get()).toBeUndefined();
+      const cancel = cell.key("pending").sink(() => {});
+      try {
+        await waitForCellValue(
+          rt,
+          cell.key("pending"),
+          (value) => value === false,
+        );
+        expect(errors).toEqual([]);
+        expect(() => cell.key("result").get()).toThrow(/read ceiling/);
+      } finally {
+        cancel();
+      }
     });
   });
 

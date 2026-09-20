@@ -12,8 +12,8 @@ requesting a `Writable<PerUser<LoomResourcesV1>>` projection.
 The home space is the discovery point. Consumers need neither source-space DIDs
 nor database IDs in their startup configuration. The favorite carries the
 provider reference, including its original space. Require user-scoped discovery
-and selection for this path; SQL results remain `PerSession<>` where the inbox's
-read ceiling requires it.
+and selection for this path; SQL results use `PerSession<>` where the inbox needs row filtering under its
+runtime read ceiling.
 
 Start with `cf-person-inbox`. Keep its person selection and session view as
 explicit inputs. Resolve its environmental dependencies through the resources

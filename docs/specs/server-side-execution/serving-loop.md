@@ -876,8 +876,10 @@ action's public write. Therefore, normatively:
   runtime's own option met with the carried one, `onExceed` meeting
   toward `fail` — and reads under it exactly as a client's own run
   reads under its option (06-cfc.md, "Runtime read ceiling"): the
-  meet joins the request hash, decides the rows, and a query whose
-  result is not session-scoped is refused before it is staged. Never
+  meet joins the request hash and filters rows for a session-scoped
+  result. A shared result materializes under its query contract and
+  carries labels on its array shape and rows; cell reads meet the
+  carried session ceiling with the runtime ceiling before returning content. Never
   for a bookkeeping run, which acts as no session; a run acting as a
   session that declared none reads under the serving runtime's option
   alone. Verification-coverage.md OW64 is the coverage row.

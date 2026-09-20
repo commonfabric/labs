@@ -247,6 +247,13 @@ const reservedSiblingCarriedForward = (
   valueEqual(carried as FabricValue, stored as FabricValue);
 
 type CfcInstrumentationHooks = {
+  /** The runtime's ceiling check, applied before a payload leaves a read. */
+  checkReadCeiling?(
+    tx: IExtendedStorageTransaction,
+    address: IMemorySpaceAddress,
+    options?: IReadOptions,
+  ): void;
+
   onRelevantTx?(): void;
 
   /** Stage C tuning T1: one flow-label probe was evaluated (`computed`) or
@@ -3068,6 +3075,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   ): Result<IAttestation, ReadError> {
     options = this.#withAmbientReadMeta(options);
     this.#prepareRead(address);
+    this.#cfcInstrumentation.checkReadCeiling?.(this, address, options);
     return this.tx.read(address, options);
   }
 
@@ -3099,6 +3107,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   ): FabricValue {
     options = this.#withAmbientReadMeta(options);
     this.#prepareRead(address);
+    this.#cfcInstrumentation.checkReadCeiling?.(this, address, options);
     const readResult = this.tx.read(address, options);
     if (
       readResult.error &&

@@ -3057,11 +3057,11 @@ export interface ISqliteQueryable {
       readClearance?: boolean;
 
       /** Scope of the result cell. A `session`-scoped result is one each
-       *  session reads alone, which a runtime-wide read ceiling
-       *  (`cfcReadMaxConfidentiality`) requires; absent, the result takes the
-       *  narrowest of the db's scope, the pattern's output scope, and — when
-       *  `readClearance` is set — `user`, since a cleared result is one
-       *  reader's view. */
+       *  session reads alone and filters under its runtime read ceiling. Shared
+       *  results retain their labels for cell-read enforcement. Absent, the
+       *  result takes the narrowest of the db's scope, the pattern's output
+       *  scope, and — when `readClearance` is set — `user`, since a cleared
+       *  result is one reader's view. */
       scope?: CellScope;
     },
   ): Reactive<
@@ -3151,9 +3151,9 @@ export type SqliteQueryFunction = {
   >;
 
   /** Bind the query's result cell to a scope: a `session`-scoped result is
-   *  one each session reads alone, which a runtime-wide read ceiling
-   *  (`cfcReadMaxConfidentiality`) requires. The `scope` option of
-   *  `db.query` is the same binding. */
+   *  one each session reads alone and filters under its runtime read ceiling.
+   *  Shared results retain their labels for cell-read enforcement. The `scope`
+   *  option of `db.query` is the same binding. */
   asScope(scope: CellScope): SqliteQueryFunction;
 };
 

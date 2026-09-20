@@ -50,12 +50,20 @@ value a caller handed to `set()` against what is stored at the destination and
 emits a change for each path where the two differ. The read it makes of the
 destination to do that carries the marker.
 
+**The SQLite publication comparison.** A query snapshots its raw destination
+record before staging a request and compares that snapshot with the destination
+when an abandoned publication settles. Both reads carry `writeDestinationRead`:
+they decide whether the write still owns this exact destination state, without
+dereferencing row links or carrying a destination value into the query or its
+output. This lets trusted publication machinery update a shared result whose
+shape label withholds it from the observing runtime.
+
 The marker is opt-in at a call site, never derived from the shape of a read,
 which is what makes the failure direction the safe one: a destination read
 nobody marks stays in the join and over-taints, where a marker reaching a
 read that should keep its label would under-taint silently.
 
-The marker goes on those two call sites, not on the walk. Every other read
+The marker goes on those call sites, not on the walk. Every other read
 `normalizeAndDiff()` makes joins as an ordinary read does, which matters
 because the walk takes reads for two other reasons:
 

@@ -1,0 +1,1 @@
+{"date": "2026-09-20", "from": {"k": "unit", "s": "runner", "n": "executor-sqlite-read-ceiling > refuses, on the serving runtime, a query whose result is not session-scoped for a bounded session's run"}, "to": {"k": "unit", "s": "runner", "n": "executor-sqlite-read-ceiling > materializes a shared served query while withholding its rows from the bounded client"}}
