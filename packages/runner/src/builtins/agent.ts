@@ -537,11 +537,8 @@ export function agent(
           entry.run.getAsNormalizedFullLink().id === recordId
         );
         if (listed) return;
-        // The entry is an element addressed by the record's id and added
-        // uniquely, the way the home pattern keys its favorites. A plain
-        // push mints its element from the length this transaction read, so
-        // two index writes that each read the list before the other landed
-        // wrote one element twice and listed one record in both slots.
+        // The record's id determines the entry's address, so concurrent
+        // index writes cannot reuse an element from the same list position.
         const entry = entries.elementById(recordId) as Cell<
           { run: Cell<unknown>; host: string }
         >;
