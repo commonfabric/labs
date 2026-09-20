@@ -600,6 +600,38 @@ describe("agent builtin", () => {
     });
   });
 
+  it("refuses an unindexed record when the home queue disappears after record creation", async () => {
+    setUp();
+    const result = runAgentPattern("agent-queue-disappears");
+    const editWithRetry = runtime.editWithRetry.bind(runtime);
+    let effectWrites = 0;
+    runtime.editWithRetry = (async (fn, ...rest) => {
+      if (++effectWrites === 2) {
+        await editWithRetry((removal) => {
+          runtime.getCell(
+            space,
+            "test-home-default-pattern",
+            undefined,
+            removal,
+          ).set({});
+        });
+      }
+      return await editWithRetry(fn, ...rest);
+    }) as typeof runtime.editWithRetry;
+    await tx.commit();
+
+    const settled = await waitForCellValue<AgentResult>(
+      runtime,
+      result,
+      (value) => value?.pending === false,
+    );
+    await runtime.settled();
+
+    expect(settled.error).toBe("REFUSED");
+    expect(result.withTx().key("run").get()?.state).toBe("refused");
+    expect(agentQueueIndexCell(runtime, space).get()).toBeUndefined();
+  });
+
   it("settles a request whose release check refuses it after commit", async () => {
     setUp();
     // The release check compares the staged request with the policy input

@@ -2628,6 +2628,26 @@ describe("wish built-in", () => {
       expect((journal as any[])[0].narrative).toBe("first entry");
     });
 
+    it("reports a missing requesting identity for #agent_queue", async () => {
+      runtime.homeSpacePrincipalFor = () => undefined;
+      const wishPattern = pattern(() => ({
+        result: wish({ query: "#agent_queue" }),
+      }));
+      const resultCell = runtime.getCell<{
+        result?: { error?: string; result?: unknown };
+      }>(patternSpace.did(), "agent-queue-no-identity", undefined, tx);
+      const result = runtime.run(tx, wishPattern, {}, resultCell);
+      await tx.commit();
+      tx = runtime.edit();
+      await result.pull();
+      const resolved = result.key("result").get();
+
+      expect(resolved?.error).toContain(
+        "User identity DID not available for #agent_queue",
+      );
+      expect(resolved?.result).toBeUndefined();
+    });
+
     it("resolves #agent_queue to the home agent queue", async () => {
       const resolved = await resolveHomeTarget(
         "agent-queue",
