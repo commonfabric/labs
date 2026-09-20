@@ -1254,18 +1254,18 @@ export class RuntimeProcessor {
   handleCellGet(
     request: CellGetRequest,
   ): CellGetResponse {
-    // `MetaField` leaves `cfc` out, but a request arrives as data which that
-    // type only describes, so `meta` can name it all the same. The branch
-    // below hands any `meta` that is not a link field to `getMetaRaw()`, which
-    // reads whichever document-root field it is given, and the `cfc` field is
-    // the raw label metadata, with `Caveat.source` and the other principal
-    // identities in it unredacted. So we refuse the request here. A label for
-    // display comes from `includeCfcLabel` on this request or from a
-    // `CellGetCfcLabel` request, and both redact it.
+    // `MetaField` does not include `cfc`. A request arrives as data, though,
+    // and checking its fields is this handler's job. As a result, `meta` can
+    // be `cfc`. The branch below passes any `meta` that is not a link field to
+    // `getMetaRaw()`. `getMetaRaw()` reads whichever document-root field it is
+    // given. The `cfc` field holds the raw label metadata, `Caveat.source`
+    // included. So we refuse the request here. A label for display comes from
+    // `includeCfcLabel` on a `CellGet` request or from a `CellGetCfcLabel`
+    // request. Both return the label with `Caveat.source` removed.
     if ((request.meta as string | undefined) === "cfc") {
       throw new Error(
-        '`meta: "cfc"` is not served over IPC; ' +
-          "use `getCfcLabel()` for the redacted display view",
+        'A `CellGet` request with `meta: "cfc"` is not served; ' +
+          "use `CellHandle.getCfcLabel()` for the redacted display view",
       );
     }
     let cell = getCell(this.#runtime, request.cell);
@@ -1307,9 +1307,9 @@ export class RuntimeProcessor {
     if (!request.includeCfcLabel) {
       return { value: converted, ...refField };
     }
-    // The same display-label read `handleCellGetCfcLabel()` makes, with
-    // `Caveat.source` redacted for display. Returning it alongside the value
-    // saves the caller a second round trip.
+    // This reads the display label with `cfcLabelViewForCell()` and redacts
+    // `Caveat.source` from it, as `handleCellGetCfcLabel()` does. Returning
+    // the label with the value saves the caller a second round trip.
     const cfcLabel = cfcLabelViewForCell(cell);
     return {
       value: converted,
