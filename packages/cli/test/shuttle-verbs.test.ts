@@ -8,12 +8,14 @@
  * exception and drives the real derivation: which space a name denotes is a
  * fact two callers have to agree about, so that case asks both.
  *
- * The connection is a borrowed one in every case but one. No verb opens or
+ * The connection is a borrowed one in nearly every case. No verb opens or
  * closes one, so which arm a case stands it up through decides nothing here,
  * and the borrowed arm is the one that needs no opener behind it. The
- * exception is `where` over a connection that will not open, which is the one
- * question the arm decides: the borrowed arm has a controller already, so only
- * an owned one can be asked what it answers when the opening fails.
+ * exceptions are the cases asking what a verb answers when the opening fails,
+ * which is the one question the arm decides: the borrowed arm has a controller
+ * already, so only an owned one can be asked. `where` and `xcd` are those
+ * cases, and they are those cases for the same reason — each reads nothing, so
+ * each owes an answer to a shuttle whose server has gone away.
  *
  * Two properties the file exists for run through it. A read never moves the
  * place, and a move never happens twice, so each of the two verbs that resolve
