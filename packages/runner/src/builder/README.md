@@ -118,11 +118,10 @@ To summarize the implications for the implementation:
 
 ### Streams
 
-A cell path whose schema declares `asCell: ["stream"]` is a stream; the
-builder stamps that declaration on the stream's descriptor and on every alias
-that reaches it, and nothing is stored at the path. Values written into that
-location won't be stored, but instead immediately sent to the scheduler to be
-queued up.
+A cell path whose schema declares `asCell: ["stream"]` is a stream; the builder
+stamps that declaration on the stream's descriptor and on every alias that
+reaches it, and nothing is stored at the path. Values written into that location
+won't be stored, but instead immediately sent to the scheduler to be queued up.
 
 The scheduler will invoke each handler tied to that location in turn, always
 waiting for at least one round of computation to settle between calls. That way

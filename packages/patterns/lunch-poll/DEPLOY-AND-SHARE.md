@@ -573,11 +573,10 @@ NEW=$(deno task cf piece new packages/patterns/lunch-poll/main.tsx \
 ### Home space won't load (profile setup, `main`-style builds)
 
 Unrelated to the poll itself, but bites colleagues setting up a profile: if a
-home space fails to load because its handlers or setup are refused at start,
-the space's **stored** root pattern is a stale compiled artifact. Fix: open the
-header menu
-→ **Toggle debug mode** (🐛) → click the red **Recreate Root Pattern** button in
-the debugger drawer, then reload. (Console fallback:
+home space fails to load because its handlers or setup are refused at start, the
+space's **stored** root pattern is a stale compiled artifact. Fix: open the
+header menu → **Toggle debug mode** (🐛) → click the red **Recreate Root
+Pattern** button in the debugger drawer, then reload. (Console fallback:
 `localStorage.setItem("showDebuggerView","true")` then reload.) The poll's join
 card has no free-text bypass. Repair and reload the home space, then create or
 pick a shared profile before joining the poll.

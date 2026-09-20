@@ -579,6 +579,7 @@ describe("queueEvent with auto-start", () => {
     }, tx);
     const eventsCell = getDerivedInternalCell(resultCell, {
       partialCause: "events",
+      schema: { asCell: ["stream"] },
     }, tx);
 
     // Set up result cell - events points to internal/events through metadata
@@ -736,6 +737,7 @@ describe("queueEvent with auto-start", () => {
     }, tx);
     const eventsCell = getDerivedInternalCell(resultCell, {
       partialCause: "events",
+      schema: { asCell: ["stream"] },
     }, tx);
     const eventCountCell = getDerivedInternalCell(resultCell, {
       partialCause: "eventCount",
@@ -890,6 +892,7 @@ describe("queueEvent with auto-start", () => {
     }, tx);
     const eventsCell = getDerivedInternalCell(resultCell, {
       partialCause: "events",
+      schema: { asCell: ["stream"] },
     }, tx);
 
     resultCell.setRaw({

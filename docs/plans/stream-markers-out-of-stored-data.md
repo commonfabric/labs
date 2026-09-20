@@ -321,8 +321,8 @@ than what the list first said, the item says what it does now and why.
       reading is `@commonfabric/runner/stream-declaration`, a module carrying
       none of the runtime, which the runtime and the inspector both go
       through, each supplying how it resolves an external schema reference:
-      the registry, or the space's documents, refusing a member outside the
-      schema-meta grammar. The value check stays until stage 3.
+      the registry, or the space's documents. The value check stays until
+      stage 3.
       `classifyDocument` takes
       the document's id, which the manifest entry is matched by, and a
       document reader, which the walk reads the owner and a manifest link's
@@ -428,7 +428,17 @@ than what the list first said, the item says what it does now and why.
       accept the break: sends through those links become value writes rather
       than events. The follow-up below re-materializes every stream under a
       new id in any case, so the question is whether old pieces break once or
-      twice. Record the choice here.
+      twice. Record the choice here. The choice rests on live data rather than
+      on fixtures, since a fixture today's setup produces is already stamped:
+      sample pieces set up before stage 1 on a deployed space and count how
+      many have stamped owner manifests; measure whether the cold-start repair
+      re-stamps them in practice on a routine pattern update; pin a test over
+      hand-written pre-stage-1 stored state — unstamped manifest, unstamped
+      stored link, sentinel present — that sends still dispatch as events;
+      and land the dispatch assertion of decision 2, rule 1, before the value
+      branch goes, so that a link nothing declares refuses loudly rather than
+      writing a value. Where the follow-up is coming anyway, migrating once
+      there may cost less than breaking twice.
 - [ ] Handler dispatch asserts that the parsed `$event` link's schema declares
       a stream (decision 2, rule 1).
 - [ ] `detectCallableKind` stops reading the value

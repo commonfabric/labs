@@ -86,7 +86,7 @@ Schemas influence runtime behavior:
   access. The runner disposes of one as an argument that did not resolve — an
   undefined result, not a fault — which is what an eager read's `undefined`
   produces anyway.
-- **Cell creation**: `asCell` properties become cell references
+- **Cell creation**: `asCell: ["cell"]` properties become cell references
 - **Stream declaration**: `asCell: ["stream"]` properties get event semantics
 
 ### Schema Resolution

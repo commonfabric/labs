@@ -138,10 +138,12 @@ See [Identity and References](./3-identity-and-references.md) for details.
 #### Streams: Declared, Not Stored
 
 A stream position stores no value. What marks it is its schema: the link that
-reaches it carries `asCell: ["stream"]` in front of the event schema, and the
-stream's own document carries the same declaration as `schema` metadata beside
-its `result` back-link. Event payloads are ephemeral. Documents written before
-this held a `{ "$stream": true }` sentinel as their value; readers still
+reaches it carries `asCell: ["stream"]` in front of the event schema, and among
+those links is the one the owning piece keeps for the stream in its `internal`
+manifest. The stream's own document holds only its `result` back-link to that
+owner, so a reader holding the document alone tells it is a stream by following
+the back-link to the manifest. Event payloads are ephemeral. Documents written
+before this held a `{ "$stream": true }` sentinel as their value; readers still
 recognize it, and nothing writes it.
 
 See [Cells](./4-cells.md) for stream semantics.

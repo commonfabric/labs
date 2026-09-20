@@ -3783,7 +3783,7 @@ describe("the actions panel", () => {
     expect((sends[0].cell as CellRef).path).toEqual(["go"]);
   });
 
-  it("never offers an undeclared key, not even one holding the retired stream sentinel", async () => {
+  it("never offers the retired stream sentinel at an undeclared key", async () => {
     const piece = statefulPiece();
     await piece.cell.set({ mystery: { $stream: true } });
     const menu = openMenu(piece.cell);

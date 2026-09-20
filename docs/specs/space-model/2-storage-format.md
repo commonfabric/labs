@@ -64,10 +64,12 @@ The system currently uses JSON for interchange and storage representation.
 ### Streams
 
 A stream cell stores no value. Its document carries a `result` back-link to the
-owning piece and a `schema` metadata field whose outermost `asCell` entry is
-`stream`, and the links that reach it carry the same declaration. That is what
-gives a stream its durable identity and marks the location as an event
-endpoint; events flow through it and are never stored.
+owning piece and nothing else. The links that reach it declare it, with
+`asCell: ["stream"]` as the outermost `asCell` entry of their schema, and the
+one the owning piece keeps in its `internal` manifest is how a reader holding
+only the document tells what it is. The document is what gives a stream its
+durable identity and marks the location as an event endpoint; events flow
+through it and are never stored.
 
 Documents written before this held a `{ "$stream": true }` sentinel as their
 value. Readers still recognize it, and nothing writes it.
