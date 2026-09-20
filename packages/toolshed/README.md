@@ -197,8 +197,16 @@ The reusable client is `SpaceInviteClient` from
 credentials before calling it so an uncertain response can be retried with the
 same ID. The convenience `create` accepts the same access/lifetime/limit options
 and optional paired `inviteId` and `code`, and returns flat active metadata plus
-`code`. `redeem` accepts only `inviteId` and `code`; `list` and `receipts`
-return arrays; `revoke` returns `{ "revoked": true }`.
+`code`. If the create request fails, `SpaceInviteCreateError` retains its
+credentials and original options in the frozen `retry` getter. Retry with
+`client.create(error.retry)` on the same client. The getter contains the bearer
+code: keep it private, and use it only to recover or retry this invitation.
+Ordinary error inspection and JSON serialization omit these credentials. The
+error preserves a structured refusal code; uncertain transport or response
+parsing failures use `create-outcome-unknown`. Validation failures before
+sending remain `SpaceInviteError` refusals. `redeem` accepts only `inviteId` and
+`code`; `list` and `receipts` return arrays; `revoke` returns
+`{ "revoked": true }`.
 
 Successful redemption returns `outcome` (`redeemed` or `already-redeemed`),
 `redemption` (`inviteId` and `did`), and `currentAccess` (`READ`, `WRITE`,
@@ -206,7 +214,9 @@ Successful redemption returns `outcome` (`redeemed` or `already-redeemed`),
 checks it again. A receipt-first retry never regrants removed access. New
 identities see `invite-unavailable` for unknown, wrong-code, expired, revoked,
 exhausted, or issuer-invalid invitations. Proof failures use `invalid-proof`;
-owner failures use `not-owner`. Transport failures remain transport failures.
+owner failures use `not-owner`. Outside the convenience `create` operation,
+transport failures remain transport failures. Malformed error responses use
+`service-error`.
 
 Admission uses private tables in the target space's SQLite engine, inside the
 same serialized transaction as its ACL-only public commit. A unique receipt pair

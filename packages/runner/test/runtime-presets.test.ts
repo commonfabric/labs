@@ -606,6 +606,19 @@ describe("runtimePresets conformance", () => {
         ).toEqual({});
       });
 
+      it("falls back to the environment when successful JSON is not a meta object", async () => {
+        for (const body of [null, [], "not metadata", 42, true]) {
+          expect(
+            await experimentalOptionsForDeployedClient({
+              apiUrl: new URL("https://deployment.example"),
+              env: (name) =>
+                name === "EXPERIMENTAL_MODERN_CELL_REP" ? "true" : undefined,
+              fetch: () => Promise.resolve(metaResponse(body)),
+            }),
+          ).toEqual({ modernCellRep: true });
+        }
+      });
+
       it("falls back to the environment for a server that publishes no posture", async () => {
         // An older server, whose meta document predates the field. It also
         // predates readerSchemaPrecedence, so that one flag adopts as the
