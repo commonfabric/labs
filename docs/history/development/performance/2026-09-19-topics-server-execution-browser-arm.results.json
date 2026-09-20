@@ -12290,48 +12290,6 @@
    "fifteen": 73.97
   }
  ],
- "feasibilityPostureOn": {
-  "elapsedMs": 9907,
-  "fixture": {
-   "spaceName": "t0-pr8b-seed-compare",
-   "boardId": "fid1:1A30DqyNt-iN4AbvOYSzJa65luCBkybLMrOfmTBke_A",
-   "seedDemand": "index",
-   "topics": [
-    {
-     "fid": "fid1:dV7MZ4NV0oX_wPsyDw_nfp5DCvflYrYJ3c7zYDiNbd8",
-     "title": "Topic 0000 attention"
-    },
-    {
-     "fid": "fid1:TYjlQaZsKrwoONJCVBNuUk-Qzw_lDwivWnGQpvWQR8k",
-     "title": "Topic 0001 boundary"
-    },
-    {
-     "fid": "fid1:zzHmvw62W3Z29oLqPwxejxd_oNijdEOHoZtu2bR5HVo",
-     "title": "Topic 0002 capture"
-    },
-    {
-     "fid": "fid1:X532AvE4G3P21KiqJ_S_8H-ZXQNt9dlX88_S9rqLPwI",
-     "title": "Topic 0003 durable"
-    },
-    {
-     "fid": "fid1:o1EZA6pimyVjw5-4a1M2ZnMwVpJDO6MhYlrjANAZQhs",
-     "title": "Topic 0004 envelope"
-    },
-    {
-     "fid": "fid1:G3ssxUrdJcdaPwhInAquQPFt27NYzNbogB3EKmOAVVc",
-     "title": "Topic 0005 fabric"
-    },
-    {
-     "fid": "fid1:ARvO-7N8iuWoS_EZuagmM8SNa_8GF1CzCmKNGOlDRYU",
-     "title": "Topic 0006 gather"
-    },
-    {
-     "fid": "fid1:cN6l6mVhUpOp4YMPNLFKGgGfFMU9-vl_G4lOTt0O_lE",
-     "title": "Topic 0007 handoff"
-    }
-   ]
-  }
- },
  "quiescenceProbe": {
   "demandMs": 17941,
   "idleStable": true,
@@ -12821,7 +12779,8 @@
     "storeReads": 0,
     "structureLoadFailures": 1
    }
-  ]
+  ],
+  "what": "An ON toolshed started over a store restored from an OFF-seeded snapshot, sampled while nothing demanded it, while a browser loaded the 100-topic board, and after that browser closed. Establishes that the serving loop derives only under demand, and that its counters stop moving afterwards. `samples` is that series; `demandMs` is how long the board took to show."
  },
  "upgradeHazard": {
   "what": "An ON server handed a store authored under each posture, board size held at 8 topics.",
@@ -13550,5 +13509,9 @@
   ],
   "stoppingRuleFloorMb": 400,
   "stoppingRuleFired": false
+ },
+ "postureReadbacks": {
+  "what": "Every round's own posture read through `readDeclaredTopicsBrowserPosture` before it measured, recorded per round as `posturePayload`. Four ON and four OFF, all declared, each from both halves ('meta and bundle').",
+  "note": "The feasibility step's refusal case -- the reader declining a deployment that declares no posture -- was observed on a terminal and is not in this file. The refusal is a property of the reader, in `packages/patterns/integration/topics-browser-posture.ts`."
  }
 }

@@ -12,12 +12,15 @@ postures, alternating, for the "Measurement and acceptance" section of
 `docs/plans/topics-computation-cost.md`, which asks for both postures measured
 before the baseline report in runs labeled by mode.
 
-Every round's samples, the per-field determinism comparison, the machine's load
-series, and the feasibility probes are in
+The data is in
 [`2026-09-19-topics-server-execution-browser-arm.results.json`](2026-09-19-topics-server-execution-browser-arm.results.json)
-beside this file. The figures below come from that file. This record says what
-was measured and under what conditions; the interpretation belongs to the
-baseline report.
+beside this file. Each section below says which part of it that section's
+figures come from, and names anything it states that the file does not hold.
+Sourcing is stated per section rather than once here, because a single claim
+covering everything is a claim over a population nobody enumerated, and it
+outruns the file the moment one figure in one section comes from somewhere
+else. This record says what was measured and under what conditions; the
+interpretation belongs to the baseline report.
 
 ## Read this before the figures
 
@@ -37,6 +40,8 @@ statement here compares their magnitudes, and one cannot be assembled from the
 figures by dividing.
 
 ## What ran
+
+*Source: `rounds`, and `postureReadbacks` for the posture each round read.*
 
 `topic-board-navigation.bench.ts` at 30 topics and `topic-board-scale.bench.ts`
 at its default limit of 100, at `784a1e3a68`, under two alternations of both
@@ -59,6 +64,8 @@ Each round ran against a fresh empty store, so no round inherited another's
 state and no ON-arm derivation could reach an OFF arm.
 
 ## The located-lift counters do not change with the posture
+
+*Source: each round's `samples[].lifts`.*
 
 The navigation bench's located lifts, in each of its two rounds per posture:
 
@@ -85,6 +92,8 @@ overlay instead of a storage transaction." These counters are that behavior
 observed.
 
 ## A countable set of unattributed runs is absent under server execution
+
+*Source: each round's `samples[].remaining` and `runsWithoutSource`.*
 
 The located lifts above are not all the work a sample sees. A run whose marker
 carries a source location is attributed to its lift; every other run falls into
@@ -128,6 +137,9 @@ the four lifts being tracked. Only the first moved here.
 
 ## The navigation bench's counters do not change with the board
 
+*Source: `determinism`, which holds the compared field values, and each
+round's `boardIds`.*
+
 `packages/patterns` seeds a fresh board per bench process, and the piece ids it
 mints differ from one seed to the next. Whether that moves the counters is
 therefore a question about every figure above.
@@ -164,6 +176,8 @@ Both rounds' located-lift rows read zero, as the declaration anticipates. The
 not.
 
 ## Every arm's instrument was demonstrably live
+
+*Source: each round's `samples[]`.*
 
 Several figures above are zeroes, and a dead instrument produces the same
 zeroes as an absence of work. Each arm therefore carries a non-zero figure of
@@ -203,12 +217,27 @@ zero across their located lifts and carry a non-zero remaining row.
 | `r2-off-scale` | 0 | 0 | absent | absent |
 | `r2-on-scale` | 0 | 0 | 817 | 816 |
 
+*Source: each round's `servingLoop`, absent on the OFF rounds.*
+
 `absent` is not zero. The OFF binary constructs no `ExecutorHost`, so
 `/api/health/stats` carries no `servingLoop` block at all to read a zero from.
 That is a sharper statement than a zero reading, and it is what makes these two
 artifacts differ in mechanism rather than in a reported string.
 
-Every ON round reported `structureLoadFailures` 0.
+Every ON round reported `structureLoadFailures` 0. That is not the same as the
+arm having run without incident, and two other counters should be read beside
+it rather than left for someone who can no longer go and look. The two ON
+navigation rounds report `foreignWriteRefusals` of 17 and 21, and
+`r2-on-scale` reports `lease.lost` 2; `foreignEngineFailures` and
+`supersededWrites` are 0 throughout. So write actions were refused in the arm
+whose counters are compared above.
+
+This record attributes nothing to that. What can be said is that the located
+lifts those refusals sit beside are identical between the postures and
+reproduce across boards, and that the refusal counts are themselves close
+between the two rounds that have them, which is the shape of a property of the
+workload rather than of a disturbance. Whether they are expected under this
+posture is a question for someone who owns the serving loop.
 
 So: the client's located-lift work is unchanged between the postures, and under
 ON the server additionally performs derivation commits that have no counterpart
@@ -218,9 +247,15 @@ magnitude follows.
 
 ## This rig cannot measure server execution's latency at all
 
-Seven of the ten timed cases separate between the postures, six of them with ON
-slower. None of that is usable, and the reason is not that this machine was
-busy. It is that the rig cannot hold the two postures to the same conditions.
+*Source: each round's `cases` for the timings, `loadByArm` and `loadSeries`
+for the load.*
+
+Comparing each round's mean, seven of the ten timed cases separate between the
+postures, six of them with ON slower. The count is not stable under the choice
+of statistic: on each round's 75th percentile it is eight and seven, and on
+each round's fastest iteration four and four. None of it is usable anyway, and
+the reason is not that this machine was busy. It is that the rig cannot hold
+the two postures to the same conditions.
 
 **The arms did not run under the same load.** One-minute load average, pooled
 over each posture's rounds, against 10 logical CPUs:
@@ -293,6 +328,10 @@ toolshed binary serving a baked shell, driven by Chrome — runs a coherent arm
 at all. That was settled before any round ran, and separately from what the
 rounds found.
 
+*Source: `postureReadbacks` and each round's `posturePayload`. The refusal
+described at the end of this section was observed on a terminal and is not in
+the results file; it is a property of the reader named there.*
+
 A toolshed binary built with `EXPERIMENTAL_SERVER_EXECUTION=true` serves a
 deployment whose posture reads back as declared: `/api/meta` reports both
 `serverExecution: true` and a baked `shellServerExecutionDefine` of `"true"`,
@@ -307,6 +346,8 @@ define" — and that deployment served an entry script normally, so the refusal
 was the define being absent rather than the fetch failing.
 
 ## Turning server execution on over an existing store fails to start a piece
+
+*Source: `upgradeHazard`, and `quiescenceProbe` for the 100-topic row.*
 
 A serving loop handed a store that was authored under the OFF posture does not
 start the home space's profile piece. The piece-start commit is refused with
@@ -344,6 +385,9 @@ eleven samples of the probe's idle phase, spanning its first ten seconds, and
 moved only once a client loaded the board.
 
 ## Conditions, and what shaped the run
+
+*Source: `loadSeries`, `swapSpotObservations`, `design.stoppingRule`, and each
+round's `seeds`.*
 
 The measurement ran on a shared developer machine, 10 logical CPUs, under
 unrelated load throughout. The full load series is in the results file.
