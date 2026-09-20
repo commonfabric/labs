@@ -11,6 +11,8 @@ import { cfcAtom } from "@commonfabric/api/cfc";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PieceController, PiecesController } from "@commonfabric/piece/ops";
 import { type Cell, isCell, Runtime } from "@commonfabric/runner";
+import type { CfcConfClause } from "@commonfabric/runner/cfc";
+import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { join, normalize } from "@std/path/posix";
 import { CfHarnessEngine } from "../src/engine.ts";
@@ -261,6 +263,131 @@ const grantResolvingSession = () =>
   }) as any;
 
 describe("prompt-loop cross-agent address handles", () => {
+  const A = { type: "https://commonfabric.org/cfc/atom/User", subject: "A" };
+  const B = { type: "https://commonfabric.org/cfc/atom/User", subject: "B" };
+  const inheritedPolicies: Array<
+    { name: string; label: CfcConfClause[]; ceiling: CfcConfClause[] }
+  > = [
+    {
+      name:
+        "withholds a delegated handle's payload outside the inherited ceiling",
+      label: ["did:key:withheld"],
+      ceiling: ["did:key:allowed"],
+    },
+    ...[[A], [B], [A, B]].map((label) => ({
+      name: `withholds a ${
+        label.map((atom) => atom.subject).join(" and ")
+      }-labeled handle from a child under an anyOf group ceiling`,
+      label,
+      ceiling: [{ anyOf: [A, B] }],
+    })),
+  ];
+  for (const policy of inheritedPolicies) {
+    it(policy.name, async () => {
+      const runId = "run-subagent-bounded-handle";
+      const signer = await Identity.fromPassphrase(runId);
+      const storageManager = StorageManager.emulate({ as: signer });
+      const writer = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager,
+        cfcFlowLabels: "persist",
+      });
+      const bounded = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager,
+        cfcReadMaxConfidentiality: policy.ceiling,
+      });
+      const session = await createSession({
+        identity: signer,
+        spaceName: runId,
+      });
+      const pieces = new PiecesController(session, bounded);
+      await pieces.synced();
+      try {
+        const tx = writer.edit();
+        const secret = writer.getCell(pieces.getSpace(), "private input", {
+          type: "string",
+          ifc: { confidentiality: policy.label },
+        }, tx);
+        secret.set("payload that must never reach the model");
+        expect((await tx.commit()).error).toBeUndefined();
+        const table = await parentTableOf(runId, [
+          createLLMFriendlyLink(
+            secret.getAsNormalizedFullLink(),
+            pieces.getSpace(),
+          ),
+        ]);
+        const token = table.entries[0]!.token;
+        const requestBodies: unknown[] = [];
+        const payloads = [
+          delegateCallTurn("call-delegate", { goal: `Read ${token}.` }),
+          runPatternCallTurn("call-child", {
+            sourceText: [
+              "import { computed, pattern } from 'commonfabric';",
+              "export default pattern<{ src: string }>(",
+              "  ({ src }) => ({ copied: computed(() => String(src)) }),",
+              ");",
+            ].join("\n"),
+            inputs: { src: token },
+          }),
+          finalTurn("Child done."),
+          finalTurn("Parent done."),
+        ];
+        const engine = new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          runId,
+          model: "gpt-5.4",
+          fabricSession: {
+            apiUrl: "http://toolshed.test",
+            identityKeyPath: "/unused-key",
+            space: pieces.getSpace(),
+            cfcReadMaxConfidentiality: policy.ceiling,
+          },
+          fabricSessionFactory: () => Promise.resolve({ pieces }),
+        });
+        await engine.recordHandleTable(table);
+        const loop = new CfHarnessPromptLoop({
+          apiKey: "test-key",
+          engine,
+          fetchFn: (_input, init) => {
+            requestBodies.push(JSON.parse(String(init?.body)));
+            const payload = payloads[requestBodies.length - 1];
+            if (payload === undefined) {
+              throw new Error("unexpected model request");
+            }
+            return Promise.resolve(
+              new Response(
+                JSON.stringify(
+                  responsesBodyFromChatFixture(payload),
+                ),
+                { status: 200 },
+              ),
+            );
+          },
+        });
+        await loop.runPrompt({
+          prompt: "Delegate the inspection.",
+          promptSlotBinding: directPromptSlotBinding,
+        });
+        const childMessages = chatViewOfRequest(requestBodies[2]).messages;
+        const toolReply = childMessages.findLast((message) =>
+          message.role === "tool"
+        );
+        expect(toolReply?.content).toContain("read ceiling");
+        expect(JSON.stringify(requestBodies)).not.toContain(
+          "payload that must never reach the model",
+        );
+        expect(engine.getRunState().subagentRuns?.[0].manifest).toMatchObject({
+          confidentialityCeiling: { source: "parent", mode: "bounded" },
+        });
+      } finally {
+        await bounded.dispose();
+        await writer.dispose();
+        await storageManager.close();
+      }
+    });
+  }
+
   it("resolves a token named in the delegate_task goal against the child's own table", async () => {
     const runId = "run-subagent-handles-seeded";
     const table = await parentTableOf(runId, [URI_A]);

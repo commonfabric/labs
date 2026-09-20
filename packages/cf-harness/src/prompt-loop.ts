@@ -5559,6 +5559,13 @@ export class CfHarnessPromptLoop {
     const manifest: HarnessSubagentRunManifest = {
       type: "cf-harness.subagent-run-manifest",
       version: 1,
+      confidentialityCeiling: {
+        source: "parent",
+        mode: this.engine.config.fabricSession?.cfcReadMaxConfidentiality ===
+            undefined
+          ? "owner-view"
+          : "bounded",
+      },
       parentRunId: parentRunState.runId,
       parentToolCallId: options.toolCall.id,
       childRunId,

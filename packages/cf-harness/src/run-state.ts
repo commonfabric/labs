@@ -127,7 +127,8 @@ export interface HarnessFabricSessionCfcPosture {
   posture?: "max-enforcement";
 
   /**
-   * The read ceiling the session's runtime bounds every `sqliteQuery` by:
+   * The read ceiling the session's runtime bounds cell payload reads and every
+   * `sqliteQuery` by:
    * the run manifest's, met with any the operator configured. Absent when
    * the session reads unbounded.
    */

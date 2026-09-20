@@ -947,24 +947,21 @@ describe("seeded violations", () => {
         const report = reportOf(root);
         for (const delegation of state.subagentRuns ?? []) {
           (delegation.manifest as unknown as Record<string, unknown>)
-            .confidentialityCeiling = ["Confidential(did:key:zSeeded)"];
+            .confidentialityCeiling = { source: "parent", mode: "owner-view" };
         }
         const orphan = structuredClone(report.subagentRuns![0]!);
         orphan.childRunId = `${FIXTURE_RUN_ID}.subagent.2`;
         (orphan.manifest as unknown as Record<string, unknown>)
-          .confidentialityCeiling = ["Confidential(did:key:zSeeded)"];
+          .confidentialityCeiling = { source: "parent", mode: "owner-view" };
         report.subagentRuns = [orphan];
       });
     });
 
     it("passes a delegation whose manifest records a ceiling", () => {
-      // Written onto the record rather than through the type, because the
-      // type has no such field — which is the defect. The check reads what a
-      // tree holds, so it turns green the day a delegation writes one.
       turnsOnly("AUD-23", "pass", (root) => {
         for (const delegation of stateOf(root).subagentRuns ?? []) {
           (delegation.manifest as unknown as Record<string, unknown>)
-            .confidentialityCeiling = ["Confidential(did:key:zSeeded)"];
+            .confidentialityCeiling = { source: "parent", mode: "owner-view" };
         }
       });
     });

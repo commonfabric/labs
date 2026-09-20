@@ -297,6 +297,27 @@ host is for local single-user Loom. A hosted multi-user adapter must inject an
 owner-bound credential resolver. Resume is not a general recovery system for an
 in-flight external side effect.
 
+## Delegation observation ceilings
+
+A child shares the parent's fabric session, carries its resolved observation
+ceiling, and records that inheritance in its delegation manifest. Resolving an
+inherited cell handle measures its stored label through the runtime read guard
+before returning payload. Absent a declared ceiling, the child inherits the
+owner's view. AUD-23 compares the parent and child runtime records and reports
+missing or inconsistent inheritance; it is a regression check, not a
+known-defect registration.
+
+## Runtime observation ceilings
+
+The runtime measures cell and transaction payload reads against its own ceiling
+met with the session ceiling carried by a served run. Shared query results
+retain one labeled materialization under the query's declared contract. Their
+array shape carries the join of all row labels, including skipped rows; a reader
+outside that label cannot observe payloads, membership, or counts.
+Session-scoped queries apply the runtime ceiling during row filtering. Ordinary
+cells require concrete clauses because database-owner and current-principal
+placeholders resolve only at the SQLite query boundary.
+
 ## Known deviations and retirement conditions
 
 1. **Dependency readiness.** The capability probe does not establish health for
@@ -357,32 +378,8 @@ in-flight external side effect.
    `subject`, `eventId`, `valueDigest`, `slotDigest`, `snapshotDigest`, and
    `targetPath`. Owner: `cf-harness`. Retirement: each surface mints per
    submission, over the submitted value's digest and an authenticated subject.
-8. **No confidentiality ceiling on a delegation.** A child profile attenuates
-   capabilities and not observation, so a child can read anything the
-   capabilities it was given can reach. Owner: `cf-harness` and the CFC runtime.
-   Retirement: a delegation carries an observation ceiling the runner's access
-   check consumes, and handle resolution into a child input is rejected when it
-   exceeds that ceiling.
 
-9. **The run's read ceiling gates session-scoped query results only.** The
-   ceiling a run carries — `--max-confidentiality`, or `cfc.maxConfidentiality`
-   in the run manifest, met into the fabric session's runtime as
-   `cfcReadMaxConfidentiality` — is applied by the runner's `db.query` builtin
-   at the query, not at the cell: a query whose result is session-scoped
-   (`PerSession<>`, `scope: "session"`, `.asScope("session")`, or a
-   session-scoped db) reads under the meet of its own ceiling and the run's; a
-   query with a space- or user-scoped result is refused before it is staged,
-   because that result is one cell every runtime on the space resolves and the
-   run's runtime cannot narrow it for itself. The refusal reaches the runtime's
-   error handlers, so an authored pattern that declares no scope fails on its
-   first query rather than reading under a wider view. What the option does not
-   reach is a shared cell another runtime already filled: that is protected by
-   the cell's own label under the commit-boundary gates, not by the run's
-   ceiling. Owner: `cf-harness` and the CFC runtime. Retirement: the ceiling is
-   carried into the runtime's cell read path (a labeled cell that does not fit
-   reads as withheld), and the served-execution arm carries a per-session
-   ceiling to the serving runtime, at which point the scope requirement and the
-   OFF-arm-only limit both retire.
+<!-- Deviation identifiers match the design and audit references. -->
 
 10. **Loom row labels assumed, not read.** A row a Loom retrieval tool returns
     with no `ifc` field is given the label of the query that produced it — the

@@ -504,6 +504,16 @@ export interface HarnessSubagentInputSummary {
   returnSchemaDigest?: string;
 }
 
+/**
+ * The child reads through the parent's fabric session and therefore inherits
+ * its ceiling. The clauses remain in each run's fabric-session record; this
+ * model-visible reference records inheritance without disclosing their atoms.
+ */
+export interface HarnessSubagentConfidentialityCeiling {
+  source: "parent";
+  mode: "bounded" | "owner-view";
+}
+
 export interface HarnessSubagentRunManifest {
   type: "cf-harness.subagent-run-manifest";
   version: 1;
@@ -529,6 +539,7 @@ export interface HarnessSubagentRunManifest {
   returnPolicy: HarnessSubagentReturnPolicy;
   createdAt: string;
   inputSummary: HarnessSubagentInputSummary;
+  confidentialityCeiling?: HarnessSubagentConfidentialityCeiling;
 }
 
 /**

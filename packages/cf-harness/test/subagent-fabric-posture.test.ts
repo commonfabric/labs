@@ -125,60 +125,81 @@ const scriptedFetch = (payloads: readonly unknown[]): typeof fetch => {
 };
 
 describe("subagent fabric-session posture", () => {
-  it("records the parent's posture on the delegated child, stamped inherited", async () => {
-    const artifactRoot = await Deno.makeTempDir({
-      prefix: "cf-harness-subagent-posture-",
-    });
-    try {
-      const runId = "run-subagent-posture";
-      const loop = new CfHarnessPromptLoop({
-        apiKey: "test-key",
-        engine: new CfHarnessEngine({
-          artifactRoot,
-          sandboxRuntime: new FakeSandboxRuntime(),
-          runId,
-          model: "gpt-5.4",
-          fabricSession: SESSION,
-        }),
-        fetchFn: scriptedFetch([
-          delegateCallTurn("call-delegate", "Inspect the workspace."),
-          finalTurn("Child done."),
-          finalTurn("Parent done."),
-        ]),
-      });
+  for (const ceiling of [undefined, [{ anyOf: ["did:key:A", "did:key:B"] }]]) {
+    it(
+      ceiling === undefined
+        ? "records the parent's posture on the delegated child, stamped inherited"
+        : "carries the parent's group ceiling into the child runtime configuration",
+      async () => {
+        const artifactRoot = await Deno.makeTempDir({
+          prefix: "cf-harness-subagent-posture-",
+        });
+        try {
+          const runId = "run-subagent-posture";
+          const loop = new CfHarnessPromptLoop({
+            apiKey: "test-key",
+            engine: new CfHarnessEngine({
+              artifactRoot,
+              sandboxRuntime: new FakeSandboxRuntime(),
+              runId,
+              model: "gpt-5.4",
+              fabricSession: {
+                ...SESSION,
+                ...(ceiling === undefined
+                  ? {}
+                  : { cfcReadMaxConfidentiality: ceiling }),
+              },
+            }),
+            fetchFn: scriptedFetch([
+              delegateCallTurn("call-delegate", "Inspect the workspace."),
+              finalTurn("Child done."),
+              finalTurn("Parent done."),
+            ]),
+          });
 
-      await loop.runPrompt({
-        prompt: "Delegate the inspection.",
-        promptSlotBinding: directPromptSlotBinding,
-      });
+          await loop.runPrompt({
+            prompt: "Delegate the inspection.",
+            promptSlotBinding: directPromptSlotBinding,
+          });
 
-      const parentState = await readHarnessRunState(
-        join(artifactRoot, runId, "run-state.json"),
-      );
-      const childState = await readHarnessRunState(
-        join(artifactRoot, `${runId}.subagent.1`, "run-state.json"),
-      );
+          const parentState = await readHarnessRunState(
+            join(artifactRoot, runId, "run-state.json"),
+          );
+          const childState = await readHarnessRunState(
+            join(artifactRoot, `${runId}.subagent.1`, "run-state.json"),
+          );
 
-      // The parent's own record is the projection its session config
-      // resolves; the child's is that record and says where it came from.
-      expect(parentState.fabricSessionCfc?.record).toEqual(
-        harnessFabricSessionPosture(SESSION),
-      );
-      expect(childState.fabricSessionCfc?.record).toEqual({
-        ...harnessFabricSessionPosture(SESSION),
-        provenance: "inherited",
-      });
-      // The itemized dials the child records are the parent's too: one
-      // session, one set of dials, whichever run reads them.
-      expect(childState.fabricSessionCfc?.enforcementMode).toBe(
-        parentState.fabricSessionCfc?.enforcementMode,
-      );
-      expect(childState.fabricSessionCfc?.flowLabels).toBe(
-        parentState.fabricSessionCfc?.flowLabels,
-      );
-      expect(childState.fabricSessionCfc?.posture).toBe("max-enforcement");
-    } finally {
-      await Deno.remove(artifactRoot, { recursive: true });
-    }
-  });
+          // The parent's own record is the projection its session config
+          // resolves; the child's is that record and says where it came from.
+          expect(parentState.fabricSessionCfc?.record).toEqual(
+            harnessFabricSessionPosture(SESSION),
+          );
+          expect(childState.fabricSessionCfc?.record).toEqual({
+            ...harnessFabricSessionPosture(SESSION),
+            provenance: "inherited",
+          });
+          expect(childState.fabricSessionCfc?.readMaxConfidentiality).toEqual(
+            ceiling,
+          );
+          // The itemized dials the child records are the parent's too: one
+          // session, one set of dials, whichever run reads them.
+          expect(childState.fabricSessionCfc?.enforcementMode).toBe(
+            parentState.fabricSessionCfc?.enforcementMode,
+          );
+          expect(childState.fabricSessionCfc?.flowLabels).toBe(
+            parentState.fabricSessionCfc?.flowLabels,
+          );
+          expect(childState.fabricSessionCfc?.posture).toBe("max-enforcement");
+          expect(parentState.subagentRuns?.[0].manifest).toMatchObject({
+            confidentialityCeiling: {
+              source: "parent",
+              mode: ceiling === undefined ? "owner-view" : "bounded",
+            },
+          });
+        } finally {
+          await Deno.remove(artifactRoot, { recursive: true });
+        }
+      },
+    );
+  }
 });

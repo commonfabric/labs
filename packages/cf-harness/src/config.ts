@@ -85,7 +85,8 @@ export interface HarnessFabricSessionConfig {
   cfcPosture?: CfcPosture;
 
   /**
-   * The read ceiling the session's runtime bounds every `sqliteQuery` by
+   * The read ceiling the session's runtime bounds cell payload reads and every
+   * `sqliteQuery` by
    * (`RuntimeOptions.cfcReadMaxConfidentiality`). Absent is no ceiling.
    */
   cfcReadMaxConfidentiality?: readonly CfcConfClause[];

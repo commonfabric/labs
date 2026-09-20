@@ -163,10 +163,33 @@ describe("conformance manifest", () => {
 
   describe("against the fixture", () => {
     it("holds every covered obligation to a check that agrees with it", () => {
-      const reconciliation = reconcileConformanceManifest(FIXTURE_RESULTS);
+      const withInheritance = structuredClone(family);
+      if (withInheritance.root.runState.status !== "present") {
+        throw new Error("fixture has no run state");
+      }
+      for (
+        const delegation of withInheritance.root.runState.value.subagentRuns ??
+          []
+      ) {
+        delegation.manifest.confidentialityCeiling = {
+          source: "parent",
+          mode: "owner-view",
+        };
+      }
+      const reconciliation = reconcileConformanceManifest(
+        auditRunFamily(withInheritance, RUN_CHECKS),
+      );
       expect(
         reconciliation.disagreements.map((one) => one.obligation.id),
       ).toEqual([]);
+    });
+
+    it("reports the fixture's missing delegation inheritance against the mechanized obligation", () => {
+      expect(
+        reconcileConformanceManifest(FIXTURE_RESULTS).disagreements.map((one) =>
+          one.obligation.id
+        ),
+      ).toEqual(["H8"]);
     });
 
     it("prints the position as a headline a reader cannot miss", () => {
