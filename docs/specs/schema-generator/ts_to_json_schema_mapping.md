@@ -738,6 +738,20 @@ both survive: `PerUser<Cell<PerSession<string>>>` → `{ asCell: [{ kind:
 "cell", scope: "user" }], scope: "session", type: "string" }` (fixture
 `scoped-wrappers`).
 
+The payload is read from the node when a node names the wrapper, so that
+structure only the node carries reaches the schema. The wrapper type's own
+first type argument supplies the payload instead in two cases, and only where
+the type is itself a scope wrapper. One is a payload whose node degrades to
+`any`, as every node the printer wrote from a type does: its names resolve to
+nothing at the position it is emitted into, and a node-driven schema would
+accept anything there. The other is a payload read only in part, of which the
+printer produces the same two members §6 names — `import("./mod.ts").T` for a
+name the emitting module does not import, and the
+`T & { readonly [DEFAULT_MARKER]: V }` arm of an expanded `Default`, which
+carries the default. Both cost whatever narrowing the node carried: the schema
+is then that of the whole declared value. Tested: scope-wrappers.test.ts, and
+end-to-end in ts-transformers `aliased-binding-declared-type.test.ts`.
+
 A scope wrapper **as a union member throws** (`A scope wrapper cannot be a
 member of a union.`; tested, scope-wrappers.test.ts). The runtime reads a
 slot's scope from the top level of that slot's own schema

@@ -303,6 +303,65 @@ export default pattern<Input>(({ v }) => ({
       });
     });
 
+    it("emits every branch of a union of instantiations", async () => {
+      // One type parameter given two arguments has no single node that stands
+      // for both, so neither branch may be substituted away.
+
+      const [capture] = await schemasOf(
+        `
+type Blank = string | Default<"">;
+interface Input<T> { c: T | Blank; }
+export default pattern<Input<number> | Input<boolean>>(({ c }) => ({
+  s: computed(() => JSON.stringify(c)),
+}));`,
+        "lift",
+      );
+      expect((capture!.properties as Record<string, unknown>).c).toEqual({
+        anyOf: [{ type: ["number", "string"] }, { type: "boolean" }],
+        default: "",
+      });
+    });
+
+    it("keeps the payload of a scope wrapper it printed, in the capture and the result", async () => {
+      // The printed payload spells names that resolve to nothing where it is
+      // emitted, so the wrapper's own type is what carries the default here.
+
+      const output = await transformSource(
+        `${IMPORTS}
+interface Box<T> { value: T; }
+interface Input<T> { c: PerUser<T | Default<{ value: 0 }>>; }
+export default pattern<Input<Box<number>>>(({ c }) => ({
+  c,
+  s: computed(() => JSON.stringify(c)),
+}));`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const root = parseModule(output);
+      const scoped = {
+        anyOf: [
+          {
+            type: "object",
+            properties: { value: { type: "number", enum: [0] } },
+            required: ["value"],
+          },
+          {
+            type: "object",
+            properties: { value: { type: "number" } },
+            required: ["value"],
+          },
+        ],
+        default: { value: 0 },
+        scope: "user",
+      };
+
+      const [capture] = callSchemas(root, "lift");
+      expect((capture!.properties as Record<string, unknown>).c)
+        .toEqual(scoped);
+      expect(
+        (patternSchemas(root).output.properties as Record<string, unknown>).c,
+      ).toEqual(scoped);
+    });
+
     it("keeps the argument's own type where the capturing module declares another of its name", async () => {
       // The printer writes the argument as a bare `Stored`, which names the
       // capturing module's own interface there.

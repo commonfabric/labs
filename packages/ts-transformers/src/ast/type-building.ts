@@ -514,7 +514,7 @@ export function getPreservedTypeForBindingElement(
   declaration: ts.BindingElement,
   checker: ts.TypeChecker,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
-): { typeNode: ts.TypeNode; type: ts.Type } | undefined {
+): PreservedBindingType | undefined {
   const declared = getDeclaredTypeNodeForBindingElement(declaration, checker);
   const preserved = declared && getPreservedBindingTypeNode(declared, checker);
   if (!declared || !preserved) return undefined;
@@ -577,7 +577,19 @@ export function getPreservedTypeForBindingElement(
     { checker, factory: ts.factory, sourceFile: declaration.getSourceFile() },
     typeRegistry,
   );
-  return { typeNode, type: instantiated.type };
+  return { typeNode, printedFrom: instantiated.type };
+}
+
+/**
+ * The type node to emit for a destructured binding, with the type it was
+ * printed from when it was printed from one. An authored node says what it
+ * denotes wherever it is emitted; a printed node says it only to a reader that
+ * holds the type behind it, because the names it spells resolve to nothing at
+ * the position it is emitted into.
+ */
+export interface PreservedBindingType {
+  readonly typeNode: ts.TypeNode;
+  readonly printedFrom?: ts.Type;
 }
 
 /**
@@ -590,10 +602,10 @@ function registerForEmission(
   typeNode: ts.TypeNode,
   type: ts.Type,
   typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
-): { typeNode: ts.TypeNode; type: ts.Type } {
+): PreservedBindingType {
   const cloned = cloneTypeNodeDeepForEmission(typeNode, typeRegistry);
   typeRegistry?.set(cloned, type);
-  return { typeNode: cloned, type };
+  return { typeNode: cloned };
 }
 
 /**
@@ -764,6 +776,14 @@ function getInstantiatedBindingType(
   }
 
   const substitutions = new Map<ts.Type, ts.Type>();
+  // A union of two instantiations of one generic input gives a parameter two
+  // arguments, and no single node stands for both.
+  const ambiguous = new Set<ts.Type>();
+  const substitute = (parameter: ts.Type, argument: ts.Type) => {
+    const known = substitutions.get(parameter);
+    if (known && known !== argument) ambiguous.add(parameter);
+    substitutions.set(parameter, argument);
+  };
   const visited = new Set<ts.Type>();
   const collect = (type: ts.Type) => {
     if (visited.has(type)) return;
@@ -775,7 +795,7 @@ function getInstantiatedBindingType(
       alias?.typeParameters?.forEach((parameter, index) => {
         const argument = type.aliasTypeArguments![index];
         if (argument) {
-          substitutions.set(checker.getTypeAtLocation(parameter), argument);
+          substitute(checker.getTypeAtLocation(parameter), argument);
         }
       });
     }
@@ -787,7 +807,7 @@ function getInstantiatedBindingType(
         const arguments_ = checker.getTypeArguments(reference);
         reference.target.typeParameters?.forEach((parameter, index) => {
           const argument = arguments_[index];
-          if (argument) substitutions.set(parameter, argument);
+          if (argument) substitute(parameter, argument);
         });
         reference.getBaseTypes()?.forEach(collect);
       }
@@ -800,6 +820,7 @@ function getInstantiatedBindingType(
     if (!property) return undefined;
     input = checker.getTypeOfSymbolAtLocation(property, declaration);
   }
+  for (const parameter of ambiguous) substitutions.delete(parameter);
   return { type: input, substitutions };
 }
 

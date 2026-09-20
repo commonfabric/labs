@@ -1323,8 +1323,19 @@ When the builder's type argument cannot be found, as when
 instantiated type on hand is the pattern body's view, and the binding is emitted
 with its concrete value type and without its default.
 
+A union of two instantiations of one generic input gives a type parameter two
+arguments. No node stands for both, so such a parameter is not substituted and
+the binding takes its instantiated declared type, which holds every branch.
+
 Pattern result inference reads returned input bindings through the same
-function when a returned binding carries a scope wrapper.
+function when a returned binding carries a scope wrapper. A node printed from
+a type is registered with that type rather than with the type at the
+expression, which is the pattern body's view: the names a printed node spells
+resolve to nothing where it is emitted, so schema generation reads it by the
+type behind it. An authored node keeps the view's type, and so keeps being
+emitted in place rather than under the name of whatever alias the declared
+type carries.
+
 `aliased-binding-declared-type.test.ts` and
 `ast/getPreservedBindingTypeNode.test.ts` pin these.
 

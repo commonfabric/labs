@@ -30,6 +30,7 @@ import {
 import {
   createRegisteredTypeLiteral,
   getPreservedTypeForBindingElement,
+  type PreservedBindingType,
   reportUnknownReactiveType,
 } from "../ast/type-building.ts";
 import {
@@ -1969,13 +1970,16 @@ function buildObjectLiteralReturnTypeNode(
       return undefined;
     }
 
-    const valueTypeNode =
-      getExplicitValueTypeNode(valueExpr, checker, typeRegistry) ??
-        typeToSchemaTypeNode(valueType, checker, sourceFile);
+    const explicit = getExplicitValueTypeNode(valueExpr, checker, typeRegistry);
+    const valueTypeNode = explicit?.typeNode ??
+      typeToSchemaTypeNode(valueType, checker, sourceFile);
     if (!valueTypeNode) {
       return undefined;
     }
-    typeRegistry?.set(valueTypeNode, valueType);
+    // A node printed from a type is read by that type: the names it spells
+    // resolve to nothing here, and the type carries the wrappers the body's
+    // view of the binding has stripped. An authored node reads on its own.
+    typeRegistry?.set(valueTypeNode, explicit?.printedFrom ?? valueType);
     const valueHint = context
       ? getUiContractHintFromNode(valueExpr, context)
       : undefined;
@@ -1999,11 +2003,12 @@ function buildObjectLiteralReturnTypeNode(
   );
 }
 
+/** The type node a returned identifier declares. */
 function getExplicitValueTypeNode(
   valueExpr: ts.Expression,
   checker: ts.TypeChecker,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
-): ts.TypeNode | undefined {
+): PreservedBindingType | undefined {
   if (!ts.isIdentifier(valueExpr)) {
     return undefined;
   }
@@ -2017,14 +2022,14 @@ function getExplicitValueTypeNode(
       shorthandValueSymbol?.declarations?.[0];
   }
   if (declaration && ts.isVariableDeclaration(declaration)) {
-    return declaration.type;
+    return declaration.type ? { typeNode: declaration.type } : undefined;
   }
   if (declaration && ts.isBindingElement(declaration)) {
     return getPreservedTypeForBindingElement(
       declaration,
       checker,
       typeRegistry,
-    )?.typeNode;
+    );
   }
   return undefined;
 }
@@ -2044,7 +2049,8 @@ function objectLiteralHasExplicitScopeValueTypeNodes(
     const valueExpr = ts.isPropertyAssignment(property)
       ? unwrapExpression(property.initializer)
       : property.name;
-    const valueTypeNode = getExplicitValueTypeNode(valueExpr, checker);
+    const valueTypeNode = getExplicitValueTypeNode(valueExpr, checker)
+      ?.typeNode;
     if (valueTypeNode && typeNodeContainsScopeWrapper(valueTypeNode)) {
       return true;
     }
