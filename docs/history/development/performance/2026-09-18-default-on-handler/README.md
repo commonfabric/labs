@@ -7,11 +7,12 @@ reason: "Default-on handler dispatch timing and phase measurements at a pinned r
 
 # Default-on handler dispatch timings
 
-All 18 cases of the existing handler-dispatch benchmark completed at revision
-`f3494fe9547d6589dad8e382e2392f14b8e0cebf`, on macOS Apple silicon with Deno
-2.9.4. Each case checks the handler's resulting value after dispatch. Read
-accounting was disabled throughout the timing pass. No runtime code was changed
-for this measurement, and no live space was accessed.
+All 18 cases of the
+[pinned handler-dispatch benchmark](https://github.com/commonfabric/labs/blob/f3494fe9547d6589dad8e382e2392f14b8e0cebf/packages/runner/test/handler-dispatch-cost.bench.ts)
+completed at revision `f3494fe9547d6589dad8e382e2392f14b8e0cebf`, on macOS Apple
+silicon with Deno 2.9.4. Each case checks the handler's resulting value after
+dispatch. Read accounting was disabled throughout the timing pass. No runtime
+code was changed for this measurement, and no live space was accessed.
 
 This repeats the timing surface of the
 [F0 baseline](../2026-09-11-lazy-materialization-f0-baseline.md), without
