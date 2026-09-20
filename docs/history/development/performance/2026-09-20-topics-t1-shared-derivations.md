@@ -109,24 +109,35 @@ across rounds; the timings sit in the extract beside them and are not a result.
 
 The stage's third exit condition is that sharing must not broaden board demand.
 
-**What could broaden it, and what could not.** None of the derivations this
-stage changed is in board demand. The board demands the four lifts T0 measured
-— the pivot, backlinks, the comment count, and last activity — and
-`hasComments`, `hasLinks`, `linksToResolve`, `commentsView` and `linksView` are
-none of them; they are body derivations a topic runs for its own rendering. So
-sharing them cannot widen board demand directly, because the board never reads
-them. There are two ways it could widen it indirectly, and both are the reason
-the comparisons below are the ones chosen: a shared derivation could pull a
-*demanded* lift's declared parameter wider — which is what widening
-`presentCommentCountOf` to return records instead of a count would have done,
-and is why the stage did not do that — or the change could alter what crosses
-the board/topic boundary. The first two items below address the first, the
-third addresses the second.
+**One changed derivation does reach board demand, and it is the one to check.**
+`hasComments`, `hasLinks` and `commentsView` are read only by the topic's own
+rendering. `linksView` is not: `linkTargets` maps it, `mentionsOf` takes those
+targets, and the `mentions` it produces is published on the topic and read by
+the board's pivot. So the route from `linksView` to board demand is real, and a
+claim that these derivations are rendering-only would be wrong.
 
-What none of this does is measure board demand through the changed graph
-end-to-end, because the instrument that reaches the changed derivations builds
-four synthetic topics and no board. That is a real limit on the evidence rather
-than a claim, and it is repeated under what this does not establish.
+What makes the demand unchanged along that route is not that it does not exist
+but that the expression did not change. Before, `linkTargets` mapped
+`linksToResolve`; now it maps `linksView`, and the two are the same expression
+over the same array — a filter of the links whose `removedAt` is unset. What
+`mentionsOf` receives, and so what `mentions` publishes, is value-identical.
+That is why the stage could delete one of them.
+
+That route is also the one the probe comparison below actually exercises, which
+is what makes it evidence here rather than only a consistency check: its cases
+are pivot cases, the pivot reads each source's `mentions`, and every count is
+identical across the two arms.
+
+The other route by which sharing could widen demand is pulling a *demanded*
+lift's declared parameter wider — which is exactly what widening
+`presentCommentCountOf` to return records instead of a count would have done,
+and is why the stage did not do that. The declared-parameter comparison below
+is what closes it.
+
+What none of this does is measure a board reading a topic end-to-end across the
+change, because the instrument that reaches the changed derivations builds four
+synthetic topics and no board. That is a real limit on the evidence rather than
+a claim, and it is repeated under what this does not establish.
 
 Four things were compared:
 
@@ -144,13 +155,12 @@ Four things were compared:
   identical: 10 cases from `--small` and 34 from a 32-topic and thread filter,
   0 differing. The comparison is on counts, so it sets aside `elapsedMs` and
   the memory gauges, which vary per run and measure nothing this stage changes.
-  This is the weakest of the four and is a consistency check rather than proof:
-  the probe starts the four demanded lifts and instantiates no pattern body,
-  which is why a separate instrument was needed above, so an unchanged probe
-  reading shows that nothing this stage did leaked into the demanded lifts —
-  not that the body's own demand is narrower. The first item is what shows
-  that. The comparison's terms and result are in the extract under
-  `boardDemandComparison`.
+  These are pivot and backlink cases, so they read each source's `mentions` and
+  therefore exercise the one route by which a changed derivation reaches board
+  demand. What they do not show is anything about the body's own reads: the
+  probe starts the four demanded lifts and instantiates no pattern body, which
+  is why a separate instrument was needed above. The comparison's terms and
+  result are in the extract under `boardDemandComparison`.
 
 ## Hoist movement
 

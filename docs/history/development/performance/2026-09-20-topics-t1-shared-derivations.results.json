@@ -309,7 +309,7 @@
     "casesCompared": 44,
     "casesWhoseCountsDiffer": 0,
     "comparedOn": "every recorded field except elapsedMs and the memory gauges (heapUsedBytes, heapTotalBytes, heapSizeLimitBytes, rssBytes, externalBytes, memory), which vary per run and are not counts",
-    "establishes": "that nothing this stage changed reached the four lifts the board demands; it does not establish that the topic body reads less, because the probe instantiates no pattern body"
+    "establishes": "that the one route by which a changed derivation reaches board demand is unchanged: these are pivot and backlink cases, the pivot reads each source's published `mentions`, and `linksView` reaches `mentions` through `linkTargets`. It establishes nothing about the topic body's own reads, because the probe instantiates no pattern body."
   },
   "behavior": {
     "authoredTopicsSuites": {
