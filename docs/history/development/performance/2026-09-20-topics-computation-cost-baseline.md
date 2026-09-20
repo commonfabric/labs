@@ -16,8 +16,10 @@ new ones.
 Every measured figure below is in
 [`2026-09-20-topics-computation-cost-baseline.results.json`](2026-09-20-topics-computation-cost-baseline.results.json)
 beside this file, which also names, per block, the run each figure was
-extracted from. Those runs are recorded in three places, and the extract's
-`sources` block gives each one's revision:
+extracted from — with one exception, the three trials under "The trials behind
+that shape", which are carried from `docs/development/BENCHMARKS.md` and have
+no data file, as that section states. Those runs are recorded in three places,
+and the extract's `sources` block gives each one's revision:
 
 - the headless matrix, in
   [`2026-09-18-topics-lazy-materialization.results.json`](2026-09-18-topics-lazy-materialization.results.json),
