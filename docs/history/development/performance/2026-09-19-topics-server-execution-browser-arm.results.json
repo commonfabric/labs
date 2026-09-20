@@ -293,7 +293,11 @@
     "min": 18.14,
     "median": 32.68,
     "max": 69.88
-   }
+   },
+   "boardIds": [
+    "fid1:DXUvZJhGbDHfp6lMRWNdU2IOzrlJf5_0LhCoWw81cOU",
+    "fid1:dTp3Hp6JQixXkHJQDzIDWWnKhHBW47KlILvWYSqWy2o"
+   ]
   },
   {
    "round": 1,
@@ -2841,7 +2845,11 @@
     "min": 9.36,
     "median": 21.2,
     "max": 25.93
-   }
+   },
+   "boardIds": [
+    "fid1:UBkNMmgI9GrFIWtmjqHt0XlVJXR3_hJ_rtJM1BhDUyw",
+    "fid1:HNtvc77wkwg1L3gJ24HErejUmW_p8_SiUL7S_9s-T2Q"
+   ]
   },
   {
    "round": 1,
@@ -5007,7 +5015,11 @@
     "min": 13.58,
     "median": 16.32,
     "max": 20.51
-   }
+   },
+   "boardIds": [
+    "fid1:C8cN8a-lcjGgyHWBm-zyuPuya9K0KnKT4P3cBIJs8so",
+    "fid1:g8Tx2XcdVeLTZmHzYVitFyV6AqOQsbYUzkXRWWevh6o"
+   ]
   },
   {
    "round": 2,
@@ -7533,7 +7545,11 @@
     "min": 23.29,
     "median": 65.22,
     "max": 126.49
-   }
+   },
+   "boardIds": [
+    "fid1:Li15kkiWGIm2kqcA3fTJtfqmi9NDEcatPMqVXaGjlvM",
+    "fid1:0Hu0hhdjPpP4ytKyIa6hh82mrIGh_W_OWV7uuJyYWak"
+   ]
   },
   {
    "round": 2,
@@ -12806,5 +12822,733 @@
     "structureLoadFailures": 1
    }
   ]
+ },
+ "upgradeHazard": {
+  "what": "An ON server handed a store authored under each posture, board size held at 8 topics.",
+  "arms": [
+   {
+    "store": "seeded under ON",
+    "topics": 8,
+    "waves": 12,
+    "derivedCommits": 10,
+    "structureLoadFailures": 0,
+    "activeSpaces": 2,
+    "note": "structureLoadTerminal was not captured for these probes.",
+    "samples": [
+     {
+      "atMs": 9,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 1003,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 2006,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 3006,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 4008,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 5009,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 6010,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 7013,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 8016,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 9016,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 10016,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 11023,
+      "phase": "client demanding",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 12838,
+      "phase": "client demanding",
+      "activeSpaces": 2,
+      "waves": 10,
+      "authoredSeen": 0,
+      "derivedCommits": 8,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 13065,
+      "phase": "client demanding",
+      "activeSpaces": 2,
+      "waves": 11,
+      "authoredSeen": 0,
+      "derivedCommits": 9,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 14026,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 10,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 15028,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 10,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 16037,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 10,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 17031,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 10,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 18036,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 10,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 19039,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 10,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 20043,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 10,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 21041,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 10,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 22040,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 10,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 23041,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 10,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 24047,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 10,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 25047,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 10,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 26047,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 10,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 27045,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 10,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 28050,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 10,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     }
+    ]
+   },
+   {
+    "store": "seeded under OFF",
+    "topics": 8,
+    "waves": 12,
+    "derivedCommits": 12,
+    "structureLoadFailures": 1,
+    "activeSpaces": 2,
+    "note": "structureLoadTerminal was not captured for these probes.",
+    "samples": [
+     {
+      "atMs": 9,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 1004,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 2006,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 3007,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 4009,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 5011,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 6011,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 7011,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 8014,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 9014,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 10014,
+      "phase": "idle, no client",
+      "activeSpaces": 0,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 11020,
+      "phase": "client demanding",
+      "activeSpaces": 2,
+      "waves": 0,
+      "authoredSeen": 0,
+      "derivedCommits": 0,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 12630,
+      "phase": "client demanding",
+      "activeSpaces": 2,
+      "waves": 1,
+      "authoredSeen": 0,
+      "derivedCommits": 1,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 13025,
+      "phase": "client demanding",
+      "activeSpaces": 2,
+      "waves": 2,
+      "authoredSeen": 0,
+      "derivedCommits": 2,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 14054,
+      "phase": "client demanding",
+      "activeSpaces": 2,
+      "waves": 7,
+      "authoredSeen": 0,
+      "derivedCommits": 7,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 0
+     },
+     {
+      "atMs": 15024,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 12,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 1
+     },
+     {
+      "atMs": 16025,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 12,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 1
+     },
+     {
+      "atMs": 17031,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 12,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 1
+     },
+     {
+      "atMs": 18032,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 12,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 1
+     },
+     {
+      "atMs": 19029,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 12,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 1
+     },
+     {
+      "atMs": 20034,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 12,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 1
+     },
+     {
+      "atMs": 21036,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 12,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 1
+     },
+     {
+      "atMs": 22032,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 12,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 1
+     },
+     {
+      "atMs": 23033,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 12,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 1
+     },
+     {
+      "atMs": 24035,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 12,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 1
+     },
+     {
+      "atMs": 25035,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 12,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 1
+     },
+     {
+      "atMs": 26037,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 12,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 1
+     },
+     {
+      "atMs": 27040,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 12,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 1
+     },
+     {
+      "atMs": 28045,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 12,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 1
+     },
+     {
+      "atMs": 29040,
+      "phase": "client closed",
+      "activeSpaces": 2,
+      "waves": 12,
+      "authoredSeen": 0,
+      "derivedCommits": 12,
+      "demandArrivals": 0,
+      "storeReads": 0,
+      "structureLoadFailures": 1
+     }
+    ]
+   }
+  ],
+  "hundredTopicOffSeeded": {
+   "store": "seeded under OFF",
+   "topics": 100,
+   "waves": 77,
+   "derivedCommits": 78,
+   "structureLoadFailures": 1,
+   "source": "quiescenceProbe below; its final sample."
+  }
+ },
+ "step1Seeds": [
+  {
+   "topics": 8,
+   "posture": "off",
+   "elapsedMs": 5999
+  },
+  {
+   "topics": 8,
+   "posture": "off",
+   "elapsedMs": 9895
+  },
+  {
+   "topics": 8,
+   "posture": "on",
+   "elapsedMs": 9907
+  },
+  {
+   "topics": 100,
+   "posture": "off",
+   "elapsedMs": 206404
+  }
+ ],
+ "step1SeedsNote": "These are the feasibility step's standalone seeds, not the arms'. The arms' own seed times are each round's `seeds`. The two are not interchangeable.",
+ "revisionNote": "The revision the benches and the toolshed binaries were built from; not the commit that adds this file.",
+ "swapSpotObservations": {
+  "what": "Free swap, in MB, read by hand at moments during the run rather than sampled on a cadence. Unlike `loadSeries` these are not a series: they were taken when something prompted a look, so they show the range observed and not the distribution.",
+  "totalMb": 47104,
+  "freeMbObserved": [
+   569,
+   817,
+   1009,
+   1176,
+   1234,
+   1289,
+   1338,
+   1369,
+   1409,
+   1452,
+   1586,
+   1633
+  ],
+  "stoppingRuleFloorMb": 400,
+  "stoppingRuleFired": false
  }
 }

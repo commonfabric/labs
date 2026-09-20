@@ -24,9 +24,11 @@ baseline report.
 Two limits bound what the numbers below support, and both are easier to apply
 before reading them than after.
 
-**The counters and the timings are not equally good.** The counters are
-reproducible and are the result. The timings are confounded and support no
-posture conclusion; the section that gives them says why.
+**The counters and the timings are not equally good.** The counters are the
+result, and the navigation bench's were shown to reproduce across
+independently seeded boards; the scale bench's reopen sample was not, and the
+section on reproducibility bounds the claim. The timings are confounded and
+support no posture conclusion; the section that gives them says why.
 
 **The client's and the server's work are counted in different units.** The
 browser's read accounting counts lift *runs*. The serving loop counts derived
@@ -56,9 +58,9 @@ All eight returned it.
 Each round ran against a fresh empty store, so no round inherited another's
 state and no ON-arm derivation could reach an OFF arm.
 
-## The counters do not change with the posture
+## The located-lift counters do not change with the posture
 
-Both benches' located lifts, every round:
+The navigation bench's located lifts, in each of its two rounds per posture:
 
 | segment | lift | ON (2 rounds) | OFF (2 rounds) |
 | --- | --- | --- | --- |
@@ -68,6 +70,12 @@ Both benches' located lifts, every round:
 | `comment` | `presentCommentCountOf` | 1 run, 3 accesses, 2 hops | 1 run, 3 accesses, 2 hops |
 
 `lastActivityOf` runs zero times in both segments under both postures.
+
+The scale bench's four rounds are not in that table because they contribute no
+located-lift work to compare: its `reopen 100, reads` sample reads zero runs
+across all four lifts in every round, under both postures. That zero is the
+reading its `mayRunNothing` declaration anticipates, and the section on
+instrument liveness says what establishes it was recorded rather than missed.
 
 The client runs its derivations under either posture. That is what
 [`speculation.md`](../../../specs/server-side-execution/speculation.md) states
@@ -118,7 +126,7 @@ A second reason not to describe the row loosely: `remaining` is a union of two
 populations — runs with no source location, and runs whose location is outside
 the four lifts being tracked. Only the first moved here.
 
-## The counters do not change with the board either
+## The navigation bench's counters do not change with the board
 
 `packages/patterns` seeds a fresh board per bench process, and the piece ids it
 mints differ from one seed to the next. Whether that moves the counters is
@@ -136,15 +144,24 @@ node and edge counts before and after, across both segments:
 
 The non-zero column is the one that carries the claim: a sparse table can agree
 almost entirely through empty rows, and 47 of these agreements are between
-figures that are not zero, among them 668, 343, 279, 256 and 3473. The four
-boards were demonstrably distinct, their ids recorded in the results file.
+figures that are not zero, among them 668, 343, 279, 256 and 3473.
+
+The four boards were distinct. Each round seeded its own into a fresh empty
+store, and the board and comment-board ids each round minted are recorded per
+round in the results file, where the four differ.
 
 **This is a claim about the navigation bench.** The scale benchmark's
 `reopen 100, reads` sample recorded one remaining run of 19 accesses in one OFF
-round and none in the other. That is the sample's documented behavior rather
-than a fault — `topic-board-scale.bench.ts` records that a reopen may run
-nothing in the worker at all, which is why the sample is declared
-`mayRunNothing` — and it is outside the reproducibility claim.
+round and none in the other, so it is outside the claim.
+
+Its `mayRunNothing` declaration is not what excuses that. `recordReopenReads`
+bounds the declaration to the located-lift rows — a reopen is expected to
+complete no run carrying an authored source location, and the declaration
+"reaches only that one outcome" — whereas what varied here is the source-less
+population the `remaining` row holds, which that declaration does not speak to.
+Both rounds' located-lift rows read zero, as the declaration anticipates. The
+`remaining` row simply varied, and nothing in the benchmark asserts it would
+not.
 
 ## Every arm's instrument was demonstrably live
 
@@ -231,12 +248,14 @@ work competes with the browser it is serving, for the same ten CPUs.
 That second reason is structural, and three things follow from it.
 
 **A quieter machine does not fix this.** The contention is between the two
-halves of the rig, not between the rig and whatever else the host is doing. An
-otherwise idle machine running this benchmark still has the ON arm's serving
-loop competing with the ON arm's browser, and still has nothing competing with
-the OFF arm's browser, because the OFF arm has no serving loop. The ON arm is
-necessarily the noisier of the two, by an amount that is a property of the
-design rather than of the afternoon.
+halves of the rig, not between the rig and whatever else the host is doing. On
+an otherwise idle machine the ON arm's browser still shares its CPUs with a
+serving loop deriving, and the OFF arm's browser shares them with a toolshed
+that derives nothing, because the OFF binary builds no `ExecutorHost`. Both
+arms carry the ordinary contention with a toolshed that
+[`BENCHMARKS.md`](../../../development/BENCHMARKS.md) describes; only the ON arm
+additionally carries that toolshed's derivation. The asymmetry is a property of
+the design rather than of the afternoon.
 
 **It is not a defect in the benchmarks.** They were built to measure
 client-side cost with a toolshed as a fixture, and for client execution that is
@@ -254,15 +273,18 @@ Whether the higher load during the ON arm was unrelated work or server
 execution's own is not separable here, and it does not need to be: neither
 licenses a posture claim.
 
-What the load figures do support, short of latency: the scale benchmark's ON
-arm ran at roughly double the OFF arm's load median, and some part of that is
-the serving loop's own work. That is not a latency result and no ratio should
-be taken from it, but it is evidence that server execution's cost on this
-workload is not small.
+The scale benchmark's ON arm ran at roughly double the OFF arm's load median,
+21.13 against 42.70. Nothing here attributes any share of that to the serving
+loop, and the difference is not evidence of a magnitude: the two medians are
+pooled over windows of very different length, the ON scale rounds having run
+547 and 541 seconds against the OFF rounds' 191 and 202, so they summarise
+roughly 2.7 times as much time and as many samples. The observation is that the
+arms ran under different conditions, which is why no comparison between them is
+offered.
 
-The machine also sets a floor under any latency claim made on it. The same
-100-topic seed, identical work, was measured at 206, 286 and 359 seconds at
-different loads; an 8-topic seed at 6.0 and 9.9 seconds.
+The machine also sets a floor under any latency claim made on it. The four
+100-topic seeds these rounds performed, identical work each time, took 146.5,
+147.8, 242.0 and 285.8 seconds.
 
 ## What the environment had to be shown to do first
 
@@ -307,16 +329,19 @@ the arms above seed each round under the posture that round measures. All four
 ON rounds report zero structure-load failures; the four OFF rounds report no
 such counter, having no serving loop to keep one.
 
-`structureLoadTerminal` is not a failure count and moved in both arms of the
-comparison equally, 55 against 55 at 8 topics. It counts demanded roots
-confirmed synced with no pattern meta, which the demand cycle stops retrying —
-plain value documents, the "never" half of the not-yet-versus-never
-distinction.
+`structureLoadTerminal` is not a failure count, and is not what moved above. It
+counts demanded roots confirmed synced with no pattern meta, which the demand
+cycle stops retrying — plain value documents, the "never" half of the
+not-yet-versus-never distinction (`packages/runner/src/executor/stats.ts`). The
+arms rounds record it between 2,194 and 4,457 with no structure-load failure
+anywhere among them. It was not captured for the 8-topic probes above, so this
+record makes no claim about it there.
 
 Separately, a serving loop derives nothing from a store handed to it until
-something demands that store: an ON toolshed over a restored OFF-seeded store
-sat at zero waves, zero derived commits and zero active spaces for five
-minutes, and moved only once a client loaded the board.
+something demands that store. Over a restored OFF-seeded store an ON toolshed
+held at zero waves, zero derived commits and zero active spaces across the
+eleven samples of the probe's idle phase, spanning its first ten seconds, and
+moved only once a client loaded the board.
 
 ## Conditions, and what shaped the run
 
@@ -325,9 +350,13 @@ unrelated load throughout. The full load series is in the results file.
 
 Memory pressure was episodic rather than steadily worsening, and it tracked
 seeding: free swap fell while a 100-topic seed held its heap and recovered when
-the seeding child exited, ranging between roughly 570 MB and 1.6 GB of 47 GB
-across the run. A stopping rule was set in advance to halt cleanly after the
-round in flight if free swap fell below 400 MB. It never fired.
+the seeding child exited. Twelve readings taken by hand during the run span
+569 MB to 1,633 MB of 47,104 MB. They are spot observations rather than a
+series — the results file records them as such, and unlike the load series
+they show a range rather than a distribution. A stopping rule was set in
+advance to
+halt cleanly after the round in flight if free swap fell below 400 MB. It never
+fired.
 
 One case was lost. `r1-on-scale`'s board-load case failed with a runtime login
 timeout at a round load median of 36.33 and a maximum of 93.08. The same case

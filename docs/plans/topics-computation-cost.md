@@ -268,18 +268,21 @@ loop and to serve a deployed Topics board's work, recorded in
 which is the engagement the headless tier has no way to produce. The browser
 benchmark environment of a built binary, a baked shell and Chrome runs a
 coherent arm: a toolshed built at either posture serves a deployment that
-declares it, and the reader refuses a deployment that declares none. The cost
-of server execution is measured in the browser tier by
+declares it, and the reader refuses a deployment that declares none. A browser
+arm holds its two halves to one posture: the toolshed serves at it, and the
+shell it serves is built at it. A run whose halves disagree is refused rather
+than labeled. Server execution on and off must both be measured before the
+baseline report, and
 [the browser arm](../history/development/performance/2026-09-19-topics-server-execution-browser-arm.md)
-and remains unmeasurable in the headless one. A browser arm holds its two
-halves to one posture: the toolshed serves at it, and the shell it serves is
-built at it. A run whose halves disagree is refused rather than labeled. What
-that arm establishes is counters: the browser benchmarks co-host the toolshed
-they measure against, and under the ON posture that toolshed derives, so its
-work competes with the browser and no latency comparison between the postures
-survives it. A latency evaluation on this axis therefore needs the server off
-the browser's hardware, which is a requirement on the rig rather than on when
-it is scheduled. The scheduled Benchmarks workflow runs client execution only.
+measures both: the computation counters this tier records are measured under
+each posture, and the headless tier can measure neither, for the reason above.
+That arm's timings are not usable, and the reason is a property of the tier
+rather than of one run: the browser benchmarks co-host the toolshed they
+measure against, and under the ON posture that toolshed derives, so its work
+competes with the browser it serves. A latency comparison between the postures
+therefore needs the server off the browser's hardware, which is a requirement
+on the rig rather than on when it is scheduled. The scheduled Benchmarks
+workflow runs client execution only.
 
 Of the three demand workloads above, the headless tier measures the
 board-with-one-topic workload with the demand the browser measured, and the
