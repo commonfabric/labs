@@ -178,8 +178,7 @@ export class DebugStringifier {
       // A `FabricPrimitive` binds no `[CODEC]`, so its realm codec supplies
       // the tag and the state. That codec is the one whose terminals are the
       // richest -- a `bigint` stays a `bigint`, bytes stay bytes -- which is
-      // what makes it the one to render. TODO(danfuzz): Replace `REALM_CODEC`
-      // with `DEBUG_CODEC` once the latter exists.
+      // what makes it the one to render.
       const codec = codecOf<RealmCodecValue>(value, REALM_CODEC);
       tag = codec.tagForValue(value);
       state = codec.encode(value, NULL_LIVE_ENVIRONMENT);

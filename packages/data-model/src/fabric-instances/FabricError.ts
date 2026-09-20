@@ -474,9 +474,37 @@ export class FabricError extends FabricNativeWrapper<Error>
         return state;
       }
 
-      /** @inheritDoc */
+      /**
+       * @inheritDoc
+       *
+       * Beyond being a plain object, the state is held to the types of the
+       * four fields the public getters are typed by: `type`, `message` and
+       * `stack` each a string where present, and `name` a string or `null`.
+       * The fields are checked here rather than by the constructor because the
+       * constructor does no validation, so an unchecked field reaches a getter
+       * typed `string` as whatever it arrived as. `cause` and the extras are
+       * arbitrary `FabricValue`s and are not constrained.
+       */
       canDecode(state: FabricValue): state is FabricPlainObject {
-        return isPlainObject(state);
+        if (!isPlainObject(state)) {
+          return false;
+        }
+
+        for (const key of ["type", "name", "message", "stack"] as const) {
+          if (!Object.hasOwn(state, key)) {
+            continue;
+          }
+
+          const value = state[key];
+          // `null` `name` means "same as `type`" (the wire-level optimization).
+          if (
+            (typeof value !== "string") && !(key === "name" && value === null)
+          ) {
+            return false;
+          }
+        }
+
+        return true;
       }
 
       /** @inheritDoc */

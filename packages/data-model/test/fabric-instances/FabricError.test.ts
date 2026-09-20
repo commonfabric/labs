@@ -725,6 +725,41 @@ describe("FabricError", () => {
             .toBe(true);
         });
 
+        it("returns `true` for a record with every checked field absent", () => {
+          expect(codec.canDecode({})).toBe(true);
+          expect(codec.canDecode({ cause: 42, code: 7 })).toBe(true);
+        });
+
+        it("returns `true` for a `null` `name`, which means same as `type`", () => {
+          expect(codec.canDecode({ type: "Error", name: null, message: "" }))
+            .toBe(true);
+        });
+
+        it("returns `true` for a `name` with no `type` (back-compat)", () => {
+          expect(codec.canDecode({ name: "TypeError", message: "old format" }))
+            .toBe(true);
+        });
+
+        it("returns `false` for a checked field that is not a string", () => {
+          // Each of these fields reaches a getter typed `string` unchecked by
+          // the constructor, so the predicate is the one place a mistyped one
+          // is refused.
+
+          for (const key of ["type", "name", "message", "stack"]) {
+            for (const value of [42, true, undefined, ["x"], { x: 1 }]) {
+              const state = { type: "Error", message: "boop", [key]: value };
+              expect(codec.canDecode(state as never)).toBe(false);
+            }
+          }
+        });
+
+        it("returns `false` for a `null` in a field other than `name`", () => {
+          for (const key of ["type", "message", "stack"]) {
+            const state = { type: "Error", message: "boop", [key]: null };
+            expect(codec.canDecode(state as never)).toBe(false);
+          }
+        });
+
         it("returns `false` for state that is not a plain object", () => {
           // Wire state is untrusted input. Without this check these decode
           // into a `FabricError` bearing a default type and an empty message,
