@@ -412,6 +412,43 @@ describe("Proxy", () => {
     expect(lastEventSeen).toEqual({ clicked: true });
   });
 
+  it("returns a stream cell for the retired stream sentinel a schema-less read reaches", async () => {
+    // A document written before streams were declared by schema holds
+    // `{ $stream: true }` as the value at the position, and a read that
+    // brings no schema to it has nothing else to go on: the proxy reads the
+    // value and mints the stream cell from the sentinel, so a send through
+    // it still dispatches.
+    const c = runtime.getCell<{ stream: { $stream: true } }>(
+      space,
+      "returns a stream cell for the retired stream sentinel",
+      undefined,
+      tx,
+    );
+    c.setRaw({ stream: { $stream: true } });
+    tx.commit();
+    tx = runtime.edit();
+
+    const streamCell = c.key("stream");
+    let lastEventSeen: unknown = null;
+    let eventCount = 0;
+    runtime.scheduler.addEventHandler(
+      (_tx: IExtendedStorageTransaction, event: unknown) => {
+        eventCount++;
+        lastEventSeen = event;
+      },
+      streamCell.getAsNormalizedFullLink(),
+    );
+
+    const held = c.get().stream as unknown as {
+      send: (event: unknown) => void;
+    };
+    expect(held).toHaveProperty("send");
+    held.send({ clicked: true });
+    await runtime.idle();
+    expect(eventCount).toBe(1);
+    expect(lastEventSeen).toEqual({ clicked: true });
+  });
+
   it("should convert cells and proxies to links when sending events", async () => {
     const c = runtime.getCell<any>(
       space,

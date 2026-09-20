@@ -32,10 +32,7 @@ function child(schema: unknown, value: unknown) {
  * cell refuses throws, the way a link the store cannot follow does. What was
  * asked of the piece is recorded in `asked`.
  */
-function pieceOf(
-  children: Record<string, ReturnType<typeof child>>,
-  asked: string[],
-) {
+function pieceOf(children: Record<string, object>, asked: string[]) {
   const cell = (side: string) => ({
     key: (key: string) => {
       asked.push(`${side}.${key}`);
@@ -61,9 +58,16 @@ function reaching(piece: ReturnType<typeof pieceOf>) {
 }
 
 describe("listCallableKeys()", () => {
+  // `count` is a cell with no link-derived view of its own, which the read
+  // takes as it is.
+  const { asSchemaFromLinks: _viewless, ...count } = child(
+    { type: "number" },
+    3,
+  );
   const children = {
     bump: child({ asCell: ["stream"], type: "object" }, undefined),
     label: child({ type: "string" }, "a place"),
+    count,
   };
 
   it("returns no callables for no keys, without reaching the piece", async () => {
@@ -78,12 +82,17 @@ describe("listCallableKeys()", () => {
     const callables = await listCallableKeys(
       CONFIG,
       [],
-      ["bump", "label", "missing"],
+      ["bump", "label", "count", "missing"],
       {},
       reaching(pieceOf(children, asked)),
     );
     expect([...callables]).toEqual(["bump"]);
-    expect(asked).toEqual(["result.bump", "result.label", "result.missing"]);
+    expect(asked).toEqual([
+      "result.bump",
+      "result.label",
+      "result.count",
+      "result.missing",
+    ]);
   });
 
   it("reads the arguments cell where the read asks for it", async () => {
