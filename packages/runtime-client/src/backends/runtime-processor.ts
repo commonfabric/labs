@@ -1254,16 +1254,18 @@ export class RuntimeProcessor {
   handleCellGet(
     request: CellGetRequest,
   ): CellGetResponse {
-    // Fail closed on the retired raw label-metadata seam (inv-12 Stage 0 /
-    // SC-14 / SC-25): `meta: "cfc"` used to return the raw `["cfc"]` envelope
-    // (unredacted Caveat.source and other principal identities) via
-    // getMetaRaw. "cfc" is no longer a MetaField, but the wire is untyped
-    // JSON — reject the request rather than serve raw metadata. Display
-    // label views are served redacted via `includeCfcLabel` / CellGetCfcLabel.
+    // `MetaField` leaves `cfc` out, but a request arrives as data which that
+    // type only describes, so `meta` can name it all the same. The branch
+    // below hands any `meta` that is not a link field to `getMetaRaw()`, which
+    // reads whichever document-root field it is given, and the `cfc` field is
+    // the raw label metadata, with `Caveat.source` and the other principal
+    // identities in it unredacted. So we refuse the request here. A label for
+    // display comes from `includeCfcLabel` on this request or from a
+    // `CellGetCfcLabel` request, and both redact it.
     if ((request.meta as string | undefined) === "cfc") {
       throw new Error(
-        'cell/get meta "cfc" is not served over IPC (inv-12); ' +
-          "use getCfcLabel for the redacted display view",
+        '`meta: "cfc"` is not served over IPC; ' +
+          "use `getCfcLabel()` for the redacted display view",
       );
     }
     let cell = getCell(this.#runtime, request.cell);
@@ -1305,8 +1307,9 @@ export class RuntimeProcessor {
     if (!request.includeCfcLabel) {
       return { value: converted, ...refField };
     }
-    // Same display-label read as handleCellGetCfcLabel: pure store read, then
-    // redact Caveat.source for display (audit 28b). One round-trip for both.
+    // The same display-label read `handleCellGetCfcLabel()` makes, with
+    // `Caveat.source` redacted for display. Returning it alongside the value
+    // saves the caller a second round trip.
     const cfcLabel = cfcLabelViewForCell(cell);
     return {
       value: converted,
