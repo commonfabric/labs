@@ -419,6 +419,31 @@ describe("completion", () => {
         .toBeUndefined();
     });
 
+    it("writes the dimension `where` sets, which is a word this process holds", async () => {
+      // The third of the three surfaces, and it is one for the same reason
+      // the other two are: the words are a table this process already has,
+      // so answering costs no read.
+
+      expect(await completeLine(shuttleIn(), "where sc", READS_NOTHING))
+        .toBe("where scope");
+      expect(await completeLine(shuttleIn(), "where ex", READS_NOTHING))
+        .toBe("where external");
+    });
+
+    it("writes nothing for the value `where` sets a dimension to", async () => {
+      // What the slot takes depends on the dimension named before it — a
+      // scope word for one, a path outside the fabric for the other — and a
+      // slot declares what it offers for the position rather than for the
+      // line that reached it, so there is no answer right for both.
+
+      expect(await completeLine(shuttleIn(), "where scope @ses", READS_NOTHING))
+        .toBeUndefined();
+      expect(
+        await completeLine(shuttleIn(), "where external ../f", READS_NOTHING),
+      )
+        .toBeUndefined();
+    });
+
     it("writes nothing where the line asked for the verb's page", async () => {
       expect(await completeLine(shuttleIn(), "cd --help sl", READS_NOTHING))
         .toBeUndefined();
