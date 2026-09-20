@@ -32,7 +32,35 @@ export type {
   RedeemReceipt,
 } from "@commonfabric/memory/space-invites";
 
-/** Signed HTTP client. The caller retains credentials for uncertain retries. */
+/** Creation settings with optional credentials for an exact retry. */
+export type CreateSpaceInviteOptions =
+  & Pick<CreateInvite, "access" | "ttlSeconds" | "maxUses">
+  & { inviteId?: string; code?: string };
+
+/** A failed creation attempt retaining caller-only credentials for an exact retry. */
+export class SpaceInviteCreateError extends SpaceInviteError {
+  #retry: Readonly<
+    CreateSpaceInviteOptions & { inviteId: string; code: string }
+  >;
+
+  /** Retains credentials privately without adding them to error diagnostics. */
+  constructor(
+    code: string,
+    retry: CreateSpaceInviteOptions & { inviteId: string; code: string },
+  ) {
+    super(code);
+    this.#retry = Object.freeze({ ...retry });
+  }
+
+  /** Secret-bearing options to pass to the same client's `create()` method. */
+  get retry(): Readonly<
+    CreateSpaceInviteOptions & { inviteId: string; code: string }
+  > {
+    return this.#retry;
+  }
+}
+
+/** Signed HTTP client. Failed creation retains credentials for uncertain retries. */
 export class SpaceInviteClient {
   #host: string;
   #space: string;
@@ -56,10 +84,7 @@ export class SpaceInviteClient {
 
   /** Creates credentials locally; preserve the returned code to deliver the link. */
   async create(
-    options: Pick<CreateInvite, "access" | "ttlSeconds" | "maxUses"> & {
-      inviteId?: string;
-      code?: string;
-    },
+    options: CreateSpaceInviteOptions,
   ): Promise<InviteMetadata & { code: string }> {
     if ((options.inviteId === undefined) !== (options.code === undefined)) {
       throw new SpaceInviteError("invalid-request");
@@ -67,8 +92,8 @@ export class SpaceInviteClient {
     const credentials = options.inviteId === undefined
       ? createInviteCredentials()
       : { inviteId: options.inviteId, code: options.code! };
-    const metadata = await this.issue({
-      ...credentials,
+    const request = {
+      inviteId: credentials.inviteId,
       codeVerifier: inviteCodeVerifier({
         host: this.#host,
         space: this.#space,
@@ -77,8 +102,25 @@ export class SpaceInviteClient {
       access: options.access,
       ttlSeconds: options.ttlSeconds,
       ...(options.maxUses === undefined ? {} : { maxUses: options.maxUses }),
-    });
-    return { ...metadata, code: credentials.code };
+    };
+    try {
+      const metadata = await this.issue(request);
+      return { ...metadata, code: credentials.code };
+    } catch (error) {
+      throw new SpaceInviteCreateError(
+        error instanceof SpaceInviteError
+          ? error.code
+          : "create-outcome-unknown",
+        {
+          access: request.access,
+          ttlSeconds: request.ttlSeconds,
+          ...(request.maxUses === undefined
+            ? {}
+            : { maxUses: request.maxUses }),
+          ...credentials,
+        },
+      );
+    }
   }
 
   /** Issues prepared credentials; retry this exact request after uncertain delivery. */
@@ -138,11 +180,12 @@ export class SpaceInviteClient {
       throw new SpaceInviteError("invite-service-unsupported");
     }
     if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        code: "service-error",
-      }));
+      const error: unknown = await response.json().catch(() => undefined);
       throw new SpaceInviteError(
-        typeof error.code === "string" ? error.code : "service-error",
+        error !== null && typeof error === "object" && "code" in error &&
+          typeof error.code === "string"
+          ? error.code
+          : "service-error",
       );
     }
     return await response.json() as T;

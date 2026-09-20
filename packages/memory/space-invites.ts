@@ -5,6 +5,7 @@ import {
   fromBase64url,
   toUnpaddedBase64url,
 } from "@commonfabric/utils/base64url";
+import { isLoopbackHostname } from "@commonfabric/utils/loopback";
 import type { Capability } from "./acl.ts";
 
 /** Host limits for version one of the invitation protocol. */
@@ -83,7 +84,7 @@ export function normalizeInviteHost(host: string): string {
   } catch {
     throw new SpaceInviteError("invalid-host");
   }
-  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  const loopback = isLoopbackHostname(url.hostname);
   if (
     url.username || url.password || url.pathname !== "/" || url.search ||
     url.hash ||
@@ -108,6 +109,12 @@ export function isInviteId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9_-]{22,64}$/.test(value);
 }
 
+/** Whether a destination has the DID key encoding accepted by invite routes. */
+function isInviteSpace(value: unknown): value is DIDKey {
+  return isDIDKey(value) &&
+    /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,120}$/.test(value);
+}
+
 /** Generates independent opaque credentials using the platform RNG. */
 export function createInviteCredentials(): { inviteId: string; code: string } {
   return {
@@ -120,7 +127,7 @@ export function createInviteCredentials(): { inviteId: string; code: string } {
 export function inviteCodeVerifier(link: InviteLink): string {
   const host = normalizeInviteHost(link.host);
   if (
-    !isDIDKey(link.space) || !isInviteId(link.inviteId) ||
+    !isInviteSpace(link.space) || !isInviteId(link.inviteId) ||
     !isInviteSecret(link.code)
   ) {
     throw new SpaceInviteError("invalid-request");
@@ -166,9 +173,7 @@ export function parseInviteLink(
     [...fragment.keys()].join(",") !== "code"
   ) throw new SpaceInviteError("invalid-link");
   const space = url.searchParams.get("space");
-  if (
-    !isDIDKey(space) || !/^did:key:z[1-9A-HJ-NP-Za-km-z]{20,120}$/.test(space)
-  ) throw new SpaceInviteError("invalid-link");
+  if (!isInviteSpace(space)) throw new SpaceInviteError("invalid-link");
   const invite = {
     host: normalizeInviteHost(url.searchParams.get("host")!),
     space,

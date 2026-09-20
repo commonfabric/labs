@@ -12,6 +12,51 @@ import {
 const space = "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8MuKWGmRfDCwAZDGBnSpXXX";
 
 describe("space-invites", () => {
+  it("accepts canonical loopback HTTP origins across the loopback address range", () => {
+    for (
+      const host of [
+        "http://127.1.2.3:8080",
+        "http://127.255.255.255",
+        "http://localhost.:8080",
+        "http://[::1]:8080",
+      ]
+    ) {
+      expect(normalizeInviteHost(host)).toBe(host);
+      const invite = { host, space, ...createInviteCredentials() };
+      expect(parseInviteLink(buildInviteLink(host, invite))).toEqual(invite);
+    }
+    for (
+      const host of [
+        "http://126.255.255.255",
+        "http://128.0.0.1",
+        "http://localhost.example",
+        "http://[::2]",
+      ]
+    ) {
+      expect(() => normalizeInviteHost(host)).toThrow("invalid-host");
+    }
+  });
+  it("refuses malformed DID key destinations before building an invitation", () => {
+    const credentials = createInviteCredentials();
+    for (
+      const invalidSpace of [
+        "did:key:foo",
+        "did:key:",
+        "did:key:z0invalid",
+        "did:key:z" + "A".repeat(121),
+      ]
+    ) {
+      const invite = {
+        host: "https://example.com",
+        space: invalidSpace,
+        ...credentials,
+      };
+      expect(() => inviteCodeVerifier(invite)).toThrow("invalid-request");
+      expect(() => buildInviteLink("https://shell.example", invite)).toThrow(
+        "invalid-request",
+      );
+    }
+  });
   it("rejects malformed origins, links, and secret encodings", () => {
     expect(() => normalizeInviteHost("not an origin")).toThrow("invalid-host");
     for (const secret of [undefined, 32, "", "A".repeat(42), "A".repeat(44)]) {
@@ -42,6 +87,13 @@ describe("space-invites", () => {
     expect(new URL(link).search.includes(invite.code)).toBe(false);
     expect(new URL(link).hash).toBe(`#code=${invite.code}`);
     expect(parseInviteLink(link)).toEqual(invite);
+    const queryCode = new URL(link);
+    queryCode.searchParams.set("code", invite.code);
+    queryCode.hash = "";
+    expect(() => parseInviteLink(queryCode)).toThrow("invalid-link");
+    const duplicateCode = new URL(link);
+    duplicateCode.searchParams.set("code", invite.code);
+    expect(() => parseInviteLink(duplicateCode)).toThrow("invalid-link");
     expect(parseInviteLink(new URL("https://shell.example/space")))
       .toBeUndefined();
     expect(() =>

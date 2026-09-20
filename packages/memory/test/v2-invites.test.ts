@@ -83,12 +83,15 @@ async function fixture() {
 }
 
 function unavailable(fn: () => unknown) {
-  expect(fn).toThrow(SpaceInviteError);
+  let failure: unknown;
   try {
     fn();
   } catch (error) {
-    expect((error as SpaceInviteError).code).toBe("invite-unavailable");
+    failure = error;
   }
+  expect(failure).toBeInstanceOf(SpaceInviteError);
+  if (!(failure instanceof SpaceInviteError)) throw failure;
+  expect(failure.code).toBe("invite-unavailable");
 }
 
 async function processAttempt(
@@ -154,6 +157,14 @@ async function processAttempt(
 }
 
 describe("invites", () => {
+  it("checks an unavailable operation with one invocation", () => {
+    let calls = 0;
+    unavailable(() => {
+      calls++;
+      throw new SpaceInviteError("invite-unavailable");
+    });
+    expect(calls).toBe(1);
+  });
   it("rejects invalid service envelopes without creating admission or receipt state", async () => {
     const f = await fixture();
     try {

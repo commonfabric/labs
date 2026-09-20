@@ -295,7 +295,7 @@ export interface DeployedClientExperimentalParams {
  * server to ask and keep reading the environment alone; the Labs development shell
  * reads its build-time defines and never fetches a posture.
  *
- * An unreachable server or a body that will not parse resolves to the
+ * An unreachable server or a body that is not a JSON object resolves to the
  * environment alone — the caller is about to fail loudly on its real work if
  * the server is genuinely down, and failing here first would only obscure
  * that. A server that ANSWERS with a pre-flag document — a meta document
@@ -342,8 +342,11 @@ export async function experimentalOptionsForDeployedClient(
       await response.body?.cancel();
       return env;
     }
-    declared = ((await response.json()) as { experimental?: unknown })
-      ?.experimental;
+    const body: unknown = await response.json();
+    if (body === null || typeof body !== "object" || Array.isArray(body)) {
+      return env;
+    }
+    declared = (body as { experimental?: unknown }).experimental;
   } catch {
     // A cancelled startup is the caller's decision, not a server that failed
     // to answer: propagate it instead of resolving a posture into a runtime
