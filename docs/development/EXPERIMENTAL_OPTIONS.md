@@ -1875,7 +1875,8 @@ while flag parsing, environment mappings, and deployed-client adoption live in
 [`packages/runner/src/experimental-posture.ts`](../../packages/runner/src/experimental-posture.ts).
 The browser-safe `@commonfabric/runner/experimental-posture` export provides
 those functions to standalone hosts without loading the runtime implementation.
-`runtime-presets.ts` re-exports them for existing callers:
+`runtime-presets.ts` re-exports those functions. The modules use these
+registries:
 
 - `EXPERIMENTAL_ENV_VARS` is
   the single environment-variable mapping for `ExperimentalOptions`, typed as
