@@ -388,3 +388,72 @@ Deno.test("an entity with no value is recorded, not dropped", () => {
     },
   );
 });
+
+/**
+ * Seeds the base space plus `count` extra documents in one transaction.
+ *
+ * `seed` writes a row per statement, which is fine for the handful of docs the
+ * cases above need and far too slow for the six figures this one takes. The
+ * shape of each bulk doc does not matter — only how many of them the scope
+ * listing carries back.
+ */
+function seedBulk(path: string, count: number): void {
+  seed(path);
+  const db = new Database(path);
+  const commit = db.prepare(
+    `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution)
+     VALUES (?, ?, ?, '{}', '{}')`,
+  );
+  const rev = db.prepare(
+    `INSERT INTO revision (id, scope_key, seq, op_index, op, data, commit_seq)
+     VALUES (?, 'space', ?, 0, 'set', ?, ?)`,
+  );
+  db.exec("BEGIN");
+  for (let i = 0; i < count; i++) {
+    const seq = 100 + i;
+    commit.run(seq, SESSION, seq);
+    rev.run(`of:bulk${i}`, seq, JSON.stringify({ value: i }), seq);
+  }
+  db.exec("COMMIT");
+  db.close();
+}
+
+/**
+ * A store larger than a spread can carry still enumerates.
+ *
+ * `allEntities` used to accumulate each scope's listing with
+ * `out.push(...listing.entities)`. A spread passes every element as a separate
+ * ARGUMENT, and V8 refuses that somewhere between 125,000 and 130,000 — so the
+ * whole module threw `RangeError: Maximum call stack size exceeded` on a store
+ * big enough to be worth fingerprinting. The real Estuary Topics store reached
+ * ~562,000 entities and could not be cloned at all, which took out the
+ * `space-clone-rehearsal.md` procedure that production pattern updates are
+ * required to go through.
+ *
+ * 200,000 is chosen to sit clear of that ceiling rather than on it: the exact
+ * limit is a function of the stack size, so a case seeded just past the
+ * observed threshold would pass on a machine with a roomier one and prove
+ * nothing there. It is still an order of magnitude inside `ENUMERATION_CAP`,
+ * which is 1,000,000 — this is a store the module promises to handle, not an
+ * abuse of it.
+ */
+Deno.test("enumerates a store past the spread-argument ceiling", () => {
+  const dir = Deno.makeTempDirSync({ prefix: "fingerprint-bulk-" });
+  try {
+    const path = `${dir}/space.sqlite`;
+    seedBulk(path, 200_000);
+    const space = openSpace(path);
+    try {
+      // Reached through `allEntities`, and cheap per entity: it skips every
+      // model that is not a piece, so this pins the enumeration without paying
+      // to hash six figures of documents.
+      const { generated, named } = generatedInternalCellIds(space);
+      assertEquals([...generated], ["of:generated"]);
+      assertEquals([...named], ["of:named"]);
+    } finally {
+      space.close();
+    }
+  } finally {
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
