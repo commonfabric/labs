@@ -45,9 +45,11 @@ The step's report is degraded while Topics hides its numbers, and Mike ruled on
 2026-09-19 to ship on that footing rather than publish a second property to
 work around it. A topic's published `shortName` is the only signal the board's
 step can read, and `SHOW_TOPIC_NUMBERS` gates it, so `named` comes back empty
-and `pending` holds every topic on every run. The asking writes nothing, so the
-step stays safe to repeat; what it loses is the ability to report that it is
-finished, and `assigned`, the namespace's own half, still settles exactly.
+and `pending` holds every topic on every run. Repeating the step is safe but
+not idle — a topic that already stores the number writes nothing further, one
+whose number never landed stores it now, and the asking is itself a write
+either way — and what it loses is the ability to report that it is finished.
+`assigned`, the namespace's own half, still settles exactly.
 Turning the switch on restores the report by itself. The component behavior
 that forced the gate onto the publication is
 [#7771](https://github.com/commontoolsinc/labs/issues/7771): `cf-code-editor`

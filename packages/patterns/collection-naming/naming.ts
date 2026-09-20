@@ -294,8 +294,11 @@ export interface RecordNamesResult {
    * that withholds that publication leaves this list holding every listed
    * member on every run, because no member can be seen to have stored
    * anything: `named` stays empty and the step cannot say it is finished. The
-   * asking still writes nothing, since `recordName` reads the member's own
-   * input rather than its publication, so a run is still safe to repeat.
+   * run is still safe to repeat, and still not idle: `recordName` reads the
+   * member's own input rather than its publication, so a member already
+   * storing the name writes nothing further while one whose name never landed
+   * stores it now — and the asking is itself a write to the member's stream
+   * either way.
    * Topics withholds it today, behind `SHOW_TOPIC_NUMBERS` in
    * `../topics/topic.tsx`, and `BackfillNamesResult` there says what an
    * operator reads instead.

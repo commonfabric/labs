@@ -972,9 +972,12 @@ export const TOPICS_THEME = {
  * a topic's published `shortName` is the only signal the board's numbering
  * step can read, so while this is off `backfillNames` cannot tell a topic that
  * stores its number from one that does not. It asks every topic every run and
- * reports every number under `pending`; the asking writes nothing, because
- * `recordName` reads the ungated input and declines a number already stored.
- * `BackfillNamesResult` in `./main.tsx` says what an operator reads instead.
+ * reports every number under `pending`. Repeating it is safe and not idle: a
+ * topic that already stores the number declines it and writes nothing further,
+ * a topic whose number never landed stores it now, and the asking is itself a
+ * write either way. `BackfillNamesResult` in `./main.tsx` says what an operator
+ * reads instead, and `skills/topics/references/namespace-backfill.md` says what
+ * a re-run writes per topic.
  *
  * WHAT TURNING IT ON WILL NEED IN TESTS, which is the part nothing else will
  * remind anyone of. This is a module constant, so a pattern test cannot vary

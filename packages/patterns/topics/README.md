@@ -128,12 +128,13 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   do — a board writes a member's result and never a member's argument — so the
   step reports what it allocated and what it asked, and running it again
   completes whichever asking did not land. While numbers are hidden it cannot
-  see what a topic stores, so it asks every topic every run; the asking writes
-  nothing, because `recordName` reads the ungated input and declines a number
-  already stored. `naming` is what the board declares about those numbers, so a
-  consumer reads the promise rather than assuming one, and `namesTable` is the
-  reverse lookup a caller uses to find the board's number for a topic by
-  identity, including one that publishes none.
+  see what a topic stores, so it asks every topic every run. That repeat is safe
+  and not idle: `recordName` reads the ungated input, so a topic already storing
+  the number writes nothing further and one whose number never landed stores it
+  now, and the asking is itself a write either way. `naming` is what the board
+  declares about those numbers, so a consumer reads the promise rather than
+  assuming one, and `namesTable` is the reverse lookup a caller uses to find the
+  board's number for a topic by identity, including one that publishes none.
 
   Every demand for that property is declared OPTIONAL rather than defaulted, and
   the spelling is what lets the whole graft be applied over a board deployed

@@ -198,10 +198,11 @@ export interface BackfillNamesEvent {
  * this step can read, and that switch gates it, so every topic reads as
  * storing no number whatever it holds: `named` comes back empty, `pending`
  * comes back holding every listed topic, and each run asks every topic again.
- * The asking writes nothing — `recordName` reads the ungated input and
- * declines a number already stored — so the step stays safe to repeat; what it
- * loses is the ability to say it is finished. Turning the switch on restores
- * the report by itself.
+ * Repeating the step is safe but not idle: a topic that already stores the
+ * number declines it and writes nothing further, a topic whose number never
+ * landed stores it now — which is what the repeat is for — and the asking is
+ * itself a write either way. What the step loses is the ability to say it is
+ * finished. Turning the switch on restores the report by itself.
  *
  * What an operator reads instead, until then:
  *
@@ -215,8 +216,9 @@ export interface BackfillNamesEvent {
  *   cannot report per topic, because a verb's result reaches its caller and
  *   the board sends rather than calls.
  *
- * `skills/topics/references/namespace-backfill.md` is the operator procedure
- * and says the same.
+ * `skills/topics/references/namespace-backfill.md` is the operator procedure.
+ * It says the same, and says per topic what a re-run writes and what one
+ * costs on a board the size of the deployed one.
  */
 export interface BackfillNamesResult {
   /** The numbers this run wrote into the namespace; empty when every listed
