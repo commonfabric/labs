@@ -240,12 +240,63 @@ describe("topics-rehearsal-lib", () => {
         resolved,
       );
       expect(structural).toEqual(["mentionable", "boardCrossrefs"]);
-      // In the raw argument's own order, which is what the walk follows.
+      // In the raw argument's own order, which is what the walk follows. Both
+      // are retired here because this target declares neither.
       expect(legacy).toEqual(["boardNames", "myName"]);
       expect(doc.mentionable).toBeUndefined();
       expect(doc.boardCrossrefs).toBeUndefined();
       expect(doc.boardNames).toBeUndefined();
       expect(doc.myName).toBeUndefined();
+    });
+
+    it("relinks a retirable field the target still declares", () => {
+      // The two vintages a migration has in flight at once. This target still
+      // runs a pattern declaring `boardNames` and holds a live link there, so
+      // retiring it by name would delete a link doing its job: the apply
+      // replaces the whole document, and a field in neither list is gone.
+      const { doc, structural, legacy } = buildRestoreDocument(
+        { title: "t", boardNames: link },
+        resolved,
+        { declaredLinks: ["boardNames"] },
+      );
+      expect(structural).toEqual(["boardNames"]);
+      expect(legacy).toEqual([]);
+      expect(doc.boardNames).toBeUndefined();
+    });
+
+    it("carries a preserved value the export does not name", () => {
+      // An export taken before a topic stored its own number names none, and
+      // the apply replaces the whole document, so saying nothing about
+      // `shortName` removes it. A number is permanent and the board's
+      // namespace still points at the topic, so the live value is carried.
+      const { doc, carried } = buildRestoreDocument(
+        { title: "old" },
+        resolved,
+        { preserved: { shortName: "42" } },
+      );
+      expect(doc.shortName).toBe("42");
+      expect(carried).toEqual(["shortName"]);
+      expect(doc.title).toBe("old");
+    });
+
+    it("leaves a preserved value alone when the export names the same one", () => {
+      const { doc, carried } = buildRestoreDocument(
+        { title: "t", shortName: "42" },
+        resolved,
+        { preserved: { shortName: "42" } },
+      );
+      expect(doc.shortName).toBe("42");
+      expect(carried).toEqual([]);
+    });
+
+    it("refuses a preserved value the export and the target disagree on", () => {
+      expect(() =>
+        buildRestoreDocument(
+          { title: "t", shortName: "7" },
+          resolved,
+          { preserved: { shortName: "42" } },
+        )
+      ).toThrow("permanent");
     });
 
     it("keeps a link the pattern stopped declaring out of the relink list", () => {

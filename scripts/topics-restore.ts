@@ -41,9 +41,14 @@
  * individual old element is not preserved. A re-established link targets the
  * board's RESULT path where the original targeted its argument document —
  * aliases of one another (#5632), so a before/after diff of the stored link
- * differs while resolution does not. A `LEGACY_LINK_FIELDS` link is not
- * restored — `myName` exists only as the pre-agentName attribution fallback,
- * and `boardNames` named a table a topic no longer reads.
+ * differs while resolution does not. A `RETIRABLE_LINK_FIELDS` link is
+ * restored or retired according to what the TARGET declares, not its name: a
+ * topic still running a pattern that declares `boardNames` gets its link back,
+ * one already migrated past it does not, and `myName` — the pre-agentName
+ * attribution fallback — is declared by nothing and so always retired. And a
+ * `PRESERVED_FIELDS` value the target holds is carried forward where the
+ * export names none, because the apply would otherwise remove a number the
+ * topic owns permanently.
  * And a field the CURRENT schema retired is written but cannot be read back,
  * so it is reported `not restored` and does not fail the run; only a field
  * the schema still declares can be checked, and there a difference is still a
@@ -62,6 +67,8 @@ import {
   deepEqual,
   isAbsentPathError,
   normalizeFid,
+  PRESERVED_FIELDS,
+  RETIRABLE_LINK_FIELDS,
   retiredKeys,
   STRUCTURAL_LINK_SOURCES,
   type TopicsExport,
@@ -163,10 +170,47 @@ async function liveValue(field: string): Promise<unknown> {
   }
 }
 
-const { doc: restoreDoc, structural, legacy } = buildRestoreDocument(
-  (row.rawArgument ?? {}) as Record<string, unknown>,
+// What the TARGET declares and holds, which is what decides two things the
+// export cannot: whether a retirable link field is still live here, and
+// whether this piece holds a permanent value the export predates.
+//
+// A targeted input read refuses a path the current pattern does not declare,
+// and `liveValue` reports that refusal as `undefined`. It reports a declared
+// path holding nothing the same way, so the probe cannot tell those two apart
+// on its own — which matters only for a retirable field, where reading it as
+// undeclared would retire a link the target still uses. The pattern identity
+// settles it: when it matches the export's, the target runs the very source
+// the export was taken from, so every field the export holds is one this
+// target declares. It is only under `--allow-identity-mismatch`, where the
+// source has deliberately moved, that the probe decides.
+const rawArgument = (row.rawArgument ?? {}) as Record<string, unknown>;
+const declaredLinks: string[] = [];
+for (const field of RETIRABLE_LINK_FIELDS) {
+  if (!Object.hasOwn(rawArgument, field)) continue;
+  if (liveIdentity === row.patternIdentity) {
+    declaredLinks.push(field);
+    continue;
+  }
+  if (await liveValue(field) !== undefined) declaredLinks.push(field);
+}
+const preserved: Record<string, unknown> = {};
+for (const field of PRESERVED_FIELDS) {
+  const live = await liveValue(field);
+  if (live !== undefined) preserved[field] = live;
+}
+
+const { doc: restoreDoc, structural, legacy, carried } = buildRestoreDocument(
+  rawArgument,
   row.content,
+  { declaredLinks, preserved },
 );
+for (const field of carried) {
+  console.log(
+    `${field}: carried forward from the target (${
+      JSON.stringify(restoreDoc[field])
+    }); the export names none`,
+  );
+}
 const differing: string[] = [];
 for (const [field, wanted] of Object.entries(restoreDoc)) {
   if (!deepEqual(await liveValue(field), wanted)) differing.push(field);
@@ -269,7 +313,7 @@ for (const field of structural) {
   }
 }
 for (const field of legacy) {
-  console.log(`${field}: not restored (deprecated legacy link)`);
+  console.log(`${field}: not restored (the target declares no such input)`);
 }
 
 console.log(`restored ${Object.keys(restoreDoc).length} field(s)`);
