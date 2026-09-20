@@ -317,9 +317,16 @@ export const RETIRABLE_LINK_FIELDS = ["myName", "boardNames"] as const;
 export const PRESERVED_FIELDS = ["shortName"] as const;
 
 /**
- * The {@link RETIRABLE_LINK_FIELDS} the TARGET declares, out of those the
- * export holds — `buildRestoreDocument`'s `declaredLinks`, decided by asking
- * the target rather than by the field's name or the export's vintage.
+ * The {@link RETIRABLE_LINK_FIELDS} the TARGET declares —
+ * `buildRestoreDocument`'s `declaredLinks`, decided by asking the target
+ * rather than by the field's name or the export's vintage.
+ *
+ * Every retirable field is asked about, which is why the export is not a
+ * parameter here. What the export carries bounds neither side of the
+ * question: the apply replaces the whole document, so a field the export
+ * never mentioned is gone from the target just as surely as one it mentioned
+ * and neither list named. A restore runs against targets of two vintages at
+ * once, and the export can be the newer of the two as easily as the older.
  *
  * `read` is a targeted read of the target's durable input at one field,
  * answering `undefined` where the read does not land. Anything else means the
@@ -345,13 +352,10 @@ export const PRESERVED_FIELDS = ["shortName"] as const;
  * restore with the document already replaced.
  */
 export async function declaredRetirableLinks(
-  rawArgument: Record<string, unknown>,
   read: (field: string) => Promise<unknown>,
 ): Promise<string[]> {
   const declared: string[] = [];
   for (const field of RETIRABLE_LINK_FIELDS) {
-    if (!Object.hasOwn(rawArgument, field)) continue;
-    if (rawArgument[field] === undefined) continue;
     if (await read(field) !== undefined) declared.push(field);
   }
   return declared;
@@ -399,14 +403,18 @@ export interface RestoreDocument {
  * handle; and an unrecognized link-valued field throws, because writing it as
  * data would corrupt it and dropping it would destroy it.
  *
- * `target` is what the same whole-document apply costs in the other direction,
- * where the EXPORT is the older of the two. A retirable link field is
- * re-established or left retired according to what the target declares rather
- * than its name, and a {@link PRESERVED_FIELDS} value the target holds and the
- * export does not name is carried forward instead of being written away. An
- * export that names such a field with a different value is refused: the fields
- * are permanent, so two values mean the export and the target are not the same
- * piece, and guessing between them is not this script's to do.
+ * `target` is what the same whole-document apply costs when the export and the
+ * target are of different vintages, which it takes in both directions. A
+ * retirable link field is re-established or left retired according to what the
+ * target declares rather than its name — including one the export never named,
+ * which the walk over the export cannot reach and the apply would therefore
+ * erase; it is relinked from the board's path, or refused before the apply
+ * where no board path re-establishes it. A {@link PRESERVED_FIELDS} value the
+ * target holds and the export does not name is carried forward instead of
+ * being written away. An export that names such a field with a different value
+ * is refused: the fields are permanent, so two values mean the export and the
+ * target are not the same piece, and guessing between them is not this
+ * script's to do.
  */
 export function buildRestoreDocument(
   rawArgument: Record<string, unknown>,
@@ -448,6 +456,22 @@ export function buildRestoreDocument(
       }
       doc[field] = value;
     }
+  }
+  // A retirable field the TARGET declares and the export never named. The walk
+  // above cannot reach it — it walks the export — and the apply replaces the
+  // whole document, so leaving it here is how a newer export erases an older
+  // target's working link. The relink needs nothing from the export, because
+  // it links to the board's own path.
+  for (const field of declared) {
+    if (Object.hasOwn(rawArgument, field)) continue;
+    if (!(STRUCTURAL_LINK_FIELDS as readonly string[]).includes(field)) {
+      throw new Error(
+        `${field} is declared by the target and absent from the export, and ` +
+          "no board path re-establishes it; applying this document would " +
+          "destroy a link nothing can put back",
+      );
+    }
+    structural.push(field);
   }
   for (const field of PRESERVED_FIELDS) {
     const live = target.preserved?.[field];

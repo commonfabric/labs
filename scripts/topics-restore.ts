@@ -174,11 +174,12 @@ async function liveValue(field: string): Promise<unknown> {
 // export cannot: whether a retirable link field is still live here, and
 // whether this piece holds a permanent value the export predates.
 //
-// Asked of the target every time, never inferred from the export's vintage or
-// from the pattern identity matching; `declaredRetirableLinks` says why, and
-// what the probe cannot see.
+// Asked of the target every time, for every retirable field and not only the
+// ones this export happens to hold — never inferred from the export's vintage
+// or from the pattern identity matching. `declaredRetirableLinks` says why,
+// and what the probe cannot see.
 const rawArgument = (row.rawArgument ?? {}) as Record<string, unknown>;
-const declaredLinks = await declaredRetirableLinks(rawArgument, liveValue);
+const declaredLinks = await declaredRetirableLinks(liveValue);
 const preserved: Record<string, unknown> = {};
 for (const field of PRESERVED_FIELDS) {
   const live = await liveValue(field);

@@ -317,6 +317,38 @@ describe("topics-rehearsal-lib", () => {
       expect(doc.title).toBe("t");
     });
 
+    it("relinks a live link the target declares and the export never had", () => {
+      // The mirror of the two cases above, and the direction a migration
+      // reaches second: the EXPORT is the newer of the two. A topic filed
+      // after the pattern stopped declaring `boardNames` never had one, so an
+      // export taken from it names no such field — while a target still on the
+      // old pattern holds a live link there. The apply replaces the whole
+      // document, so a field in neither list is gone: the target's working
+      // wiring is erased by an export that simply never mentioned it. The
+      // relink needs nothing from the export, because it links to the board's
+      // own path.
+      const { doc, structural, legacy } = buildRestoreDocument(
+        { title: "t" },
+        resolved,
+        { declaredLinks: ["boardNames"] },
+      );
+      expect(structural).toEqual(["boardNames"]);
+      expect(legacy).toEqual([]);
+      expect(doc.boardNames).toBeUndefined();
+    });
+
+    it("refuses a declared link it has no board path to relink from", () => {
+      // `myName` is retirable but not structural: no board path re-establishes
+      // it. A target declaring one the export does not name cannot be restored
+      // without destroying it, and the throw comes before the apply rather
+      // than after, which is the difference between a refusal and a loss.
+      expect(() =>
+        buildRestoreDocument({ title: "t" }, resolved, {
+          declaredLinks: ["myName"],
+        })
+      ).toThrow("myName");
+    });
+
     it("throws on a link-valued field it does not understand", () => {
       expect(() => buildRestoreDocument({ attachments: [link] }, resolved))
         .toThrow("attachments");
@@ -330,10 +362,7 @@ describe("topics-rehearsal-lib", () => {
 
     it("reads a bound link as declared", async () => {
       expect(
-        await declaredRetirableLinks(
-          { title: "t", boardNames: link },
-          probe({ boardNames: [{ name: "1" }] }),
-        ),
+        await declaredRetirableLinks(probe({ boardNames: [{ name: "1" }] })),
       ).toEqual(["boardNames"]);
     });
 
@@ -343,10 +372,7 @@ describe("topics-rehearsal-lib", () => {
       // pattern does not declare at all. The 2026-09-05 clone rehearsal
       // measured that read.
       expect(
-        await declaredRetirableLinks(
-          { title: "t", boardNames: link },
-          probe({ boardNames: [] }),
-        ),
+        await declaredRetirableLinks(probe({ boardNames: [] })),
       ).toEqual(["boardNames"]);
     });
 
@@ -359,26 +385,26 @@ describe("topics-rehearsal-lib", () => {
       // declared sends the restore to `cf piece link` against a path that
       // refuses, after the content write has landed.
       expect(
-        await declaredRetirableLinks(
-          { title: "t", boardNames: link },
-          probe({}),
-        ),
+        await declaredRetirableLinks(probe({})),
       ).toEqual([]);
     });
 
-    it("asks only about retirable fields the export holds", async () => {
-      let asked = 0;
+    it("asks about every retirable field, not only the ones the export holds", async () => {
+      // What the export holds cannot bound the question, because the target is
+      // the one being asked. A newer export names no `boardNames`; a target
+      // still on the old pattern holds a live one, and the whole-document
+      // apply erases whatever neither list names. So each retirable field is
+      // probed once whether or not the export mentions it, and only the
+      // structural fields — which are never retired — go unasked.
+      const asked: string[] = [];
       const counted = (field: string) => {
-        asked++;
-        return Promise.resolve(field === "myName" ? "Ada" : undefined);
+        asked.push(field);
+        return Promise.resolve(field === "boardNames" ? [] : undefined);
       };
       expect(
-        await declaredRetirableLinks(
-          { title: "t", mentionable: link, myName: link },
-          counted,
-        ),
-      ).toEqual(["myName"]);
-      expect(asked).toBe(1);
+        await declaredRetirableLinks(counted),
+      ).toEqual(["boardNames"]);
+      expect(asked).toEqual(["myName", "boardNames"]);
     });
   });
 
