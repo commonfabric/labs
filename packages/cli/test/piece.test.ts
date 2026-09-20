@@ -187,6 +187,20 @@ describe("cli piece parsing", () => {
     expect(cleanupOrder).toEqual(["closeNow", "dispose"]);
   });
 
+  it("disposes failed runtime when storage has no force-close capability", async () => {
+    let disposed = false;
+    const originalError = new Error("sync failed");
+
+    await expect(withRuntimeCleanupOnFailure({
+      dispose: () => {
+        disposed = true;
+        return Promise.resolve();
+      },
+    }, () => Promise.reject(originalError))).rejects.toBe(originalError);
+
+    expect(disposed).toBe(true);
+  });
+
   it("still disposes failed runtime when force-close cleanup fails", async () => {
     let disposeCalls = 0;
     const originalError = new Error("sync failed");

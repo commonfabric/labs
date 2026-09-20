@@ -44,6 +44,7 @@ function parseCliTestShard(): { index: number; count: number } {
 // command its environment directly.
 const SERIAL_TESTS = [
   "test/agent-command.test.ts",
+  "test/agent-connections.test.ts",
   "test/completion-output.test.ts",
   "test/completion-providers.test.ts",
   "test/fuse.test.ts",
