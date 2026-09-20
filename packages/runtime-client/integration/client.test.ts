@@ -1732,9 +1732,8 @@ export default pattern<Record<string, never>>(() => {
 
     it("drops label views from raw sigil links in inbound write values", async () => {
       // A hand-crafted sigil link with a cfcLabelView riding a write value —
-      // the raw-link ingress that bypasses the CellRef path (CellHandle
-      // serialized into CustomEvent.detail has the same shape). The write
-      // must succeed with the link intact; the main-thread view is display
+      // the raw-link ingress that bypasses the CellRef path. The write must
+      // succeed with the link intact; the main-thread view is display
       // freight the worker discards at ingress, so it must not surface as
       // label state on the linked read.
       const session = await createTestSession();
@@ -1856,8 +1855,8 @@ export default pattern<Record<string, never>>(() => {
         await mirror.sync();
 
         // Both documents watch the same cell, and each has a subscription of
-        // its own. Were the second subscribe to join the first's, the first's
-        // unsubscribe would silence both.
+        // its own, so one document's unsubscribe leaves the other's feed
+        // running.
         const firstSeen: number[] = [];
         const secondSeen: number[] = [];
         const sawOne = defer<void>();

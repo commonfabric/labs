@@ -97,7 +97,7 @@ function mapOne(
     // refusal at the other end of the same crossing -- `CellHandle.serialize()`
     // in `../cell-handle.ts` refuses a `FabricInstance` before the value is
     // sent, so neither caller here can be handed one. The transport does not
-    // stop one: the envelope's encoding carries an instance across with its
+    // stop an instance: the envelope's encoding carries one across with its
     // class.
     //
     // The two refusals are a matched pair and move together, along with
@@ -174,10 +174,11 @@ export function cellRefToSigilLink(cell: CellRef): SigilLink {
   // A `cfcLabelView` on an inbound `CellRef` is not forwarded onto the link.
   // The view has been through the main thread, where
   // `CellHandle.deserialize()` keeps it on the ref, so the main thread can
-  // alter it. Forwarded onto a written sigil link, it would feed
-  // `recordLinkWritePolicyInput()`, whose entries `prepareBoundaryCommit()`
-  // persists as link-origin labels. `prepareBoundaryCommit()` derives those
-  // labels from the source's stored metadata.
+  // alter it. On a written sigil link, the view could be recorded in a
+  // `link-write` policy input, and `prepareBoundaryCommit()` persists the
+  // entries of a recorded view as link-origin labels. Without the view,
+  // `prepareBoundaryCommit()` still derives link-origin labels from the
+  // source's stored metadata.
   // `docs/specs/cfc-label-metadata-confidentiality.md` §3 has the design.
   return linkRefFrom<CfcCellLinkRefPayload>({
     id: cell.id,

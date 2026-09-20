@@ -904,7 +904,7 @@ export class CellHandle<T = unknown> {
     // a `CellHandle` belongs.
     //
     // Nothing reaches this today, de facto rather than by construction. The
-    // transport does not stop one: the envelope's encoding carries an instance
+    // transport does not stop an instance: the envelope's encoding carries one
     // across with its class. What keeps it unreachable is the refusal at each
     // of the other ends of the crossing -- `convertCellsToLinks()` on the way
     // out of the worker, and `serialize()` below on the way in.

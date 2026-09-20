@@ -327,8 +327,8 @@ describe("cell-handle", () => {
     it("does not serialize the ref-carried label view into sigil links", () => {
       // The link a handle names itself by re-enters the worker without passing
       // `getCell()` or `cellRefToSigilLink()`, so the ref's display view must
-      // not be on it. The link holds the addressing fields and the schema, and
-      // like what `toWireString()` encodes, no view.
+      // not be on it. The link holds the addressing fields and the schema. Like
+      // the string `toWireString()` encodes, it holds no view.
 
       const runtime = {
         [$conn]: () => ({

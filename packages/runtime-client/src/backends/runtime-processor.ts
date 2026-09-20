@@ -2758,9 +2758,9 @@ export class RuntimeProcessor {
     request: UploadBlobRequest,
   ): Promise<UploadBlobResponse> {
     // A request arrives as data, so its `space` is checked here. A request
-    // whose `space` is not a DID fails with a named error. Without the check,
-    // a request with no `space` would build an upload URL whose path begins
-    // `/undefined/blobs/`.
+    // whose `space` is not a DID fails with an error that says so. Without the
+    // check, a request with no `space` would build an upload URL whose path
+    // begins `/undefined/blobs/`.
     if (!isDID(request.space)) {
       throw new Error("uploadBlob requires a space DID");
     }

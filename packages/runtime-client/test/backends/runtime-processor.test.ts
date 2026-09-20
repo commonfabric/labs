@@ -306,7 +306,8 @@ describe("runtime-processor", () => {
         // Seeded as a path-`[]` full-document write — the shape hydration
         // delivers, and the one `ACLManager` uses. A value-surface write is
         // decomposed into `op: "patch"`, which the memory server refuses for the
-        // ACL document (INV-12), so the runner's write chokepoint rejects it.
+        // ACL document (INV-12 of `docs/specs/memory-v2/09-invariants.md`), so
+        // the runner's write chokepoint rejects it.
         const tx = runtime.edit();
         tx.writeOrThrow({
           space: grantedSpace as MemorySpace,
@@ -365,8 +366,7 @@ describe("runtime-processor", () => {
       const grantedSpace = "did:key:z6MkGrantedSpaceForProviderTest";
       try {
         // Path-`[]` full-document write: the ACL document's required write shape
-        // (INV-12 of `docs/specs/memory-v2/09-invariants.md`). See the note in
-        // the resolver test above.
+        // (INV-12). See the note in the resolver test above.
         const tx = runtime.edit();
         tx.writeOrThrow({
           space: grantedSpace as MemorySpace,
