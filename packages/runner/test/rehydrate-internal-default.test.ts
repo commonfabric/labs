@@ -17,9 +17,7 @@ import { trustExecutable } from "./support/trusted-builder.ts";
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
 
-describe("rehydrate internal default (CT-1666)", () => {
-  // Regression coverage for CT-1666.
-  //
+describe("rehydrate internal default", () => {
   // A pattern's derived internal cell carries a build-time default (in
   // home.tsx, `const activeTab = new Writable("spaces").for("activeTab")` →
   // `derivedInternalCells = [{ partialCause: "activeTab", schema: { default:
@@ -28,12 +26,12 @@ describe("rehydrate internal default (CT-1666)", () => {
   // build-time default.
   //
   // `Runner.#applySetupState` reads the persisted internal value and merges the
-  // build-time default UNDER it (persisted wins). But the internal cell lives
-  // in a separate content-addressed doc reached only via the result cell's meta
+  // build-time default UNDER it (persisted wins). The internal cell lives in a
+  // separate content-addressed doc reached only via the result cell's meta
   // link — not through the schema/value graph — so the run's awaited sync gate
-  // (`Runner.#syncCellsForRunningPattern()`) did not load it. The fix makes
-  // that gate sync the `internal`/`argument` meta docs, so the persisted value
-  // is loaded before the pattern (re)starts and renders.
+  // (`Runner.#syncCellsForRunningPattern()`) syncs the `internal`/`argument`
+  // meta docs explicitly, and the persisted value is loaded before the
+  // pattern (re)starts and renders.
   //
   // `activeTab` is intentionally internal-only here (never exported in
   // `result`), matching home.tsx where it is bound only to `<cf-tabs

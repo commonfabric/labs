@@ -2,8 +2,6 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { verifiedWalkChildValues } from "../src/harness/executable-registry.ts";
 
-// Regression for CT-1623.
-//
 // The verified-value walks (recordVerifiedFunctions / annotateVerifiedPatterns /
 // collectAssociatedFunctions) recurse through `verifiedWalkChildValues`, which
 // has to handle both export shapes it can meet. A plain CommonJS exports object
@@ -18,7 +16,7 @@ const collect = (
   value: object,
 ): unknown[] => [...verifiedWalkChildValues(value)];
 
-describe("verifiedWalkChildValues (CT-1623)", () => {
+describe("verifiedWalkChildValues()", () => {
   it("yields data property values (plain CommonJS export shape)", () => {
     const fn = () => {};
     const exportsObj = { a: fn, b: 7, c: { nested: true } };
@@ -67,9 +65,8 @@ describe("verifiedWalkChildValues (CT-1623)", () => {
   });
 
   it("does NOT invoke a Symbol.toStringTag getter while detecting module namespaces", () => {
-    // Regression for the review note: detecting a module namespace must not
-    // perform a [[Get]] on @@toStringTag, or it would run user getters as a
-    // side effect on every walked value.
+    // Detecting a module namespace performs no [[Get]] on @@toStringTag; one
+    // would run user getters as a side effect on every walked value.
     let tagInvoked = false;
     let exportInvoked = false;
     const obj = {};
