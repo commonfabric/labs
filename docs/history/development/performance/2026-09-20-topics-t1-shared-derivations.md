@@ -108,6 +108,26 @@ across rounds; the timings sit in the extract beside them and are not a result.
 ## Demand narrowed rather than broadening
 
 The stage's third exit condition is that sharing must not broaden board demand.
+
+**What could broaden it, and what could not.** None of the derivations this
+stage changed is in board demand. The board demands the four lifts T0 measured
+— the pivot, backlinks, the comment count, and last activity — and
+`hasComments`, `hasLinks`, `linksToResolve`, `commentsView` and `linksView` are
+none of them; they are body derivations a topic runs for its own rendering. So
+sharing them cannot widen board demand directly, because the board never reads
+them. There are two ways it could widen it indirectly, and both are the reason
+the comparisons below are the ones chosen: a shared derivation could pull a
+*demanded* lift's declared parameter wider — which is what widening
+`presentCommentCountOf` to return records instead of a count would have done,
+and is why the stage did not do that — or the change could alter what crosses
+the board/topic boundary. The first two items below address the first, the
+third addresses the second.
+
+What none of this does is measure board demand through the changed graph
+end-to-end, because the instrument that reaches the changed derivations builds
+four synthetic topics and no board. That is a real limit on the evidence rather
+than a claim, and it is repeated under what this does not establish.
+
 Four things were compared:
 
 - **The two shared hoists' emitted input schemas**, from `cf check
@@ -180,3 +200,10 @@ and `pattern-vintage` 8 vintages, all clean.
   per-topic derivations dominate; the counts are per-topic and the fixture
   varies comments and links rather than topic count.
 - Anything under `serverExecution`. Both arms ran with it off.
+- Board demand measured end-to-end through the changed graph. The argument
+  above is that the changed derivations are not in board demand and that the
+  two indirect routes are closed, supported by the declared-parameter
+  comparison and the read-budget gates. It is not a measurement of a board
+  reading a topic across this change, which would need an instrument that
+  builds a board and reaches body derivations at once. No instrument on this
+  arc does both today.
