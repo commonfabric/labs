@@ -459,6 +459,21 @@ does that for the `cf` children whose files it times itself, and
 `packages/deno-web-test/test/utils.ts` for the fixture projects it runs the
 browser harness over.
 
+The child inherits every variable the test's own process carries, so a
+test that starts one names each recording variable it cares about,
+including the ones the child is meant not to have. `CF_TEST_SKIP_LIST` is
+the one to name deliberately. A lane runs a package's tests with a skip
+list naming everything inside it that lane did not select, so a child
+started from such a run is handed a skip list nobody asked it to carry.
+Two things then follow from a list the child's own test never wrote. The
+preload wraps `Deno.test` for a child whose test set up a run that wraps
+nothing. And where the bdd re-export loaded before the preload, a skip
+list is what makes the preload end the run rather than warn and carry on.
+An empty value is unset for that variable too, so naming it beside
+`CF_TEST_RECORDS_DIR` is the whole of it.
+`packages/test-support/test/records/preload.test.ts` starts a recording
+child on purpose, and names both.
+
 Every test must finish within sixty seconds in CI, not counting setup; a
 check that cannot is a container to split, and the report's over-60s list
 is the work queue for that. The list is built from passing executions, so

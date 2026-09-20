@@ -53,6 +53,100 @@ A test's name is also its identity in the run-record store, so a renamed test
 must be listed in `tasks/test-identity-aliases/` to keep its recorded
 history joined to its new name.
 
+### Every test has to pass on its own
+
+A continuous-integration lane selects individual tests, not whole files. A lane
+given one `it()` out of a file registers every other test in the file as
+ignored, and the file's `beforeAll` and `afterAll` hooks all still run —
+including those of a `describe()` whose every test was ignored, which pays for
+that suite's setup and runs none of its tests. Only `beforeEach` and
+`afterEach` narrow, to the surviving test. So what a test needs comes from a
+hook or from the test itself, and never from a test above it. A page another
+test navigated to a view, a cell another test set to a value, and a piece
+another test created are all things a test has to arrange for itself.
+[Test selection](test-selection.md) describes the machinery that picks them.
+
+Such a test fails by waiting. The waits an integration test uses resolve on an
+event, and the event never comes, so the wait runs to its stuck-condition
+safety net and the test costs five minutes. Selection then charges the test
+what it cost, and five minutes is more than a lane can hold. A lane may fill
+to `LANE_BUDGET_SECONDS`, and a lane running one test and nothing else may go
+up to `LANE_BOUND_SECONDS`, which is 300 — so a test charged more than that
+fits nowhere at all, and one charged between the two runs only while a change
+makes it mandatory. [Test selection](test-selection.md) has the packing rules;
+`tasks/test-selection/policy.ts` has the numbers.
+
+A page and a value are not equally easy to find missing. A page a test never
+navigated announces itself: the wait's diagnostics say `document URL:
+about:blank` and `globalThis.app: absent`, in the cause of whatever message the
+helper wrapping the wait reports. A value a test never wrote does not.
+The page is there, every diagnostic reads healthy, and the test waits out the
+same five minutes against the initial value. So give each test the value it
+asserts as well as the page it drives, or, where one test's expectation is
+another test's effect, make the two one test.
+
+Writing that value is what leaves the test waiting on a condition its own
+starting state satisfies, where the value is the one a neighbor wrote first.
+["A wait the initial state already satisfies establishes
+nothing"](waiting-in-tests.md#a-wait-the-initial-state-already-satisfies-establishes-nothing)
+covers that, including how to tell it from a test whose subject is the initial
+state. The part of it to carry away here: give such a test a value no other
+test in the file writes.
+
+Making a test stand alone has a third consequence in a browser test. What the
+page shows is now the effect of a write the page did not make, and an
+integration test holds no subscription that drives the page between a wait's
+checks, so a passive wait can sit on an unchanged DOM while the effect is
+ready to apply. Reach for a wait that settles
+the view on each check — `waitForSettledText` rather than `waitForText`, and a
+`waitForCondition` predicate that settles before it reads.
+[Waiting in tests](waiting-in-tests.md) covers the primitives.
+
+Of the two places a test's page can come from, give it to the test rather than
+to `beforeAll`. `ShellIntegration.bindLifecycle()` collects the browser's
+console errors and uncaught page exceptions, clears them in `beforeEach` and
+fails the test on them in `afterEach`, and `beforeAll` runs before the first
+`beforeEach`. So a navigation in `beforeAll` has everything the shell's
+bootstrap, login and first render reported thrown away before anything looks at
+it, while a navigation inside the test is covered. A helper each test calls
+keeps that check. It is one line per test to read and a whole `goto` to run —
+page load, state wait, and a login that rebuilds the worker runtime — so a
+suite of four tests pays for four of them, which is a cost a section about
+what selection charges should not leave out.
+
+Reproducing one of these locally takes the skip list rather than `--filter`.
+`--filter` matches the name of a `Deno.test`, which for a file using
+`describe()` and `it()` is a top-level `describe()`, so the least it can select
+is a whole suite. `CF_TEST_SKIP_LIST` names a JSON file mapping a
+repository-relative test file to the test names inside it to ignore, each
+written as its full describe chain:
+
+```json
+{
+  "packages/patterns/integration/cf-render.test.ts": [
+    "cf-render integration test > should load the nested counter piece and verify initial state"
+  ]
+}
+```
+
+Reading that file is the registration preload's job, and `tasks/integration.ts`
+hands `deno test` that preload only for a run that writes a JUnit report. So
+the run needs `--junit-dir` as well. The name after the package selects test
+files rather than tests:
+
+```bash
+HEADLESS=1 CF_TEST_SKIP_LIST=/tmp/skip.json \
+  deno task integration --junit-dir=/tmp/junit patterns cf-render
+```
+
+Check the output says `ignored (0ms)` beside each test the list names. Where
+nothing reads the list every test runs, and a file that still depends on a
+sibling passes.
+
+[Focused browser regressions](#focused-browser-regressions) states the same
+requirement one level up, for a file sharing a browser with the files beside
+it.
+
 ### Browser tests in agent sandboxes
 
 Headless Chrome registers with AppKit and needs Launch Services and
@@ -332,6 +426,12 @@ makes the computed form name the right binary, so
 `packages/test-support/src/isolated-deno.test.ts` holds it in place: it runs a
 task with a decoy `deno` as the only entry on the child's `PATH` and fails if the
 decoy is the one that runs.
+
+The child also inherits the environment of the run that started it, which in CI
+carries the recording variables, `CF_TEST_SKIP_LIST` among them. A test that
+starts a child naming its own tests names those variables too, and
+[test-records.md](test-records.md#covering-a-new-test-surface) says which and
+what to set them to.
 
 ### Test Structure
 

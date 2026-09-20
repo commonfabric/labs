@@ -50,6 +50,9 @@ interface CompatibilityContext {
   role: SchemaRole;
   activePairs: ActivePairsByRoot;
 
+  /** Depth of supplementary nested-union splits along this proof path. */
+  sourceUnionSplitDepth: number;
+
   /**
    * Piece evolution deliberately permits a small set of non-subset changes
    * (for example, naming a previously-uncontracted field on an open argument
@@ -94,9 +97,10 @@ type ActivePairsByRoot = WeakMap<
 >;
 
 /**
- * The annotations that describe a schema to a reader or to a listing and take
- * no part in any comparison this module makes. Two schemas that differ only in
- * these say the same thing, and {@link schemaSubtreesEqual} reads past them.
+ * The annotations omitted by keyword and equality comparisons. Two schemas
+ * that differ only in these compare equally through {@link schemaSubtreesEqual}.
+ * Nested-union splitting keeps `$comment` wrappers opaque because the runner
+ * reserves some comment values for traversal markers.
  *
  * {@link ANNOTATION_KEYS} extends this set with four keywords the subset proof
  * likewise treats as annotations but the equality walk still compares:
@@ -652,6 +656,7 @@ export function assertPatternSchemasBackwardCompatible(
       targetRoot: candidate.argumentSchema,
       role: "argument",
       activePairs: new WeakMap(),
+      sourceUnionSplitDepth: 0,
       allowEvolutionPolicy: true,
       allowEvolutionDefaults: true,
       allowTargetDefaults: false,
@@ -669,6 +674,7 @@ export function assertPatternSchemasBackwardCompatible(
       targetRoot: previousResultSchema,
       role: "result",
       activePairs: new WeakMap(),
+      sourceUnionSplitDepth: 0,
       allowEvolutionPolicy: true,
       allowEvolutionDefaults: true,
       allowTargetDefaults: false,
@@ -735,6 +741,7 @@ export function assertSchemaSubset(
     // object fields. Link materialization may also fill valid target defaults.
     role: "argument",
     activePairs: new WeakMap(),
+    sourceUnionSplitDepth: 0,
     allowEvolutionPolicy: false,
     allowEvolutionDefaults: true,
     allowTargetDefaults: true,
@@ -875,15 +882,14 @@ function schemaSubsetIssue(
       const sources = schemaAlternatives(source, "source", context);
       const targets = schemaAlternatives(target, "target", context);
       for (const sourceAlternative of sources) {
-        const accepted = targets.some((targetAlternative) =>
-          schemaConjunctionSubsetIssue(
+        if (
+          !sourceAlternativeAcceptedBy(
             sourceAlternative,
-            targetAlternative,
+            targets,
             path,
             context,
-          ) === undefined
-        );
-        if (!accepted) {
+          )
+        ) {
           return `${path}: a schema alternative accepted previously is not accepted by the candidate`;
         }
       }
@@ -1492,13 +1498,20 @@ function arraySubsetIssue(
   return schemaSubsetIssue(sourceItems, targetItems, `${path}[]`, context);
 }
 
+/**
+ * Checks target literal restrictions against explicit source literals or the
+ * finite value set of a boolean or null source type.
+ */
 function literalSubsetIssue(
   source: SchemaObject,
   target: SchemaObject,
   path: string,
 ): string | undefined {
-  const sourceValues = allowedLiteralValues(source) ??
-    (source.type === "null" ? [null] : undefined);
+  let sourceValues = allowedLiteralValues(source);
+  if (sourceValues === undefined) {
+    if (source.type === "boolean") sourceValues = [false, true];
+    else if (source.type === "null") sourceValues = [null];
+  }
   const targetValues = allowedLiteralValues(target);
   if (!targetValues) return undefined;
   if (!sourceValues) {
@@ -1716,8 +1729,9 @@ function schemaMayProduceType(
  * {@link sourceEnumAlternatives}, including beside a `type` list or inside
  * `anyOf`. Branch partitions stay beside their base in the conjunction, so
  * their node-level keywords are compared at the branch boundary. Target enums
- * stay whole: a source alternative has to fit inside a single target
- * alternative, and one listing values of several types can fit the whole enum.
+ * stay whole so an alternative listing values of several types can fit the
+ * whole enum. Transparent nested source unions can split further through
+ * {@link sourceAlternativeAcceptedBy}.
  */
 function schemaAlternatives(
   schema: SchemaObject,
@@ -1839,6 +1853,78 @@ function withoutNodeLevelKeywords(schema: SchemaObject): SchemaObject {
     }
   }
   return fragment as SchemaObject;
+}
+
+/**
+ * The supplementary union proof retries whole branches after each split.
+ * Bounding its depth limits repeated work on long union spines; the ordinary
+ * whole-branch proof remains available at every depth.
+ */
+const MAX_SOURCE_UNION_SPLIT_DEPTH = 8;
+
+/**
+ * Proves a source conjunction against the target alternatives. A transparent
+ * nested `anyOf` can send each child to a different target alternative while
+ * retaining the source's other conjuncts. Wrappers carrying constraints or
+ * semantic metadata stay at their own proof boundary. During evolution, each
+ * child must also preserve the wrapper's effective default in its owning root.
+ */
+function sourceAlternativeAcceptedBy(
+  sourceAlternative: readonly JSONSchema[],
+  targets: readonly (readonly JSONSchema[])[],
+  path: string,
+  context: CompatibilityContext,
+): boolean {
+  // Keep whole-branch proofs first, including comparisons of matching nested
+  // contracts whose defaults or metadata require the existing boundaries.
+  if (
+    targets.some((target) =>
+      schemaConjunctionSubsetIssue(sourceAlternative, target, path, context) ===
+        undefined
+    )
+  ) return true;
+
+  // Splitting only adds a proof when children can choose different targets.
+  // A single target is already checked recursively by the whole-branch proof;
+  // retrying it at each wrapper would repeat the same work exponentially.
+  if (
+    targets.length < 2 ||
+    context.sourceUnionSplitDepth >= MAX_SOURCE_UNION_SPLIT_DEPTH
+  ) return false;
+
+  return sourceAlternative.some((fragment, index) => {
+    if (
+      typeof fragment === "boolean" || fragment.anyOf === undefined ||
+      Object.keys(fragment).some((key) =>
+        key !== "anyOf" &&
+        (key === "$comment" || !DESCRIPTIVE_ANNOTATION_KEYS.has(key))
+      )
+    ) return false;
+    if (
+      context.defaultComparison === "evolution" &&
+      fragment.anyOf.some((branch) =>
+        !schemaDefaultsResolveEqually(fragment, branch, {
+          sourceRoot: context.sourceRoot,
+          targetRoot: context.sourceRoot,
+        })
+      )
+    ) return false;
+    return fragment.anyOf.every((branch) =>
+      sourceAlternativeAcceptedBy(
+        [
+          ...sourceAlternative.slice(0, index),
+          branch,
+          ...sourceAlternative.slice(index + 1),
+        ],
+        targets,
+        path,
+        {
+          ...context,
+          sourceUnionSplitDepth: context.sourceUnionSplitDepth + 1,
+        },
+      )
+    );
+  });
 }
 
 /**

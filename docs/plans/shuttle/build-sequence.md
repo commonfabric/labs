@@ -568,7 +568,7 @@ schema-derived flag machinery `cf` already exports (`pieceCallRawArgs`,
 lands here, since `set` is what makes stale computed state visible.
 
 **B3 — watch and views** (after A4). `Cell.sink` with the guard-plus-`idle()`
-settling discipline; the value, list, and structured piece-overview views;
+settling discipline; the value and list views;
 session watches (`watch`, `watches`, `unwatch`) with prompt event lines.
 Governed by [`views.md`](views.md). Landing in slices.
 
@@ -692,8 +692,6 @@ Still to land:
   rendering is the one `get` and `wish` write, so a cursor that meant anything
   to `enter` would be a map from a drawn row back to a path inside the value,
   which is a change to a shared renderer.
-- **The structured piece overview** (decision 26): one refreshable frame
-  carrying arguments, a result summary, callables and pattern identity.
 
 **B4 — externals and escapes.** `>` and `<` to and from `file:` externals
 under the scheme-absolute rule; the external working location
@@ -701,7 +699,46 @@ under the scheme-absolute rule; the external working location
 `|!` in a pipeline (bare `|` reserved, its error naming `|!`), and `!cf`
 with place-derived flags injected. With the external location, `where`
 reaches its v1 surface: every dimension printed, the light ones settable
-(decision 22).
+(decision 22). Landing in slices.
+
+Landed:
+
+- **The external working location, and `where`'s setting half.** `xcd` moves
+  the position and `xpwd` prints it. The location is a URL, because the
+  arithmetic a relative move wants is the arithmetic a URL already does over
+  `file:` and `https:` alike (`lib/shuttle/external.ts`). It stands beside the
+  place rather than inside it, and the two move independently. The
+  scheme-absolute rule is shuttle's own check rather than the URL parser's,
+  which does not enforce it — `new URL("file:out.json")` answers with a path
+  of `/out.json`, turning a relative spelling into a place at the root. `~`
+  expands where the location is on the plane that has a home, and a path
+  naming somebody else's is refused rather than guessed at.
+
+  `x:` is not here. It roots a relative *operand* at this position, and
+  nothing reads an operand against this plane until redirection does, so the
+  base lands with the verb that reads it rather than ahead of one.
+
+  `Arity` gains the arm `where` needs: none or two operands and nothing
+  between, the record being one surface, so naming a dimension with no value
+  after it is neither of the two acts. `Candidates` gains the dimension words,
+  which are `where`'s own setter table read back rather than a second list.
+  Neither setter is a second mechanism — `where scope @session` moves the
+  place as `cd .@session` moves it, and `where external …` moves the location
+  as `xcd` moves it — which is why the first comes back a move and the second
+  comes back a line.
+
+Still to land:
+
+- **Redirection,** and the `x:` base with it. `>` and `<` to and from `file:`
+  externals, reading an operand against the location above: a bare relative
+  operand stays fabric, a schemed one names a plane, and `x:` roots a relative
+  one at the external location whatever that location's scheme — a base name
+  rather than a scheme, so no operand changes plane by position. This is the
+  slice the rendering question below gates.
+- **The escape family.** Line-initial `!`, `|!` in a pipeline, `!cf` with
+  place-derived flags injected, and bare `|` reserved with its error naming
+  `|!`. A local program takes and gives back the terminal the way `$EDITOR`
+  does.
 
 One question B4 settles rather than inherits: what a rendering carries when
 it is not going to a terminal. Only part of the treatment of a control

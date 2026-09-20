@@ -53,7 +53,7 @@ Marks a property as a stream endpoint:
 ```
 
 This causes:
-- Storage of `{ $stream: true }` marker
+- No stored value: the declaration alone marks the position
 - Different runtime behavior (send vs set)
 - Different change detection (every send triggers)
 
@@ -86,8 +86,8 @@ Schemas influence runtime behavior:
   access. The runner disposes of one as an argument that did not resolve — an
   undefined result, not a fault — which is what an eager read's `undefined`
   produces anyway.
-- **Cell creation**: `asCell` properties become cell references
-- **Stream detection**: `asStream` properties get event semantics
+- **Cell creation**: `asCell: ["cell"]` properties become cell references
+- **Stream declaration**: `asCell: ["stream"]` properties get event semantics
 
 ### Schema Resolution
 
@@ -100,17 +100,17 @@ Schemas can be:
 
 ## Proposed Directions
 
-### Removing `asStream`
+### Removing the stream declaration
 
-The `asStream` flag encodes type information in a schema property rather than
-in the data itself. This creates:
+The `asCell: ["stream"]` declaration encodes type information in a schema
+property rather than in the data itself. This creates:
 - Two parallel type systems (schema types + stream/cell bifurcation)
 - Method duplication (get/set vs send)
 - Runtime brand checking (isStream)
 
 #### Alternative: Timestamps in Schema
 
-Instead of `asStream`, events could be data that includes timestamps:
+Instead of a declaration, events could be data that includes timestamps:
 
 ```json
 {
@@ -130,7 +130,7 @@ The "event-ness" emerges from the data shape:
 
 #### What This Eliminates
 
-- `asStream` flag
+- The `asCell: ["stream"]` declaration
 - `isStream()` / `isCell()` checks
 - Separate Stream type
 - Duplicated methods (send vs set)
@@ -145,7 +145,7 @@ The "event-ness" emerges from the data shape:
 
 ## Open Questions
 
-- Should `asStream` be removed in favor of timestamp-based events?
+- Should the stream declaration be removed in favor of timestamp-based events?
 - How are schema migrations handled?
 - What is the validation behavior on schema mismatch?
 - How do schemas interact with the type system in pattern code?

@@ -200,8 +200,8 @@ describe("cf wish headless read (resolveWish)", () => {
       isEditing: boolean;
       elements: { title: string }[];
       $UI: { type: string; name: string };
-      setName: { $stream: boolean };
     }>(userIdentity.did(), "ct1844-projection-fixture", undefined, tx);
+    // Nothing is stored where `setName` stands; the schema declares it.
     cell.set({
       name: "Ada Lovelace",
       avatar: "ada.png",
@@ -209,7 +209,6 @@ describe("cf wish headless read (resolveWish)", () => {
       isEditing: false,
       elements: [{ title: "Note" }],
       $UI: { type: "vnode", name: "cf-screen" },
-      setName: { $stream: true },
     });
     const schema = {
       type: "object",
@@ -254,12 +253,13 @@ describe("cf wish headless read (resolveWish)", () => {
     // would project the shared subtree on the first path but return it RAW on
     // the second — leaking the handle. The memo must project it on both.
     const tx = runtime.edit();
-    const cell = runtime.getCell<
-      { shared: { label: string; setName: { $stream: boolean } } }
-    >(userIdentity.did(), "ct1844-diamond-fixture", undefined, tx);
-    cell.set({
-      shared: { label: "shared", setName: { $stream: true } },
-    });
+    const cell = runtime.getCell<{ shared: { label: string } }>(
+      userIdentity.did(),
+      "ct1844-diamond-fixture",
+      undefined,
+      tx,
+    );
+    cell.set({ shared: { label: "shared" } });
     const schema = {
       type: "object",
       properties: {

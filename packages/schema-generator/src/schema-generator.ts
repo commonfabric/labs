@@ -19,6 +19,7 @@ import { CommonFabricFormatter } from "./formatters/common-fabric-formatter.ts";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import { UnionFormatter } from "./formatters/union-formatter.ts";
 import { IntersectionFormatter } from "./formatters/intersection-formatter.ts";
+import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
 import {
   detectWrapperViaNode,
   getNamedTypeKey,
@@ -29,7 +30,852 @@ import {
   safeGetTypeOfSymbolAtLocation,
 } from "./type-utils.ts";
 import { attachDocTags, extractDocFromType } from "./doc-utils.ts";
+import { unionFoldedFrom } from "./schema-origins.ts";
+import { dedupeByValueEqual } from "./value-equality.ts";
 import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
+
+/**
+ * The default library's generic aliases the node-based analyzer applies
+ * structurally (see `#analyzeLibraryAliasReference`). A cell read prints its
+ * type through `Readonly<…>`; the others are what authored types reach for.
+ */
+const LIBRARY_ALIAS_NAMES = new Set([
+  "Readonly",
+  "Partial",
+  "Required",
+  "Pick",
+  "Omit",
+  "NonNullable",
+  "Array",
+  "ReadonlyArray",
+  "Record",
+]);
+
+/** Whether a schema is an object schema the alias rules can rewrite. */
+function isObjectSchema(
+  schema: MutableJSONSchema,
+): schema is MutableJSONSchemaObj & { type: "object" } {
+  return isObjectOrArray(schema) && schema.type === "object";
+}
+
+/**
+ * The definition a local `$ref` names, or `schema` itself when it is not one.
+ * A named authored type analyzes to a reference into the context's
+ * definitions, so a rule that needs the shape behind it reads it here. The
+ * definition is returned as the shared object it is: a caller that derives a
+ * new shape copies before it changes anything.
+ */
+function resolveLocalRef(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+): MutableJSONSchema {
+  const prefix = "#/$defs/";
+  if (
+    !isObjectOrArray(schema) || typeof schema.$ref !== "string" ||
+    !schema.$ref.startsWith(prefix)
+  ) {
+    return schema;
+  }
+  const definition = context.definitions[schema.$ref.slice(prefix.length)];
+  return definition === undefined ? schema : definition as MutableJSONSchema;
+}
+
+/** Whether a schema is an array schema the alias rules can rewrite. */
+function isArraySchema(
+  schema: MutableJSONSchema,
+): schema is MutableJSONSchemaObj & { type: "array" } {
+  return isObjectOrArray(schema) && schema.type === "array";
+}
+
+/**
+ * `transform` applied to every object or array schema `schema` denotes: the
+ * schema itself, the definition a local reference names, or each arm of a
+ * union of them — the homomorphic aliases (`Partial`, `Required`) distribute
+ * over a union, `Partial<A | B>` being `Partial<A> | Partial<B>`, and map an
+ * array's elements as they map a tuple's. The schema handed to `transform`
+ * is a copy with its own `properties` map, so a mapped view (`Partial<Foo>`)
+ * never alters the `Foo` every other consumer reads. A schema that denotes
+ * neither is returned as it came.
+ */
+function mapArms(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+  transform: (
+    arm: MutableJSONSchemaObj & { type: "object" | "array" },
+  ) => MutableJSONSchema,
+): MutableJSONSchema {
+  const resolved = resolveLocalRef(schema, context);
+  if (isObjectOrArray(resolved) && Array.isArray(resolved.anyOf)) {
+    const arms = (resolved.anyOf as MutableJSONSchema[]).map((arm) =>
+      mapArms(arm, context, transform)
+    );
+    return { ...resolved, anyOf: arms as MutableJSONSchemaObj[] };
+  }
+  if (!isObjectSchema(resolved) && !isArraySchema(resolved)) return schema;
+  return transform({
+    ...resolved,
+    ...(isObjectOrArray(resolved.properties)
+      ? { properties: { ...resolved.properties } }
+      : {}),
+  });
+}
+
+/**
+ * The index signature an object schema carries, as the schema every key it
+ * covers has: `additionalProperties` when present — a schema, `true`, or
+ * `false` for a `never`-valued signature, which still covers every key —
+ * and `undefined` for an object closed to unnamed keys, for which this
+ * generator writes no `additionalProperties` at all.
+ */
+function indexSignatureOf(
+  object: MutableJSONSchemaObj,
+): MutableJSONSchema | undefined {
+  return object.additionalProperties as MutableJSONSchema | undefined;
+}
+
+/** An object or array arm as `Partial<T>` maps it. */
+function partialArm(
+  arm: MutableJSONSchemaObj & { type: "object" | "array" },
+): MutableJSONSchema {
+  if (arm.type === "array") {
+    return {
+      ...arm,
+      items: unionOfSchemas([
+        (arm.items as MutableJSONSchema | undefined) ?? true,
+        { type: "undefined" },
+      ]),
+    };
+  }
+  const { required: _required, ...rest } = arm;
+  return rest;
+}
+
+/** An object or array arm as `Required<T>` maps it. */
+function requiredArm(
+  arm: MutableJSONSchemaObj & { type: "object" | "array" },
+  context: GenerationContext,
+): MutableJSONSchema {
+  if (arm.type === "array") {
+    return arm.items === undefined ? arm : {
+      ...arm,
+      items: withoutUndefined(arm.items as MutableJSONSchema, context),
+    };
+  }
+  return isObjectOrArray(arm.properties)
+    ? { ...arm, required: Object.keys(arm.properties) }
+    : arm;
+}
+
+/**
+ * The schemas a union denotes, one per arm, read through local references
+ * and flattened through nested unions; a schema that is no union is its own
+ * single arm. The arms are the shared objects they are — see
+ * `resolveLocalRef`.
+ */
+function unionArms(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+): MutableJSONSchema[] {
+  const resolved = resolveLocalRef(schema, context);
+  if (isObjectOrArray(resolved) && Array.isArray(resolved.anyOf)) {
+    return (resolved.anyOf as MutableJSONSchema[]).flatMap((arm) =>
+      unionArms(arm, context)
+    );
+  }
+  return [resolved];
+}
+
+/**
+ * `Pick`/`Omit` applied to `schema`: the object it denotes with only the
+ * selected properties. These aliases map over `keyof T`, and the keys of a
+ * union are the keys every arm has, so a union does not distribute the way
+ * `Partial` does: its view is one object over the surface the arms share,
+ * each property accepting what any arm's does and required only where every
+ * arm that names it requires it. `Omit<A | B, "kind">` therefore keeps
+ * neither arm's own members, and a `Pick` of two correlated arms no longer
+ * pairs their values. An index signature covers every key: a key an arm
+ * has only through one takes the signature's schema and casts no vote on
+ * being required, and an `Omit` from a surface every arm covers that way
+ * keeps just the signature, the named members dissolving into it as they do
+ * in `keyof T`. A lone arm that is no object is returned as it came; a union
+ * with such an arm, or a `Pick` naming a key some arm lacks (a program the
+ * type checker rejects), has no view here and is `undefined`.
+ */
+function pickedView(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+  selection: { pick: Set<string> } | { omit: Set<string> },
+): MutableJSONSchema | undefined {
+  const arms = unionArms(schema, context);
+  if (arms.length === 1 && !isObjectSchema(arms[0]!)) return schema;
+  const objects = arms.filter(isObjectSchema);
+  if (objects.length !== arms.length) return undefined;
+  const propertiesOf = (
+    object: MutableJSONSchemaObj,
+  ): Record<string, MutableJSONSchema> =>
+    isObjectOrArray(object.properties)
+      ? object.properties as Record<string, MutableJSONSchema>
+      : {};
+  const closed = objects.filter((object) =>
+    indexSignatureOf(object) === undefined
+  );
+  if ("omit" in selection && closed.length === 0) {
+    return {
+      type: "object",
+      properties: {},
+      additionalProperties: unionOfSchemas(
+        objects.map((object) => indexSignatureOf(object)!),
+      ),
+    };
+  }
+  const covers = (object: MutableJSONSchemaObj, key: string) =>
+    key in propertiesOf(object) || indexSignatureOf(object) !== undefined;
+  const keys = "pick" in selection
+    ? [...selection.pick]
+    : Object.keys(propertiesOf(closed[0]!)).filter((key) =>
+      !selection.omit.has(key) && closed.every((object) => covers(object, key))
+    );
+  if (!keys.every((key) => objects.every((object) => covers(object, key)))) {
+    return undefined;
+  }
+  const properties = Object.fromEntries(
+    keys.map((key) => [
+      key,
+      unionOfSchemas(
+        objects.map((object) =>
+          propertiesOf(object)[key] ?? indexSignatureOf(object)!
+        ),
+      ),
+    ]),
+  );
+  const required = keys.filter((key) =>
+    objects.every((object) =>
+      !(key in propertiesOf(object)) ||
+      (Array.isArray(object.required) && object.required.includes(key))
+    )
+  );
+  return required.length > 0
+    ? { type: "object", properties, required }
+    : { type: "object", properties };
+}
+
+/** The alias declarations already opened on one path — see `#openTypeNode`. */
+type OpenedAliases = ReadonlySet<ts.TypeAliasDeclaration>;
+
+/**
+ * How `#tupleSlots` reads a node. Under `nonNullable` a union's `null` and
+ * `undefined` members are dropped, as `NonNullable` drops them. Under
+ * `spread` the node is what a rest element spreads, so a member that is no
+ * tuple is an array and is held in a rest slot rather than ending the read.
+ */
+type TupleReading = { nonNullable: boolean; spread: boolean };
+
+/** One slot of a tuple as the checker sees it once spreads are expanded. */
+type TupleSlot = {
+  kind: "required" | "optional" | "rest";
+  schema: MutableJSONSchema;
+};
+
+/**
+ * A tuple's slots as the checker normalizes them: an optional slot that a
+ * required slot follows is required, `undefined` added to what it holds,
+ * since a value filling the later slot has to spell the earlier one out.
+ */
+function normalizeTuple(slots: TupleSlot[]): TupleSlot[] {
+  const lastRequired = slots.findLastIndex((slot) => slot.kind === "required");
+  return slots.map((slot, index) =>
+    slot.kind === "optional" && index < lastRequired
+      ? {
+        kind: "required",
+        schema: unionOfSchemas([slot.schema, { type: "undefined" }]),
+      }
+      : slot
+  );
+}
+
+/**
+ * A tuple's slots as `Required<T>` leaves them: no slot optional, and
+ * `undefined` gone from what an optional or a rest slot held — those count
+ * as optional — while a required slot keeps an authored `undefined`.
+ */
+function requiredSlots(
+  slots: TupleSlot[],
+  context: GenerationContext,
+): TupleSlot[] {
+  return slots.map((slot) =>
+    slot.kind === "required" ? slot : {
+      kind: slot.kind === "rest" ? "rest" : "required",
+      schema: withoutUndefined(slot.schema, context),
+    }
+  );
+}
+
+/**
+ * A tuple's slots as `Partial<T>` leaves them: every slot optional, a rest
+ * slot's elements admitting `undefined`.
+ */
+function partialSlots(slots: TupleSlot[]): TupleSlot[] {
+  return slots.map((slot) =>
+    slot.kind === "rest"
+      ? {
+        kind: "rest",
+        schema: unionOfSchemas([slot.schema, { type: "undefined" }]),
+      }
+      : { kind: "optional", schema: slot.schema }
+  );
+}
+
+/**
+ * The default library's aliases that map a type without changing whether it
+ * is a tuple, and distribute over a union: what `#requiredView` peels to
+ * reach the tuple or union they wrap.
+ */
+const LIBRARY_WRAPPER_NAMES = new Set([
+  "Readonly",
+  "NonNullable",
+  "Required",
+  "Partial",
+]);
+
+/** Whether a type node is `null` or `undefined`, what `NonNullable` removes. */
+function isNullishTypeNode(node: ts.TypeNode): boolean {
+  return node.kind === ts.SyntaxKind.UndefinedKeyword ||
+    node.kind === ts.SyntaxKind.NullKeyword ||
+    (ts.isLiteralTypeNode(node) &&
+      node.literal.kind === ts.SyntaxKind.NullKeyword);
+}
+
+/**
+ * What a schema spread into a tuple contributes: an array's items, held in
+ * a rest slot — or, for a schema that is no array (a program the checker
+ * rejects), the schema itself.
+ */
+function restSlot(schema: MutableJSONSchema): TupleSlot {
+  if (isArraySchema(schema) && schema.items !== undefined) {
+    return { kind: "rest", schema: schema.items as MutableJSONSchema };
+  }
+  return { kind: "rest", schema };
+}
+
+/**
+ * The positionless items schema of tuples with these slots, one list per
+ * alternative: every slot's schema, an optional slot admitting `undefined`
+ * as well, since an omitted one reads as `undefined` and the type-based
+ * path admits it into the items union.
+ */
+function tupleItems(alternatives: TupleSlot[][]): MutableJSONSchema {
+  return unionOfSchemas(
+    alternatives.flat().map((slot) =>
+      slot.kind === "optional"
+        ? unionOfSchemas([slot.schema, { type: "undefined" }])
+        : slot.schema
+    ),
+  );
+}
+
+type NullishName = "null" | "undefined";
+const NULLISH: ReadonlySet<NullishName> = new Set(["null", "undefined"]);
+const UNDEFINED_ONLY: ReadonlySet<NullishName> = new Set(["undefined"]);
+
+/**
+ * `schema` with `null` and `undefined` removed from what it accepts, the way
+ * `NonNullable<T>` removes them from `T`.
+ */
+function withoutNullish(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+): MutableJSONSchema {
+  return withoutTypes(schema, context, NULLISH);
+}
+
+/**
+ * `schema` with `undefined` alone removed from what it accepts, the way
+ * `Required<T>` removes it from an element it makes non-optional.
+ */
+function withoutUndefined(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+): MutableJSONSchema {
+  return withoutTypes(schema, context, UNDEFINED_ONLY);
+}
+
+/**
+ * `schema` with the nullish types in `drop` removed from what it accepts: a
+ * schema of nothing else becomes `false`; an array-valued `type` loses those
+ * entries, an `enum` those values; a union loses those arms; a local
+ * reference is followed to its definition. A schema that accepted none of
+ * them is returned as it came, reference and all.
+ */
+function withoutTypes(
+  schema: MutableJSONSchema,
+  context: GenerationContext,
+  drop: ReadonlySet<NullishName>,
+): MutableJSONSchema {
+  const resolved = resolveLocalRef(schema, context);
+  if (!isObjectOrArray(resolved)) return schema;
+  if (Array.isArray(resolved.anyOf)) {
+    const before = resolved.anyOf as MutableJSONSchema[];
+    const arms = before.map((arm) => withoutTypes(arm, context, drop)).filter(
+      (arm) => arm !== false,
+    );
+    if (
+      arms.length === before.length && arms.every((arm, i) => arm === before[i])
+    ) {
+      return schema;
+    }
+    if (arms.length === 0) return false;
+    if (arms.length === 1) return arms[0]!;
+    return { ...resolved, anyOf: arms as MutableJSONSchemaObj[] };
+  }
+  type SchemaType = NonNullable<MutableJSONSchemaObj["type"]>;
+  const types: SchemaType[] | undefined = Array.isArray(resolved.type)
+    ? resolved.type
+    : typeof resolved.type === "string"
+    ? [resolved.type]
+    : undefined;
+  const values = Array.isArray(resolved.enum) ? resolved.enum : undefined;
+  const keptTypes = types?.filter((type) => !drop.has(type as NullishName));
+  const keptValues = values?.filter((value) =>
+    !(value === null && drop.has("null")) &&
+    !(value === undefined && drop.has("undefined"))
+  );
+  if (
+    keptTypes?.length === types?.length &&
+    keptValues?.length === values?.length
+  ) {
+    return schema;
+  }
+  if (keptTypes?.length === 0 || keptValues?.length === 0) return false;
+  return {
+    ...resolved,
+    ...(keptTypes === undefined ? {} : {
+      type: (keptTypes.length === 1 ? keptTypes[0]! : keptTypes) as SchemaType,
+    }),
+    ...(keptValues === undefined ? {} : { enum: keptValues }),
+  };
+}
+
+/**
+ * `node` with parentheses and `readonly` operators stripped from the outside;
+ * neither changes what a type denotes to these rules.
+ */
+function unwrapTypeNode(node: ts.TypeNode): ts.TypeNode {
+  let current = node;
+  while (
+    ts.isParenthesizedTypeNode(current) ||
+    (ts.isTypeOperatorNode(current) &&
+      current.operator === ts.SyntaxKind.ReadonlyKeyword)
+  ) {
+    current = current.type;
+  }
+  return current;
+}
+
+/**
+ * The string keys a `Pick`/`Omit`/`Record` key argument names: a string
+ * literal or a union of them. Anything else (a `keyof`, a `string`) is not a
+ * key list, and the caller falls back to the general path.
+ */
+function literalKeys(node: ts.TypeNode): Set<string> | undefined {
+  const members = ts.isUnionTypeNode(node) ? node.types : [node];
+  const keys = new Set<string>();
+  for (const member of members) {
+    if (!ts.isLiteralTypeNode(member) || !ts.isStringLiteral(member.literal)) {
+      return undefined;
+    }
+    keys.add(member.literal.text);
+  }
+  return keys;
+}
+
+/** The primitive `type` names an intersection can narrow or find disjoint. */
+const PRIMITIVE_TYPE_NAMES = new Set([
+  "string",
+  "number",
+  "boolean",
+  "null",
+  "undefined",
+]);
+
+/**
+ * What a primitive schema accepts: the primitive types, and the values when
+ * a `const` or an `enum` makes them finite. `void` has the domain of
+ * `undefined` — beside another primitive the checker reduces it as one — and
+ * is marked, because beside an object it is not the nullish part that
+ * `undefined` is, and because `undefined & void` is `undefined`.
+ */
+type PrimitiveDomain = {
+  types: string[];
+  values: unknown[] | undefined;
+  isVoid: boolean;
+};
+
+/** The primitive type name of a literal value. */
+function primitiveTypeOf(value: unknown): string {
+  return value === null ? "null" : typeof value;
+}
+
+/**
+ * The domain of a schema that says nothing but which primitives it accepts —
+ * `type`, `const`, `enum` and no other keyword — or `undefined` for any
+ * other schema. An `enum` with no `type`, the spelling of a named literal
+ * union, takes its types from its values.
+ */
+function primitiveDomain(
+  schema: MutableJSONSchemaObj,
+  context: GenerationContext,
+): PrimitiveDomain | undefined {
+  if (context.schemaOrigins?.get(schema)?.kind === "void") {
+    return { types: ["undefined"], values: undefined, isVoid: true };
+  }
+  const values = "const" in schema
+    ? [schema.const]
+    : Array.isArray(schema.enum)
+    ? [...schema.enum]
+    : undefined;
+  const declared = Array.isArray(schema.type)
+    ? schema.type as string[]
+    : typeof schema.type === "string"
+    ? [schema.type]
+    : undefined;
+  const types = declared ?? [...new Set((values ?? []).map(primitiveTypeOf))];
+  const primitivesOnly = types.length > 0 &&
+    types.every((type) => PRIMITIVE_TYPE_NAMES.has(type)) &&
+    Object.keys(schema).every((key) =>
+      key === "type" || key === "const" || key === "enum"
+    );
+  return primitivesOnly ? { types, values, isVoid: false } : undefined;
+}
+
+/**
+ * The intersection of primitive schemas, as the checker reduces one: the
+ * types every part admits, and, where a part is finite, the values every
+ * part admits — `"a" & string` is `"a"`, `string & number` is nothing. A
+ * part that already says exactly that is returned as it is, so a literal
+ * keeps its spelling; otherwise the result is an `enum` or a `type`.
+ */
+function intersectPrimitives(
+  parts: MutableJSONSchema[],
+  domains: PrimitiveDomain[],
+): MutableJSONSchema {
+  let types = domains[0]!.types;
+  let values: unknown[] | undefined;
+  for (const domain of domains) {
+    types = types.filter((type) => domain.types.includes(type));
+    if (domain.values === undefined) continue;
+    const admitted = domain.values;
+    values = values === undefined
+      ? admitted
+      : values.filter((value) =>
+        admitted.some((other) => Object.is(value, other))
+      );
+  }
+  values = values?.filter((value) => types.includes(primitiveTypeOf(value)));
+  if (values !== undefined) {
+    const held = new Set(values.map(primitiveTypeOf));
+    types = types.filter((type) => held.has(type));
+  }
+  if (types.length === 0) return false;
+  const same = (left: unknown[] | undefined, right: unknown[] | undefined) =>
+    left === undefined || right === undefined
+      ? left === right
+      : left.length === right.length &&
+        left.every((value) => right.some((other) => Object.is(value, other)));
+  const says = (index: number) =>
+    same(domains[index]!.types, types) && same(domains[index]!.values, values);
+  const indexes = parts.map((_part, index) => index);
+  const exact =
+    indexes.find((index) => !domains[index]!.isVoid && says(index)) ??
+      indexes.find(says);
+  if (exact !== undefined) return parts[exact]!;
+  if (values !== undefined) return { enum: values } as MutableJSONSchema;
+  type SchemaType = NonNullable<MutableJSONSchemaObj["type"]>;
+  return { type: (types.length === 1 ? types[0]! : types) as SchemaType };
+}
+
+/**
+ * `parts` with its primitive schemas intersected into one, or `false` when
+ * they are disjoint. The one that survives stands where it stood — the
+ * checker drops the wider part and keeps the narrower in place, and the
+ * order decides which refused part the merge meets first — and a result
+ * none of them spelled stands where the first of them stood. Parts that are
+ * no primitive stay as they are, in order.
+ */
+function reducePrimitiveParts(
+  parts: MutableJSONSchemaObj[],
+  context: GenerationContext,
+): MutableJSONSchemaObj[] | false {
+  const domains = parts.map((part) => primitiveDomain(part, context));
+  const primitive = parts.filter((_part, index) =>
+    domains[index] !== undefined
+  );
+  if (primitive.length < 2) return parts;
+  const met = intersectPrimitives(
+    primitive,
+    domains.filter((domain) => domain !== undefined),
+  );
+  if (met === false) return false;
+  const survivor = parts.indexOf(met as MutableJSONSchemaObj);
+  const stands = survivor >= 0 ? survivor : parts.indexOf(primitive[0]!);
+  return parts.flatMap((part, index) =>
+    index === stands
+      ? [met as MutableJSONSchemaObj]
+      : domains[index] === undefined
+      ? [part]
+      : []
+  );
+}
+
+/** Whether a schema is an object with no members to speak of: `{}`. */
+function isEmptyObjectSchema(schema: MutableJSONSchema): boolean {
+  return isObjectSchema(schema) &&
+    Object.keys(schema).every((key) =>
+      key === "type" || key === "properties"
+    ) &&
+    Object.keys(schema.properties ?? {}).length === 0;
+}
+
+/**
+ * `parts` with equal schemas folded, preserving source kind and the identity
+ * of schemas with recorded union or intersection constituents. Equal fallback
+ * schemas can stand for different constituents; `void` and an opaque cell
+ * also remain distinct despite their equal schemas.
+ */
+function dedupeIntersectionParts<T extends MutableJSONSchema>(
+  parts: T[],
+  context: GenerationContext,
+): T[] {
+  const sourceIds = new Map<MutableJSONSchemaObj, number>();
+  return dedupeByValueEqual(parts.map((schema) => {
+    const origin = isObjectOrArray(schema)
+      ? context.schemaOrigins?.get(schema)
+      : undefined;
+    let sourceId = 0;
+    if (
+      isObjectOrArray(schema) &&
+      (origin?.kind === "union" || origin?.kind === "intersection")
+    ) {
+      sourceId = sourceIds.get(schema) ?? sourceIds.size + 1;
+      sourceIds.set(schema, sourceId);
+    }
+    return { schema, sourceKind: origin?.kind ?? "schema", sourceId };
+  })).map((part) => part.schema);
+}
+
+/**
+ * The schema of an intersection whose constituents have these schemas, as
+ * the checker settles one. Nested fallbacks expose their source constituents
+ * before reduction, and identical constituents fold. A constituent
+ * accepting nothing (`never`) leaves nothing. One accepting anything (`any`)
+ * makes the whole accept anything — unless the constituents beside it that
+ * are no union already contradict each other, which is as far as the checker
+ * looks before `any` wins: it never distributes a union beside `any`, so
+ * `any & null & (string | number)` is `any` where `any & null & string` is
+ * nothing. Otherwise a union constituent distributes, and every combination
+ * of arms is merged on its own (`mergeParts`).
+ */
+function intersectionOf(
+  constituents: MutableJSONSchema[],
+  context: GenerationContext,
+): MutableJSONSchema {
+  const expand = (schema: MutableJSONSchema): MutableJSONSchema[] => {
+    const resolved = resolveLocalRef(schema, context);
+    const origin = isObjectOrArray(resolved)
+      ? context.schemaOrigins?.get(resolved)
+      : undefined;
+    return origin?.kind === "intersection"
+      ? origin.parts().flatMap(expand)
+      : [schema];
+  };
+  const distinct = dedupeIntersectionParts(
+    constituents.flatMap(expand),
+    context,
+  );
+  if (distinct.some((constituent) => constituent === false)) return false;
+  const arms = distinct
+    .filter((constituent) => constituent !== true)
+    .map((constituent) => {
+      const resolved = resolveLocalRef(constituent, context);
+      const origin = isObjectOrArray(resolved)
+        ? context.schemaOrigins?.get(resolved)
+        : undefined;
+      return origin?.kind === "union"
+        ? origin.parts().flatMap((part) => unionArms(part, context))
+        : unionArms(constituent, context);
+    });
+  if (arms.length < distinct.length) {
+    const direct = arms
+      .filter((alternatives) => alternatives.length === 1)
+      .map((alternatives) => alternatives[0] as MutableJSONSchemaObj)
+      .filter((part) => {
+        const domain = primitiveDomain(part, context);
+        return domain === undefined ||
+          (domain.types.length === 1 && (domain.values?.length ?? 1) === 1);
+      });
+    return contradictory(direct, context) ? false : true;
+  }
+  const combinations = arms.reduce<MutableJSONSchema[][]>(
+    (prefixes, alternatives) =>
+      prefixes.flatMap((prefix) => alternatives.map((arm) => [...prefix, arm])),
+    [[]],
+  );
+  return unionOfSchemas(
+    combinations.map((parts) => {
+      const expanded = parts.flatMap(expand);
+      if (
+        expanded.length !== parts.length ||
+        expanded.some((part, index) => part !== parts[index])
+      ) {
+        return intersectionOf(expanded, context);
+      }
+      return parts.some((part) => part === false) ? false : mergeParts(
+        parts as MutableJSONSchemaObj[],
+        context,
+      );
+    }),
+    context,
+  );
+}
+
+/**
+ * Whether these constituents, none of them a union, contradict each other
+ * the way the checker finds before it lets `any` win: a nullish part beside
+ * an object, or two disjoint primitives. It finds the latter from a
+ * string-like, number-like, or void-like part, or between two unit types, so
+ * `null` beside the bare `boolean`, which is none of those, is no
+ * contradiction to it at that point, though `null` beside `true` is.
+ */
+function contradictory(
+  direct: MutableJSONSchemaObj[],
+  context: GenerationContext,
+): boolean {
+  const parts = direct.filter((part) => part.type !== "unknown");
+  if (parts.length < 2 || mergeParts(parts, context) !== false) return false;
+  const domains = parts.map((part) => primitiveDomain(part, context));
+  const bareBoolean = (domain: PrimitiveDomain | undefined) =>
+    domain?.types[0] === "boolean" && domain.values === undefined;
+  const nullOnly = (domain: PrimitiveDomain | undefined) =>
+    domain?.types[0] === "null";
+  return !domains.every((domain) => bareBoolean(domain) || nullOnly(domain));
+}
+
+/**
+ * The schema of an intersection of these parts, none of them a union,
+ * `never`, or `any`, reduced the way the checker reduces the types before
+ * `IntersectionFormatter` merges them, in this order: `unknown` is the
+ * identity and drops out; an empty object drops out beside anything else and
+ * takes `null` and `undefined` with it, `T & {}` being `NonNullable<T>`;
+ * primitives are narrowed or found disjoint wherever they sit
+ * (`reducePrimitiveParts`); and `null` or `undefined` beside an object
+ * leaves nothing. What remains is one schema, returned as it is, or object
+ * schemas whose properties are unioned (the first definition kept on a
+ * clash) and whose `required` lists are unioned. A part that merge refuses —
+ * a non-object, or one with an index signature, which an array is — yields
+ * the same unsupported-pattern fallback the type-based path emits.
+ */
+function mergeParts(
+  parts: MutableJSONSchemaObj[],
+  context: GenerationContext,
+): MutableJSONSchema {
+  const substantive = dedupeIntersectionParts(
+    parts.filter((part) => part.type !== "unknown"),
+    context,
+  );
+  if (substantive.length === 0) return { type: "unknown" };
+  const nonEmpty = substantive.filter((part) => !isEmptyObjectSchema(part));
+  const remaining: MutableJSONSchema[] =
+    nonEmpty.length > 0 && nonEmpty.length < substantive.length
+      ? dedupeIntersectionParts(
+        nonEmpty.map((part) => withoutNullish(part, context)),
+        context,
+      )
+      : substantive;
+  if (remaining.some((part) => part === false)) return false;
+  // The primitive parts are reduced among themselves wherever they sit, so
+  // a contradiction between two of them is found with an object beside them
+  // too; what they reduce to stands where the first of them stood.
+  const reduced = reducePrimitiveParts(
+    remaining as MutableJSONSchemaObj[],
+    context,
+  );
+  if (reduced === false) return false;
+  if (reduced.length === 1) return reduced[0]!;
+  const nullish = (part: MutableJSONSchemaObj) => {
+    const domain = primitiveDomain(part, context);
+    return domain !== undefined && !domain.isVoid &&
+      domain.types.every((type) => type === "null" || type === "undefined");
+  };
+  if (reduced.some(nullish)) return false;
+  const unsupported = (reason: string): MutableJSONSchema => {
+    const schema: MutableJSONSchemaObj = {
+      type: "object",
+      additionalProperties: true,
+      $comment: `Unsupported intersection pattern: ${reason}`,
+    };
+    context.schemaOrigins?.set(schema, {
+      kind: "intersection",
+      parts: () => reduced,
+    });
+    return schema;
+  };
+  const properties: Record<string, MutableJSONSchema> = {};
+  const required = new Set<string>();
+  for (const part of reduced) {
+    if (isArraySchema(part)) {
+      return unsupported("index signature on constituent");
+    }
+    if (!isObjectSchema(part)) return unsupported("non-object constituent");
+    if (part.additionalProperties !== undefined) {
+      return unsupported("index signature on constituent");
+    }
+    for (
+      const [key, value] of Object.entries(
+        (part.properties ?? {}) as Record<string, MutableJSONSchema>,
+      )
+    ) {
+      if (!(key in properties)) properties[key] = value;
+    }
+    if (Array.isArray(part.required)) {
+      for (const key of part.required) {
+        if (typeof key === "string") required.add(key);
+      }
+    }
+  }
+  const merged: MutableJSONSchemaObj = { type: "object", properties };
+  if (required.size > 0) merged.required = [...required];
+  return merged;
+}
+
+/**
+ * The schema of a union whose arms have these schemas: an arm that is itself
+ * a bare union contributes its arms, an arm accepting anything makes the
+ * whole accept anything, arms accepting nothing drop out, equal arms fold
+ * (by value-model equality, as every other union in this package folds),
+ * and a lone survivor stands alone. Given the context, a fold that drops an
+ * arm with an origin of its own is recorded (`unionFoldedFrom`), so an
+ * intersection that meets the survivor still reads every arm.
+ */
+function unionOfSchemas(
+  schemas: MutableJSONSchema[],
+  context?: GenerationContext,
+): MutableJSONSchema {
+  const flat = schemas.flatMap((schema) =>
+    isObjectOrArray(schema) && Array.isArray(schema.anyOf) &&
+      Object.keys(schema).length === 1
+      ? schema.anyOf as MutableJSONSchema[]
+      : [schema]
+  );
+  if (flat.some((schema) => schema === true)) return true;
+  const kept = flat.filter((schema) => schema !== false);
+  const unique = dedupeByValueEqual(kept);
+  if (unique.length === 0) return false;
+  const folded = unique.length === 1
+    ? unique[0]!
+    : { anyOf: unique as MutableJSONSchemaObj[] };
+  return context === undefined
+    ? folded
+    : unionFoldedFrom(folded, kept, unique.length, context);
+}
 
 /**
  * Main schema generator that uses a chain of formatters
@@ -127,6 +973,7 @@ export class SchemaGenerator {
       // Accumulating state
       definitions: {},
       emittedRefs: new Set(),
+      schemaOrigins: new WeakMap(),
 
       // Stack state
       definitionStack: new Set(),
@@ -147,6 +994,9 @@ export class SchemaGenerator {
         writerIdentityForSourceFile: options.writerIdentityForSourceFile,
       }),
       ...(options?.onDiagnostic && { onDiagnostic: options.onDiagnostic }),
+      ...(options?.isDefaultLibrarySourceFile && {
+        isDefaultLibrarySourceFile: options.isDefaultLibrarySourceFile,
+      }),
       ...(schemaHints && { schemaHints }),
     };
 
@@ -702,6 +1552,10 @@ export class SchemaGenerator {
         if (ts.isPropertySignature(member) && member.name && member.type) {
           const propName = getPropertyNameText(member.name, checker);
           if (!propName) {
+            // A computed brand such as `[DEFAULT_MARKER]` can carry metadata
+            // that only the resolved type retains. A wrapper with that type
+            // must know this node's members were not fully interpreted.
+            context.uninterpretedTypeNodes?.push(typeNode);
             continue;
           }
 
@@ -794,6 +1648,38 @@ export class SchemaGenerator {
       return this.#analyzeTypeNodeStructure(typeNode.type, checker, context);
     }
 
+    // A parenthesized node carries exactly the shape it wraps.
+    if (ts.isParenthesizedTypeNode(typeNode)) {
+      return this.#analyzeTypeNodeStructure(typeNode.type, checker, context);
+    }
+
+    // A tuple lowers the way the type-based path lowers one: an array whose
+    // items accept any of the elements, structure and arity dropped
+    // (tuple-emission.test.ts pins that choice). A rest element contributes
+    // its array's items; an optional one admits `undefined` as well, so a
+    // tuple of `unknown` — reference-only slots — reads as that and not as a
+    // request for everything.
+    if (ts.isTupleTypeNode(typeNode)) {
+      return {
+        type: "array",
+        items: tupleItems(
+          this.#slotsOfTupleNode(typeNode, checker, context, new Set()),
+        ),
+      };
+    }
+
+    // An intersection is settled as the checker settles one and merged the
+    // way IntersectionFormatter merges one (`intersectionOf`), each
+    // constituent read through its reference.
+    if (ts.isIntersectionTypeNode(typeNode)) {
+      return intersectionOf(
+        typeNode.types.map((member) =>
+          this.#analyzeChildNode(member, checker, context)
+        ),
+        context,
+      );
+    }
+
     // Handle ArrayTypeNode (e.g., number[], string[])
     if (ts.isArrayTypeNode(typeNode)) {
       const elementType = typeRegistry?.get(typeNode.elementType) ??
@@ -857,6 +1743,13 @@ export class SchemaGenerator {
         return this.formatChildType(wrapperType, context, typeNode);
       }
 
+      const applied = this.#analyzeLibraryAliasReference(
+        typeNode,
+        checker,
+        context,
+      );
+      if (applied !== undefined) return applied;
+
       const resolved = this.#resolveTypeReferenceFromScope(
         typeNode,
         checker,
@@ -892,8 +1785,7 @@ export class SchemaGenerator {
       case ts.SyntaxKind.UnknownKeyword:
         return { type: "unknown" };
       case ts.SyntaxKind.VoidKeyword:
-        // matches anything, but we will not access the cell
-        return { asCell: ["opaque"] };
+        return PrimitiveFormatter.getSchemaType(checker.getVoidType(), context);
       case ts.SyntaxKind.AnyKeyword:
         // Accept any value
         return true;
@@ -906,8 +1798,454 @@ export class SchemaGenerator {
       return this.formatChildType(type, context, typeNode);
     }
 
-    // Fallback: accept any value
+    // Fallback: accept any value. This is a guess rather than a reading of the
+    // node, so it is recorded for a caller holding a usable type for the
+    // position.
+    context.uninterpretedTypeNodes?.push(typeNode);
     return true;
+  }
+
+  /**
+   * Analyze a child node the way the array branch analyzes an element: from
+   * its registered Type when the registry has a reliable one, from the node
+   * otherwise. `formatChildType` makes that choice.
+   */
+  #analyzeChildNode(
+    node: ts.TypeNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    const type = context.typeRegistry?.get(node) ??
+      checker.getTypeFromTypeNode(node);
+    return this.formatChildType(type, context, node);
+  }
+
+  /**
+   * The slots of the tuples `node` denotes, one list per alternative — a
+   * union of tuples, spread or wrapped, has several — or `undefined` when
+   * `node` denotes no tuple these rules can read: an array, an object, a
+   * generic alias. `node` is opened through parentheses, `readonly`, and
+   * aliases, and through the default library's `Readonly`, `NonNullable`,
+   * `Required`, and `Partial` — `NonNullable` dropping a union's `null` and
+   * `undefined` members however they are spelled, the last two applied to
+   * the slots they wrap — so the optionality an outer `Required` acts on
+   * survives any composition of them. A union is one alternative per
+   * member, each read on its own; read as a spread (`TupleReading`), a
+   * member that is no tuple is an array, held in a rest slot, so a tuple
+   * beside it keeps its slots and the read always has an answer.
+   */
+  #tupleSlots(
+    node: ts.TypeNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+    opened: OpenedAliases,
+    reading: TupleReading,
+  ): TupleSlot[][] | undefined {
+    const behind = this.#openTypeNode(node, checker, context, opened);
+    const target = behind.node;
+    if (ts.isUnionTypeNode(target)) {
+      const members: (TupleSlot[][] | undefined)[] = [];
+      for (const member of target.types) {
+        // A member is nullish by what it opens to: `Nil` and `(null)` are
+        // `null` as much as the bare keyword is. Dropped, it is no
+        // alternative at all, which is not a failed read.
+        const opensTo =
+          this.#openTypeNode(member, checker, context, behind.opened).node;
+        if (reading.nonNullable && isNullishTypeNode(opensTo)) continue;
+        members.push(
+          this.#tupleSlots(member, checker, context, behind.opened, reading),
+        );
+      }
+      return members.every((member) => member !== undefined)
+        ? (members as TupleSlot[][][]).flat()
+        : undefined;
+    }
+    if (ts.isTupleTypeNode(target)) {
+      return this.#slotsOfTupleNode(target, checker, context, behind.opened);
+    }
+    if (
+      ts.isTypeReferenceNode(target) && ts.isIdentifier(target.typeName) &&
+      target.typeArguments?.length === 1 &&
+      this.#isLibraryDeclaredName(target, target.typeName, checker, context)
+    ) {
+      const wrapped = (nonNullable = reading.nonNullable) =>
+        this.#tupleSlots(
+          target.typeArguments![0]!,
+          checker,
+          context,
+          behind.opened,
+          { ...reading, nonNullable },
+        );
+      switch (target.typeName.text) {
+        case "Readonly":
+          return wrapped();
+        case "NonNullable":
+          return wrapped(true);
+        case "Required":
+          return wrapped()?.map((slots) => requiredSlots(slots, context));
+        case "Partial":
+          return wrapped()?.map(partialSlots);
+      }
+    }
+    return reading.spread
+      ? unionArms(this.#analyzeChildNode(node, checker, context), context)
+        .map((arm) => [restSlot(arm)])
+      : undefined;
+  }
+
+  /**
+   * The slots of a tuple type node, one list per alternative: a spread
+   * tuple's slots inlined, each with its own optionality, a spread over a
+   * union multiplying the alternatives, one per member; anything else
+   * spread being an array, a rest slot holding its items, read through a
+   * reference and a union of arrays; then each alternative normalized as
+   * the checker normalizes a tuple.
+   */
+  #slotsOfTupleNode(
+    tuple: ts.TupleTypeNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+    opened: OpenedAliases,
+  ): TupleSlot[][] {
+    let alternatives: TupleSlot[][] = [[]];
+    for (const element of tuple.elements) {
+      const rest = ts.isRestTypeNode(element) ||
+        (ts.isNamedTupleMember(element) &&
+          element.dotDotDotToken !== undefined);
+      const optional = ts.isOptionalTypeNode(element) ||
+        (ts.isNamedTupleMember(element) &&
+          element.questionToken !== undefined);
+      const inner = ts.isNamedTupleMember(element) ||
+          ts.isRestTypeNode(element) || ts.isOptionalTypeNode(element)
+        ? element.type
+        : element;
+      // A spread always has slots: what is no tuple is an array.
+      const contributions = rest
+        ? this.#tupleSlots(inner, checker, context, opened, {
+          nonNullable: false,
+          spread: true,
+        }) as TupleSlot[][]
+        : [[{
+          kind: optional ? "optional" : "required",
+          schema: this.#analyzeChildNode(inner, checker, context),
+        } as TupleSlot]];
+      alternatives = alternatives.flatMap((prefix) =>
+        contributions.map((slots) => [...prefix, ...slots])
+      );
+    }
+    return alternatives.map(normalizeTuple);
+  }
+
+  /**
+   * `Required<T>` applied to `node`. The node is read rather than its
+   * schema wherever the schema has already lost what `Required` acts on: a
+   * tuple's slot optionality, which the positionless items form drops. So
+   * a union is viewed member by member, and a tuple's slots are read
+   * (`#tupleSlots`) and made required; anything else maps its schema's
+   * arms.
+   */
+  #requiredView(
+    node: ts.TypeNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+    opened: OpenedAliases,
+  ): MutableJSONSchema {
+    const behind = this.#openTypeNode(node, checker, context, opened);
+    if (ts.isUnionTypeNode(behind.node)) {
+      return unionOfSchemas(
+        behind.node.types.map((member) =>
+          this.#requiredView(member, checker, context, behind.opened)
+        ),
+      );
+    }
+    const peeled = this.#peelLibraryWrappers(node, checker, context, opened);
+    if (peeled.wrappers.length > 0 && ts.isUnionTypeNode(peeled.core)) {
+      // The wrappers distribute over the union, `NonNullable` dropping its
+      // `null` and `undefined` members; each member is viewed wrapped as
+      // the whole was, so a tuple beside an object keeps its slots.
+      const dropNullish = peeled.wrappers.some((wrapper) =>
+        (wrapper.typeName as ts.Identifier).text === "NonNullable"
+      );
+      return unionOfSchemas(
+        peeled.core.types
+          .filter((member) =>
+            !(dropNullish &&
+              isNullishTypeNode(
+                this.#openTypeNode(member, checker, context, peeled.opened)
+                  .node,
+              ))
+          )
+          .map((member) =>
+            this.#requiredView(
+              peeled.wrappers.reduceRight<ts.TypeNode>(
+                (inner, wrapper) =>
+                  ts.factory.createTypeReferenceNode(wrapper.typeName, [inner]),
+                member,
+              ),
+              checker,
+              context,
+              peeled.opened,
+            )
+          ),
+      );
+    }
+    const slots = this.#tupleSlots(node, checker, context, opened, {
+      nonNullable: false,
+      spread: false,
+    });
+    if (slots !== undefined) {
+      return {
+        type: "array",
+        items: tupleItems(
+          slots.map((alternative) => requiredSlots(alternative, context)),
+        ),
+      };
+    }
+    return mapArms(
+      this.#analyzeChildNode(node, checker, context),
+      context,
+      (arm) => requiredArm(arm, context),
+    );
+  }
+
+  /**
+   * `node` with the library's wrappers (`LIBRARY_WRAPPER_NAMES`) peeled off
+   * the outside, outermost first, down to the `core` they wrap, aliases
+   * opened along the way.
+   */
+  #peelLibraryWrappers(
+    node: ts.TypeNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+    opened: OpenedAliases,
+  ): {
+    wrappers: ts.TypeReferenceNode[];
+    core: ts.TypeNode;
+    opened: OpenedAliases;
+  } {
+    const wrappers: ts.TypeReferenceNode[] = [];
+    let behind = this.#openTypeNode(node, checker, context, opened);
+    for (;;) {
+      const target = behind.node;
+      if (
+        !ts.isTypeReferenceNode(target) || !ts.isIdentifier(target.typeName) ||
+        target.typeArguments?.length !== 1 ||
+        !LIBRARY_WRAPPER_NAMES.has(target.typeName.text) ||
+        !this.#isLibraryDeclaredName(target, target.typeName, checker, context)
+      ) {
+        return { wrappers, core: target, opened: behind.opened };
+      }
+      wrappers.push(target);
+      behind = this.#openTypeNode(
+        target.typeArguments[0]!,
+        checker,
+        context,
+        behind.opened,
+      );
+    }
+  }
+
+  /**
+   * The type node behind `node`: parentheses and `readonly` stripped, and a
+   * reference to a non-generic alias replaced by what the alias declares,
+   * followed as far as it goes, so a spread or a union member is read as the
+   * checker reads it. `opened` names the aliases already on this path; one
+   * met again is left as the reference it is, so a circular alias — an
+   * error the checker reports — cannot send this in a loop. A node the
+   * rules cannot open (a generic alias, an imported or unresolvable name) is
+   * returned as it came.
+   */
+  #openTypeNode(
+    node: ts.TypeNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+    opened: OpenedAliases,
+  ): { node: ts.TypeNode; opened: OpenedAliases } {
+    const unwrapped = unwrapTypeNode(node);
+    if (
+      !ts.isTypeReferenceNode(unwrapped) ||
+      !ts.isIdentifier(unwrapped.typeName) ||
+      unwrapped.typeArguments !== undefined
+    ) {
+      return { node: unwrapped, opened };
+    }
+    const declaration = this.#resolveTypeName(
+      unwrapped,
+      unwrapped.typeName,
+      checker,
+      context,
+    )?.declarations?.find(ts.isTypeAliasDeclaration);
+    if (
+      declaration === undefined || declaration.typeParameters !== undefined ||
+      opened.has(declaration)
+    ) {
+      return { node: unwrapped, opened };
+    }
+    return this.#openTypeNode(
+      declaration.type,
+      checker,
+      context,
+      new Set([...opened, declaration]),
+    );
+  }
+
+  /**
+   * The symbol `name` denotes as seen from the reference's scope, an import
+   * followed to what it imports: bound through the node when the checker can
+   * bind it, else resolved lexically, so an authored or imported declaration
+   * of the same name shadows a global's the way it does for the checker.
+   * (`getSymbolsInScope` lists every visible symbol, globals included, in no
+   * order that honors shadowing.)
+   */
+  #resolveTypeName(
+    typeNode: ts.TypeReferenceNode,
+    name: ts.Identifier,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+  ): ts.Symbol | undefined {
+    let symbol = checker.getSymbolAtLocation(name);
+    if (!symbol) {
+      const scope = this.#scopeSourceFile(typeNode, checker, context);
+      if (!scope) return undefined;
+      symbol = checker.resolveName(
+        name.text,
+        scope,
+        ts.SymbolFlags.Type,
+        false,
+      );
+    }
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
+      symbol = checker.getAliasedSymbol(symbol);
+    }
+    return symbol;
+  }
+
+  /**
+   * The source file whose scope a synthetic reference resolves in: the
+   * generation context's, else the one the node or its context node belongs
+   * to. A synthetic node built outside any file has none.
+   */
+  #scopeSourceFile(
+    typeNode: ts.TypeNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+  ): ts.SourceFile | undefined {
+    const checkerWithProgram = checker as ts.TypeChecker & {
+      getProgram?: () => ts.Program;
+    };
+    const sourceFromContext = context.sourceFile ??
+      (context.sourceFileName
+        ? checkerWithProgram.getProgram?.().getSourceFile(
+          context.sourceFileName,
+        )
+        : undefined);
+    return sourceFromContext ??
+      context.typeNode?.getSourceFile?.() ??
+      typeNode.getSourceFile?.();
+  }
+
+  /**
+   * Whether `name`, as seen from the reference's scope, is declared by the
+   * default library — so an authored type alias of the same name is never
+   * mistaken for the library's.
+   */
+  #isLibraryDeclaredName(
+    typeNode: ts.TypeReferenceNode,
+    name: ts.Identifier,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+  ): boolean {
+    const symbol = this.#resolveTypeName(typeNode, name, checker, context);
+    return symbol?.declarations?.some((declaration) =>
+      isDefaultLibrarySourceFile(declaration.getSourceFile(), context)
+    ) ?? false;
+  }
+
+  /**
+   * A reference to one of the default library's generic aliases, with its
+   * type arguments applied structurally. The general path resolves such a
+   * reference by name to the alias's UNINSTANTIATED declared type — a mapped
+   * type over an unbound parameter — which reads as an empty object and drops
+   * every member the arguments carried, and a cell read prints its type
+   * through `Readonly<{…}>`. Each alias is applied the way the
+   * type-based path applies it, to an inline object, to the definition a
+   * named type's reference points at (on a copy — the shared definition is
+   * left as every other consumer reads it), and to each arm of a union of
+   * them; a reference the rules cannot express (a computed key set, an
+   * unsupported arity) returns `undefined` and takes the general path.
+   */
+  #analyzeLibraryAliasReference(
+    typeNode: ts.TypeReferenceNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+  ): MutableJSONSchema | undefined {
+    if (!ts.isIdentifier(typeNode.typeName)) return undefined;
+    const name = typeNode.typeName.text;
+    if (!LIBRARY_ALIAS_NAMES.has(name)) return undefined;
+    const args = typeNode.typeArguments;
+    if (args === undefined || args.length === 0) return undefined;
+    if (
+      !this.#isLibraryDeclaredName(
+        typeNode,
+        typeNode.typeName,
+        checker,
+        context,
+      )
+    ) {
+      return undefined;
+    }
+    const first = args[0]!;
+    const second = args[1];
+    const analyze = (node: ts.TypeNode) =>
+      this.#analyzeChildNode(node, checker, context);
+    switch (name) {
+      case "Readonly":
+        return analyze(first);
+      case "Array":
+      case "ReadonlyArray":
+        return { type: "array", items: analyze(first) };
+      case "NonNullable":
+        return withoutNullish(analyze(first), context);
+      case "Partial":
+        // An array's elements count as optional, so each admits `undefined`;
+        // a tuple's do the same, every element made optional.
+        return mapArms(analyze(first), context, partialArm);
+      case "Required":
+        return this.#requiredView(first, checker, context, new Set());
+      case "Pick":
+      case "Omit": {
+        if (second === undefined) return undefined;
+        const keys = literalKeys(second);
+        if (keys === undefined) return undefined;
+        return pickedView(
+          analyze(first),
+          context,
+          name === "Pick" ? { pick: keys } : { omit: keys },
+        );
+      }
+      case "Record": {
+        if (second === undefined) return undefined;
+        const value = analyze(second);
+        if (
+          first.kind === ts.SyntaxKind.StringKeyword ||
+          first.kind === ts.SyntaxKind.NumberKeyword
+        ) {
+          return {
+            type: "object",
+            properties: {},
+            additionalProperties: value,
+          };
+        }
+        const keys = literalKeys(first);
+        if (keys === undefined) return undefined;
+        return {
+          type: "object",
+          properties: Object.fromEntries([...keys].map((key) => [key, value])),
+          required: [...keys],
+        };
+      }
+    }
+    return undefined;
   }
 
   #resolveTypeReferenceFromScope(
@@ -927,18 +2265,7 @@ export class SchemaGenerator {
       }
     }
 
-    const checkerWithProgram = checker as ts.TypeChecker & {
-      getProgram?: () => ts.Program;
-    };
-    const sourceFromContext = context.sourceFile ??
-      (context.sourceFileName
-        ? checkerWithProgram.getProgram?.().getSourceFile(
-          context.sourceFileName,
-        )
-        : undefined);
-    const scopeNode = sourceFromContext ??
-      context.typeNode?.getSourceFile?.() ??
-      typeNode.getSourceFile?.();
+    const scopeNode = this.#scopeSourceFile(typeNode, checker, context);
     if (!scopeNode) return undefined;
 
     const candidates = checker.getSymbolsInScope(

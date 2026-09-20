@@ -1,3 +1,22 @@
+/**
+ * These tests cover a running piece whose durable `patternIdentity` names an
+ * identity this runtime cannot load. The watcher sees the pointer as a change,
+ * fails the load, and logs "pattern-load-error". Left in place, the pointer
+ * would keep naming an identity no session can load, and every start of the
+ * piece by identity would fail.
+ *
+ * With by-identity recovery enabled (CFC enforcement not disabled), a
+ * DEFINITIVE load failure of the pointed-at identity while a pattern is RUNNING
+ * rolls the pointer back to the running pattern's identity, durably, so the
+ * piece converges instead of staying stranded. NOT definitive, and never rolled
+ * back: CFC-disabled probes (undefined means "probe unsupported" there), and
+ * session-synthetic keyless refs are never written durably.
+ *
+ * All synchronization goes through runner.idlePointerMaintenance() — the
+ * runner suite runs under a frozen clock (test/clock-preload.ts), so
+ * wall-clock polling cannot observe this work.
+ */
+
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
@@ -7,28 +26,6 @@ import { Runtime } from "../src/runtime.ts";
 import { getPatternIdentityRef, resolveEntryIdentity } from "../src/index.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
-
-// CT-1923 (2026-07-29 estuary): a running piece whose durable patternIdentity
-// names an identity this runtime cannot load sat stranded forever: the
-// watcher saw the pointer as a change, failed the load, logged
-// "pattern-load-error" — and left the unloadable pointer in place. Every
-// later session then started the piece by that dead pointer and rendered
-// nothing. Production shape: a nested home-section piece whose stored vintage
-// used a retired JSX element; the parent re-instantiates the CURRENT
-// sub-pattern each boot, but the durable pointer never rolls forward, so the
-// stranded state reasserts itself per session (blank Favorites/Profile).
-//
-// Desired: with by-identity recovery enabled (CFC enforcement not disabled), a
-// DEFINITIVE load failure of the pointed-at
-// identity while a pattern is RUNNING rolls the pointer back to the running
-// pattern's identity, durably. The stranded state becomes self-converging
-// instead of self-perpetuating. NOT definitive, and never rolled back:
-// CFC-disabled probes (undefined means "probe unsupported" there), and
-// session-synthetic keyless refs are never written durably.
-//
-// All synchronization goes through runner.idlePointerMaintenance() — the
-// runner suite runs under a frozen clock (test/clock-preload.ts), so
-// wall-clock polling cannot observe this work.
 
 const signer = await Identity.fromPassphrase("pattern-pointer-unloadable");
 const space = signer.did();

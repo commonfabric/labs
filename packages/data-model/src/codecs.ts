@@ -17,7 +17,7 @@
 
 import { isInstance, isObjectOrArray } from "@commonfabric/utils/types";
 
-import type { FabricValue } from "./index.ts";
+import type { FabricValue } from "@/interface.ts";
 import type { LiveEnvironment } from "./codec-interface/interface.ts";
 import { NULL_LIVE_ENVIRONMENT } from "./codec-interface/NullLiveEnvironment.ts";
 import type { CodecRegistry } from "./codec-common/CodecRegistry.ts";

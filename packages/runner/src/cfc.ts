@@ -24,7 +24,6 @@ import {
   cfcSchemaToObject,
   findCfcSchemaRefs,
   hoistCfcSchemaDefs,
-  localDefinitionName,
   resolveCfcSchemaRef,
   resolveCfcSchemaRefRoot,
   resolveCfcSchemaRefs,
@@ -35,7 +34,9 @@ import {
   externalResolutionMissCount,
   onSchemaRegistryClear,
 } from "./schema-registry.ts";
+import type { ResolvedExternalReference } from "./cfc/schema-primitives.ts";
 import { isSchemaScope, narrowerScopeCap } from "./scope.ts";
+import { declaredHandleKind as declaredHandleKindOf } from "./stream-declaration.ts";
 export {
   CFC_ATOM_TYPE,
   CFC_CONCEPT_KIND,
@@ -842,74 +843,20 @@ export class ContextualFlowControl {
   }
 
   /**
-   * The kind of handle `schema` declares at its root, read through a root
-   * `$ref` — external or into the schema's own `$defs` — and through a
-   * composition whose branches agree: `allOf` declares what any of its
-   * branches declares, and `anyOf`/`oneOf` what every branch declares, since
-   * the value may be any of them. `undefined` where nothing is declared, or
-   * where the branches disagree, or where a reference does not resolve.
-   *
-   * `root` is the document local `$ref`s resolve against. It defaults to
-   * `schema`, which a link's schema is self-contained enough for
-   * (`schemaAtPath` keeps the reachable `$defs` closure on it), and it moves
-   * to the resolved document when an external reference is followed, since
-   * the local references inside that document name its own `$defs`. A
-   * reference into a `$defs` the root does not carry declares nothing,
-   * quietly: this is asked of every position a read passes, and most carry
-   * no such closure.
-   *
-   * `active` is the descent under way. It stops a reference from being
-   * followed back into itself; a definition two sibling branches share is
-   * read once for each, since the first branch has left it by the time the
-   * second arrives.
+   * The kind of handle `schema` declares at its root: the reading in
+   * `stream-declaration.ts`, with an external reference resolved through the
+   * schema registry. `root` is the document local `$ref`s resolve against,
+   * and defaults to `schema`, which a link's schema is self-contained enough
+   * for (`schemaAtPath` keeps the reachable `$defs` closure on it).
    */
   static declaredHandleKind(
     schema: JSONSchema | undefined,
     root: JSONSchema | undefined = schema,
-    active: Set<object> = new Set(),
   ): CellKind | undefined {
-    if (!isObjectOrArray(schema) || active.has(schema)) return undefined;
-    active.add(schema);
-    try {
-      const resolved = resolveExternalRootRefForStructure(schema);
-      if (resolved !== schema) root = resolved;
-      const direct = ContextualFlowControl.getAsCellKind(
-        ContextualFlowControl.getAsCellValues(resolved).at(0),
-      );
-      if (direct !== undefined) return direct;
-      if (typeof resolved.$ref === "string") {
-        return ContextualFlowControl.declaredHandleKind(
-          localDefinition(root, resolved.$ref),
-          root,
-          active,
-        );
-      }
-      const agreed = (
-        branches: unknown,
-        every: boolean,
-      ): CellKind | undefined => {
-        if (!Array.isArray(branches) || branches.length === 0) return undefined;
-        let kind: CellKind | undefined;
-        for (const branch of branches) {
-          const declared = ContextualFlowControl.declaredHandleKind(
-            branch as JSONSchema,
-            root,
-            active,
-          );
-          if (declared === undefined) {
-            if (every) return undefined;
-            continue;
-          }
-          if (kind !== undefined && kind !== declared) return undefined;
-          kind = declared;
-        }
-        return kind;
-      };
-      return agreed(resolved.allOf, false) ?? agreed(resolved.anyOf, true) ??
-        agreed(resolved.oneOf, true);
-    } finally {
-      active.delete(schema);
-    }
+    return declaredHandleKindOf(schema, {
+      root,
+      resolveExternal: resolveExternalReferenceThroughRegistry,
+    });
   }
 
   static getAsCellScope(
@@ -984,23 +931,17 @@ export class ContextualFlowControl {
 }
 
 /**
- * The definition a `#/$defs/<name>` reference names in `root`, or `undefined`
- * for any other reference or a name `root` does not define. Looked up
- * directly rather than through {@link ContextualFlowControl.resolveSchemaRefs}
- * so that a miss stays silent.
+ * Helper for {@link ContextualFlowControl.declaredHandleKind}, which follows
+ * an external reference through the schema registry
+ * ({@link resolveExternalRootRefForStructure}). The resolved document is what
+ * the local references inside it name definitions of, so it is the root as
+ * well. A reference the registry cannot resolve declares nothing.
  */
-function localDefinition(
-  root: JSONSchema | undefined,
-  ref: string,
-): JSONSchema | undefined {
-  const name = localDefinitionName(ref);
-  if (name === undefined || !isObjectOrArray(root)) return undefined;
-  const defs = root.$defs;
-  if (!isObjectOrArray(defs) || !Object.hasOwn(defs, name)) return undefined;
-  const definition = (defs as Record<string, unknown>)[name];
-  return isObjectOrArray(definition) || typeof definition === "boolean"
-    ? definition as JSONSchema
-    : undefined;
+function resolveExternalReferenceThroughRegistry(
+  schema: JSONSchemaObj,
+): ResolvedExternalReference | undefined {
+  const resolved = resolveExternalRootRefForStructure(schema);
+  return resolved === schema ? undefined : { schema: resolved, root: resolved };
 }
 
 /**

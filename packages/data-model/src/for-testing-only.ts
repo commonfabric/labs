@@ -19,21 +19,24 @@
  * barrel, so that loading the classes constructs none of it.
  */
 
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
-import { UnknownValue } from "@/codec-common/UnknownValue.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricLink } from "@/fabric-instances/FabricLink.ts";
-import { FabricMap } from "@/fabric-instances/FabricMap.ts";
-import { FabricSet } from "@/fabric-instances/FabricSet.ts";
-import type { FabricInstanceClassesByName } from "@/fabric-instances/impl.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
-import { FabricEpochDay } from "@/fabric-primitives/FabricEpochDay.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
-import { FabricKeyPair } from "@/fabric-primitives/FabricKeyPair.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
-import { FabricUnavailable } from "@/fabric-primitives/FabricUnavailable.ts";
-import type { FabricPrimitiveClassesByName } from "@/fabric-primitives/impl.ts";
+import { ProblematicValue, UnknownValue } from "@/codec-common";
+import {
+  FabricError,
+  type FabricInstanceClassesByName,
+  FabricLink,
+  FabricMap,
+  FabricSet,
+} from "@/fabric-instances";
+import {
+  FabricBytes,
+  FabricEpochDay,
+  FabricEpochNsec,
+  FabricHash,
+  FabricKeyPair,
+  type FabricPrimitiveClassesByName,
+  FabricRegExp,
+  FabricUnavailable,
+} from "@/fabric-primitives";
 
 /** At least two makers of one kind of value. */
 type Makers<Value> = readonly [() => Value, () => Value, ...(() => Value)[]];

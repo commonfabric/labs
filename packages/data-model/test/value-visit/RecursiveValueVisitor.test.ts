@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { FabricMap } from "@/fabric-instances/FabricMap.ts";
+import { FabricMap } from "@/fabric-instances";
 import { DO_RECURSE_VALUES, RecursiveValueVisitor } from "@/value-visit";
 
 describe("RecursiveValueVisitor", () => {

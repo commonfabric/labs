@@ -1,10 +1,10 @@
 /**
- * The remedy channel a CFC refusal carries (CT-2077): not only WHAT the gate
- * refused, but WHICH of the transaction's reads carried the offending
- * confidentiality in. A refusal naming only its atoms leaves the refused party
- * with nothing to replan against; a refusal naming its inputs, and stating
- * whether those inputs account for every offending atom, is one an agent can
- * act on by dropping an argument and running again.
+ * The remedy channel a CFC refusal carries: not only WHAT the gate refused, but
+ * WHICH of the transaction's reads carried the offending confidentiality in. A
+ * refusal naming only its atoms leaves the refused party with nothing to replan
+ * against; a refusal naming its inputs, and stating whether those inputs
+ * account for every offending atom, is one an agent can act on by dropping an
+ * argument and running again.
  *
  * Three layers, because the channel breaks at any of them:
  *

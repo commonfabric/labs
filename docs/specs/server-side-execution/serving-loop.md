@@ -1550,58 +1550,61 @@ the one wake standing for it. An armed timer can be unnecessary if input wakes
 the drain first; these counters do not equate each deferral with an elapsed
 timer interval or each cycle with a durable commit.
 
-Exposed via the existing `/api/health/stats` shape, replacing v1's pool
-block: `servingLoop: { activeSpaces, waves, wavesBudgetExhausted,
-supersededWrites, authoredSeen, effectAcks, derivedCommits,
-structureLoadFailures, structureLoadDeferred, structureLoadStuck,
-structureLoadTerminal,
-structureLoadRearmed, watermarkClamped, storeReads, storeRefreshes,
-unstampedSealRefusals, foreignWriteRefusals, foreignEngineFailures,
-warmRequests,
-watermarkLag, demandArrivals, undemandedNarrowingRuns, earlyEmitRefusals,
-demand: {demandedRows, demandedInstances, demandedInstancesMax,
-demandedPairs, demandedWriters, demandedWritersMax, demandRootEnters,
-demandRootLeaves, notCurrentRearms, demandPasses, demandPassMs,
-pushGrowthWakes, watchWakes, warmWakes}, settle: {series, dropped},
-settleAdvances: {count, lastDelta, series, dropped}, events:
+Exposed via the existing `/api/health/stats` shape, replacing v1's pool block:
+`servingLoop: { activeSpaces, waves, wavesBudgetExhausted, supersededWrites,
+authoredSeen, effectAcks, derivedCommits, structureLoadFailures,
+structureLoadDeferred, structureLoadStuck, structureLoadTerminal,
+structureLoadConfirmationsSkipped, structureLoadRearmed, watermarkClamped,
+storeReads, storeRefreshes, unstampedSealRefusals, foreignWriteRefusals,
+foreignEngineFailures, warmRequests, watermarkLag, demandArrivals,
+undemandedNarrowingRuns, earlyEmitRefusals, demand: {demandedRows,
+demandedInstances, demandedInstancesMax, demandedPairs, demandedWriters,
+demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
+demandPasses, demandPassMs, pushGrowthWakes, watchWakes, warmWakes}, settle:
+{series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
 {appended, processed, coalescedPerWaveMax, skippedIdempotent,
 drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
 visibilityDeferrals, deferredRescansArmed, deferredRescansFired,
-lt1LeftoversPurged, lt1LateSealsRefused,
-orphanDeliveriesRefused, handlerNotRunDeferrals, loadParkDeferrals,
-loadParkFailures,
+lt1LeftoversPurged, lt1LateSealsRefused, orphanDeliveriesRefused,
+handlerNotRunDeferrals, loadParkDeferrals, loadParkFailures,
 deliveryDeferralsActive, deliveryFailuresActive,
 maxAccumulatedDeliveryFailureMs, deliveryFailureWakesArmed,
 deliveryFailureWakesFired, needsAttention: {total, byPhase},
-needsAttentionSealFailures, deliveryCheckpointWriteFailures,
-explicitRetries, dropped}, memo:
-{hits, misses, inflight}, outbox: {queued, completed, failed,
-budgetDeferrals}, lease:
-{held, lost}, push: {prioritizedSessions, followerSessions,
-mixedFlushes} }` (`structureLoadFailures`/`structureLoadDeferred`
-count demanded-structure loads that threw / could not land yet —
-never-a-piece id classes are EXCLUDED from piece demand and count
-nothing, RULED 2026-08-07; `structureLoadFailures` also counts a
-piece-start commit that failed AFTER its start resolved (the §3d
+needsAttentionSealFailures, deliveryCheckpointWriteFailures, explicitRetries,
+dropped}, memo: {hits, misses, inflight}, outbox: {queued, completed, failed,
+budgetDeferrals}, lease: {held, lost}, push: {prioritizedSessions,
+followerSessions, mixedFlushes} }`
+(`structureLoadFailures`/`structureLoadDeferred` count demanded-structure loads
+that threw / could not land yet — never-a-piece id classes are EXCLUDED from
+piece demand and count nothing, RULED 2026-08-07; `structureLoadFailures` also
+counts a piece-start commit that failed AFTER its start resolved (the §3d
 piece-start site's surfaced fire-and-forget failure, stage P2-F);
-`structureLoadStuck` counts roots whose CONSECUTIVE-deferral streak
-crossed the space server's stuck threshold — once per crossing, with a
-WARN naming the space and root at the crossing and at each doubling of
-the streak — so a forever-parked root (a demanded piece whose program
-docs never materialized, verification-coverage.md OW46) is a
-health-stats fact instead of an undifferentiated share of the
-per-attempt `structureLoadDeferred` aggregate; the streak clears when
-the root starts or terminalizes;
+`structureLoadStuck` counts roots whose CONSECUTIVE-deferral streak crossed the
+space server's stuck threshold — once per crossing, with a WARN naming the space
+and root at the crossing and at each doubling of the streak — so a
+forever-parked root (a demanded piece whose program docs never materialized,
+verification-coverage.md OW46) is a health-stats fact instead of an
+undifferentiated share of the per-attempt `structureLoadDeferred` aggregate; the
+streak clears when the root starts or terminalizes;
 `structureLoadTerminal`/`structureLoadRearmed` carry the demand-cycle terminal
-state. A root with no pattern metadata is confirmed by a second owning-result
-traversal, including the scoped-to-space fallback. Each traversal syncs the
-complete addresses it reads; cycle detection distinguishes scopes. Confirmation
-does not subscribe to additional addresses formed by combining observed IDs
-with other scopes. A confirmed root parks terminal, counted once, and a commit
-touching an observed document re-arms it. Admissions racing either traversal
-invalidate a no-metadata verdict when they touch an observed document; pending
-foreign novelty hidden by a sealed write also prevents terminalization. These
-invalidated attempts count as deferrals.
+state. A root with no pattern metadata is confirmed before it parks, and the
+co-hosted engine — the authority the serving replica syncs from — answers first.
+It is read at the chain termini the attempt resolved, the demanded instance's
+and the scoped-to-space fallback's alike, at the instance the replica itself
+resolves their scope to. A pattern pointer it holds at none of them is one a
+second traversal could not read either, so the attempt's verdict stands and
+`structureLoadConfirmationsSkipped` counts the traversal not taken. A pointer it
+holds means the replica read behind the store, and a terminus it cannot be
+addressed for from here — another space, a scope the tenure's session cannot
+key, a closed database — is a question it does not answer: both confirm by a
+second owning-result traversal, including the scoped-to-space fallback. Each
+traversal syncs the complete addresses it reads; cycle detection distinguishes
+scopes. Confirmation does not subscribe to additional addresses formed by
+combining observed IDs with other scopes. A confirmed root parks terminal,
+counted once, and a commit touching an observed document re-arms it. Admissions
+racing either traversal invalidate a no-metadata verdict when they touch an
+observed document; pending foreign novelty hidden by a sealed write also
+prevents terminalization. These invalidated attempts count as deferrals.
 
 The retry follows frame application within the settle loop. Its structure load
 and demanded derivations finish before the watermark covers the triggering

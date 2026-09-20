@@ -1794,7 +1794,7 @@ describe("opening a space root", () => {
     // (startEnsuredDefaultPattern -> checkAndUpdateDefaultPattern), then
     // cold-starts the piece — and `Runner.#startCore()`'s initial
     // instantiation does not run the setup phase, so the incoming pattern's
-    // { "$stream": true } markers were never materialized on the reused doc.
+    // internal cells were never materialized on the reused doc.
 
     await setupHome();
     await controller.recreateDefaultPattern({

@@ -89,6 +89,20 @@ tells a reader which group failed; a comment does not. A comment that turns out
 to describe several adjacent tests is the usual sign that a group is missing;
 see [Commenting a block](#commenting-a-block).
 
+### Each case stands on its own
+
+A case may not depend on another case in the file having run. What a case
+needs goes in the case or in a hook, and that reaches process-wide setup as
+much as it reaches a local fixture: a one-time initialization another case
+happens to trigger is setup like any other.
+
+A whole-file run passes either way, so nothing local shows the dependence.
+What shows it is a lane of a continuous-integration run, which takes part of
+a file and skips the rest, so the case whose setup came from a sibling fails
+there and nowhere else.
+[Test selection](test-selection.md#a-case-that-fails-only-when-its-siblings-do-not-run)
+holds the recipe for running one case of a file with its siblings skipped.
+
 ### Describing a class
 
 Under the `describe()` naming a class, use literally

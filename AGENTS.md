@@ -165,7 +165,8 @@ If you are developing runtime code, start with:
   servers correctly (use `dev-local` for shell, not `dev`)
 - `docs/development/TESTING.md` - Running the test suites and the general unit
   and integration test structure; hub that links the other testing docs; renamed
-  tests must be tracked in the aliases file
+  tests must be tracked in the aliases file; a lane may run a subset of a file
+  and skip the rest, so a test that leans on a sibling fails when it does
 - `docs/development/unit-test-coding-style.md` - How a unit test file is shaped:
   its location and name, the single top-level `describe()`, how an `it()`
   description is worded, `expect()` over `assert*()`, and the matcher traps that

@@ -107,6 +107,19 @@ export type ServingLoopStats = {
    * terminalizes again counts again. */
   structureLoadTerminal: number;
 
+  /** No-pattern-meta verdicts the ENGINE settled, sparing the confirming
+   * re-traversal (`SpaceServer.#confirmNoPatternMeta`): the co-hosted
+   * engine held no pattern pointer at any chain terminus the attempt
+   * resolved, so a second traversal could read none either and its
+   * per-address syncs were not issued. Counted once per verdict at the
+   * point the decision is taken — before the terminal park, which is
+   * what `structureLoadTerminal` counts, and which the
+   * confirmation-invalidated arm may pre-empt — so a root that re-arms
+   * and comes back counts again. The re-traversal still runs whenever
+   * the engine holds a pointer, cannot be addressed for a terminus, or
+   * the attempt resolved none, and those verdicts move nothing here. */
+  structureLoadConfirmationsSkipped: number;
+
   /** Terminal roots RE-ARMED by a commit touching one of their observed
    * docs (the OW19 re-arm half): the root returns to the pending set
    * and the next cycle retries its load — this is what keeps the
@@ -618,6 +631,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
   structureLoadDeferred: 0,
   structureLoadStuck: 0,
   structureLoadTerminal: 0,
+  structureLoadConfirmationsSkipped: 0,
   structureLoadRearmed: 0,
   watermarkClamped: 0,
   storeReads: 0,

@@ -2885,11 +2885,14 @@ describe("cli piece parsing", () => {
 
       try {
         const tx = runtime.edit();
-        const cell = runtime.getCell<{
-          name: string;
-          submit: { $stream: boolean };
-        }>(signer.did(), "piece-get-live-stream", undefined, tx);
-        cell.set({ name: "Ada", submit: { $stream: true } });
+        // Nothing is stored where the stream stands; the schema declares it.
+        const cell = runtime.getCell<{ name: string }>(
+          signer.did(),
+          "piece-get-live-stream",
+          undefined,
+          tx,
+        );
+        cell.set({ name: "Ada" });
         const schema = {
           type: "object",
           properties: {

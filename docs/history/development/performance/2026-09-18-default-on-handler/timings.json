@@ -1,0 +1,403 @@
+{
+  "version": 1,
+  "runtime": "Deno/2.9.4 aarch64-apple-darwin",
+  "cpu": "Apple M5",
+  "benches": [
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-74",
+      "name": "scalarKey (74 rows)",
+      "baseline": true,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 17278583.0,
+            "max": 29301625.0,
+            "avg": 23250021.0,
+            "p75": 24155167.0,
+            "p99": 29301625.0,
+            "p995": 29301625.0,
+            "p999": 29301625.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-74",
+      "name": "scalarGet (74 rows)",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 19859375.0,
+            "max": 33922917.0,
+            "avg": 25160511.0,
+            "p75": 26686541.0,
+            "p99": 33922917.0,
+            "p995": 33922917.0,
+            "p999": 33922917.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-74",
+      "name": "walk (74 rows)",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 30023375.0,
+            "max": 170244458.0,
+            "avg": 56304136.0,
+            "p75": 43519875.0,
+            "p99": 170244458.0,
+            "p995": 170244458.0,
+            "p999": 170244458.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-74",
+      "name": "mutate (74 rows)",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 14983000.0,
+            "max": 68585625.0,
+            "avg": 29339188.0,
+            "p75": 26248417.0,
+            "p99": 68585625.0,
+            "p995": 68585625.0,
+            "p999": 68585625.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-74",
+      "name": "plainScalar (74 rows)",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 18954417.0,
+            "max": 37157791.0,
+            "avg": 24154969.0,
+            "p75": 25101750.0,
+            "p99": 37157791.0,
+            "p995": 37157791.0,
+            "p999": 37157791.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-74",
+      "name": "plainWalk (74 rows)",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 29585208.0,
+            "max": 181017625.0,
+            "avg": 58633735.0,
+            "p75": 45692667.0,
+            "p99": 181017625.0,
+            "p995": 181017625.0,
+            "p999": 181017625.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-296",
+      "name": "scalarKey (296 rows)",
+      "baseline": true,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 32028542.0,
+            "max": 43894417.0,
+            "avg": 35815401.0,
+            "p75": 37348791.0,
+            "p99": 43894417.0,
+            "p995": 43894417.0,
+            "p999": 43894417.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-296",
+      "name": "scalarGet (296 rows)",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 41832625.0,
+            "max": 61257833.0,
+            "avg": 49072922.0,
+            "p75": 50476917.0,
+            "p99": 61257833.0,
+            "p995": 61257833.0,
+            "p999": 61257833.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-296",
+      "name": "walk (296 rows)",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 67449334.0,
+            "max": 278393666.0,
+            "avg": 108390704.0,
+            "p75": 101855709.0,
+            "p99": 278393666.0,
+            "p995": 278393666.0,
+            "p999": 278393666.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-296",
+      "name": "mutate (296 rows)",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 36258417.0,
+            "max": 47030833.0,
+            "avg": 41082683.0,
+            "p75": 42683959.0,
+            "p99": 47030833.0,
+            "p995": 47030833.0,
+            "p999": 47030833.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-296",
+      "name": "plainScalar (296 rows)",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 50431917.0,
+            "max": 192819458.0,
+            "avg": 82174448.0,
+            "p75": 72830500.0,
+            "p99": 192819458.0,
+            "p995": 192819458.0,
+            "p999": 192819458.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-296",
+      "name": "plainWalk (296 rows)",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 64715500.0,
+            "max": 95037708.0,
+            "avg": 85204120.0,
+            "p75": 91040917.0,
+            "p99": 95037708.0,
+            "p995": 95037708.0,
+            "p999": 95037708.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-1184",
+      "name": "scalarKey (1184 rows)",
+      "baseline": true,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 91648625.0,
+            "max": 307125416.0,
+            "avg": 130383250.0,
+            "p75": 114319375.0,
+            "p99": 307125416.0,
+            "p995": 307125416.0,
+            "p999": 307125416.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-1184",
+      "name": "scalarGet (1184 rows)",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 154476208.0,
+            "max": 218142500.0,
+            "avg": 181665719.0,
+            "p75": 204552459.0,
+            "p99": 218142500.0,
+            "p995": 218142500.0,
+            "p999": 218142500.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-1184",
+      "name": "walk (1184 rows)",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 267713875.0,
+            "max": 542800833.0,
+            "avg": 378390074.0,
+            "p75": 426763958.0,
+            "p99": 542800833.0,
+            "p995": 542800833.0,
+            "p999": 542800833.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-1184",
+      "name": "mutate (1184 rows)",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 89421084.0,
+            "max": 283479542.0,
+            "avg": 139665766.0,
+            "p75": 145852708.0,
+            "p99": 283479542.0,
+            "p995": 283479542.0,
+            "p999": 283479542.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-1184",
+      "name": "plainScalar (1184 rows)",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 148472333.0,
+            "max": 204589958.0,
+            "avg": 176394172.0,
+            "p75": 190842167.0,
+            "p99": 204589958.0,
+            "p995": 204589958.0,
+            "p999": 204589958.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    },
+    {
+      "origin": "file:///private/tmp/b13-f5-evidence/packages/runner/test/handler-dispatch-cost.bench.ts",
+      "group": "handler-dispatch-1184",
+      "name": "plainWalk (1184 rows)",
+      "baseline": false,
+      "results": [
+        {
+          "ok": {
+            "n": 8,
+            "min": 313507000.0,
+            "max": 648515583.0,
+            "avg": 373640323.0,
+            "p75": 349667666.0,
+            "p99": 648515583.0,
+            "p995": 648515583.0,
+            "p999": 648515583.0,
+            "highPrecision": true,
+            "usedExplicitTimers": true
+          }
+        }
+      ]
+    }
+  ]
+}

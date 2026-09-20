@@ -9,6 +9,25 @@ files' subject matter without being bench files themselves — the Topics browse
 measurement and the Topics board demo below are both of that kind — so that a
 reader looking for how a workload is measured finds all of it in one place.
 
+## Report the measured boundary
+
+Record the revision, resolved runtime posture, machine and tool versions, fixture
+size, and demanded outputs with the result. Report the observed sample count from
+benchmark JSON; a requested iteration count is not necessarily the number of
+samples the harness collects. Keep warmup and diagnostic invocations distinct
+from the samples included in the reported timing statistic.
+
+Name each timer's actual start and end. An explicit timer around an awaited
+operation includes call setup and promise resumption that an internal timer may
+exclude. Nested phase timers are not an additive decomposition of wall-clock
+time. Collect read accounting separately with instrumentation disabled for timing;
+stable read counts alone establish neither stable latency nor a speedup.
+
+Use repeated interleaved arms and matched fresh fixtures for comparative latency
+claims. For retention claims, warm the runtime and take repeated post-GC samples
+that separate surviving state from setup garbage; one cold-runtime heap delta
+cannot establish retained memory cost.
+
 ## The pipeline
 
 The Benchmarks workflow (`.github/workflows/benchmarks.yml`) runs every four
@@ -359,46 +378,29 @@ carrying a location the helper cannot parse still fails the measurement,
 declared or not, because that is a reading it cannot place rather than an
 absence of work.
 
-Three measurements stand behind that shape, all against a local toolshed with
-client execution. The first asked whether the absence belongs to the operation
-or to where the interval is drawn. Four boundaries, each a re-open within one
-live runtime client, on an eight-topic board with citations:
+Three measurements stand behind that shape, and
+[the baseline report](../history/development/performance/2026-09-20-topics-computation-cost-baseline.md)
+records them: a survey of four operation boundaries, a classification of the
+runs a reopen completes against first-open controls, and the outcome once the
+two refusal paths were told apart. They are trial counts from particular runs
+in a particular environment, which is why they sit in that record rather than
+here. What they establish, and what governs this series, is that a reopen's
+runs carry no source location at all rather than one the helper fails to parse
+— so the attribution check, which fails a sample only when everything it is
+given fails to parse, has nothing to refuse, while the no-runs guard does. That
+is the distinction `mayRunNothing` is scoped to.
 
-| boundary                                         | attributable runs                                       |
-| ------------------------------------------------ | ------------------------------------------------------- |
-| open a topic already opened once, from the board | none; 1 scheduler run                                   |
-| a third visit to the same topic                  | none; **0** scheduler runs                              |
-| reopen with another topic opened in between      | runs carried a read sample, but no source location      |
-| the whole round trip, topic → board → topic      | `lastActivityOf` once; the other three lifts not at all |
+Widening the interval would not recover a lift run worth having. Of those four
+boundaries only the whole round trip yields one, and for the return leg:
+measuring the return to the board on its own records that same single
+`lastActivityOf` run with the same counters, while the reopen beside it records
+none. Charging this series for a board render is what widening that far would
+do, and the `<size>` series already measures it, at a hundred topics costing an
+order of magnitude more than the reopen.
 
-Only the last yields a lift run, and for the wrong leg: measuring the return to
-the board on its own records that same single `lastActivityOf` run with the same
-counters, while the reopen beside it records none. Widening the boundary that
-far would charge this series for a board render, which the `<size>` series
-already measures and which at a hundred topics costs an order of magnitude more
-than the reopen.
-
-The second classified the runs themselves, because a reopen at first refused
-the read-accounted sample on every attempt. It refused by one of two paths: the
-attribution check, when a run keyed by the empty string was the whole
-population, on 14 of 20 trials at a hundred topics and 19 of 20 at eight; and
-the old no-runs guard on the rest, when the operation completed no run at all.
-Recording each run's raw source location across 32
-reopen trials and 16 first-open controls in the same environment: every reopen
-run that carried a read sample carried **no** source location, none carried one
-that failed to parse, and the first opens carried 416 parseable locations and
-attributed three lift runs on every one of the 16 — 260 parseable locations
-across the ten controls at a hundred topics and 156 across the six at eight. A
-first open also carries runs without a location, 216 and 126 of them, alongside
-its parseable ones. That is why the attribution check passes there and failed
-on a reopen: the check fails a sample only when everything it is given fails to
-parse, and a reopen's runs without a location were the whole population rather
-than part of it.
-
-The third is the outcome: with the two cases told apart, 20 trials of the
-hundred-topic reopen recorded 20 zeros and no refusals. Thirteen of them saw one
-run carrying no source location and seven saw none at all, which the sample
-reports as `runsWithoutSource` so that the two zeros do not print identically.
+The sample reports `runsWithoutSource` beside its zero so that a zero taken
+next to such runs does not print identically to one taken next to no runs at
+all.
 
 What does not apply to this workload is separating producer from consumer work,
 there being no lift work to separate; [the
@@ -407,7 +409,7 @@ plan](../plans/topics-computation-cost.md) records that.
 A reopen may run nothing in the worker at all, and the series declares
 `mayRunNothing` because that was observed rather than to quiet the check in
 advance: on a 100-topic board one iteration recorded a single scheduler run and
-a later one recorded none, and the third visit in the table above recorded none.
+a later one recorded none, and a third visit to one topic recorded none.
 What the interval times is the shell reaching a topic whose values are already
 computed, so the worker having nothing to do is the substance of the
 measurement. Each sample records the declaration beside its run count, so a

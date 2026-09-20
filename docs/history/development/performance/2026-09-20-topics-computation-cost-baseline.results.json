@@ -1,0 +1,4769 @@
+{
+  "status": "historical",
+  "created": "2026-09-20",
+  "purpose": "The Topics computation-cost baseline: the figures quoted in 2026-09-20-topics-computation-cost-baseline.md, each extracted from the run that produced it.",
+  "sources": {
+    "headless": {
+      "file": "2026-09-18-topics-lazy-materialization.results.json",
+      "path": "arms['lazy-materialization-on']",
+      "probeRevision": "fd9fa9a44b1d04c53cea863e5c46c48692d0da57",
+      "dirtyWorkingTree": false,
+      "mode": "lazy-materialization-on",
+      "experimental": {
+        "lazyMaterialization": true,
+        "serverExecution": false
+      },
+      "deno": {
+        "deno": "2.9.4",
+        "v8": "15.0.245.2-rusty",
+        "typescript": "6.0.3"
+      },
+      "platform": {
+        "os": "darwin",
+        "arch": "aarch64",
+        "target": "aarch64-apple-darwin"
+      },
+      "processors": 10,
+      "arguments": [
+        "--mode=lazy-materialization-on",
+        "--max-old-space-size=8192"
+      ],
+      "childV8Flags": [
+        "--expose-gc",
+        "--max-old-space-size=8192"
+      ],
+      "repeat": 1,
+      "wallClockSeconds": 1311,
+      "cases": 85,
+      "measuredCases": 59,
+      "casesByWorkload": {
+        "board": 26,
+        "topic-open": 26,
+        "all-backlinks": 26,
+        "aggregates": 7
+      },
+      "limitedSeries": [],
+      "machine": {
+        "platform": "Darwin 27.0.0 arm64",
+        "cpu": "Apple M5",
+        "logicalCpus": 10,
+        "memoryGiB": 32,
+        "runtime": "Deno 2.9.4 aarch64-apple-darwin",
+        "caveat": "The two matrix arms ran on a shared machine under unrelated Deno, Python and Xcode load, and under markedly asymmetric contention: the on arm's one-minute load had a median of 24.18 over 22 samples, the off arm's 10.24 over 26. The more contended arm is the faster one, so contention does not account for the elapsed-time difference between them; two single samples do not make a latency baseline either way. The alternating repeat subset, which the timing claims rest on, ran later at a median one-minute load of 6.54 over 16 samples, and alternates the arms so that drift falls on both.",
+        "loadAveragesDuringBatchedRepeatSubset": [
+          {
+            "at": "18:18:14",
+            "load1": 2.68,
+            "load5": 5.67,
+            "load15": 9.53
+          },
+          {
+            "at": "18:19:14",
+            "load1": 4.36,
+            "load5": 5.62,
+            "load15": 9.24
+          },
+          {
+            "at": "18:20:14",
+            "load1": 3.76,
+            "load5": 5.19,
+            "load15": 8.83
+          },
+          {
+            "at": "18:21:14",
+            "load1": 3.44,
+            "load5": 4.86,
+            "load15": 8.46
+          },
+          {
+            "at": "18:22:14",
+            "load1": 3.09,
+            "load5": 4.5,
+            "load15": 8.08
+          },
+          {
+            "at": "18:23:14",
+            "load1": 3.45,
+            "load5": 4.38,
+            "load15": 7.79
+          },
+          {
+            "at": "18:24:14",
+            "load1": 6.57,
+            "load5": 4.98,
+            "load15": 7.77
+          },
+          {
+            "at": "18:25:14",
+            "load1": 6.63,
+            "load5": 5.37,
+            "load15": 7.73
+          }
+        ],
+        "loadAveragesDuringAlternatingSubset": [
+          {
+            "at": "18:48:11",
+            "load1": 4.91,
+            "load5": 11.54,
+            "load15": 10.38
+          },
+          {
+            "at": "18:48:41",
+            "load1": 4.08,
+            "load5": 10.72,
+            "load15": 10.12
+          },
+          {
+            "at": "18:49:11",
+            "load1": 5.55,
+            "load5": 10.47,
+            "load15": 10.05
+          },
+          {
+            "at": "18:49:41",
+            "load1": 8.71,
+            "load5": 10.82,
+            "load15": 10.2
+          },
+          {
+            "at": "18:50:11",
+            "load1": 9.23,
+            "load5": 10.76,
+            "load15": 10.19
+          },
+          {
+            "at": "18:50:41",
+            "load1": 10.13,
+            "load5": 10.87,
+            "load15": 10.25
+          },
+          {
+            "at": "18:51:11",
+            "load1": 10.31,
+            "load5": 10.96,
+            "load15": 10.31
+          },
+          {
+            "at": "18:51:41",
+            "load1": 7.91,
+            "load5": 10.32,
+            "load15": 10.1
+          },
+          {
+            "at": "18:52:11",
+            "load1": 6.7,
+            "load5": 9.8,
+            "load15": 9.92
+          },
+          {
+            "at": "18:52:41",
+            "load1": 8.83,
+            "load5": 10.2,
+            "load15": 10.07
+          },
+          {
+            "at": "18:53:11",
+            "load1": 6.86,
+            "load5": 9.6,
+            "load15": 9.86
+          },
+          {
+            "at": "18:53:41",
+            "load1": 6.39,
+            "load5": 9.22,
+            "load15": 9.71
+          },
+          {
+            "at": "18:54:11",
+            "load1": 5.66,
+            "load5": 8.78,
+            "load15": 9.54
+          },
+          {
+            "at": "18:54:41",
+            "load1": 5.83,
+            "load5": 8.53,
+            "load15": 9.42
+          },
+          {
+            "at": "18:55:11",
+            "load1": 5.14,
+            "load5": 8.12,
+            "load15": 9.24
+          },
+          {
+            "at": "18:55:41",
+            "load1": 5.21,
+            "load5": 7.87,
+            "load15": 9.11
+          }
+        ],
+        "oneMinuteLoadByArm": {
+          "matrixOn": {
+            "samples": 22,
+            "min": 11.17,
+            "median": 24.18,
+            "max": 39.59
+          },
+          "matrixOff": {
+            "samples": 26,
+            "min": 6.62,
+            "median": 10.24,
+            "max": 24.24
+          },
+          "alternatingSubset": {
+            "samples": 16,
+            "min": 4.08,
+            "median": 6.54,
+            "max": 10.31
+          }
+        }
+      }
+    },
+    "browser": {
+      "file": "2026-09-19-topics-server-execution-browser-arm.results.json",
+      "path": "rounds[] where posture == 'off'",
+      "revision": "784a1e3a68f1db4b2346fca5895157ec6309eda2",
+      "machine": {
+        "logicalCpus": 10,
+        "model": "Mac17,2",
+        "os": "Darwin 27.0.0",
+        "note": "Shared machine under unrelated load throughout; see loadSeries.",
+        "browser": "Google Chrome 153, the installed browser Astral was pointed at.",
+        "sandbox": "The session was unsandboxed. Established by capability rather than by configuration: writes outside the workspace, Apple Events, the GUI launchd domain and direct network all succeeded."
+      },
+      "lazyMaterializationRecorded": false
+    },
+    "delivery": {
+      "branch": "experiment/topic-own-entry-lookup",
+      "branchHead": "9c1bc1aa33285d135de70c6a3a52db07df3987ff",
+      "runHead": "bc23e3c6d09b77e63cf2b4a6a611c9dbaade4d96",
+      "files": "experiment-output/runs/current-N<n>.result.json at the branch head",
+      "phase": "phases.start"
+    }
+  },
+  "headless": {
+    "topicOpenInitializationByTopicCount": [
+      {
+        "case": "pivot/low-degree/mentions-3/topics-4/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 77.74337500000001,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 21,
+          "linkResolutions": 34,
+          "distinctDocuments": 11,
+          "registeredDependencies": 53,
+          "maxRunProxyAccesses": 21
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 15,
+          "linkResolutions": 20,
+          "distinctDocuments": 12,
+          "registeredDependencies": 46,
+          "maxRunProxyAccesses": 15
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 26,
+          "distinctDocuments": 25,
+          "registeredDependencies": 90,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 43,
+          "linkResolutions": 85,
+          "distinctDocuments": 54,
+          "registeredDependencies": 209,
+          "maxRunProxyAccesses": 21
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 43,
+          "linkResolutions": 87
+        },
+        "graph": {
+          "nodes": 32,
+          "edges": 51
+        },
+        "fixture": {
+          "topicCount": 4,
+          "mentions": {
+            "shape": "low-degree",
+            "perSource": 3
+          },
+          "mentionEntries": 12,
+          "focusMentioners": 3,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/low-degree/mentions-4/topics-32/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 216.02041700000018,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 193,
+          "linkResolutions": 322,
+          "distinctDocuments": 67,
+          "registeredDependencies": 393,
+          "maxRunProxyAccesses": 193
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 72,
+          "linkResolutions": 105,
+          "distinctDocuments": 68,
+          "registeredDependencies": 244,
+          "maxRunProxyAccesses": 72
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 199,
+          "distinctDocuments": 82,
+          "registeredDependencies": 523,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 272,
+          "linkResolutions": 631,
+          "distinctDocuments": 223,
+          "registeredDependencies": 1180,
+          "maxRunProxyAccesses": 193
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 272,
+          "linkResolutions": 633
+        },
+        "graph": {
+          "nodes": 88,
+          "edges": 220
+        },
+        "fixture": {
+          "topicCount": 32,
+          "mentions": {
+            "shape": "low-degree",
+            "perSource": 4
+          },
+          "mentionEntries": 128,
+          "focusMentioners": 4,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/low-degree/mentions-4/topics-128/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 662.2347910000003,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 769,
+          "linkResolutions": 1282,
+          "distinctDocuments": 259,
+          "registeredDependencies": 1545,
+          "maxRunProxyAccesses": 769
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 264,
+          "linkResolutions": 393,
+          "distinctDocuments": 260,
+          "registeredDependencies": 916,
+          "maxRunProxyAccesses": 264
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 775,
+          "distinctDocuments": 274,
+          "registeredDependencies": 1963,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 1040,
+          "linkResolutions": 2455,
+          "distinctDocuments": 799,
+          "registeredDependencies": 4444,
+          "maxRunProxyAccesses": 769
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 1040,
+          "linkResolutions": 2457
+        },
+        "graph": {
+          "nodes": 280,
+          "edges": 796
+        },
+        "fixture": {
+          "topicCount": 128,
+          "mentions": {
+            "shape": "low-degree",
+            "perSource": 4
+          },
+          "mentionEntries": 512,
+          "focusMentioners": 4,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/low-degree/mentions-4/topics-512/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 4327.775707999999,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 3073,
+          "linkResolutions": 5122,
+          "distinctDocuments": 1027,
+          "registeredDependencies": 6153,
+          "maxRunProxyAccesses": 3073
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 1032,
+          "linkResolutions": 1545,
+          "distinctDocuments": 1028,
+          "registeredDependencies": 3604,
+          "maxRunProxyAccesses": 1032
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 3079,
+          "distinctDocuments": 1042,
+          "registeredDependencies": 7723,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 4112,
+          "linkResolutions": 9751,
+          "distinctDocuments": 3103,
+          "registeredDependencies": 17500,
+          "maxRunProxyAccesses": 3073
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 4112,
+          "linkResolutions": 9753
+        },
+        "graph": {
+          "nodes": 1048,
+          "edges": 3100
+        },
+        "fixture": {
+          "topicCount": 512,
+          "mentions": {
+            "shape": "low-degree",
+            "perSource": 4
+          },
+          "mentionEntries": 2048,
+          "focusMentioners": 4,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/high-degree/mentions-4/topics-32/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 164.7389579999999,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 193,
+          "linkResolutions": 322,
+          "distinctDocuments": 67,
+          "registeredDependencies": 393,
+          "maxRunProxyAccesses": 193
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 99,
+          "linkResolutions": 132,
+          "distinctDocuments": 68,
+          "registeredDependencies": 298,
+          "maxRunProxyAccesses": 99
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 226,
+          "distinctDocuments": 109,
+          "registeredDependencies": 658,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 299,
+          "linkResolutions": 685,
+          "distinctDocuments": 250,
+          "registeredDependencies": 1369,
+          "maxRunProxyAccesses": 193
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 299,
+          "linkResolutions": 687
+        },
+        "graph": {
+          "nodes": 88,
+          "edges": 247
+        },
+        "fixture": {
+          "topicCount": 32,
+          "mentions": {
+            "shape": "high-degree",
+            "perSource": 4
+          },
+          "mentionEntries": 128,
+          "focusMentioners": 31,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/high-degree/mentions-4/topics-128/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 730.7064169999999,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 769,
+          "linkResolutions": 1282,
+          "distinctDocuments": 259,
+          "registeredDependencies": 1545,
+          "maxRunProxyAccesses": 769
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 387,
+          "linkResolutions": 516,
+          "distinctDocuments": 260,
+          "registeredDependencies": 1162,
+          "maxRunProxyAccesses": 387
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 898,
+          "distinctDocuments": 397,
+          "registeredDependencies": 2578,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 1163,
+          "linkResolutions": 2701,
+          "distinctDocuments": 922,
+          "registeredDependencies": 5305,
+          "maxRunProxyAccesses": 769
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 1163,
+          "linkResolutions": 2703
+        },
+        "graph": {
+          "nodes": 280,
+          "edges": 919
+        },
+        "fixture": {
+          "topicCount": 128,
+          "mentions": {
+            "shape": "high-degree",
+            "perSource": 4
+          },
+          "mentionEntries": 512,
+          "focusMentioners": 127,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/high-degree/mentions-4/topics-512/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 3474.3891249999997,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 3073,
+          "linkResolutions": 5122,
+          "distinctDocuments": 1027,
+          "registeredDependencies": 6153,
+          "maxRunProxyAccesses": 3073
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 1539,
+          "linkResolutions": 2052,
+          "distinctDocuments": 1028,
+          "registeredDependencies": 4618,
+          "maxRunProxyAccesses": 1539
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 3586,
+          "distinctDocuments": 1549,
+          "registeredDependencies": 10258,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 4619,
+          "linkResolutions": 10765,
+          "distinctDocuments": 3610,
+          "registeredDependencies": 21049,
+          "maxRunProxyAccesses": 3073
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 4619,
+          "linkResolutions": 10767
+        },
+        "graph": {
+          "nodes": 1048,
+          "edges": 3607
+        },
+        "fixture": {
+          "topicCount": 512,
+          "mentions": {
+            "shape": "high-degree",
+            "perSource": 4
+          },
+          "mentionEntries": 2048,
+          "focusMentioners": 511,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/single-bucket/mentions-4/topics-32/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 107.38000000000011,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 189,
+          "linkResolutions": 314,
+          "distinctDocuments": 67,
+          "registeredDependencies": 389,
+          "maxRunProxyAccesses": 189
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 99,
+          "linkResolutions": 132,
+          "distinctDocuments": 68,
+          "registeredDependencies": 298,
+          "maxRunProxyAccesses": 99
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 129,
+          "distinctDocuments": 109,
+          "registeredDependencies": 464,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 295,
+          "linkResolutions": 580,
+          "distinctDocuments": 250,
+          "registeredDependencies": 1171,
+          "maxRunProxyAccesses": 189
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 295,
+          "linkResolutions": 582
+        },
+        "graph": {
+          "nodes": 88,
+          "edges": 247
+        },
+        "fixture": {
+          "topicCount": 32,
+          "mentions": {
+            "shape": "single-bucket",
+            "perSource": 4
+          },
+          "mentionEntries": 124,
+          "focusMentioners": 31,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/single-bucket/mentions-4/topics-128/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 305.23808299999996,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 765,
+          "linkResolutions": 1274,
+          "distinctDocuments": 259,
+          "registeredDependencies": 1541,
+          "maxRunProxyAccesses": 765
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 387,
+          "linkResolutions": 516,
+          "distinctDocuments": 260,
+          "registeredDependencies": 1162,
+          "maxRunProxyAccesses": 387
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 513,
+          "distinctDocuments": 397,
+          "registeredDependencies": 1808,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 1159,
+          "linkResolutions": 2308,
+          "distinctDocuments": 922,
+          "registeredDependencies": 4531,
+          "maxRunProxyAccesses": 765
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 1159,
+          "linkResolutions": 2310
+        },
+        "graph": {
+          "nodes": 280,
+          "edges": 919
+        },
+        "fixture": {
+          "topicCount": 128,
+          "mentions": {
+            "shape": "single-bucket",
+            "perSource": 4
+          },
+          "mentionEntries": 508,
+          "focusMentioners": 127,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/single-bucket/mentions-4/topics-512/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 1227.210083,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 3069,
+          "linkResolutions": 5114,
+          "distinctDocuments": 1027,
+          "registeredDependencies": 6149,
+          "maxRunProxyAccesses": 3069
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 1539,
+          "linkResolutions": 2052,
+          "distinctDocuments": 1028,
+          "registeredDependencies": 4618,
+          "maxRunProxyAccesses": 1539
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 2049,
+          "distinctDocuments": 1549,
+          "registeredDependencies": 7184,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 4615,
+          "linkResolutions": 9220,
+          "distinctDocuments": 3610,
+          "registeredDependencies": 17971,
+          "maxRunProxyAccesses": 3069
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 4615,
+          "linkResolutions": 9222
+        },
+        "graph": {
+          "nodes": 1048,
+          "edges": 3607
+        },
+        "fixture": {
+          "topicCount": 512,
+          "mentions": {
+            "shape": "single-bucket",
+            "perSource": 4
+          },
+          "mentionEntries": 2044,
+          "focusMentioners": 511,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      }
+    ],
+    "topicOpenInitializationByMentionDegree128": [
+      {
+        "case": "pivot/none/mentions-0/topics-128/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 151.1361669999999,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 257,
+          "linkResolutions": 258,
+          "distinctDocuments": 259,
+          "registeredDependencies": 1033,
+          "maxRunProxyAccesses": 257
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 260,
+          "linkResolutions": 389,
+          "distinctDocuments": 260,
+          "registeredDependencies": 907,
+          "maxRunProxyAccesses": 260
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 259,
+          "distinctDocuments": 270,
+          "registeredDependencies": 919,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 524,
+          "linkResolutions": 911,
+          "distinctDocuments": 795,
+          "registeredDependencies": 2879,
+          "maxRunProxyAccesses": 260
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 524,
+          "linkResolutions": 913
+        },
+        "graph": {
+          "nodes": 280,
+          "edges": 792
+        },
+        "fixture": {
+          "topicCount": 128,
+          "mentions": {
+            "shape": "none"
+          },
+          "mentionEntries": 0,
+          "focusMentioners": 0,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/low-degree/mentions-1/topics-128/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 282.5415830000002,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 385,
+          "linkResolutions": 514,
+          "distinctDocuments": 259,
+          "registeredDependencies": 1161,
+          "maxRunProxyAccesses": 385
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 261,
+          "linkResolutions": 390,
+          "distinctDocuments": 260,
+          "registeredDependencies": 910,
+          "maxRunProxyAccesses": 261
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 388,
+          "distinctDocuments": 271,
+          "registeredDependencies": 1180,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 653,
+          "linkResolutions": 1297,
+          "distinctDocuments": 796,
+          "registeredDependencies": 3271,
+          "maxRunProxyAccesses": 385
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 653,
+          "linkResolutions": 1299
+        },
+        "graph": {
+          "nodes": 280,
+          "edges": 793
+        },
+        "fixture": {
+          "topicCount": 128,
+          "mentions": {
+            "shape": "low-degree",
+            "perSource": 1
+          },
+          "mentionEntries": 128,
+          "focusMentioners": 1,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/low-degree/mentions-4/topics-128/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 662.2347910000003,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 769,
+          "linkResolutions": 1282,
+          "distinctDocuments": 259,
+          "registeredDependencies": 1545,
+          "maxRunProxyAccesses": 769
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 264,
+          "linkResolutions": 393,
+          "distinctDocuments": 260,
+          "registeredDependencies": 916,
+          "maxRunProxyAccesses": 264
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 775,
+          "distinctDocuments": 274,
+          "registeredDependencies": 1963,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 1040,
+          "linkResolutions": 2455,
+          "distinctDocuments": 799,
+          "registeredDependencies": 4444,
+          "maxRunProxyAccesses": 769
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 1040,
+          "linkResolutions": 2457
+        },
+        "graph": {
+          "nodes": 280,
+          "edges": 796
+        },
+        "fixture": {
+          "topicCount": 128,
+          "mentions": {
+            "shape": "low-degree",
+            "perSource": 4
+          },
+          "mentionEntries": 512,
+          "focusMentioners": 4,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/low-degree/mentions-16/topics-128/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 1628.4122910000006,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 2305,
+          "linkResolutions": 4354,
+          "distinctDocuments": 259,
+          "registeredDependencies": 3081,
+          "maxRunProxyAccesses": 2305
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 276,
+          "linkResolutions": 405,
+          "distinctDocuments": 260,
+          "registeredDependencies": 940,
+          "maxRunProxyAccesses": 276
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 2323,
+          "distinctDocuments": 286,
+          "registeredDependencies": 5095,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 2588,
+          "linkResolutions": 7087,
+          "distinctDocuments": 811,
+          "registeredDependencies": 9136,
+          "maxRunProxyAccesses": 2305
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 2588,
+          "linkResolutions": 7089
+        },
+        "graph": {
+          "nodes": 280,
+          "edges": 808
+        },
+        "fixture": {
+          "topicCount": 128,
+          "mentions": {
+            "shape": "low-degree",
+            "perSource": 16
+          },
+          "mentionEntries": 2048,
+          "focusMentioners": 16,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/high-degree/mentions-1/topics-128/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 197.64662500000009,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 385,
+          "linkResolutions": 514,
+          "distinctDocuments": 259,
+          "registeredDependencies": 1161,
+          "maxRunProxyAccesses": 385
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 387,
+          "linkResolutions": 516,
+          "distinctDocuments": 260,
+          "registeredDependencies": 1162,
+          "maxRunProxyAccesses": 387
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 514,
+          "distinctDocuments": 397,
+          "registeredDependencies": 1810,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 779,
+          "linkResolutions": 1549,
+          "distinctDocuments": 922,
+          "registeredDependencies": 4153,
+          "maxRunProxyAccesses": 387
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 779,
+          "linkResolutions": 1551
+        },
+        "graph": {
+          "nodes": 280,
+          "edges": 919
+        },
+        "fixture": {
+          "topicCount": 128,
+          "mentions": {
+            "shape": "high-degree",
+            "perSource": 1
+          },
+          "mentionEntries": 128,
+          "focusMentioners": 127,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/high-degree/mentions-4/topics-128/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 730.7064169999999,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 769,
+          "linkResolutions": 1282,
+          "distinctDocuments": 259,
+          "registeredDependencies": 1545,
+          "maxRunProxyAccesses": 769
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 387,
+          "linkResolutions": 516,
+          "distinctDocuments": 260,
+          "registeredDependencies": 1162,
+          "maxRunProxyAccesses": 387
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 898,
+          "distinctDocuments": 397,
+          "registeredDependencies": 2578,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 1163,
+          "linkResolutions": 2701,
+          "distinctDocuments": 922,
+          "registeredDependencies": 5305,
+          "maxRunProxyAccesses": 769
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 1163,
+          "linkResolutions": 2703
+        },
+        "graph": {
+          "nodes": 280,
+          "edges": 919
+        },
+        "fixture": {
+          "topicCount": 128,
+          "mentions": {
+            "shape": "high-degree",
+            "perSource": 4
+          },
+          "mentionEntries": 512,
+          "focusMentioners": 127,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/high-degree/mentions-16/topics-128/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 881.1755000000003,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 2305,
+          "linkResolutions": 4354,
+          "distinctDocuments": 259,
+          "registeredDependencies": 3081,
+          "maxRunProxyAccesses": 2305
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 387,
+          "linkResolutions": 516,
+          "distinctDocuments": 260,
+          "registeredDependencies": 1162,
+          "maxRunProxyAccesses": 387
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 2434,
+          "distinctDocuments": 397,
+          "registeredDependencies": 5650,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 2699,
+          "linkResolutions": 7309,
+          "distinctDocuments": 922,
+          "registeredDependencies": 9913,
+          "maxRunProxyAccesses": 2305
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 2699,
+          "linkResolutions": 7311
+        },
+        "graph": {
+          "nodes": 280,
+          "edges": 919
+        },
+        "fixture": {
+          "topicCount": 128,
+          "mentions": {
+            "shape": "high-degree",
+            "perSource": 16
+          },
+          "mentionEntries": 2048,
+          "focusMentioners": 127,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/single-bucket/mentions-1/topics-128/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 200.30341700000008,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 384,
+          "linkResolutions": 512,
+          "distinctDocuments": 259,
+          "registeredDependencies": 1160,
+          "maxRunProxyAccesses": 384
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 387,
+          "linkResolutions": 516,
+          "distinctDocuments": 260,
+          "registeredDependencies": 1162,
+          "maxRunProxyAccesses": 387
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 513,
+          "distinctDocuments": 397,
+          "registeredDependencies": 1808,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 778,
+          "linkResolutions": 1546,
+          "distinctDocuments": 922,
+          "registeredDependencies": 4150,
+          "maxRunProxyAccesses": 387
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 778,
+          "linkResolutions": 1548
+        },
+        "graph": {
+          "nodes": 280,
+          "edges": 919
+        },
+        "fixture": {
+          "topicCount": 128,
+          "mentions": {
+            "shape": "single-bucket",
+            "perSource": 1
+          },
+          "mentionEntries": 127,
+          "focusMentioners": 127,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/single-bucket/mentions-4/topics-128/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 305.23808299999996,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 765,
+          "linkResolutions": 1274,
+          "distinctDocuments": 259,
+          "registeredDependencies": 1541,
+          "maxRunProxyAccesses": 765
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 387,
+          "linkResolutions": 516,
+          "distinctDocuments": 260,
+          "registeredDependencies": 1162,
+          "maxRunProxyAccesses": 387
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 513,
+          "distinctDocuments": 397,
+          "registeredDependencies": 1808,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 1159,
+          "linkResolutions": 2308,
+          "distinctDocuments": 922,
+          "registeredDependencies": 4531,
+          "maxRunProxyAccesses": 765
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 1159,
+          "linkResolutions": 2310
+        },
+        "graph": {
+          "nodes": 280,
+          "edges": 919
+        },
+        "fixture": {
+          "topicCount": 128,
+          "mentions": {
+            "shape": "single-bucket",
+            "perSource": 4
+          },
+          "mentionEntries": 508,
+          "focusMentioners": 127,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/single-bucket/mentions-16/topics-128/topic-open",
+        "phase": "initialization",
+        "elapsedMs": 366.78745899999967,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 2289,
+          "linkResolutions": 4322,
+          "distinctDocuments": 259,
+          "registeredDependencies": 3065,
+          "maxRunProxyAccesses": 2289
+        },
+        "backlinksOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 387,
+          "linkResolutions": 516,
+          "distinctDocuments": 260,
+          "registeredDependencies": 1162,
+          "maxRunProxyAccesses": 387
+        },
+        "presentCommentCountOf": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 7,
+          "linkResolutions": 5,
+          "distinctDocuments": 6,
+          "registeredDependencies": 20,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 0,
+          "linkResolutions": 513,
+          "distinctDocuments": 397,
+          "registeredDependencies": 1808,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 9,
+          "actions": 9,
+          "proxyAccesses": 2683,
+          "linkResolutions": 5356,
+          "distinctDocuments": 922,
+          "registeredDependencies": 6055,
+          "maxRunProxyAccesses": 2289
+        },
+        "attemptTotal": {
+          "attempts": 10,
+          "proxyAccesses": 2683,
+          "linkResolutions": 5358
+        },
+        "graph": {
+          "nodes": 280,
+          "edges": 919
+        },
+        "fixture": {
+          "topicCount": 128,
+          "mentions": {
+            "shape": "single-bucket",
+            "perSource": 16
+          },
+          "mentionEntries": 2032,
+          "focusMentioners": 127,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      }
+    ],
+    "allBacklinksInitialization": [
+      {
+        "case": "pivot/low-degree/mentions-4/topics-32/all-backlinks",
+        "phase": "initialization",
+        "elapsedMs": 488.55733299999974,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 193,
+          "linkResolutions": 322,
+          "distinctDocuments": 67,
+          "registeredDependencies": 393,
+          "maxRunProxyAccesses": 193
+        },
+        "backlinksOf": {
+          "runs": 32,
+          "actions": 32,
+          "proxyAccesses": 2304,
+          "linkResolutions": 3360,
+          "distinctDocuments": 2176,
+          "registeredDependencies": 7808,
+          "maxRunProxyAccesses": 72
+        },
+        "presentCommentCountOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 66,
+          "actions": 66,
+          "proxyAccesses": 0,
+          "linkResolutions": 353,
+          "distinctDocuments": 358,
+          "registeredDependencies": 1385,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 99,
+          "actions": 99,
+          "proxyAccesses": 2497,
+          "linkResolutions": 4035,
+          "distinctDocuments": 2601,
+          "registeredDependencies": 9586,
+          "maxRunProxyAccesses": 193
+        },
+        "attemptTotal": {
+          "attempts": 100,
+          "proxyAccesses": 2497,
+          "linkResolutions": 4099
+        },
+        "graph": {
+          "nodes": 235,
+          "edges": 2568
+        },
+        "fixture": {
+          "topicCount": 32,
+          "mentions": {
+            "shape": "low-degree",
+            "perSource": 4
+          },
+          "mentionEntries": 128,
+          "focusMentioners": 4,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/low-degree/mentions-4/topics-128/all-backlinks",
+        "phase": "initialization",
+        "elapsedMs": 5071.116917000001,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 769,
+          "linkResolutions": 1282,
+          "distinctDocuments": 259,
+          "registeredDependencies": 1545,
+          "maxRunProxyAccesses": 769
+        },
+        "backlinksOf": {
+          "runs": 128,
+          "actions": 128,
+          "proxyAccesses": 33792,
+          "linkResolutions": 50304,
+          "distinctDocuments": 33280,
+          "registeredDependencies": 117248,
+          "maxRunProxyAccesses": 264
+        },
+        "presentCommentCountOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 258,
+          "actions": 258,
+          "proxyAccesses": 0,
+          "linkResolutions": 1409,
+          "distinctDocuments": 1414,
+          "registeredDependencies": 5513,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 387,
+          "actions": 387,
+          "proxyAccesses": 34561,
+          "linkResolutions": 52995,
+          "distinctDocuments": 34953,
+          "registeredDependencies": 124306,
+          "maxRunProxyAccesses": 769
+        },
+        "attemptTotal": {
+          "attempts": 388,
+          "proxyAccesses": 34561,
+          "linkResolutions": 53251
+        },
+        "graph": {
+          "nodes": 907,
+          "edges": 34824
+        },
+        "fixture": {
+          "topicCount": 128,
+          "mentions": {
+            "shape": "low-degree",
+            "perSource": 4
+          },
+          "mentionEntries": 512,
+          "focusMentioners": 4,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/low-degree/mentions-4/topics-512/all-backlinks",
+        "phase": "initialization",
+        "elapsedMs": 94931.495584,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 3073,
+          "linkResolutions": 5122,
+          "distinctDocuments": 1027,
+          "registeredDependencies": 6153,
+          "maxRunProxyAccesses": 3073
+        },
+        "backlinksOf": {
+          "runs": 512,
+          "actions": 512,
+          "proxyAccesses": 528384,
+          "linkResolutions": 791040,
+          "distinctDocuments": 526336,
+          "registeredDependencies": 1845248,
+          "maxRunProxyAccesses": 1032
+        },
+        "presentCommentCountOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 1026,
+          "actions": 1026,
+          "proxyAccesses": 0,
+          "linkResolutions": 5633,
+          "distinctDocuments": 5638,
+          "registeredDependencies": 22025,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 1539,
+          "actions": 1539,
+          "proxyAccesses": 531457,
+          "linkResolutions": 801795,
+          "distinctDocuments": 533001,
+          "registeredDependencies": 1873426,
+          "maxRunProxyAccesses": 3073
+        },
+        "attemptTotal": {
+          "attempts": 1540,
+          "proxyAccesses": 531457,
+          "linkResolutions": 802819
+        },
+        "graph": {
+          "nodes": 3595,
+          "edges": 532488
+        },
+        "fixture": {
+          "topicCount": 512,
+          "mentions": {
+            "shape": "low-degree",
+            "perSource": 4
+          },
+          "mentionEntries": 2048,
+          "focusMentioners": 4,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/high-degree/mentions-4/topics-32/all-backlinks",
+        "phase": "initialization",
+        "elapsedMs": 693.8967079999998,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 193,
+          "linkResolutions": 322,
+          "distinctDocuments": 67,
+          "registeredDependencies": 393,
+          "maxRunProxyAccesses": 193
+        },
+        "backlinksOf": {
+          "runs": 32,
+          "actions": 32,
+          "proxyAccesses": 2304,
+          "linkResolutions": 3360,
+          "distinctDocuments": 2176,
+          "registeredDependencies": 7781,
+          "maxRunProxyAccesses": 99
+        },
+        "presentCommentCountOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 66,
+          "actions": 66,
+          "proxyAccesses": 0,
+          "linkResolutions": 353,
+          "distinctDocuments": 358,
+          "registeredDependencies": 1385,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 99,
+          "actions": 99,
+          "proxyAccesses": 2497,
+          "linkResolutions": 4035,
+          "distinctDocuments": 2601,
+          "registeredDependencies": 9559,
+          "maxRunProxyAccesses": 193
+        },
+        "attemptTotal": {
+          "attempts": 100,
+          "proxyAccesses": 2497,
+          "linkResolutions": 4099
+        },
+        "graph": {
+          "nodes": 235,
+          "edges": 2568
+        },
+        "fixture": {
+          "topicCount": 32,
+          "mentions": {
+            "shape": "high-degree",
+            "perSource": 4
+          },
+          "mentionEntries": 128,
+          "focusMentioners": 31,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/high-degree/mentions-4/topics-128/all-backlinks",
+        "phase": "initialization",
+        "elapsedMs": 4229.084,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 769,
+          "linkResolutions": 1282,
+          "distinctDocuments": 259,
+          "registeredDependencies": 1545,
+          "maxRunProxyAccesses": 769
+        },
+        "backlinksOf": {
+          "runs": 128,
+          "actions": 128,
+          "proxyAccesses": 33792,
+          "linkResolutions": 50304,
+          "distinctDocuments": 33280,
+          "registeredDependencies": 117125,
+          "maxRunProxyAccesses": 387
+        },
+        "presentCommentCountOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 258,
+          "actions": 258,
+          "proxyAccesses": 0,
+          "linkResolutions": 1409,
+          "distinctDocuments": 1414,
+          "registeredDependencies": 5513,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 387,
+          "actions": 387,
+          "proxyAccesses": 34561,
+          "linkResolutions": 52995,
+          "distinctDocuments": 34953,
+          "registeredDependencies": 124183,
+          "maxRunProxyAccesses": 769
+        },
+        "attemptTotal": {
+          "attempts": 388,
+          "proxyAccesses": 34561,
+          "linkResolutions": 53251
+        },
+        "graph": {
+          "nodes": 907,
+          "edges": 34824
+        },
+        "fixture": {
+          "topicCount": 128,
+          "mentions": {
+            "shape": "high-degree",
+            "perSource": 4
+          },
+          "mentionEntries": 512,
+          "focusMentioners": 127,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/high-degree/mentions-4/topics-512/all-backlinks",
+        "phase": "initialization",
+        "elapsedMs": 65126.163875000006,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 3073,
+          "linkResolutions": 5122,
+          "distinctDocuments": 1027,
+          "registeredDependencies": 6153,
+          "maxRunProxyAccesses": 3073
+        },
+        "backlinksOf": {
+          "runs": 512,
+          "actions": 512,
+          "proxyAccesses": 528384,
+          "linkResolutions": 791040,
+          "distinctDocuments": 526336,
+          "registeredDependencies": 1844741,
+          "maxRunProxyAccesses": 1539
+        },
+        "presentCommentCountOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 1026,
+          "actions": 1026,
+          "proxyAccesses": 0,
+          "linkResolutions": 5633,
+          "distinctDocuments": 5638,
+          "registeredDependencies": 22025,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 1539,
+          "actions": 1539,
+          "proxyAccesses": 531457,
+          "linkResolutions": 801795,
+          "distinctDocuments": 533001,
+          "registeredDependencies": 1872919,
+          "maxRunProxyAccesses": 3073
+        },
+        "attemptTotal": {
+          "attempts": 1540,
+          "proxyAccesses": 531457,
+          "linkResolutions": 802819
+        },
+        "graph": {
+          "nodes": 3595,
+          "edges": 532488
+        },
+        "fixture": {
+          "topicCount": 512,
+          "mentions": {
+            "shape": "high-degree",
+            "perSource": 4
+          },
+          "mentionEntries": 2048,
+          "focusMentioners": 511,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/single-bucket/mentions-4/topics-32/all-backlinks",
+        "phase": "initialization",
+        "elapsedMs": 308.6788749999996,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 189,
+          "linkResolutions": 314,
+          "distinctDocuments": 67,
+          "registeredDependencies": 389,
+          "maxRunProxyAccesses": 189
+        },
+        "backlinksOf": {
+          "runs": 32,
+          "actions": 32,
+          "proxyAccesses": 2207,
+          "linkResolutions": 3263,
+          "distinctDocuments": 2176,
+          "registeredDependencies": 7583,
+          "maxRunProxyAccesses": 99
+        },
+        "presentCommentCountOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 66,
+          "actions": 66,
+          "proxyAccesses": 0,
+          "linkResolutions": 159,
+          "distinctDocuments": 261,
+          "registeredDependencies": 706,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 99,
+          "actions": 99,
+          "proxyAccesses": 2396,
+          "linkResolutions": 3736,
+          "distinctDocuments": 2504,
+          "registeredDependencies": 8678,
+          "maxRunProxyAccesses": 189
+        },
+        "attemptTotal": {
+          "attempts": 100,
+          "proxyAccesses": 2396,
+          "linkResolutions": 3800
+        },
+        "graph": {
+          "nodes": 235,
+          "edges": 2471
+        },
+        "fixture": {
+          "topicCount": 32,
+          "mentions": {
+            "shape": "single-bucket",
+            "perSource": 4
+          },
+          "mentionEntries": 124,
+          "focusMentioners": 31,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/single-bucket/mentions-4/topics-128/all-backlinks",
+        "phase": "initialization",
+        "elapsedMs": 2417.415292,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 765,
+          "linkResolutions": 1274,
+          "distinctDocuments": 259,
+          "registeredDependencies": 1541,
+          "maxRunProxyAccesses": 765
+        },
+        "backlinksOf": {
+          "runs": 128,
+          "actions": 128,
+          "proxyAccesses": 33407,
+          "linkResolutions": 49919,
+          "distinctDocuments": 33280,
+          "registeredDependencies": 116351,
+          "maxRunProxyAccesses": 387
+        },
+        "presentCommentCountOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 258,
+          "actions": 258,
+          "proxyAccesses": 0,
+          "linkResolutions": 639,
+          "distinctDocuments": 1029,
+          "registeredDependencies": 2818,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 387,
+          "actions": 387,
+          "proxyAccesses": 34172,
+          "linkResolutions": 51832,
+          "distinctDocuments": 34568,
+          "registeredDependencies": 120710,
+          "maxRunProxyAccesses": 765
+        },
+        "attemptTotal": {
+          "attempts": 388,
+          "proxyAccesses": 34172,
+          "linkResolutions": 52088
+        },
+        "graph": {
+          "nodes": 907,
+          "edges": 34439
+        },
+        "fixture": {
+          "topicCount": 128,
+          "mentions": {
+            "shape": "single-bucket",
+            "perSource": 4
+          },
+          "mentionEntries": 508,
+          "focusMentioners": 127,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "pivot/single-bucket/mentions-4/topics-512/all-backlinks",
+        "phase": "initialization",
+        "elapsedMs": 39063.889375,
+        "crossrefTable": {
+          "runs": 1,
+          "actions": 1,
+          "proxyAccesses": 3069,
+          "linkResolutions": 5114,
+          "distinctDocuments": 1027,
+          "registeredDependencies": 6149,
+          "maxRunProxyAccesses": 3069
+        },
+        "backlinksOf": {
+          "runs": 512,
+          "actions": 512,
+          "proxyAccesses": 526847,
+          "linkResolutions": 789503,
+          "distinctDocuments": 526336,
+          "registeredDependencies": 1841663,
+          "maxRunProxyAccesses": 1539
+        },
+        "presentCommentCountOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "lastActivityOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "other": {
+          "runs": 1026,
+          "actions": 1026,
+          "proxyAccesses": 0,
+          "linkResolutions": 2559,
+          "distinctDocuments": 4101,
+          "registeredDependencies": 11266,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 1539,
+          "actions": 1539,
+          "proxyAccesses": 529916,
+          "linkResolutions": 797176,
+          "distinctDocuments": 531464,
+          "registeredDependencies": 1859078,
+          "maxRunProxyAccesses": 3069
+        },
+        "attemptTotal": {
+          "attempts": 1540,
+          "proxyAccesses": 529916,
+          "linkResolutions": 798200
+        },
+        "graph": {
+          "nodes": 3595,
+          "edges": 530951
+        },
+        "fixture": {
+          "topicCount": 512,
+          "mentions": {
+            "shape": "single-bucket",
+            "perSource": 4
+          },
+          "mentionEntries": 2044,
+          "focusMentioners": 511,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 3
+        }
+      }
+    ],
+    "aggregatesInitialization": [
+      {
+        "case": "thread/comments-1/links-1/aggregates",
+        "phase": "initialization",
+        "elapsedMs": 53.47354199999995,
+        "crossrefTable": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "backlinksOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "presentCommentCountOf": {
+          "runs": 4,
+          "actions": 4,
+          "proxyAccesses": 12,
+          "linkResolutions": 12,
+          "distinctDocuments": 16,
+          "registeredDependencies": 46,
+          "maxRunProxyAccesses": 3
+        },
+        "lastActivityOf": {
+          "runs": 4,
+          "actions": 4,
+          "proxyAccesses": 48,
+          "linkResolutions": 32,
+          "distinctDocuments": 20,
+          "registeredDependencies": 132,
+          "maxRunProxyAccesses": 12
+        },
+        "other": {
+          "runs": 16,
+          "actions": 16,
+          "proxyAccesses": 0,
+          "linkResolutions": 8,
+          "distinctDocuments": 24,
+          "registeredDependencies": 48,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 24,
+          "actions": 24,
+          "proxyAccesses": 60,
+          "linkResolutions": 52,
+          "distinctDocuments": 60,
+          "registeredDependencies": 226,
+          "maxRunProxyAccesses": 12
+        },
+        "attemptTotal": {
+          "attempts": 25,
+          "proxyAccesses": 60,
+          "linkResolutions": 52
+        },
+        "graph": {
+          "nodes": 52,
+          "edges": 52
+        },
+        "fixture": {
+          "topicCount": 4,
+          "mentions": {
+            "shape": "low-degree",
+            "perSource": 1
+          },
+          "mentionEntries": 4,
+          "focusMentioners": 1,
+          "commentsPerTopic": 1,
+          "linksPerTopic": 1
+        }
+      },
+      {
+        "case": "thread/comments-10/links-3/aggregates",
+        "phase": "initialization",
+        "elapsedMs": 61.8946669999998,
+        "crossrefTable": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "backlinksOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "presentCommentCountOf": {
+          "runs": 4,
+          "actions": 4,
+          "proxyAccesses": 84,
+          "linkResolutions": 48,
+          "distinctDocuments": 52,
+          "registeredDependencies": 202,
+          "maxRunProxyAccesses": 21
+        },
+        "lastActivityOf": {
+          "runs": 4,
+          "actions": 4,
+          "proxyAccesses": 216,
+          "linkResolutions": 76,
+          "distinctDocuments": 64,
+          "registeredDependencies": 456,
+          "maxRunProxyAccesses": 54
+        },
+        "other": {
+          "runs": 16,
+          "actions": 16,
+          "proxyAccesses": 0,
+          "linkResolutions": 8,
+          "distinctDocuments": 24,
+          "registeredDependencies": 48,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 24,
+          "actions": 24,
+          "proxyAccesses": 300,
+          "linkResolutions": 132,
+          "distinctDocuments": 140,
+          "registeredDependencies": 706,
+          "maxRunProxyAccesses": 54
+        },
+        "attemptTotal": {
+          "attempts": 25,
+          "proxyAccesses": 300,
+          "linkResolutions": 132
+        },
+        "graph": {
+          "nodes": 96,
+          "edges": 132
+        },
+        "fixture": {
+          "topicCount": 4,
+          "mentions": {
+            "shape": "low-degree",
+            "perSource": 1
+          },
+          "mentionEntries": 4,
+          "focusMentioners": 1,
+          "commentsPerTopic": 10,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "thread/comments-100/links-3/aggregates",
+        "phase": "initialization",
+        "elapsedMs": 136.707625,
+        "crossrefTable": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "backlinksOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "presentCommentCountOf": {
+          "runs": 4,
+          "actions": 4,
+          "proxyAccesses": 804,
+          "linkResolutions": 408,
+          "distinctDocuments": 412,
+          "registeredDependencies": 1762,
+          "maxRunProxyAccesses": 201
+        },
+        "lastActivityOf": {
+          "runs": 4,
+          "actions": 4,
+          "proxyAccesses": 1656,
+          "linkResolutions": 436,
+          "distinctDocuments": 424,
+          "registeredDependencies": 3216,
+          "maxRunProxyAccesses": 414
+        },
+        "other": {
+          "runs": 16,
+          "actions": 16,
+          "proxyAccesses": 0,
+          "linkResolutions": 8,
+          "distinctDocuments": 24,
+          "registeredDependencies": 48,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 24,
+          "actions": 24,
+          "proxyAccesses": 2460,
+          "linkResolutions": 852,
+          "distinctDocuments": 860,
+          "registeredDependencies": 5026,
+          "maxRunProxyAccesses": 414
+        },
+        "attemptTotal": {
+          "attempts": 25,
+          "proxyAccesses": 2460,
+          "linkResolutions": 852
+        },
+        "graph": {
+          "nodes": 456,
+          "edges": 852
+        },
+        "fixture": {
+          "topicCount": 4,
+          "mentions": {
+            "shape": "low-degree",
+            "perSource": 1
+          },
+          "mentionEntries": 4,
+          "focusMentioners": 1,
+          "commentsPerTopic": 100,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "thread/comments-1000/links-3/aggregates",
+        "phase": "initialization",
+        "elapsedMs": 790.5531249999999,
+        "crossrefTable": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "backlinksOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "presentCommentCountOf": {
+          "runs": 4,
+          "actions": 4,
+          "proxyAccesses": 8004,
+          "linkResolutions": 4008,
+          "distinctDocuments": 4012,
+          "registeredDependencies": 17362,
+          "maxRunProxyAccesses": 2001
+        },
+        "lastActivityOf": {
+          "runs": 4,
+          "actions": 4,
+          "proxyAccesses": 16056,
+          "linkResolutions": 4036,
+          "distinctDocuments": 4024,
+          "registeredDependencies": 30816,
+          "maxRunProxyAccesses": 4014
+        },
+        "other": {
+          "runs": 16,
+          "actions": 16,
+          "proxyAccesses": 0,
+          "linkResolutions": 8,
+          "distinctDocuments": 24,
+          "registeredDependencies": 48,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 24,
+          "actions": 24,
+          "proxyAccesses": 24060,
+          "linkResolutions": 8052,
+          "distinctDocuments": 8060,
+          "registeredDependencies": 48226,
+          "maxRunProxyAccesses": 4014
+        },
+        "attemptTotal": {
+          "attempts": 25,
+          "proxyAccesses": 24060,
+          "linkResolutions": 8052
+        },
+        "graph": {
+          "nodes": 4056,
+          "edges": 8052
+        },
+        "fixture": {
+          "topicCount": 4,
+          "mentions": {
+            "shape": "low-degree",
+            "perSource": 1
+          },
+          "mentionEntries": 4,
+          "focusMentioners": 1,
+          "commentsPerTopic": 1000,
+          "linksPerTopic": 3
+        }
+      },
+      {
+        "case": "thread/comments-3/links-10/aggregates",
+        "phase": "initialization",
+        "elapsedMs": 62.56704100000002,
+        "crossrefTable": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "backlinksOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "presentCommentCountOf": {
+          "runs": 4,
+          "actions": 4,
+          "proxyAccesses": 28,
+          "linkResolutions": 20,
+          "distinctDocuments": 24,
+          "registeredDependencies": 80,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 4,
+          "actions": 4,
+          "proxyAccesses": 188,
+          "linkResolutions": 76,
+          "distinctDocuments": 64,
+          "registeredDependencies": 410,
+          "maxRunProxyAccesses": 47
+        },
+        "other": {
+          "runs": 16,
+          "actions": 16,
+          "proxyAccesses": 0,
+          "linkResolutions": 8,
+          "distinctDocuments": 24,
+          "registeredDependencies": 48,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 24,
+          "actions": 24,
+          "proxyAccesses": 216,
+          "linkResolutions": 104,
+          "distinctDocuments": 112,
+          "registeredDependencies": 538,
+          "maxRunProxyAccesses": 47
+        },
+        "attemptTotal": {
+          "attempts": 25,
+          "proxyAccesses": 216,
+          "linkResolutions": 104
+        },
+        "graph": {
+          "nodes": 96,
+          "edges": 104
+        },
+        "fixture": {
+          "topicCount": 4,
+          "mentions": {
+            "shape": "low-degree",
+            "perSource": 1
+          },
+          "mentionEntries": 4,
+          "focusMentioners": 1,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 10
+        }
+      },
+      {
+        "case": "thread/comments-3/links-100/aggregates",
+        "phase": "initialization",
+        "elapsedMs": 108.37037499999997,
+        "crossrefTable": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "backlinksOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "presentCommentCountOf": {
+          "runs": 4,
+          "actions": 4,
+          "proxyAccesses": 28,
+          "linkResolutions": 20,
+          "distinctDocuments": 24,
+          "registeredDependencies": 80,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 4,
+          "actions": 4,
+          "proxyAccesses": 1268,
+          "linkResolutions": 436,
+          "distinctDocuments": 424,
+          "registeredDependencies": 2570,
+          "maxRunProxyAccesses": 317
+        },
+        "other": {
+          "runs": 16,
+          "actions": 16,
+          "proxyAccesses": 0,
+          "linkResolutions": 8,
+          "distinctDocuments": 24,
+          "registeredDependencies": 48,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 24,
+          "actions": 24,
+          "proxyAccesses": 1296,
+          "linkResolutions": 464,
+          "distinctDocuments": 472,
+          "registeredDependencies": 2698,
+          "maxRunProxyAccesses": 317
+        },
+        "attemptTotal": {
+          "attempts": 25,
+          "proxyAccesses": 1296,
+          "linkResolutions": 464
+        },
+        "graph": {
+          "nodes": 456,
+          "edges": 464
+        },
+        "fixture": {
+          "topicCount": 4,
+          "mentions": {
+            "shape": "low-degree",
+            "perSource": 1
+          },
+          "mentionEntries": 4,
+          "focusMentioners": 1,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 100
+        }
+      },
+      {
+        "case": "thread/comments-3/links-1000/aggregates",
+        "phase": "initialization",
+        "elapsedMs": 692.5999580000002,
+        "crossrefTable": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "backlinksOf": {
+          "runs": 0,
+          "actions": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0,
+          "maxRunProxyAccesses": 0
+        },
+        "presentCommentCountOf": {
+          "runs": 4,
+          "actions": 4,
+          "proxyAccesses": 28,
+          "linkResolutions": 20,
+          "distinctDocuments": 24,
+          "registeredDependencies": 80,
+          "maxRunProxyAccesses": 7
+        },
+        "lastActivityOf": {
+          "runs": 4,
+          "actions": 4,
+          "proxyAccesses": 12068,
+          "linkResolutions": 4036,
+          "distinctDocuments": 4024,
+          "registeredDependencies": 24170,
+          "maxRunProxyAccesses": 3017
+        },
+        "other": {
+          "runs": 16,
+          "actions": 16,
+          "proxyAccesses": 0,
+          "linkResolutions": 8,
+          "distinctDocuments": 24,
+          "registeredDependencies": 48,
+          "maxRunProxyAccesses": 0
+        },
+        "total": {
+          "runs": 24,
+          "actions": 24,
+          "proxyAccesses": 12096,
+          "linkResolutions": 4064,
+          "distinctDocuments": 4072,
+          "registeredDependencies": 24298,
+          "maxRunProxyAccesses": 3017
+        },
+        "attemptTotal": {
+          "attempts": 25,
+          "proxyAccesses": 12096,
+          "linkResolutions": 4064
+        },
+        "graph": {
+          "nodes": 4056,
+          "edges": 4064
+        },
+        "fixture": {
+          "topicCount": 4,
+          "mentions": {
+            "shape": "low-degree",
+            "perSource": 1
+          },
+          "mentionEntries": 4,
+          "focusMentioners": 1,
+          "commentsPerTopic": 3,
+          "linksPerTopic": 1000
+        }
+      }
+    ],
+    "everyPhaseOfOneCase": {
+      "case": "pivot/high-degree/mentions-4/topics-128/topic-open",
+      "demandedActions": {
+        "crossrefTable": 1,
+        "backlinksOf": 1,
+        "presentCommentCountOf": 1,
+        "lastActivityOf": 0
+      },
+      "fixture": {
+        "topicCount": 128,
+        "mentions": {
+          "shape": "high-degree",
+          "perSource": 4
+        },
+        "commentsPerTopic": 3,
+        "linksPerTopic": 3,
+        "mentionEntries": 512,
+        "focusTopic": 0,
+        "focusMentioners": 127
+      },
+      "phases": [
+        {
+          "case": "pivot/high-degree/mentions-4/topics-128/topic-open",
+          "phase": "initialization",
+          "elapsedMs": 730.7064169999999,
+          "crossrefTable": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 769,
+            "linkResolutions": 1282,
+            "distinctDocuments": 259,
+            "registeredDependencies": 1545,
+            "maxRunProxyAccesses": 769
+          },
+          "backlinksOf": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 387,
+            "linkResolutions": 516,
+            "distinctDocuments": 260,
+            "registeredDependencies": 1162,
+            "maxRunProxyAccesses": 387
+          },
+          "presentCommentCountOf": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 7,
+            "linkResolutions": 5,
+            "distinctDocuments": 6,
+            "registeredDependencies": 20,
+            "maxRunProxyAccesses": 7
+          },
+          "lastActivityOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "other": {
+            "runs": 6,
+            "actions": 6,
+            "proxyAccesses": 0,
+            "linkResolutions": 898,
+            "distinctDocuments": 397,
+            "registeredDependencies": 2578,
+            "maxRunProxyAccesses": 0
+          },
+          "total": {
+            "runs": 9,
+            "actions": 9,
+            "proxyAccesses": 1163,
+            "linkResolutions": 2701,
+            "distinctDocuments": 922,
+            "registeredDependencies": 5305,
+            "maxRunProxyAccesses": 769
+          },
+          "attemptTotal": {
+            "attempts": 10,
+            "proxyAccesses": 1163,
+            "linkResolutions": 2703
+          },
+          "graph": {
+            "nodes": 280,
+            "edges": 919
+          }
+        },
+        {
+          "case": "pivot/high-degree/mentions-4/topics-128/topic-open",
+          "phase": "mention removal",
+          "elapsedMs": 357.2104589999999,
+          "crossrefTable": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 768,
+            "linkResolutions": 1280,
+            "distinctDocuments": 259,
+            "registeredDependencies": 1543,
+            "maxRunProxyAccesses": 768
+          },
+          "backlinksOf": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 386,
+            "linkResolutions": 515,
+            "distinctDocuments": 260,
+            "registeredDependencies": 1160,
+            "maxRunProxyAccesses": 386
+          },
+          "presentCommentCountOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "lastActivityOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "other": {
+            "runs": 2,
+            "actions": 2,
+            "proxyAccesses": 0,
+            "linkResolutions": 895,
+            "distinctDocuments": 391,
+            "registeredDependencies": 2563,
+            "maxRunProxyAccesses": 0
+          },
+          "total": {
+            "runs": 4,
+            "actions": 4,
+            "proxyAccesses": 1154,
+            "linkResolutions": 2690,
+            "distinctDocuments": 910,
+            "registeredDependencies": 5266,
+            "maxRunProxyAccesses": 768
+          },
+          "attemptTotal": {
+            "attempts": 4,
+            "proxyAccesses": 1154,
+            "linkResolutions": 2690
+          },
+          "graph": {
+            "nodes": 280,
+            "edges": 918
+          }
+        },
+        {
+          "case": "pivot/high-degree/mentions-4/topics-128/topic-open",
+          "phase": "mention insertion",
+          "elapsedMs": 246.94645800000035,
+          "crossrefTable": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 769,
+            "linkResolutions": 1282,
+            "distinctDocuments": 259,
+            "registeredDependencies": 1544,
+            "maxRunProxyAccesses": 769
+          },
+          "backlinksOf": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 387,
+            "linkResolutions": 516,
+            "distinctDocuments": 260,
+            "registeredDependencies": 1162,
+            "maxRunProxyAccesses": 387
+          },
+          "presentCommentCountOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "lastActivityOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "other": {
+            "runs": 2,
+            "actions": 2,
+            "proxyAccesses": 0,
+            "linkResolutions": 897,
+            "distinctDocuments": 392,
+            "registeredDependencies": 2570,
+            "maxRunProxyAccesses": 0
+          },
+          "total": {
+            "runs": 4,
+            "actions": 4,
+            "proxyAccesses": 1156,
+            "linkResolutions": 2695,
+            "distinctDocuments": 911,
+            "registeredDependencies": 5276,
+            "maxRunProxyAccesses": 769
+          },
+          "attemptTotal": {
+            "attempts": 4,
+            "proxyAccesses": 1156,
+            "linkResolutions": 2695
+          },
+          "graph": {
+            "nodes": 280,
+            "edges": 919
+          }
+        },
+        {
+          "case": "pivot/high-degree/mentions-4/topics-128/topic-open",
+          "phase": "same-count retarget",
+          "elapsedMs": 305.33079199999975,
+          "crossrefTable": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 769,
+            "linkResolutions": 1282,
+            "distinctDocuments": 259,
+            "registeredDependencies": 1544,
+            "maxRunProxyAccesses": 769
+          },
+          "backlinksOf": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 386,
+            "linkResolutions": 515,
+            "distinctDocuments": 260,
+            "registeredDependencies": 1160,
+            "maxRunProxyAccesses": 386
+          },
+          "presentCommentCountOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "lastActivityOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "other": {
+            "runs": 2,
+            "actions": 2,
+            "proxyAccesses": 0,
+            "linkResolutions": 896,
+            "distinctDocuments": 391,
+            "registeredDependencies": 2565,
+            "maxRunProxyAccesses": 0
+          },
+          "total": {
+            "runs": 4,
+            "actions": 4,
+            "proxyAccesses": 1155,
+            "linkResolutions": 2693,
+            "distinctDocuments": 910,
+            "registeredDependencies": 5269,
+            "maxRunProxyAccesses": 769
+          },
+          "attemptTotal": {
+            "attempts": 4,
+            "proxyAccesses": 1155,
+            "linkResolutions": 2693
+          },
+          "graph": {
+            "nodes": 280,
+            "edges": 918
+          }
+        },
+        {
+          "case": "pivot/high-degree/mentions-4/topics-128/topic-open",
+          "phase": "comment append",
+          "elapsedMs": 8.927792000000409,
+          "crossrefTable": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "backlinksOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "presentCommentCountOf": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 9,
+            "linkResolutions": 6,
+            "distinctDocuments": 7,
+            "registeredDependencies": 24,
+            "maxRunProxyAccesses": 9
+          },
+          "lastActivityOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "other": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 0,
+            "linkResolutions": 1,
+            "distinctDocuments": 2,
+            "registeredDependencies": 5,
+            "maxRunProxyAccesses": 0
+          },
+          "total": {
+            "runs": 2,
+            "actions": 2,
+            "proxyAccesses": 9,
+            "linkResolutions": 7,
+            "distinctDocuments": 9,
+            "registeredDependencies": 29,
+            "maxRunProxyAccesses": 9
+          },
+          "attemptTotal": {
+            "attempts": 2,
+            "proxyAccesses": 9,
+            "linkResolutions": 7
+          },
+          "graph": {
+            "nodes": 281,
+            "edges": 919
+          }
+        },
+        {
+          "case": "pivot/high-degree/mentions-4/topics-128/topic-open",
+          "phase": "comment edit",
+          "elapsedMs": 2.949250000000575,
+          "crossrefTable": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "backlinksOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "presentCommentCountOf": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 9,
+            "linkResolutions": 6,
+            "distinctDocuments": 7,
+            "registeredDependencies": 24,
+            "maxRunProxyAccesses": 9
+          },
+          "lastActivityOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "other": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "total": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 9,
+            "linkResolutions": 6,
+            "distinctDocuments": 7,
+            "registeredDependencies": 24,
+            "maxRunProxyAccesses": 9
+          },
+          "attemptTotal": {
+            "attempts": 1,
+            "proxyAccesses": 9,
+            "linkResolutions": 6
+          },
+          "graph": {
+            "nodes": 281,
+            "edges": 919
+          }
+        },
+        {
+          "case": "pivot/high-degree/mentions-4/topics-128/topic-open",
+          "phase": "comment retraction",
+          "elapsedMs": 7.981708999999682,
+          "crossrefTable": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "backlinksOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "presentCommentCountOf": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 9,
+            "linkResolutions": 6,
+            "distinctDocuments": 7,
+            "registeredDependencies": 25,
+            "maxRunProxyAccesses": 9
+          },
+          "lastActivityOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "other": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 0,
+            "linkResolutions": 1,
+            "distinctDocuments": 2,
+            "registeredDependencies": 5,
+            "maxRunProxyAccesses": 0
+          },
+          "total": {
+            "runs": 2,
+            "actions": 2,
+            "proxyAccesses": 9,
+            "linkResolutions": 7,
+            "distinctDocuments": 9,
+            "registeredDependencies": 30,
+            "maxRunProxyAccesses": 9
+          },
+          "attemptTotal": {
+            "attempts": 2,
+            "proxyAccesses": 9,
+            "linkResolutions": 7
+          },
+          "graph": {
+            "nodes": 281,
+            "edges": 919
+          }
+        },
+        {
+          "case": "pivot/high-degree/mentions-4/topics-128/topic-open",
+          "phase": "link removal",
+          "elapsedMs": 1.659208000000035,
+          "crossrefTable": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "backlinksOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "presentCommentCountOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "lastActivityOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "other": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "total": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "attemptTotal": {
+            "attempts": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0
+          },
+          "graph": {
+            "nodes": 281,
+            "edges": 919
+          }
+        },
+        {
+          "case": "pivot/high-degree/mentions-4/topics-128/topic-open",
+          "phase": "unrelated sibling edit",
+          "elapsedMs": 12.944375000000036,
+          "crossrefTable": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "backlinksOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "presentCommentCountOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "lastActivityOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "other": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 0,
+            "linkResolutions": 127,
+            "distinctDocuments": 130,
+            "registeredDependencies": 637,
+            "maxRunProxyAccesses": 0
+          },
+          "total": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 0,
+            "linkResolutions": 127,
+            "distinctDocuments": 130,
+            "registeredDependencies": 637,
+            "maxRunProxyAccesses": 0
+          },
+          "attemptTotal": {
+            "attempts": 1,
+            "proxyAccesses": 0,
+            "linkResolutions": 127
+          },
+          "graph": {
+            "nodes": 281,
+            "edges": 919
+          }
+        },
+        {
+          "case": "pivot/high-degree/mentions-4/topics-128/topic-open",
+          "phase": "reopen",
+          "elapsedMs": 205.9350000000013,
+          "crossrefTable": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 769,
+            "linkResolutions": 1282,
+            "distinctDocuments": 259,
+            "registeredDependencies": 1544,
+            "maxRunProxyAccesses": 769
+          },
+          "backlinksOf": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 386,
+            "linkResolutions": 515,
+            "distinctDocuments": 260,
+            "registeredDependencies": 1159,
+            "maxRunProxyAccesses": 386
+          },
+          "presentCommentCountOf": {
+            "runs": 1,
+            "actions": 1,
+            "proxyAccesses": 9,
+            "linkResolutions": 6,
+            "distinctDocuments": 7,
+            "registeredDependencies": 25,
+            "maxRunProxyAccesses": 9
+          },
+          "lastActivityOf": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "other": {
+            "runs": 0,
+            "actions": 0,
+            "proxyAccesses": 0,
+            "linkResolutions": 0,
+            "distinctDocuments": 0,
+            "registeredDependencies": 0,
+            "maxRunProxyAccesses": 0
+          },
+          "total": {
+            "runs": 3,
+            "actions": 3,
+            "proxyAccesses": 1164,
+            "linkResolutions": 1803,
+            "distinctDocuments": 526,
+            "registeredDependencies": 2728,
+            "maxRunProxyAccesses": 769
+          },
+          "attemptTotal": {
+            "attempts": 4,
+            "proxyAccesses": 1164,
+            "linkResolutions": 1803
+          },
+          "graph": {
+            "nodes": 281,
+            "edges": 919
+          }
+        }
+      ]
+    },
+    "boardWorkloadNotMeasured": {
+      "measured": false,
+      "reason": "A board loaded before any topic is opened reads its stored card values, and in a browser with client execution loading it ran none of the reached lifts, so there is no work of theirs to measure headlessly. Returning to the board after opening a topic ran that topic's last activity once; that state is not one of the probe's workloads.",
+      "cases": 26
+    }
+  },
+  "browser": {
+    "rounds": [
+      {
+        "tag": "r1-off-nav",
+        "bench": "nav",
+        "declaredMode": "server-execution-off",
+        "position": 2,
+        "elapsedS": 129,
+        "servingLoopPresent": false,
+        "boardIds": [
+          "fid1:DXUvZJhGbDHfp6lMRWNdU2IOzrlJf5_0LhCoWw81cOU",
+          "fid1:dTp3Hp6JQixXkHJQDzIDWWnKhHBW47KlILvWYSqWy2o"
+        ],
+        "cases": [
+          {
+            "name": "load",
+            "group": "topic board",
+            "n": 6,
+            "minMs": 199.821875,
+            "avgMs": 226.045056,
+            "maxMs": 273.353458,
+            "p75Ms": 247.061166,
+            "error": null
+          },
+          {
+            "name": "sign in",
+            "group": "topic board",
+            "n": 6,
+            "minMs": 113.608667,
+            "avgMs": 175.908598,
+            "maxMs": 261.875167,
+            "p75Ms": 193.898792,
+            "error": null
+          },
+          {
+            "name": "board",
+            "group": "topic board",
+            "n": 6,
+            "minMs": 607.55325,
+            "avgMs": 656.118501,
+            "maxMs": 770.517917,
+            "p75Ms": 670.210709,
+            "error": null
+          },
+          {
+            "name": "open topic",
+            "group": "topic board",
+            "n": 6,
+            "minMs": 214.115833,
+            "avgMs": 248.58957,
+            "maxMs": 367.73725,
+            "p75Ms": 239.792209,
+            "error": null
+          },
+          {
+            "name": "crossref",
+            "group": "topic board",
+            "n": 6,
+            "minMs": 169.713333,
+            "avgMs": 195.152577,
+            "maxMs": 222.1145,
+            "p75Ms": 208.951541,
+            "error": null
+          },
+          {
+            "name": "journey",
+            "group": "topic board",
+            "n": 6,
+            "minMs": 1463.475459,
+            "avgMs": 1584.340091,
+            "maxMs": 1841.417833,
+            "p75Ms": 1626.724833,
+            "error": null
+          },
+          {
+            "name": "comment",
+            "group": "topic board",
+            "n": 6,
+            "minMs": 74.990125,
+            "avgMs": 92.275556,
+            "maxMs": 126.763833,
+            "p75Ms": 96.699791,
+            "error": null
+          },
+          {
+            "name": "backlink",
+            "group": "topic board",
+            "n": 6,
+            "minMs": 202.443958,
+            "avgMs": 260.393736,
+            "maxMs": 400.813875,
+            "p75Ms": 311.747583,
+            "error": null
+          }
+        ],
+        "samples": [
+          {
+            "label": "comment",
+            "mode": "server-execution-off",
+            "clientFrom": "meta and bundle",
+            "elapsedMs": 139,
+            "readAccounting": true,
+            "graph": {
+              "nodesBefore": 889,
+              "nodesAfter": 933,
+              "edgesBefore": 1538,
+              "edgesAfter": 1655
+            },
+            "lifts": [
+              {
+                "role": "producer",
+                "name": "crossrefTable",
+                "runs": 0,
+                "durationMs": 0.0,
+                "proxyAccesses": 0,
+                "maxProxyAccesses": 0,
+                "linkResolutions": 0,
+                "distinctDocuments": 0,
+                "registeredDependencies": 0,
+                "site": "/topics/main.tsx:346:2"
+              },
+              {
+                "role": "consumer",
+                "name": "backlinksOf",
+                "runs": 0,
+                "durationMs": 0.0,
+                "proxyAccesses": 0,
+                "maxProxyAccesses": 0,
+                "linkResolutions": 0,
+                "distinctDocuments": 0,
+                "registeredDependencies": 0,
+                "site": "/topics/topic.tsx:1737:25"
+              },
+              {
+                "role": "consumer",
+                "name": "presentCommentCountOf",
+                "runs": 1,
+                "durationMs": 0.3,
+                "proxyAccesses": 3,
+                "maxProxyAccesses": 3,
+                "linkResolutions": 2,
+                "distinctDocuments": 3,
+                "registeredDependencies": 7,
+                "site": "/topics/topic.tsx:1793:35"
+              },
+              {
+                "role": "consumer",
+                "name": "lastActivityOf",
+                "runs": 0,
+                "durationMs": 0.0,
+                "proxyAccesses": 0,
+                "maxProxyAccesses": 0,
+                "linkResolutions": 0,
+                "distinctDocuments": 0,
+                "registeredDependencies": 0,
+                "site": "/topics/topic.tsx:1806:28"
+              }
+            ],
+            "remaining": {
+              "runs": 31,
+              "durationMs": 27.1,
+              "proxyAccesses": 20,
+              "maxProxyAccesses": 4,
+              "linkResolutions": 99,
+              "distinctDocuments": 111,
+              "registeredDependencies": 256
+            },
+            "runsWithoutReads": 0,
+            "runsWithoutSource": 24,
+            "eventCommits": 1
+          },
+          {
+            "label": "backlink",
+            "mode": "server-execution-off",
+            "clientFrom": "meta and bundle",
+            "elapsedMs": 338,
+            "readAccounting": true,
+            "graph": {
+              "nodesBefore": 1674,
+              "nodesAfter": 912,
+              "edgesBefore": 3473,
+              "edgesAfter": 1586
+            },
+            "lifts": [
+              {
+                "role": "producer",
+                "name": "crossrefTable",
+                "runs": 1,
+                "durationMs": 12.3,
+                "proxyAccesses": 67,
+                "maxProxyAccesses": 67,
+                "linkResolutions": 163,
+                "distinctDocuments": 122,
+                "registeredDependencies": 343,
+                "site": "/topics/main.tsx:346:2"
+              },
+              {
+                "role": "consumer",
+                "name": "backlinksOf",
+                "runs": 1,
+                "durationMs": 4.0,
+                "proxyAccesses": 66,
+                "maxProxyAccesses": 66,
+                "linkResolutions": 157,
+                "distinctDocuments": 93,
+                "registeredDependencies": 250,
+                "site": "/topics/topic.tsx:1737:25"
+              },
+              {
+                "role": "consumer",
+                "name": "presentCommentCountOf",
+                "runs": 1,
+                "durationMs": 0.5,
+                "proxyAccesses": 1,
+                "maxProxyAccesses": 1,
+                "linkResolutions": 1,
+                "distinctDocuments": 2,
+                "registeredDependencies": 3,
+                "site": "/topics/topic.tsx:1793:35"
+              },
+              {
+                "role": "consumer",
+                "name": "lastActivityOf",
+                "runs": 0,
+                "durationMs": 0.0,
+                "proxyAccesses": 0,
+                "maxProxyAccesses": 0,
+                "linkResolutions": 0,
+                "distinctDocuments": 0,
+                "registeredDependencies": 0,
+                "site": "/topics/topic.tsx:1806:28"
+              }
+            ],
+            "remaining": {
+              "runs": 46,
+              "durationMs": 31.8,
+              "proxyAccesses": 668,
+              "maxProxyAccesses": 279,
+              "linkResolutions": 159,
+              "distinctDocuments": 211,
+              "registeredDependencies": 829
+            },
+            "runsWithoutReads": 0,
+            "runsWithoutSource": 26,
+            "eventCommits": 0
+          }
+        ]
+      },
+      {
+        "tag": "r1-off-scale",
+        "bench": "scale",
+        "declaredMode": "server-execution-off",
+        "position": 2,
+        "elapsedS": 191,
+        "servingLoopPresent": false,
+        "boardIds": null,
+        "cases": [
+          {
+            "name": "100",
+            "group": "topic board scale",
+            "n": 4,
+            "minMs": 1669.95825,
+            "avgMs": 2588.35374,
+            "maxMs": 4410.12025,
+            "p75Ms": 2177.534292,
+            "error": null
+          },
+          {
+            "name": "reopen 100",
+            "group": "topic board scale",
+            "n": 4,
+            "minMs": 71.984833,
+            "avgMs": 84.384792,
+            "maxMs": 106.013792,
+            "p75Ms": 86.004291,
+            "error": null
+          }
+        ],
+        "samples": [
+          {
+            "label": "reopen 100",
+            "mode": "server-execution-off",
+            "clientFrom": "meta and bundle",
+            "elapsedMs": 72,
+            "readAccounting": false,
+            "graph": {
+              "nodesBefore": 5587,
+              "nodesAfter": 2284,
+              "edgesBefore": 11961,
+              "edgesAfter": 3989
+            },
+            "lifts": [],
+            "remaining": null,
+            "runsWithoutReads": null
+          },
+          {
+            "label": "reopen 100, reads",
+            "mode": "server-execution-off",
+            "clientFrom": "meta and bundle",
+            "elapsedMs": 106,
+            "readAccounting": true,
+            "graph": {
+              "nodesBefore": 5588,
+              "nodesAfter": 2284,
+              "edgesBefore": 11961,
+              "edgesAfter": 3989
+            },
+            "lifts": [
+              {
+                "role": "producer",
+                "name": "crossrefTable",
+                "runs": 0,
+                "durationMs": 0.0,
+                "proxyAccesses": 0,
+                "maxProxyAccesses": 0,
+                "linkResolutions": 0,
+                "distinctDocuments": 0,
+                "registeredDependencies": 0,
+                "site": "/topics/main.tsx:346:2"
+              },
+              {
+                "role": "consumer",
+                "name": "backlinksOf",
+                "runs": 0,
+                "durationMs": 0.0,
+                "proxyAccesses": 0,
+                "maxProxyAccesses": 0,
+                "linkResolutions": 0,
+                "distinctDocuments": 0,
+                "registeredDependencies": 0,
+                "site": "/topics/topic.tsx:1737:25"
+              },
+              {
+                "role": "consumer",
+                "name": "presentCommentCountOf",
+                "runs": 0,
+                "durationMs": 0.0,
+                "proxyAccesses": 0,
+                "maxProxyAccesses": 0,
+                "linkResolutions": 0,
+                "distinctDocuments": 0,
+                "registeredDependencies": 0,
+                "site": "/topics/topic.tsx:1793:35"
+              },
+              {
+                "role": "consumer",
+                "name": "lastActivityOf",
+                "runs": 0,
+                "durationMs": 0.0,
+                "proxyAccesses": 0,
+                "maxProxyAccesses": 0,
+                "linkResolutions": 0,
+                "distinctDocuments": 0,
+                "registeredDependencies": 0,
+                "site": "/topics/topic.tsx:1806:28"
+              }
+            ],
+            "remaining": {
+              "runs": 1,
+              "durationMs": 1.6,
+              "proxyAccesses": 19,
+              "maxProxyAccesses": 19,
+              "linkResolutions": 0,
+              "distinctDocuments": 6,
+              "registeredDependencies": 12
+            },
+            "runsWithoutReads": 0,
+            "runsWithoutSource": 1,
+            "eventCommits": 0
+          }
+        ]
+      },
+      {
+        "tag": "r2-off-nav",
+        "bench": "nav",
+        "declaredMode": "server-execution-off",
+        "position": 1,
+        "elapsedS": 130,
+        "servingLoopPresent": false,
+        "boardIds": [
+          "fid1:C8cN8a-lcjGgyHWBm-zyuPuya9K0KnKT4P3cBIJs8so",
+          "fid1:g8Tx2XcdVeLTZmHzYVitFyV6AqOQsbYUzkXRWWevh6o"
+        ],
+        "cases": [
+          {
+            "name": "load",
+            "group": "topic board",
+            "n": 6,
+            "minMs": 186.57325,
+            "avgMs": 242.247757,
+            "maxMs": 411.486792,
+            "p75Ms": 224.137708,
+            "error": null
+          },
+          {
+            "name": "sign in",
+            "group": "topic board",
+            "n": 6,
+            "minMs": 182.114167,
+            "avgMs": 206.138625,
+            "maxMs": 279.224375,
+            "p75Ms": 195.666708,
+            "error": null
+          },
+          {
+            "name": "board",
+            "group": "topic board",
+            "n": 6,
+            "minMs": 591.815959,
+            "avgMs": 756.457778,
+            "maxMs": 1157.012792,
+            "p75Ms": 795.540291,
+            "error": null
+          },
+          {
+            "name": "open topic",
+            "group": "topic board",
+            "n": 6,
+            "minMs": 187.628583,
+            "avgMs": 242.264861,
+            "maxMs": 375.73475,
+            "p75Ms": 247.829542,
+            "error": null
+          },
+          {
+            "name": "crossref",
+            "group": "topic board",
+            "n": 6,
+            "minMs": 152.577666,
+            "avgMs": 173.261598,
+            "maxMs": 219.608708,
+            "p75Ms": 182.648125,
+            "error": null
+          },
+          {
+            "name": "journey",
+            "group": "topic board",
+            "n": 6,
+            "minMs": 1321.520375,
+            "avgMs": 1470.608792,
+            "maxMs": 1548.693708,
+            "p75Ms": 1516.999709,
+            "error": null
+          },
+          {
+            "name": "comment",
+            "group": "topic board",
+            "n": 6,
+            "minMs": 76.667333,
+            "avgMs": 91.434459,
+            "maxMs": 99.038417,
+            "p75Ms": 98.700083,
+            "error": null
+          },
+          {
+            "name": "backlink",
+            "group": "topic board",
+            "n": 6,
+            "minMs": 215.222333,
+            "avgMs": 272.824417,
+            "maxMs": 342.051875,
+            "p75Ms": 304.55175,
+            "error": null
+          }
+        ],
+        "samples": [
+          {
+            "label": "comment",
+            "mode": "server-execution-off",
+            "clientFrom": "meta and bundle",
+            "elapsedMs": 105,
+            "readAccounting": true,
+            "graph": {
+              "nodesBefore": 889,
+              "nodesAfter": 933,
+              "edgesBefore": 1538,
+              "edgesAfter": 1655
+            },
+            "lifts": [
+              {
+                "role": "producer",
+                "name": "crossrefTable",
+                "runs": 0,
+                "durationMs": 0.0,
+                "proxyAccesses": 0,
+                "maxProxyAccesses": 0,
+                "linkResolutions": 0,
+                "distinctDocuments": 0,
+                "registeredDependencies": 0,
+                "site": "/topics/main.tsx:346:2"
+              },
+              {
+                "role": "consumer",
+                "name": "backlinksOf",
+                "runs": 0,
+                "durationMs": 0.0,
+                "proxyAccesses": 0,
+                "maxProxyAccesses": 0,
+                "linkResolutions": 0,
+                "distinctDocuments": 0,
+                "registeredDependencies": 0,
+                "site": "/topics/topic.tsx:1737:25"
+              },
+              {
+                "role": "consumer",
+                "name": "presentCommentCountOf",
+                "runs": 1,
+                "durationMs": 0.4,
+                "proxyAccesses": 3,
+                "maxProxyAccesses": 3,
+                "linkResolutions": 2,
+                "distinctDocuments": 3,
+                "registeredDependencies": 7,
+                "site": "/topics/topic.tsx:1793:35"
+              },
+              {
+                "role": "consumer",
+                "name": "lastActivityOf",
+                "runs": 0,
+                "durationMs": 0.0,
+                "proxyAccesses": 0,
+                "maxProxyAccesses": 0,
+                "linkResolutions": 0,
+                "distinctDocuments": 0,
+                "registeredDependencies": 0,
+                "site": "/topics/topic.tsx:1806:28"
+              }
+            ],
+            "remaining": {
+              "runs": 31,
+              "durationMs": 17.2,
+              "proxyAccesses": 20,
+              "maxProxyAccesses": 4,
+              "linkResolutions": 99,
+              "distinctDocuments": 111,
+              "registeredDependencies": 256
+            },
+            "runsWithoutReads": 0,
+            "runsWithoutSource": 24,
+            "eventCommits": 1
+          },
+          {
+            "label": "backlink",
+            "mode": "server-execution-off",
+            "clientFrom": "meta and bundle",
+            "elapsedMs": 243,
+            "readAccounting": true,
+            "graph": {
+              "nodesBefore": 1674,
+              "nodesAfter": 912,
+              "edgesBefore": 3473,
+              "edgesAfter": 1586
+            },
+            "lifts": [
+              {
+                "role": "producer",
+                "name": "crossrefTable",
+                "runs": 1,
+                "durationMs": 8.5,
+                "proxyAccesses": 67,
+                "maxProxyAccesses": 67,
+                "linkResolutions": 163,
+                "distinctDocuments": 122,
+                "registeredDependencies": 343,
+                "site": "/topics/main.tsx:346:2"
+              },
+              {
+                "role": "consumer",
+                "name": "backlinksOf",
+                "runs": 1,
+                "durationMs": 3.0,
+                "proxyAccesses": 66,
+                "maxProxyAccesses": 66,
+                "linkResolutions": 157,
+                "distinctDocuments": 93,
+                "registeredDependencies": 250,
+                "site": "/topics/topic.tsx:1737:25"
+              },
+              {
+                "role": "consumer",
+                "name": "presentCommentCountOf",
+                "runs": 1,
+                "durationMs": 0.2,
+                "proxyAccesses": 1,
+                "maxProxyAccesses": 1,
+                "linkResolutions": 1,
+                "distinctDocuments": 2,
+                "registeredDependencies": 3,
+                "site": "/topics/topic.tsx:1793:35"
+              },
+              {
+                "role": "consumer",
+                "name": "lastActivityOf",
+                "runs": 0,
+                "durationMs": 0.0,
+                "proxyAccesses": 0,
+                "maxProxyAccesses": 0,
+                "linkResolutions": 0,
+                "distinctDocuments": 0,
+                "registeredDependencies": 0,
+                "site": "/topics/topic.tsx:1806:28"
+              }
+            ],
+            "remaining": {
+              "runs": 46,
+              "durationMs": 22.2,
+              "proxyAccesses": 668,
+              "maxProxyAccesses": 279,
+              "linkResolutions": 159,
+              "distinctDocuments": 211,
+              "registeredDependencies": 829
+            },
+            "runsWithoutReads": 0,
+            "runsWithoutSource": 26,
+            "eventCommits": 0
+          }
+        ]
+      },
+      {
+        "tag": "r2-off-scale",
+        "bench": "scale",
+        "declaredMode": "server-execution-off",
+        "position": 1,
+        "elapsedS": 202,
+        "servingLoopPresent": false,
+        "boardIds": null,
+        "cases": [
+          {
+            "name": "100",
+            "group": "topic board scale",
+            "n": 4,
+            "minMs": 2192.219334,
+            "avgMs": 2566.264969,
+            "maxMs": 3161.130041,
+            "p75Ms": 2501.73825,
+            "error": null
+          },
+          {
+            "name": "reopen 100",
+            "group": "topic board scale",
+            "n": 4,
+            "minMs": 86.707625,
+            "avgMs": 104.552386,
+            "maxMs": 121.992917,
+            "p75Ms": 121.527958,
+            "error": null
+          }
+        ],
+        "samples": [
+          {
+            "label": "reopen 100",
+            "mode": "server-execution-off",
+            "clientFrom": "meta and bundle",
+            "elapsedMs": 122,
+            "readAccounting": false,
+            "graph": {
+              "nodesBefore": 5587,
+              "nodesAfter": 2284,
+              "edgesBefore": 11961,
+              "edgesAfter": 3989
+            },
+            "lifts": [],
+            "remaining": null,
+            "runsWithoutReads": null
+          },
+          {
+            "label": "reopen 100, reads",
+            "mode": "server-execution-off",
+            "clientFrom": "meta and bundle",
+            "elapsedMs": 153,
+            "readAccounting": true,
+            "graph": {
+              "nodesBefore": 5587,
+              "nodesAfter": 2284,
+              "edgesBefore": 11961,
+              "edgesAfter": 3989
+            },
+            "lifts": [
+              {
+                "role": "producer",
+                "name": "crossrefTable",
+                "runs": 0,
+                "durationMs": 0.0,
+                "proxyAccesses": 0,
+                "maxProxyAccesses": 0,
+                "linkResolutions": 0,
+                "distinctDocuments": 0,
+                "registeredDependencies": 0,
+                "site": "/topics/main.tsx:346:2"
+              },
+              {
+                "role": "consumer",
+                "name": "backlinksOf",
+                "runs": 0,
+                "durationMs": 0.0,
+                "proxyAccesses": 0,
+                "maxProxyAccesses": 0,
+                "linkResolutions": 0,
+                "distinctDocuments": 0,
+                "registeredDependencies": 0,
+                "site": "/topics/topic.tsx:1737:25"
+              },
+              {
+                "role": "consumer",
+                "name": "presentCommentCountOf",
+                "runs": 0,
+                "durationMs": 0.0,
+                "proxyAccesses": 0,
+                "maxProxyAccesses": 0,
+                "linkResolutions": 0,
+                "distinctDocuments": 0,
+                "registeredDependencies": 0,
+                "site": "/topics/topic.tsx:1793:35"
+              },
+              {
+                "role": "consumer",
+                "name": "lastActivityOf",
+                "runs": 0,
+                "durationMs": 0.0,
+                "proxyAccesses": 0,
+                "maxProxyAccesses": 0,
+                "linkResolutions": 0,
+                "distinctDocuments": 0,
+                "registeredDependencies": 0,
+                "site": "/topics/topic.tsx:1806:28"
+              }
+            ],
+            "remaining": {
+              "runs": 0,
+              "durationMs": 0.0,
+              "proxyAccesses": 0,
+              "maxProxyAccesses": 0,
+              "linkResolutions": 0,
+              "distinctDocuments": 0,
+              "registeredDependencies": 0
+            },
+            "runsWithoutReads": 0,
+            "runsWithoutSource": 0,
+            "eventCommits": 0
+          }
+        ]
+      }
+    ],
+    "loadByArm": {
+      "nav/off": {
+        "samples": 52,
+        "min": 13.58,
+        "median": 19.15,
+        "mean": 26.36,
+        "max": 69.88
+      },
+      "scale/off": {
+        "samples": 78,
+        "min": 12.17,
+        "median": 21.13,
+        "mean": 22.67,
+        "max": 52.02
+      }
+    }
+  },
+  "delivery": {
+    "topicsAsItStands": [
+      {
+        "N": 4,
+        "arm": "current",
+        "base": "topics",
+        "d": 2,
+        "runHead": "bc23e3c6d09b77e63cf2b4a6a611c9dbaade4d96",
+        "status": [
+          "?? experiment-output/"
+        ],
+        "experimental": {
+          "modernCellRep": false,
+          "commitPreconditions": true,
+          "plainResultReceipts": true,
+          "computedCellIds": true,
+          "lazyMaterialization": true,
+          "serverExecution": false,
+          "contentAddressedSchemas": true,
+          "readerSchemaPrecedence": true
+        },
+        "phase": "start",
+        "docs": 187,
+        "bytes": 264137,
+        "selfDocs": 2,
+        "boardDocs": 1,
+        "otherDocs": 3,
+        "otherTopics": 3,
+        "otherBytes": 113070
+      },
+      {
+        "N": 10,
+        "arm": "current",
+        "base": "topics",
+        "d": 2,
+        "runHead": "bc23e3c6d09b77e63cf2b4a6a611c9dbaade4d96",
+        "status": [
+          "?? experiment-output/"
+        ],
+        "experimental": {
+          "modernCellRep": false,
+          "commitPreconditions": true,
+          "plainResultReceipts": true,
+          "computedCellIds": true,
+          "lazyMaterialization": true,
+          "serverExecution": false,
+          "contentAddressedSchemas": true,
+          "readerSchemaPrecedence": true
+        },
+        "phase": "start",
+        "docs": 211,
+        "bytes": 498891,
+        "selfDocs": 2,
+        "boardDocs": 1,
+        "otherDocs": 9,
+        "otherTopics": 9,
+        "otherBytes": 339210
+      },
+      {
+        "N": 40,
+        "arm": "current",
+        "base": "topics",
+        "d": 2,
+        "runHead": "bc23e3c6d09b77e63cf2b4a6a611c9dbaade4d96",
+        "status": [
+          "?? experiment-output/"
+        ],
+        "experimental": {
+          "modernCellRep": false,
+          "commitPreconditions": true,
+          "plainResultReceipts": true,
+          "computedCellIds": true,
+          "lazyMaterialization": true,
+          "serverExecution": false,
+          "contentAddressedSchemas": true,
+          "readerSchemaPrecedence": true
+        },
+        "phase": "start",
+        "docs": 331,
+        "bytes": 1672761,
+        "selfDocs": 2,
+        "boardDocs": 1,
+        "otherDocs": 39,
+        "otherTopics": 39,
+        "otherBytes": 1469910
+      }
+    ]
+  },
+  "startupAndLatencyDerivation": {
+    "startup": [
+      {
+        "name": "board segment",
+        "benchCase": "board",
+        "posture": "client execution (server execution off)",
+        "observations": [
+          {
+            "round": "r1-off-nav",
+            "n": 6,
+            "minMs": 607.55325,
+            "avgMs": 656.118501,
+            "p75Ms": 670.210709,
+            "maxMs": 770.517917
+          },
+          {
+            "round": "r2-off-nav",
+            "n": 6,
+            "minMs": 591.815959,
+            "avgMs": 756.457778,
+            "p75Ms": 795.540291,
+            "maxMs": 1157.012792
+          }
+        ],
+        "largestObservedMs": 1157.012792,
+        "rule": "largest observed value plus 10%, rounded up to an integer millisecond",
+        "limitMs": 1273,
+        "gatedInCi": false
+      },
+      {
+        "name": "scale board load, 100 topics",
+        "benchCase": "100",
+        "posture": "client execution (server execution off)",
+        "observations": [
+          {
+            "round": "r1-off-scale",
+            "n": 4,
+            "minMs": 1669.95825,
+            "avgMs": 2588.35374,
+            "p75Ms": 2177.534292,
+            "maxMs": 4410.12025
+          },
+          {
+            "round": "r2-off-scale",
+            "n": 4,
+            "minMs": 2192.219334,
+            "avgMs": 2566.264969,
+            "p75Ms": 2501.73825,
+            "maxMs": 3161.130041
+          }
+        ],
+        "largestObservedMs": 4410.12025,
+        "rule": "largest observed value plus 10%, rounded up to an integer millisecond",
+        "limitMs": 4852,
+        "gatedInCi": false
+      }
+    ],
+    "latency": [
+      {
+        "name": "comment segment",
+        "benchCase": "comment",
+        "posture": "client execution (server execution off)",
+        "observations": [
+          {
+            "round": "r1-off-nav",
+            "n": 6,
+            "minMs": 74.990125,
+            "avgMs": 92.275556,
+            "p75Ms": 96.699791,
+            "maxMs": 126.763833
+          },
+          {
+            "round": "r2-off-nav",
+            "n": 6,
+            "minMs": 76.667333,
+            "avgMs": 91.434459,
+            "p75Ms": 98.700083,
+            "maxMs": 99.038417
+          }
+        ],
+        "largestObservedMs": 126.763833,
+        "rule": "largest observed value plus 10%, rounded up to an integer millisecond",
+        "limitMs": 140,
+        "gatedInCi": false
+      },
+      {
+        "name": "reopen, 100 topics",
+        "benchCase": "reopen 100",
+        "posture": "client execution (server execution off)",
+        "observations": [
+          {
+            "round": "r1-off-scale",
+            "n": 4,
+            "minMs": 71.984833,
+            "avgMs": 84.384792,
+            "p75Ms": 86.004291,
+            "maxMs": 106.013792
+          },
+          {
+            "round": "r2-off-scale",
+            "n": 4,
+            "minMs": 86.707625,
+            "avgMs": 104.552386,
+            "p75Ms": 121.527958,
+            "maxMs": 121.992917
+          }
+        ],
+        "largestObservedMs": 121.992917,
+        "rule": "largest observed value plus 10%, rounded up to an integer millisecond",
+        "limitMs": 135,
+        "gatedInCi": false
+      }
+    ],
+    "note": "The observations the plan's startup and latency limits are derived from, and the arithmetic. The limits themselves are recorded in the measurement-and-acceptance section of docs/plans/topics-computation-cost.md; this block is the derivation, not a second statement of the policy. Taken under client execution on a shared machine under unrelated load; sources.browser and loadByArm record the conditions. Not gated in continuous integration."
+  }
+}

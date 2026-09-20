@@ -6,6 +6,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   buildRestoreDocument,
+  declaredRetirableLinks,
   deepEqual,
   findLink,
   isAbsentPathError,
@@ -239,21 +240,172 @@ describe("topics-rehearsal-lib", () => {
         },
         resolved,
       );
-      expect(structural).toEqual([
-        "mentionable",
-        "boardCrossrefs",
-        "boardNames",
-      ]);
-      expect(legacy).toEqual(["myName"]);
+      expect(structural).toEqual(["mentionable", "boardCrossrefs"]);
+      // In the raw argument's own order, which is what the walk follows. Both
+      // are retired here because this target declares neither.
+      expect(legacy).toEqual(["boardNames", "myName"]);
       expect(doc.mentionable).toBeUndefined();
       expect(doc.boardCrossrefs).toBeUndefined();
       expect(doc.boardNames).toBeUndefined();
       expect(doc.myName).toBeUndefined();
     });
 
+    it("relinks a retirable field the target still declares", () => {
+      // The two vintages a migration has in flight at once. This target still
+      // runs a pattern declaring `boardNames` and holds a live link there, so
+      // retiring it by name would delete a link doing its job: the apply
+      // replaces the whole document, and a field in neither list is gone.
+      const { doc, structural, legacy } = buildRestoreDocument(
+        { title: "t", boardNames: link },
+        resolved,
+        { declaredLinks: ["boardNames"] },
+      );
+      expect(structural).toEqual(["boardNames"]);
+      expect(legacy).toEqual([]);
+      expect(doc.boardNames).toBeUndefined();
+    });
+
+    it("carries a preserved value the export does not name", () => {
+      // An export taken before a topic stored its own number names none, and
+      // the apply replaces the whole document, so saying nothing about
+      // `shortName` removes it. A number is permanent and the board's
+      // namespace still points at the topic, so the live value is carried.
+      const { doc, carried } = buildRestoreDocument(
+        { title: "old" },
+        resolved,
+        { preserved: { shortName: "42" } },
+      );
+      expect(doc.shortName).toBe("42");
+      expect(carried).toEqual(["shortName"]);
+      expect(doc.title).toBe("old");
+    });
+
+    it("leaves a preserved value alone when the export names the same one", () => {
+      const { doc, carried } = buildRestoreDocument(
+        { title: "t", shortName: "42" },
+        resolved,
+        { preserved: { shortName: "42" } },
+      );
+      expect(doc.shortName).toBe("42");
+      expect(carried).toEqual([]);
+    });
+
+    it("refuses a preserved value the export and the target disagree on", () => {
+      expect(() =>
+        buildRestoreDocument(
+          { title: "t", shortName: "7" },
+          resolved,
+          { preserved: { shortName: "42" } },
+        )
+      ).toThrow("permanent");
+    });
+
+    it("keeps a link the pattern stopped declaring out of the relink list", () => {
+      // The whole point of retiring a link field rather than leaving it
+      // structural: `structural` is what the restore hands to `cf piece link`
+      // after the apply has already landed, so a path the current pattern does
+      // not declare there is a refusal the operator meets mid-restore, with
+      // the content write done and unverified. An export taken before a topic
+      // stored its own number carries exactly such a link.
+      const { doc, structural, legacy } = buildRestoreDocument(
+        { title: "t", boardNames: link },
+        resolved,
+      );
+      expect(structural).toEqual([]);
+      expect(legacy).toEqual(["boardNames"]);
+      expect(doc.boardNames).toBeUndefined();
+      expect(doc.title).toBe("t");
+    });
+
+    it("relinks a live link the target declares and the export never had", () => {
+      // The mirror of the two cases above, and the direction a migration
+      // reaches second: the EXPORT is the newer of the two. A topic filed
+      // after the pattern stopped declaring `boardNames` never had one, so an
+      // export taken from it names no such field — while a target still on the
+      // old pattern holds a live link there. The apply replaces the whole
+      // document, so a field in neither list is gone: the target's working
+      // wiring is erased by an export that simply never mentioned it. The
+      // relink needs nothing from the export, because it links to the board's
+      // own path.
+      const { doc, structural, legacy } = buildRestoreDocument(
+        { title: "t" },
+        resolved,
+        { declaredLinks: ["boardNames"] },
+      );
+      expect(structural).toEqual(["boardNames"]);
+      expect(legacy).toEqual([]);
+      expect(doc.boardNames).toBeUndefined();
+    });
+
+    it("refuses a declared link it has no board path to relink from", () => {
+      // `myName` is retirable but not structural: no board path re-establishes
+      // it. A target declaring one the export does not name cannot be restored
+      // without destroying it, and the throw comes before the apply rather
+      // than after, which is the difference between a refusal and a loss.
+      expect(() =>
+        buildRestoreDocument({ title: "t" }, resolved, {
+          declaredLinks: ["myName"],
+        })
+      ).toThrow("myName");
+    });
+
     it("throws on a link-valued field it does not understand", () => {
       expect(() => buildRestoreDocument({ attachments: [link] }, resolved))
         .toThrow("attachments");
+    });
+  });
+
+  describe("declaredRetirableLinks", () => {
+    // No export fixture here on purpose: the probe asks the TARGET, and what
+    // the export holds is not a parameter of the question.
+    const probe = (answers: Record<string, unknown>) => (field: string) =>
+      Promise.resolve(answers[field]);
+
+    it("reads a bound link as declared", async () => {
+      expect(
+        await declaredRetirableLinks(probe({ boardNames: [{ name: "1" }] })),
+      ).toEqual(["boardNames"]);
+    });
+
+    it("reads a declared input's own default as declared", async () => {
+      // An unbound but declared `boardNames` answers with the `Default<[]>`
+      // its input carries, which is what tells it apart from a path the
+      // pattern does not declare at all. The 2026-09-05 clone rehearsal
+      // measured that read.
+      expect(
+        await declaredRetirableLinks(probe({ boardNames: [] })),
+      ).toEqual(["boardNames"]);
+    });
+
+    it("retires a link the target's own source no longer declares", async () => {
+      // The case this change creates, and the one an export's vintage cannot
+      // settle: a topic migrated past `boardNames` keeps the stored link in
+      // its raw argument, so an export taken from it AFTERWARDS holds a link
+      // at a path its own source does not declare — with the pattern identity
+      // matching, because no migration separates the two. Classifying that as
+      // declared sends the restore to `cf piece link` against a path that
+      // refuses, after the content write has landed.
+      expect(
+        await declaredRetirableLinks(probe({})),
+      ).toEqual([]);
+    });
+
+    it("asks about every retirable field, not only the ones the export holds", async () => {
+      // What the export holds cannot bound the question, because the target is
+      // the one being asked. A newer export names no `boardNames`; a target
+      // still on the old pattern holds a live one, and the whole-document
+      // apply erases whatever neither list names. So each retirable field is
+      // probed once whether or not the export mentions it, and only the
+      // structural fields — which are never retired — go unasked.
+      const asked: string[] = [];
+      const counted = (field: string) => {
+        asked.push(field);
+        return Promise.resolve(field === "boardNames" ? [] : undefined);
+      };
+      expect(
+        await declaredRetirableLinks(counted),
+      ).toEqual(["boardNames"]);
+      expect(asked).toEqual(["myName", "boardNames"]);
     });
   });
 
