@@ -587,25 +587,22 @@ export class CommonFabricFormatter implements TypeFormatter {
       innerType = context.typeChecker.getAnyType();
     }
 
-    let innerNode: ts.TypeNode | undefined = innerTypeNode;
-    if (this.#isUnusableInnerType(innerType) && usableResolvedInner) {
-      innerType = usableResolvedInner;
-      innerNode = undefined;
-    }
-
     const uninterpreted: ts.TypeNode[] = [];
     let innerSchema = this.#schemaGenerator.formatChildType(
       innerType,
       { ...context, uninterpretedTypeNodes: uninterpreted },
-      innerNode,
+      innerTypeNode,
     );
 
-    // A payload node read only in part loses what the unread part carried: the
-    // `T & { [DEFAULT_MARKER]: V }` arm of an expanded `Default` holds the
-    // default. The wrapper's own payload supplies the whole value schema
-    // instead, at the cost of any narrowing the node carried.
+    // A payload node that node analysis had to guess at loses what it could
+    // not read. A node printed from a type is guessed at whole, since the
+    // names it spells resolve to nothing here; one read in part loses only
+    // what that part carried, and the `T & { [DEFAULT_MARKER]: V }` arm of an
+    // expanded `Default` carries the default. The wrapper's own payload
+    // supplies the value schema instead, at the cost of any narrowing the
+    // node carried.
     if (uninterpreted.length > 0) {
-      if (innerNode && usableResolvedInner) {
+      if (usableResolvedInner) {
         innerSchema = this.#schemaGenerator.formatChildType(
           usableResolvedInner,
           context,
