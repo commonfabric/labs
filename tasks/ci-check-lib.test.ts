@@ -1392,6 +1392,54 @@ Deno.test("githubGet reads a secondary limit out of a refusal that sends no head
   assertEquals(calls, 4);
 });
 
+Deno.test("githubGet classifies a refusal that carries no body from its headers", async () => {
+  // Nothing to read, so the headers are the whole of the evidence — and they
+  // are enough here.
+  const calls = await withFetchAnswering(
+    () =>
+      new Response(null, {
+        status: 403,
+        statusText: "Forbidden",
+        headers: { "x-ratelimit-remaining": "0" },
+      }),
+    async () => {
+      await assertRejects(
+        () => githubGet("/repos/commonfabric/labs/actions/runs"),
+        GitHubRateLimitError,
+      );
+    },
+  );
+
+  assertEquals(calls, 1);
+});
+
+Deno.test("githubGet reports the status when a refusal's body fails mid-read", async () => {
+  // Reading the body is how a refusal is classified, never how it is
+  // reported, so a body that breaks costs the classification its evidence and
+  // the failure nothing.
+  await withFetchAnswering(
+    () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new Error("the body failed"));
+          },
+        }),
+        { status: 404, statusText: "Not Found" },
+      ),
+    async () => {
+      const error = await assertRejects(
+        () => githubGet("/repos/commonfabric/labs/missing"),
+        Error,
+      );
+      assertEquals(
+        error.message,
+        "GitHub API GET 404 Not Found: /repos/commonfabric/labs/missing",
+      );
+    },
+  );
+});
+
 Deno.test("githubGet does not call an ordinary refusal a rate limit", async () => {
   await withFetchAnswering(
     () => new Response("forbidden", { status: 403, statusText: "Forbidden" }),
