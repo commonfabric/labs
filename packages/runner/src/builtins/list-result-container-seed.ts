@@ -1,7 +1,7 @@
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import type { Logger } from "@commonfabric/utils/logger";
 
-import type { Cell } from "../cell.ts";
+import { type Cell, syncCellForIdentity } from "../cell.ts";
 import type { Runtime } from "../runtime.ts";
 import { markDurableReadTx } from "../storage/reactivity-log.ts";
 
@@ -124,4 +124,89 @@ export function seedResultContainerWhenPullSettles(
   });
   runtime.storageManager.trackUntilSettled(settled);
   return settled;
+}
+
+/** One list coordinator's wait on its own result container. */
+export interface ResumeContainerWait {
+  /** Whether a reconcile holding `container` may wait for it. */
+  mayWait(container: Cell<any[]>): boolean;
+
+  /**
+   * Wait for `container`: pull it, seed it when it is absent, and re-arm the
+   * coordinator once both have settled. A call naming the container a wait is
+   * already outstanding for joins that wait rather than starting a second one;
+   * one naming a container whose wait has settled opens a wait of its own,
+   * which is what a coordinator that let a container go and took it up again
+   * takes.
+   */
+  begin(
+    container: Cell<any[]>,
+    stillHeld: () => boolean,
+    rearm: () => void,
+  ): void;
+}
+
+/**
+ * The wait a resuming list coordinator takes on its result container, which it
+ * takes once per container.
+ *
+ * The reconcile that reads an undefined container waits rather than reconcile
+ * against a value that has not arrived, and {@link
+ * seedResultContainerWhenPullSettles} re-arms the coordinator once the pull has
+ * settled. The wait is over that one pull. The reconcile it re-arms reads the
+ * container again, and when that read has not changed it has nothing further to
+ * wait for: the pull it would start has already happened, and waiting on it
+ * again is a cycle whose every turn leaves the list rendering nothing.
+ *
+ * A read that does not change is an ordinary state for a client running under
+ * server-side execution. Such a client keeps its own writes in a process-local
+ * speculation overlay, and a layer standing on the container's document that
+ * carries no value for the container answers every ordinary read of it with
+ * undefined while it stands. The seed reads the durable replica, so a container
+ * another writer has filled stands it down, and what that container holds sits
+ * beneath the layer where no read the coordinator takes reaches it. The value
+ * such a coordinator can read comes from its own ordinary write, which lands
+ * above the layer, so the reconcile after the wait is the one that produces it.
+ *
+ * `mayWait` is therefore asked before the container is read, and answers for
+ * the container alone: a coordinator that swaps in a replacement waits for that
+ * one as well, since a replacement's own state is what its first reconcile
+ * confirms.
+ */
+export function resumeContainerWait(
+  runtime: Runtime,
+  logger: Logger,
+  seedActionId: string,
+  identity?: ScopeKeyIdentity,
+): ResumeContainerWait {
+  let outstanding: Cell<any[]> | undefined;
+  let waited: Cell<any[]> | undefined;
+  return {
+    mayWait: (container) => waited !== container,
+    begin: (container, stillHeld, rearm) => {
+      if (outstanding === container) return;
+      outstanding = container;
+      const settled = seedResultContainerWhenPullSettles(
+        runtime,
+        container,
+        stillHeld,
+        () => {
+          waited = container;
+          rearm();
+        },
+        syncCellForIdentity(container, identity),
+        logger,
+        seedActionId,
+        identity,
+      );
+      // The chain settles whether or not the coordinator was still holding the
+      // container to re-arm, and a coordinator that was not is one this wait
+      // told nothing. Releasing the container here is what lets it wait afresh
+      // if it takes that same container up again, rather than join a wait
+      // whose answer never reached it. The chain does not reject.
+      settled.then(() => {
+        if (outstanding === container) outstanding = undefined;
+      });
+    },
+  };
 }

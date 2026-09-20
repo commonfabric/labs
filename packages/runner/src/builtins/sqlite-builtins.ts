@@ -39,8 +39,10 @@ import {
   effectTargetKey,
   markEffectCompletion,
 } from "../executor/effect-completion.ts";
+import type { CfcReadOnExceed } from "../cfc/read-ceiling.ts";
 import {
   requireWaveAcceptance,
+  type WaveRunContext,
   waveRunContextOf,
   waveSettlementOf,
 } from "../executor/wave.ts";
@@ -83,6 +85,44 @@ type WireParams = SqliteParamsWire | undefined;
 
 const errMsg = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+/**
+ * The read ceiling a query issued on `tx` reads under: the runtime's own
+ * `cfcReadMaxConfidentiality` met with the ceiling the run's session
+ * carries (`WaveRunContext.readCeiling` — the client's declared ceiling,
+ * stamped by the serving loop onto every run it serves as that session),
+ * so a served run is bounded by the client that demanded it exactly as the
+ * client's own run would be. The mode meets toward `fail`: either side
+ * saying `fail` stands, else either side's `skip`; neither source can turn
+ * the other's refusal into a release. Both absent is no ceiling.
+ *
+ * Exported for unit testing only — not part of the builtin surface.
+ */
+export function effectiveReadCeiling(
+  runtime: Runtime,
+  runContext: WaveRunContext | undefined,
+): {
+  maxConfidentiality: readonly CfcConfClause[] | undefined;
+  onExceed: CfcReadOnExceed | undefined;
+} {
+  const carried = runContext?.readCeiling;
+  if (carried === undefined) {
+    return {
+      maxConfidentiality: runtime.cfcReadMaxConfidentiality,
+      onExceed: runtime.cfcReadOnExceed,
+    };
+  }
+  const own = runtime.cfcReadOnExceed;
+  return {
+    maxConfidentiality: meetCfcObservationCeilings(
+      runtime.cfcReadMaxConfidentiality,
+      carried.maxConfidentiality,
+    ),
+    onExceed: own === "fail" || carried.onExceed === "fail"
+      ? "fail"
+      : (own ?? carried.onExceed),
+  };
+}
 
 /**
  * The acting principal THIS run carries, for the sqlite builtins' identity
@@ -861,6 +901,7 @@ export function sqliteQuery(
     const runContext = waveRunContextOf(tx);
     const servedRun = runContext !== undefined;
     const runIdentity = runContext?.scopeKeyIdentity;
+    const readCeiling = effectiveReadCeiling(runtime, runContext);
     if (
       crossSpace && servedRun &&
       (!runIdentity?.principal ||
@@ -977,12 +1018,11 @@ export function sqliteQuery(
     // handlers rather than the result cell, which another runtime may be
     // serving. After the inputs guard, so a scope the db handle carries is
     // read from the handle rather than refused before the handle loads.
-    if (
-      runtime.cfcReadMaxConfidentiality !== undefined && scope !== "session"
-    ) {
+    if (readCeiling.maxConfidentiality !== undefined && scope !== "session") {
       throw new Error(
-        "sqlite: this runtime declares a read ceiling " +
-          "(`cfcReadMaxConfidentiality`), which applies only to a " +
+        "sqlite: this run reads under a read ceiling (the runtime's " +
+          "`cfcReadMaxConfidentiality`, or the one its session carries), " +
+          "which applies only to a " +
           `session-scoped query result; this result is ${scope}-scoped. ` +
           "Declare the result per session — `PerSession<>` on the query's " +
           'result type, the `scope: "session"` query option, ' +
@@ -1053,14 +1093,14 @@ export function sqliteQuery(
           ? { user: actingReader ?? null, session: clearanceSession }
           : (actingReader ?? null))
         : null,
-      // The runtime's own ceiling joins the request identity too: a settled
-      // result is only a hit for a runtime reading under the same ceiling.
-      // Absent for a runtime without one, so such a runtime's queries do not
-      // re-hash.
-      ...(runtime.cfcReadMaxConfidentiality !== undefined
+      // The run's ceiling joins the request identity too — the runtime's
+      // own met with the one the run's session carries: a settled result
+      // is only a hit for a run reading under the same ceiling. Absent for
+      // a run without one, so such a run's queries do not re-hash.
+      ...(readCeiling.maxConfidentiality !== undefined
         ? {
-          runtimeReadCeiling: runtime.cfcReadMaxConfidentiality,
-          runtimeReadOnExceed: runtime.cfcReadOnExceed ?? null,
+          runtimeReadCeiling: readCeiling.maxConfidentiality,
+          runtimeReadOnExceed: readCeiling.onExceed ?? null,
         }
         : {}),
     });
@@ -1302,9 +1342,9 @@ export function sqliteQuery(
             // is sound but over-withholds an OR-labeled row both admit.
             // Resolved against the same principal and owner as the query's,
             // and refusing on the same terms when a placeholder cannot be.
-            if (runtime.cfcReadMaxConfidentiality !== undefined) {
+            if (readCeiling.maxConfidentiality !== undefined) {
               const resolved = resolveCeilingPlaceholders(
-                runtime.cfcReadMaxConfidentiality,
+                readCeiling.maxConfidentiality,
                 placeholderContext,
               );
               if ("error" in resolved) {
@@ -1325,10 +1365,10 @@ export function sqliteQuery(
               // supplies the default for a query that declared none, and
               // the builtin's `fail` beneath that.
               onExceed: inputs.onExceed === undefined
-                ? runtime.cfcReadOnExceed
+                ? readCeiling.onExceed
                 : inputs.onExceed,
               onExceedIsRuntimeDefault: inputs.onExceed === undefined &&
-                runtime.cfcReadOnExceed !== undefined,
+                readCeiling.onExceed !== undefined,
               // Phase 3.b read-time clearance: the reader is the acting
               // principal of the REQUESTING run (same identity the ceiling
               // placeholders resolve against, and the USER half of the

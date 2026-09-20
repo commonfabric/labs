@@ -1,9 +1,9 @@
 # Agent requests from a pattern, and the queue that runs them
 
-**Status:** design, ruled on 2026-09-18; phase 2 (the result writer, §1.3)
-is built, the rest is not. Written against `c89aef10a3`. The Decisions table
-records the rulings and the Assumptions section the assumptions the first take
-rests on.
+**Status:** design, ruled on 2026-09-18; phase 1 (the Loom retrieval tools) and
+phase 2 (the result writer, §1.3) are built, and the rest is not. Written
+against `c89aef10a3`. The Decisions table records the rulings and the
+Assumptions section the assumptions the first take rests on.
 
 ## What this is
 
@@ -340,7 +340,7 @@ measured the same way (section 1.6), and a refusal returns a typed opaque
 observation, never silence (AH-CFC-6). The fabric session's read ceiling is
 the same clause set; its present limit — it gates session-scoped query results
 only, deviation 9 in the implementation profile — is a known gap the design
-inherits and phase 6 retires.
+inherits and phase 7 retires.
 
 **Gate 3 — the result, at the write.** Section 1.3's write is an ordinary
 transaction under the run's session, so every runtime gate applies to it. It
@@ -385,11 +385,12 @@ is a consequence rather than a rule.
 
 Set aside for a shared runner later: a service identity with a delegated read
 binding naming the requester as acting principal, the way the serving
-runtime's loopback sessions carry `actingAs: "space-owner"` (`protocol.md`
-§7). It is the shape the server-execution spec prefers and it needs the
-per-document grant story that protocol.md lists as owed (OW13). Ruled out
-outright: the service identity alone, which resolves `user:<serviceDID>` and
-reads empty instances.
+runtime's loopback sessions carry `actingAs: "space-owner"`
+([`protocol.md`](../specs/server-side-execution/protocol.md) §7). It is the
+shape the server-execution spec prefers and it needs the per-document grant
+story that `protocol.md` lists as owed (OW13). Ruled out outright: the
+service identity alone, which resolves `user:<serviceDID>` and reads empty
+instances.
 
 The sandbox never holds a fabric credential; that is the existing
 fabric-session property and nothing here changes it.
@@ -408,35 +409,60 @@ are about collections:
 | `loom_page_discover` | `loom page discover --concise [--kind] [--limit]` | the canonical Page inventory |
 | `loom_page_inspect` | `loom page inspect <target> --concise` | a Page's context, `sourceVersion`, relations, and capability descriptors |
 | `loom_page_read` | `loom page read <target>` | the Page or Document source with its exact `sourceVersion` |
-| `loom_people` | `loom people <query> --json [--shape summary\|card]` | canonical person resolution: identifiers, pages, recent interaction summary |
-| `loom_calendar_list` | `loom calendar list --json [--since/--until]` | loom-native events from the calendar store |
-| `loom_context` | `loom context where\|activity\|hosted --json` | where the user is, current activity, hosted surfaces |
-| `loom_profile` | `loom profile --json` | the user's short resolver-backed identity |
+| `loom_people` | `loom people <query> --json [--shape summary\|card]`, lookups only — an email, phone, `handle:`, `person:`, `group:`, or `People/<Name>/about.md` path; the maintenance and group-write verbs the same positional carries are refused | canonical person resolution: identifiers, pages, recent interaction summary |
+| `loom_calendar_list` | `loom calendar list --json [--from/--to \| --all]` (`YYYY-MM-DD` dates) | loom-native events from the calendar store |
+| `loom_context` | `loom context where\|activity --json [--at] [--since/--until]`; `hosted` records channel coordinates and is refused | where the user is, current activity |
+| `loom_profile` | `loom profile --json [--fresh]` | the user's short resolver-backed identity |
 
-The first four are confirmed against the pinned loom checkout; the last four
-are named from loom's command inventory and phase 1 confirms each command's
-exact arguments and JSON shape before it ships, dropping any that turns out
-not to be read-only or not to answer in JSON. Page mutation (`create`,
-`replace`, `section …`, `relocate`, `trash`), calendar writes, and `wish` are
-out of the first take. `--concise` is passed by the host, not offered to the
-model: a full `inspect` exceeds the harness's tool-result bound and returns
-fragments that do not parse, which loom's own skill notes.
+All eight are confirmed against the pinned loom checkout: read-only, JSON on
+`--json`, with the argument surface the table shows and nothing else — no
+routing flag (`--rpc-queue`, `--instance`, `--engine`, `--person-ref`) reaches
+the model, and a value that would parse as a flag or as another verb is
+refused before a process starts. Page mutation (`create`, `replace`,
+`section …`, `relocate`, `trash`), calendar writes, and `wish` are out of the
+first take. `--concise` is passed by the host, not offered to the model: a
+full `inspect` exceeds the harness's tool-result bound and returns fragments
+that do not parse, which loom's own skill notes.
+[`packages/cf-harness/docs/LOOM_RETRIEVAL.md`](../../packages/cf-harness/docs/LOOM_RETRIEVAL.md)
+is the implementation reference.
 
-**Labels on Loom observations.** Loom connector rows carry `ifc` labels and
-loom's `/agent-search` honors a facet scope and a read ceiling injected by its
-broker. The tool passes the run's observation ceiling through the same
-channels the wish dispatcher uses (`--read-ceiling-file`, the facet header the
-broker writes), so loom's own filtering runs first, and the host measures the
-returned rows' labels against the ceiling again before they enter model
-context (gate 2) so that a loom version that returns an unlabeled row is
-refused rather than admitted. A `hits[]` entry whose label cannot be read is
-reported as a label, not as public — the disclosure rule in
-`cfc-label-disclosure.ts`. The same reported label is what the result writer
-stamps on a document it mints for a hit the answer references (section 1.3).
+**Labels on Loom observations.** Loom connector rows carry `ifc` labels in
+their stores, and loom's `/agent-search` honors the facet scope its broker was
+launched with (`fabric_local_agent_rpc.py serve --facets`), so loom's own
+filtering runs first. None of the retrieval commands takes a ceiling on argv,
+so the harness carries the ceiling on its own side: the retrieval
+configuration names the loom read-ceiling record a facet-scoped dispatch
+writes (`readCeilingFile`, the `run-ceiling` output with `loomReadCeiling`,
+`facets`, `facetSource`), the harness reads it on the host, checks its facets
+against the configured ones, and meets its clause list with the run's own
+ceiling. Every returned row's label is then measured against that met ceiling
+before the row enters model context (gate 2), with the same predicate
+`run_pattern` uses over a disclosed label, and a row above the ceiling is
+replaced by a typed opaque entry.
 
-**Loom's search JSON is deliberately unversioned** until a first external
-consumer appears; this is that consumer, and phase 1 adds `schemaVersion: 1`
-to the loom side and pins it in the tool.
+Where a row's label comes from is the first take's one placeholder. A row
+that carries `ifc` keeps its own label. A row that carries none — which, with
+the pinned loom checkout, is every row: `loom search --json` emits no `ifc` on
+its hits, and the page, people, calendar, context, and profile payloads carry
+none — is given **the label of the query that produced it**: the label of the
+tool call's input, which the harness already tracks as the prompt slot's
+influence joined with the run's accumulated model-context label. That is not
+correct — a row's label is a fact about its store, not about who asked — and
+it can under-label a row; it stands so that the first take runs end to end,
+it is published as a deviation in the harness's implementation profile, and it
+sits behind one function (`labelForUnlabeledLoomRow()`) so that reading real
+per-row labels from loom replaces that and nothing else. A row whose `ifc` is
+present and unreadable is still refused as `cfc_label_read_failed`, with or
+without a ceiling: a label that is there and cannot be read is not an absent
+one (the disclosure rule in `cfc-label-disclosure.ts`). The admitted rows'
+labels, read or assigned, join into one model-context observation, and an
+admitted row's label is what the result writer stamps on a document it mints
+for a hit the answer references (section 1.3).
+
+**The tool pins `schemaVersion: 1` on loom's search JSON** and refuses a
+payload that states any other value. A payload that states none is read as
+version 1, which is what the pinned loom emits; the stamp is loom's to add, in
+`render_json` (`lib/connectors/search.py`).
 
 ### 1.7 Where a run executes, across two toolsheds
 
@@ -523,15 +549,25 @@ and the scheduled-work plan already proposes a per-space ledger there; that is
 later work and it reads the same records.
 
 **Ruled: records in the requesting space, indexed from the home space.** The
-record is created in the same transaction as the request, in the requester's
-`PerUser` instance, next to the builtin cell that derives from it. The
-requester's home space carries one index piece (`#agent_queue`, an underscore
-because the hashtag extractor ends at a hyphen) holding `{link, host}` entries
+record is created by the request's post-commit effect, once the transaction
+staging the request is durable, in the requester's `PerUser` instance, next to
+the builtin cell that derives from it; the index entry follows in a second
+transaction, since the home space is not the requesting space. A request with
+no requesting identity to resolve a home space for is refused before it is
+staged, so no record exists that no index names; a record whose index write is
+refused is ended by the effect as `refused`, and the builtin derives that. The
+requester's home space carries one index piece holding `{link, host}` entries
 to records across spaces and toolsheds, written through the sanctioned
-`.inSpace` crossing that home-space wish bootstrap already uses, and
-discovered by consumers with `wish({ query: "#agent_queue", scope: ["~"] })` —
-the aggregation shape [Loom resource discovery](loom-resource-discovery.md)
-chose for the same problem. Set aside: a dedicated per-user queue space
+`.inSpace` crossing that home-space wish bootstrap already uses. The home
+default pattern holds the piece in a field of its own, `agentQueue`, and
+consumers discover it with `wish({ query: "#agent_queue" })`, a well-known
+home-space target that `wish` resolves to that field the way it resolves
+`#journal` and `#learned`. A hashtag search does not reach it: under
+`scope: ["~"]` that search reads the user's favorites and nothing else in the
+home space, and the index is not a favorite, which the user could remove. The
+index is the aggregation shape
+[Loom resource discovery](loom-resource-discovery.md) chose for the same
+problem. Set aside: a dedicated per-user queue space
 pointed at from the profile, which costs a minted space per user and puts the
 record and the builtin cell in different spaces.
 
@@ -546,6 +582,7 @@ AgentRun (PerUser, in the requesting space)
   state          queued | claimed | running | completed | failed | refused | cancelled
   stateSince
   claim?         { runner, leaseUntil }        while claimed or running
+  attempts       claims made so far; runner-written, incremented by each claim
   cancel         stream                         the one write a client makes
   result?        link to the result document the harness wrote
   outcome?       completed | failed | refused | cancelled
@@ -598,7 +635,13 @@ the harness's estimate table, and the record says `estimatedCostUsd`, not
 **Idempotency.** The record's identity is the request's `requestHash`, so the
 same request in the same instance yields the same record and a memo hit yields
 no record at all — the request settled from the stored result. A pattern that
-wants a fresh run includes an input that changes.
+wants a fresh run includes an input that changes. The same identity covers a
+request whose transaction committed and whose post-commit effect did not run,
+because the process ended between the two: the node's next run finds the
+stored `requestHash` with no record and no result, stages the request again as
+`generateObject` does for a stored hash that has neither result nor error, and
+the effect creates the record then. Creation is keyed by `requestHash`, so an
+effect that runs twice finds the first run's record and makes no second one.
 
 **Labels.** The request fields carry the request transaction's join. The
 terminal fields are written by the runner in the same session that wrote the
@@ -612,7 +655,7 @@ result. Until it does, they fail closed to the result's label.
 
 The runner subscribes to the user's index, claims the oldest `queued` record
 it may run, and runs it. The claim is a commit: `state: claimed`,
-`claim.runner`, `claim.leaseUntil`. Two runners racing for one record
+`claim.runner`, `claim.leaseUntil`, and `attempts` incremented. Two runners racing for one record
 conflict on the basis and one loses, which is the transaction system's
 ordinary answer and needs no lock.
 
@@ -624,10 +667,13 @@ the way a detached `cf piece call` subscribes to its receipt rather than
 polling.
 
 **Crash recovery.** A lease is the honest tool here: a runner that dies
-mid-run leaves a `running` record with a `leaseUntil` in the past, and the
-next runner to see it re-queues it once, recording the retry on the record
-(AH-LIFE-5: bounded, visible, and only where replay is safe — a run that had
-not yet started a side effect). A second expiry fails the record. The lease is
+after its claim commits leaves a `claimed` or `running` record with a
+`leaseUntil` in the past — `claimed` when it died before the run started — and
+the next runner to see either re-queues it once. The bound is the record's
+`attempts` count, which every claim increments in the same commit: an expired
+record with `attempts` of one goes back to `queued`, and one with `attempts`
+of two is failed (AH-LIFE-5: bounded, visible, and only where replay is safe —
+a run that had not yet started a side effect). The lease is
 renewed on every durable write the run makes, so it measures silence rather
 than time since start — the trap
 [`docs/features/fetch-request-deadlines.md`](../features/fetch-request-deadlines.md)
@@ -648,8 +694,8 @@ sums; nothing in the first take depends on it.
   in `packages/cli`, over the home index. Described in the package README
   because `deno task check-command-docs` requires it, and given completion
   candidates because `check-completion-slots` does.
-- **A Home tab**, "Agent runs": a pattern over `wish({ query: "#agent_queue",
-  scope: ["~"] })` rendering state, age, and usage per record, with a cancel
+- **A Home tab**, "Agent runs": a pattern over
+  `wish({ query: "#agent_queue" })` rendering state, age, and usage per record, with a cancel
   action and a "no runner registered" notice read from `agentRunner`. The
   same pattern is what a third-party space embeds if it wants to show its own
   runs.
@@ -664,15 +710,18 @@ harness has a scripted model client (`packages/cf-harness/test/research.test.ts`
 `ScriptedModelClient`), and the runner's admission and settlement are
 exercised with a fake executor the way hosted authoring's stage 1 prescribes.
 
-**Phase 1 — Loom retrieval tools in the harness.** The tools of section 1.6
-over a `HarnessLoomRetrievalConfig` beside the authoring one; confirmation of
-each command's arguments and JSON shape; ceiling and facet forwarding; label
-measurement on returned rows; the untrusted-content notice; `schemaVersion`
-on loom's search JSON. Capability description lists the tools. *Acceptance:* a
-batch run over a fixture loom answers a search and a people lookup from a
-scripted model, an unlabeled row is refused, and the run report shows the
-tools' calls. Documents: `LOOM_AUTHORING.md` gains a sibling or a section,
-`IMPLEMENTATION_PROFILE.md` lists the tools.
+**Phase 1 — Loom retrieval tools in the harness. Built.** The tools of
+section 1.6 over a `HarnessLoomRetrievalConfig` beside the authoring one, each
+command's arguments and JSON shape confirmed against the pinned loom checkout;
+the run's ceiling met with the loom read-ceiling record on the host; label
+measurement on returned rows; the untrusted-content notice; a pinned
+`schemaVersion` on loom's search JSON. Capability description lists the tools.
+A scripted model over fixture output gets a search and a people lookup
+returned, a row with a malformed label is refused, and the transcript shows
+the tools' calls. `packages/cf-harness/docs/LOOM_RETRIEVAL.md` is the reference, and
+`IMPLEMENTATION_PROFILE.md` lists the tools. What the phase rests on from the
+loom side, and what it assumes in its place — the query's label for a row
+without one — is assumption 11.
 
 **Phase 2 — The result writer in the harness.** The host-side routine of
 section 1.3: validate, resolve handles to links, mint labeled documents for
@@ -723,7 +772,8 @@ space-scoped reads — a reduced-assurance deviation with an owner and a
 retirement condition, as AH-CFC-15 requires.
 
 **Later, not sequenced:** ranking; the durable ledger and per-user budgets;
-Page and calendar mutation tools; a shared runner with delegated identity;
+Loom tools returning real per-row labels, which retires the query-label
+assumption of section 1.6; Page and calendar mutation tools; a shared runner with delegated identity;
 folding hosted pattern authoring into an agent request with the
 `pattern-author` profile.
 
@@ -784,9 +834,20 @@ Listed so they can be overturned before phase 1.
    single-deriver rule forbids it, the progress fields move to a sibling
    document the runner owns and the record links to it; nothing else changes.
 10. **Minting a document for a Loom hit is an authored write the runtime
-    admits with a declared label.** The label comes from loom's `ifc` on the
-    row; a row without one is refused before it reaches the model, so none
+    admits with a declared label.** The label is the one the row was admitted
+    under: loom's `ifc` on the row where it carries one, and otherwise the
+    label of the query that produced it (assumption 11). A row whose `ifc` is
+    present and unreadable is refused before it reaches the model, so none
     reaches the writer.
+11. **A Loom row without a label carries the label of its query.** The pinned
+    loom emits no `ifc` on any retrieval payload and no `schemaVersion` on its
+    search JSON, so the harness assigns every real row the label of the tool
+    call's input and reads an unversioned search payload as version 1
+    (section 1.6). The first is known to be unsound — it can under-label a
+    row — and is accepted for the first take; the demonstration (phase 6)
+    rests on it. Loom returning a real label per row, and stamping its search
+    payload, is later work, and replaces the assumption without changing a
+    stored shape.
 
 ## Alternatives considered and set aside
 

@@ -1106,11 +1106,10 @@ export function describePlan(
 /** What the lane reaches for beyond its own arguments. */
 export interface LaneDeps {
   /**
-   * Where the manifest comes from. A caller that supplies one is saying
-   * what the store holds, which is how the selected path — the packing,
-   * the skip lists, the summary — is exercised without one.
+   * Where the manifest comes from, read at a moment. Every caller names
+   * one, and the store is named at the command line alone.
    */
-  manifest?: (at: string) => Promise<ManifestFetch>;
+  manifest: (options: { at: string }) => Promise<ManifestFetch>;
 
   /**
    * Where the suites come from. A caller that supplies them is saying
@@ -1155,8 +1154,7 @@ async function read(
 ): Promise<Reading> {
   const moment = await manifestMoment(options);
   if (moment.note !== undefined) say(`ci-lane: ${moment.note}`);
-  const fetch = deps.manifest ?? ((at: string) => fetchManifest({ at }));
-  const manifest = await fetch(moment.at);
+  const manifest = await deps.manifest({ at: moment.at });
   // A full run reads the manifest for what things cost and nothing else,
   // and a run with no diff has touched nothing.
   const changed = options.full
@@ -1210,7 +1208,7 @@ function packing(
  */
 export async function fullLanes(
   options: LaneOptions,
-  deps: LaneDeps = {},
+  deps: LaneDeps,
 ): Promise<number> {
   const suites = await (deps.topology ?? loadTopology)(options.root);
   const { seen } = await read(options, suites, deps, console.error);
@@ -1262,7 +1260,7 @@ export async function fullLanes(
 /** Runs one lane, and says whether everything in it passed. */
 export async function runLane(
   options: LaneOptions,
-  deps: LaneDeps = {},
+  deps: LaneDeps,
 ): Promise<boolean> {
   // Ahead of everything this lane reads, plans, opens or spawns, so that
   // no child of it inherits the token except through the capability.
@@ -1483,9 +1481,9 @@ export function describeCoverage(
  * lane that failed, zero otherwise.
  */
 export async function main(
-  args: readonly string[] = Deno.args,
-  root: string = Deno.cwd(),
-  deps: LaneDeps = {},
+  args: readonly string[],
+  root: string,
+  deps: LaneDeps,
 ): Promise<number> {
   const options = parseLaneArgs(args, root);
   if (options === undefined) {
@@ -1502,7 +1500,10 @@ export async function main(
   return await runLane(options, deps) ? 0 : 1;
 }
 
+/** What the lane the command line runs reads its manifest from. */
+const store: LaneDeps = { manifest: fetchManifest };
+
 // `Deno.exitCode` rather than `Deno.exit`, which would end the process
 // before the unload handlers run — and one of those is what writes a
 // test run's name map into its spool.
-if (import.meta.main) Deno.exitCode = await main();
+if (import.meta.main) Deno.exitCode = await main(Deno.args, Deno.cwd(), store);

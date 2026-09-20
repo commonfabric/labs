@@ -158,6 +158,7 @@ describe("memory v2 flags", () => {
       entityIdLookup: true,
       sessionHoldings: true,
       viewScopedReplicationV1: false,
+      sessionReadCeiling: true,
       syncSchemaTableV2: false,
     });
 
@@ -182,6 +183,7 @@ describe("memory v2 flags", () => {
       entityIdLookup: true,
       sessionHoldings: true,
       viewScopedReplicationV1: false,
+      sessionReadCeiling: true,
       syncSchemaTableV2: true,
     });
 
@@ -210,6 +212,7 @@ describe("memory v2 flags", () => {
         entityIdLookup: true,
         sessionHoldings: false,
         viewScopedReplicationV1: true,
+        sessionReadCeiling: true,
       },
       {
         modernCellRep: true,
@@ -230,6 +233,9 @@ describe("memory v2 flags", () => {
         entityIdLookup: false,
         sessionHoldings: false,
         viewScopedReplicationV1: false,
+        // Likewise: a client carrying a read ceiling refuses such a
+        // server itself, and one carrying none connects as before.
+        sessionReadCeiling: false,
       },
     ));
   });
@@ -297,6 +303,7 @@ describe("parseMemoryProtocolFlags", () => {
       entityIdLookup: false,
       sessionHoldings: false,
       viewScopedReplicationV1: false,
+      sessionReadCeiling: false,
     });
     assertEquals(parseMemoryProtocolFlags({ modernCellRep: false }), {
       modernCellRep: false,
@@ -314,6 +321,7 @@ describe("parseMemoryProtocolFlags", () => {
       entityIdLookup: false,
       sessionHoldings: false,
       viewScopedReplicationV1: false,
+      sessionReadCeiling: false,
     });
   });
 
@@ -338,6 +346,7 @@ describe("parseMemoryProtocolFlags", () => {
         entityIdLookup: false,
         sessionHoldings: false,
         viewScopedReplicationV1: false,
+        sessionReadCeiling: false,
       },
     );
   });
@@ -374,6 +383,7 @@ describe("parseMemoryProtocolFlags", () => {
         messageCompressionV1: false,
         sessionHoldings: false,
         viewScopedReplicationV1: false,
+        sessionReadCeiling: false,
         sqliteCommitRowLabelEval: false,
         sqliteQueryReader: false,
         pendingReadStacks: false,
@@ -404,6 +414,7 @@ describe("parseMemoryProtocolFlags", () => {
         entityIdLookup: false,
         sessionHoldings: false,
         viewScopedReplicationV1: false,
+        sessionReadCeiling: false,
       },
     );
   });
@@ -429,6 +440,7 @@ describe("parseMemoryProtocolFlags", () => {
         entityIdLookup: false,
         sessionHoldings: false,
         viewScopedReplicationV1: false,
+        sessionReadCeiling: false,
       },
     );
   });
@@ -462,6 +474,7 @@ describe("parseMemoryProtocolFlags", () => {
         entityIdLookup: false,
         sessionHoldings: false,
         viewScopedReplicationV1: false,
+        sessionReadCeiling: false,
       },
     );
   });
@@ -488,6 +501,7 @@ describe("parseMemoryProtocolFlags", () => {
         entityIdLookup: false,
         sessionHoldings: false,
         viewScopedReplicationV1: false,
+        sessionReadCeiling: false,
       },
     );
   });
@@ -511,6 +525,7 @@ describe("parseMemoryProtocolFlags", () => {
         entityIdLookup: false,
         sessionHoldings: false,
         viewScopedReplicationV1: false,
+        sessionReadCeiling: false,
       },
     );
   });
@@ -522,6 +537,7 @@ describe("parseMemoryProtocolFlags", () => {
         entityIdLookup: true,
         sessionHoldings: false,
         viewScopedReplicationV1: false,
+        sessionReadCeiling: false,
       }),
       {
         modernCellRep: false,
@@ -539,6 +555,7 @@ describe("parseMemoryProtocolFlags", () => {
         entityIdLookup: true,
         sessionHoldings: false,
         viewScopedReplicationV1: false,
+        sessionReadCeiling: false,
       },
     );
   });

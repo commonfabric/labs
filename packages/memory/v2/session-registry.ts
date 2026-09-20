@@ -2,6 +2,7 @@ import type {
   OpCursor,
   OperationWatchSpec,
   SessionDescriptor,
+  SessionReadCeiling,
   SessionToken,
   ViewInterest,
   ViewPlan,
@@ -16,6 +17,10 @@ export type SessionState = {
   id: string;
   space: string;
   sessionToken: SessionToken;
+
+  /** The read ceiling this session declared at its LAST open
+   * (`SessionDescriptor.readCeiling`); fresh per open, never inherited. */
+  readCeiling?: SessionReadCeiling;
   seenSeq: number;
   lastSyncedSeq: number;
   watches: WatchSpec[];
@@ -208,6 +213,12 @@ export class SessionRegistry {
       expiresAt: null,
       ownerConnectionId,
       principal: existing?.principal ?? principal,
+      // Fresh per open (never inherited), like the binding below: a
+      // resuming client re-declares its ceiling, and an open declaring none
+      // is a session that reads unbounded.
+      ...(session.readCeiling !== undefined
+        ? { readCeiling: session.readCeiling }
+        : {}),
       // Fresh per open (never inherited): the binding reflects THIS
       // open's resolution against the current ACL; an open without the
       // marker carries none (fail-closed toward less authority).

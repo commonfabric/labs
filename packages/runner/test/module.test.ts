@@ -332,14 +332,14 @@ describe("module", () => {
       );
       const stream = clickHandler({ x: reactive(10), y: reactive(20) });
       expect(isReactive(stream)).toBe(true);
-      const { value, nodes } = (stream as any).export();
-      expect(value).toEqual({ $stream: true });
+      const { kind, nodes } = (stream as any).export();
+      expect(kind).toBe("stream");
       expect(nodes.size).toBe(1);
       expect([...nodes][0].module).toMatchObject({ wrapper: "handler" });
       expect([...nodes][0].inputs.$event).toBe(stream);
     });
 
-    it("serializes stream causes without losing the stream marker", () => {
+    it("serializes stream causes with the stream declared in their schemas", () => {
       const clickHandler = handler(
         false,
         false,
@@ -359,14 +359,14 @@ describe("module", () => {
           $alias: {
             partialCause: { stream: "click" },
             path: [],
-            schema: true,
+            schema: externalRefTo({ asCell: ["stream"] }),
             scope: "space",
           },
         },
       });
       expect(clickPattern.derivedInternalCells).toEqual([{
         partialCause: { stream: "click" },
-        schema: { default: { $stream: true } },
+        schema: { asCell: ["stream"] },
       }]);
       const handlerInputs = clickPattern.nodes[0].inputs as {
         $event: unknown;
@@ -375,7 +375,7 @@ describe("module", () => {
         $alias: {
           partialCause: { stream: "click" },
           path: [],
-          schema: true,
+          schema: externalRefTo({ asCell: ["stream"] }),
           scope: "space",
         },
       });
@@ -395,13 +395,13 @@ describe("module", () => {
         $alias: {
           partialCause: generatedStreamCause,
           path: [],
-          schema: true,
+          schema: externalRefTo({ asCell: ["stream"] }),
           scope: "space",
         },
       });
       expect(clickPattern.derivedInternalCells).toEqual([{
         partialCause: generatedStreamCause,
-        schema: { default: { $stream: true } },
+        schema: { asCell: ["stream"] },
       }]);
       const handlerInputs = clickPattern.nodes[0].inputs as {
         $event: unknown;
@@ -410,7 +410,7 @@ describe("module", () => {
         $alias: {
           partialCause: generatedStreamCause,
           path: [],
-          schema: true,
+          schema: externalRefTo({ asCell: ["stream"] }),
           scope: "space",
         },
       });
@@ -535,8 +535,8 @@ describe("module", () => {
       );
       const stream = clickHandler.with({ x: reactive(10), y: reactive(20) });
       expect(isReactive(stream)).toBe(true);
-      const { value, nodes } = (stream as any).export();
-      expect(value).toEqual({ $stream: true });
+      const { kind, nodes } = (stream as any).export();
+      expect(kind).toBe("stream");
       expect(nodes.size).toBe(1);
       expect([...nodes][0].module).toMatchObject({ wrapper: "handler" });
       expect([...nodes][0].inputs.$event).toBe(stream);

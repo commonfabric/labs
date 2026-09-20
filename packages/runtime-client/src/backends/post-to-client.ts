@@ -1,4 +1,4 @@
-import { toLongQuotedDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 import { realmFromFabricValue } from "@commonfabric/data-model/codecs";
 
 import { type IPCRemotePost, NotificationType } from "@/protocol/mod.ts";
@@ -78,9 +78,9 @@ function undeliverableMessageFrom(
   message: IPCRemotePost,
   error: unknown,
 ): IPCRemotePost {
-  const reason = `Undeliverable message: ${describeFailure(error)}: ${
-    toLongQuotedDebugString(message)
-  }`;
+  const reason = debugStr`Undeliverable message: ${
+    describeFailure(error)
+  }: $quote,long${message}`;
   const msgId = (message as { msgId?: unknown }).msgId;
 
   return typeof msgId === "number"

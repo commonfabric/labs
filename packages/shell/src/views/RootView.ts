@@ -1,4 +1,4 @@
-import { toLongQuotedDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 import { type DID, type Identity, KeyStore } from "@commonfabric/identity";
 import { resolveSpaceDid, RuntimeInternals } from "@commonfabric/lib-shell";
 import {
@@ -666,7 +666,7 @@ export class XRootView extends BaseView implements ShellApp {
         return this.setConfig(command.key, command.value);
     }
     throw new Error(
-      `Received a non-command: ${toLongQuotedDebugString(command)}`,
+      debugStr`Received a non-command: $quote,long${command}`,
     );
   }
 

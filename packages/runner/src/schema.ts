@@ -570,16 +570,15 @@ export function processDefaultValue(
     if (
       ContextualFlowControl.getAsCellKind(asCellValues.at(0)) === "stream"
     ) {
-      logger.warn(
-        "Created asStream as a default value, but this is likely unintentional",
-      );
-      // This can receive events, but at first nothing will be bound to it.
-      // Normally these get created by a handler call.
-      return runtime.getImmutableCell(
-        link.space,
-        { $stream: true },
-        resolvedSchema,
+      // A stream position holds no value: the handle is what the schema
+      // declares, and the handlers registered on its link are what an event
+      // sent to it reaches.
+      return createCell(
+        runtime,
+        { ...link, schema: resolvedSchema },
         tx,
+        synced,
+        "stream",
         cfcLabelView,
       );
     } else {
@@ -673,12 +672,9 @@ export function processDefaultValue(
           const asCellValues = ContextualFlowControl.getAsCellValues(
             propSchema,
           );
-          if (
-            asCellValues.length > 0 &&
-            ContextualFlowControl.getAsCellKind(asCellValues.at(0)) !==
-              "stream"
-          ) {
-            // asCell are always created, it's their value that can be `undefined`
+          if (asCellValues.length > 0) {
+            // asCell are always created, it's their value that can be
+            // `undefined` — and for a stream, is never anything else.
             result[key] = processDefaultValue(
               runtime,
               tx,

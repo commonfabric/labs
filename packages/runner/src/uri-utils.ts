@@ -1,4 +1,4 @@
-import { hashOf, toCompactDebugString } from "@commonfabric/data-model";
+import { debugStr, hashOf } from "@commonfabric/data-model";
 import {
   entityRefToString,
   isEntityRef,
@@ -56,7 +56,7 @@ export function toURI(value: unknown, kind?: EntityKind): URI {
   }
 
   throw new Error(
-    `Cannot convert value to URI: ${toCompactDebugString(value)}`,
+    debugStr`Cannot convert value to URI: $quote${value}`,
   );
 }
 

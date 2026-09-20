@@ -1,4 +1,4 @@
-import { action, assert, pattern, TESTS } from "commonfabric";
+import { action, assert, equals, NAME, pattern, TESTS } from "commonfabric";
 import ProfileHome from "./profile-home.tsx";
 
 export default pattern(() => {
@@ -16,55 +16,55 @@ export default pattern(() => {
   const action_set_avatar = action(() => {
     profile.setAvatar.send({ avatar: "AL" });
   });
-  // The share inbox pointer (2026-09-15): both parts shaped or nothing.
-  const INBOX_SPACE = "did:key:z6MkinboxAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  // The share inbox link. Loom sends it serialized, as the `link@1` sigil
+  // naming the inbox piece and its space; here the link is a live cell, the
+  // catalog card added below, because a link into a space the harness does
+  // not hold resolves to nothing and the action never runs.
   const action_set_inbox = action(() => {
-    profile.setInbox.send({
-      space: INBOX_SPACE,
-      host: "https://estuary.example.ts.net/",
+    const first = profile.elements[0];
+    if (first) profile.setInbox.send({ inbox: first.cell });
+  });
+  const action_add_second_card = action(() => {
+    profile.addElement.send({
+      catalogId: "profile-card",
+      title: "Second card",
+      tag: "#second",
+      userTags: ["person"],
     });
   });
-  const action_set_inbox_half = action(() => {
-    profile.setInbox.send({
-      space: INBOX_SPACE,
-      host: "estuary.example.ts.net",
-    });
-  });
-  const action_set_inbox_with_credentials = action(() => {
-    profile.setInbox.send({
-      space: INBOX_SPACE,
-      host: "https://alice:secret@estuary.example.ts.net",
-    });
-  });
-  const action_set_inbox_with_a_path_and_query = action(() => {
-    profile.setInbox.send({
-      space: INBOX_SPACE,
-      host: "https://estuary.example.ts.net/api?x=1",
-    });
-  });
-  const action_set_inbox_with_a_loose_did = action(() => {
-    profile.setInbox.send({
-      space: "did:key:not-base58-0OIl",
-      host: "https://estuary.example.ts.net",
-    });
+  const action_set_inbox_to_second = action(() => {
+    const second = profile.elements[1];
+    if (second) profile.setInbox.send({ inbox: second.cell });
   });
   const action_clear_inbox = action(() => {
     profile.setInbox.send({});
   });
-  const assert_inbox_empty_at_birth = assert(() =>
-    profile.inbox?.space === "" && profile.inbox?.host === ""
+  const assert_inbox_absent_at_birth = assert(() =>
+    profile.inbox?.piece === undefined
   );
-  const assert_inbox_set_with_the_host_trimmed = assert(() =>
-    profile.inbox?.space === INBOX_SPACE &&
-    profile.inbox?.host === "https://estuary.example.ts.net"
+  const assert_inbox_links_the_first_card = assert(() =>
+    profile.inbox?.piece !== undefined &&
+    equals(profile.inbox?.piece, profile.elements[0]?.cell)
   );
-  const assert_inbox_kept_over_a_half_pointer = assert(() =>
-    profile.inbox?.space === INBOX_SPACE &&
-    profile.inbox?.host === "https://estuary.example.ts.net"
+  const assert_inbox_links_the_second_card = assert(() =>
+    profile.inbox?.piece !== undefined &&
+    equals(profile.inbox?.piece, profile.elements[1]?.cell)
   );
-  const assert_inbox_cleared = assert(() =>
-    profile.inbox?.space === "" && profile.inbox?.host === ""
+  // Both cards keep their content through every pointer write: the pointer
+  // is re-bound and cleared in place, never written through into a card.
+  // Each card's name is read back through its cell, so a write that reached
+  // a card's document — or re-bound a card's slot to the other card — reads
+  // as the wrong name, not as an object of some kind.
+  const assert_both_cards_intact = assert(() =>
+    profile.elements.length === 2 &&
+    profile.elements[0]?.cell?.[NAME] === "Profile card" &&
+    profile.elements[1]?.cell?.[NAME] === "Second card"
   );
+  const assert_inbox_cleared = assert(() => profile.inbox?.piece === undefined);
+  const action_remove_second_card = action(() => {
+    const second = profile.elements[1];
+    if (second) profile.removeElement.send({ cell: second.cell });
+  });
 
   // CT-1828: same empty-after-trim guard applies to setAvatar.
   const action_clear_avatar = action(() => {
@@ -193,19 +193,7 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
-      { assertion: assert_inbox_empty_at_birth },
-      { action: action_set_inbox },
-      { assertion: assert_inbox_set_with_the_host_trimmed },
-      { action: action_set_inbox_half },
-      { assertion: assert_inbox_kept_over_a_half_pointer },
-      { action: action_set_inbox_with_credentials },
-      { assertion: assert_inbox_kept_over_a_half_pointer },
-      { action: action_set_inbox_with_a_path_and_query },
-      { assertion: assert_inbox_kept_over_a_half_pointer },
-      { action: action_set_inbox_with_a_loose_did },
-      { assertion: assert_inbox_kept_over_a_half_pointer },
-      { action: action_clear_inbox },
-      { assertion: assert_inbox_cleared },
+      { assertion: assert_inbox_absent_at_birth },
       { assertion: assert_initial_state },
       // CT-1748: a freshly-visited profile starts in the read-only
       // presentation, not the edit form.
@@ -238,6 +226,20 @@ export default pattern(() => {
       // writer behind every mutation surface (CT-1698).
       { action: action_add_catalog_element },
       { assertion: assert_added_element },
+      // The share inbox link points at a piece; a send without one clears it.
+      { action: action_set_inbox },
+      { assertion: assert_inbox_links_the_first_card },
+      { action: action_add_second_card },
+      { action: action_set_inbox_to_second },
+      { assertion: assert_inbox_links_the_second_card },
+      { assertion: assert_both_cards_intact },
+      { action: action_clear_inbox },
+      { assertion: assert_inbox_cleared },
+      { assertion: assert_both_cards_intact },
+      { action: action_remove_second_card },
+      { assertion: assert_added_element },
+      { action: action_remove_catalog_element },
+      { assertion: assert_removed_element },
       // CT-1748: the view/edit toggle flips presentation ⇄ edit form.
       { action: action_toggle_editing },
       { assertion: assert_editing },

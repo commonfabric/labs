@@ -14,13 +14,7 @@
  */
 
 import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
-import { FabricEpochDay } from "@/fabric-primitives/FabricEpochDay.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
-import { FabricKeyPair } from "@/fabric-primitives/FabricKeyPair.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
-import { FabricUnavailable } from "@/fabric-primitives/FabricUnavailable.ts";
+import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
 
 /** A class with no fabric representation, wanted here by name. */
 export class PlainClass {}
@@ -107,20 +101,11 @@ export const LAYER_CORPUS: ReadonlyArray<[string, unknown]> = [
   ["a null-prototype object", Object.assign(Object.create(null), { a: 1 })],
   ["a class instance", new PlainClass()],
   ["a class instance with a forged `constructor`", forgedConstructorInstance()],
-  ["a `FabricBytes`", new FabricBytes(new Uint8Array([1]))],
-  ["a `FabricEpochNsec`", new FabricEpochNsec(0n)],
-  ["a `FabricEpochDay`", new FabricEpochDay(0n)],
-  ["a `FabricRegExp`", new FabricRegExp(/a/)],
-  ["a `FabricHash`", new FabricHash(new Uint8Array(32), "fid1")],
-  [
-    "a `FabricKeyPair`",
-    new FabricKeyPair(
-      "ExampleAlgorithm",
-      new Uint8Array([1]),
-      new Uint8Array([2]),
-    ),
-  ],
-  ["a `FabricUnavailable`", new FabricUnavailable("error", "general", "boom")],
+  // One entry per concrete primitive class, from the examples the classes'
+  // own package keeps complete, so that no class goes uncarried here.
+  ...Object.entries(FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY).map((
+    [name, [example]],
+  ): [string, unknown] => [`a \`${name}\``, example]),
   ["a `FabricError`", FabricError.fromNativeError(new Error("x"))],
   ["a `Date`", new Date(1234)],
   ["a `Uint8Array`", new Uint8Array([1, 2, 3])],

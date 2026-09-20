@@ -57,6 +57,12 @@ The current package provides:
   include verified authored Loom receipts and the submitted origin. See
   [Durable Loom authoring](LOOM_AUTHORING.md) for authority, custody, and retry
   contracts;
+- read-only Loom retrieval — search, page discovery, inspection, and reads,
+  person resolution, calendar events, ambient context, and the profile — over
+  the same kind of host command transport, every row measured against the run's
+  observation ceiling before it enters model context. A row loom returns without
+  a label is given the query's label, an assumption the implementation profile
+  publishes as a deviation. See [Read-only Loom retrieval](LOOM_RETRIEVAL.md);
 - batch CLI execution with bounded model turns and optional streamed events;
 - machine-readable capability discovery with `--describe-capabilities`;
 - persistent provider configuration and structured config/auth control, with
@@ -371,9 +377,12 @@ The current package provides:
   governs only query results declared per session (`PerSession<>`,
   `scope: "session"`, `.asScope("session")`, or a session-scoped db) and the
   runtime refuses any other query under it, so a pattern authored for a bounded
-  run declares its results per session; it is refused without a fabric session,
-  recorded with its source as `readMaxConfidentiality` in `fabricSessionCfc`,
-  printed in the operator summary, and inherited unchanged by a delegated child;
+  run declares its results per session; it bounds the session on either
+  server-execution arm (under server execution the session declares it to the
+  space server, whose runtime reads under it); it is refused without a fabric
+  session, recorded with its source as `readMaxConfidentiality` in
+  `fabricSessionCfc`, printed in the operator summary, and inherited unchanged
+  by a delegated child;
 - an opt-in pattern index (`--pattern-index-url`, or its
   `CF_HARNESS_PATTERN_INDEX_URL` environment fallback), which needs the fabric
   session configuration: index requests are signed with the session identity

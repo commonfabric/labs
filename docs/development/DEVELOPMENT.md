@@ -440,6 +440,10 @@ come up.
 - Write descriptive error messages, marked up as
   [`code-comment-style.md`](code-comment-style.md#error-and-log-messages)
   describes.
+- Put a value into a message with the `debugStr` template tag, which quotes
+  the value's rendering and cuts it to length;
+  [`code-comment-style.md`](code-comment-style.md#putting-a-value-into-a-message)
+  says how.
 - Propagate errors using async/await.
 - Document possible errors in JSDoc.
 

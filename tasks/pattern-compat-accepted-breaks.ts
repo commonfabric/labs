@@ -59,6 +59,26 @@ export interface AcceptedContractBreak {
    * when either gate runs (`pattern-break-registry-guards.ts`).
    */
   record: string;
+
+  /**
+   * The ruling that lets this entry name a required pattern. Absent on every
+   * other entry: the guard refuses a break on an auto-updating root unless
+   * one is carried, because such a break strands every space's root the
+   * moment it merges, and that is a decision a person makes by name.
+   */
+  requiredPatternOverride?: RequiredPatternOverride;
+}
+
+/** Who ruled that a required pattern takes an accepted break, and why. */
+export interface RequiredPatternOverride {
+  /** The person whose ruling this is. */
+  rulingBy: string;
+
+  /** The date of the ruling, `YYYY-MM-DD`. */
+  on: string;
+
+  /** The ruling, quoted or summarized. */
+  reason: string;
 }
 
 export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
@@ -79,6 +99,63 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     reason:
       "the profile's new owner-protected inbox pointer reads as a changed label under a baseline that never had the property",
     record: "docs/history/profile-inbox-pointer-break.md",
+  },
+  {
+    // A SECOND entry for the picker, and no baseline here appears above: the
+    // pairs stay disjoint because the gate keys accepted pairs into a Map,
+    // so a baseline named twice would take the later path set in place of
+    // the earlier one.
+    //
+    // The share inbox pointer's `space` and `host` fields left, replaced by
+    // a link to the inbox piece under `piece`. The recorded object requires
+    // the two fields, so no candidate without them applies over it.
+    pattern: "system/profile-picker.tsx",
+    baselines: [
+      "20260915T064957Z-Idjl03Ljo7Yyeecn",
+      "20260918T000350Z-TY78mWqtLnHDoZtN",
+    ],
+    paths: ["argument.defaultProfile"],
+    reason:
+      "the share inbox pointer's `space` and `host` fields left, replaced by a link to the inbox piece under `piece`, which the recorded object requires them beside",
+    record: "docs/history/profile-inbox-piece-break.md",
+  },
+  {
+    // The same ruling seen from the profile itself: the proof names the
+    // first of the two fields that left.
+    pattern: "system/profile-home.tsx",
+    baselines: [
+      "20260915T064957Z-mE7S34E5xl20_PZs",
+      "20260917T235321Z--A47I2nujs7eKua6",
+    ],
+    paths: ["result.inbox.host"],
+    reason:
+      "the share inbox pointer's `space` and `host` fields left, replaced by a link to the inbox piece under `piece`, which the recorded object requires them beside",
+    record: "docs/history/profile-inbox-piece-break.md",
+  },
+  {
+    // The same ruling seen from home, whose published `defaultProfile`
+    // carries the profile's shape. Home is a required pattern, so this entry
+    // carries the ruling that lets it name one: every space's root takes the
+    // break the moment it merges, and nothing deployed beyond one install
+    // holds a pointer of the old shape.
+    pattern: "system/home.tsx",
+    baselines: [
+      "20260915T064957Z-k40oHeJO0hh31i1H",
+      "20260917T220636Z-xdDxE87ojM-_6i1g",
+      "20260918T000350Z-AhP3Iq9N0OLx48b1",
+      "20260918T002421Z-RB590FUNua-vIXOh",
+      "20260918T072634Z-NeP8mB1oe_0bWKFV",
+    ],
+    paths: ["result.defaultProfile"],
+    reason:
+      "the share inbox pointer's `space` and `host` fields left, replaced by a link to the inbox piece under `piece`, which the recorded object requires them beside",
+    record: "docs/history/profile-inbox-piece-break.md",
+    requiredPatternOverride: {
+      rulingBy: "Berni",
+      on: "2026-09-18",
+      reason:
+        "you can make that an allowed incompatible pattern update if you need to since other than Gideon no one will have that version of setInbox",
+    },
   },
   {
     // The Join verb's event opens: `Record<PropertyKey, never>` compiled to

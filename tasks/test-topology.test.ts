@@ -160,7 +160,10 @@ describe("the test topology", () => {
       { test: { k: "gate", s: "repo", n: "check-deno-pins" } },
       { test: { k: "gate", s: "repo", n: "check-test-aliases" } },
       { test: { k: "gate", s: "repo", n: "pattern-compat annotation.tsx" } },
-      { test: { k: "gate", s: "repo", n: "pattern-vintage a b c" } },
+      // The vintage gate's wrapper record. Its per-fixture records are
+      // named after fixtures in the tree, which `test-topology/gates.test.ts`
+      // checks against the tree itself.
+      { test: { k: "gate", s: "repo", n: "pattern-vintage" } },
       {
         test: {
           k: "typecheck",

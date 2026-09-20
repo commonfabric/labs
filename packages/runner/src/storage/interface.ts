@@ -38,6 +38,7 @@ import type {
   ReleaseOpFieldOperation,
   ScopeKey,
   ScopeKeyIdentity,
+  SessionReadCeiling,
   SessionSyncUpsert,
   SqliteDbRef,
   SqliteOperation,
@@ -301,6 +302,19 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * was installed). Optional, like the observer.
    */
   openedSpaces?(): MemorySpace[];
+
+  /**
+   * Declares the read ceiling every session this manager opens carries in
+   * its signed `session.open` descriptor (`SessionDescriptor.readCeiling`),
+   * so a space server serving this runtime's queries bounds them by it. A
+   * flag-ON client runtime configured with `cfcReadMaxConfidentiality`
+   * calls this at construction; a manager without the method cannot carry
+   * a ceiling, and the runtime refuses to be built with one over it.
+   *
+   * @throws If a session is already open: a ceiling declared after the
+   * fact would leave that session reading unbounded.
+   */
+  setSessionReadCeiling?(ceiling: SessionReadCeiling): void;
 
   /**
    * Record a runtime-learned HTTP or HTTPS host hint for a space

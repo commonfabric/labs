@@ -732,9 +732,17 @@ export interface RuntimeOptions {
    * reads are governed by the commit-boundary gates, and a host's direct
    * sqlite bridge refuses labeled tables outright. Validated and deep-frozen
    * at construction; an empty list, which admits nothing, is refused (omit
-   * the option for no ceiling), and so is a ceiling on a client under
-   * server execution, whose queries the space server's runtime serves
-   * outside this ceiling's reach.
+   * the option for no ceiling).
+   *
+   * A client under server execution executes no query of its own: the
+   * space server's runtime serves them. Its ceiling travels with its
+   * sessions instead — declared through the storage manager
+   * (`setSessionReadCeiling`) into every signed `session.open` descriptor
+   * before a session opens — and the serving loop stamps it onto every run
+   * it serves as one of those sessions, whose queries then read under the
+   * serving runtime's option met with it. Such a client refuses a storage
+   * manager that cannot carry the ceiling, and a server that does not
+   * record one (`sessionReadCeiling` absent from its protocol flags).
    */
   cfcReadMaxConfidentiality?: readonly CfcConfClause[];
 
@@ -1757,20 +1765,31 @@ export class Runtime {
       // malformed or empty read ceiling refuses to boot rather than admitting
       // nothing at every query.
       const readCeiling = buildCfcReadCeiling(options);
-      // A client under server execution stages its queries for the space
-      // server's runtime to serve, and the ceiling reaches only the runtime
-      // it is configured on. Accepting it there would read as a bounded
-      // session whose reads nothing bounds, so it is refused until a run
-      // carries its ceiling to the runtime that serves it.
+      // A client under server execution executes no query of its own — the
+      // space server's runtime serves them — so its ceiling travels with
+      // its sessions (`SessionDescriptor.readCeiling`, declared through the
+      // storage manager before any session opens) and the serving loop
+      // stamps it onto every run it serves as one of them. A manager that
+      // cannot carry it is refused here: a ceiling accepted over one would
+      // read as a bounded session whose reads nothing bounds.
       if (
         readCeiling.maxConfidentiality !== undefined &&
         this.experimental.serverExecution === true && !this.servingPosture
       ) {
-        throw new Error(
-          "cfcReadMaxConfidentiality does not bound a client under server " +
-            "execution: its queries are served by the space server's " +
-            "runtime, which this ceiling does not reach",
-        );
+        if (this.storageManager.setSessionReadCeiling === undefined) {
+          throw new Error(
+            "cfcReadMaxConfidentiality does not bound a client under server " +
+              "execution over this storage manager: its queries are served " +
+              "by the space server's runtime, and the manager cannot carry " +
+              "the ceiling to it (`setSessionReadCeiling`)",
+          );
+        }
+        this.storageManager.setSessionReadCeiling({
+          maxConfidentiality: readCeiling.maxConfidentiality,
+          ...(readCeiling.onExceed !== undefined
+            ? { onExceed: readCeiling.onExceed }
+            : {}),
+        });
       }
       this.cfcReadMaxConfidentiality = readCeiling.maxConfidentiality;
       this.cfcReadOnExceed = readCeiling.onExceed;

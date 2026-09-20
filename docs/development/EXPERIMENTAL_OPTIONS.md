@@ -363,6 +363,11 @@ server](#clients-that-are-not-built-alongside-their-server).
     new` compiles and materializes on the space's serving runtime rather
     than in the client
     ([`server-pattern-lifecycle.md`](../features/server-pattern-lifecycle.md)),
+    serves a bounded client's `db.query` under the read ceiling that client
+    declared in its signed `session.open` descriptor (a flag-ON client
+    runtime hands its `cfcReadMaxConfidentiality` to its sessions, and
+    the serving loop stamps it onto every run served as one of them —
+    `docs/specs/sqlite-builtin/06-cfc.md`, "Runtime read ceiling"),
     and exposes the §7 `servingLoop` counters on `/api/health/stats`.
     Narrowing writes chain the eager via-user hop (scopes.md §2's MUST).
     Since Phase 2 (speculation.md), a flag-ON CLIENT no longer commits

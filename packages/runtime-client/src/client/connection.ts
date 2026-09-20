@@ -1,4 +1,4 @@
-import { toLongQuotedDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 import { defer, type Deferred } from "@commonfabric/utils/defer";
 import { getLogger } from "@commonfabric/utils/logger";
 import { unrefTimer } from "@commonfabric/utils/sleep";
@@ -596,7 +596,7 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
         this.emit("eventneedsattention", message);
       } else {
         console.warn(
-          `Unknown notification: ${toLongQuotedDebugString(message)}`,
+          debugStr`Unknown notification: $quote,long${message}`,
         );
       }
       return;

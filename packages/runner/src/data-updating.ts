@@ -62,6 +62,7 @@ import {
   areMaybeLinkAndNormalizedLinkSame,
   areNormalizedLinksSame,
   createSigilLinkFromParsedLink,
+  declareStreamSchema,
   isCellLink,
   isPrimitiveCellLink,
   isSigilLink,
@@ -1204,6 +1205,9 @@ export function normalizeAndDiff(
     const seedDefault = isObjectOrArray(cellSchema)
       ? cellSchema.default
       : undefined;
+    // A descriptor from before streams were declared by schema spells the
+    // declaration as a default of `{ $stream: true }`. That is not a value a
+    // stream holds, and a stream's document holds none, so it seeds nothing.
     const seedTarget = seedDefault !== undefined &&
         !(isObjectOrArray(seedDefault) &&
           (seedDefault as Record<string, unknown>).$stream === true)
@@ -1296,11 +1300,24 @@ export function normalizeAndDiff(
         }
       }
     }
+    // A stream handle's own schema is the event schema it accepts. The link
+    // that stands for the handle declares the stream, so a reader following
+    // it to a document that holds nothing still knows what the position is.
+    // The handle's kind decides, with nothing read: a read of the target here
+    // would join its label into this write.
+    const cellLink = newValue.getAsNormalizedFullLink();
+    const streamHandle = newValue instanceof CellImpl &&
+      newValue.kind === "stream";
     newValue = attachCfcLabelViewToSigilLink(
-      createSigilLinkFromParsedLink(newValue.getAsNormalizedFullLink(), {
-        base: link,
-        includeSchema: true,
-      }),
+      createSigilLinkFromParsedLink(
+        streamHandle
+          ? { ...cellLink, schema: declareStreamSchema(cellLink.schema) }
+          : cellLink,
+        {
+          base: link,
+          includeSchema: true,
+        },
+      ),
       carriedCfcLabelView,
     );
   }

@@ -1525,70 +1525,10 @@ describe("setup/start", () => {
     );
   });
 
-  it("reports a missing stream marker when a handler's $event reads undefined", async () => {
-    const pattern: Pattern = {
-      argumentSchema: { type: "object", properties: {} },
-      resultSchema: {},
-      result: {},
-      nodes: [
-        {
-          module: { type: "javascript", implementation: () => undefined },
-          inputs: {
-            $event: { $alias: { cell: "argument", path: ["missingStream"] } },
-          },
-          outputs: {},
-        },
-      ],
-    };
+  it("refuses an action node whose inputs bind `$event`", async () => {
+    // A handler lowered where a lift belongs has this shape: no handler
+    // wrapper on the module, and a `$event` among the inputs.
 
-    const resultCell = runtime.getCell(
-      space,
-      "handler $event reads undefined",
-    );
-    setupTrusted(runtime, undefined, pattern, {}, resultCell);
-
-    // The node is authored as a handler but its stream marker location was
-    // never written (e.g. state persisted in an older format). The error must
-    // say the marker is missing, not that it was overwritten.
-    const error = await runtime.start(resultCell).then(
-      () => undefined,
-      (e) => e as Error,
-    );
-    expect(error?.message).toContain("was never written");
-    // This piece's internal meta is the modern manifest (an array), so the
-    // pre-manifest hint must not fire on it.
-    expect(error?.message).not.toContain("pre-manifest");
-  });
-
-  it("reports an overwritten stream marker when $event resolves to data", async () => {
-    const pattern: Pattern = {
-      argumentSchema: {
-        type: "object",
-        properties: { ev: { type: "number" } },
-      },
-      resultSchema: {},
-      result: {},
-      nodes: [
-        {
-          module: { type: "javascript", implementation: () => undefined },
-          inputs: { $event: { $alias: { cell: "argument", path: ["ev"] } } },
-          outputs: {},
-        },
-      ],
-    };
-
-    const resultCell = runtime.getCell(
-      space,
-      "handler $event resolves to data",
-    );
-    setupTrusted(runtime, undefined, pattern, { ev: 7 }, resultCell);
-
-    await expect(runtime.start(resultCell)).rejects.toThrow(
-      "was overwritten (found: `7`)",
-    );
-  });
-
-  it("reports a non-link $event input on a handler node", async () => {
     const pattern: Pattern = {
       argumentSchema: { type: "object", properties: {} },
       resultSchema: {},
@@ -1602,108 +1542,110 @@ describe("setup/start", () => {
       ],
     };
 
-    const resultCell = runtime.getCell(space, "handler $event is not a link");
+    const resultCell = runtime.getCell(space, "action node binds $event");
     setupTrusted(runtime, undefined, pattern, {}, resultCell);
 
     await expect(runtime.start(resultCell)).rejects.toThrow(
-      "is not a stream reference",
+      "binds a `$event` input",
     );
   });
 
-  it("hints at the pre-manifest format when internal meta is a single-cell link", async () => {
+  it("refuses a handler node with no `$event` input", async () => {
     const pattern: Pattern = {
       argumentSchema: { type: "object", properties: {} },
       resultSchema: {},
       result: {},
       nodes: [
         {
-          module: { type: "javascript", implementation: () => undefined },
-          inputs: {
-            $event: { $alias: { cell: "argument", path: ["missingStream"] } },
+          module: {
+            type: "javascript",
+            wrapper: "handler",
+            implementation: () => undefined,
           },
+          inputs: { $ctx: {} },
           outputs: {},
         },
       ],
     };
 
-    const resultCell = runtime.getCell(
-      space,
-      "pre-manifest internal meta hint",
-    );
+    const resultCell = runtime.getCell(space, "handler node without $event");
     setupTrusted(runtime, undefined, pattern, {}, resultCell);
 
-    // Simulate a piece persisted before the internal-cell manifest format
-    // (#3911): its `internal` meta is a single cell link rather than the
-    // manifest array the modern setup path writes.
-    const legacyInternalCell = runtime.getCell(
-      space,
-      "pre-manifest single internal cell",
+    await expect(runtime.start(resultCell)).rejects.toThrow(
+      "has no `$event` input",
     );
-    const metaTx = runtime.edit();
-    resultCell.withTx(metaTx).setMetaRaw(
-      "internal",
-      legacyInternalCell.getAsWriteRedirectLink({ base: resultCell }),
-      rawMetaWriteAuthorization,
-    );
-    await metaTx.commit();
-
-    const error = await runtime.start(resultCell).then(
-      () => undefined,
-      (e) => e as Error,
-    );
-    expect(error?.message).toContain("was never written");
-    // The non-array internal meta is the discriminator for the pre-manifest
-    // format; the hint and its remedy must both surface.
-    expect(error?.message).toContain("pre-manifest format");
-    expect(error?.message).toContain("recreate the piece");
   });
 
-  it("truncates long values in the overwritten-marker diagnostic", async () => {
+  it("refuses a handler node whose `$event` input is not a link", async () => {
     const pattern: Pattern = {
-      argumentSchema: {
-        type: "object",
-        properties: { ev: { type: "array", items: { type: "string" } } },
-      },
+      argumentSchema: { type: "object", properties: {} },
       resultSchema: {},
       result: {},
       nodes: [
         {
-          module: { type: "javascript", implementation: () => undefined },
-          inputs: { $event: { $alias: { cell: "argument", path: ["ev"] } } },
+          module: {
+            type: "javascript",
+            wrapper: "handler",
+            implementation: () => undefined,
+          },
+          inputs: { $event: 42 },
           outputs: {},
         },
       ],
     };
 
-    const resultCell = runtime.getCell(
-      space,
-      "handler $event resolves to a long value",
-    );
-    setupTrusted(
-      runtime,
-      undefined,
-      pattern,
-      { ev: Array.from({ length: 100 }, () => "abcdef") },
-      resultCell,
-    );
+    const resultCell = runtime.getCell(space, "handler $event is not a link");
+    setupTrusted(runtime, undefined, pattern, {}, resultCell);
 
-    // The diagnostic prints the offending value but must stay bounded: the
-    // rendering is `toLongQuotedDebugString()`'s, cut with an ellipsis, so an
-    // error message never dumps a large payload.
-    const error = await runtime.start(resultCell).then(
-      () => undefined,
-      (e) => e as Error,
+    await expect(runtime.start(resultCell)).rejects.toThrow(
+      "is not a link (got: `42`)",
     );
-    expect(error?.message).toContain('was overwritten (found: `["abcdef",');
-    const found = error?.message.split("(found: ")[1];
-    expect(found).toMatch(/\.\.\.`\)$/);
-    expect(found?.length).toBeLessThan(600);
+  });
+
+  it("registers a handler on a stream whose document holds no value", async () => {
+    // Nothing is read at the stream's target to decide the node is a handler:
+    // the module's wrapper says so, and `$event` names the stream.
+
+    let received: unknown;
+    const pattern: Pattern = {
+      argumentSchema: { type: "object", properties: {} },
+      resultSchema: {},
+      derivedInternalCells: [
+        { partialCause: "events", schema: { asCell: ["stream"] } },
+      ],
+      result: {},
+      nodes: [
+        {
+          module: {
+            type: "javascript",
+            wrapper: "handler",
+            implementation: (event: unknown) => {
+              received = event;
+            },
+          },
+          inputs: { $event: { $alias: { partialCause: "events", path: [] } } },
+          outputs: {},
+        },
+      ],
+    };
+
+    const resultCell = runtime.getCell(space, "handler on a valueless stream");
+    setupTrusted(runtime, undefined, pattern, {}, resultCell);
+    expect(await runtime.start(resultCell)).toBe(true);
+
+    const events = getDerivedInternalCell(resultCell, {
+      partialCause: "events",
+      schema: { asCell: ["stream"] },
+    });
+    expect(events.getRaw()).toBeUndefined();
+    runtime.scheduler.queueEvent(events.getAsNormalizedFullLink(), { n: 1 });
+    await runtime.idle();
+    expect(received).toEqual({ n: 1 });
   });
 
   it("start() leaves no running registration when instantiation throws", async () => {
-    // A handler node whose $event input does not resolve to a stream marker
-    // (e.g. persisted state in an older format) makes node instantiation
-    // throw "Handler used as lift".
+    // An action node binding a `$event` input makes node instantiation
+    // throw.
     const pattern: Pattern = {
       argumentSchema: { type: "object", properties: {} },
       resultSchema: {},
@@ -1724,15 +1666,13 @@ describe("setup/start", () => {
     setupTrusted(runtime, undefined, pattern, {}, resultCell);
 
     await expect(runtime.start(resultCell)).rejects.toThrow(
-      "Handler used as lift",
+      "binds a `$event` input",
     );
 
-    // Regression: the failed start used to leave the piece registered as
-    // running, so a second start() reported success for a piece that had no
-    // nodes or event handlers — events sent to it were silently dropped. It
-    // must fail the same way as the first attempt instead.
+    // A zombie registration would make the second start() short-circuit to
+    // "already running" and return without error. It must throw identically.
     await expect(runtime.start(resultCell)).rejects.toThrow(
-      "Handler used as lift",
+      "binds a `$event` input",
     );
   });
 
@@ -1759,12 +1699,12 @@ describe("setup/start", () => {
     );
 
     expect(() => runTrusted(runtime, undefined, pattern, {}, resultCell))
-      .toThrow("Handler used as lift");
+      .toThrow("binds a `$event` input");
 
     // A zombie registration would make the second run() short-circuit to
     // "already running" and return without error. It must throw identically.
     expect(() => runTrusted(runtime, undefined, pattern, {}, resultCell))
-      .toThrow("Handler used as lift");
+      .toThrow("binds a `$event` input");
   });
 
   it("setup ignores exhausted retry errors and still resolves", async () => {

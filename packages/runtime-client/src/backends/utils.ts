@@ -1,9 +1,9 @@
 import {
+  debugStr,
   FabricInstance,
   FabricPrimitive,
   type FabricValue,
   isValidFabricValue,
-  toShortQuotedDebugString,
 } from "@commonfabric/data-model";
 import {
   Cell,
@@ -167,7 +167,7 @@ export function assertFabricLoggerFlags(
 
   throw new Error(
     "Cannot send logger flags on this connection, not being a " +
-      `\`FabricValue\`: ${toShortQuotedDebugString(breakdown)}`,
+      debugStr`\`FabricValue\`: $quote${breakdown}`,
   );
 }
 

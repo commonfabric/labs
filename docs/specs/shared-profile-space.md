@@ -223,7 +223,21 @@ type ProfileDefaultPattern = {
   addElement: Stream<AddProfileElementEvent>;
   removeElement: Stream<{ cell: Cell<unknown> }>;
   setBio: Stream<SetProfileBioEvent>;
+  inbox?: ProfileInbox;
+  setInbox: Stream<SetProfileInboxEvent>;
   initialNameApplied: string;
+};
+
+type ShareInboxPiece = {
+  [NAME]?: string;
+};
+
+type ProfileInbox = {
+  piece?: Cell<ShareInboxPiece>;
+};
+
+type SetProfileInboxEvent = {
+  inbox?: Cell<ShareInboxPiece>;
 };
 ```
 
@@ -241,6 +255,35 @@ outside Common Fabric, such as GitHub, LinkedIn, or a personal site. Entries
 contain a display label and an `http(s)` URL; unsafe schemes are rejected before
 storage and never render as live anchors. The list is owner-protected and is
 mutated only through `addExternalLink` / `removeExternalLink`.
+
+`inbox` is the owner's share inbox pointer: where other people's daemons
+deliver things shared with the owner. Its one member, `piece`, is a cell link
+to the owner's share inbox piece — the piece whose `receive` stream a sender's
+daemon calls — inside the dedicated inbox space the owner's daemon minted,
+and it names the piece and its space together. Stored, the link is the
+`link@1` sigil the profile's pinned-piece elements also use, so the stored
+pointer reads:
+
+```json
+{ "piece": { "/": { "link@1": { "id": "of:baedreia…", "space": "did:key:z6Mk…", "path": [] } } } }
+```
+
+The link names the piece rather than only its space because an inbox space
+can hold more than one inbox piece (each mint adds one), and a sender that
+picks one by listing the space can pick one the owner's reader never reads.
+It carries no memory host: the inbox lives on the host the profile pointing at
+it lives on, so a reader uses the host it read the profile from. The pointer
+holds no secret — the inbox space's ACL is the gate — and is owner-protected,
+written only through `setInbox`, which takes the link alone (`{ inbox: <link>
+}`) and stores it as `piece`, or nothing (`{}`) to clear the pointer. A
+profile with no inbox holds a pointer without `piece`; a stored profile
+predating the pointer has no `inbox` property.
+
+The link sits under `piece` rather than being the stored value itself because
+a write to a cell whose document root holds a link goes through the link into
+the piece it names, so a pointer stored bare could be set once and never
+re-pointed or cleared; under a key, a new link re-binds the slot and an
+omitted key removes it.
 
 `verifiedIdentities` is an opt-in list of identifiers that Loom observed only
 after a connector successfully authenticated as the profile owner. Each

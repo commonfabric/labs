@@ -8,7 +8,7 @@ on its own, and is testable without a model provider. Checkboxes are ticked
 as work lands; when the last stage of the first take (stage 6) lands, both
 documents are archived to `docs/history/plans/`.
 
-**Status:** stage 2 implemented; the other stages not started. Written
+**Status:** stages 1 and 2 implemented; the other stages not started. Written
 2026-09-18 against `37b1acd3dd`.
 
 ## Ground rules for every stage
@@ -35,7 +35,7 @@ configuration the model cannot see, a command transport it cannot change,
 structured stdin, typed outputs, and admission through the tool-descriptor
 availability tables.
 
-- [ ] `src/loom-retrieval.ts` — sibling of `src/loom-authoring.ts`:
+- [x] `src/loom-retrieval.ts` — sibling of `src/loom-authoring.ts`:
       `HarnessLoomRetrievalConfig { cliPath, transport, readCeilingFile?, facets? }`
       reusing `HarnessLoomAuthoringTransport`; `LoomRetrievalCommand` union
       (`search`, `page.discover`, `page.inspect`, `page.read`, `people`,
@@ -44,11 +44,11 @@ availability tables.
       command takes it and `--concise` where `page` takes it, runs through
       `createClearedHostProcessEnv`, and parses stdout as JSON with a
       `schemaVersion` check for `search`.
-- [ ] Confirm each of `people`, `calendar list`, `context`, `profile` against
+- [x] Confirm each of `people`, `calendar list`, `context`, `profile` against
       the pinned loom checkout (`~/looms/primary/src/bin/loom`): read-only,
       JSON output, argument list. Drop from the union any that is not; record
       the dropped ones and why in `packages/cf-harness/docs/LOOM_RETRIEVAL.md`.
-- [ ] `src/tools/loom-retrieval.ts` — one `HarnessToolDefinition` per tool
+- [x] `src/tools/loom-retrieval.ts` — one `HarnessToolDefinition` per tool
       (`loom_search`, `loom_page_discover`, `loom_page_inspect`,
       `loom_page_read`, `loom_people`, `loom_calendar_list`, `loom_context`,
       `loom_profile`), each `effectClass: "read"`, each returning a bounded
@@ -56,21 +56,25 @@ availability tables.
       `web_fetch` results (`src/prompt-loop.ts`, the search notice), and each
       recording the rows' `ifc` labels as observations through the existing
       `HarnessCfcModelContext` accumulation.
-- [ ] Label measurement: before a row enters model context, its label is
+- [x] Label measurement: before a row enters model context, its label is
       measured against the run's observation ceiling with the same predicate
       `run_pattern` uses (`describeSinkReleaseRefusal` where a transaction is
       available, `atomsOutsideCeiling` over the disclosed label otherwise); a
-      row above the ceiling is replaced by a typed opaque entry; a row with no
-      readable label is reported as `CFC_LABEL_READ_FAILED_ATOM`, never as
-      public.
-- [ ] Ceiling forwarding: the run's ceiling is written to a host temp file and
-      passed as `--read-ceiling-file`; facets from the config ride the
-      transport the way the authoring transport carries `actor`.
-- [ ] `src/contracts/tool-descriptor.ts` — the eight ids in `BuiltinToolId`;
+      row above the ceiling is replaced by a typed opaque entry; a row whose
+      `ifc` is present and unreadable is refused as `cfc_label_read_failed`;
+      a row with no `ifc` is given the query's label by
+      `labelForUnlabeledLoomRow()`, a placeholder the implementation profile
+      publishes as a deviation.
+- [x] Ceiling forwarding: the pinned loom CLI takes no `--read-ceiling-file`
+      on any retrieval command — loom's own scope is the broker's launch
+      facets — so the configuration names the loom read-ceiling record
+      (`readCeilingFile`) and the harness meets its clause list with the
+      run's ceiling before measuring rows; `facets` must match the record's.
+- [x] `src/contracts/tool-descriptor.ts` — the eight ids in `BuiltinToolId`;
       `LOOM_RETRIEVAL_TOOL_IDS`; an `loomRetrievalAvailable` availability flag
       beside `loomAuthoringAvailable` in both the withheld and the offered
       lists.
-- [ ] `src/engine.ts` — input and output map entries; `src/tools/registry.ts`
+- [x] `src/engine.ts` — input and output map entries; `src/tools/registry.ts`
       — registration; `src/config.ts` and `src/session-assembly.ts` —
       `loomRetrieval?: HarnessLoomRetrievalConfig`, validated like
       `loomAuthoring`; `src/cli.ts` — `--loom-retrieval-config` and
@@ -79,18 +83,18 @@ availability tables.
 - [ ] Loom side (separate change in `~/looms/primary`): `schemaVersion: 1` on
       the `search --json` payload at `src/lib/connectors/search.py`, per the
       comment there.
-- [ ] Tests, `test/loom-retrieval.test.ts` and `test/tools/loom-retrieval.test.ts`,
+- [x] Tests, `test/loom-retrieval.test.ts` and `test/tools/loom-retrieval.test.ts`,
       with a fake `ProcessRunner` returning fixture JSON: argv construction per
       command; `--json`/`--concise` always present; config validation failures
-      (relative path, empty transport); a `schemaVersion` mismatch refused; an
-      unlabeled hit refused; a hit above the ceiling sealed; the notice
+      (relative path, empty transport); a stated `schemaVersion` other than 1 refused
+      and an absent one accepted; an unlabeled hit given the query's label and
+      a malformed `ifc` refused; a hit above the ceiling sealed; the notice
       attached; availability gating in the descriptor tables; capability
       description lists the tools only when configured.
-- [ ] Documents: `packages/cf-harness/docs/LOOM_RETRIEVAL.md` (new, the
-      sibling of `packages/cf-harness/docs/LOOM_AUTHORING.md`),
-      `packages/cf-harness/docs/IMPLEMENTATION_PROFILE.md` tool list,
-      `packages/cf-harness/docs/CURRENT_STATE.md` supported surfaces,
-      `packages/cf-harness/README.md` where it lists
+- [x] Documents, all under `packages/cf-harness/`: `docs/LOOM_RETRIEVAL.md`
+      (new, the sibling of `LOOM_AUTHORING.md`), `docs/IMPLEMENTATION_PROFILE.md`
+      tool list, `docs/CURRENT_STATE.md` supported surfaces, `README.md` where
+      it lists
       Loom tools; `deno task check-skill-facts` if a skill cites a path.
 
 *Exit:* a batch run with `--loom-retrieval-config` and a scripted model answers
@@ -201,10 +205,15 @@ against a real deployment.
         `createFrozenRequestSnapshot`, hash it;
       - memo: an existing `AgentRun` record for this `requestHash` in this
         instance means no new record and `pending`/`result` derive from it;
+        a stored `requestHash` with no record and no result — the request
+        committed and its effect did not run — is a new request and is staged
+        again, the way `generateObject` treats a stored hash with neither
+        result nor error;
       - stage the sink request under sink `agent` through
         `enqueueSinkRequestPostCommitEffect`, whose post-commit effect
         *creates the `AgentRun` record* (stage 4's schema) in the requesting
-        space, `PerUser`, with the request fields, and appends a `{link, host}`
+        space, `PerUser`, with the request fields — keyed by `requestHash`, so
+        an effect that runs twice creates one record — and appends a `{link, host}`
         entry to the requester's home index through the `.inSpace` crossing;
       - derive `pending`, `result`, `error` from the record's `state`,
         `result`, `outcome`, and `errorCode` by reading the record reactively;
@@ -251,7 +260,8 @@ and a result link, and observes `pending: false` and `result` on the node.
 ## Stage 4 — Records, index, runner
 
 **Packages:** `packages/patterns/system` (record and index schemas),
-`packages/cli` (the runner). **Depends on:** stages 2 and 3.
+`packages/runner` (the `#agent_queue` wish target), `packages/cli` (the
+runner). **Depends on:** stages 2 and 3.
 
 - [ ] Record schema — `packages/patterns/system/agent-run.tsx` exporting the
       `AgentRun` type of design §2.3 as a pattern-facing schema with `PerUser`
@@ -265,13 +275,19 @@ and a result link, and observes `pending: false` and `result` on the node.
       move the runner-written fields to `AgentRunProgress`, a sibling document
       the runner creates on claim and the record links to, and update design
       §2.3 in the same change.
-- [ ] Home index — `packages/patterns/system/agent-queue.tsx`: a piece whose
-      output carries `#agent_queue` in its schema description, holding
+- [ ] Home index — `packages/patterns/system/agent-queue.tsx`: a piece holding
       `entries: { run: link, host: string }[]` and the `agentRunner` entry
       `{ host, tools, registeredAt, lastClaimAt }` owner-protected the way
-      `ProfileInboxPointer` is on `profile-home.tsx`; registered once in the
-      home space by `home.tsx` the way favorites are, and discovered with
-      `wish({ query: "#agent_queue", scope: ["~"], headless: true })`.
+      `ProfileInboxPointer` is on `profile-home.tsx`; held by `home.tsx` in an
+      `agentQueue` field of the home default pattern, beside `favorites` and
+      `journal`, and discovered with
+      `wish({ query: "#agent_queue", headless: true })`.
+- [ ] `packages/runner/src/builtins/wish.ts` — `#agent_queue` as a well-known
+      home-space target resolving to `defaultPattern.agentQueue` of the home
+      space, beside `#journal` and `#learned`. A hashtag search under
+      `scope: ["~"]` reads favorites only, so it would not find the piece.
+      Tests beside the existing well-known-target tests; the target added to
+      the well-known list in `docs/common/conventions/wish.md`.
 - [ ] Runner — `packages/cli/commands/agent.ts` with subcommand `runner`,
       registered in `commands/main.ts`. Configuration: identity, cloud and
       local API URLs, `--loom-retrieval-config`, `--max-concurrent` (default
@@ -280,7 +296,8 @@ and a result link, and observes `pending: false` and `result` on the node.
       1. open client sessions to both toolsheds as the identity;
       2. write or refresh the `agentRunner` entry;
       3. subscribe to the index; on change, claim the oldest `queued` record
-         under the concurrency cap by committing `state: claimed`, `claim`;
+         under the concurrency cap by committing `state: claimed`, `claim`,
+         and `attempts` incremented;
       4. build a `HarnessSessionConfig` — input handles from the record's
          request links, `cfc.maxConfidentiality` from the request, tools
          from `tools`, `loomRetrieval` from the config, prompt-slot role
@@ -295,20 +312,21 @@ and a result link, and observes `pending: false` and `result` on the node.
       7. on a typed harness failure write `failed` with the taxonomy code; on
          a writer refusal write `refused`; on `cancel` abort through the
          harness's `signal` and write `cancelled`;
-      8. on start, and on each index change, re-queue once any `running`
-         record whose `leaseUntil` has passed and whose retry count is zero,
-         and fail one whose count is one.
+      8. on start, and on each index change, take any `claimed` or `running`
+         record whose `leaseUntil` has passed: re-queue it when its `attempts`
+         is one, and fail it as `RUNNER_LOST` when its `attempts` is two.
 - [ ] Error taxonomy — one module in `packages/runner` (or `packages/api`)
       exporting the codes `INVALID_INPUT`, `LIMIT_REACHED`, `PROVIDER_FAILURE`,
       `RUNNER_LOST`, `CANCELLED`, `REFUSED`, shared with the verb-refusal
       taxonomy the retention plan owes; the design document's §2.3 names it.
 - [ ] Tests: `packages/cli/test/agent-runner.test.ts` with a fake executor
       (an injected `createPromptLoop` returning a scripted loop, the seam
-      `src/cli.ts` already exposes as `deps.createPromptLoop`) over two
+      `packages/cf-harness/src/cli.ts` already exposes as
+      `deps.createPromptLoop`) over two
       in-process test toolsheds (the multi-runtime harness, one memory server
       per toolshed): every state transition; the memo hit creates no record;
-      two runners racing claim once; a killed runner's record re-queues once
-      then fails; `cancel` mid-run ends `cancelled`; the `agentRunner` entry
+      two runners racing claim once; a killed runner's record, left `claimed`
+      or left `running`, re-queues once then fails; `cancel` mid-run ends `cancelled`; the `agentRunner` entry
       appears and refreshes on claim; a cloud-hosted record is found from a
       local runner through a `{link, host}` entry. Pattern tests for
       `agent-queue.tsx` and `agent-run.tsx` under `packages/patterns/system`.
@@ -385,12 +403,13 @@ may start earlier.
       so a labeled cell outside the ceiling reads as withheld
       (`packages/runner/src/cfc/read-ceiling.ts` and the transaction read
       path); retire the session-scope requirement `run_pattern`'s description
-      states; update `IMPLEMENTATION_PROFILE.md` deviation 9 and
-      `README.md` §ceiling.
+      states; update `packages/cf-harness/docs/IMPLEMENTATION_PROFILE.md`
+      deviation 9 and `packages/cf-harness/README.md` §ceiling.
 - [ ] Deviation 8 / CT-2217: `delegate_task` carries the parent's observation
       ceiling into the child profile and rejects an inherited handle whose
       resolved value exceeds it (AH-CFC-12a); retire the AUD-23 known-defect
-      row in `audit/checks/known-defects.ts` and `conformance-manifest.ts`.
+      row in `packages/cf-harness/audit/checks/known-defects.ts` and
+      `packages/cf-harness/audit/conformance-manifest.ts`.
 - [ ] Group ceilings: a runner test with `maxConfidentiality:
       [{anyOf:[User(A),User(B)]}]` over cells labeled `User(A)`, `User(B)`,
       and `[User(A),User(B)]`, asserting which enter model context.
@@ -415,7 +434,9 @@ read through `gh api --paginate repos/commonfabric/labs/pulls/<n>/comments`.
 ## What is deliberately not in this plan
 
 Ranking (`priority` stays reserved). A durable per-user ledger and quota
-enforcement. Page and calendar mutation tools. A shared runner with delegated
+enforcement. Loom tools returning real per-row labels, which retires the
+query-label assumption the stage-1 tools make for a row without `ifc`. Page
+and calendar mutation tools. A shared runner with delegated
 identity. Folding hosted pattern authoring into an agent request. Each is
 named in the design document under "Later, not sequenced" and gets its own
 plan when it is picked up.

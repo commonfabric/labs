@@ -44,13 +44,9 @@ import { FabricError } from "@/fabric-instances/FabricError.ts";
 import { FabricMap } from "@/fabric-instances/FabricMap.ts";
 import { FabricSet } from "@/fabric-instances/FabricSet.ts";
 import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
-import { FabricEpochDay } from "@/fabric-primitives/FabricEpochDay.ts";
 import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
-import { FabricKeyPair } from "@/fabric-primitives/FabricKeyPair.ts";
-import { codecClasses } from "@/fabric-primitives/impl.ts";
 import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
-import { FabricUnavailable } from "@/fabric-primitives/FabricUnavailable.ts";
+import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
 import { FrozenMap, FrozenSet } from "@/frozen-builtins.ts";
 import {
   type FabricConvertibleJsValue,
@@ -794,34 +790,15 @@ describe("convertible-js", () => {
     });
 
     describe("passes `FabricValue`s through", () => {
-      // One instance per concrete primitive class, checked against
-      // `codecClasses()` for exact membership. A single class would not do:
-      // the pass-through is a `switch` with one `case` per class and a
-      // throwing `default`, so a class missing a `case` is invisible to any
-      // test that only ever hands it a different one.
+      // One instance per concrete primitive class, from the examples the
+      // classes' own package keeps complete. A single class would not do: the
+      // pass-through is a `switch` with one `case` per class and a throwing
+      // `default`, so a class missing a `case` is invisible to any test that
+      // only ever hands it a different one.
 
-      const PRIMITIVES: readonly FabricPrimitive[] = [
-        new FabricBytes(new Uint8Array([1, 2, 3])),
-        new FabricEpochDay(1n),
-        new FabricEpochNsec(1n),
-        new FabricHash(new Uint8Array(32), "fid1"),
-        new FabricKeyPair(
-          "ExampleAlgorithm",
-          new Uint8Array([1]),
-          new Uint8Array([2]),
-        ),
-        new FabricRegExp(/x/),
-        new FabricUnavailable("pending"),
-      ];
-
-      it("covers every registered primitive class", () => {
-        const covered = new Set(PRIMITIVES.map((p) => p.constructor));
-        expect(covered.size).toBe(PRIMITIVES.length);
-        for (const cls of codecClasses()) {
-          expect(covered.has(cls)).toBe(true);
-        }
-        expect(codecClasses().length).toBe(PRIMITIVES.length);
-      });
+      const PRIMITIVES: readonly FabricPrimitive[] = Object.values(
+        FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY,
+      ).map(([example]) => example);
 
       for (const value of PRIMITIVES) {
         const name = value.constructor.name;

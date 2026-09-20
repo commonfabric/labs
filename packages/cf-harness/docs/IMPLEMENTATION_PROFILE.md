@@ -183,22 +183,25 @@ readiness.
 Current selectable parent tools are `bash`, `read_file`, `view_image`,
 `web_fetch`, `read_skill_resource`, `run_skill_script`, `edit_file`,
 `write_file`, `delegate_task`, `describe_handle`, `run_pattern`, `assign_slug`,
-`search_patterns`, `record_feedback`, `search_skills`, `acquire_skill`, and
-`research`, `loom_compose`, `loom_inspect`, and `loom_authoring_context`.
-Individual runs receive only their configured subset; `web_fetch` and
-`run_skill_script` are not in the ordinary default surface. Optional tools are
-gated on the backing a run can supply — a fabric session for `run_pattern`,
-`assign_slug`, and `acquire_skill`, the pattern index for `search_patterns` and
-`record_feedback`, configured skills.sh discovery for `search_skills`, and a
-resolved documentation corpus or pattern index for `research`, and explicit host
-Loom configuration for the three Loom tools — and a tool the run cannot back is
-absent from the surface rather than present and failing, so an explicit
-allowlist naming it does not conjure it. `run_pattern` additionally requires the
-three `--fabric-*` session flags. `browser` exists only as a built-in used by
-the authorized browser child profile and cannot be selected as a parent CLI
-tool; it drives the host `agent-browser` CLI through a typed action vocabulary,
-with the Browser Access CDP endpoint attached by the harness rather than written
-by the model.
+`search_patterns`, `record_feedback`, `search_skills`, `acquire_skill`,
+`research`, `loom_compose`, `loom_inspect`, `loom_authoring_context`, and the
+eight read-only Loom tools `loom_search`, `loom_page_discover`,
+`loom_page_inspect`, `loom_page_read`, `loom_people`, `loom_calendar_list`,
+`loom_context`, and `loom_profile`. Individual runs receive only their
+configured subset; `web_fetch` and `run_skill_script` are not in the ordinary
+default surface. Optional tools are gated on the backing a run can supply — a
+fabric session for `run_pattern`, `assign_slug`, and `acquire_skill`, the
+pattern index for `search_patterns` and `record_feedback`, configured skills.sh
+discovery for `search_skills`, and a resolved documentation corpus or pattern
+index for `research`, explicit host Loom authoring configuration for the three
+authoring tools, and explicit host Loom retrieval configuration for the eight
+retrieval tools — and a tool the run cannot back is absent from the surface
+rather than present and failing, so an explicit allowlist naming it does not
+conjure it. `run_pattern` additionally requires the three `--fabric-*` session
+flags. `browser` exists only as a built-in used by the authorized browser child
+profile and cannot be selected as a parent CLI tool; it drives the host
+`agent-browser` CLI through a typed action vocabulary, with the Browser Access
+CDP endpoint attached by the harness rather than written by the model.
 
 `describe_handle` reports the referent's structural schema and path segments,
 never its data. It prefers the session Fabric's declared shape when available
@@ -362,6 +365,20 @@ in-flight external side effect.
    reads as withheld), and the served-execution arm carries a per-session
    ceiling to the serving runtime, at which point the scope requirement and the
    OFF-arm-only limit both retire.
+
+10. **Loom row labels assumed, not read.** A row a Loom retrieval tool returns
+    with no `ifc` field is given the label of the query that produced it — the
+    tool call's input label, the prompt slot's influence joined with the run's
+    accumulated model-context label — and that assumed label is what is measured
+    against the run's ceiling, recorded as the observation, and available to
+    stamp on a minted document. The pinned loom emits no `ifc` on any retrieval
+    payload, so this is the path every real row takes. The assumption can
+    under-label a row: what it holds is decided by its store, not by who asked.
+    A row whose `ifc` is present and unreadable is still refused, and loom's own
+    facet filtering still runs first on the host. The rule is
+    `labelForUnlabeledLoomRow()` in `src/tools/loom-retrieval.ts`; see
+    [Read-only Loom retrieval](LOOM_RETRIEVAL.md). Owner: `cf-harness` and loom.
+    Retirement: loom returns a label per row and the function reads it.
 
 ## Test evidence
 

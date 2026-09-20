@@ -873,14 +873,19 @@ describe("verb-undeclared-field", () => {
   describe("cf piece call against a live verb", () => {
     it("declares an event schema naming `properties` with no `additionalProperties`", async () => {
       // The coupling every refusal below rests on: the shape the transformer
-      // emits is one that drops what it does not name.
+      // emits is one that drops what it does not name. The link the verb is
+      // reached through declares the stream in front of that shape.
       await withList("undeclared-shape", ({ root }) => {
         expect(resolvedSchema(root.key("addItem").schema)).toEqual({
+          asCell: ["stream"],
           type: "object",
           properties: { title: { type: "string" }, done: { type: "boolean" } },
           required: ["title", "done"],
         });
-        expect(root.key("ping").schema).toBeUndefined();
+        // A verb declaring no event schema still declares the stream.
+        expect(resolvedSchema(root.key("ping").schema)).toEqual({
+          asCell: ["stream"],
+        });
         return Promise.resolve();
       });
     });

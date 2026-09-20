@@ -190,15 +190,16 @@ export function createRef(
     obj = encodableFormOf(obj) ?? obj;
 
     if (isReactive(obj)) {
-      const val = obj.export().value;
-      if (val == null) {
-        // An Reactive feeding a derived id must carry a value; otherwise the
-        // id would silently become non-deterministic (audit S14). Fail closed.
+      // A stream is the one reactive an id derives from: it holds no value,
+      // and its sentinel stands in as the value the id hashes. Any other
+      // reactive has no value to hash, and an id minted from one would
+      // silently become non-deterministic (audit S14). Fail closed.
+      if (obj.export().kind !== "stream") {
         throw new Error(
           "[createRef] Reactive has no value; cannot derive a stable id",
         );
       }
-      return val;
+      return { $stream: true };
     }
 
     if (isCellResultForDereferencing(obj)) {

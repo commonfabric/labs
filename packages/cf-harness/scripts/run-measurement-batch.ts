@@ -42,7 +42,7 @@ import { parseArgs } from "@std/cli/parse-args";
 import { ensureDir } from "@std/fs";
 import { isAbsolute, join } from "@std/path";
 
-import { toLongQuotedDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { ConsolePolicyReport } from "../console/policy.ts";
@@ -957,9 +957,8 @@ export class ConsoleClient {
     if (!Array.isArray(results)) {
       return {
         kind: "refused",
-        reason: `the index answered with no results array: ${
-          toLongQuotedDebugString(answer)
-        }`,
+        reason:
+          debugStr`the index answered with no results array: $quote,long${answer}`,
       };
     }
     const candidates = (answer as Record<string, unknown>).candidates;

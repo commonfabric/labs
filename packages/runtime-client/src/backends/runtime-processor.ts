@@ -1,9 +1,9 @@
 import type { JSONSchema } from "@commonfabric/api";
 import {
   cloneIfNecessary,
+  debugStr,
   fabricFromConvertibleJsValue,
   type FabricValue,
-  toLongQuotedDebugString,
   toStructuredDebugValue,
 } from "@commonfabric/data-model";
 import { newDefaultJsonCodecEngine } from "@commonfabric/data-model/codecs";
@@ -2148,9 +2148,7 @@ export class RuntimeProcessor {
       // an array and `null` an `object` and so says nothing about either. It
       // is bounded because the argument is a caller's data.
       throw new Error(
-        `A piece's argument must be a record, not: ${
-          toLongQuotedDebugString(argument)
-        }`,
+        debugStr`A piece's argument must be a record, not: $quote,long${argument}`,
       );
     }
 

@@ -86,7 +86,9 @@
  * | cfcSinkMaxConfidentiality  | core-default (none declared) — same              |
  * | cfcReadMaxConfidentiality  | core-default (none — the owner view); delta on   |
  * |                            | remoteClient / browserWorker (a per-run or       |
- * |                            | per-device read ceiling is the host's to set)    |
+ * |                            | per-device read ceiling is the host's to set).   |
+ * |                            | A flag-ON client declares it to its sessions and |
+ * |                            | the serving runtime reads under it per run       |
  * | cfcReadOnExceed            | core-default (`fail`); delta on the same two,    |
  * |                            | beside the ceiling it qualifies                  |
  * | patternEnvironment         | pinned from apiUrl in productionServer /         |
@@ -141,7 +143,7 @@
  * `enforce` asks for it the same way.
  */
 
-import { toShortQuotedDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 
 import {
@@ -440,7 +442,7 @@ export function parseServerExperimentalOptions(
     if (typeof value !== "boolean") {
       console.warn(
         `[runtime-presets] Ignoring server-published ${key}=` +
-          `${toShortQuotedDebugString(value)} — expected a boolean.`,
+          debugStr`$quote${value} — expected a boolean.`,
       );
       continue;
     }
@@ -880,7 +882,10 @@ export interface RemoteClientPresetParams extends CoreParams {
   /**
    * The runtime-wide read ceiling for this one session's `db.query` reads
    * (`RuntimeOptions.cfcReadMaxConfidentiality`): a harness running one
-   * pattern under one clearance sets it here.
+   * pattern under one clearance sets it here. Under server execution the
+   * client's sessions declare it and the space server's runtime reads under
+   * it for every run served as one of them; the client's own runtime holds
+   * it either way.
    */
   cfcReadMaxConfidentiality?: readonly CfcConfClause[];
 
@@ -923,7 +928,9 @@ export interface BrowserWorkerPresetParams extends CoreParams {
    * The runtime-wide read ceiling for this worker's `db.query` reads
    * (`RuntimeOptions.cfcReadMaxConfidentiality`), from `InitializationData`:
    * a worker is one device's runtime, so a ceiling set here is per device
-   * by construction and never touches the space.
+   * by construction and never touches the space. Under server execution
+   * the worker's sessions declare it and the space server's runtime reads
+   * under it for every run served as one of them.
    */
   cfcReadMaxConfidentiality?: readonly CfcConfClause[];
 

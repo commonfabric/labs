@@ -230,6 +230,7 @@ describe("view replication client", () => {
         }, {
           module: {
             type: "javascript",
+            wrapper: "handler",
             argumentSchema: {
               type: "object",
               properties: { $event: true },
@@ -343,15 +344,18 @@ describe("view replication client", () => {
           call.args[0].viewNodeId === visibleId
         );
       expect(visibleBindings()).toHaveLength(1);
+      // The handler registers on the stream its `$event` names without
+      // reading the stream's document, so the stored graph installs whole at
+      // mount, offscreen stream included.
       expect([...viewer.runner.cancels.values()][0].graphIsInstalled()).toBe(
-        false,
+        true,
       );
+      expect(handlers.calls).toHaveLength(1);
       const runsBeforeCoverage = visibleRuns;
       notifyCoverage();
       await viewer.idle();
       expect(visibleBindings()).toHaveLength(1);
       expect(visibleRuns).toBe(runsBeforeCoverage);
-      expect(handlers.calls).toHaveLength(0);
       await viewer.getCellFromLink(
         result.key("offscreenEvent").resolveAsCell().getAsNormalizedFullLink(),
       ).sync();

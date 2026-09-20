@@ -19,15 +19,14 @@ import { expect } from "@std/expect";
 
 import { fabricAwareEqual } from "@/index.ts";
 import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricLink } from "@/fabric-instances/FabricLink.ts";
 import { FabricMap } from "@/fabric-instances/FabricMap.ts";
 import { FabricSet } from "@/fabric-instances/FabricSet.ts";
 import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
-import { FabricEpochDay } from "@/fabric-primitives/FabricEpochDay.ts";
 import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
-import { FabricUnavailable } from "@/fabric-primitives/FabricUnavailable.ts";
+import {
+  FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
+  FABRIC_PRIMITIVE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
+} from "@/for-testing-only.ts";
 
 /** Fixed `FabricError` state, so two built the same way agree in every slot. */
 const errorState = (message: string) => ({
@@ -39,9 +38,21 @@ const errorState = (message: string) => ({
 });
 
 /**
+ * The classes whose codecs are stubs. Two of one cannot be compared, the
+ * comparison hashing them, so they take no part in the content cases; the
+ * stub-codec cases in this file are theirs.
+ */
+const STUB_CODEC_CLASSES: ReadonlySet<string> = new Set([
+  "FabricMap",
+  "FabricSet",
+]);
+
+/**
  * A distinct-but-equal pair of each special-object kind, plus a third value of
- * the same kind that differs. The pairs are built fresh per case so no case
- * can pass on reference identity.
+ * the same kind that differs, from the data model's own makers: two calls of a
+ * class's first maker are the pair, and its second maker gives the value that
+ * differs. The values are built fresh per case so no case can pass on
+ * reference identity.
  */
 const SPECIAL_OBJECT_KINDS: readonly {
   name: string;
@@ -49,58 +60,11 @@ const SPECIAL_OBJECT_KINDS: readonly {
   makeEqual: () => unknown;
   makeDifferent: () => unknown;
 }[] = [
-  {
-    name: "FabricBytes",
-    make: () => new FabricBytes(new Uint8Array([1, 2, 3])),
-    makeEqual: () => new FabricBytes(new Uint8Array([1, 2, 3])),
-    makeDifferent: () => new FabricBytes(new Uint8Array([1, 2, 4])),
-  },
-  {
-    name: "FabricEpochNsec",
-    make: () => new FabricEpochNsec(1_700_000_000_000_000_000n),
-    makeEqual: () => new FabricEpochNsec(1_700_000_000_000_000_000n),
-    makeDifferent: () => new FabricEpochNsec(1_700_000_000_000_000_001n),
-  },
-  {
-    name: "FabricEpochDay",
-    make: () => new FabricEpochDay(20_000n),
-    makeEqual: () => new FabricEpochDay(20_000n),
-    makeDifferent: () => new FabricEpochDay(20_001n),
-  },
-  {
-    name: "FabricRegExp",
-    make: () => new FabricRegExp("es2025", "a+", "g"),
-    makeEqual: () => new FabricRegExp("es2025", "a+", "g"),
-    makeDifferent: () => new FabricRegExp("es2025", "b+", "g"),
-  },
-  {
-    name: "FabricHash",
-    make: () => new FabricHash(new Uint8Array([9, 9]), "fid1"),
-    makeEqual: () => new FabricHash(new Uint8Array([9, 9]), "fid1"),
-    makeDifferent: () => new FabricHash(new Uint8Array([9, 8]), "fid1"),
-  },
-  {
-    name: "FabricUnavailable",
-    make: () => new FabricUnavailable("error", "general", "boom"),
-    makeEqual: () => new FabricUnavailable("error", "general", "boom"),
-    makeDifferent: () => new FabricUnavailable("error", "general", "bang"),
-  },
-  {
-    // Built from explicit state rather than from a thrown `Error`, whose
-    // captured stack differs per construction site and would make two
-    // otherwise-identical errors unequal for a reason unrelated to this.
-    name: "FabricError",
-    make: () => new FabricError(errorState("boom")),
-    makeEqual: () => new FabricError(errorState("boom")),
-    makeDifferent: () => new FabricError(errorState("other")),
-  },
-  {
-    name: "FabricLink",
-    make: () => new FabricLink({ id: "of:fid1:aaa" }),
-    makeEqual: () => new FabricLink({ id: "of:fid1:aaa" }),
-    makeDifferent: () => new FabricLink({ id: "of:fid1:bbb" }),
-  },
-];
+  ...Object.entries(FABRIC_PRIMITIVE_EXAMPLE_MAKERS_FOR_TESTING_ONLY),
+  ...Object.entries(FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY),
+].filter(([name]) => !STUB_CODEC_CLASSES.has(name)).map((
+  [name, [make, makeDifferent]],
+) => ({ name, make, makeEqual: make, makeDifferent }));
 
 describe("fabricAwareEqual()", () => {
   describe("given a bare special object of each kind", () => {

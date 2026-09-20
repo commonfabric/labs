@@ -6,6 +6,11 @@ import { TRIPWIRES } from "../check-tripwires.ts";
 import { namedBenchmarkFiles } from "../check-bench-workflow.ts";
 import { matchesPatternFilter } from "../pattern-files.ts";
 import {
+  parseVintagePath,
+  vintageRecordName,
+  VINTAGES_DIR,
+} from "../pattern-vintage-layout.ts";
+import {
   type Gate,
   HISTORY_GATES,
   loadGateSuites,
@@ -30,6 +35,28 @@ const root = new URL("../..", import.meta.url).pathname.replace(/\/$/, "");
 const suites = await loadGateSuites(root);
 const byId = (id: string): Suite => suites.find((s) => s.id === id)!;
 const context = { root: "/repo", outputDir: "/out", spoolDir: "/spool" };
+
+/**
+ * Every record name the vintage gate writes for the tree's own fixtures.
+ *
+ * The fixture set is read from git rather than from the walk the gate
+ * replays with, so what the topology claims is compared against the tree
+ * rather than against a second copy of that walk. What each fixture is
+ * called comes from the layout module, which is where the gate takes it
+ * from as well, so the two cannot disagree about the name; the record
+ * name's own spelling is held by `tasks/pattern-vintage-run.test.ts`.
+ */
+function vintageRecordNames(): string[] {
+  const listed = new Deno.Command("git", {
+    args: ["-C", root, "ls-files", "-z", VINTAGES_DIR],
+  }).outputSync();
+  const names = new Set<string>();
+  for (const file of new TextDecoder().decode(listed.stdout).split("\0")) {
+    const fixture = parseVintagePath(file);
+    if (fixture !== undefined) names.add(vintageRecordName(fixture));
+  }
+  return [...names].sort();
+}
 
 describe("the repository's gate suites", () => {
   it("gives the base revision to the gates whose suite asks for history", async () => {
@@ -503,13 +530,46 @@ describe("the repository's gate suites", () => {
     expect(cfcheck.units.length).toBeGreaterThan(0);
   });
 
-  it("gives the vintage replay every record it writes", () => {
+  it("claims a vintage record for every fixture the tree holds", () => {
+    // The gate writes one record per fixture under the committed vintage
+    // tree, named for the fixture's test key, tier and capture stamp. The
+    // fixture set is read from git rather than from the enumerator the
+    // gate replays with, so this compares the claim against the tree
+    // rather than against the same walk twice.
     const vintage = byId("pattern-vintage");
+    const names = vintageRecordNames();
+    expect(names.length).toBeGreaterThan(0);
+    for (const name of names) {
+      expect(
+        vintage.locate({ test: { k: "gate", s: "repo", n: name } }),
+      ).toEqual({ level: "unit", unit: "pattern-vintage" });
+    }
+    // The wrapper's own record, which carries what the whole replay took.
     expect(
-      vintage.locate({
-        test: { k: "gate", s: "repo", n: "pattern-vintage key tier stamp" },
-      }),
+      vintage.locate({ test: { k: "gate", s: "repo", n: "pattern-vintage" } }),
     ).toEqual({ level: "unit", unit: "pattern-vintage" });
+  });
+
+  it("disowns a vintage record no fixture in the tree carries", () => {
+    // These name fixtures no tree holds: the gate's own tests build them
+    // in a temporary directory, and the record store carries executions
+    // under them. An identity a suite claims is one a published manifest
+    // carries and the publisher scores on every run, and `departed` in
+    // `tasks/test-selection/build.ts` drops an identity from the
+    // aggregate only while no suite claims it.
+    const vintage = byId("pattern-vintage");
+    const stamp = "2026-07-29T12-00-00.000Z";
+    for (const key of ["subject", "nested", "undeclared", "crossspace"]) {
+      expect(
+        vintage.locate({
+          test: {
+            k: "gate",
+            s: "repo",
+            n: `pattern-vintage vintage-gate-${key}.test.tsx pinned ${stamp}`,
+          },
+        }),
+      ).toBeUndefined();
+    }
   });
 
   it("runs the vintage replay whole", async () => {

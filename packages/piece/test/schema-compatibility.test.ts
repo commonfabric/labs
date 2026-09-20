@@ -7,13 +7,8 @@ import type { FabricPrimitive } from "@commonfabric/data-model";
 import {
   FABRIC_PRIMITIVE_SCHEMA_TYPES,
   FabricBytes,
-  FabricEpochDay,
-  FabricEpochNsec,
-  FabricHash,
-  FabricKeyPair,
-  FabricRegExp,
-  FabricUnavailable,
 } from "@commonfabric/data-model/fabric-primitives";
+import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@commonfabric/data-model/for-testing-only";
 import { FABRIC_SPECIAL_OBJECT_BRAND } from "@commonfabric/runner/fabric-special-object-brand";
 import {
   assertPatternSchemasBackwardCompatible,
@@ -55,22 +50,28 @@ const oldPattern = pattern(
 );
 
 /**
- * A value of each `FabricPrimitive` class, keyed by the schema type name that
- * matches it. The `satisfies` closes the classes over the vocabulary's names.
+ * A value of each `FabricPrimitive` class, from the examples the data model
+ * keeps complete over its classes.
  */
-const FABRIC_PRIMITIVE_VALUES = {
-  FabricBytes: new FabricBytes(new Uint8Array([1])),
-  FabricEpochDay: new FabricEpochDay(0n),
-  FabricEpochNsec: new FabricEpochNsec(0n),
-  FabricHash: new FabricHash(new Uint8Array(32), "fid1"),
-  FabricKeyPair: new FabricKeyPair(
-    "ExampleAlgorithm",
-    new Uint8Array([1]),
-    new Uint8Array([2]),
-  ),
-  FabricRegExp: new FabricRegExp(/a/),
-  FabricUnavailable: new FabricUnavailable("error", "general", "boom"),
-} satisfies Record<FabricPrimitiveSchemaType, FabricPrimitive>;
+const FABRIC_PRIMITIVE_VALUES: readonly FabricPrimitive[] = Object.values(
+  FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY,
+).map(([example]) => example);
+
+/**
+ * Returns the value in {@link FABRIC_PRIMITIVE_VALUES} that the schema type
+ * `type` matches, which is the one reporting it as `.schemaType`.
+ */
+function fabricPrimitiveValueOf(
+  type: FabricPrimitiveSchemaType,
+): FabricPrimitive {
+  const found = FABRIC_PRIMITIVE_VALUES.find((value) =>
+    value.schemaType === type
+  );
+  if (found === undefined) {
+    throw new Error(`No example reports the schema type \`${type}\`.`);
+  }
+  return found;
+}
 
 /**
  * Returns every string-keyed member on the prototype chain of a value in
@@ -79,7 +80,7 @@ const FABRIC_PRIMITIVE_VALUES = {
  */
 function fabricPrimitiveMemberNames(): Set<string> {
   const names = new Set(["absentFromEveryClass", FABRIC_SPECIAL_OBJECT_BRAND]);
-  for (const value of Object.values(FABRIC_PRIMITIVE_VALUES)) {
+  for (const value of FABRIC_PRIMITIVE_VALUES) {
     for (
       let prototype = Object.getPrototypeOf(value);
       prototype !== Object.prototype;
@@ -3399,7 +3400,7 @@ describe("piece schema compatibility", () => {
     });
 
     it("leaves mixed enums containing an unclassified value whole", () => {
-      const value = FABRIC_PRIMITIVE_VALUES.FabricBytes;
+      const value = FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY.FabricBytes[0];
       const source = { enum: ["open", value] } as unknown as JSONSchema;
       const target = {
         anyOf: [{ type: "string" }, { enum: [value] }],
@@ -3416,13 +3417,17 @@ describe("piece schema compatibility", () => {
     it("retains `FabricPrimitive` values while splitting a declared type list", () => {
       const source = {
         type: ["string", "null", "object"],
-        enum: ["open", null, FABRIC_PRIMITIVE_VALUES.FabricBytes],
+        enum: [
+          "open",
+          null,
+          FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY.FabricBytes[0],
+        ],
       } as unknown as JSONSchema;
       const target: JSONSchema = { type: ["string", "null"] };
       expect(
         validateSchemaValue(
           source,
-          FABRIC_PRIMITIVE_VALUES.FabricBytes,
+          FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY.FabricBytes[0],
           source,
         ),
       )
@@ -3730,7 +3735,7 @@ describe("piece schema compatibility", () => {
           const target: JSONSchema = { type: "object", required: [name] };
           const accepted = validateSchemaValue(
             target,
-            FABRIC_PRIMITIVE_VALUES[type],
+            fabricPrimitiveValueOf(type),
             target,
           ) === undefined;
           let proved = true;
@@ -3763,8 +3768,8 @@ describe("piece schema compatibility", () => {
     // `in`. Each link case reads the validator's verdict on a value beside the
     // proof's, so the two agree on the spelling in front of them.
 
-    const bytes = FABRIC_PRIMITIVE_VALUES.FabricBytes;
-    const hash = FABRIC_PRIMITIVE_VALUES.FabricHash;
+    const bytes = FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY.FabricBytes[0];
+    const hash = FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY.FabricHash[0];
     const defaulted = (key: string, required: string[] = []): JSONSchema => ({
       type: "object",
       properties: { [key]: { default: 1 } },
@@ -3837,7 +3842,7 @@ describe("piece schema compatibility", () => {
       const disagreements: typeof verdicts = [];
       for (const name of fabricPrimitiveMemberNames()) {
         const target = defaulted(name);
-        const accepted = Object.values(FABRIC_PRIMITIVE_VALUES).every((value) =>
+        const accepted = FABRIC_PRIMITIVE_VALUES.every((value) =>
           validateSchemaValue(target, value, target) === undefined
         );
         let proved = true;

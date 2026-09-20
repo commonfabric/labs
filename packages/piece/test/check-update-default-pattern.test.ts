@@ -48,9 +48,9 @@ const patternSource = (marker: string) =>
 
 const SOURCE_V1 = patternSource("v1");
 const SOURCE_V2 = patternSource("v2");
-// A roll target WITH a handler: handler nodes need their { "$stream": true }
-// markers materialized on the (reused) root doc — the dimension the plain
-// sources above never exercise, and the estuary post-swap failure class.
+// A roll target WITH a handler: a handler's stream is an internal cell the
+// (reused) root doc has to materialize — the dimension the plain sources
+// above never exercise, and the estuary post-swap failure class.
 const SOURCE_V3_HANDLER = [
   "import { Writable, handler, pattern } from 'commonfabric';",
   "const bump = handler<void, { count: Writable<number> }>((_, { count }) => {",
@@ -1718,9 +1718,9 @@ describe("opening a space root", () => {
     // The estuary post-#4883 failure class: the swap engages, writes the new
     // patternIdentity onto the EXISTING result cell, and the replacement
     // pattern must then start over that reused doc — including materializing
-    // { "$stream": true } markers for handler nodes the old program never
-    // had. A handler-less roll target (every other test here) cannot see
-    // this; home.tsx is handler-rich.
+    // the internal cells of handler nodes the old program never had. A
+    // handler-less roll target (every other test here) cannot see this;
+    // home.tsx is handler-rich.
 
     await setupHome();
     await controller.recreateDefaultPattern({
@@ -1743,11 +1743,9 @@ describe("opening a space root", () => {
     await runtime.idle();
 
     // The swap alone is not the contract — the replacement must RUN. Start
-    // it the way bootstrap would and let the scheduler settle; a missing
-    // stream marker surfaces as "Handler used as lift" at instantiation and
-    // the pattern body never executes, so the functional read below is the
-    // pin: `count` only reads 0 if the swapped-in program actually ran its
-    // setup (internal cells materialized) and instantiated.
+    // it the way bootstrap would and let the scheduler settle; the functional
+    // read below is the pin: `count` only reads 0 if the swapped-in program
+    // actually ran its setup (internal cells materialized) and instantiated.
     const after = (await controller.getDefaultPattern(true))!;
     await runtime.idle();
     expect(getPatternIdentityRef(after)?.identity).toBe(
@@ -2175,7 +2173,7 @@ describe("opening a space root", () => {
       restore();
     }
     // Fail-closed: the ORIGINAL cold-start failure surfaces, not a heal error…
-    expect(String(thrown)).toContain("Handler used as lift");
+    expect(String(thrown)).toContain("stored setup was staged by");
     expect(String(thrown)).not.toContain("default-root heal failed");
     // …and the root's identity is untouched — no roll-forward, no displacement.
     const after = (await controller.getDefaultPattern(false))!;
@@ -2216,7 +2214,7 @@ describe("opening a space root", () => {
       restore();
     }
     // The ORIGINAL cold-start failure surfaces (fail-closed), not a heal error.
-    expect(String(thrown)).toContain("Handler used as lift");
+    expect(String(thrown)).toContain("stored setup was staged by");
     expect(String(thrown)).not.toContain("default-root heal failed");
     const after = (await controller.getDefaultPattern(false))!;
     expect(getPatternIdentityRef(after)?.identity).toBe(oldRef.identity);
@@ -2624,7 +2622,7 @@ describe("opening a space root", () => {
       rt.runSynced = originalRunSynced;
     }
     // The original start failure surfaces, not the repair's own error.
-    expect(String(thrown)).toContain("Handler used as lift");
+    expect(String(thrown)).toContain("stored setup was staged by");
     expect(String(thrown)).not.toContain("repair backend unavailable");
 
     // Nothing was torn down or corrupted: with the repair path restored, the

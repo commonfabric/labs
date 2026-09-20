@@ -17,8 +17,8 @@ Design, and likely to be superseded before it is built. The
 [agent requests plan](../plans/agent-requests-and-work-queue.md) proposes a
 general way for a pattern or a person to hand work to a `cf-harness` run and
 track it through a per-user queue; revising a piece from a request is one such
-run under the harness's existing `pattern-author` profile, and the harness is
-now capable of the authoring that this document specified a service for.
+run under the harness's existing `pattern-author` profile, and the harness can
+already perform the authoring for which this document specifies a service.
 Whoever
 picks this up should start there and treat the entry points, the session state
 machine, and the publication gate below as requirements to carry into that
@@ -35,7 +35,7 @@ authored-program manifest still required by the piece source lifecycle.
 
 ## Last updated
 
-2026-08-13
+2026-09-18
 
 ## Goal
 

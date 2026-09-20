@@ -15,7 +15,7 @@
  * test builds from a `MessageChannel` are the same thing here.
  */
 
-import { toLongQuotedDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray } from "@commonfabric/utils/types";
@@ -245,7 +245,7 @@ export class RuntimeClients {
         // `bigint` anywhere in the tree -- replacing this report with one that
         // names nothing -- and renders a `FabricPrimitive` as `{}`.
         throw new Error(
-          `Invalid IPC request: ${toLongQuotedDebugString(message)}`,
+          debugStr`Invalid IPC request: $quote,long${message}`,
         );
       }
       const { msgId, data: request } = message;

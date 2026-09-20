@@ -56,7 +56,11 @@ import {
   rebaseCfcLabelView,
 } from "./cfc/label-view-state.ts";
 import { dataUriFromValueWithResolvedLinks } from "./data-uri.ts";
-import { isSigilLink, type NormalizedFullLink } from "./link-utils.ts";
+import {
+  isSigilLink,
+  type NormalizedFullLink,
+  parseLink,
+} from "./link-utils.ts";
 import { type Runtime } from "./runtime.ts";
 import {
   createOpaqueReference,
@@ -273,22 +277,45 @@ const branchWithOuter = (
  * the cell among the results (`mergeMatches`); collapsing to the branch is the
  * same answer, decided on the schema instead.
  */
-const preferAsCellBranch = (schema: JSONSchema): JSONSchema => {
+const preferAsCellBranch = (
+  schema: JSONSchema,
+  stored?: unknown,
+): JSONSchema => {
   if (!isObjectOrArray(schema)) return schema;
   const branches = schema.anyOf ?? schema.oneOf;
   if (!Array.isArray(branches)) return schema;
   const resolved = branches.map((branch) => resolveBranch(branch, schema));
-  if (
-    resolved.some((branch) =>
-      ContextualFlowControl.getAsCellValues(branch).length > 0
-    )
-  ) {
-    const chosen = resolved.find((branch) =>
-      ContextualFlowControl.getAsCellValues(branch).length > 0
-    )!;
-    return branchWithOuter(schema, chosen);
-  }
-  return schema;
+  return ontoHandleBranch(schema, resolved, stored) ?? schema;
+};
+
+/**
+ * `schema` collapsed onto the one of `branches` that declares a handle, or
+ * `undefined` when none does.
+ *
+ * The first such branch, unless what is stored at the position says
+ * otherwise. A view node's prop offers both a `cell` and a `stream`, a stream
+ * is declared by the link that names it, and a reader asking for a plain cell
+ * there is a mismatch, so committing to the `cell` branch on the schema alone
+ * would refuse a stream the union allows. `stored` is the value at the
+ * position before any link is followed: when it is a link that declares a
+ * stream, the branch that declares one is the branch that applies. An eager
+ * read reaches the same answer by evaluating every branch.
+ */
+const ontoHandleBranch = (
+  schema: JSONSchemaObj,
+  branches: readonly JSONSchema[],
+  stored: unknown,
+): JSONSchema | undefined => {
+  const handles = branches.filter((branch) =>
+    ContextualFlowControl.getAsCellValues(branch).length > 0
+  );
+  if (handles.length === 0) return undefined;
+  const namesStream = isSigilLink(stored) &&
+    ContextualFlowControl.declaresStream(parseLink(stored)?.schema);
+  const chosen = namesStream
+    ? handles.find((branch) => ContextualFlowControl.declaresStream(branch))
+    : undefined;
+  return branchWithOuter(schema, chosen ?? handles[0]);
 };
 
 /**
@@ -365,11 +392,8 @@ const narrowForValue = (
   // a property the pattern declared as a `Cell` — `authorProfile: ProfileCell`
   // on a message union — comes back as a plain value and `.get()` is not a
   // function. Preferring the branch keeps the two reads agreeing.
-  const asCellBranch = matching.find((branch) =>
-    ContextualFlowControl.getAsCellValues(branch).length > 0
-  );
-  if (asCellBranch !== undefined) return branchWithOuter(schema, asCellBranch);
-  return mergeAnyOfBranchSchemas(matching as JSONSchema[], schema) ?? schema;
+  return ontoHandleBranch(schema, matching, value) ??
+    mergeAnyOfBranchSchemas(matching as JSONSchema[], schema) ?? schema;
 };
 
 const requiredKeys = (schema: JSONSchema | undefined): readonly string[] =>
@@ -380,6 +404,9 @@ const requiredKeys = (schema: JSONSchema | undefined): readonly string[] =>
 const childSchema = (
   schema: JSONSchema | undefined,
   key: string,
+  // What is stored at `key`, before any link is followed; a union of handle
+  // kinds is settled by it (`ontoHandleBranch`).
+  stored?: unknown,
 ): JSONSchema => {
   if (schema === undefined) return true;
   const narrowed = ContextualFlowControl.schemaAtPath(
@@ -390,7 +417,7 @@ const childSchema = (
     EXCLUDED_MISSING,
   );
   if (narrowed !== false || !isObjectOrArray(schema)) {
-    return preferAsCellBranch(narrowed);
+    return preferAsCellBranch(narrowed, stored);
   }
   // `schemaAtPath` decides which children exist from the schema's `type`, so a
   // schema that declares `properties` or `items` and omits `type` narrows to
@@ -610,8 +637,12 @@ export function materializeSchemaView(
     const narrowed = childSchema(schema, key);
     if (!Object.hasOwn(value, key)) {
       // A declared default stands in for an absent required key, exactly as it
-      // does for an eager read.
-      if (declaredDefault(narrowed) !== undefined) continue;
+      // does for an eager read, and so does a declared stream: its handle is
+      // minted from the schema alone.
+      if (
+        declaredDefault(narrowed) !== undefined ||
+        ContextualFlowControl.declaresStream(narrowed)
+      ) continue;
       return mismatch(`missing required property ${JSON.stringify(key)}`);
     }
     // A required property the schema does not select cannot be satisfied while
@@ -637,8 +668,11 @@ export function materializeSchemaView(
   );
 }
 
-/** The keys a reader sees: the data's own keys the schema selects, plus any
- * declared property that is absent but carries a default. */
+/**
+ * The keys a reader sees: the data's own keys the schema selects, plus any
+ * declared property that is absent but carries a default or declares a
+ * stream.
+ */
 const visibleKeys = (
   schema: JSONSchema | undefined,
   value: Record<string, FabricValue>,
@@ -649,7 +683,11 @@ const visibleKeys = (
   if (isObjectOrArray(schema) && isObjectOrArray(schema.properties)) {
     for (const key of Object.keys(schema.properties)) {
       if (Object.hasOwn(value, key)) continue;
-      if (declaredDefault(childSchema(schema, key)) === undefined) continue;
+      const narrowed = childSchema(schema, key);
+      if (
+        declaredDefault(narrowed) === undefined &&
+        !ContextualFlowControl.declaresStream(narrowed)
+      ) continue;
       keys.push(key);
     }
   }
@@ -735,7 +773,7 @@ function createObjectView(
   const schema = link.schema;
   const required = new Set(requiredKeys(schema));
   const resolveChild = (key: string): unknown => {
-    const narrowed = childSchema(schema, key);
+    const narrowed = childSchema(schema, key, value[key]);
     if (isExcluded(narrowed)) {
       // The data carries this key and the schema does not select it, so the
       // reader gets the `undefined` an absent key gives, and nothing at the
@@ -769,6 +807,17 @@ function createObjectView(
       // a refusal carries, for the case that is not a refusal: the schema does
       // not require this key, so reading it is an ordinary miss, not a mismatch.
       tx.readValueOrThrow({ ...link, path: [...link.path, key] });
+      if (ContextualFlowControl.declaresStream(narrowed)) {
+        return readChild(
+          runtime,
+          tx,
+          link,
+          key,
+          narrowed,
+          cfcLabelView,
+          synced,
+        );
+      }
       const fallback = declaredDefault(narrowed);
       if (fallback === undefined) return undefined;
       return processDefaultValue(
@@ -881,8 +930,8 @@ function createArrayView(
   const schema = link.schema;
   const resolveElement = (index: number): unknown => {
     const key = String(index);
-    const itemSchema = childSchema(schema, key);
     const item = value[index];
+    const itemSchema = childSchema(schema, key, item);
     const slotLink: NormalizedFullLink = {
       ...link,
       path: [...link.path, key],

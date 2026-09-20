@@ -114,6 +114,9 @@ What works today:
   - override per run with `--sandbox-image` or `CF_HARNESS_SANDBOX_IMAGE`
 - durable Loom collections through an explicitly configured host transport; see
   [Durable Loom authoring](docs/LOOM_AUTHORING.md);
+- read-only Loom retrieval through a separately configured host transport, with
+  every row measured against the run's observation ceiling; see
+  [Read-only Loom retrieval](docs/LOOM_RETRIEVAL.md);
 - built-in tools:
   - `bash`
   - `browser` (structured host browser control for the browser subagent profile
@@ -155,6 +158,11 @@ What works today:
   - `loom_compose`, `loom_inspect`, and `loom_authoring_context` (present only
     with `--loom-authoring-config`; collections and verified commit receipts,
     separate from Pattern Instance deployment)
+  - `loom_search`, `loom_page_discover`, `loom_page_inspect`, `loom_page_read`,
+    `loom_people`, `loom_calendar_list`, `loom_context`, and `loom_profile`
+    (present only with `--loom-retrieval-config`; read-only, each row measured
+    against the run's observation ceiling; a row loom returns without a label is
+    given the query's label, and one whose label is malformed is withheld)
   - `research` (present when the run resolves a documentation corpus or pattern
     index; performs bounded, iterative Common Fabric research over exact docs,
     skills, published pattern source and dependencies, and safe handle shapes,
@@ -1770,7 +1778,11 @@ whose runtime is not bounded as configured; the manifest's declaration is
 projected into the policy snapshot and every invocation context for the audit;
 and the operator summary prints the ceiling beside the other session dials. A
 delegated child runs on its parent's session and records the parent's ceiling as
-its own.
+its own. The ceiling bounds the session on either server-execution arm: a
+session's own runtime reads under it, and under server execution the session
+declares it to the space server, whose runtime reads under it for every run
+served as that session — a server too old to record a session's ceiling is
+refused rather than trusted to bound anything.
 
 The tool takes `sourceText` (inline pattern source, at most 256 KiB — an
 over-cap source is a structured tool error), an optional `inputs` object, and an

@@ -1,9 +1,9 @@
 import {
+  debugStr,
   deepFreeze,
   type FabricValue,
   isDeepFrozen,
   isWalkableObjectOrArray,
-  toCompactDebugString,
 } from "@commonfabric/data-model";
 import { linkRefFrom, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import {
@@ -168,7 +168,7 @@ export function parseLinkOrThrow(
   const result = parseLink(value, baseCell);
   if (!result) {
     throw new Error(
-      `Cannot parse value as link: ${toCompactDebugString(value)}`,
+      debugStr`Cannot parse value as link: $quote${value}`,
     );
   }
   return result;
@@ -411,6 +411,56 @@ export function createSigilLinkFromParsedLink(
 
   return sigil;
 }
+
+/**
+ * Returns `schema` stamped as a stream position: a `stream` entry at the
+ * front of its `asCell` list, over the event schema the stream accepts. An
+ * `asCell` entry the event schema already carries describes the event and
+ * stays behind the stamp, which is the order the runtime reads a list of
+ * kinds in. A schema whose front entry is already `stream` is returned as it
+ * is; one that declares the stream only through a reference or a union is
+ * stamped like any other, since the readers that mint a handle from a link's
+ * schema look at its root alone. This is the declaration every link to a
+ * stream carries, since the document behind a stream holds nothing that says
+ * what the position is.
+ *
+ * The result is interned and remembered per input schema, so a stream
+ * serialized again and again hands link serialization the same frozen
+ * schema each time, which is what its own caches key on.
+ */
+export function declareStreamSchema(
+  schema: JSONSchema | undefined,
+): JSONSchema {
+  if (schema === undefined || schema === true) {
+    return UNTYPED_STREAM_SCHEMA;
+  }
+  if (schema === false) {
+    return EVENTLESS_STREAM_SCHEMA;
+  }
+  if (
+    ContextualFlowControl.getAsCellKind(
+      ContextualFlowControl.getAsCellValues(
+        resolveExternalRootRefForStructure(schema),
+      ).at(0),
+    ) === "stream"
+  ) return schema;
+  const remembered = declaredStreamSchemas.get(schema);
+  if (remembered !== undefined) return remembered;
+  const entries = Array.isArray(schema.asCell) ? schema.asCell : [];
+  const declared = internSchema({
+    ...schema,
+    asCell: ["stream", ...entries],
+  });
+  declaredStreamSchemas.set(schema, declared);
+  return declared;
+}
+
+const UNTYPED_STREAM_SCHEMA = internSchema({ asCell: ["stream"] });
+const EVENTLESS_STREAM_SCHEMA = internSchema({
+  not: true,
+  asCell: ["stream"],
+});
+const declaredStreamSchemas = new WeakMap<object, JSONSchema>();
 
 /**
  * Controls which `asCell` schema entries survive {@link sanitizeSchemaForLinks}.
@@ -972,4 +1022,43 @@ export function getMetaLink(
   if (linkObj === undefined) return undefined;
   const link = parseLink(linkObj, resultCell);
   return link;
+}
+
+/**
+ * The schema under which the owner of the document `cell` names declares it
+ * a stream, or `undefined` when no owner does.
+ *
+ * A stream's document holds only the `result` back-link setup writes onto
+ * it, so an address that names the document alone says nothing about it:
+ * there is no stored link hop to carry a declaration, and the caller brought
+ * no schema. The declaration is on the owner, in the manifest link its result
+ * document keeps for each derived internal cell, and this follows the
+ * back-link to read it there. A cell below a document's root, or one whose
+ * document names no owner, is declared by no one. The schema returned is the
+ * manifest link's own, so it carries the event schema the stream was declared
+ * with beside the declaration.
+ */
+export function ownerStreamSchema(
+  cell: Cell<unknown>,
+): JSONSchema | undefined {
+  const target = cell.getAsNormalizedFullLink();
+  if (target.path.length > 0) return undefined;
+  const ownerLink = getMetaLink(cell, "result");
+  if (ownerLink === undefined) return undefined;
+  const owner = cell.runtime.getCellFromLink(
+    { ...ownerLink, path: [], schema: undefined },
+    undefined,
+    cell.tx,
+  );
+  const manifest = owner.getMetaRaw("internal", META_READ_OPTIONS);
+  if (!Array.isArray(manifest)) return undefined;
+  for (const entry of manifest) {
+    if (!isObjectNotArray(entry)) continue;
+    const link = parseLink(entry.link, owner);
+    if (
+      link !== undefined && areNormalizedLinksSame(link, target) &&
+      ContextualFlowControl.declaresStream(link.schema)
+    ) return link.schema;
+  }
+  return undefined;
 }

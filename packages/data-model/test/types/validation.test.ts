@@ -21,7 +21,6 @@ import { expect } from "@std/expect";
 import { FabricError } from "@/fabric-instances/FabricError.ts";
 import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
 import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { codecClasses } from "@/fabric-primitives/impl.ts";
 import type { FabricValue } from "@/interface.ts";
 import { shallowFabricFromConvertibleJsValue } from "@/convertible-js.ts";
 import {
@@ -789,20 +788,6 @@ describe("validation", () => {
       it("is checked against both answers", () => {
         expect(accepted.length).toBeGreaterThan(0);
         expect(refused.length).toBeGreaterThan(0);
-      });
-
-      it("carries every registered primitive class", () => {
-        // The predicate's accepting side is a chain of shape tests, so a class
-        // the corpus never carries is a branch no cross-check above reaches.
-
-        const carried = new Set(
-          LAYER_CORPUS.map(([, value]) =>
-            (value as object)?.constructor as unknown
-          ),
-        );
-        for (const cls of codecClasses()) {
-          expect([cls.name, carried.has(cls)]).toEqual([cls.name, true]);
-        }
       });
     });
 

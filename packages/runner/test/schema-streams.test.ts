@@ -119,13 +119,13 @@ describe("Schema - Streams and Promises", () => {
       expect(isStream(value?.user?.profile?.notifications)).toBe(true);
     });
 
-    it("should not create a stream when property is missing", () => {
+    it("creates a stream for a declared stream property the value lacks", () => {
       const c = runtime.getCell<{
         name: string;
         // Missing events property
       }>(
         space,
-        "should not create a stream when property is missing 1",
+        "creates a stream for a declared stream property the value lacks 1",
         undefined,
         tx,
       );
@@ -149,7 +149,7 @@ describe("Schema - Streams and Promises", () => {
       const value = cell.get();
 
       expect(value.name).toBe("Test Doc");
-      expect(isStream(value.events)).toBe(false);
+      expect(isStream(value.events)).toBe(true);
     });
 
     it("should behave correctly when both asCell cell and asCell stream are in the schema", () => {

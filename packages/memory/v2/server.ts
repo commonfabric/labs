@@ -57,6 +57,7 @@ import {
   type OperationFieldQueryResult,
   type OperationWatchSpec,
   parseMemoryProtocolFlags,
+  parseSessionReadCeiling,
   resolveScopeKey,
   type ResponseMessage,
   type ScopeKey,
@@ -72,6 +73,7 @@ import {
   type SessionOpenChallenge,
   type SessionOpenRequest,
   type SessionOpenResult,
+  type SessionReadCeiling,
   type SessionRevokedMessage,
   type SessionSync,
   type SessionViewHandle,
@@ -6680,6 +6682,20 @@ export class Server {
    * root the tracker has not (yet) keyed still carries what
    * `watchedRootsForSpace` carried — parity with today's structure load.
    */
+  /**
+   * The read ceiling `sessionId` declared at its last open
+   * (`SessionDescriptor.readCeiling`), or `undefined` for a session that
+   * declared none or is not live. What the SpaceServer stamps onto every
+   * run it serves AS that session, so the runs of a bounded client read
+   * under the client's ceiling.
+   */
+  sessionReadCeiling(
+    space: string,
+    sessionId: string,
+  ): SessionReadCeiling | undefined {
+    return this.#sessions.get(space, sessionId)?.readCeiling;
+  }
+
   demandedInstancesForSpace(
     space: string,
     options: { excludePrincipal?: string } = {},
@@ -7925,6 +7941,10 @@ export const parseClientMessage = (
   ) {
     const holdings = parseHoldings(parsed.holdings);
     if (holdings === null) return null;
+    // A malformed ceiling refuses the message: a session opened without the
+    // ceiling its client asked for would read unbounded, silently.
+    const readCeiling = parseSessionReadCeiling(parsed.session.readCeiling);
+    if (readCeiling === null) return null;
     return {
       type: "session.open",
       requestId: parsed.requestId,
@@ -7948,6 +7968,7 @@ export const parseClientMessage = (
           : typeof parsed.session.actingAs === "string"
           ? (parsed.session.actingAs as "space-owner")
           : undefined,
+        ...(readCeiling !== undefined ? { readCeiling } : {}),
       },
       invocation: isFabricPlainObject(parsed.invocation)
         ? parsed.invocation

@@ -7,6 +7,7 @@ import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { readStatsActive, recordProxyAccess } from "./read-stats.ts";
 import { isStreamValue } from "./builder/types.ts";
 import { type BackToCellInternals, toCell } from "./back-to-cell.ts";
+import { ContextualFlowControl } from "./cfc.ts";
 import { resolveLinkTracingDereferences } from "./link-resolution.ts";
 import { type NormalizedFullLink } from "./link-utils.ts";
 import { type Cell, createCell } from "./cell.ts";
@@ -332,6 +333,16 @@ function createViewProxy<T>(
     cloneCfcLabelView(cfcLabelView),
     cfcLabelViewForDereferenceTraces(viewTx, resolved.traces),
   ]);
+  // A stream position is declared by the link's schema: the stamp the builder
+  // puts on a stream's alias, which the stored redirect carries onto the
+  // resolved link. The handle is minted from that alone, since the document
+  // behind a stream holds no value to read.
+  if (ContextualFlowControl.declaresStream(link.schema)) {
+    return remember(
+      createCell(runtime, link, tx, false, "stream", cfcLabelView) as T,
+    );
+  }
+
   const value = viewTx.readValueOrThrow(link, SHAPE_READ) as any;
 
   // The SHAPE_READ above only tracks the container's shape, but the stream

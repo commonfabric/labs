@@ -146,23 +146,44 @@ export type VerifiedExternalIdentity = RequiresIntegrity<
 
 export type VerifiedExternalIdentityCell = Cell<VerifiedExternalIdentity>;
 
-/**
- * Where things shared with this profile's owner are delivered: the owner's
- * share inbox — a dedicated space their daemon minted, holding one inbox piece
- * whose `receive` stream other daemons call (loom `shares/inbox.py`; the
- * design is loom's weaver-multiuser-sharing D8 and share-inbox proposal).
- * Public on purpose and no secret in it: the inbox space's ACL is the gate,
- * the pointer only says where to knock. Empty strings mean "no inbox yet".
- */
-export type ProfileInboxPointer = {
-  /** The inbox space's DID. */
-  space: string;
-  /** The memory host the space lives on (an http(s) origin). */
-  host: string;
+/** What the profile knows of its share inbox piece: its name, at most. */
+export type ShareInboxPiece = {
+  [NAME]?: string;
 };
+
+/**
+ * Where things shared with this profile's owner are delivered: a link to the
+ * owner's share inbox piece — the piece whose `receive` stream other daemons
+ * call, in the dedicated inbox space the owner's daemon minted (loom
+ * `shares/inbox.py`; the design is loom's weaver-multiuser-sharing D8 and
+ * share-inbox proposal). The link names the piece and its space together;
+ * it carries no memory host because the inbox lives on the host the profile
+ * pointing at it lives on, so a reader uses the host it read the profile
+ * from. Public on purpose and no secret in it: the inbox space's ACL is the
+ * gate, the link only says where to knock. Stored as the `link@1` sigil,
+ * `{ "/": { "link@1": { id: "of:…", space: "did:key:…", path: [] } } }`,
+ * the same form the profile's pinned-piece elements take; `piece` is absent
+ * when the owner has no inbox.
+ *
+ * The link sits under a key rather than being the stored value itself
+ * because a write to a cell whose document root holds a link goes through
+ * the link into the piece it names, so a pointer stored bare could be set
+ * once and never re-pointed or cleared. Under a key, a new link re-binds the
+ * slot and an omitted key removes it.
+ */
+export type ProfileInbox = {
+  /** The owner's share inbox piece. */
+  piece?: Cell<ShareInboxPiece>;
+};
+
 export type SetProfileInboxEvent = {
-  space?: string;
-  host?: string;
+  /** The inbox piece to point at; absent clears the pointer. */
+  // `Cell<…>` is written out rather than reached through an alias: the
+  // handler's event schema marks a reference position only where the wrapper
+  // is spelled in the event type, and through an alias the member compiles
+  // to the piece's value shape, so the handler is handed a value instead of
+  // the link it stores.
+  inbox?: Cell<ShareInboxPiece>;
 };
 
 type VerifiedIdentityListWrite<Binding> = OwnerProtectedProfileWrite<
@@ -189,15 +210,12 @@ export type ProfileHomeOutput = {
   // (masked until now only because `addExternalLink` sorts earlier in the
   // required check).
   bio: Default<OwnerProtectedProfileWrite<string, typeof setBio>, "">;
-  // The owner's share inbox pointer (2026-09-15). Owner-protected like bio;
-  // readable by anyone who can read the profile, which is what a sender
-  // needs. OPTIONAL rather than defaulted, unlike bio: the pattern-update
-  // gate refuses an object default beneath a `$ref` constraint ("defaults
-  // changed below a constraint that is not stable under default insertion"),
-  // and a stored profile predating the field simply has no such property.
-  // A running profile always binds it (empty strings mean "no inbox yet");
-  // a reader of a stored doc takes `inbox?.space`.
-  inbox?: OwnerProtectedProfileWrite<ProfileInboxPointer, typeof setInbox>;
+  // The owner's share inbox pointer. Owner-protected like bio; readable by
+  // anyone who can read the profile, which is what a sender needs. OPTIONAL
+  // rather than defaulted, unlike bio: a stored profile predating the field
+  // has no such property, and a profile with no inbox holds a pointer with
+  // no `piece`. A running profile always binds it.
+  inbox?: OwnerProtectedProfileWrite<ProfileInbox, typeof setInbox>;
   // Public web profiles the owner has chosen to associate with this profile.
   // The owner-protected list is distinct from `elements`, whose entries are
   // Common Fabric piece references.
@@ -538,51 +556,15 @@ const setBio = handler<
   },
 );
 
-// A share inbox space is minted by the owner's daemon as a did:key (ed25519,
-// base58btc: `z` then the alphabet without 0, O, I, l), so that is the one
-// grammar the pointer admits — a value that cannot name a space is not
-// published, not stored half-right.
-const INBOX_SPACE_DID = /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,}$/;
-
-/** The memory host as an http(s) ORIGIN and nothing more: parsed, not
- *  pattern-matched, so credentials, a path, a query, a fragment or an
- *  unparseable port are refused rather than stored for a sender to read
- *  back. Returns the origin, or "" when the value is not one. */
-function inboxHostOrigin(value: string): string {
-  const raw = value.trim();
-  if (raw === "") return "";
-  let url: URL;
-  try {
-    url = new URL(raw);
-  } catch {
-    return "";
-  }
-  if (url.protocol !== "http:" && url.protocol !== "https:") return "";
-  if (url.username !== "" || url.password !== "") return "";
-  if (url.search !== "" || url.hash !== "") return "";
-  if (url.pathname !== "/" && url.pathname !== "") return "";
-  if (raw.endsWith("?") || raw.endsWith("#")) return "";
-  return url.origin;
-}
-
-// The single authorized writer for the share inbox pointer. A pointer is
-// both parts shaped or nothing: a did:key for the space, an http(s) origin
-// for the host; both empty clears it (the owner retired their inbox).
-// Anything else is dropped, never half-written — a sender that read a half
-// pointer would knock on nothing.
+// The single authorized writer for the share inbox link. The link is stored
+// as sent, and an event without one clears the pointer (the owner retired
+// their inbox). No shape check here: the event's schema admits a cell link
+// and nothing else, and the runtime refuses an event that is not one.
 const setInbox = handler<
   SetProfileInboxEvent,
-  { inbox: Writable<ProfileInboxPointer> }
+  { inbox: Writable<ProfileInbox> }
 >((event, state) => {
-  const space = (event.space ?? "").trim();
-  const rawHost = (event.host ?? "").trim();
-  if (space === "" && rawHost === "") {
-    state.inbox.set({ space: "", host: "" });
-    return;
-  }
-  const host = inboxHostOrigin(rawHost);
-  if (!INBOX_SPACE_DID.test(space) || host === "") return;
-  state.inbox.set({ space, host });
+  state.inbox.set(event.inbox === undefined ? {} : { piece: event.inbox });
 });
 
 // The single authorized writer for externally hosted profile links. Add and
@@ -735,8 +717,8 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
       OwnerProtectedProfileWrite<string, typeof setBio>
     >("").for("bio");
     const inbox = new Writable<
-      OwnerProtectedProfileWrite<ProfileInboxPointer, typeof setInbox>
-    >({ space: "", host: "" }).for("inbox");
+      OwnerProtectedProfileWrite<ProfileInbox, typeof setInbox>
+    >({}).for("inbox");
     const externalLinks = new Writable<
       OwnerProtectedProfileWrite<
         ExternalProfileLink[],

@@ -55,6 +55,7 @@
     "./fabric-bases": "./src/fabric-bases/index.ts",
     "./fabric-instances": "./src/fabric-instances/index.ts",
     "./fabric-primitives": "./src/fabric-primitives/index.ts",
+    "./for-testing-only": "./src/for-testing-only.ts",
     "./frozen-builtins": "./src/frozen-builtins.ts"
   }
 }

@@ -135,9 +135,11 @@ import {
 } from "./data-uri.ts";
 import { actingForEmission, waveRunContextOf } from "./executor/wave.ts";
 import { type LastNode, resolveLink } from "./link-resolution.ts";
+import { areNormalizedLinksSame } from "./link-types.ts";
 import {
   areLinksSame,
   createSigilLinkFromParsedLink,
+  declareStreamSchema,
   isCellLink,
   KeepAsCell,
   type NormalizedFullLink,
@@ -656,7 +658,7 @@ declare module "@commonfabric/api" {
       scope?: CellScope;
       nodes: Set<NodeRef>;
       frame: Frame;
-      value?: FactoryInput<T> | T;
+      kind?: CellKind;
       name?: unknown;
       external?: unknown;
     };
@@ -1168,6 +1170,15 @@ export class CellImpl<T extends FabricValue>
     return this.#kind === "cell" || this.#kind === "readonly";
   }
 
+  /**
+   * The kind this cell was constructed as: `stream` for a handle minted for a
+   * stream position, `cell` otherwise. Read off the handle alone, with nothing
+   * read from storage, which is what a write boundary needs from it.
+   */
+  get kind(): CellKind {
+    return this.#kind;
+  }
+
   [cfcLabelViewSymbol](): CfcLabelView | undefined {
     return cloneCfcLabelView(this.#cfcLabelView);
   }
@@ -1395,14 +1406,7 @@ export class CellImpl<T extends FabricValue>
       });
     }
 
-    // The link's schema may ride as a content-addressed reference; the
-    // stream marker lives on the resolved document.
-    const streamSchema = isObjectNotArray(resolvedToValueLink.schema)
-      ? resolveExternalRootRefForStructure(resolvedToValueLink.schema)
-      : resolvedToValueLink.schema;
-    if (
-      ContextualFlowControl.getAsCellValues(streamSchema).at(0) === "stream"
-    ) {
+    if (ContextualFlowControl.declaresStream(resolvedToValueLink.schema)) {
       return true;
     }
 
@@ -1453,13 +1457,29 @@ export class CellImpl<T extends FabricValue>
     }
 
     logger.timeStart("cell", "get");
-    const value = validateAndTransform(
+    const read = validateAndTransform(
       this.runtime,
       this.tx,
       this.#viewRef,
       [],
       { ...options, synced: this.#synced },
     );
+    // A stream holds no value, so a read of a stream handle returns the
+    // stream. The read finds that out rather than assuming it, because the
+    // kind alone does not decide: a union that offers both `cell` and `stream`
+    // hands a stream handle to a position that holds a value, and that value
+    // is what its read returns. Two outcomes say there is none. The read
+    // finds nothing. Or the handle's own schema names a further handle kind
+    // behind the stream's, as a view node's prop schema leaves `opaque`
+    // there, and the read mints that handle on the very location the stream
+    // names: a handle carrying nothing that says stream, whose `send()` would
+    // write the event into the stream's document.
+    const holdsNoValue = read === undefined ||
+      (isCell(read) &&
+        areNormalizedLinksSame(read.getAsNormalizedFullLink(), this.#link));
+    const value = this.#kind === "stream" && holdsNoValue
+      ? this as unknown as typeof read
+      : read;
     const elapsed = logger.timeEnd("cell", "get")!;
     if (elapsed > 50) {
       logger.warn(
@@ -3321,6 +3341,19 @@ export class CellImpl<T extends FabricValue>
     return this.#link;
   }
 
+  /**
+   * The link a serialized reference to this cell is built from. A stream
+   * handle's own link carries the event schema, and what says it is a stream
+   * is the handle's kind, which a reference does not carry. The reference
+   * outlives the handle, and the document it names holds nothing, so the
+   * declaration goes onto the reference's schema.
+   */
+  #linkForReference(): NormalizedFullLink {
+    return this.#kind === "stream"
+      ? { ...this.#link, schema: declareStreamSchema(this.#link.schema) }
+      : this.#link;
+  }
+
   getAsLink(
     options?: {
       base?: Cell<any>;
@@ -3329,7 +3362,7 @@ export class CellImpl<T extends FabricValue>
       keepAsCell?: KeepAsCell;
     },
   ): SigilLink {
-    return createSigilLinkFromParsedLink(this.#link, {
+    return createSigilLinkFromParsedLink(this.#linkForReference(), {
       ...options,
       overwrite: "this",
     });
@@ -3343,7 +3376,7 @@ export class CellImpl<T extends FabricValue>
       keepAsCell?: KeepAsCell;
     },
   ): SigilWriteRedirectLink {
-    return createSigilLinkFromParsedLink(this.#link, {
+    return createSigilLinkFromParsedLink(this.#linkForReference(), {
       ...options,
       overwrite: "redirect",
     }) as SigilWriteRedirectLink;
@@ -3560,7 +3593,8 @@ export class CellImpl<T extends FabricValue>
 
   /**
    * Export cell metadata for introspection, similar to Reactive's export method.
-   * If the cell has a link, it's included as 'external'.
+   * If the cell has a link, it's included as 'external'. `kind` is the cell's
+   * kind, which is what tells a stream from a value cell.
    */
   export(): {
     cell: OpaqueCell<unknown>;
@@ -3569,7 +3603,7 @@ export class CellImpl<T extends FabricValue>
     scope?: CellScope;
     nodes: Set<NodeRef>;
     frame: Frame;
-    value?: FactoryInput<T> | T;
+    kind?: CellKind;
     name?: unknown;
     external?: unknown;
   } {
@@ -3589,10 +3623,7 @@ export class CellImpl<T extends FabricValue>
       scope: isCellScope(this.#_link.scope) ? this.#_link.scope : undefined,
       nodes: cellNodes.get(this.#causeContainer.cell) ?? new Set(),
       frame: this.#frame,
-      // Cast needed: stream sentinel marker isn't actually of type T
-      value: this.#kind === "stream"
-        ? { $stream: true } as unknown as T
-        : undefined,
+      kind: this.#kind,
       name: this.#causeContainer.cause,
       external: this.#_link.id
         ? this.getAsWriteRedirectLink({
