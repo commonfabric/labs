@@ -11,9 +11,10 @@ docs/history/INDEX.md merge=union
 # Test-identity aliases are append-only, one JSON object per line. A file per
 # test file keeps most renames apart; two that land in one alias file — the same
 # test file, or test files sharing a last path segment — still append to it, and
-# the union driver keeps both instead of raising a conflict. It cannot admit anything the rules allow the
-# file to lose: `deno task check-test-aliases` fails a line that does not parse,
-# an identity mapped twice, a cycle, and a file that stopped growing.
+# the union driver keeps both instead of raising a conflict. A union merge can
+# only add lines, so every state it produces is one that
+# `deno task check-test-aliases` still judges: that gate fails a line that does
+# not parse, an identity mapped twice, a cycle, and a file that stopped growing.
 tasks/test-identity-aliases/*.jsonl merge=union
 
 # Keep generated measurement data available without expanding it in code review.
