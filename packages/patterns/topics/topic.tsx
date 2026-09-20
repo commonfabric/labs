@@ -875,6 +875,18 @@ export interface TopicOutput extends TopicPiece {
    * The board's `backfillNames` sends this verb one event per topic it holds
    * that reports no number, and an operator can send it directly.
    *
+   * THE NUMBER MUST BE THE ONE THE BOARD'S NAMESPACE HOLDS FOR THIS TOPIC, and
+   * the verb cannot check that: a topic holds no namespace to look itself up
+   * in, and giving it one is the board-derived table this design exists to
+   * remove — `shortName` above says why. So the check is the caller's, and
+   * `cf cell get --cell <board> names` is where the answer is. A number the
+   * board did not allocate is stored as readily as one it did, and a number is
+   * permanent: the step then allocates a different one, writes it into the
+   * namespace, and is refused here for as long as the disagreement stands, so
+   * `top/<n>` and the topic's own badge name different numbers and nothing in
+   * the board reconciles them. `skills/topics/references/namespace-backfill.md`
+   * carries that repair, which is by hand.
+   *
    * Outside the projection for the reason `removeComment` states: a board
    * stores `TopicPiece`, so a required verb added there would refuse every
    * topic deployed before the verb existed.

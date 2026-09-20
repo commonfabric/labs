@@ -400,8 +400,8 @@ export default pattern(() => {
   // REFUSAL: `recordName` rejects a number disagreeing with one already
   // stored, so a board-created topic refusing `9` is one that stores something
   // else. That refusal is counted, not asserted — it is one of this file's
-  // three expected runtime errors, and dropping the pass-through at the create
-  // makes the call succeed and the count fall to two. The assertion below
+  // five expected runtime errors, and dropping the pass-through at the create
+  // makes the call succeed and the count fall to four. The assertion below
   // carries only the namespace half, which is what it can read.
   const madeNames = new Writable<NamesMap>({});
   const madeTopics = new Writable<TopicDemand[] | Default<[]>>([]);

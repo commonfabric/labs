@@ -504,9 +504,12 @@ Mike's call, after S4.
    is made by the 2026-09-17 entry above: a topic stores its own number, and
    `backfillNames` asks each topic filed before the namespace to store the one
    the namespace holds for it, so no per-topic `cf piece link` remains in the
-   sequence. The two rehearsals recorded below ran the link-bind shape, so what
-   they measured of the numbering step itself no longer describes it; what they
-   measured of the two source legs does, and those legs are unchanged. The
+   sequence. Both rehearsals ran the link-bind shape — the first of 2026-09-05,
+   recorded at
+   `../history/plans/collection-naming-s6-backfill-rehearsal-2026-09-05.md`, and
+   its rerun below — so what they measured of the numbering step itself no
+   longer describes it; what they measured of the two source legs does, and
+   those legs are unchanged. The
    operator procedure is `skills/topics/references/namespace-backfill.md`, which
    states which of its steps have a clone run behind them.
 

@@ -297,8 +297,8 @@ cf cell get --cell <board> names
 # Idempotent. While `SHOW_TOPIC_NUMBERS` is off the step cannot see what a topic
 # stores, so `named` is empty and `pending` holds every topic however many runs
 # have gone by: re-run until `assigned` is empty, and read one topic's stored
-# number from its own input. The three empty lists below are what this returns
-# once numbers are shown again.
+# number from its own input. The three lists below are what this returns once
+# numbers are shown again, with an empty `pending` as the finished state.
 cf piece call --cell <board> backfillNames '{"agentName":"Sol"}'
 # -> { "result": { "assigned": [], "named": ["1","2"], "pending": [] } }
 cf cell get --cell <topic> shortName --input
@@ -316,9 +316,13 @@ cf piece call --cell <topic> addLink \
 cf piece call --cell <topic> mention '{"topic":"/of:fid1:other-topic"}'
 cf piece call --cell <topic> unmention '{"topic":"/of:fid1:other-topic"}'
 # Store a number on one topic, which is what `backfillNames` asks each topic to
-# do. Idempotent, and refused where it disagrees with what the topic stores.
-cf piece call --cell <topic> recordName '{"name":"42"}'
-# -> { "result": { "name": "42", "wrote": true } }
+# do. Idempotent, and refused where it disagrees with what the topic stores —
+# so against this flow's topic 1, which the create already numbered, the number
+# the namespace holds for it is the one that answers.
+cf piece call --cell <topic> recordName '{"name":"1"}'
+# -> { "result": { "name": "1", "wrote": false } }   already stored
+# `wrote: true` comes back only from a topic holding no number yet: one filed
+# before the board numbered anything, which is what `backfillNames` is for.
 cf piece call --cell <topic> removeLink \
   '{"url":"https://github.com/org/repo/pull/123","agentName":"Sol"}'
 ```

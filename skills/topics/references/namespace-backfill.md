@@ -165,9 +165,11 @@ asks every Topic again. Per case:
 - **The asking itself is a write.** A send is an ordinary write to the target's
   stream — `Cell.send` in `packages/runner/src/cell.ts` delegates to `set` — and
   every send in one run lands in the board's own transaction. So a run over a
-  board of 125 Topics writes 125 events and dispatches 125 handlings, whatever
-  those handlings then decide. That cost is per run and does not fall as Topics
-  store their numbers, because the step cannot see that they have.
+  board of 125 Topics stages 125 writes, whatever the handlings then decide.
+  That cost is per run and does not fall as Topics store their numbers, because
+  the step cannot see that they have. A handling per Topic is the rest of it,
+  but only where the Topic's source declares the stream: one that does not takes
+  the last case below and dispatches nothing.
 - **A Topic that already stores its number writes nothing further.**
   `recordName` compares the number asked for against its own input — which no
   switch gates — and returns before `upgradeTopicState` and before the write.
@@ -190,9 +192,11 @@ asks every Topic again. Per case:
   comes before step 3.
 
 So: re-run when something is outstanding, not as a matter of course. Each run
-costs one board transaction, one event and one handling per Topic, and one
-logged failure per Topic in a state the verb refuses. None of it corrupts
-anything, and none of it is free.
+costs one board transaction and one write per Topic; a handling for each Topic
+whose source declares the verb, and none for one that does not; and one logged
+failure per Topic in a state the verb refuses. After step 2 that is a handling
+for every Topic, which is the shape to plan for. None of it corrupts anything,
+and none of it is free.
 
 Until the switch is on, read three things instead of `pending`:
 
@@ -213,9 +217,13 @@ about the step changes with it.
 **A number that comes back under `pending` on every run is not waiting for a
 retry** — once numbers are shown, when `pending` means something again. That
 Topic's own verb is refusing the number, which `recordName` does when the Topic
-already stores a different one. Read its stored number, decide which number that
-Topic is to keep, and reconcile by hand; nothing in the board resolves it, and
-each run costs one refused handler transaction.
+already stores a different one. The way a Topic comes to store one the namespace
+disagrees with is a direct `recordName` call carrying a number the board did not
+allocate: the verb takes any well-formed member name, because a Topic holds no
+namespace to check against, so the check belongs to whoever calls it. Read its
+stored number, decide which number that Topic is to keep, and reconcile by hand;
+nothing in the board resolves it, and each run costs one refused handler
+transaction.
 
 ### What a half-finished Topic looks like, and what it costs
 

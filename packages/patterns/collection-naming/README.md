@@ -299,13 +299,14 @@ The Topics board (`../topics/`) is the collection this library exists for, and
 it calls it: `addTopic` allocates in the same transaction as its append and
 passes the name into the topic it creates, its `backfillNames` verb runs
 `recordNames` over what the board held before, each topic stores its own name
-and publishes it as `shortName`, and both boards derive their mention universe
-through `mentionable.ts`. Topics shows no numbers for now — `SHOW_TOPIC_NUMBERS`
-in `../topics/topic.tsx` says why — so a topic publishes no `shortName`, and
-every place that would show one reads nothing: the header, the cards, the survey
-rows, and the universe rows the derivation copies from each topic. A topic still
-STORES its number, which is what `recordNames` asks it to do and what no switch
-gates; the switch costs the step its report, which `RecordNamesResult` states.
-This exemplar shows its numbers in all three places. What is still to come is in
+and publishes it as `shortName` once numbers are shown, and both boards derive
+their mention universe through `mentionable.ts`. Topics shows no numbers for now
+— `SHOW_TOPIC_NUMBERS` in `../topics/topic.tsx` says why — so a topic publishes
+no `shortName`, and every place that would show one reads nothing: the header,
+the cards, the survey rows, and the universe rows the derivation copies from
+each topic. A topic still STORES its number, which is what `recordNames` asks it
+to do and what no switch gates; the switch costs the step its report, which
+`RecordNamesResult` states. This exemplar shows its numbers in all three places.
+What is still to come is in
 [the plan](../../../docs/plans/collection-naming-topics.md): the production
 backfill, and the slug that binds the board's `names` cell as `top`.
