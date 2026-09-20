@@ -38,6 +38,22 @@ the T0 fixture's synthetic topics, under the same read accounting the probe
 uses. Four topics, `lazyMaterialization` on, `serverExecution` off, demand
 `aggregates`, and no mentions, so the pivot contributes nothing.
 
+**The instrument that did this is not committed, deliberately.** It resolves
+each derivation by its hoist number — `__cfLift_4` through `__cfLift_7`, and
+`__cfLift_32` in the before arm — and hoist numbers are exactly what an
+ordinary edit to `topic.tsx` renumbers. A committed instrument naming them
+would go on running after the next edit and measure whichever derivations had
+inherited those numbers, reporting figures rather than failing. That is a worse
+artifact than none.
+
+What stands in for it is the run count below, which is a structural check on
+whether the intended derivations were the ones started: it lands on the number
+the change predicts, and does so identically at every fixture size. Making the
+instrument durable means resolving these derivations by a stable name rather
+than by hoist number, which `topic.tsx` does not currently offer for a body
+derivation — `presentCommentCountOf`, the one module-scope lift among them, is
+the exception and is resolved by its authored name here.
+
 ## What it cost before, and costs now
 
 Initialization, the sampler bucket the started derivations' runs land in:
@@ -90,24 +106,58 @@ Four things were compared:
   with the full `TopicLink` and `TopicAuthor` definitions, to
   `{ linksView: { length: number } }`; `hasComments` from
   `StoredTopicComment[]` to `{ commentCount: number }`. Both read strictly less.
-- **The headless probe's 44-case read accounting**, byte-identical across the
-  two arms in every non-timing field.
-- **The four CI read-budget gates**, each gated count inside its limit.
+- **The four CI read-budget gates**, each gated count inside its limit. These
+  gate the lifts the board demands, so they are what would register a widened
+  read reaching the board.
 - **The topic's own argument and result contract**, unchanged; nothing crossing
   the board/topic boundary moved.
+- **The headless probe's 44-case read accounting**, byte-identical across the
+  two arms in every non-timing field. This is the weakest of the four and is
+  recorded as a consistency check rather than as proof: the probe starts the
+  four demanded lifts and instantiates no pattern body, which is why a separate
+  instrument was needed above, so an unchanged probe reading shows that nothing
+  this stage did leaked into the demanded lifts — not that the body's own
+  demand is narrower. The first item is what shows that.
 
 ## Hoist movement
 
 The `handler` and `pattern` sequences do not move. The `lift` sequence goes from
-33 hoists to 32: numbers 1 through 31 keep their numbers and their bodies, the
-removed third link filter was 32, and the former 33 becomes 32 — a shift of one,
-from index 33 onward.
+33 hoists to 32, and three things happen in it, which are worth separating
+because only the last is renumbering:
 
-Two hoists keep their numbers while their bodies change, which is the revision
-this stage makes rather than a renumbering: the two shared predicates. The
-scope of the plan's hoist requirement against that case was open when this was
-recorded. `deno task pattern-vintage` replayed eight vintages, 134 recorded
-instantiations, with no state stranded.
+- Numbers 1 through 31 all keep their numbers. Twenty-nine of them also keep
+  their bodies unchanged.
+- Numbers 6 and 7 keep their numbers while their bodies change. They are the
+  two shared predicates, and this is the revision the stage makes: `hasLinks`
+  from a filter over every link record to `linksView.length > 0`, `hasComments`
+  from a filter over every comment to `commentCount > 0`.
+- Number 32, the removed third link filter, is gone, and the former 33 becomes
+  32. That is the renumbering, and it is a shift of one applied from index 33
+  onward — one entry.
+
+The scope of the plan's hoist requirement against the second case was open when
+this was recorded. `deno task pattern-vintage` replayed eight vintages, 134
+recorded instantiations, with no state stranded.
+
+## Behavior
+
+The stage's first exit condition. Run at `933632931c`, with the before arm's
+counts beside them: all nine authored `topics/*.test.tsx` suites, 194
+assertions, identical pass counts in both arms — `topics` 56, `topics-rejections`
+38, `naming` 31, `state-version` 28, `author-migration` 13, `view-identity` 9,
+`multi-user` 7, `render-shape` 6, `author-migration-multi-user` 6.
+
+The headless topics integration suites pass: the four read-budget files (34
+steps), and `topic-author-migration`, `topic-board-fixture` and
+`topics-headless-fixture` (93 steps). So do all six browser-backed suites —
+`topic-retraction-controls`, `topic-board-seed`, `topic-create-onscreen`,
+`topic-board-demo`, `topics-navigation` and `topic-board-child-contract` — each
+against a toolshed built from the checkout under test, which matters because
+these tests start no server themselves and otherwise drive whatever occupies
+`API_URL`'s default port.
+
+`deno task cfcheck` covers 361 pattern files, `pattern-compat` 289 patterns,
+and `pattern-vintage` 8 vintages, all clean.
 
 ## What this does not establish
 
