@@ -2049,9 +2049,15 @@ function objectLiteralHasExplicitScopeValueTypeNodes(
     const valueExpr = ts.isPropertyAssignment(property)
       ? unwrapExpression(property.initializer)
       : property.name;
-    const valueTypeNode = getExplicitValueTypeNode(valueExpr, checker)
-      ?.typeNode;
-    if (valueTypeNode && typeNodeContainsScopeWrapper(valueTypeNode)) {
+    const explicit = getExplicitValueTypeNode(valueExpr, checker);
+    // The printer can emit `unknown` for a scoped generic array. The authored
+    // node it stands in for still names the scope the result must retain.
+    if (
+      explicit &&
+      (typeNodeContainsScopeWrapper(explicit.typeNode) ||
+        (explicit.preservedTypeNode &&
+          typeNodeContainsScopeWrapper(explicit.preservedTypeNode)))
+    ) {
       return true;
     }
   }

@@ -362,6 +362,37 @@ export default pattern<Input<Box<number>>>(({ c }) => ({
       ).toEqual(scoped);
     });
 
+    for (
+      const [argument, items] of [
+        ["number", { type: "number" }],
+        ["Box<number>", {
+          type: "object",
+          properties: { value: { type: "number" } },
+          required: ["value"],
+        }],
+      ] as const
+    ) {
+      it(`retains the scope and default of a returned generic array of \`${argument}\``, async () => {
+        const output = await transformSource(
+          `${IMPORTS}
+interface Box<T> { value: T; }
+interface Input<T> { c: PerUser<T[] | Default<[]>>; }
+export default pattern<Input<${argument}>>(({ c }) => ({
+  c,
+  s: computed(() => JSON.stringify(c)),
+}));`,
+          { types: COMMONFABRIC_TYPES, typeCheck: true },
+        );
+        const root = parseModule(output);
+        const scoped = { type: "array", items, default: [], scope: "user" };
+
+        const [capture] = callSchemas(root, "lift");
+        expect((capture!.properties as Schema).c).toEqual(scoped);
+        expect((patternSchemas(root).output.properties as Schema).c)
+          .toEqual(scoped);
+      });
+    }
+
     it("keeps the argument's own type where the capturing module declares another of its name", async () => {
       // The printer writes the argument as a bare `Stored`, which names the
       // capturing module's own interface there.

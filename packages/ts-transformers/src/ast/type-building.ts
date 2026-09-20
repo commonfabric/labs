@@ -577,19 +577,33 @@ export function getPreservedTypeForBindingElement(
     { checker, factory: ts.factory, sourceFile: declaration.getSourceFile() },
     typeRegistry,
   );
-  return { typeNode, printedFrom: instantiated.type };
+  return {
+    typeNode,
+    printedFrom: instantiated.type,
+    preservedTypeNode: preserved,
+  };
 }
 
 /**
- * The type node to emit for a destructured binding, with the type it was
- * printed from when it was printed from one. An authored node says what it
- * denotes wherever it is emitted; a printed node says it only to a reader that
- * holds the type behind it, because the names it spells resolve to nothing at
- * the position it is emitted into.
+ * The type node to emit for a destructured binding, and what a reader needs to
+ * read it by. An authored node says what it denotes wherever it is emitted; a
+ * printed node says it only to a reader that holds the type behind it, because
+ * the names it spells resolve to nothing at the position it is emitted into.
  */
 export interface PreservedBindingType {
+  /** Node emitted for the binding, authored or printed. */
   readonly typeNode: ts.TypeNode;
+
+  /** Type `typeNode` was printed from, when it was printed, not authored. */
   readonly printedFrom?: ts.Type;
+
+  /**
+   * Authored node a printed `typeNode` stands in for, with each alias that
+   * names a wrapper resolved. The printer can reduce a type to `unknown`, and
+   * this node still names the wrappers the type carried. It is for inspection,
+   * not emission: its type parameters are unresolved.
+   */
+  readonly preservedTypeNode?: ts.TypeNode;
 }
 
 /**

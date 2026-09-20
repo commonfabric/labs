@@ -1328,9 +1328,12 @@ arguments. No node stands for both, so such a parameter is not substituted and
 the binding takes its instantiated declared type, which holds every branch.
 
 Pattern result inference reads returned input bindings through the same
-function when a returned binding carries a scope wrapper. A node printed from
-a type is registered with that type rather than with the type at the
-expression, which is the pattern body's view: the names a printed node spells
+function when a returned binding carries a scope wrapper. Scope detection reads
+both the emitted node and the recovered declaration: the printer can emit
+`unknown` for a scoped generic array, while its declaration still names the
+scope the result must retain. A node printed from a type is registered with that
+type rather than with the type at the expression, which is the pattern body's
+view: the names a printed node spells
 resolve to nothing where it is emitted, so schema generation reads it by the
 type behind it. An authored node keeps the view's type, and so keeps being
 emitted in place rather than under the name of whatever alias the declared
