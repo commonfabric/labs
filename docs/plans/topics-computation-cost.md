@@ -169,17 +169,27 @@ implementation and prototypes can begin earlier.
 - [ ] **T4 — Evaluate large-thread aggregates.** Compare a maintained active
       comment count and activity maxima with the T1 implementation. Use explicit
       Cell receivers and measure score/predicate production; do not rely on
-      unsupported ordinary-array `.map(...).sum()` chains. A maintained count or
-      activity maximum carrying a callback is a new operator, so it too lives in
-      a pattern in a module of its own, instantiated the same way. Exit: adopt
-      only the candidates with justified end-to-end tradeoffs. Depends on T0 and
-      T1.
+      unsupported ordinary-array `.map(...).sum()` chains. Write the aggregates
+      as `.count(predicate)`, `.minBy(score)` and `.maxBy(score)`: the
+      argument-free `count()` takes no callback and so hoists nothing, which
+      leaves nothing to measure. A maintained count or activity maximum
+      carrying a callback is a new operator, so it too lives in a pattern in a
+      module of its own, instantiated the same way. Exit: adopt only the
+      candidates with justified end-to-end tradeoffs. Depends on T0 and T1.
 - [ ] **T5 — Harden accepted changes and prepare release artifacts.** Add
       regression read budgets, run all relevant authored/package/integration
       tests, preserve compatibility baselines, pass the
       [pattern update gates](../specs/pattern-update-testing.md), and update
-      maintained docs. Produce matched before/after demos and reports. Establish
-      and record how to check the hoist requirement under
+      maintained docs. Those gates report an inserted `.map` rather than gating
+      it: a mapped row's anonymous sub-pattern is a transformer-derived hoist,
+      hoist ids are builder node ids that ordinary edits renumber, and a hoist
+      today's source no longer defines is held back and reported instead of
+      failing. A hoist that does apply is compared like everything else, so
+      what the gates stop covering is the inserted map itself, not row
+      behavior in general. Either keep a new `.map()` call after the existing
+      ones in the Topics sources, or have T6 check map-rendered rows directly.
+      Produce matched before/after demos and reports. Establish and record how
+      to check the hoist requirement under
       [compatibility requirements](#compatibility-requirements), with evidence
       from the stored data of deployed board and topic generations, among them a
       read-only copy of the primary Topics instances obtained through Gideon.
