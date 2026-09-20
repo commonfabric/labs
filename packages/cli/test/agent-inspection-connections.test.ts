@@ -7,6 +7,10 @@ import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import { openAgentStorageHost } from "../lib/agent-connections.ts";
 import { cancelAgentRun, readAgentRuns } from "../lib/agent-inspection.ts";
 import { loadIdentity } from "../lib/identity.ts";
+import { main } from "../commands/main.ts";
+import { tokenizeLine } from "../lib/completion/mod.ts";
+import { resolveCompletionLine } from "../lib/completion/line.ts";
+import { liveCandidates } from "../lib/completion/providers.ts";
 import { claimProcessDeployment } from "../lib/process-deployment.ts";
 
 describe("agent inspection connections", () => {
@@ -62,6 +66,16 @@ describe("agent inspection connections", () => {
       };
 
       const runs = await readAgentRuns(config);
+      const text =
+        `cf agent show --identity ${identityPath} --api-url ${homeServer.url.origin} `;
+      const { words, cword } = tokenizeLine(text, text.length);
+      const candidates = await liveCandidates(
+        resolveCompletionLine(main, words, cword),
+      );
+      expect(candidates.candidates).toEqual([{
+        value: run.getAsNormalizedFullLink().id,
+        description: "running: Read the local catalog",
+      }]);
       const cancelled = await cancelAgentRun(config, "remote-request");
 
       expect(runs.map((value) => [value.host, value.state])).toEqual([

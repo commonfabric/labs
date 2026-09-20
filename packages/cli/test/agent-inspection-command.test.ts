@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import {
+  agentInspectionAction,
   type AgentInspectionCommandDeps,
   createAgentCommand,
   formatAgentRun,
@@ -80,6 +81,55 @@ describe("agent inspection commands", () => {
     expect(rendered).toContain("Provider cost (USD): 0.1");
     expect(rendered).toContain("Estimated cost (USD): 0.08");
     expect(rendered).toContain("Estimate withheld: incomplete-estimates");
+  });
+
+  it("shows an empty filtered list without rendering record metadata", async () => {
+    const { run, outputs } = setup();
+    await run(["ls", "--state", "refused"]);
+    expect(outputs).toEqual(["No agent runs."]);
+  });
+
+  it("includes terminal status and result addresses in the human-readable view", () => {
+    const rendered = formatAgentRun({
+      ...completed,
+      outcome: "completed",
+      modelTurns: 2,
+      toolCalls: 1,
+      usageCoverage: "including-descendants",
+      result: "remote-result-address",
+    });
+    expect(rendered).toContain("Outcome: completed");
+    expect(rendered).toContain("Model turns: 2");
+    expect(rendered).toContain("Tool calls: 1");
+    expect(rendered).toContain("Result: remote-result-address");
+    expect(rendered).toContain("Usage coverage: including-descendants");
+  });
+
+  it("rejects incomplete action inputs before opening any connection", async () => {
+    let opened = false;
+    const deps: AgentInspectionCommandDeps = {
+      read: () => {
+        opened = true;
+        return Promise.resolve([]);
+      },
+      cancel: () => {
+        opened = true;
+        return Promise.resolve(queued);
+      },
+      render: () => {},
+    };
+    await expect(agentInspectionAction("ls", {}, undefined, deps))
+      .rejects.toThrow("requires --identity");
+    await expect(agentInspectionAction(
+      "show",
+      {
+        identity: "/key",
+        apiUrl: "https://home.example",
+      },
+      undefined,
+      deps,
+    )).rejects.toThrow("identifier is required");
+    expect(opened).toBe(false);
   });
 
   it("rejects an unknown state before reading the index", async () => {

@@ -197,6 +197,73 @@ describe("agent-inspection", () => {
     expect(await readAgentRuns(config, deps)).toEqual([]);
   });
 
+  it("deduplicates repeated queue entries and reuses their remote connection", async () => {
+    const { completed } = await seed();
+    const runtime = runtimes.get(HOME_HOST)!;
+    await runtime.editWithRetry((tx) => {
+      runtime.getCell(home, "home-pattern", undefined, tx)
+        .key("agentQueue").key("entries").push({
+          run: completed,
+          host: OTHER_HOST,
+        });
+    });
+    const hosts: string[] = [];
+    const open = deps.openHost;
+    deps.openHost = (identity, host) => {
+      hosts.push(host);
+      return open(identity, host);
+    };
+
+    const runs = await readAgentRuns(config, deps);
+
+    expect(runs).toHaveLength(2);
+    expect(hosts).toEqual([OTHER_HOST]);
+  });
+
+  it("reports a deleted remote record instead of presenting incomplete metadata", async () => {
+    const { completed } = await seed();
+    await runtimes.get(OTHER_HOST)!.editWithRetry((tx) => {
+      completed.withTx(tx).setRaw(undefined);
+    });
+
+    await expect(readAgentRuns(config, deps)).rejects.toThrow(
+      "unavailable on https://other.example",
+    );
+  });
+
+  it("propagates a home wish error without reading another host", async () => {
+    runtimes.get(HOME_HOST)!.homeSpacePrincipalFor = () => undefined;
+    const hosts: string[] = [];
+    deps.openHost = (_identity, host) => {
+      hosts.push(host);
+      return Promise.resolve(runtimes.get(host)!);
+    };
+
+    await expect(readAgentRuns(config, deps)).rejects.toThrow(
+      "User identity DID not available for #agent_queue",
+    );
+    expect(hosts).toEqual([]);
+  });
+
+  it("reports a rejected cancellation write without claiming it succeeded", async () => {
+    const { completed } = await seed();
+    const remote = runtimes.get(OTHER_HOST)!;
+    await remote.editWithRetry((tx) => {
+      completed.withTx(tx).key("state").set("running");
+    });
+    const rejection = {
+      name: "StorageTransactionAborted" as const,
+      message: "remote cancellation write rejected",
+      reason: new Error("remote storage unavailable"),
+    };
+    remote.editWithRetry = () => Promise.resolve({ error: rejection });
+
+    await expect(cancelAgentRun(config, "hash-completed", deps)).rejects.toBe(
+      rejection,
+    );
+    expect(completed.key("cancelRequestedAt").get()).toBeUndefined();
+  });
+
   it("rejects an unknown identifier", async () => {
     await seed();
     await expect(cancelAgentRun(config, "missing", deps)).rejects.toThrow(
