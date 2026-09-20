@@ -40,6 +40,7 @@ export type InviteRequest = InviteOperation & {
   space: string;
   principal: string;
   now: number | (() => number);
+  /** Effective access only; invitation administration requires explicit OWNER. */
   implicitOwner?: boolean;
 };
 

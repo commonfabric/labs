@@ -202,7 +202,7 @@ export function parseServerExperimentalOptions(
   // has no posture yet — that adopts nothing, as does a malformed
   // declaration. A client that could not reach the server never calls
   // this at all and keeps its built-in defaults.
-  if (declared === null) return {};
+  if (declared === null || Array.isArray(declared)) return {};
   if (typeof declared !== "object") {
     return declared === undefined ? { readerSchemaPrecedence: false } : {};
   }
@@ -340,9 +340,11 @@ export async function experimentalOptionsForDeployedClient(
       // unread stream. An error page is not a posture even when it parses
       // as one.
       await response.body?.cancel();
+      params.signal?.throwIfAborted();
       return env;
     }
     const body: unknown = await response.json();
+    params.signal?.throwIfAborted();
     if (body === null || typeof body !== "object" || Array.isArray(body)) {
       return env;
     }

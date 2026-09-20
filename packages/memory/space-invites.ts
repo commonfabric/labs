@@ -1,5 +1,5 @@
 /** Versioned credentials, links, and wire contracts for space invitations. */
-import { sha256 } from "@commonfabric/content-hash";
+import { hashStringOf } from "@commonfabric/data-model";
 import { type DIDKey, isDIDKey } from "@commonfabric/identity/did";
 import {
   fromBase64url,
@@ -132,13 +132,13 @@ export function inviteCodeVerifier(link: InviteLink): string {
   ) {
     throw new SpaceInviteError("invalid-request");
   }
-  return toUnpaddedBase64url(sha256(new TextEncoder().encode(JSON.stringify([
+  return hashStringOf([
     "commonfabric-space-invite-v1",
     host,
     link.space,
     link.inviteId,
     link.code,
-  ]))));
+  ]);
 }
 
 /** Builds a join link whose secret is carried only in its fragment. */

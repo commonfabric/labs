@@ -13,7 +13,7 @@ if (options.mode === "before-commit") {
     Deno.exit(73);
   });
   engine.database.exec(
-    "CREATE TRIGGER crash_redemption AFTER INSERT ON space_invite_redemptions BEGIN SELECT crash_before_commit(); END",
+    "CREATE TEMP TRIGGER crash_redemption AFTER INSERT ON space_invite_redemptions BEGIN SELECT crash_before_commit(); END",
   );
 }
 await Deno.stdout.write(new TextEncoder().encode("ready\n"));

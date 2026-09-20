@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import { ensureDir } from "@std/fs";
 import { dirname, fromFileUrl, toFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
@@ -22,136 +23,183 @@ import { createSpaceInviteRouter } from "@/routes/space-invites/router.ts";
 
 async function fixture(publicHost?: string) {
   const directory = await Deno.makeTempDir();
-  const store = toFileUrl(directory + "/");
-  const space = (await Identity.generate({ implementation: "noble" })).did();
-  const owner = await Identity.generate({ implementation: "noble" });
-  const guest = await Identity.generate({ implementation: "noble" });
-  const dbUrl = resolveSpaceStoreUrl(store, space);
-  await ensureDir(dirname(fromFileUrl(dbUrl)));
-  const engine = await Engine.open({ url: dbUrl });
-  Engine.applyCommit(engine, {
-    space,
-    sessionId: "seed",
-    commitClass: "system",
-    commit: {
-      localSeq: 1,
-      reads: { confirmed: [], pending: [] },
-      operations: [{
-        op: "set",
-        id: aclDocId(space),
-        value: { value: { [owner.did()]: "OWNER" } },
-      }],
-    },
-  });
-  Engine.close(engine);
-  const server = new Server({
-    store,
-    acl: { mode: "enforce" },
-    authorizeSessionOpen: verifySessionOpenAuthorization,
-    sessionOpenAuth: { audience: owner.did() },
-    subscriptionRefreshDelayMs: 0,
-  });
-  let now = Date.now();
-  const router = createSpaceInviteRouter({
-    server,
-    now: () => now,
-    host: publicHost,
-  });
-  const http = Deno.serve({
-    hostname: "127.0.0.1",
-    port: 0,
-    onListen: () => {},
-  }, (req) => router.fetch(req));
-  const host = `http://127.0.0.1:${http.addr.port}`;
-  const client = (signer: Identity) =>
-    new SpaceInviteClient({
-      host: publicHost ?? host,
-      space,
-      signer,
-      fetch: (input, init) =>
-        fetch(new URL(new URL(String(input)).pathname, host), init),
-    });
-  const raw = async (
-    operation: string,
-    body: object,
-    signer: Identity = owner,
-    options: {
-      age?: number;
-      audience?: string;
-      tamper?: boolean;
-      forged?: boolean;
-    } = {},
-  ) => {
-    const url = new URL(`/api/spaces/${space}/invites/${operation}`, host);
-    const payload = JSON.stringify(body);
-    const headers = await signFirstPartyHttpRequest({
-      url: options.audience ? new URL(url.pathname, options.audience) : url,
-      method: "POST",
-      body: payload,
-      signer,
-      nowSeconds: Math.floor(now / 1000) + (options.age ?? 0),
-    });
-    if (options.forged) headers.set("CF-Request-Proof", "A".repeat(86));
-    return await fetch(url, {
-      method: "POST",
-      headers,
-      body: options.tamper ? payload + " " : payload,
-    });
-  };
-  const memory = async (signer: Identity) => {
-    const client = await connect({ transport: loopback(server) });
+  let closeEngine: (() => void) | undefined;
+  let closeServer: (() => Promise<void>) | undefined;
+  let closeHttp: (() => Promise<void>) | undefined;
+  const close = async () => {
     try {
-      const session = await client.mount(
-        space,
-        {},
-        async (space, session, context) => {
-          const invocation = {
-            iss: signer.did(),
-            sub: space,
-            cmd: "session.open",
-            args: { protocol: MEMORY_PROTOCOL, session },
-            aud: context.audience,
-            challenge: context.challenge.value,
-            iat: Math.floor(Date.now() / 1000),
-            exp: Math.floor(Date.now() / 1000) + 300,
-          };
-          const signature = await signer.sign(hashOf(invocation).bytes);
-          if (signature.error) throw signature.error;
-          return {
-            invocation,
-            authorization: { signature: new FabricBytes(signature.ok) },
-          };
-        },
-      );
-      return { client, session };
-    } catch (error) {
-      await client.close();
-      throw error;
+      await closeHttp?.();
+    } finally {
+      try {
+        await closeServer?.();
+      } finally {
+        try {
+          closeEngine?.();
+        } finally {
+          await Deno.remove(directory, { recursive: true });
+        }
+      }
     }
   };
-  return {
-    directory,
-    store,
-    space,
-    owner,
-    guest,
-    server,
-    host,
-    client,
-    raw,
-    memory,
-    advance(ms: number) {
-      now += ms;
-    },
-    async close() {
-      await http.shutdown();
-      await server.close();
-      await Deno.remove(directory, { recursive: true });
-    },
-  };
+  try {
+    const store = toFileUrl(directory + "/");
+    const space = (await Identity.generate({ implementation: "noble" })).did();
+    const owner = await Identity.generate({ implementation: "noble" });
+    const guest = await Identity.generate({ implementation: "noble" });
+    const dbUrl = resolveSpaceStoreUrl(store, space);
+    await ensureDir(dirname(fromFileUrl(dbUrl)));
+    const engine = await Engine.open({ url: dbUrl });
+    closeEngine = () => Engine.close(engine);
+    Engine.applyCommit(engine, {
+      space,
+      sessionId: "seed",
+      commitClass: "system",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: aclDocId(space),
+          value: { value: { [owner.did()]: "OWNER" } },
+        }],
+      },
+    });
+    Engine.close(engine);
+    closeEngine = undefined;
+    const server = new Server({
+      store,
+      acl: { mode: "enforce" },
+      authorizeSessionOpen: verifySessionOpenAuthorization,
+      sessionOpenAuth: { audience: owner.did() },
+      subscriptionRefreshDelayMs: 0,
+    });
+    closeServer = () => server.close();
+    let now = Date.now();
+    const router = createSpaceInviteRouter({
+      server,
+      now: () => now,
+      host: publicHost,
+    });
+    const errors: Error[] = [];
+    router.onError((error, c) => {
+      errors.push(error);
+      return c.json({ code: "service-error" }, 500);
+    });
+    const http = Deno.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      onListen: () => {},
+    }, (req) => router.fetch(req));
+    closeHttp = () => http.shutdown();
+    const host = `http://127.0.0.1:${http.addr.port}`;
+    const client = (signer: Identity) =>
+      new SpaceInviteClient({
+        host: publicHost ?? host,
+        space,
+        signer,
+        fetch: (input, init) =>
+          fetch(new URL(new URL(String(input)).pathname, host), init),
+      });
+    const raw = async (
+      operation: string,
+      body: object,
+      signer: Identity = owner,
+      options: {
+        age?: number;
+        audience?: string;
+        tamper?: boolean;
+        forged?: boolean;
+      } = {},
+    ) => {
+      const url = new URL(`/api/spaces/${space}/invites/${operation}`, host);
+      const payload = JSON.stringify(body);
+      const headers = await signFirstPartyHttpRequest({
+        url: options.audience ? new URL(url.pathname, options.audience) : url,
+        method: "POST",
+        body: payload,
+        signer,
+        nowSeconds: Math.floor(now / 1000) + (options.age ?? 0),
+      });
+      if (options.forged) headers.set("CF-Request-Proof", "A".repeat(86));
+      return await fetch(url, {
+        method: "POST",
+        headers,
+        body: options.tamper ? payload + " " : payload,
+      });
+    };
+    const memory = async (signer: Identity) => {
+      const client = await connect({ transport: loopback(server) });
+      try {
+        const session = await client.mount(
+          space,
+          {},
+          async (space, session, context) => {
+            const invocation = {
+              iss: signer.did(),
+              sub: space,
+              cmd: "session.open",
+              args: { protocol: MEMORY_PROTOCOL, session },
+              aud: context.audience,
+              challenge: context.challenge.value,
+              iat: Math.floor(Date.now() / 1000),
+              exp: Math.floor(Date.now() / 1000) + 300,
+            };
+            const signature = await signer.sign(hashOf(invocation).bytes);
+            if (signature.error) throw signature.error;
+            return {
+              invocation,
+              authorization: { signature: new FabricBytes(signature.ok) },
+            };
+          },
+        );
+        return { client, session };
+      } catch (error) {
+        await client.close();
+        throw error;
+      }
+    };
+    return {
+      directory,
+      store,
+      space,
+      owner,
+      guest,
+      server,
+      errors,
+      host,
+      client,
+      raw,
+      memory,
+      advance(ms: number) {
+        now += ms;
+      },
+      close,
+    };
+  } catch (error) {
+    await close();
+    throw error;
+  }
 }
 
 describe("space-invites", () => {
+  it("removes fixture storage when setup fails before listening", async () => {
+    const directory = await Deno.makeTempDir();
+    using _tempDirectory = stub(
+      Deno,
+      "makeTempDir",
+      () => Promise.resolve(directory),
+    );
+    try {
+      await expect(fixture("not an origin")).rejects.toThrow("invalid-host");
+      await expect(Deno.stat(directory)).rejects.toBeInstanceOf(
+        Deno.errors.NotFound,
+      );
+    } finally {
+      await Deno.remove(directory, { recursive: true }).catch((error) => {
+        if (!(error instanceof Deno.errors.NotFound)) throw error;
+      });
+    }
+  });
   it("rejects oversized bodies, invalid spaces, and signed malformed JSON before admission", async () => {
     const f = await fixture();
     try {
@@ -189,6 +237,10 @@ describe("space-invites", () => {
       const response = await f.raw("list", {});
       expect(response.status).toBe(500);
       expect(await response.json()).toEqual({ code: "service-error" });
+      expect(f.errors).toHaveLength(1);
+      expect(f.errors[0]?.message).toBe("Space invitation service failed");
+      expect(f.errors[0]?.cause).toBeUndefined();
+      expect(JSON.stringify(f.errors)).not.toContain("private storage");
     } finally {
       await f.close();
     }

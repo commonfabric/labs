@@ -347,6 +347,10 @@ describe("space invite", () => {
         "3",
       );
       expect(second).toMatchObject({ access: "WRITE", maxUses: 3 });
+      expect(requests.at(-1)).toMatchObject({
+        operation: "create",
+        body: { access: "WRITE", ttlSeconds: 90, maxUses: 3 },
+      });
       expect(second).not.toHaveProperty("link");
       expect(second.inviteId).not.toBe(first.inviteId);
       await Deno.writeTextFile(codePath, ` ${first.code}\n`);

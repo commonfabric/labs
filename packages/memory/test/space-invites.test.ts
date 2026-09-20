@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { hashStringOf } from "@commonfabric/data-model";
 import {
   buildInviteLink,
   createInviteCredentials,
@@ -19,6 +20,8 @@ describe("space-invites", () => {
         "http://127.255.255.255",
         "http://localhost.:8080",
         "http://[::1]:8080",
+        "http://[::ffff:7f00:1]:8080",
+        "http://[::ffff:7fff:ffff]",
       ]
     ) {
       expect(normalizeInviteHost(host)).toBe(host);
@@ -31,6 +34,8 @@ describe("space-invites", () => {
         "http://128.0.0.1",
         "http://localhost.example",
         "http://[::2]",
+        "http://[::ffff:7eff:ffff]",
+        "http://[::ffff:8000:1]",
       ]
     ) {
       expect(() => normalizeInviteHost(host)).toThrow("invalid-host");
@@ -108,7 +113,13 @@ describe("space-invites", () => {
       code: "A".repeat(43),
     };
     expect(inviteCodeVerifier(invite)).toBe(
-      "IOJKH3t822YSd5VzGDtVWxUE1Ft2uBmoFht4Iy909Xg",
+      hashStringOf([
+        "commonfabric-space-invite-v1",
+        "https://example.com",
+        space,
+        invite.inviteId,
+        invite.code,
+      ]),
     );
     const baseline = inviteCodeVerifier(invite);
     for (

@@ -183,8 +183,9 @@ export function createSpaceInviteRouter(
               : 409,
           );
         }
-        // Request bodies and private database errors never enter telemetry.
-        return c.json({ code: "service-error" }, 500);
+        // The shared error boundary records failures without private storage
+        // diagnostics, invitation credentials, or request bodies.
+        throw new Error("Space invitation service failed");
       }
     });
   }
