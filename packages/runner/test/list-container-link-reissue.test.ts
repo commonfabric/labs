@@ -1,3 +1,42 @@
+/**
+ * A list coordinator mints its result container and then holds it in memory
+ * across reconciles. The link that makes the container reachable is a write
+ * like any other: the reconcile carrying it can fail to commit.
+ *
+ * `sendResult` writes the link from the node's output spot to the container the
+ * coordinator mints. A later reconcile takes the `result` the coordinator
+ * already holds in memory, and unless the link is owed it writes the
+ * container's VALUE alone. The per-element setup writes have a ledger for
+ * exactly this — `trackListSetupRollback` marks each element `needsSetup` when
+ * the transaction carrying its writes fails, stale basis included, so the next
+ * reconcile issues them again. The container link is on that ledger too:
+ * `issueResultContainerSetup()` records it as issued, and a reconcile that
+ * finds the record marked `needsSetup` issues the link again against the
+ * container already in hand. A container that nothing points at would leave
+ * the output spot reading `undefined` for as long as the coordinator lives.
+ *
+ * Each coordinator gets the same two runs, differing only in whether its first
+ * reconcile commits, so the rejection is what they isolate:
+ *
+ *   1. Runtime A builds the durable aggregate, then empties the node's output
+ *      spot. That is the state a session starts in when the spot is a fresh
+ *      holder over a container that persists at space scope: the container and
+ *      its per-element runs are durable, and the link to them is not.
+ *   2. Runtime B resumes over that state. On a COLD replica the container is
+ *      unreachable from the emptied spot, so B never loads it, and the
+ *      coordinator's first reconcile reads it as absent — a confirmed read at
+ *      seq 0 against a document the server holds at a later seq, which the
+ *      server rejects as a stale basis. Nothing here is timed: whether B holds
+ *      the container is decided by whether anything links to it, so the
+ *      rejection is a property of the arrangement rather than of the schedule.
+ *   3. On a WARM replica B already holds every document, the same first
+ *      reconcile commits, and the link comes back. That control is what pins
+ *      the rejection, rather than the emptied spot, as the cause.
+ *
+ * `map`, `filter` and `flatMap` carry the same guard, and all three issue the
+ * link through `issueResultContainerSetup()`.
+ */
+
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
@@ -23,43 +62,6 @@ import { isRawBuiltinResult, raw } from "../src/module.ts";
 import { map } from "../src/builtins/map.ts";
 import { filter } from "../src/builtins/filter.ts";
 import { flatMap } from "../src/builtins/flatmap.ts";
-
-// A list coordinator mints its result container and then holds it in memory
-// across reconciles. The link that makes the container reachable is a write
-// like any other: the reconcile carrying it can fail to commit.
-//
-// `sendResult` writes the link from the node's output spot to the container the
-// coordinator mints. A later reconcile takes the `result` the coordinator
-// already holds in memory, and unless the link is owed it writes the
-// container's VALUE alone. The per-element setup writes have a ledger for
-// exactly this — `trackListSetupRollback` marks each element `needsSetup` when
-// the transaction carrying its writes fails, stale basis included, so the next
-// reconcile issues them again. The container link is on that ledger too:
-// `issueResultContainerSetup()` records it as issued, and a reconcile that
-// finds the record marked `needsSetup` issues the link again against the
-// container already in hand. A container that nothing points at would leave
-// the output spot reading `undefined` for as long as the coordinator lives.
-//
-// Each coordinator gets the same two runs, differing only in whether its first
-// reconcile commits, so the rejection is what they isolate:
-//
-//   1. Runtime A builds the durable aggregate, then empties the node's output
-//      spot. That is the state a session starts in when the spot is a fresh
-//      holder over a container that persists at space scope: the container and
-//      its per-element runs are durable, and the link to them is not.
-//   2. Runtime B resumes over that state. On a COLD replica the container is
-//      unreachable from the emptied spot, so B never loads it, and the
-//      coordinator's first reconcile reads it as absent — a confirmed read at
-//      seq 0 against a document the server holds at a later seq, which the
-//      server rejects as a stale basis. Nothing here is timed: whether B holds
-//      the container is decided by whether anything links to it, so the
-//      rejection is a property of the arrangement rather than of the schedule.
-//   3. On a WARM replica B already holds every document, the same first
-//      reconcile commits, and the link comes back. That control is what pins
-//      the rejection, rather than the emptied spot, as the cause.
-//
-// `map`, `filter` and `flatMap` carry the same guard, and all three issue the
-// link through `issueResultContainerSetup()`.
 
 const signer = await Identity.fromPassphrase("list container link reissue");
 const space = signer.did();

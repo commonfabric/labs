@@ -1,3 +1,22 @@
+/**
+ * These tests cover a running piece whose durable `patternIdentity` names an
+ * identity this runtime cannot load. The watcher sees the pointer as a change,
+ * fails the load, and logs "pattern-load-error". Left in place, the pointer
+ * would keep naming an identity no session can load, and every start of the
+ * piece by identity would fail.
+ *
+ * With by-identity recovery enabled (CFC enforcement not disabled), a
+ * DEFINITIVE load failure of the pointed-at identity while a pattern is RUNNING
+ * rolls the pointer back to the running pattern's identity, durably, so the
+ * piece converges instead of staying stranded. NOT definitive, and never rolled
+ * back: CFC-disabled probes (undefined means "probe unsupported" there), and
+ * session-synthetic keyless refs are never written durably.
+ *
+ * All synchronization goes through runner.idlePointerMaintenance() — the
+ * runner suite runs under a frozen clock (test/clock-preload.ts), so
+ * wall-clock polling cannot observe this work.
+ */
+
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
@@ -7,23 +26,6 @@ import { Runtime } from "../src/runtime.ts";
 import { getPatternIdentityRef, resolveEntryIdentity } from "../src/index.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
-
-// These tests cover a running piece whose durable `patternIdentity` names an
-// identity this runtime cannot load. The watcher sees the pointer as a change,
-// fails the load, and logs "pattern-load-error". Left in place, the pointer
-// would keep naming an identity no session can load, and every start of the
-// piece by identity would fail.
-//
-// With by-identity recovery enabled (CFC enforcement not disabled), a
-// DEFINITIVE load failure of the pointed-at identity while a pattern is RUNNING
-// rolls the pointer back to the running pattern's identity, durably, so the
-// piece converges instead of staying stranded. NOT definitive, and never rolled
-// back: CFC-disabled probes (undefined means "probe unsupported" there), and
-// session-synthetic keyless refs are never written durably.
-//
-// All synchronization goes through runner.idlePointerMaintenance() — the
-// runner suite runs under a frozen clock (test/clock-preload.ts), so
-// wall-clock polling cannot observe this work.
 
 const signer = await Identity.fromPassphrase("pattern-pointer-unloadable");
 const space = signer.did();
