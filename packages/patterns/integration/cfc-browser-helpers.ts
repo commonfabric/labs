@@ -3423,7 +3423,17 @@ async function readAimProgress(
   }), { args: [selector] });
 }
 
-async function readTextProbe(
+/**
+ * What `selector` resolves to on `page`, for a failure report: every match
+ * through shadow roots, each with the text a wait's predicate reads through
+ * `probe.deepText`, its box, whether it is visible, and whether it declines a
+ * click; plus the page's body text where there is no match at all.
+ *
+ * The helpers here build their own failure messages with it. A test building
+ * one of its own reaches for it rather than walking the shadow roots again,
+ * which would report a different traversal from the one its wait was reading.
+ */
+export async function readTextProbe(
   page: Page,
   selector: string,
 ): Promise<TextProbe> {

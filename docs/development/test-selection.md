@@ -1074,6 +1074,50 @@ artifacts, so it takes minutes; nothing waits on it.
 To see what it would say about a run, set `MAIN_REPORT_RUN_ID` to that
 run and pass `--dry-run`, which posts nothing.
 
+## A case that fails only when its siblings do not run
+
+A lane runs part of a file: the cases it holds run, and the registration
+preload registers the rest as ignored. So a case that passes in a
+full-file run and fails when a lane selects it on its own is reading
+state that another case in the same file establishes — a process-wide
+initialization, a global something else installs, a cache another case
+fills. The selection that dropped the other case dropped the setup with
+it.
+
+`CF_TEST_SKIP_LIST` reproduces such a selection locally.
+[The record guide](test-records.md#the-environment-surface) describes the
+variable; the file it names is keyed by repository-relative test file and
+holds the names this invocation is not to run. A name is a case's whole
+`describe` chain, joined with ` > `, which is the name the report carries.
+A file whose hooks sit outside every `describe` has a root suite the bdd
+runner invents, named `global`, and every name in that file opens with
+it. A name that matches nothing is skipped over in silence, so a case
+that goes on running is as likely to be a misspelled name as an
+independent case:
+
+```json
+{
+  "packages/donut/test/glaze.test.ts": [
+    "glazing a donut > takes the sugar ratio from the flavor"
+  ]
+}
+```
+
+`packages/test-support/src/records/preload.ts` is what reads the list, so
+the invocation adds it to whatever preloads and variables the package's
+own test task already passes, and runs from that package's directory.
+Deno resolves `--preload` as a path rather than through the import map,
+so it is absolute:
+
+```bash
+CF_TEST_SKIP_LIST=/tmp/skips.json deno test --no-check --allow-all \
+  --preload="$(git rev-parse --show-toplevel)/packages/test-support/src/records/preload.ts" \
+  test/glaze.test.ts
+```
+
+Running each case of a file alone, with every other case in it skipped,
+is what settles whether the file holds more of them.
+
 ## Telling the machinery about a new test
 
 Nothing, in the ordinary case. A test added to an existing suite is
