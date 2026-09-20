@@ -5,7 +5,10 @@
  */
 
 import { type DID, isDID } from "@commonfabric/identity";
-import { isLoopbackHostname, normalizeSpaceHost } from "@commonfabric/runner";
+import {
+  isLoopbackHostname,
+  normalizeSpaceHost,
+} from "@commonfabric/runner/space-host";
 
 /** A captured invitation whose bearer code belongs in tab-scoped storage. */
 export interface InviteLink {
