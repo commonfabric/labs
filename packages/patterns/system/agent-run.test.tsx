@@ -1,4 +1,13 @@
-import { action, assert, pattern, TESTS, Writable } from "commonfabric";
+import {
+  action,
+  assert,
+  NAME,
+  pattern,
+  TESTS,
+  UI,
+  Writable,
+} from "commonfabric";
+import { hasText } from "../test/vnode-helpers.ts";
 import AgentRunView, { type AgentRun } from "./agent-run.tsx";
 
 const QUEUED: AgentRun = {
@@ -24,6 +33,18 @@ export default pattern(() => {
   });
   const view = AgentRunView({ run });
   const finishedView = AgentRunView({ run: finished });
+
+  const assert_queued_view = assert(() =>
+    view[NAME] === "Agent run: queued" &&
+    hasText(view[UI], "recommend a book") &&
+    hasText(view[UI], "submitted 2026-09-18T00:00:00.000Z") &&
+    hasText(view[UI], "Cancel")
+  );
+  const assert_completed_view = assert(() =>
+    finishedView[NAME] === "Agent run: completed" &&
+    hasText(finishedView[UI], "completed") &&
+    !hasText(finishedView[UI], "Cancel")
+  );
 
   const assert_queued_is_not_terminal = assert(() => view.terminal === false);
   const assert_completed_is_terminal = assert(() =>
@@ -56,9 +77,16 @@ export default pattern(() => {
     run.key("errorCode").set("CANCELLED");
   });
   const assert_cancelled_is_terminal = assert(() => view.terminal === true);
+  const assert_cancelled_view = assert(() =>
+    view[NAME] === "Agent run: cancelled" &&
+    hasText(view[UI], "error CANCELLED") &&
+    !hasText(view[UI], "Cancel")
+  );
 
   return {
     [TESTS]: [
+      { assertion: assert_queued_view },
+      { assertion: assert_completed_view },
       { assertion: assert_queued_is_not_terminal },
       { assertion: assert_completed_is_terminal },
       { assertion: assert_no_cancel_requested },
@@ -68,6 +96,7 @@ export default pattern(() => {
       { assertion: assert_finished_untouched },
       { action: action_runner_cancels },
       { assertion: assert_cancelled_is_terminal },
+      { assertion: assert_cancelled_view },
     ],
   };
 });

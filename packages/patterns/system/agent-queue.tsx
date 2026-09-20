@@ -96,12 +96,14 @@ export default pattern<Record<string, never>, AgentQueueOutput>((_) => {
     | undefined
   >(undefined).for("agentRunner");
 
+  const noRunner = computed(() => agentRunner.get() === undefined);
+
   return {
     [NAME]: "Agent runs",
     [UI]: (
       <cf-vstack gap="2" style={{ padding: "1rem" }}>
         <h2 style={{ margin: 0, fontSize: "16px" }}>Agent runs</h2>
-        {computed(() => agentRunner.get() === undefined)
+        {noRunner
           ? (
             <p style={{ color: "#888", fontStyle: "italic" }}>
               No runner is registered. Requests stay queued until one starts.

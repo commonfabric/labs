@@ -1,4 +1,5 @@
-import { action, assert, pattern, TESTS, Writable } from "commonfabric";
+import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
+import { hasText } from "../test/vnode-helpers.ts";
 import AgentQueue from "./agent-queue.tsx";
 import type { AgentRun } from "./agent-run.tsx";
 
@@ -30,6 +31,13 @@ export default pattern(() => {
     queue.agentRunner === undefined
   );
 
+  const assert_no_runner_notice = assert(() =>
+    hasText(queue[UI], "No runner is registered.")
+  );
+  const assert_runner_notice_cleared = assert(() =>
+    !hasText(queue[UI], "No runner is registered.")
+  );
+
   const action_register_runner = action(() => {
     queue.setAgentRunner.send({ runner: RUNNER });
   });
@@ -59,6 +67,12 @@ export default pattern(() => {
     queue.entries.get()[0].run.state === "queued"
   );
 
+  const assert_rendered_record = assert(() =>
+    hasText(queue[UI], "queued") &&
+    hasText(queue[UI], "recommend a book") &&
+    hasText(queue[UI], "https://cloud.example")
+  );
+
   const action_clear_runner = action(() => {
     queue.setAgentRunner.send({});
   });
@@ -67,14 +81,18 @@ export default pattern(() => {
     [TESTS]: [
       { assertion: assert_starts_with_no_entries },
       { assertion: assert_starts_with_no_runner },
+      { assertion: assert_no_runner_notice },
       { action: action_register_runner },
       { assertion: assert_runner_registered },
+      { assertion: assert_runner_notice_cleared },
       { action: action_refresh_on_claim },
       { assertion: assert_claim_refreshed },
       { action: action_append_entry },
       { assertion: assert_entry_links_the_record },
+      { assertion: assert_rendered_record },
       { action: action_clear_runner },
       { assertion: assert_starts_with_no_runner },
+      { assertion: assert_no_runner_notice },
     ],
   };
 });
