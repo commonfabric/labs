@@ -448,8 +448,10 @@ describe("agent runner", () => {
       };
       await kill(1);
       const claimed: number[] = [];
+      const started = defer<void>();
       await startRunner((run) => {
         claimed.push(run.record.attempts ?? 0);
+        started.resolve();
         return new Promise<AgentRunExecution>((resolve) => {
           run.signal.addEventListener(
             "abort",
@@ -464,6 +466,8 @@ describe("agent runner", () => {
         recordOf(result),
         (value) => value?.state === "running" && value.attempts === 2,
       );
+      // The committed state can arrive before the runner starts its executor.
+      await started.promise;
       expect(claimed).toEqual([2]);
 
       // The second runner dies too. Stopping it is as close as a test gets,

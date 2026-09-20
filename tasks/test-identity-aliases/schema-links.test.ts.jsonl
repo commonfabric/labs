@@ -1,0 +1,1 @@
+{"date":"2026-09-20","from":{"k":"unit","s":"runner","n":"Schema - Link Resolution > Array element link resolution > warns (not silently) when a narrower-scope link follow is blocked (CT-1642)"},"to":{"k":"unit","s":"runner","n":"Schema - Link Resolution > Array element link resolution > logs at warn level when a narrower-scope link follow is blocked"}}
