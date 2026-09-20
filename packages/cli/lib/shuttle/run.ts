@@ -34,7 +34,7 @@
  * and what arrives is the connection it settled on.
  */
 
-import { toFileUrl } from "@std/path/posix";
+import { toFileUrl } from "@std/path";
 
 import { loadPieces, type SpaceConfig } from "../piece.ts";
 import { newSessionId } from "../session.ts";
@@ -97,6 +97,12 @@ export interface ShuttleDeps {
  * for again (`external.ts`).
  */
 function startingExternal(): ExternalLocation {
+  // The platform-aware conversion, where `external.ts` uses the posix one.
+  // The two look like one spelling and are not: this converts the working
+  // directory the operating system reports, which on some of them is not a
+  // posix path at all, and that module converts a path it derived from a URL,
+  // which always is.
+  //
   // The directory is handed over as it stands. `ExternalLocation` is what
   // makes a location read as a container, so a separator added here would be
   // a second answer to a question already answered — and at the filesystem
