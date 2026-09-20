@@ -3448,8 +3448,10 @@ const previousWriteValueForTarget = (
  * something else there is the value that comes back, so the fallback reaches
  * only a path the transaction leaves as it found it. It is a runtime-internal
  * verifier read besides, so it stays out of the commit's conflict set and out
- * of reactivity (spec §18.6.2, §8.9.4). A path this transaction cannot read
- * answers `undefined`, as an absent one does.
+ * of reactivity (spec §18.6.2, §8.9.4). An absent path returns `undefined`,
+ * as does one that descends through a value with no keys; the read decides
+ * both. Any other read failure propagates, so a gate never treats a path it
+ * could not read as one holding nothing.
  */
 const effectiveValueForTarget = (
   tx: IExtendedStorageTransaction,
@@ -3464,11 +3466,7 @@ const effectiveValueForTarget = (
   if (written !== undefined) {
     return written;
   }
-  try {
-    return tx.readValueOrThrow(target, { meta: INTERNAL_VERIFIER_META });
-  } catch {
-    return undefined;
-  }
+  return tx.readValueOrThrow(target, { meta: INTERNAL_VERIFIER_META });
 };
 
 const writeInstallsInitialSchemaDefault = (
