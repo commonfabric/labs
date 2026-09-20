@@ -66,7 +66,7 @@ export type AgentRunUsage = {
  * `stateSince` below. The user's runner writes everything from `claim` on —
  * `claim`, `attempts`, the terminal fields — and moves `state` and
  * `stateSince` as it goes. `cancelRequestedAt` is the one field any other
- * client writes, through this pattern's `cancel` stream.
+ * client writes, through this pattern's `cancel` stream or `cf agent cancel`.
  */
 export type AgentRun = {
   // Written by the builtin's effect when the request commits.
@@ -118,6 +118,9 @@ export const isTerminalAgentRunState = (
 
 type AgentRunViewInput = {
   run: Writable<AgentRunRecord>;
+
+  /** The shared observation time for relative age, in epoch milliseconds. */
+  nowMs?: number;
 };
 
 export type AgentRunViewOutput = {
@@ -145,36 +148,83 @@ export const requestCancel = handler<
   run.key("cancelRequestedAt").set(new Date().toISOString());
 });
 
-export default pattern<AgentRunViewInput, AgentRunViewOutput>(({ run }) => {
-  const terminal = computed(() => isTerminalAgentRunState(run.get()?.state));
-  const cancel = requestCancel({ run });
-  return {
-    [NAME]: computed(() => `Agent run: ${run.get()?.state ?? "unknown"}`),
-    [UI]: (
-      <cf-vstack gap="1">
-        <cf-hstack gap="2" align="center">
-          <strong>{computed(() => run.get()?.state ?? "unknown")}</strong>
-          <span>{computed(() => run.get()?.task ?? "")}</span>
-        </cf-hstack>
-        <span style={{ fontSize: "12px", color: "#666" }}>
-          {computed(() => {
-            const value = run.get();
-            if (value === undefined) return "";
-            const usage = value.usage?.totalTokens;
-            return [
-              `submitted ${value.submittedAt}`,
-              value.errorCode ? `error ${value.errorCode}` : "",
-              usage !== undefined ? `${usage} tokens` : "",
-            ].filter((part) => part !== "").join(" · ");
-          })}
-        </span>
-        {computed(() => terminal)
-          ? null
-          : <cf-button size="sm" onClick={cancel}>Cancel</cf-button>}
-      </cf-vstack>
-    ),
-    run,
-    terminal,
-    cancel,
-  };
-});
+/** Formats elapsed time without consulting an ambient clock. */
+export function formatAgentRunAge(submittedAt: string, nowMs?: number): string {
+  const submittedMs = Date.parse(submittedAt);
+  if (
+    !Number.isFinite(submittedMs) || nowMs === undefined ||
+    !Number.isFinite(nowMs)
+  ) {
+    return "unknown";
+  }
+  const minutes = Math.floor(Math.max(0, nowMs - submittedMs) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+export default pattern<AgentRunViewInput, AgentRunViewOutput>(
+  ({ run, nowMs }) => {
+    const terminal = computed(() => isTerminalAgentRunState(run.get()?.state));
+    const cancellationRequested = computed(() =>
+      run.get()?.cancelRequestedAt !== undefined
+    );
+    const canCancel = computed(() => !terminal && !cancellationRequested);
+    const cancelling = computed(() => !terminal && cancellationRequested);
+    const cancel = requestCancel({ run });
+    const usageText = computed(() => {
+      const usage = run.get()?.usage;
+      if (usage === undefined) return "Usage unavailable";
+      return [
+        usage.totalTokens !== undefined ? `${usage.totalTokens} tokens` : "",
+        usage.costUsd !== undefined
+          ? `Reported cost: $${usage.costUsd.toFixed(6)}`
+          : "",
+        usage.estimatedCostUsd !== undefined
+          ? `Estimated cost: $${usage.estimatedCostUsd.toFixed(6)}`
+          : "",
+        usage.estimateWithheldReason !== undefined
+          ? `Estimate withheld: ${usage.estimateWithheldReason}`
+          : "",
+      ].filter((part) => part !== "").join(" · ") || "Usage unavailable";
+    });
+    return {
+      [NAME]: computed(() => `Agent run: ${run.get()?.state ?? "unknown"}`),
+      [UI]: (
+        <cf-vstack gap="2">
+          <cf-hstack gap="2" align="center">
+            <cf-badge>{computed(() => run.get()?.state ?? "unknown")}</cf-badge>
+            <strong>
+              {computed(() => run.get()?.task ?? "")}
+            </strong>
+          </cf-hstack>
+          <small>
+            {computed(() => {
+              const value = run.get();
+              if (value === undefined) return "";
+              return `Age: ${
+                formatAgentRunAge(value.submittedAt, nowMs)
+              } · submitted ${value.submittedAt}`;
+            })}
+          </small>
+          <span>{usageText}</span>
+          <span>
+            {computed(() => {
+              const errorCode = run.get()?.errorCode;
+              return errorCode === undefined ? "" : `error ${errorCode}`;
+            })}
+          </span>
+          {cancelling ? <span>Cancellation requested</span> : null}
+          {canCancel
+            ? <cf-button size="sm" onClick={cancel}>Cancel</cf-button>
+            : null}
+        </cf-vstack>
+      ),
+      run,
+      terminal,
+      cancel,
+    };
+  },
+);

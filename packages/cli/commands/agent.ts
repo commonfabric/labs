@@ -1,16 +1,22 @@
-import { Command, ValidationError } from "@cliffy/command";
+import { Command, EnumType, ValidationError } from "@cliffy/command";
 import { join } from "@std/path";
 
+import type { Cell, Runtime } from "@commonfabric/runner";
 import {
-  type Cell,
-  experimentalOptionsForDeployedClient,
-  Runtime,
-  runtimePresets,
-} from "@commonfabric/runner";
-import { agentQueueIndexCell } from "@commonfabric/runner/agent-run";
-import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+  AGENT_RUN_STATES,
+  agentQueueIndexCell,
+} from "@commonfabric/runner/agent-run";
+import { openAgentStorageHost } from "../lib/agent-connections.ts";
 
 import { createHarnessAgentRunExecutor } from "../lib/agent-run-harness.ts";
+import {
+  type AgentRunInspection,
+  cancelAgentRun,
+  readAgentRuns,
+  selectAgentRun,
+} from "../lib/agent-inspection.ts";
+import { render } from "../lib/render.ts";
+
 import {
   AgentRunner,
   type AgentRunnerEntry,
@@ -226,18 +232,8 @@ const deployedConnections: AgentRunnerConnections = {
   },
   // Records are read and written there, and nothing of that deployment's is
   // run.
-  async openHost(config, origin) {
-    return new Runtime(runtimePresets.remoteClient({
-      apiUrl: new URL(origin),
-      storageManager: StorageManager.open({
-        as: await loadIdentity(config.identityPath),
-        memoryHost: new URL(origin),
-      }),
-      experimental: await experimentalOptionsForDeployedClient({
-        apiUrl: new URL(origin),
-        env: Deno.env.get,
-      }),
-    }));
+  openHost(config, origin) {
+    return openAgentStorageHost(config.identityPath, origin);
   },
 };
 
@@ -385,10 +381,142 @@ The model provider is the one 'cf-harness' is configured with under
 CF_HARNESS_HOME.`,
 );
 
+/** Effects used by the one-shot agent inspection commands. */
+export interface AgentInspectionCommandDeps {
+  read: typeof readAgentRuns;
+  cancel: typeof cancelAgentRun;
+  render: typeof render;
+}
+
+const defaultInspectionDeps: AgentInspectionCommandDeps = {
+  read: readAgentRuns,
+  cancel: cancelAgentRun,
+  render,
+};
+
+/** Renders costs with their provenance and keeps withheld estimates explicit. */
+export function formatAgentRun(run: AgentRunInspection): string {
+  const lines = [
+    `${run.id}  ${run.state}`,
+    `Request: ${run.requestHash}`,
+    `Task: ${run.task}`,
+    `Host: ${run.host}`,
+    `Submitted: ${run.submittedAt}`,
+    `State since: ${run.stateSince}`,
+  ];
+  for (
+    const [name, value] of [
+      ["Outcome", run.outcome],
+      ["Error", run.errorCode],
+      ["Cancellation requested", run.cancelRequestedAt],
+      ["Model turns", run.modelTurns],
+      ["Tool calls", run.toolCalls],
+      ["Usage coverage", run.usageCoverage],
+      ["Result", run.result],
+    ]
+  ) {
+    if (value !== undefined) lines.push(`${name}: ${value}`);
+  }
+  if (run.usage) {
+    lines.push("Usage:");
+    for (const [name, value] of Object.entries(run.usage)) {
+      const label = name === "costUsd"
+        ? "Provider cost (USD)"
+        : name === "estimatedCostUsd"
+        ? "Estimated cost (USD)"
+        : name === "estimateWithheldReason"
+        ? "Estimate withheld"
+        : name;
+      lines.push(`  ${label}: ${String(value)}`);
+    }
+  }
+  return lines.join("\n");
+}
+
+/** Runs one metadata read or durable cancellation request. */
+export async function agentInspectionAction(
+  kind: "ls" | "show" | "cancel",
+  options: {
+    identity?: string;
+    apiUrl?: string;
+    json?: boolean;
+    state?: string;
+  },
+  identifier: string | undefined,
+  deps: AgentInspectionCommandDeps = defaultInspectionDeps,
+): Promise<void> {
+  if (!options.identity || !options.apiUrl) {
+    throw new ValidationError(
+      "Agent inspection requires --identity (CF_IDENTITY) and --api-url (CF_API_URL).",
+    );
+  }
+  const config = {
+    identity: absPath(options.identity),
+    apiUrl: originOf("--api-url", options.apiUrl),
+  };
+  if (kind === "ls") {
+    const runs = (await deps.read(config)).filter((run) =>
+      options.state === undefined || run.state === options.state
+    );
+    deps.render(
+      options.json
+        ? runs
+        : runs.length === 0
+        ? "No agent runs."
+        : runs.map((run) => `${run.id}  ${run.state}  ${run.task}`).join("\n"),
+      { json: options.json },
+    );
+    return;
+  }
+  if (!identifier) {
+    throw new ValidationError("An agent run identifier is required.");
+  }
+  const run = kind === "cancel"
+    ? await deps.cancel(config, identifier)
+    : selectAgentRun(await deps.read(config), identifier);
+  deps.render(options.json ? run : formatAgentRun(run), { json: options.json });
+}
+
 /** The `cf agent` command tree over `deps`. */
 export const createAgentCommand = (
   deps: AgentRunnerCommandDeps = defaultAgentRunnerCommandDeps,
+  inspectionDeps: AgentInspectionCommandDeps = defaultInspectionDeps,
 ) => {
+  const inspectionCommand = () =>
+    new Command()
+      .env("CF_API_URL=<url:string>", "Toolshed serving the home space.", {
+        prefix: "CF_",
+      })
+      .option("-a,--api-url <url:string>", "Toolshed serving the home space.")
+      .env("CF_IDENTITY=<path:string>", "Path to an identity keyfile.", {
+        prefix: "CF_",
+      })
+      .option("-i,--identity <path:string>", "Path to an identity keyfile.")
+      .option(
+        "--json",
+        "Print structured metadata with result links as addresses.",
+      );
+  const listCommand = inspectionCommand()
+    .description("List agent runs from the home queue across toolsheds.")
+    .type("agent-state", new EnumType([...AGENT_RUN_STATES]))
+    .option("--state <state:agent-state>", "List only runs in this state.")
+    .action((options) =>
+      agentInspectionAction("ls", options, undefined, inspectionDeps)
+    );
+  const showCommand = inspectionCommand()
+    .description(
+      "Show one run's metadata and usage without reading its result payload.",
+    )
+    .arguments("<run:string>")
+    .action((options, run) =>
+      agentInspectionAction("show", options, run, inspectionDeps)
+    );
+  const cancelCommand = inspectionCommand()
+    .description("Request cancellation of a nonterminal agent run.")
+    .arguments("<run:string>")
+    .action((options, run) =>
+      agentInspectionAction("cancel", options, run, inspectionDeps)
+    );
   const runnerCommand = new Command()
     .name("runner")
     .description(runnerDescription)
@@ -442,7 +570,10 @@ export const createAgentCommand = (
     .name("agent")
     .description("Run and inspect agent requests.")
     .default("help")
-    .command("runner", runnerCommand);
+    .command("runner", runnerCommand)
+    .command("ls", listCommand)
+    .command("show", showCommand)
+    .command("cancel", cancelCommand).reset();
 };
 
 export const agent = createAgentCommand();

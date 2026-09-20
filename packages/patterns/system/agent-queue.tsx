@@ -23,10 +23,11 @@ import {
   type Stream,
   UI,
   type VNode,
+  wish,
   Writable,
   type WriteAuthorizedBy,
 } from "commonfabric";
-import type { AgentRunRecord } from "./agent-run.tsx";
+import AgentRunView, { type AgentRunRecord } from "./agent-run.tsx";
 
 /**
  * One submitted run. `host` is the origin of the toolshed serving the
@@ -97,29 +98,33 @@ export default pattern<Record<string, never>, AgentQueueOutput>((_) => {
   >(undefined).for("agentRunner");
 
   const noRunner = computed(() => agentRunner.get() === undefined);
+  const empty = computed(() => entries.get().length === 0);
+  const now = wish<number>({ query: "#now/60" });
 
   return {
     [NAME]: "Agent runs",
     [UI]: (
-      <cf-vstack gap="2" style={{ padding: "1rem" }}>
-        <h2 style={{ margin: 0, fontSize: "16px" }}>Agent runs</h2>
-        {noRunner
-          ? (
-            <p style={{ color: "#888", fontStyle: "italic" }}>
-              No runner is registered. Requests stay queued until one starts.
-            </p>
-          )
-          : null}
-        {entries.map((entry) => (
-          <cf-hstack gap="2" align="center">
-            <strong>{entry.run.state}</strong>
-            <span style={{ flex: "1" }}>{entry.run.task}</span>
-            <span style={{ fontSize: "12px", color: "#666" }}>
-              {entry.host}
-            </span>
-          </cf-hstack>
-        ))}
-      </cf-vstack>
+      <cf-theme theme={{ density: "compact", borderRadius: "8px" }}>
+        <cf-vstack gap="3" padding="4">
+          <h2 style={{ margin: 0 }}>Agent runs</h2>
+          {noRunner
+            ? (
+              <p>
+                No runner is registered. Requests stay queued until one starts.
+              </p>
+            )
+            : null}
+          {empty ? <p>No agent runs yet.</p> : null}
+          {entries.map((entry) => (
+            <cf-card data-agent-run={entry.run.requestHash}>
+              <cf-vstack gap="2">
+                {AgentRunView({ run: entry.run, nowMs: now.result })}
+                <small>{entry.host}</small>
+              </cf-vstack>
+            </cf-card>
+          ))}
+        </cf-vstack>
+      </cf-theme>
     ),
     entries,
     agentRunner: agentRunner as any,

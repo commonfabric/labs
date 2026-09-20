@@ -2,7 +2,13 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
-import { isStream, type JSONSchema, Runtime } from "@commonfabric/runner";
+import {
+  type Cell,
+  isCell,
+  isStream,
+  type JSONSchema,
+  Runtime,
+} from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   projectWishValue,
@@ -187,6 +193,25 @@ describe("cf wish headless read (resolveWish)", () => {
     });
     expect(error).toBeUndefined();
     expect((result as { name?: string })?.name).toBe("Ada Lovelace");
+  });
+
+  it("preserves an `asCell` reference whose target is absent on this toolshed", async () => {
+    const home = userIdentity.did();
+    const target = runtime.getCell(home, "run-on-another-toolshed");
+    await runtime.editWithRetry((tx) => {
+      const homePattern = runtime.getCell(home, "queue-home", undefined, tx);
+      homePattern.set({ agentQueue: { run: target } });
+      runtime.getHomeSpaceCell(tx).key("defaultPattern").set(homePattern);
+    });
+
+    const { result } = await resolveWish(runtime, home, {
+      query: "#agent_queue",
+      schema: { type: "object", properties: { run: { asCell: ["cell"] } } },
+    });
+
+    expect(isCell((result as { run: unknown }).run)).toBe(true);
+    expect((result as { run: Cell<unknown> }).run.getAsNormalizedFullLink().id)
+      .toBe(target.getAsNormalizedFullLink().id);
   });
 
   it("projectWishValue strips stream handles but keeps profile data (CT-1844)", () => {

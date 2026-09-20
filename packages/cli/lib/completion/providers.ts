@@ -901,6 +901,21 @@ function rootCandidates(line: CompletionLine): Promise<ProviderResult> {
     : Promise.resolve(directive({ kind: "dirs" }));
 }
 
+/** Agent runs named by stable record id, discovered through the home wish. */
+async function agentRunCandidates(
+  line: CompletionLine,
+): Promise<ProviderResult> {
+  const identity = line.options.get("identity") ?? Deno.env.get("CF_IDENTITY");
+  const apiUrl = line.options.get("api-url") ?? Deno.env.get("CF_API_URL");
+  if (!identity || !apiUrl) return NOTHING;
+  const { readAgentRuns } = await import("../agent-inspection.ts");
+  const runs = await readAgentRuns({ identity: absPath(identity), apiUrl });
+  return values(runs.map((run) => ({
+    value: run.id,
+    description: `${run.state}: ${run.task}`,
+  })));
+}
+
 /** API URLs worth offering: the environment's, plus the local dev server. */
 function apiUrlCandidates(): ProviderResult {
   const candidates: Candidate[] = [];
@@ -1034,6 +1049,8 @@ const INSPECT_ENTITY_COMMANDS: readonly string[] = [
 const ARGUMENT_PROVIDERS: Readonly<
   Record<string, (line: CompletionLine) => Promise<ProviderResult>>
 > = {
+  "agent show:run": agentRunCandidates,
+  "agent cancel:run": agentRunCandidates,
   "cell get-label:path": cellPathCandidates,
   "piece get-label:path": cellPathCandidates,
   "cell set-label:path": cellPathCandidates,

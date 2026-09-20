@@ -1048,6 +1048,30 @@ an id is replayable only within the session it was chosen in, and a session
 minted on the spot would make the replay name a different invocation. A call
 naming neither gets both, minted for that one call.
 
+## Agent inspection
+
+`cf agent ls [--state <state>] [--json]` lists the identity's requests from
+`wish '#agent_queue'`, including records on other toolsheds. `--state` accepts
+`queued`, `claimed`, `running`, `completed`, `failed`, `refused`, or
+`cancelled`.
+
+`cf agent show <run> [--json]` shows one record's state, timestamps, usage, and
+result address. `<run>` is an exact record id, request hash, or canonical
+address from the list; ambiguous matches are refused. Provider-reported
+`costUsd` and `estimatedCostUsd` stay separate, and an absent estimate's
+`estimateWithheldReason` is shown when recorded. Inspection reads metadata and
+renders result links as addresses without reading their payloads.
+
+`cf agent cancel <run> [--json]` writes a durable `cancelRequestedAt` timestamp
+for the runner to observe. A repeated cancellation keeps the first timestamp,
+and a terminal record is unchanged. Cancellation does not synchronously change
+the run's state; the runner acknowledges it by ending the run `cancelled`.
+
+All three commands take `--identity` / `CF_IDENTITY` and `--api-url` /
+`CF_API_URL`. The API URL names the home toolshed; each queue entry determines
+the host used to read or cancel that record. Completion offers the state
+vocabulary and live run ids from the home queue.
+
 ## Agent runner
 
 `cf agent` groups the commands over agent requests, and prints its help when
@@ -1116,9 +1140,10 @@ queues it again when its `attempts` is 1 and ends it `failed` as `RUNNER_LOST`
 when its `attempts` is 2. If `cancelRequestedAt` is set, recovery ends the
 expired record as `cancelled` instead. A live lease stays with its runner.
 
-A runner connects to at most two deployments, and only the home one is a full
-connection; the other is read and written as storage. This is the one command
-that the next section's rule does not bound to a single deployment.
+Agent commands use a full connection for the home deployment. Other hosts named
+by queue entries are read and written through storage-only runtimes that leave
+the process's deployment settings alone. The runner and inspection commands
+share this connection path.
 
 ## One deployment per process
 

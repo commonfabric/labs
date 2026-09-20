@@ -157,6 +157,19 @@ The piece holds two things:
   `agent` builtin can fail a request naming a tool the runner does not offer
   before the request is staged.
 
+Home's **Agent runs** tab renders this queue beside Spaces, Favorites, Profile,
+and Self. Each row shows its task, state, age, and available token usage.
+Reported cost and estimated cost have separate labels; an unavailable estimate
+shows the harness's withheld reason when supplied. Missing counters and costs
+remain unavailable rather than displaying zero. Relative ages share a one-minute
+clock from `#now/60`.
+
+**Cancel** records `cancelRequestedAt` on the selected run. The row shows
+"Cancellation requested" while the runner settles the request; the action does
+not change the run's state or outcome. A terminal run has no Cancel action. When
+no runner is registered, the tab explains that requests remain queued until one
+starts. A queue with no entries shows "No agent runs yet."
+
 A request made in a home space that holds no queue — its home pattern does not
 exist, or is a version without the field — ends `refused`.
 [`docs/common/capabilities/agent.md`](../capabilities/agent.md) describes the

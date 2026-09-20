@@ -8,6 +8,7 @@
 
 import type { Option } from "@cliffy/command";
 
+import { AGENT_RUN_STATES } from "@commonfabric/runner/agent-run";
 import { CFC_ENFORCEMENT_MODES } from "@commonfabric/runner/cfc";
 import { languageNames } from "../view/languages/language.ts";
 import type { AnyCommand, CompletionLine, PreParseGlobal } from "./line.ts";
@@ -33,6 +34,7 @@ export interface Candidate {
  * `--from` are settled.
  */
 const ENUMERATED_OPTION_VALUES: Readonly<Record<string, readonly string[]>> = {
+  "state": [...AGENT_RUN_STATES],
   "log-level": ["debug", "info", "warn", "error", "silent"],
   "color": ["auto", "always", "never"],
   "language": languageNames(),

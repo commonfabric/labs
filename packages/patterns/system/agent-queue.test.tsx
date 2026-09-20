@@ -1,5 +1,10 @@
 import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
-import { hasText } from "../test/vnode-helpers.ts";
+import {
+  findElementByText,
+  findNodeByProp,
+  hasText,
+  propsOf,
+} from "../test/vnode-helpers.ts";
 import AgentQueue from "./agent-queue.tsx";
 import type { AgentRun } from "./agent-run.tsx";
 
@@ -9,19 +14,36 @@ const RUNNER = {
   registeredAt: "2026-09-18T00:00:00.000Z",
 };
 
+const QUEUED: AgentRun = {
+  requestHash: "hash-1",
+  request: {},
+  piece: {},
+  space: {},
+  task: "recommend a book",
+  inputs: {},
+  resultSchema: {},
+  submittedAt: "2026-09-18T00:00:00.000Z",
+  state: "queued",
+  stateSince: "2026-09-18T00:00:00.000Z",
+};
+
 export default pattern(() => {
   const queue = AgentQueue({});
-  const record = new Writable<AgentRun>({
-    requestHash: "hash-1",
-    request: {},
-    piece: {},
-    space: {},
-    task: "recommend a book",
-    inputs: {},
-    resultSchema: {},
-    submittedAt: "2026-09-18T00:00:00.000Z",
-    state: "queued",
-    stateSince: "2026-09-18T00:00:00.000Z",
+  const record = new Writable<AgentRun>(QUEUED);
+
+  const running = new Writable<AgentRun>({
+    ...QUEUED,
+    requestHash: "hash-2",
+    task: "find authors",
+    state: "running",
+  });
+  const finished = new Writable<AgentRun>({
+    ...QUEUED,
+    requestHash: "hash-3",
+    task: "find books",
+    state: "completed",
+    outcome: "completed",
+    usage: { totalTokens: 120, costUsd: 0.01, estimatedCostUsd: 0.02 },
   });
 
   const assert_starts_with_no_entries = assert(() =>
@@ -60,9 +82,11 @@ export default pattern(() => {
   // The builtin appends entries as the runtime; a push stands in for it.
   const action_append_entry = action(() => {
     queue.entries.push({ run: record, host: "https://cloud.example" });
+    queue.entries.push({ run: running, host: "https://cloud.example" });
+    queue.entries.push({ run: finished, host: "https://cloud.example" });
   });
   const assert_entry_links_the_record = assert(() =>
-    queue.entries.get().length === 1 &&
+    queue.entries.get().length === 3 &&
     queue.entries.get()[0].host === "https://cloud.example" &&
     queue.entries.get()[0].run.state === "queued"
   );
@@ -71,6 +95,46 @@ export default pattern(() => {
     hasText(queue[UI], "queued") &&
     hasText(queue[UI], "recommend a book") &&
     hasText(queue[UI], "https://cloud.example")
+  );
+
+  const assert_three_record_views = assert(() =>
+    hasText(findNodeByProp(queue[UI], "data-agent-run", "hash-1"), "queued") &&
+    hasText(findNodeByProp(queue[UI], "data-agent-run", "hash-2"), "running") &&
+    hasText(
+      findNodeByProp(queue[UI], "data-agent-run", "hash-3"),
+      "completed",
+    ) &&
+    hasText(
+      findNodeByProp(queue[UI], "data-agent-run", "hash-3"),
+      "120 tokens",
+    ) &&
+    hasText(
+      findNodeByProp(queue[UI], "data-agent-run", "hash-3"),
+      "Reported cost: $0.010000",
+    ) &&
+    hasText(
+      findNodeByProp(queue[UI], "data-agent-run", "hash-3"),
+      "Estimated cost: $0.020000",
+    ) &&
+    !hasText(findNodeByProp(queue[UI], "data-agent-run", "hash-3"), "Cancel")
+  );
+  const action_cancel_running = action(() => {
+    const row = findNodeByProp(queue[UI], "data-agent-run", "hash-2");
+    const button = findElementByText(row, "cf-button", "Cancel");
+    const onClick = propsOf(button)?.onClick;
+    if (typeof onClick === "object" && onClick !== null && "send" in onClick) {
+      (onClick as { send: () => void }).send();
+    }
+  });
+  const assert_only_running_cancelled = assert(() =>
+    typeof running.get().cancelRequestedAt === "string" &&
+    record.get().cancelRequestedAt === undefined &&
+    finished.get().cancelRequestedAt === undefined &&
+    running.get().state === "running" &&
+    hasText(
+      findNodeByProp(queue[UI], "data-agent-run", "hash-2"),
+      "Cancellation requested",
+    )
   );
 
   const action_clear_runner = action(() => {
@@ -90,6 +154,9 @@ export default pattern(() => {
       { action: action_append_entry },
       { assertion: assert_entry_links_the_record },
       { assertion: assert_rendered_record },
+      { assertion: assert_three_record_views },
+      { action: action_cancel_running },
+      { assertion: assert_only_running_cancelled },
       { action: action_clear_runner },
       { assertion: assert_starts_with_no_runner },
       { assertion: assert_no_runner_notice },

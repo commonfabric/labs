@@ -391,24 +391,24 @@ hold, the second at the harness's default `enforce-strict` mode.
 **Packages:** `packages/cli`, `packages/patterns/system`. **Depends on:**
 stage 4.
 
-- [ ] `cf agent ls [--state <s>] [--json]`, `cf agent show <run> [--json]`,
+- [x] `cf agent ls [--state <s>] [--json]`, `cf agent show <run> [--json]`,
       `cf agent cancel <run>` in `commands/agent.ts`, reading the index through
       the same wish the Home tab uses; `show` renders the usage block with
       `costUsd` and `estimatedCostUsd` kept apart and names the withheld
       reason when there is one.
-- [ ] Completion candidates for `--state` and for `<run>` in the tables
+- [x] Completion candidates for `--state` and for `<run>` in the tables
       `tasks/check-completion-slots.ts` reads, or a recorded reason.
-- [ ] Home tab "Agent runs" in `packages/patterns/system/home.tsx`: a fourth
+- [x] Home tab "Agent runs" in `packages/patterns/system/home.tsx`: a fifth
       `cf-tab` rendering `agent-queue.tsx` — state, age, usage per record,
       a cancel action, and a "no runner registered" notice when `agentRunner`
       is absent.
-- [ ] Tests: `packages/cli/test/agent-command.test.ts` (list, show, cancel
+- [x] Tests: `packages/cli/test/agent-command.test.ts` (list, show, cancel
       against a seeded index); `home.test.tsx` gains the tab; a pattern test
       renders three records, one finished with usage, and the no-runner
       notice.
-- [ ] Gates: `deno task check-command-docs`, `deno task check-completion-slots`,
+- [x] Gates: `deno task check-command-docs`, `deno task check-completion-slots`,
       `deno task check-test-aliases` if any test is renamed.
-- [ ] Documents: `packages/cli/README.md` — the three commands;
+- [x] Documents: `packages/cli/README.md` — the three commands;
       `docs/common/conventions/HOME_SPACE.md` — the tab.
 
 *Exit:* both gates pass and the tab shows a live record moving through states

@@ -1,4 +1,13 @@
-import { action, assert, NAME, pattern, TESTS, Writable } from "commonfabric";
+import {
+  action,
+  assert,
+  NAME,
+  pattern,
+  TESTS,
+  UI,
+  Writable,
+} from "commonfabric";
+import { findNodeByProp, hasText } from "../test/vnode-helpers.ts";
 import Home from "./home.tsx";
 
 export default pattern(() => {
@@ -16,6 +25,14 @@ export default pattern(() => {
   const assert_agent_queue_starts_empty = assert(() =>
     home.agentQueue.entries.get().length === 0 &&
     home.agentQueue.agentRunner === undefined
+  );
+  const assert_agent_runs_tab = assert(() =>
+    hasText(findNodeByProp(home[UI], "value", "agent-runs"), "Agent runs") &&
+    hasText(
+      findNodeByProp(home[UI], "id", "home-agent-runs"),
+      "No runner is registered.",
+    ) &&
+    hasText(findNodeByProp(home[UI], "value", "self"), "Self")
   );
   const action_register_runner = action(() => {
     home.agentQueue.setAgentRunner.send({
@@ -86,6 +103,7 @@ export default pattern(() => {
     [TESTS]: [
       { assertion: assert_initial_profile_missing },
       { assertion: assert_agent_queue_starts_empty },
+      { assertion: assert_agent_runs_tab },
       { action: action_register_runner },
       { assertion: assert_runner_registered },
       { action: action_add_favorite },
