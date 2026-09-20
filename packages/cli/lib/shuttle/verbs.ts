@@ -106,6 +106,7 @@ import {
   escapeControlCharacters,
   escapeControlCharactersInJson,
   holdsControlCharacter,
+  isScopeWord,
   MEMBER_SPELLINGS,
   messageOf,
   type Move,
@@ -118,6 +119,7 @@ import {
   RELATIVE_HEAD,
   type ResolvedPlace,
   type ResolvedTarget,
+  SCOPE_WORDS,
   scopeMoveHint,
 } from "./place.ts";
 import { renderRecord } from "./record.ts";
@@ -725,6 +727,28 @@ function where(
   );
 }
 
+/**
+ * Sets the scope, which is moving the place to the scope `value` names.
+ *
+ * `value` is held to being a scope word and nothing else before any operand
+ * is composed from it. What it becomes is the operand that carries a
+ * qualifier and no walk, so a value wider than a word would hand a caller the
+ * navigation grammar under a name that says it sets one dimension —
+ * `where scope /pieces` would move the position rather than the scope.
+ */
+function setScope(
+  shuttle: Shuttle,
+  value: string,
+  deps: VerbDeps,
+): Promise<Outcome> | Outcome {
+  if (!isScopeWord(value)) {
+    return refuse(
+      `\`${value}\` is no scope. The scopes are ${listed(SCOPE_WORDS)}.`,
+    );
+  }
+  return landing(shuttle, shuttle.place.cd(`${RELATIVE_HEAD}${value}`), deps);
+}
+
 /** What setting one dimension of the ambient record does. */
 type Setter = (
   shuttle: Shuttle,
@@ -748,11 +772,7 @@ type Setter = (
  * already knows how to show.
  */
 const SETTERS: ReadonlyMap<string, Setter> = new Map<string, Setter>([
-  [
-    "scope",
-    (shuttle, value, deps) =>
-      landing(shuttle, shuttle.place.cd(`${RELATIVE_HEAD}${value}`), deps),
-  ],
+  ["scope", setScope],
   ["external", (shuttle, value) => moveExternal(shuttle, value)],
 ]);
 
@@ -1826,9 +1846,13 @@ const VERBS: ReadonlyMap<string, VerbEntry> = new Map<string, VerbEntry>([
       operands: "none-or-pair",
       names: "a dimension and the value to set it to, or no operand at all",
       // The dimensions are words this process writes itself, so the first
-      // position completes. The second is whatever that dimension takes —
-      // a scope word or a path outside the fabric — which is two grammars
-      // and neither of them a list.
+      // position completes. The second takes whatever the dimension before
+      // it takes — a scope word for one, a path outside the fabric for the
+      // other — and what a slot offers is declared for the position rather
+      // than for the line that reached it, so there is no answer here that
+      // would be right for both. `nothing` is that, rather than a decision
+      // nobody made: a second table keyed on the first operand is what would
+      // change it, and it is a change to how a slot is declared.
       completes: ["dimensions", "nothing"],
     },
     usage: "where [<dimension> <value>]",

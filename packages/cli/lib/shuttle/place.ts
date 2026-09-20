@@ -1651,10 +1651,28 @@ export const HANDLE_SIGIL = "%";
  * operand that named no key *and* looks like an attempt at the scope.
  */
 export function scopeMoveHint(operand: string): string {
-  return operand.startsWith("@") && CELL_SCOPE_VALUES.has(operand.slice(1))
+  return isScopeWord(operand)
     ? ` \`${RELATIVE_HEAD}${operand}\` is what moves the scope.`
     : "";
 }
+
+/**
+ * Whether `operand` is a scope word and nothing else: the sigil, and one of
+ * the scopes the runtime knows, with no path after it.
+ *
+ * It is the whole of what a setter for the scope may take. Composing an
+ * operand out of anything wider would hand the caller the navigation grammar
+ * under a name that says it sets one dimension — `where scope /pieces` would
+ * move the position — so the check is here beside the words rather than at
+ * each caller.
+ */
+export function isScopeWord(operand: string): boolean {
+  return operand.startsWith("@") && CELL_SCOPE_VALUES.has(operand.slice(1));
+}
+
+/** The scope words, in the spelling an operand and the record both write. */
+export const SCOPE_WORDS: readonly string[] = [...CELL_SCOPE_VALUES]
+  .map((scope) => `@${scope}`);
 
 /**
  * The member an operand writes to select a piece's arguments cell, which is

@@ -122,10 +122,42 @@ describe("external", () => {
       expect(reason).not.toContain("absolute");
     });
 
-    it("refuses a relative token the plane cannot spell, and does not move", () => {
-      const location = at("file:///tmp/work/");
+    it("refuses a relative token a URL plane cannot spell, and does not move", () => {
+      // A plane written in URLs reads a token as a URL reference, and `//a b`
+      // is an authority it cannot write. The same token on the file plane is
+      // an ordinary path and lands, which is the case below.
+
+      const location = at("https://example.test/a/");
       expect(refusal(location.xcd("//a b/c"))).toContain("names no place");
-      expect(location.render()).toBe("file:///tmp/work/");
+      expect(location.render()).toBe("https://example.test/a/");
+    });
+
+    it("reads a token on the file plane as a path, not as a URL reference", () => {
+      // A URL reads `#` as a fragment, `?` as a query and a leading blank as
+      // nothing at all, and a directory may be named with any of them. Each
+      // of these would land somewhere else if the token were resolved as a
+      // URL reference: `a#b` at `a`, and the third at a scheme.
+
+      const cases: readonly (readonly [string, string])[] = [
+        ["a#b", "file:///tmp/work/a%23b/"],
+        ["a?b", "file:///tmp/work/a%3Fb/"],
+        [" file:out", "file:///tmp/work/%20file:out/"],
+        ["//a b/c", "file:///a%20b/c/"],
+      ];
+      for (const [token, landed] of cases) {
+        const location = at("file:///tmp/work/");
+        location.xcd(token);
+        expect({ token, at: location.render() }).toEqual({ token, at: landed });
+      }
+    });
+
+    it("writes out a home holding a character a URL would read as syntax", () => {
+      const location = new ExternalLocation(
+        new URL("file:///tmp/"),
+        "/home/a#b",
+      );
+      location.xcd("file:~/data");
+      expect(location.render()).toBe("file:///home/a%23b/data/");
     });
 
     it("refuses a path opening at a home the run was given none of", () => {

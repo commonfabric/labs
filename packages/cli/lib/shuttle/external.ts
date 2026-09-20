@@ -7,12 +7,24 @@
  * a position of its own, and this is it: `xcd` moves it and `xpwd` prints
  * it.
  *
- * A location is a {@link URL} because the arithmetic a relative move wants is
- * the arithmetic a URL already does, over `file:` and `https:` alike. Nothing
- * here opens anything: where a token lands is decided before any of it
- * reaches disk, and the reading is the same whether the place is there or
+ * A location is a {@link URL}, which is what lets one position stand for a
+ * place on either plane and what gives a relative move its arithmetic on the
+ * plane that has no paths of its own.
+ *
+ * On the `file:` plane a token is a path rather than a URL reference, and the
+ * two are not the same language: a URL reads `#` as a fragment, `?` as a
+ * query and a leading blank as nothing at all, where a directory may be named
+ * with any of them. So a token there is resolved as a path and converted at
+ * the end ({@link toFileUrl}), which is the conversion's one home. On every
+ * other plane a token is a URL reference and is resolved as one, because
+ * that is the language those planes are written in.
+ *
+ * Nothing here opens anything: where a token lands is decided before any of
+ * it reaches disk, and the reading is the same whether the place is there or
  * not.
  */
+
+import { fromFileUrl, resolve, toFileUrl } from "@std/path/posix";
 
 import { type RecordEntry } from "./record.ts";
 
@@ -210,7 +222,10 @@ export class ExternalLocation {
     token: string,
     { scheme, rest }: { scheme: string; rest: string },
   ): Landing {
-    const path = rest.startsWith("//") ? rest : expandHome(rest, this.#home);
+    // An authority is a URL's own spelling wherever it appears, so the `//`
+    // form is read as one on either plane and `~` has no meaning inside it.
+    const onFilePlane = scheme === HOME_SCHEME && !rest.startsWith("//");
+    const path = onFilePlane ? expandHome(rest, this.#home) : rest;
     if (path === undefined) {
       return { kind: "refused", reason: NAMES_NO_HOME };
     }
@@ -218,7 +233,10 @@ export class ExternalLocation {
       return { kind: "refused", reason: notAbsolute(token) };
     }
     try {
-      return { kind: "external", at: new URL(`${scheme}:${path}`) };
+      return {
+        kind: "external",
+        at: onFilePlane ? toFileUrl(path) : new URL(`${scheme}:${path}`),
+      };
     } catch {
       return { kind: "refused", reason: spellsNoPlace(token) };
     }
@@ -232,14 +250,18 @@ export class ExternalLocation {
    * nothing after it means.
    */
   #rooted(path: string): Landing {
-    const expanded = this.#at.protocol === `${HOME_SCHEME}:`
-      ? expandHome(path, this.#home)
-      : path;
-    if (expanded === undefined) {
-      return { kind: "refused", reason: NAMES_NO_HOME };
-    }
     try {
-      return { kind: "external", at: new URL(expanded, this.#at) };
+      if (this.#at.protocol !== `${HOME_SCHEME}:`) {
+        return { kind: "external", at: new URL(path, this.#at) };
+      }
+      const expanded = expandHome(path, this.#home);
+      if (expanded === undefined) {
+        return { kind: "refused", reason: NAMES_NO_HOME };
+      }
+      return {
+        kind: "external",
+        at: toFileUrl(resolve(fromFileUrl(this.#at), expanded)),
+      };
     } catch {
       return {
         kind: "refused",

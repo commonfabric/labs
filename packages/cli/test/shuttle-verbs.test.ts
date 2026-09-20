@@ -2672,6 +2672,29 @@ describe("verbs", () => {
         .toContain("external  file:///other/");
     });
 
+    it("refuses a value for the scope that is not a scope word", async () => {
+      // The setter composes an operand out of what it is given, so a value
+      // wider than a word would hand the caller the navigation grammar under
+      // a name that says it sets one dimension.
+
+      const shuttle = shuttleIn();
+      const reason = reasonOf(
+        await runLine("where scope /pieces", shuttle, READS_NOTHING),
+      );
+      expect(reason).toContain("is no scope");
+      expect(textOf(await runLine("pwd", shuttle, READS_NOTHING)))
+        .toBe(textOf(await runLine("pwd", shuttleIn(), READS_NOTHING)));
+    });
+
+    it("refuses a bare scope name, the sigil being part of the word", async () => {
+      expect(
+        reasonOf(
+          await runLine("where scope session", shuttleIn(), READS_NOTHING),
+        ),
+      )
+        .toContain("`@session`");
+    });
+
     it("refuses a heavyweight dimension, naming restart as the switch", async () => {
       for (const dimension of ["api", "identity", "space"]) {
         const reason = reasonOf(
