@@ -1365,6 +1365,33 @@ Deno.test("githubGet waits out a secondary limit that arrives as a refusal", asy
   assertEquals(calls, 4);
 });
 
+Deno.test("githubGet reads a secondary limit out of a refusal that sends no headers", async () => {
+  // GitHub documents a secondary limit as arriving with neither rate-limit
+  // header, and its message as what tells it from a permission failure. Read
+  // as a permission failure it would reach the coverage walk as absent data.
+  const calls = await withFetchAnswering(
+    () =>
+      new Response(
+        '{"message":"You have exceeded a secondary rate limit. Please wait a few minutes before you try again."}',
+        { status: 403, statusText: "Forbidden" },
+      ),
+    async () => {
+      const error = await assertRejects(
+        () => githubGet("/repos/commonfabric/labs/actions/runs"),
+        GitHubRateLimitError,
+      );
+      // The body classified the refusal and stayed out of what is reported.
+      assertEquals(
+        error.message,
+        "GitHub API GET 403 Forbidden: /repos/commonfabric/labs/actions/runs",
+      );
+    },
+  );
+
+  // A wait to observe, so the attempts are spent before it is called a limit.
+  assertEquals(calls, 4);
+});
+
 Deno.test("githubGet does not call an ordinary refusal a rate limit", async () => {
   await withFetchAnswering(
     () => new Response("forbidden", { status: 403, statusText: "Forbidden" }),

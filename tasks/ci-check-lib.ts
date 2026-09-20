@@ -351,9 +351,8 @@ export function sleep(ms: number): Promise<void> {
 /**
  * GitHub refusing because the token is over one of its request limits, as
  * against refusing for any other reason. A caller that has to tell the two
- * apart reads this type rather than the message, whose only variable parts are
- * the status and the path: the response body, which is where GitHub words the
- * refusal, is cancelled unread.
+ * apart reads this type rather than the message, which names only the status
+ * and the path.
  */
 export class GitHubRateLimitError extends Error {}
 
@@ -368,17 +367,27 @@ export class GitHubRateLimitError extends Error {}
  *
  * 403 is also how GitHub refuses a request the token may not make, and an
  * artifact download reaches storage that answers 403 for a signed URL that has
- * expired. So there the headers decide: no requests left in the window, or a
- * wait to observe. A bare 403 is taken at its word as a refusal, because
- * reporting a permission failure as a limit would promise the author a re-run
- * that clears it.
+ * expired. So there the evidence has to come from somewhere: no requests left
+ * in the window, a wait to observe, or `body` saying outright that this is a
+ * limit, which is how GitHub words a secondary limit that carries neither
+ * header. A 403 offering none of the three is taken at its word as a refusal,
+ * because reporting a permission failure as a limit would promise the author a
+ * re-run that clears it.
  */
-function isRateLimitResponse(resp: Response): boolean {
+function isRateLimitResponse(resp: Response, body: string): boolean {
   if (resp.status === 429) return true;
   if (resp.status !== 403) return false;
   return isOverPrimaryRateLimit(resp) ||
-    resp.headers.get("retry-after") !== null;
+    resp.headers.get("retry-after") !== null ||
+    RATE_LIMIT_BODY.test(body);
 }
+
+/**
+ * How GitHub words a limit in the body of a refusal that carries none of the
+ * rate-limit headers. Consulted only for a 403, where the status settles
+ * nothing on its own.
+ */
+const RATE_LIMIT_BODY = /\b(rate limit|abuse detection)\b/i;
 
 /**
  * Whether `resp` spent the last request of its window. Such a limit resets
@@ -394,18 +403,19 @@ function isOverPrimaryRateLimit(resp: Response): boolean {
  * another attempt whichever status it arrives under — and an attempt that
  * succeeds is a pull request held to its baseline rather than passed ungated.
  */
-function isSecondaryRateLimit(resp: Response): boolean {
-  return isRateLimitResponse(resp) && !isOverPrimaryRateLimit(resp);
+function isSecondaryRateLimit(resp: Response, body: string): boolean {
+  return isRateLimitResponse(resp, body) && !isOverPrimaryRateLimit(resp);
 }
 
 function githubApiError(
   resp: Response,
   path: string,
   method: "GET" | "POST" | "PATCH",
+  body: string,
 ): Error {
   const statusText = resp.statusText ? ` ${resp.statusText}` : "";
   const message = `GitHub API ${method} ${resp.status}${statusText}: ${path}`;
-  return isRateLimitResponse(resp)
+  return isRateLimitResponse(resp, body)
     ? new GitHubRateLimitError(message)
     : new Error(message);
 }
@@ -432,11 +442,69 @@ export function isNotFound(error: unknown): boolean {
   );
 }
 
-async function cancelResponseBody(resp: Response): Promise<void> {
+/** How much of a refusal's body is read to tell what kind of refusal it is. */
+const MAX_REFUSAL_BODY_BYTES = 4096;
+
+/**
+ * How long that body has to arrive. Reaching the end of it costs the check
+ * nothing: the classification falls back to what the status and the headers
+ * say, which is the whole of the evidence anywhere else. So this bounds an
+ * enrichment rather than an operation whose success anything waits on, and a
+ * refusal that never arrives cannot leave the check hanging on a connection
+ * the runner would otherwise hold open to the job's own limit.
+ */
+const REFUSAL_BODY_BUDGET_MS = 2_000;
+
+/** Reads up to {@link MAX_REFUSAL_BODY_BYTES} of `reader`, decoded. */
+async function drainRefusalBody(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<string> {
+  const chunks: Uint8Array[] = [];
+  let read = 0;
+  while (read < MAX_REFUSAL_BODY_BYTES) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    read += value.length;
+  }
+
+  const prefix = new Uint8Array(read);
+  let at = 0;
+  for (const chunk of chunks) {
+    prefix.set(chunk, at);
+    at += chunk.length;
+  }
+  return new TextDecoder().decode(prefix);
+}
+
+/**
+ * Takes a refusal's body, far enough to tell what kind of refusal it is. The
+ * text is evidence for {@link isRateLimitResponse} and reaches no message: an
+ * error names the status and the path, so a body holding an upstream request,
+ * a data URI or a page of markup is never copied into a log.
+ *
+ * Answers with the empty string wherever the body cannot be had — absent,
+ * unreadable, or slower than its budget — which leaves the status and the
+ * headers to classify the refusal on their own.
+ */
+async function readRefusalBody(resp: Response): Promise<string> {
+  const reader = resp.body?.getReader();
+  if (!reader) return "";
+
+  let expire: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<string>((resolve) => {
+    expire = setTimeout(() => resolve(""), REFUSAL_BODY_BUDGET_MS);
+  });
+
   try {
-    await resp.body?.cancel();
+    return await Promise.race([drainRefusalBody(reader), budget]);
   } catch {
-    // The GitHub status error remains the reported failure.
+    return "";
+  } finally {
+    clearTimeout(expire);
+    // Releases the connection, and settles a read still outstanding against a
+    // body that never arrived.
+    await reader.cancel().catch(() => {});
   }
 }
 
@@ -454,19 +522,19 @@ export async function githubGet<T>(path: string): Promise<T> {
 
     if (resp.ok) return resp.json();
 
-    await cancelResponseBody(resp);
+    const refusal = await readRefusalBody(resp);
     // A secondary limit is worth another attempt whatever status carries it,
     // which is why it is named here beside the statuses that are retried by
     // their own nature. A spent window is not, and an ordinary refusal will
     // not answer differently for being asked again.
     const worthRetrying = RETRYABLE_GITHUB_STATUSES.has(resp.status) ||
-      isSecondaryRateLimit(resp);
+      isSecondaryRateLimit(resp, refusal);
     if (
       !worthRetrying ||
       isOverPrimaryRateLimit(resp) ||
       attempt === GITHUB_GET_MAX_ATTEMPTS
     ) {
-      throw githubApiError(resp, path, "GET");
+      throw githubApiError(resp, path, "GET", refusal);
     }
 
     await sleep(githubRetryDelayMs(attempt, resp));
@@ -485,8 +553,7 @@ export async function githubPost<T>(
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
-    await cancelResponseBody(resp);
-    throw githubApiError(resp, path, "POST");
+    throw githubApiError(resp, path, "POST", await readRefusalBody(resp));
   }
   return resp.json();
 }
@@ -501,8 +568,7 @@ export async function githubPatch<T>(
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
-    await cancelResponseBody(resp);
-    throw githubApiError(resp, path, "PATCH");
+    throw githubApiError(resp, path, "PATCH", await readRefusalBody(resp));
   }
   return resp.json();
 }
@@ -805,9 +871,11 @@ export async function downloadAndExtractArtifact(
       const failure =
         `GitHub artifact download ${resp.status}${statusText}: ${artifactPath}`;
       recordFailure(attempt, failure);
-      const rateLimited = isRateLimitResponse(resp);
+      const rateLimited = isRateLimitResponse(
+        resp,
+        await readRefusalBody(resp),
+      );
       const overPrimaryLimit = isOverPrimaryRateLimit(resp);
-      await cancelResponseBody(resp);
       // A limit is the one refusal this must not report as a missing artifact:
       // a caller told the artifact is absent holds its metric against no
       // baseline, which is a verdict about coverage rather than about GitHub.
