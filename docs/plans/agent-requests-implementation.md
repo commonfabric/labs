@@ -330,6 +330,8 @@ and a result link, and observes `pending: false` and `result` on the node.
       8. on start, and on each index change, take any `claimed` or `running`
          record whose `leaseUntil` has passed: re-queue it when its `attempts`
          is one, and fail it as `RUNNER_LOST` when its `attempts` is two.
+         A durable cancellation request instead ends the expired record as
+         `cancelled`; another runner's live lease remains untouched.
 - [x] Error taxonomy — `packages/runner/src/agent-error-codes.ts` exporting
       the codes `INVALID_INPUT`, `LIMIT_REACHED`, `PROVIDER_FAILURE`,
       `RUNNER_LOST`, `CANCELLED`, `REFUSED`, shared with the verb-refusal
@@ -361,17 +363,15 @@ and a result link, and observes `pending: false` and `result` on the node.
       (`structured_result_return`). The runner's executor allows it beside a
       request's tools and validates with `asCell` positions relaxed. The
       manual `dev-local` run completes at the default `enforce-strict`.
-- [x] Index entries keyed by record id. The builtin's index write used a
-      plain `push`, which mints its element from the list length the
-      transaction read; two index writes that each read the list before the
-      other landed wrote one element twice and listed one record in both
-      slots, leaving the other record for no runner to find. The entry is now
-      `entries.elementById(recordId)` added with `addUnique`.
-- [ ] The harness mode an agent run uses. Under `enforce-strict` a
+- [x] Index entries keyed by record id. `entries.elementById(recordId)`
+      added with `addUnique` gives concurrent index writes distinct entries
+      without deriving their identities from the shared list length.
+- [x] The runner keeps the harness default, `enforce-strict`. A
       `context`-role run is refused every tool but `submit_result`, reads
-      included, so a run that searches Loom or describes a handle needs
-      `enforce-explicit`. The runner passes no mode today and takes the
-      harness default.
+      included. A run that searches Loom or describes a handle requires an
+      explicit `CF_HARNESS_CFC_ENFORCEMENT_MODE=enforce-explicit` override;
+      the demonstration must document that limitation when deciding whether
+      to enable `agentBuiltin` by default.
 - [x] Observed Loom rows reach the result writer. Each admitted row is
       registered in the run's handle table as a held referent
       (`HarnessHandleTable.referents`, token `cfh:v:<suffix>`, with its

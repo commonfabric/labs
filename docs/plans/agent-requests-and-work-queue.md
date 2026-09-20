@@ -268,8 +268,10 @@ validates against the schema with its `asCell` positions relaxed
 (`relaxAsCellPositions`), the same relaxation the writer applies, and a handle
 token in the submitted value stays a token for the writer to resolve. Under
 `enforce-strict` a `context` run is refused its read tools as well, so a run
-that is to search or describe a handle runs at `enforce-explicit`; which mode
-an agent run gets by default is an open setting of the runner.
+that is to search or describe a handle requires the explicit
+`CF_HARNESS_CFC_ENFORCEMENT_MODE=enforce-explicit` override. The runner keeps
+the harness's `enforce-strict` default; the demonstration's flag-default
+assessment must account for this read-tool limitation.
 
 **Every handle the result references becomes a link.** Wherever the result
 names a handle the run holds — as a token, as the canonical link string the
@@ -741,7 +743,9 @@ after its claim commits leaves a `claimed` or `running` record with a
 the next runner to see either re-queues it once. The bound is the record's
 `attempts` count, which every claim increments in the same commit: an expired
 record with `attempts` of one goes back to `queued`, and one with `attempts`
-of two is failed (AH-LIFE-5: bounded, visible, and only where replay is safe —
+of two is failed. A durable cancellation request ends an expired record as
+`cancelled` instead of re-queuing or failing it; a live lease stays with its
+runner (AH-LIFE-5: bounded, visible, and only where replay is safe —
 a run that had not yet started a side effect). The lease is
 renewed on every durable write the run makes, so it measures silence rather
 than time since start — the trap
