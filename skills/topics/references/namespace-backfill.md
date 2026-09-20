@@ -17,10 +17,11 @@ number the namespace holds for it.
 while it is off a Topic publishes no `shortName` whether or not it stores one.
 Turning it on is a pattern update of its own and the team's decision, not an
 agent's. So every `shortName` read below is what this procedure looks like once
-numbers are shown; until then the board's `namesTable` says which Topics have a
-number and what it is, and a Topic's own durable input says what that Topic
-stores. `deno task cf cell get /top/<n> title` answers either way, because a
-member's address is the namespace's and not the Topic's.
+numbers are shown. Until then the namespace says which Topics it has numbered
+and what each number is, and only a Topic's own durable input says what that
+Topic stores — the two are different questions, and "Which read answers what"
+below gives each one its command. `deno task cf cell get /top/<n> title` answers
+either way, because a member's address is the namespace's and not the Topic's.
 
 **This procedure has not been rehearsed against a clone in this shape.** The two
 source legs below are unchanged, and were measured twice —
@@ -217,12 +218,15 @@ which the verb works. It is untidy rather than damaging, and step 2 before step
 **What an operator sees**, in the order they would look:
 
 ```bash
-# the step's own report, run after run
+# the step's own report, run after run. While numbers are hidden it reads every
+# Topic as storing nothing, so `named` is empty and `pending` holds them all:
+# what moves between runs is `assigned`.
 deno task cf piece call --cell "$TOPICS_BOARD" backfillNames '{"agentName":"Sol"}'
-# -> { "assigned": [], "named": ["1"], "pending": ["2"] }
+# -> { "assigned": [], "named": [], "pending": ["1","2"] }
 
-# the board's survey: the row for 2 carries no shortName
-deno task cf cell get "$TOPICS_BOARD" index --step --select @,title,shortName
+# what Topic 2 actually stores, which no switch gates
+deno task cf cell get --cell "$TOPIC2" shortName --input
+# -> (absent, for a Topic that has not stored one)
 
 # and the number addresses the Topic anyway
 deno task cf cell get /@<space>/top/2 title
@@ -233,21 +237,54 @@ that Topic's, on a Topic that does not yet show it. No content is touched, no
 number is lost or reused, the board serves every Topic either way, and the
 repair is another run of the step. Nothing has to be undone.
 
-### Audit which Topics still need it
+### Which read answers what
 
-The number a Topic reports is the number it stores, so the board's own index is
-the survey:
+Every read below is named somewhere in this procedure, and they do not all
+survive `SHOW_TOPIC_NUMBERS` being off. The switch gates a Topic's PUBLISHED
+`shortName`, so every read that goes through the publication reads the same
+absence for a Topic storing a number and one storing none. The reads that go
+through the namespace, or through a Topic's own durable input, are untouched by
+it.
+
+| Read                            | Numbers hidden                                                                                       | Numbers shown                     |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `backfillNames` → `assigned`    | what this run wrote into the namespace                                                               | the same                          |
+| `backfillNames` → `named`       | always empty                                                                                         | the Topics already storing theirs |
+| `backfillNames` → `pending`     | every listed Topic, every run                                                                        | the Topics this run asked         |
+| board `index` row's `shortName` | absent for every Topic                                                                               | the number that Topic stores      |
+| board `names` map               | which Topics the namespace has numbered, and what each number is — never whether the Topic stores it | the same                          |
+| Topic's `shortName` input       | the number that Topic stores                                                                         | the same                          |
+| `recordName` on one Topic       | `wrote` says whether it had to write                                                                 | the same                          |
+| `/@<space>/top/<n>`             | resolves to the Topic                                                                                | the same                          |
+
+So while numbers are hidden, **the board's index answers nothing about storage**
+— it is the read to skip, not the survey — and there is no board-wide read of
+what Topics store. The two that work are one per Topic:
+
+```bash
+# what this Topic stores. No switch gates the durable input.
+deno task cf cell get --cell "$TOPIC" shortName --input
+
+# or ask the Topic, which answers for itself
+deno task cf piece call --cell "$TOPIC" recordName '{"name":"<n>"}'
+# -> { "name": "<n>", "wrote": false }   already stored; nothing written
+# -> { "name": "<n>", "wrote": true }    it had none and now stores this
+```
+
+Board-wide, the namespace is what can be surveyed, and it answers the other half
+of the question:
+
+```bash
+deno task cf cell get "$TOPICS_BOARD" names
+# -> { "1": {}, "2": {} }   the Topics the namespace has numbered
+```
+
+Once numbers are shown, the board's index becomes the one bounded read that
+answers both halves at once, because a row's `shortName` is then the number its
+Topic stores:
 
 ```bash
 deno task cf cell get "$TOPICS_BOARD" index --step --select @,title,shortName
-```
-
-A row with no `shortName` is a Topic with no stored number. To read one Topic's
-number without depending on its result having materialized, read the durable
-input:
-
-```bash
-deno task cf cell get --cell "$TOPIC" shortName --input
 ```
 
 Audit only Topics whose source has already been migrated. Input reads use the

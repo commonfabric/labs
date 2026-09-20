@@ -20,10 +20,12 @@ its Topic's title, out of the number the Topic stores and publishes as
 `addTopic` allocates the number, passes it into the Topic it creates, and
 returns it as `name` beside the created `topic`. For the Topics already on the
 board, the namespace is what to read: the board's `namesTable` holds one row per
-named Topic, carrying `name` and the Topic itself as `member`, and `names` holds
-the same pairing as a map from name to Topic. One Topic's own stored number is
-read from its durable input, `cf cell get --cell "$TOPIC" shortName --input`,
-which the display switch does not gate.
+Topic the NAMESPACE has numbered, carrying `name` and the Topic itself as
+`member`, and `names` holds the same pairing as a map from number to Topic.
+Neither says whether that Topic stores its number; that is a separate question
+and a separate read. One Topic's own stored number is read from its durable
+input, `cf cell get --cell "$TOPIC" shortName --input`, which the display switch
+does not gate.
 
 ```bash
 deno task cf cell get --cell "$TOPICS_BOARD" namesTable --step
