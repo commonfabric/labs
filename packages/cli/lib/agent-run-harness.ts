@@ -127,8 +127,9 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
   const resultSchema = typeof requestedSchema === "boolean"
     ? requestedSchema
     : cloneSchemaMutable(requestedSchema, true);
+  // The same ceiling bounds what the run observes and what its result carries.
   const maxConfidentiality = record.maxConfidentiality === undefined
-    ? undefined
+    ? [{ type: CFC_ATOM_TYPE.User, subject: options.requester }]
     : cloneIfNecessary(record.maxConfidentiality, { frozen: false });
   const inputs = record.inputs as Record<string, Cell<unknown>>;
   // A request naming no tools runs with the surface its session backs.
@@ -156,9 +157,8 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
     options.identityKeyPath,
     "--fabric-space",
     run.link.space,
-    ...(maxConfidentiality !== undefined
-      ? ["--max-confidentiality", JSON.stringify(maxConfidentiality)]
-      : []),
+    "--max-confidentiality",
+    JSON.stringify(maxConfidentiality),
     ...(options.loomRetrievalConfigPath !== undefined
       ? ["--loom-retrieval-config", options.loomRetrievalConfigPath]
       : []),
@@ -210,8 +210,7 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
             throw error;
           }
         },
-        runTranscript: (transcriptOptions) =>
-          loop.runTranscript(transcriptOptions),
+        runTranscript: loop.runTranscript.bind(loop),
       };
     },
   };
@@ -258,10 +257,7 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
       structuredResult,
       resultSchema,
       observedHandles,
-      // A request naming no ceiling gets the requester's own view, which
-      // the first take states as the requester's `User` atom.
-      maxConfidentiality: (maxConfidentiality ??
-        [{ type: CFC_ATOM_TYPE.User, subject: options.requester }]) as never,
+      maxConfidentiality: maxConfidentiality as never,
       cause: { agentRunResult: record.requestHash },
     });
     return { outcome: "completed", result: written.link, report };
