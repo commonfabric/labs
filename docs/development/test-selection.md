@@ -238,7 +238,7 @@ rather than a setting to fix.
 | `FULL_LANE_BOUND_SECONDS` | 600 | seconds | chosen | Up when the run on `main` uses more jobs than it needs; down when `main` takes too long to say something broke. |
 | `FULL_LANE_BUDGET_SECONDS` | 530 | seconds | derived | Nothing edits this. It is the full run's bound less the same prologue and safety margin a pull request's lane pays, since a lane of either run is the same job doing the same setup on the same runner. |
 | `FULL_RUN_LABEL` | ci: full | a label | chosen | Not a quantity. Change it only if the label collides with one the repository already uses for something else. |
-| `UNMEASURED_COST_SECONDS` | 1 | seconds | chosen | Up when a lane holding new tests runs long; down when it finishes early. It is reached for only by a suite with no measured test at all, since a suite that has any charges an unmeasured one what its middle test costs. |
+| `UNMEASURED_COST_SECONDS` | 1 | seconds | chosen | Up when a lane holding new tests runs long; down when it finishes early. It is reached for only by a suite with no measured unit at all, since a suite that has any charges an unmeasured one the larger of its units' mean and their ninetieth percentile. |
 | `VALUE_FLOOR` | 0.05 | score | chosen | Up when the cheap tail is not being swept up; down when it crowds out tests with a record of catching things. |
 | `WEIGHT_PROVEN` | 0.55 | share of the score | chosen | Up when a record of catching things should count for more. The three weights are shares of one score, so what this gains the other two lose. |
 | `WEIGHT_BREADTH` | 0.25 | share of the score | chosen | Up when a test that several distinct sources have hit should count for more; down when breadth is mostly telling you about the environment rather than the test. |
@@ -1135,6 +1135,16 @@ of the identity being the reported name:
   `tasks/test-identity-aliases/`. Most renames cost nothing, because
   most tests have never caught anything; a rename of a test that has is
   worth the line.
+
+Until a run records it, a new test file is charged what
+[`standIn`](../../tasks/test-selection/census.ts) works out from the
+measured units of the suite around it: the larger of their mean and their
+ninetieth percentile. That is deliberately above what most units of a
+suite cost, since a lane packed under what its work takes is one killed at
+its bound, where one packed over it finishes early. A change adding many
+files at once therefore reads as filling a lane well before it does, and
+the lane summary says how many seconds of its projection stand on units
+nothing has measured.
 
 A new test *surface* — a new job, script, or harness — needs wiring, which
 [the record guide](test-records.md#covering-a-new-test-surface) covers.
