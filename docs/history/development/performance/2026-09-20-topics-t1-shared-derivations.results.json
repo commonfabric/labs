@@ -302,5 +302,13 @@
         "elapsedMs": 78.51837499999965
       }
     }
-  ]
+  ],
+  "boardDemandComparison": {
+    "what": "The headless probe's cases, run on both arms and compared on counts.",
+    "command": "scripts/topics-computation-cost.ts, --small and a topics-32 / thread filter",
+    "casesCompared": 44,
+    "casesWhoseCountsDiffer": 0,
+    "comparedOn": "every recorded field except elapsedMs and the memory gauges (heapUsedBytes, heapTotalBytes, heapSizeLimitBytes, rssBytes, externalBytes, memory), which vary per run and are not counts",
+    "establishes": "that nothing this stage changed reached the four lifts the board demands; it does not establish that the topic body reads less, because the probe instantiates no pattern body"
+  }
 }

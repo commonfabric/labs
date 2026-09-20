@@ -2517,6 +2517,13 @@ export default pattern<TopicInput, TopicOutput>(
       titleUpdatedAt,
     });
 
+    // This keeps its own pass over the predicate, and that is the whole of
+    // the sharing left to do: the only other reader is `presentCommentCountOf`
+    // above, which has to stay a module-scope lift because the board demands
+    // it. Two readers is the floor a shared intermediate could reach, so one
+    // would add a node and remove no work — and widening the lift to hand back
+    // records instead of a count would broaden what the board reads, which is
+    // the thing this stage is not allowed to do.
     const commentsView = computed(() =>
       comments.get().filter((c) => c.removedAt === undefined).toSorted((a, b) =>
         a.sentAt - b.sentAt

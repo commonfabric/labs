@@ -111,13 +111,17 @@ Four things were compared:
   read reaching the board.
 - **The topic's own argument and result contract**, unchanged; nothing crossing
   the board/topic boundary moved.
-- **The headless probe's 44-case read accounting**, byte-identical across the
-  two arms in every non-timing field. This is the weakest of the four and is
-  recorded as a consistency check rather than as proof: the probe starts the
-  four demanded lifts and instantiates no pattern body, which is why a separate
-  instrument was needed above, so an unchanged probe reading shows that nothing
-  this stage did leaked into the demanded lifts — not that the body's own
-  demand is narrower. The first item is what shows that.
+- **The headless probe's 44 cases, run on both arms**, with every count
+  identical: 10 cases from `--small` and 34 from a 32-topic and thread filter,
+  0 differing. The comparison is on counts, so it sets aside `elapsedMs` and
+  the memory gauges, which vary per run and measure nothing this stage changes.
+  This is the weakest of the four and is a consistency check rather than proof:
+  the probe starts the four demanded lifts and instantiates no pattern body,
+  which is why a separate instrument was needed above, so an unchanged probe
+  reading shows that nothing this stage did leaked into the demanded lifts —
+  not that the body's own demand is narrower. The first item is what shows
+  that. The comparison's terms and result are in the extract under
+  `boardDemandComparison`.
 
 ## Hoist movement
 
