@@ -8,7 +8,50 @@ const { truncateLabel } = XSchedulerGraph.accessForTestingOnly;
 /** A space id long enough that no label holding it fits the default bound. */
 const SPACE = "did:key:z6MkabcdefghijkLMNOP";
 
+type LayoutNodes = XSchedulerGraph["accessForTestingOnly"]["layoutNodes"];
+type LayoutNode = LayoutNodes extends Map<string, infer N> ? N : never;
+
+/** A laid-out node for `id`, labeled the way the layout labels one. */
+function layoutNode(id: string, parentId?: string): LayoutNode {
+  return {
+    id,
+    label: truncateLabel(id),
+    fullId: id,
+    type: "computation",
+    x: 0,
+    y: 0,
+    width: 140,
+    height: 36,
+    isDirty: false,
+    isPending: false,
+    parentId,
+  };
+}
+
 describe("XSchedulerGraph", () => {
+  describe("instance members", () => {
+    describe("#renderParentGroups()", () => {
+      it("returns a group labeled with the prefix and the entity tail of a parent whose own label holds no path", () => {
+        // The parent's own label is `computation:...DDDD`, which holds no `/`
+        // and so would be cut from its end. The group's label is cut from the
+        // parent's full id.
+
+        const parentId = `computation:${SPACE}/of:fid1:AAAABBBBCCCCDDDD/value`;
+        const childId = `sink:${SPACE}/of:fid1:AAAABBBBCCCCDDDD/value`;
+        const graph = new XSchedulerGraph();
+        graph.accessForTestingOnly.layoutNodes = new Map([
+          [parentId, layoutNode(parentId)],
+          [childId, layoutNode(childId, parentId)],
+        ]);
+
+        const groups = graph.accessForTestingOnly.renderParentGroups();
+
+        expect(groups.length).toBe(1);
+        expect(groups[0].values).toContain("computation:...DDDD");
+      });
+    });
+  });
+
   describe("static members", () => {
     describe("#truncateLabel()", () => {
       // Each expectation is the whole label the method assembles, so a case
@@ -63,6 +106,12 @@ describe("XSchedulerGraph", () => {
             ),
           ).toBe("sink:...DDDD/some...");
         });
+
+        it("returns the whole assembled label when it is exactly `maxLen` long", () => {
+          expect(
+            truncateLabel(`sink:${SPACE}/of:fid1:AAAABBBBCCCCDDDD/value`, 18),
+          ).toBe("sink:...DDDD/value");
+        });
       });
 
       describe("given no schemed entity segment", () => {
@@ -88,7 +137,7 @@ describe("XSchedulerGraph", () => {
       describe("given a label whose assembled form is longer than `maxLen`", () => {
         // The prefix and the entity tail are never cut, so the path takes the
         // whole cut. `sink:...DDDD` is 12 characters long and `action:...HHHH`
-        // is 14, which is what places each `maxLen` below.
+        // is 14. Each `maxLen` below is chosen against those two lengths.
 
         it("returns the prefix and the entity tail alone when the two are exactly `maxLen` long", () => {
           expect(
@@ -138,13 +187,6 @@ describe("XSchedulerGraph", () => {
               `computation:${SPACE}/of:fid1:AAAABBBBCCCCDDDD/value`,
             ),
           ).toBe("computation:...DDDD");
-        });
-
-        it("returns the prefix and the entity tail of a label that is already in assembled form", () => {
-          expect(truncateLabel("sink:...DDDD/value", 12)).toBe("sink:...DDDD");
-          expect(truncateLabel("action:...HHHH/count", 12)).toBe(
-            "action:...HHHH",
-          );
         });
       });
 
