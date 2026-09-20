@@ -1,5 +1,5 @@
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
-import { toCompactDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 import { getLogger } from "@commonfabric/utils/logger";
 import {
   isObjectNotArray,
@@ -582,9 +582,7 @@ export class Client {
           // reconnect that hits it gives up rather than retrying a doomed
           // handshake.
           const error = permanentProtocolError(
-            `memory flag mismatch: client=${
-              toCompactDebugString(expectedFlags)
-            } server=${toCompactDebugString(helloOk.flags)}`,
+            debugStr`memory flag mismatch: client=$quote,long${expectedFlags} server=$quote,long${helloOk.flags}`,
           );
           this.#helloPending.reject(error);
           return;

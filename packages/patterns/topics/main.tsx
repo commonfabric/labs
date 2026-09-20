@@ -390,6 +390,37 @@ const crossrefTable = lift(
 );
 
 /**
+ * The instant a row sorts by: its published `lastActivityAt`, or its
+ * `createdAt` when it has published none.
+ *
+ * `lastActivityAt` is DERIVED, so it exists only once the topic has run. A
+ * topic filed headlessly and never opened publishes none, and
+ * {@link TopicIndexRow} coalesces that absence to `0`. Ordering on that `0`
+ * puts the newest topic on the board beneath every topic that has ever run —
+ * the opposite of what a board sorted by recency is for, and invisible,
+ * because the row is present and merely last.
+ *
+ * `createdAt` is the one instant a cold row always carries: the Topic pattern
+ * defaults its input and publishes that path unconditionally, which is why the
+ * demand declares it required. Falling back to it orders a cold topic by when
+ * it was filed, which is what a reader means by recency for a topic that has
+ * had no activity since.
+ *
+ * The absence arrives as `0` rather than `undefined`, so this tests the value
+ * and does not merely coalesce with `??`. A published `lastActivityAt` is a max
+ * that includes `createdAt`, so it is never `0` for a topic that has run, and
+ * the fallback cannot mask a real one.
+ */
+export function activityOrderOf(
+  row: {
+    lastActivityAt: number | Default<0> | undefined;
+    createdAt: number;
+  },
+): number {
+  return (row.lastActivityAt ?? 0) || row.createdAt;
+}
+
+/**
  * The board's cards, most recently active first.
  *
  * Sorts and returns the topics themselves. It does not build a card object per
@@ -399,11 +430,13 @@ const crossrefTable = lift(
  * registered and the old ones torn down — for topics whose content never
  * changed. Passing a topic through keeps the identity it already has.
  *
- * The CONSTRAINT declares the one field the sort reads, so ordering the board
+ * The CONSTRAINT declares the two fields the sort reads, so ordering the board
  * expands no topic; the type parameter hands back what it was given, which is
  * the topics themselves. Those are two separate statements, and a cast could
  * only conflate them — the one here used to claim a card-shaped view the sort
  * never produced, which also hid `lastActivityAt`'s absence from the caller.
+ * Both fields are already on the demand, so reading the second costs no read
+ * the first did not already take.
  *
  * Each card still bounds its own read: the elements are links, and the mapped
  * sub-pattern's argument schema is shrunk to the fields its body renders. That
@@ -411,10 +444,14 @@ const crossrefTable = lift(
  * piece holding older topics is updated against.
  */
 const cardsByActivity = lift(
-  <T extends { lastActivityAt: number | Default<0> | undefined }>(
+  <
+    T extends {
+      lastActivityAt: number | Default<0> | undefined;
+      createdAt: number;
+    },
+  >(
     { rows }: { rows: T[] | Default<[]> },
-  ): T[] =>
-    rows.toSorted((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0)),
+  ): T[] => rows.toSorted((a, b) => activityOrderOf(b) - activityOrderOf(a)),
 );
 
 /**

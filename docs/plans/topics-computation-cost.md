@@ -141,9 +141,9 @@ implementation and prototypes can begin earlier.
       hold `boardCrossrefs` as a link to the board's cross-reference table;
       older topics may not, which step 1's inventory records. Decide between
       carrying the handle through that link, which changes the board's published
-      `crossrefs` result, and a new topic input, which needs the one-time
-      link-bind onto every existing topic that the `mentionable` and
-      `boardNames` inputs describe. Classify the choice under step 1 of the
+      `crossrefs` result, and a new topic input, which needs a one-time
+      link-bind onto every existing topic that is to hold it. Classify the
+      choice under step 1 of the
       [stored-state procedure](#stored-state-and-deployment-procedure), and list
       a link-bind in the step 7 manifest. Retain existing public results through
       a compatibility bridge where needed; do not assume adding a required field

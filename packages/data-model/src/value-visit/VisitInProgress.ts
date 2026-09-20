@@ -2,7 +2,7 @@ import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
 import { type Primitive } from "@commonfabric/utils/types";
 
-import { codecOf, NULL_LIVE_ENVIRONMENT } from "@/codec-common/index.ts";
+import { codecOf, NULL_LIVE_ENVIRONMENT } from "@/codec-common";
 import type {
   FabricArrayPlus,
   FabricContainerValuePlus,

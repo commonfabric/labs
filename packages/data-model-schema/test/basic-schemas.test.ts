@@ -5,7 +5,7 @@ import type { JSONSchemaTypes } from "@commonfabric/api";
 
 import { type FabricValue, isDeepFrozen } from "@commonfabric/data-model";
 
-import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@commonfabric/data-model/fabric-primitives/for-testing-only";
+import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@commonfabric/data-model/for-testing-only";
 import { emptySchemaObject, schemaForValueType } from "@/basic-schemas.ts";
 import { isInternedSchema } from "@/schema-intern.ts";
 

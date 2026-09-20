@@ -120,6 +120,7 @@ import {
   executeResolvedCallable,
   type InvocationOutcome,
   runtimeErrorLog,
+  VerbInputValidationError,
 } from "./callable.ts";
 import {
   type CellSelection,
@@ -413,6 +414,14 @@ export interface ResolvedPieceCallable extends CallableResolution {
    * Only the help page pulls it. A dispatch needs nothing an author wrote.
    */
   declaredProse?: () => Promise<DeclaredVerbProse | undefined>;
+
+  /**
+   * The canonical address of the piece called, present when the target named
+   * a path and the piece was reached through the link stored there. The
+   * address the caller wrote names the holder of that link, so this is the
+   * one that names what ran.
+   */
+  linkedPiece?: string;
 }
 
 export interface PieceCallableDependencies extends CallableExecutionDeps {
@@ -2365,15 +2374,61 @@ async function tryResolveLivePieceToolCallable(
 async function loadPieceForCallables(
   config: PieceConfig,
   deps: PieceCallableDependencies,
-  { prepareDispatch }: { prepareDispatch: boolean },
+  { prepareDispatch, followPathToPiece = false }: {
+    prepareDispatch: boolean;
+
+    /**
+     * Whether a path left after the piece is followed, through the link
+     * stored there, to the piece it names. Off, such a path is refused.
+     */
+    followPathToPiece?: boolean;
+  },
 ): Promise<{
   pieces: any;
   piece: any;
   space: MemorySpace;
-  resolvedConfig: Awaited<ReturnType<typeof resolvePieceConfigWithPieces>>;
+  resolvedConfig: PieceConfig;
+
+  /** Whether the piece was reached through a link stored at a path. */
+  followedLink: boolean;
 }> {
-  const pieces = await (deps.loadPieces ?? loadPieces)(config);
-  const resolvedConfig = await resolvePieceConfigWithPieces(config, pieces);
+  const load = deps.loadPieces ?? loadPieces;
+  let pieces = await load(config);
+  let resolvedConfig: PieceConfig;
+  let followedLink = false;
+  if (followPathToPiece) {
+    const target = await resolvePieceTargetWithPieces(
+      config,
+      config.piecePath ?? [],
+      pieces,
+    );
+    if (target.path.length === 0) {
+      resolvedConfig = target.config;
+    } else {
+      const linked = await resolveLinkedPiece(pieces, target, deps);
+      followedLink = true;
+      // The embedded space named the space the position sits in, which the
+      // connection above already checked; the linked piece's space comes
+      // from the stored link, so nothing embedded is left to agree with.
+      const { embeddedSpaces: _checked, ...rest } = target.config;
+      resolvedConfig = {
+        ...rest,
+        space: linked.space,
+        piece: linked.piece,
+        pieceScope: linked.scope,
+      };
+      if (linked.space !== (pieces.getSpace?.() ?? config.space)) {
+        // A controller serves one space, so a piece in another one is
+        // reached over a connection of its own, opened as the same
+        // identity. Whether that identity may call the piece is the target
+        // space's ACL to decide, as for a call addressed there directly.
+        await pieces.dispose?.();
+        pieces = await load(resolvedConfig);
+      }
+    }
+  } else {
+    resolvedConfig = await resolvePieceConfigWithPieces(config, pieces);
+  }
 
   const piece = await (deps.loadPiece
     ? deps.loadPiece(
@@ -2397,8 +2452,161 @@ async function loadPieceForCallables(
         resolvedConfig.pieceScope,
       ),
     ));
-  const space = pieces.getSpace?.() ?? config.space;
-  return { pieces, piece, space, resolvedConfig };
+  const space = pieces.getSpace?.() ?? resolvedConfig.space;
+  return { pieces, piece, space, resolvedConfig, followedLink };
+}
+
+/**
+ * The phrase every refusal of {@link resolveLinkedPiece} carries when the
+ * addressed position holds no pointer to a piece. A caller tells "no pointer
+ * here" from every other failure by it.
+ */
+export const NAMES_NO_PIECE = "names no piece";
+
+/**
+ * A `cf piece call` target whose path does not lead to a piece: the position
+ * holds no link, or the link it holds names a cell inside a piece.
+ */
+export class LinkedPieceRefusal extends Error {}
+
+/** Helper for {@link resolveLinkedPiece}, which compares two cell addresses. */
+function sameCellAddress(a: NormalizedFullLink, b: NormalizedFullLink) {
+  return a.space === b.space && a.id === b.id &&
+    (a.scope ?? "space") === (b.scope ?? "space") &&
+    a.path.length === b.path.length &&
+    a.path.every((segment, index) => segment === b.path[index]);
+}
+
+/**
+ * Helper for {@link resolveLinkedPiece}, which follows every stored link at
+ * `cell` with the runtime's own link resolution. Resolution reads the local
+ * replica and stops at a document that has not arrived, so each round loads
+ * the document reached and resolves again, until a round moves nowhere.
+ */
+async function resolveThroughStoredLinks(
+  cell: Cell<unknown>,
+): Promise<Cell<unknown>> {
+  let current = cell;
+  // A round that moves ends on a document the rounds so far had not loaded,
+  // and a chain of stored links crosses finitely many; once all of a cycle's
+  // documents are local, the resolution itself throws on it.
+  while (true) {
+    await current.sync();
+    const next = current.resolveAsCell();
+    if (
+      sameCellAddress(
+        next.getAsNormalizedFullLink(),
+        current.getAsNormalizedFullLink(),
+      )
+    ) return next;
+    current = next;
+  }
+}
+
+/**
+ * Helper for {@link resolveLinkedPiece}, which says whether the document
+ * `cell` sits in is `result` or a document `result`'s piece owns. Setup writes
+ * a `result` back-link onto each document a piece owns, and that is what is
+ * read here.
+ */
+async function isDocumentOf(
+  cell: Cell<unknown>,
+  result: Cell<unknown>,
+): Promise<boolean> {
+  const owner = { ...result.resolveAsCell().getAsNormalizedFullLink() };
+  const sameDocument = (link: NormalizedFullLink) =>
+    sameCellAddress({ ...link, path: [] }, { ...owner, path: [] });
+  const link = cell.getAsNormalizedFullLink();
+  const document = cell.runtime.getCellFromLink(
+    { ...link, path: [], schema: undefined },
+    undefined,
+    cell.tx,
+  );
+  await document.sync();
+  const backLink = getMetaLink(document, "result");
+  return sameDocument(link) ||
+    (backLink !== undefined && sameDocument(backLink));
+}
+
+/**
+ * Resolves the piece that the position `target.path` inside `target.config`'s
+ * piece links to, in whichever space the stored link names.
+ *
+ * @throws LinkedPieceRefusal when the position holds no link to another
+ * document or links to a document that is no piece, carrying
+ * {@link NAMES_NO_PIECE}, or when the link it holds names a cell inside a
+ * piece.
+ */
+async function resolveLinkedPiece(
+  pieces: PiecesController,
+  target: ResolvedPieceTarget,
+  deps: PieceCallableDependencies,
+): Promise<{ space: string; piece: string; scope?: CellScope }> {
+  const { config, path } = target;
+  const spelled = `"${path.join("/")}" on piece ${config.piece}`;
+  const holder = deps.loadPiece
+    ? await deps.loadPiece(pieces, config.piece, config.pieceScope)
+    : new PieceController(
+      pieces,
+      await pieces.getPieceCell(
+        config.piece,
+        false,
+        undefined,
+        config.pieceScope,
+      ),
+    );
+  const result: Cell<unknown> = await holder.result.getCell();
+  // The parent resolves first, so that what is compared below is the last
+  // segment alone: links on the way to the position are the holder's own
+  // plumbing, and only one AT the position is a pointer.
+  const parent = await resolveThroughStoredLinks(
+    path.length > 1 ? result.key(...path.slice(0, -1)) : result,
+  );
+  const position = parent.key(path[path.length - 1]);
+  const resolved = await resolveThroughStoredLinks(position);
+  const link = resolved.getAsNormalizedFullLink();
+  // A piece is the document its pattern identity is written on.
+  const piece = pieceId(resolved);
+  if (
+    link.path.length > 0 || piece === undefined ||
+    getPatternIdentityRef(resolved) === undefined
+  ) {
+    const ending = `\`cf piece call\` takes a piece, or a path that links ` +
+      `to one.`;
+    // A link that stays within the holder is its own plumbing — a result
+    // field reading an argument or an internal cell — and what sits at the
+    // end of it is the holder's value, so it points nowhere either.
+    if (
+      sameCellAddress(link, position.getAsNormalizedFullLink()) ||
+      await isDocumentOf(resolved, result)
+    ) {
+      throw new LinkedPieceRefusal(
+        `The path ${spelled} ${NAMES_NO_PIECE}: no link is stored there. ` +
+          ending,
+      );
+    }
+    // A document a piece owns, reached at its root, is one of that piece's
+    // cells as much as a path into its result is.
+    if (
+      link.path.length > 0 || getMetaLink(resolved, "result") !== undefined
+    ) {
+      throw new LinkedPieceRefusal(
+        `The path ${spelled} links to a cell inside a piece ` +
+          `(${[link.id, ...link.path].join("/")} in ${link.space}), not ` +
+          `to a piece. ${ending}`,
+      );
+    }
+    throw new LinkedPieceRefusal(
+      `The path ${spelled} ${NAMES_NO_PIECE}: the document it links to is ` +
+        `not a piece. ${ending}`,
+    );
+  }
+  const scope = link.scope;
+  return {
+    space: link.space,
+    piece,
+    ...(scope !== undefined && scope !== "space" && { scope }),
+  };
 }
 
 /**
@@ -2452,12 +2660,40 @@ async function resolvePieceCallable(
   callableName: string,
   deps: PieceCallableDependencies = {},
 ): Promise<ResolvedPieceCallable> {
-  const { pieces, piece, space, resolvedConfig } = await loadPieceForCallables(
-    config,
-    deps,
-    { prepareDispatch: true },
+  const { pieces, piece, space, resolvedConfig, followedLink } =
+    await loadPieceForCallables(
+      config,
+      deps,
+      { prepareDispatch: true, followPathToPiece: true },
+    );
+  const resolution = await resolveCallableOnPiece(
+    { pieces, piece, space, resolvedConfig },
+    callableName,
   );
+  if (!followedLink) return resolution;
+  return {
+    ...resolution,
+    linkedPiece: canonicalAddress({
+      id: resolvedConfig.piece,
+      space,
+      scope: resolvedConfig.pieceScope ?? "space",
+    }),
+  };
+}
 
+/**
+ * Helper for {@link resolvePieceCallable}, which resolves `callableName` on a
+ * piece already loaded for dispatch.
+ */
+async function resolveCallableOnPiece(
+  { pieces, piece, space, resolvedConfig }: {
+    pieces: any;
+    piece: any;
+    space: MemorySpace;
+    resolvedConfig: PieceConfig;
+  },
+  callableName: string,
+): Promise<ResolvedPieceCallable> {
   const onResultCell = await tryResolvePieceCallableAt(
     piece,
     pieces,
@@ -2496,7 +2732,7 @@ async function resolvePieceCallable(
     (await tryResolvePieceHandler(piece, pieces, space, callableName));
   if (!resolved) {
     throw new Error(
-      `Callable "${callableName}" not found on piece ${config.piece}`,
+      `Callable "${callableName}" not found on piece ${resolvedConfig.piece}`,
     );
   }
 
@@ -3967,6 +4203,33 @@ export async function executePieceCallable(
   // question.
   const commandPrefix = deps.helpCommandPrefix ??
     cliCommand(["piece", "call", "...", callableName]);
+  return await executeResolvedPieceCallable(
+    resolved,
+    rawArgs,
+    deps,
+    commandPrefix,
+  ).catch((error) => {
+    // The address the caller wrote names the holder of the link, so a
+    // refusal that sends them to the verb listing carries the piece whose
+    // verb it was.
+    if (
+      error instanceof VerbInputValidationError &&
+      resolved.linkedPiece !== undefined
+    ) error.linkedPiece = resolved.linkedPiece;
+    throw error;
+  });
+}
+
+/**
+ * Helper for {@link executePieceCallable}, which parses the verb's section
+ * and dispatches on the callable already resolved.
+ */
+async function executeResolvedPieceCallable(
+  resolved: ResolvedPieceCallable,
+  rawArgs: string[],
+  deps: PieceCallableDependencies,
+  commandPrefix: string,
+): Promise<ExecutedPieceCallable> {
   return await executeCallableCommand({
     resolved,
     execution: resolved,

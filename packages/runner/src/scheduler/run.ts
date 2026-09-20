@@ -566,6 +566,9 @@ export async function runSchedulerAction(
   };
   const invalidCauses = record ? takeInvalidCauses(record) : undefined;
   if (record) {
+    // Consumes the owed retry at entry; a completion during this run can
+    // establish a new retry that must survive this run's finalization.
+    delete record.gate.retryOwed;
     record.cancelLocalReadWake?.();
     record.cancelLocalReadWake = undefined;
     state.nodes.setStatus(action, "clean");

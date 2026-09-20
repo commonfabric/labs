@@ -94,6 +94,7 @@ import {
   getCellValue,
   getPieceView,
   inspectPiece,
+  LinkedPieceRefusal,
   linkPieces,
   linkSqliteDiskSource,
   LinkValidationError,
@@ -789,7 +790,9 @@ export function verbInputErrorReport(
   return {
     message: error.message,
     hint: cliText(
-      `TIP: Run 'cf piece verbs --cell ${opts.piece} --json' to see each verb's expected input.`,
+      `TIP: Run 'cf piece verbs --cell ${
+        error.linkedPiece ?? opts.piece
+      } --json' to see each verb's expected input.`,
     ),
   };
 }
@@ -1810,7 +1813,11 @@ argument is present.
 ADDRESS: The target is best written before the callable name, as a reference
 (it begins with "/"): cf ${spelling} /tracker addItem '{"title":"Milk"}'. A
 reference names the piece by handle or by slug, and may carry the space
-(//my-space/tracker). --cell takes the same word when a flag suits better.`,
+(//my-space/tracker). --cell takes the same word when a flag suits better.
+A path on the reference is followed through the link stored there, and the
+call goes to the piece that link names, in whichever space it names:
+cf ${spelling} //my-space/of:fid1:abc.../inbox/piece receive '{...}'. A path
+with no link to a piece at it is refused ("names no piece").`,
     )
     .usage(`${pieceUsage} [address] <callable> [input]`)
     .example(
@@ -3620,11 +3627,14 @@ export async function callFromCommand(
   }
   try {
     const invocation = pieceCallInvocation(tail);
+    // A path on the target is kept rather than refused: the dispatch follows
+    // the link stored there to the piece it names, and refuses a path that
+    // leads to none.
     const pieceConfig = parsePieceOptions({
       ...options,
       ...(cell !== undefined && { cell }),
       json: invocation.jsonOutput,
-    });
+    }, { acceptsPath: true });
     const result = await boundedSettlement(
       (deps.executePieceCallable ?? executePieceCallable)(
         pieceConfig,
@@ -3650,6 +3660,11 @@ export async function callFromCommand(
           ),
         },
       ).catch((error) => {
+        if (error instanceof LinkedPieceRefusal) {
+          observer.finish("failed");
+          suppressDeferredSkewNote();
+          exitWithDataError({ message: error.message }, dataErrorSinks);
+        }
         if (error instanceof UnknownPieceVerbError) {
           observer.finish("failed");
           suppressDeferredSkewNote();
@@ -3672,7 +3687,7 @@ export async function callFromCommand(
       observer,
       result,
       callableName,
-      pieceConfig.piece,
+      result.resolved?.linkedPiece ?? pieceConfig.piece,
       deps,
       { detached: waitControl.mode === "commit", invocation: identity },
     );

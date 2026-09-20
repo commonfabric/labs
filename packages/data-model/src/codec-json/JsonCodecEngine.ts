@@ -1,16 +1,18 @@
 import { backtickQuote } from "@commonfabric/utils/markdown";
 
-import { BaseCodecEngine } from "@/codec-common/BaseCodecEngine.ts";
+import {
+  BaseCodecEngine,
+  type CodecRegistry,
+  ProblematicValue,
+  UnknownValue,
+} from "@/codec-common";
 import { JsonDecodeAct } from "./JsonDecodeAct.ts";
 import { JsonEncodeAct } from "./JsonEncodeAct.ts";
 import { seemsLikeEncoded } from "./wire-text.ts";
 import { CODEC, type LiveEnvironment } from "@/codec-interface/interface.ts";
 import { NullLiveEnvironment } from "@/codec-interface/NullLiveEnvironment.ts";
-import { UnknownValue } from "@/codec-common/UnknownValue.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
 import { ENCODING_PREFIX_TAG, type JsonCodecValue } from "./interface.ts";
 import { createBaseJsonRegistry } from "./createBaseJsonRegistry.ts";
-import type { CodecRegistry } from "@/codec-common/CodecRegistry.ts";
 
 /**
  * Whole-value JSON codec implementing the `/<Type>@<Version>` wire format from

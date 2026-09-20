@@ -32,9 +32,9 @@
 
 import { BenchWorker } from "@commonfabric/test-support/bench-worker";
 
-import type { RealmEncodedValue } from "@/codec-realm/interface.ts";
+import type { FabricValue } from "@";
+import type { RealmEncodedValue } from "@/codec-realm";
 import { realmFromFabricValue } from "@/codecs.ts";
-import type { FabricValue } from "@/interface.ts";
 import {
   JSON_PASS_THROUGH_OMNIBUSES,
   makeBigint,

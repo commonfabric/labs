@@ -1,0 +1,1241 @@
+{
+  "revision": "f3494fe9547d6589dad8e382e2392f14b8e0cebf",
+  "deno": "2.9.4",
+  "handlers": [
+    {
+      "size": 74,
+      "workload": "scalarKey",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": 310144,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 93,
+          "shallowReadCount": 818,
+          "populateMs": 5.666000000000167,
+          "txToLogMs": 0.30983299999979863,
+          "depCommitMs": 0.03258300000015879,
+          "collectMs": 0.3469589999999698,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 93,
+          "shallowReadCount": 818,
+          "populateMs": 4.793666999999914,
+          "txToLogMs": 0.33433300000024246,
+          "depCommitMs": 0.019041999999899417,
+          "collectMs": 0.18308299999989686,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 78
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 78
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 6
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 7
+        }
+      ]
+    },
+    {
+      "size": 74,
+      "workload": "scalarGet",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": -352016,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 93,
+          "shallowReadCount": 818,
+          "populateMs": 3.8023749999997563,
+          "txToLogMs": 0.34933400000045367,
+          "depCommitMs": 0.01641700000027413,
+          "collectMs": 0.19154200000002675,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 93,
+          "shallowReadCount": 818,
+          "populateMs": 3.298833000000286,
+          "txToLogMs": 0.3046249999997599,
+          "depCommitMs": 0.012917000000015832,
+          "collectMs": 0.18187499999976353,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 78
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 78
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 6
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 80
+        }
+      ]
+    },
+    {
+      "size": 74,
+      "workload": "walk",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": -95512,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 93,
+          "shallowReadCount": 818,
+          "populateMs": 164.1492500000004,
+          "txToLogMs": 0.551792000000205,
+          "depCommitMs": 0.02775000000019645,
+          "collectMs": 0.40087499999981446,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 93,
+          "shallowReadCount": 818,
+          "populateMs": 4.828957999999602,
+          "txToLogMs": 0.29516700000021956,
+          "depCommitMs": 0.014000000000123691,
+          "collectMs": 0.15633400000024267,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 78
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 78
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 6
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 80
+        }
+      ]
+    },
+    {
+      "size": 74,
+      "workload": "mutate",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": -280648,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 93,
+          "shallowReadCount": 818,
+          "populateMs": 9.408499999999549,
+          "txToLogMs": 0.31612499999937427,
+          "depCommitMs": 0.015499999999519787,
+          "collectMs": 0.15945800000008603,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 93,
+          "shallowReadCount": 818,
+          "populateMs": 9.724708000000646,
+          "txToLogMs": 0.4998750000004293,
+          "depCommitMs": 0.027374999999665306,
+          "collectMs": 1.9555829999999332,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 78
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 78
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 6
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 10
+        }
+      ]
+    },
+    {
+      "size": 74,
+      "workload": "plainScalar",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": -299656,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 93,
+          "shallowReadCount": 818,
+          "populateMs": 131.73174999999992,
+          "txToLogMs": 0.49620800000047893,
+          "depCommitMs": 0.02962500000012369,
+          "collectMs": 0.6414579999991474,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 93,
+          "shallowReadCount": 818,
+          "populateMs": 13.326958000000559,
+          "txToLogMs": 0.5563750000001164,
+          "depCommitMs": 0.03225000000020373,
+          "collectMs": 0.4375419999996666,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 78
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 78
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 80
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 80
+        }
+      ]
+    },
+    {
+      "size": 74,
+      "workload": "plainWalk",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": -124552,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 93,
+          "shallowReadCount": 818,
+          "populateMs": 133.57729199999994,
+          "txToLogMs": 0.5442079999993439,
+          "depCommitMs": 0.020250000001396984,
+          "collectMs": 1.463292000000365,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 93,
+          "shallowReadCount": 818,
+          "populateMs": 14.604708000000755,
+          "txToLogMs": 0.9372089999997115,
+          "depCommitMs": 0.03170800000043528,
+          "collectMs": 0.3684580000008282,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 78
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 78
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 80
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 80
+        }
+      ]
+    },
+    {
+      "size": 296,
+      "workload": "scalarKey",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": -556416,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 315,
+          "shallowReadCount": 3260,
+          "populateMs": 149.7365409999984,
+          "txToLogMs": 2.5212919999994483,
+          "depCommitMs": 0.027208999999857042,
+          "collectMs": 1.2100000000009459,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 315,
+          "shallowReadCount": 3260,
+          "populateMs": 95.4976659999993,
+          "txToLogMs": 6.27520800000093,
+          "depCommitMs": 0.03879199999937555,
+          "collectMs": 3.3977089999989403,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 300
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 300
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 6
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 7
+        }
+      ]
+    },
+    {
+      "size": 296,
+      "workload": "scalarGet",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": -336136,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 315,
+          "shallowReadCount": 3260,
+          "populateMs": 21.78912500000115,
+          "txToLogMs": 5.445749999998952,
+          "depCommitMs": 0.03995799999938754,
+          "collectMs": 0.8809579999997368,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 315,
+          "shallowReadCount": 3260,
+          "populateMs": 56.01087499999994,
+          "txToLogMs": 1.9475419999998849,
+          "depCommitMs": 0.031000000000858563,
+          "collectMs": 0.8405839999995806,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 300
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 300
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 6
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 302
+        }
+      ]
+    },
+    {
+      "size": 296,
+      "workload": "walk",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": 3200,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 315,
+          "shallowReadCount": 3260,
+          "populateMs": 72.56266599999981,
+          "txToLogMs": 1.3421670000006998,
+          "depCommitMs": 0.020582999999533058,
+          "collectMs": 3.4506670000009763,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 315,
+          "shallowReadCount": 3260,
+          "populateMs": 385.66554200000246,
+          "txToLogMs": 1.885416000000987,
+          "depCommitMs": 0.034834000001865206,
+          "collectMs": 1.4715829999986454,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 300
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 300
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 6
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 302
+        }
+      ]
+    },
+    {
+      "size": 296,
+      "workload": "mutate",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": -823632,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 315,
+          "shallowReadCount": 3260,
+          "populateMs": 29.528916999999637,
+          "txToLogMs": 2.059583999998722,
+          "depCommitMs": 0.03712499999892316,
+          "collectMs": 1.394333000000188,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 315,
+          "shallowReadCount": 3260,
+          "populateMs": 35.59966700000223,
+          "txToLogMs": 1.535582999997132,
+          "depCommitMs": 0.01995800000076997,
+          "collectMs": 0.6293750000004366,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 300
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 300
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 6
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 10
+        }
+      ]
+    },
+    {
+      "size": 296,
+      "workload": "plainScalar",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": -295368,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 315,
+          "shallowReadCount": 3260,
+          "populateMs": 21.78295799999978,
+          "txToLogMs": 3.401165999999648,
+          "depCommitMs": 0.02449999999953434,
+          "collectMs": 1.1918750000004366,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 315,
+          "shallowReadCount": 3260,
+          "populateMs": 25.04820800000016,
+          "txToLogMs": 3.4004580000000715,
+          "depCommitMs": 0.1864160000004631,
+          "collectMs": 2.0213330000005953,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 300
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 300
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 302
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 302
+        }
+      ]
+    },
+    {
+      "size": 296,
+      "workload": "plainWalk",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": -220904,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 315,
+          "shallowReadCount": 3260,
+          "populateMs": 50.495332999998936,
+          "txToLogMs": 1.2284169999984442,
+          "depCommitMs": 0.02541699999710545,
+          "collectMs": 0.5949590000018361,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 315,
+          "shallowReadCount": 3260,
+          "populateMs": 14.40441699999792,
+          "txToLogMs": 0.8569170000009763,
+          "depCommitMs": 0.013125000001309672,
+          "collectMs": 1.1355829999993148,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 300
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 300
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 302
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 302
+        }
+      ]
+    },
+    {
+      "size": 1184,
+      "workload": "scalarKey",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": -692424,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 1203,
+          "shallowReadCount": 13028,
+          "populateMs": 384.4325830000016,
+          "txToLogMs": 3.25800000000163,
+          "depCommitMs": 0.028916999999637483,
+          "collectMs": 3.716374999999971,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 1203,
+          "shallowReadCount": 13028,
+          "populateMs": 70.56979099999808,
+          "txToLogMs": 6.04833299999882,
+          "depCommitMs": 0.04558299999916926,
+          "collectMs": 6.765957999999955,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 1188
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 1188
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 6
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 7
+        }
+      ]
+    },
+    {
+      "size": 1184,
+      "workload": "scalarGet",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": -1776576,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 1203,
+          "shallowReadCount": 13028,
+          "populateMs": 130.32816699999967,
+          "txToLogMs": 5.43683400000009,
+          "depCommitMs": 0.02508300000044983,
+          "collectMs": 2.111666000000696,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 1203,
+          "shallowReadCount": 13028,
+          "populateMs": 63.25170799999978,
+          "txToLogMs": 2.604208999997354,
+          "depCommitMs": 0.050040999998600455,
+          "collectMs": 5.635541999999987,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 1188
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 1188
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 6
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 1190
+        }
+      ]
+    },
+    {
+      "size": 1184,
+      "workload": "walk",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": -243520,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 1203,
+          "shallowReadCount": 13028,
+          "populateMs": 77.51916699999856,
+          "txToLogMs": 72.12079199999789,
+          "depCommitMs": 0.034790999998222105,
+          "collectMs": 51.48983399999997,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 1203,
+          "shallowReadCount": 13028,
+          "populateMs": 68.38533300000199,
+          "txToLogMs": 9.875750000002881,
+          "depCommitMs": 0.041499999999359716,
+          "collectMs": 10.296458000000712,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 1188
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 1188
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 6
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 1190
+        }
+      ]
+    },
+    {
+      "size": 1184,
+      "workload": "mutate",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": -1406240,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 1203,
+          "shallowReadCount": 13028,
+          "populateMs": 63.984375,
+          "txToLogMs": 5.204375000001164,
+          "depCommitMs": 0.037000000000261934,
+          "collectMs": 3.096708999997645,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 1203,
+          "shallowReadCount": 13028,
+          "populateMs": 49.82650000000285,
+          "txToLogMs": 4.571125000002212,
+          "depCommitMs": 0.04120899999543326,
+          "collectMs": 9.773750000000291,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 1188
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 1188
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 6
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 10
+        }
+      ]
+    },
+    {
+      "size": 1184,
+      "workload": "plainScalar",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": -880280,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 1203,
+          "shallowReadCount": 13028,
+          "populateMs": 75.5499589999963,
+          "txToLogMs": 5.088582999997016,
+          "depCommitMs": 0.12087500000052387,
+          "collectMs": 3.5160419999956503,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 1203,
+          "shallowReadCount": 13028,
+          "populateMs": 28.185291000001598,
+          "txToLogMs": 2.363708000004408,
+          "depCommitMs": 0.019332999996549916,
+          "collectMs": 4.935917000002519,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 1188
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 1188
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 1190
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 1190
+        }
+      ]
+    },
+    {
+      "size": 1184,
+      "workload": "plainWalk",
+      "nodesBefore": 1,
+      "nodesAfter": 1,
+      "retainedBytes": 87360,
+      "preflights": [
+        {
+          "skipped": true,
+          "readCount": 1203,
+          "shallowReadCount": 13028,
+          "populateMs": 65.98462499999732,
+          "txToLogMs": 4.098417000001064,
+          "depCommitMs": 0.043665999997756444,
+          "collectMs": 3.7949589999989257,
+          "scheduleMs": 0
+        },
+        {
+          "skipped": false,
+          "readCount": 1203,
+          "shallowReadCount": 13028,
+          "populateMs": 43.18595800000185,
+          "txToLogMs": 4.052624999996624,
+          "depCommitMs": 0.03350000000500586,
+          "collectMs": 6.460708999999042,
+          "scheduleMs": 0
+        }
+      ],
+      "attempts": [
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 1188
+        },
+        {
+          "kind": "preflight",
+          "proxyAccesses": 0,
+          "linkResolutions": 1188
+        },
+        {
+          "kind": "presync",
+          "proxyAccesses": 0,
+          "linkResolutions": 1190
+        },
+        {
+          "kind": "event",
+          "proxyAccesses": 0,
+          "linkResolutions": 1190
+        }
+      ]
+    }
+  ],
+  "collections": [
+    {
+      "size": 32,
+      "mode": "computed",
+      "lazyMaterialization": true,
+      "steps": [
+        {
+          "phase": "initialize",
+          "runs": 3,
+          "writingRuns": 1,
+          "proxyAccesses": 65,
+          "linkResolutions": 35,
+          "distinctDocuments": 39,
+          "registeredDependencies": 172
+        },
+        {
+          "phase": "unread title",
+          "runs": 0,
+          "writingRuns": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0
+        },
+        {
+          "phase": "read amount",
+          "runs": 2,
+          "writingRuns": 1,
+          "proxyAccesses": 65,
+          "linkResolutions": 35,
+          "distinctDocuments": 38,
+          "registeredDependencies": 171
+        }
+      ]
+    },
+    {
+      "size": 32,
+      "mode": "lift-wide",
+      "lazyMaterialization": true,
+      "steps": [
+        {
+          "phase": "initialize",
+          "runs": 3,
+          "writingRuns": 1,
+          "proxyAccesses": 65,
+          "linkResolutions": 35,
+          "distinctDocuments": 39,
+          "registeredDependencies": 172
+        },
+        {
+          "phase": "unread title",
+          "runs": 0,
+          "writingRuns": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0
+        },
+        {
+          "phase": "read amount",
+          "runs": 2,
+          "writingRuns": 1,
+          "proxyAccesses": 65,
+          "linkResolutions": 35,
+          "distinctDocuments": 38,
+          "registeredDependencies": 171
+        }
+      ]
+    },
+    {
+      "size": 32,
+      "mode": "lift-narrow",
+      "lazyMaterialization": true,
+      "steps": [
+        {
+          "phase": "initialize",
+          "runs": 3,
+          "writingRuns": 1,
+          "proxyAccesses": 65,
+          "linkResolutions": 35,
+          "distinctDocuments": 39,
+          "registeredDependencies": 172
+        },
+        {
+          "phase": "unread title",
+          "runs": 0,
+          "writingRuns": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0
+        },
+        {
+          "phase": "read amount",
+          "runs": 2,
+          "writingRuns": 1,
+          "proxyAccesses": 65,
+          "linkResolutions": 35,
+          "distinctDocuments": 38,
+          "registeredDependencies": 171
+        }
+      ]
+    },
+    {
+      "size": 128,
+      "mode": "computed",
+      "lazyMaterialization": true,
+      "steps": [
+        {
+          "phase": "initialize",
+          "runs": 3,
+          "writingRuns": 1,
+          "proxyAccesses": 257,
+          "linkResolutions": 131,
+          "distinctDocuments": 135,
+          "registeredDependencies": 652
+        },
+        {
+          "phase": "unread title",
+          "runs": 0,
+          "writingRuns": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0
+        },
+        {
+          "phase": "read amount",
+          "runs": 2,
+          "writingRuns": 1,
+          "proxyAccesses": 257,
+          "linkResolutions": 131,
+          "distinctDocuments": 134,
+          "registeredDependencies": 651
+        }
+      ]
+    },
+    {
+      "size": 128,
+      "mode": "lift-wide",
+      "lazyMaterialization": true,
+      "steps": [
+        {
+          "phase": "initialize",
+          "runs": 3,
+          "writingRuns": 1,
+          "proxyAccesses": 257,
+          "linkResolutions": 131,
+          "distinctDocuments": 135,
+          "registeredDependencies": 652
+        },
+        {
+          "phase": "unread title",
+          "runs": 0,
+          "writingRuns": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0
+        },
+        {
+          "phase": "read amount",
+          "runs": 2,
+          "writingRuns": 1,
+          "proxyAccesses": 257,
+          "linkResolutions": 131,
+          "distinctDocuments": 134,
+          "registeredDependencies": 651
+        }
+      ]
+    },
+    {
+      "size": 128,
+      "mode": "lift-narrow",
+      "lazyMaterialization": true,
+      "steps": [
+        {
+          "phase": "initialize",
+          "runs": 3,
+          "writingRuns": 1,
+          "proxyAccesses": 257,
+          "linkResolutions": 131,
+          "distinctDocuments": 135,
+          "registeredDependencies": 652
+        },
+        {
+          "phase": "unread title",
+          "runs": 0,
+          "writingRuns": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0
+        },
+        {
+          "phase": "read amount",
+          "runs": 2,
+          "writingRuns": 1,
+          "proxyAccesses": 257,
+          "linkResolutions": 131,
+          "distinctDocuments": 134,
+          "registeredDependencies": 651
+        }
+      ]
+    },
+    {
+      "size": 512,
+      "mode": "computed",
+      "lazyMaterialization": true,
+      "steps": [
+        {
+          "phase": "initialize",
+          "runs": 3,
+          "writingRuns": 1,
+          "proxyAccesses": 1025,
+          "linkResolutions": 515,
+          "distinctDocuments": 519,
+          "registeredDependencies": 2572
+        },
+        {
+          "phase": "unread title",
+          "runs": 0,
+          "writingRuns": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0
+        },
+        {
+          "phase": "read amount",
+          "runs": 2,
+          "writingRuns": 1,
+          "proxyAccesses": 1025,
+          "linkResolutions": 515,
+          "distinctDocuments": 518,
+          "registeredDependencies": 2571
+        }
+      ]
+    },
+    {
+      "size": 512,
+      "mode": "lift-wide",
+      "lazyMaterialization": true,
+      "steps": [
+        {
+          "phase": "initialize",
+          "runs": 3,
+          "writingRuns": 1,
+          "proxyAccesses": 1025,
+          "linkResolutions": 515,
+          "distinctDocuments": 519,
+          "registeredDependencies": 2572
+        },
+        {
+          "phase": "unread title",
+          "runs": 0,
+          "writingRuns": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0
+        },
+        {
+          "phase": "read amount",
+          "runs": 2,
+          "writingRuns": 1,
+          "proxyAccesses": 1025,
+          "linkResolutions": 515,
+          "distinctDocuments": 518,
+          "registeredDependencies": 2571
+        }
+      ]
+    },
+    {
+      "size": 512,
+      "mode": "lift-narrow",
+      "lazyMaterialization": true,
+      "steps": [
+        {
+          "phase": "initialize",
+          "runs": 3,
+          "writingRuns": 1,
+          "proxyAccesses": 1025,
+          "linkResolutions": 515,
+          "distinctDocuments": 519,
+          "registeredDependencies": 2572
+        },
+        {
+          "phase": "unread title",
+          "runs": 0,
+          "writingRuns": 0,
+          "proxyAccesses": 0,
+          "linkResolutions": 0,
+          "distinctDocuments": 0,
+          "registeredDependencies": 0
+        },
+        {
+          "phase": "read amount",
+          "runs": 2,
+          "writingRuns": 1,
+          "proxyAccesses": 1025,
+          "linkResolutions": 515,
+          "distinctDocuments": 518,
+          "registeredDependencies": 2571
+        }
+      ]
+    }
+  ],
+  "comparison": {
+    "baselineRevision": "ccc751b2d4b19005e6a9ef1503a8e94ccc466022",
+    "handlerCountFieldsMatch": true,
+    "collectionFieldsMatch": true,
+    "excludedFromComparison": [
+      "handler preflight duration fields",
+      "retainedBytes"
+    ]
+  }
+}

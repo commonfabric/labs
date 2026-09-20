@@ -403,6 +403,26 @@ receiver's complete stored shape, including when the result passes through a
 helper. Optional member reads retain the receiver without imposing a full-shape
 read.
 
+A cell reached through a type alias — `type ProfileCell = Writable<...>` —
+gives the transformer no authored node for its value, so the value type is
+printed inside the inferred capability wrapper. Schema generation can read
+some prints only from the type behind them: `import("./mod.ts").T` for a name
+the emitting module does not import, and the brand arm of an expanded
+`Default`. A skipped computed brand marks the node-driven schema as incomplete
+even when the remaining union and intersection members can be read, so the
+resolved value supplies the default metadata.
+Where the cell is a property, schema generation reads the value from the
+property's resolved type; where the cell is the whole argument there is no
+such type, so the printed node is registered in `typeRegistry` with the value
+type it was printed from. An aliased cell therefore emits the value schema the
+same wrapper emits written inline, under every inferred capability, for a
+generic alias, and for an alias imported from another module. One shape
+differs: `T | Default<V>` where `V` is an object type assignable to `T`.
+Inline, the authored `Default` node shows that `T` already covers `V`, and the
+schema is `T` with the default. Through an alias the resolved union keeps `V`
+as a member of its own, and the schema is `anyOf: [T, V]` with the default.
+`aliased-cell-value-schema.test.ts` pins these.
+
 The type-driven shrink also guards its descent on (type, requested-paths): a
 pair already on the path falls back to the named type reference — no
 structural fallback — which schema generation resolves through `$defs`
@@ -2088,6 +2108,25 @@ Special path:
   this reference-only element schema. The
   `schema-injection/cell-get-readonly-array-result` fixture pins the emitted
   lift schemas, including a `number[]` control.
+- the node-based generator also applies the default library's generic
+  aliases (`Readonly`, `Partial`, `Required`, `Pick`, `Omit`, `NonNullable`,
+  `Array`, `ReadonlyArray`, `Record`) to their arguments, lowers a tuple to an
+  array of its element union (`undefined` admitted for an optional element, a
+  rest element contributing a spread tuple's elements or an array's items),
+  reduces an intersection as the checker reduces the type and merges it as
+  the type-based path merges one (the schema-generator mapping spec states
+  the rules, among them that `void` is told from an opaque cell wrapper, and
+  a nested, named, or union-folded constituent is reopened, by where a
+  schema came from; distinct folded unions retain their separate constraints
+  even when their schemas coincide), and unwraps parentheses. A pattern-scope
+  `.get()` on a `Cell<{ topic: unknown; title: string }>` lowers to a lift
+  with result type
+  `Readonly<{ topic: unknown; title: string }>` and a result schema that
+  keeps both members; a tuple view of `unknown` keeps
+  `items: { type: "unknown" }`. The
+  `schema-injection/cell-get-unknown-member-result` fixture pins the emitted
+  lift schemas, and `schema-injection/intersection-source-types` the
+  intersections.
 - synthetic unions preserve explicit `{ type: "unknown" }` members in `anyOf`
   rather than collapsing them away
 - `Reactive<T>` does not emit an opaque marker. Cell, stream, and opaque

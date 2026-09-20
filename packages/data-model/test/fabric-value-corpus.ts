@@ -13,8 +13,8 @@
  * dropped from here is an arm the cross-checks stop reaching.
  */
 
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/fabric-primitives/for-testing-only.ts";
+import { FabricError } from "@/fabric-instances";
+import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
 
 /** A class with no fabric representation, wanted here by name. */
 export class PlainClass {}

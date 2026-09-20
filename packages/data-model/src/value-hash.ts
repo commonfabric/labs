@@ -21,13 +21,15 @@ import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 import { isDeepFrozen } from "./deep-freeze.ts";
 import { shallowFabricFromConvertibleJsValue } from "./convertible-js.ts";
 import { tagOfConvertibleJsValueElseNull, VALUE_TAGS } from "@/types";
-import { BaseFabricInstance } from "@/fabric-bases/BaseFabricInstance.ts";
-import { codecOf, NULL_LIVE_ENVIRONMENT } from "@/codec-common/index.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
-import { FabricKeyPair } from "@/fabric-primitives/FabricKeyPair.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
-import type { FabricUnavailable } from "@/fabric-primitives/FabricUnavailable.ts";
+import { BaseFabricInstance } from "@/fabric-bases";
+import { codecOf, NULL_LIVE_ENVIRONMENT } from "@/codec-common";
+import {
+  FabricBytes,
+  FabricHash,
+  FabricKeyPair,
+  FabricRegExp,
+  type FabricUnavailable,
+} from "@/fabric-primitives";
 
 //
 // Type tag bytes (Section 2 of the byte-level spec)

@@ -16,6 +16,11 @@
       "@/*": [
         "../../data-model/src/*"
       ],
+      // `data-model`'s import map gives this key a target of its own, where
+      // the pattern above would resolve it to the directory of the same name.
+      "@/value-debug": [
+        "../../data-model/src/value-debug-internal.ts"
+      ],
       "@commonfabric/api": [
         "../index.ts"
       ],

@@ -53,9 +53,10 @@ user browses candidates and clicks "Confirm Selection". Until confirmed,
 
 > **Exception — well-known profile targets.** `wish({ query: "#profile" })` does
 > _not_ follow the "result reflects the highlighted candidate" rule. Its
-> `.result` is **always the single current profile** (default → MRU → first) in
-> every mode; the picker there is only a switching affordance, and selecting a
-> profile changes `.result` by reordering candidates (MRU/default writes), not by
+> `.result` is **the single current profile** (default → MRU → first) in every
+> mode once profile data is loaded and a profile exists. The picker there is
+> only a switching affordance. Selecting a profile changes `.result` by
+> reordering candidates (MRU/default writes), not by
 > a confirm gesture. See [Well-Known Profile Targets](#well-known-profile-targets)
 > (CT-1829). Generalizing this "single-best by default; picker opt-in" shape to
 > all wishes is a future step.
@@ -141,12 +142,26 @@ wish({ query: "#profileBio" }) // default profile's bio (free-text description)
 wish({ query: "#profileSpace" }) // default profile's space cell
 ```
 
-`wish({ query: "#profile" }).result` is **always the single current profile** —
+Once profile data is loaded and at least one profile exists,
+`wish({ query: "#profile" }).result` is **the single current profile** —
 the best of the ordered candidates (default → MRU → first) — in **every** mode
-(interactive, headless, and the blessed read). It is never `undefined` while a
-profile exists, and it never depends on the picker sidecar pattern running, so
+(interactive, headless, and the blessed read). It does not depend on the picker
+sidecar pattern running, so
 consumers can gate on `.result` without stranding in the multi-profile case
 (CT-1829). The `candidates` array holds all ordered profiles.
+
+Profile resolution waits for the Home root, default pattern, roster, and
+referenced profile documents to load before publishing a new result or opening
+profile creation.
+While those reads are pending, the existing wish state is retained; a new wish
+can remain unset. Confirmation re-runs the wish even when a document is absent
+and no data arrives. A confirmed empty roster opens profile creation. An entry
+confirmed absent is skipped when another valid profile remains. A failed load,
+or absent entries leaving no valid profile, produces an error surface instead.
+Failed confirmations do not schedule another load on their own. Every re-run
+checks the current document before consulting a cached failure, so document
+arrival allows the same Wish instance to recover. A fresh Wish instance or a
+replica reset can request another load.
 
 The picker is the **switching affordance**, not the source of `.result`:
 selection is _state_, not a channel. When the picker's "Use" writes `mru` or

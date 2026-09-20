@@ -6,7 +6,7 @@ import {
 } from "./schema-ifc.ts";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { isObjectOrArray } from "@commonfabric/utils/types";
-import { toCompactDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 import {
   linkPayloadAtProbe,
   linkProbeSubPath,
@@ -673,10 +673,10 @@ export function resolveLinkTracingDereferences(
     if (seen.has(key)) {
       logger.error(
         "link-res-error",
-        `Link cycle detected ${key} [${toCompactDebugString([...seen])}]`,
+        debugStr`Link cycle detected ${key}: $quote,long${[...seen]}`,
       );
       throw new Error(
-        `Link cycle detected at ${key} [${toCompactDebugString([...seen])}]`,
+        debugStr`Link cycle detected at ${key}: $quote,long${[...seen]}`,
       );
     }
     seen.add(key);

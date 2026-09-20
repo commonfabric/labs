@@ -4,15 +4,14 @@ import { expect } from "@std/expect";
 import type {
   FabricArray,
   FabricArrayPlus,
-  FabricInstance,
   FabricInstancePlus,
   FabricPlainObject,
   FabricPlainObjectPlus,
-  FabricPrimitive,
   FabricSpecialObject,
   FabricValue,
   FabricValuePlus,
-} from "@/api.ts";
+} from "@";
+import type { FabricInstance, FabricPrimitive } from "@/api.ts";
 
 // The assertions in this file are made when it is type-checked, which the
 // package's `test` task does before it runs anything, not when it runs. Each

@@ -1,10 +1,10 @@
 import {
+  debugStr,
   fabricAwareEqual,
   FabricInstance,
   FabricPrimitive,
   isKeyableObjectOrArray,
   isWalkableObjectOrArray,
-  toLongQuotedDebugString,
   valueEqual,
 } from "@commonfabric/data-model";
 import { deepFrozenCloneAndInternSchema } from "@commonfabric/data-model-schema";
@@ -270,7 +270,7 @@ function sendValueToBindingInner<T>(
       const alias = binding.$alias;
       if ((alias.defer ?? 0) > 0) {
         throw new Error(
-          `Cannot write to deferred alias: ${toLongQuotedDebugString(binding)}`,
+          debugStr`Cannot write to deferred alias: $quote,long${binding}`,
         );
       }
       if (alias.partialCause !== undefined) {
@@ -289,7 +289,7 @@ function sendValueToBindingInner<T>(
         );
       } else if (typeof alias.cell !== "string") {
         throw new Error(
-          `Invalid pseudo-alias cell: ${toLongQuotedDebugString(binding)}`,
+          debugStr`Invalid pseudo-alias cell: $quote,long${binding}`,
         );
       } else {
         // Certain strings have special meaning as the cell id
@@ -469,9 +469,7 @@ function sendValueToBindingInner<T>(
     // constant fabric binding is compared by content rather than by identity.
     if (!fabricAwareEqual(binding, value)) {
       throw new Error(
-        `Got ${toLongQuotedDebugString(value)} instead of ${
-          toLongQuotedDebugString(binding)
-        }`,
+        debugStr`Got $quote,long${value} instead of $quote,long${binding}`,
       );
     }
   }

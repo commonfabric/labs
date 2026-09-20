@@ -694,18 +694,35 @@ evolution and link proofs, under their respective default policies.
 
 Literal comparisons intersect `const` and `enum` with the declared `type`, so
 values that the type excludes do not restrict a widening. A `null` type proves
-membership in an enum or const containing `null`. Source enums containing
-several JSON value types are partitioned by type, including beside a type list
-or within nested `anyOf` branches, with sibling constraints and branch metadata
-retained. Each partition must satisfy a target alternative. Target enums remain
-whole, and an enum containing a value outside the JSON type vocabulary, such as
-a `FabricPrimitive`, remains subject to the conservative object proof. During
+membership in an enum or const containing `null`; a `boolean` type proves
+membership in an enum containing both `false` and `true`. This permits argument
+widening from `boolean` to `boolean | "auto"` and the reverse result narrowing.
+Source enums containing several JSON value types are partitioned by type,
+including beside a type list or within nested `anyOf` branches, with sibling
+constraints and branch metadata retained. Each partition must satisfy a target
+alternative. Target enums remain whole, and an enum containing a value outside
+the JSON type vocabulary, such as a `FabricPrimitive`, remains subject to the
+conservative object proof. During
 pattern evolution, a branch stays whole if partitioning would change the
 effective default it supplies, including defaults inherited from a child branch
 or a reference. Link proofs compare target defaults only, so source defaults do
 not limit partitioning there. These rules permit adding an option to a nullable
 literal argument while still refusing to remove an admitted option or widen a
 result contract.
+
+When a source alternative contains a nested `anyOf` with only descriptive
+annotations other than `$comment` beside it, its children may each satisfy a
+different target alternative. The other source constraints remain in every
+child proof. A wrapper carrying constraints, reference scope, defaults, or
+semantic metadata keeps its own comparison boundary. During evolution,
+splitting also requires each child to supply the wrapper's effective default
+in the original source scope. Whole-branch proofs take precedence, preserving
+compatible nested contracts whose boundaries matter. Wrappers carrying
+`$comment` stay opaque because the runner reserves some comment values for
+traversal markers. The supplementary split search stops after eight splits
+along a proof path, including splits reached through a whole-branch retry, and
+conservatively refuses an update it cannot prove within that bound. Ordinary
+whole-branch proofs remain available at every depth.
 
 An incompatible pattern contract or retained link becomes an
 actionable warning. The UI requires explicit confirmation, and command-line

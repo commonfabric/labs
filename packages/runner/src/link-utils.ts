@@ -1,9 +1,9 @@
 import {
+  debugStr,
   deepFreeze,
   type FabricValue,
   isDeepFrozen,
   isWalkableObjectOrArray,
-  toCompactDebugString,
 } from "@commonfabric/data-model";
 import { linkRefFrom, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import {
@@ -168,7 +168,7 @@ export function parseLinkOrThrow(
   const result = parseLink(value, baseCell);
   if (!result) {
     throw new Error(
-      `Cannot parse value as link: ${toCompactDebugString(value)}`,
+      debugStr`Cannot parse value as link: $quote${value}`,
     );
   }
   return result;

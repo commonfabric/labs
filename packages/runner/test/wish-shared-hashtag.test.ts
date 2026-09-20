@@ -326,13 +326,13 @@ Deno.test(
       }) as typeof runtime.scheduler.subscribe;
 
       const first = runtime.edit();
-      action(first);
+      action.action(first);
       await first.commit();
       await runtime.idle();
       expect(subscriptions).toBe(1);
 
       const second = runtime.edit();
-      action(second);
+      action.action(second);
       await second.commit();
       await runtime.idle();
       expect(sent.length).toBe(2);

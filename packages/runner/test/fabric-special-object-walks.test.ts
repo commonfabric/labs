@@ -37,7 +37,7 @@ import { Identity } from "@commonfabric/identity";
 
 import {
   FabricError,
-  FabricLink,
+  fabricInstanceClassesByName,
   FabricMap,
   FabricSet,
 } from "@commonfabric/data-model/fabric-instances";
@@ -45,7 +45,10 @@ import {
   FabricBytes,
   fabricPrimitiveClassesByName,
 } from "@commonfabric/data-model/fabric-primitives";
-import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@commonfabric/data-model/fabric-primitives/for-testing-only";
+import {
+  FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
+  FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY,
+} from "@commonfabric/data-model/for-testing-only";
 import {
   fabricAwareEqual,
   type FabricSpecialObject,
@@ -106,43 +109,26 @@ const PRIMITIVE_KINDS: readonly SpecialObjectKind[] = Object.entries(
   isInstance: false,
 }));
 
+/**
+ * One kind per concrete `FabricInstance` class, taken likewise from the data
+ * model's own makers. Each case gets an instance of its own, since an instance
+ * can be mutable. No case consults `storable` for an instance.
+ */
+const INSTANCE_KINDS: readonly SpecialObjectKind[] = Object.entries(
+  FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
+).map(([name, [make]]): SpecialObjectKind => ({
+  name,
+  cls: fabricInstanceClassesByName()[
+    name as keyof typeof FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY
+  ],
+  make,
+  storable: false,
+  isInstance: true,
+}));
+
 const SPECIAL_OBJECTS: readonly SpecialObjectKind[] = [
   ...PRIMITIVE_KINDS,
-  {
-    name: "FabricError",
-    cls: FabricError,
-    make: () =>
-      new FabricError({
-        type: "Error",
-        name: "Error",
-        message: "boom",
-        stack: undefined,
-        cause: undefined,
-      }),
-    storable: true,
-    isInstance: true,
-  },
-  {
-    name: "FabricLink",
-    cls: FabricLink,
-    make: () => new FabricLink({ id: "of:fid1:aaa" }),
-    storable: true,
-    isInstance: true,
-  },
-  {
-    name: "FabricMap",
-    cls: FabricMap,
-    make: () => new FabricMap(new Map([["a", 1]])),
-    storable: false,
-    isInstance: true,
-  },
-  {
-    name: "FabricSet",
-    cls: FabricSet,
-    make: () => new FabricSet(new Set([1, 2])),
-    storable: false,
-    isInstance: true,
-  },
+  ...INSTANCE_KINDS,
 ];
 
 /**

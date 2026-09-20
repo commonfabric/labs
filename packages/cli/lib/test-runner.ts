@@ -38,10 +38,7 @@ import {
 } from "@commonfabric/test-support/records";
 
 import { internSchema } from "@commonfabric/data-model-schema";
-import {
-  toCompactDebugString,
-  toDebugKindString,
-} from "@commonfabric/data-model";
+import { debugStr, toDebugKindString } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
@@ -605,7 +602,8 @@ function matchesTimingPrefix(name: string, prefixes: string[]): boolean {
   );
 }
 
-function printLoggerStats(
+/** Prints timing and call-count summaries, using absolute or baseline deltas. */
+export function printLoggerStats(
   elapsedMs: number,
   useDelta: boolean,
   label?: string,
@@ -1748,8 +1746,8 @@ export async function runTestPattern(
         if (!isAction && !isAssertion) {
           throw new Error(
             `Test step at index ${i} must have an 'action', 'assertion', ` +
-              `'render', 'settle', 'label', or 'await' key. Got: ${
-                toCompactDebugString(Object.keys(stepCell.get() as object))
+              debugStr`'render', 'settle', 'label', or 'await' key. Got: $quote,long${
+                Object.keys(stepCell.get() as object)
               }`,
           );
         }

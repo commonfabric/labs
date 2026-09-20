@@ -1,9 +1,6 @@
 import { backtickQuote } from "@commonfabric/utils/markdown";
 import type { FabricInstance } from "@/interface.ts";
-import {
-  BaseFabricInstance,
-  DEEP_CLONE_CORE,
-} from "@/fabric-bases/BaseFabricInstance.ts";
+import { BaseFabricInstance, DEEP_CLONE_CORE } from "@/fabric-bases";
 
 /**
  * Abstract base class for `FabricInstance` wrappers that bridge native JS

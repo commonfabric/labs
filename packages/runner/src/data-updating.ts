@@ -8,13 +8,13 @@ import type { CfcAtom } from "@commonfabric/api/cfc";
 import {
   assertValidFabricValueLayer,
   cloneIfNecessary,
+  debugStr,
   fabricFromConvertibleJsValue,
   type FabricPlainObject,
   type FabricValue,
   isFabricSpecialObject,
   isKeyableObjectNotArray,
   shallowFabricFromConvertibleJsObjectElseUndefined,
-  toCompactDebugString,
 } from "@commonfabric/data-model";
 import { linkRefFrom, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { isFabricDataUri } from "@commonfabric/data-model/codec-data-uri";
@@ -470,7 +470,7 @@ export function diffAndUpdate(
   );
   diffLogger.debug(
     "diff",
-    () => `[diffAndUpdate] changes: ${toCompactDebugString(changes)}`,
+    () => debugStr`[diffAndUpdate] changes: $quote,long${changes}`,
   );
   applyChangeSet(tx, changes);
   return changes.length > 0;
@@ -970,9 +970,7 @@ export function normalizeAndDiff(
   diffLogger.debug(
     "diff",
     () =>
-      `[DIFF_ENTER] path=${pathStr} type=${valueType} newValue=${
-        toCompactDebugString(newValue)
-      }`,
+      debugStr`[DIFF_ENTER] path=${pathStr} type=${valueType} newValue=$quote,long${newValue}`,
   );
 
   // When detecting a circular reference on JS objects, turn it into a cell,
@@ -1473,9 +1471,7 @@ export function normalizeAndDiff(
     diffLogger.debug(
       "diff",
       () =>
-        `[BRANCH_CELL_LINK] Processing cell link at path=${pathStr} link=${
-          toCompactDebugString(newValue)
-        }`,
+        debugStr`[BRANCH_CELL_LINK] Processing cell link at path=${pathStr} link=$quote,long${newValue}`,
     );
     const carriedCfcLabelView = cfcLabelViewForPrimitiveLink(newValue);
     const parsedLink = parseLink(newValue, link);

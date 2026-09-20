@@ -1,8 +1,8 @@
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import {
+  debugStr,
   fabricAwareEqual,
   isDeepFrozen,
-  toCompactDebugString,
 } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
@@ -1093,9 +1093,7 @@ export const resolveCfcSchemaRefsOrThrow = (
   if (resolved === undefined) {
     const ref = Object.hasOwn(schemaObj, "$ref")
       ? schemaObj.$ref
-      : toCompactDebugString(
-        schemaObj,
-      );
+      : debugStr`$quote${schemaObj}`;
     throw new Error(
       `Failed to resolve $ref: ${ref}. ` +
         (typeof ref === "string" && ref.startsWith("http")
@@ -1103,7 +1101,7 @@ export const resolveCfcSchemaRefsOrThrow = (
             `If you added a new native type to NATIVE_TYPE_SCHEMAS in ` +
             `packages/schema-generator/src/formatters/native-type-formatter.ts, ` +
             `add its schema to embeddedSchemas as well.`
-          : `Schema: ${toCompactDebugString(schemaObj)}`),
+          : debugStr`Schema: $quote,long${schemaObj}`),
     );
   }
   return resolved;
