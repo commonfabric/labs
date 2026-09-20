@@ -2220,6 +2220,24 @@ JSON and require no existing memory session to redeem.
 - `cf space invite revoke <invite-id>` ends admission without removing grants.
 - `cf space invite receipts [invite-id]` lists unique invitation/DID pairs.
 
+Creation saves its credentials before sending HTTP. With
+`--request-file <path>`, the command exclusively creates a private file (0600),
+or loads an existing private regular file. Existing files are never overwritten;
+symlinks, malformed data, and mismatched host, space, signing identity, access,
+TTL, or max uses are refused before sending. Retry with the same creation flags
+and `--request-file` to reuse the exact invitation after a lost response or CLI
+restart. `--shell` only changes the output link and may differ on a retry.
+
+Without `--request-file`, each creation saves a new file under
+`$XDG_STATE_HOME/commonfabric/space-invites`, defaulting to
+`$HOME/.local/state/commonfabric/space-invites`; the directory is private
+(0700). The absolute recovery path is printed to stderr before sending and
+returned as `requestFile` in successful JSON output. The file contains the
+bearer code and remains local until the caller removes it. Keep it private and
+retain it while a creation outcome is uncertain. Saving and syncing the file
+precedes HTTP; this supports process restart recovery, without promising
+recovery from filesystem or power failure. Errors never print the file contents.
+
 Only explicit owners can create, list, revoke, or list receipts. One distinct
 DID uses one slot in each invitation; a same-DID retry uses none. Copying the
 same identity to another client preserves its DID. A receipt with null current
