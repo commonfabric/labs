@@ -20,8 +20,9 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import { Identity } from "@commonfabric/identity";
-import { Runtime } from "@commonfabric/runner";
+import { type Cell, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { withEnv } from "./utils.ts";
 import { runTestPattern, runTests } from "../lib/test-runner.ts";
 
 const FIXTURES = resolve(import.meta.dirname!, "fixtures/storage-host");
@@ -79,6 +80,135 @@ describe(
 
       // The caller owns the close, which is the other half of the contract.
       await reader.dispose();
+    });
+
+    it("preserves an existing home pattern when the storage host requests it", async () => {
+      const identity = await Identity.fromPassphrase(
+        "cli storage host preserved home",
+      );
+      const storageManager = StorageManager.emulate({ as: identity });
+      const owner = new Runtime({
+        apiUrl: new URL("https://fabric.example"),
+        storageManager,
+      });
+      const home = owner.getCell<{ marker: string }>(
+        identity.did(),
+        "caller-home",
+      );
+      await owner.editWithRetry((tx) => {
+        home.withTx(tx).set({ marker: "caller-owned" });
+        owner.getHomeSpaceCell(tx).key("defaultPattern").set(home);
+      });
+      try {
+        const result = await runTestPattern(
+          resolve(FIXTURES, "counter.test.tsx"),
+          {
+            root: FIXTURES,
+            storageHost: {
+              identity,
+              storageManager,
+              preserveDefaultPattern: true,
+            },
+          },
+        );
+        expect(result.error).toBeUndefined();
+        expect(result.results.every((step) => step.passed)).toBe(true);
+        await owner.getHomeSpaceCell().sync();
+        const actual = owner.getHomeSpaceCell().key("defaultPattern")
+          .resolveAsCell();
+        expect(actual.equals(home)).toBe(true);
+      } finally {
+        await owner.dispose();
+      }
+    });
+
+    it("uses the supplied API origin for agent queue entries", async () => {
+      const identity = await Identity.fromPassphrase(
+        "cli storage host API origin",
+      );
+      const storageManager = StorageManager.emulate({ as: identity });
+      const owner = new Runtime({
+        apiUrl: new URL("https://fabric.example"),
+        storageManager,
+      });
+      await owner.editWithRetry((tx) => {
+        owner.getCell(identity.did(), "default-pattern", undefined, tx)
+          .key("agentQueue").set({ entries: [] });
+      });
+      try {
+        await withEnv("EXPERIMENTAL_AGENT_BUILTIN", "true", async () => {
+          const result = await runTestPattern(
+            resolve(FIXTURES, "agent-host.test.tsx"),
+            {
+              root: FIXTURES,
+              storageHost: {
+                identity,
+                storageManager,
+                apiUrl: new URL("https://fabric.example"),
+              },
+            },
+          );
+          expect(result.error).toBeUndefined();
+          expect(result.results.filter((step) => !step.passed)).toEqual([]);
+        });
+      } finally {
+        await owner.dispose();
+      }
+    });
+
+    it("awaits the storage host's external work before reading assertions", async () => {
+      const identity = await Identity.fromPassphrase("cli external work");
+      const storageManager = StorageManager.emulate({ as: identity });
+      const storageHost = {
+        identity,
+        storageManager,
+        beforeAssertions: async (runtime: Runtime, result: Cell<unknown>) => {
+          const written = await runtime.editWithRetry((tx) => {
+            result.key("ready").withTx(tx).set(true);
+          });
+          expect(written.error).toBeUndefined();
+        },
+      };
+      try {
+        const result = await runTestPattern(
+          resolve(FIXTURES, "external-agent.test.tsx"),
+          {
+            root: FIXTURES,
+            storageHost,
+          },
+        );
+        expect(result.error).toBeUndefined();
+        expect(result.results).toHaveLength(1);
+        expect(result.results[0].passed).toBe(true);
+      } finally {
+        await storageManager.close();
+      }
+    });
+
+    it("reports rejected external work without executing the assertions", async () => {
+      const identity = await Identity.fromPassphrase(
+        "cli rejected external work",
+      );
+      const storageManager = StorageManager.emulate({ as: identity });
+      const storageHost = {
+        identity,
+        storageManager,
+        beforeAssertions: () =>
+          Promise.reject(new Error("external agent failed")),
+      };
+      try {
+        const result = await runTestPattern(
+          resolve(FIXTURES, "external-agent.test.tsx"),
+          {
+            root: FIXTURES,
+            storageHost,
+          },
+        );
+        expect(result.error).toContain("external agent failed");
+        expect(result.results).toEqual([]);
+      } finally {
+        await storageManager.close();
+      }
     });
 
     it("RAISES a teardown that does not complete", async () => {
