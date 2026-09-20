@@ -382,10 +382,12 @@ check "shuttle /slugs/ @space> " "$(prompt 5 "cd nosuchslug")" \
 step "9. A slug the index does record lands on the piece it names"
 check "shuttle first @space> " "$(prompt 6 "cd first")" \
   "the prompt carries the name the index confirmed"
+# The two handlers list as callables off the schema their stored links carry;
+# nothing is stored at either position.
 check "%1 \$NAME
 %2 \$UI
-%3 addItem
-%4 clearItems
+%3 addItem <callable>
+%4 clearItems <callable>
 %5 items
 %6 label
 %7 settings
