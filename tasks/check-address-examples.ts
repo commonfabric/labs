@@ -41,7 +41,7 @@
  *   parser.
  *
  * Which text is prose is the other half of the rule: all of a Markdown file,
- * and in TypeScript the regions a comment opener reaches, which `commentsOf`
+ * and in TypeScript the regions a comment opener reaches, which `proseOf`
  * below defines and states the bound on.
  *
  * A `<placeholder>` is left as written and judged as the string it is, which is
@@ -73,13 +73,30 @@
  * names. A directive naming a string no address example in its file carries is
  * reported too, so that an exemption cannot outlive its example.
  *
- * A directive opens its own line, and is read from the file as written rather
- * than from the prose read out of it. Both are what keep an exemption
- * something a writer states: a line of prose that mentions the directive is
- * not one, and neither is a string a program carries, whatever the prose
- * reader makes of the text around it. A directive belongs above the table or
- * the paragraph it speaks for, since a line inside a table row does not open
- * one; `docs/specs/cell-reference-grammar.md` has the worked example.
+ * Where a directive may sit is as much of the rule as how it reads. It opens
+ * its own line, so a sentence mentioning one is a sentence. In TypeScript it
+ * sits in a comment, read by `commentsOnly`, which recognizes string and
+ * template literals — so a directive-shaped line a program carries states
+ * nothing. In Markdown it sits outside a fenced code block, since a fence is
+ * where a document shows what a directive looks like rather than writing one.
+ * And it belongs above the table or paragraph it speaks for, a row's line
+ * opening no directive; `docs/specs/cell-reference-grammar.md` has the worked
+ * example.
+ *
+ * What that leaves, stated rather than implied: a rule about text can be met
+ * by text written to meet it, and this one has a residual worth naming.
+ * Regular-expression literals are modeled by neither reader, so a `//` inside
+ * one is not attributed to the regex. Reaching an exemption from there takes
+ * both halves at once — the `//` has to open the line's kept region and the
+ * directive has to follow it immediately — which means a character class
+ * written to hold the directive whole: one opening `/[// ` and running through
+ * the directive to `]/`. Measured over this tree, no file carries a
+ * directive-shaped line outside a comment at all.
+ *
+ * And such a line hides nothing on its own. A directive whose string no
+ * example in its file carries is reported, so a silent exemption needs the
+ * same file to carry both that line and the very refused address it covers.
+ * Both are written where a writer writes, in a file the writer owns.
  *
  * The string a directive names is an address example, and so begins with `/`.
  * That is what lets this file spell the directive out without exempting
@@ -117,11 +134,19 @@ export function governedKind(path: string): GovernedKind | null {
 }
 
 //
-// Reading a file's prose
+// Reading a file
 //
-// Two readers, one per governed kind, each producing text whose offsets are
-// those of the file: a line number in a finding names the line a reader will
-// open.
+// Two readers over a source file, leaning opposite ways on purpose. `proseOf`
+// keeps every comment and sometimes more, and is what examples are read from,
+// so no comment's address can go unchecked. `commentsOnly` keeps only what is
+// certainly a comment and sometimes less, and is what directives are read
+// from, so nothing a program carries can state an exemption. Each is wrong
+// only where being wrong is visible: one offers a candidate a reader can see
+// is not prose, the other drops an exemption, and the gate then reports the
+// example the writer meant to exempt.
+//
+// Both keep every character at the offset the file gave it, so a line number
+// in a finding names the line a reader will open.
 //
 
 /** `text` with every character but the line breaks replaced by a space. */
@@ -169,7 +194,7 @@ function commentRegionEnd(source: string, at: number): number | null {
  * reader can see is not prose, and a candidate too few is a finding nobody
  * ever sees.
  */
-export function commentsOf(source: string): string {
+export function proseOf(source: string): string {
   const parts: string[] = [];
   let at = 0;
   let covered = 0;
@@ -188,6 +213,66 @@ export function commentsOf(source: string): string {
   }
   parts.push(blanked(source.slice(at)));
   return parts.join("");
+}
+
+/**
+ * One match per comment or literal, whichever opens first. Each match consumes
+ * its own text, so a comment opener a literal carries is carried away with it.
+ */
+const COMMENT_OR_LITERAL =
+  /\/\/[^\n]*|\/\*[\s\S]*?\*\/|`(?:[^`\\]|\\[\s\S])*`|"(?:[^"\\\n]|\\[\s\S])*"|'(?:[^'\\\n]|\\[\s\S])*'/g;
+
+/**
+ * `source` with everything but its comments blanked out, keeping only what is
+ * certainly one.
+ *
+ * `proseOf`'s opposite, and the pair is the point: a string literal and a
+ * template literal are recognized here, so a directive-shaped line a program
+ * carries is not in a comment and states nothing. Where this reader is wrong
+ * it keeps too little, and an exemption that stops working is one the gate
+ * reports.
+ *
+ * Regular-expression literals are not modeled, here or in `proseOf`. A `//`
+ * inside one — `/[//]/`, where a character class holds the pair — opens a
+ * region this reader takes for a comment, so a directive on that line would be
+ * honored. That is the residual this file's header states.
+ */
+export function commentsOnly(source: string): string {
+  const parts: string[] = [];
+  let at = 0;
+  for (const match of source.matchAll(COMMENT_OR_LITERAL)) {
+    const token = match[0];
+    parts.push(blanked(source.slice(at, match.index)));
+    parts.push(
+      token.startsWith("//") || token.startsWith("/*") ? token : blanked(token),
+    );
+    at = match.index + token.length;
+  }
+  parts.push(blanked(source.slice(at)));
+  return parts.join("");
+}
+
+/** A line that opens or closes a fenced code block. */
+const FENCE = /^[ \t]*(?:```|~~~)/;
+
+/**
+ * `text` with the lines inside its fenced code blocks blanked out.
+ *
+ * A fence is where a document writes what a directive looks like rather than
+ * writing one, so a line inside one states nothing. This is the Markdown half
+ * of the pair above: there is no code in a Markdown file for `commentsOnly` to
+ * separate out, and a fence is the one place a document quotes a directive
+ * instead of giving one.
+ */
+export function outsideFences(text: string): string {
+  let fenced = false;
+  return text.split("\n").map((line) => {
+    if (FENCE.test(line)) {
+      fenced = !fenced;
+      return blanked(line);
+    }
+    return fenced ? blanked(line) : line;
+  }).join("\n");
 }
 
 /**
@@ -270,12 +355,18 @@ export function addressExample(content: string): string | null {
  *
  * A directive opens its own line. Before it may come an indent and one of the
  * things a writer puts in front of prose — an HTML comment's `<!--`, a line
- * comment's `//`, a block comment's `/*` or its continuation `*` — and nothing
- * else. The reason runs to the end of the line, less the `-->` that closes an
- * HTML comment around it.
+ * comment's `//`, a block comment's `/*` or its continuation `*` — and
+ * nothing else. The reason runs to the end of the line, less the `-->` that
+ * closes an HTML comment around it.
+ *
+ * The optional opener carries its own trailing spaces rather than leaving them
+ * to a second run beside it. Two runs of spaces around an optional part can
+ * divide a run between them in as many ways as it is long, and the lines this
+ * reads are blanked to spaces, so the ambiguous spelling costs the square of
+ * the longest line.
  */
 const DIRECTIVE =
-  /^[ \t]*(?:<!--|\/\*+|\/\/|\*)?[ \t]*check-address-examples-ignore:[ \t]*(\/\S*)[ \t]*([^\n]*)/gm;
+  /^[ \t]*(?:(?:<!--|\/\*+|\/\/|\*)[ \t]*)?check-address-examples-ignore:[ \t]*(\/\S*)[ \t]*([^\n]*)/gm;
 
 /** A string a file's directives exempt, and the reason given for it. */
 export interface Exemption {
@@ -353,15 +444,18 @@ export interface Finding {
  * Every finding in `documents`: an address example the parser refuses, a
  * directive with no reason, and a directive whose string no example carries.
  *
- * Examples come from the prose and exemptions from the file, which is what
- * keeps a directive out of reach of the one thing the prose reader is
- * deliberately loose about. Pure — all input and output happens in `main`.
+ * Examples come from the reader that keeps too much and exemptions from the
+ * one that keeps too little, so a comment's address is always checked and only
+ * a comment can exempt it. Pure — all input and output happens in `main`.
  */
 export function collectFindings(documents: readonly Document[]): Finding[] {
   const findings: Finding[] = [];
   for (const { path, kind, text } of documents) {
-    const prose = kind === "markdown" ? text : commentsOf(text);
-    const exempt = exemptions(text);
+    const markdown = kind === "markdown";
+    const prose = markdown ? text : proseOf(text);
+    const exempt = exemptions(
+      markdown ? outsideFences(text) : commentsOnly(text),
+    );
     const used = new Set<string>();
     for (const span of codeSpans(prose)) {
       const example = addressExample(span.content);

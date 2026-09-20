@@ -8,11 +8,13 @@ import {
   addressExample,
   codeSpans,
   collectFindings,
-  commentsOf,
+  commentsOnly,
   type Document,
   exemptions,
   governedKind,
   main,
+  outsideFences,
+  proseOf,
   readDocuments,
 } from "./check-address-examples.ts";
 
@@ -110,14 +112,14 @@ describe("check-address-examples", () => {
     });
   });
 
-  describe("commentsOf()", () => {
+  describe("proseOf()", () => {
     it("keeps a comment and blanks the code around it", () => {
       const comment = `${LINE_OPENER} \`/tracker/items\` is the address.`;
       const source = [
         'const target = "/@bakery/glaze-tracker";',
         comment,
       ].join("\n");
-      const prose = commentsOf(source);
+      const prose = proseOf(source);
 
       expect(prose).toContain(comment);
       expect(prose).not.toContain("glaze-tracker");
@@ -129,15 +131,15 @@ describe("check-address-examples", () => {
 
       const source = "const url = `/@${space}/top/42`;";
 
-      expect(commentsOf(source).trim()).toBe("");
+      expect(proseOf(source).trim()).toBe("");
     });
 
     it("leaves every character at the offset the file gave it", () => {
       const source = ["const a = 1;", "const b = 2;", `${LINE_OPENER} note`]
         .join("\n");
 
-      expect(commentsOf(source).split("\n")[2]).toBe(`${LINE_OPENER} note`);
-      expect(commentsOf(source).length).toBe(source.length);
+      expect(proseOf(source).split("\n")[2]).toBe(`${LINE_OPENER} note`);
+      expect(proseOf(source).length).toBe(source.length);
     });
 
     it("keeps a comment that follows a regular expression holding a quote", () => {
@@ -149,14 +151,14 @@ describe("check-address-examples", () => {
         `${LINE_OPENER} Use \`/@bakery/glaze-tracker\` and say "done".`;
       const source = `const quoted = /"/; ${comment}\n`;
 
-      expect(commentsOf(source)).toContain(comment);
+      expect(proseOf(source)).toContain(comment);
     });
 
     it("keeps a comment that follows a regular expression holding a backtick", () => {
       const comment = `${LINE_OPENER} Read \`/@bakery/glaze-tracker\`.`;
       const source = "const pattern = /`/;\n" + comment + "\n";
 
-      expect(commentsOf(source)).toContain(comment);
+      expect(proseOf(source)).toContain(comment);
     });
 
     it("keeps a comment in full past a block closer opened inside a literal", () => {
@@ -169,7 +171,7 @@ describe("check-address-examples", () => {
       } on.`;
       const source = `const glob = "${BLOCK_OPENER}";\n${comment}\n`;
 
-      expect(commentsOf(source)).toContain(comment);
+      expect(proseOf(source)).toContain(comment);
     });
 
     it("stops an unclosed block opener at the end of its line", () => {
@@ -180,7 +182,7 @@ describe("check-address-examples", () => {
       const source = `${LINE_OPENER} the ${BLOCK_OPENER} characters\n` +
         "const url = `/x/y`;\n";
 
-      expect(commentsOf(source)).not.toContain("`/x/y`");
+      expect(proseOf(source)).not.toContain("`/x/y`");
     });
 
     it("reads a comment opener inside a string as opening a comment", () => {
@@ -191,7 +193,42 @@ describe("check-address-examples", () => {
       const source =
         `const separator = "${LINE_OPENER}"; const url = \`/x/y\`;`;
 
-      expect(commentsOf(source)).toContain("`/x/y`");
+      expect(proseOf(source)).toContain("`/x/y`");
+    });
+  });
+
+  describe("commentsOnly()", () => {
+    it("blanks a directive-shaped line a template literal carries", () => {
+      // `proseOf`'s opposite: it recognizes literals, so a line a program
+      // carries is not a comment and states nothing.
+
+      const source = "const note = `data\n" +
+        `${LINE_OPENER} check-address-examples-ignore: /@bakery/x/y why\n` +
+        "`;\n";
+
+      expect(commentsOnly(source).trim()).toBe("");
+    });
+
+    it("keeps a comment no literal holds", () => {
+      const comment = `${LINE_OPENER} check-address-examples-ignore: /x/y why`;
+
+      expect(commentsOnly(`const a = 1;\n${comment}\n`)).toContain(comment);
+    });
+  });
+
+  describe("outsideFences()", () => {
+    it("blanks a line inside a fenced code block", () => {
+      const text = "Before.\n\n```text\n<!-- a directive -->\n```\n\nAfter.\n";
+      const outside = outsideFences(text);
+
+      expect(outside).not.toContain("a directive");
+      expect(outside).toContain("Before.");
+      expect(outside).toContain("After.");
+      expect(outside.length).toBe(text.length);
+    });
+
+    it("keeps a line a fence does not enclose", () => {
+      expect(outsideFences("<!-- a directive -->\n")).toContain("a directive");
     });
   });
 
@@ -403,6 +440,45 @@ describe("check-address-examples", () => {
 
       expect(collectFindings(inLine)).toEqual([]);
       expect(collectFindings(inBlock)).toEqual([]);
+    });
+
+    it("returns a finding past a directive a template literal carries", () => {
+      // A template literal's interior lines are lines of the file, so opening
+      // one's own line is not enough on its own. Only a comment states an
+      // exemption, with or without an opener written into the data.
+
+      const opened = typescript(
+        "const note = `data\n" +
+          `${LINE_OPENER} check-address-examples-ignore: /@bakery/x/y why\n` +
+          "`;\n" + `${LINE_OPENER} Use \`/@bakery/x/y\`.\n`,
+      );
+      const bare = typescript(
+        "const note = `data\ncheck-address-examples-ignore: /@bakery/x/y why\n" +
+          "`;\n" + `${LINE_OPENER} Use \`/@bakery/x/y\`.\n`,
+      );
+
+      expect(collectFindings(opened).length).toBe(1);
+      expect(collectFindings(bare).length).toBe(1);
+    });
+
+    it("returns a finding past a directive a fenced block shows", () => {
+      // A fence is where a document writes what a directive looks like.
+
+      const documents = markdown(
+        "```text\n<!-- check-address-examples-ignore: /@bakery/x/y why -->\n" +
+          "```\n\nWrite `/@bakery/x/y` to reach it.\n",
+      );
+
+      expect(collectFindings(documents).length).toBe(1);
+    });
+
+    it("returns nothing for a directive outside every fence", () => {
+      const documents = markdown(
+        "<!-- check-address-examples-ignore: /@bakery/x/y quoted as refused " +
+          "-->\n\nWrite `/@bakery/x/y` to reach it.\n",
+      );
+
+      expect(collectFindings(documents)).toEqual([]);
     });
 
     it("returns a finding for an example split across a line break", () => {
