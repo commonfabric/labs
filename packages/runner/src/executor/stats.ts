@@ -252,10 +252,12 @@ export type ServingLoopStats = {
    * absolutely, since those counters reset on a fresh runtime);
    * `notCurrentRearms` (per-key not-current-for-pair re-arms, accumulated);
    * `demandPasses` the pass count and `demandPassMs` the pass's total WALL
-   * time (NOT pure reconcile cost: it INCLUDES the awaited structure-load
-   * segments — `ensurePieceRunning` / `#confirmNoPatternMeta` — for
-   * first-demand and pending ROOT keys, which dominate the early passes;
-   * the reconcile itself is the O(rows) map work — W1 review MINOR-3);
+   * time (NOT pure reconcile cost: it INCLUDES the pull of those keys' root
+   * documents — `structureRootsPreloaded` below — and the awaited
+   * structure-load segments after it — `ensurePieceRunning` /
+   * `#confirmNoPatternMeta` — for first-demand and pending ROOT keys, which
+   * dominate the early passes; the reconcile itself is the O(rows) map work
+   * — W1 review MINOR-3);
    * `pushGrowthWakes` / `watchWakes` count NOTIFIES (the push-time
    * `demandChanged` and the `session.watch.set` / `.add` notifies) BEFORE
    * the 300 ms grace coalesces them into a pending callback. A callback
@@ -286,6 +288,7 @@ export type ServingLoopStats = {
      * wave's settle. Counted per document per pass, so a root whose load
      * stays owed across passes counts once for each. */
     structureRootsPreloaded: number;
+
     pushGrowthWakes: number;
     watchWakes: number;
 

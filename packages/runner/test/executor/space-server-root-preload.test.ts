@@ -180,6 +180,7 @@ describe("SpaceServer", () => {
     });
     return {
       engine,
+      manager,
       runtime,
       stats,
       serving,
@@ -204,6 +205,43 @@ describe("SpaceServer", () => {
         expect(fixture.stats.demand.structureRootsPreloaded).toBe(
           rootIds.length,
         );
+      });
+
+      it("defers a root a commit touched while the pull that read it was in flight", async () => {
+        // The pull registers each root's watch, and a registered watch is what
+        // lets the traversal read from the replica rather than fetch — so a
+        // commit admitted between the two is one the root's reading may not
+        // carry. The verdict is meta-less either way here; what the case turns
+        // on is whether the pass invalidates it.
+
+        const fixture = await openFixture();
+        const sync = fixture.manager.syncCell.bind(fixture.manager);
+        let wrote = false;
+        fixture.manager.syncCell = async (cell, options) => {
+          // The pull's call carries no transaction; a traversal's carries its
+          // own immediate one.
+          if (
+            !wrote && cell.tx === undefined &&
+            cell.getAsNormalizedFullLink().id === rootIds[0]
+          ) {
+            wrote = true;
+            await server.writeDocument(space, rootIds[0], { plain: 2 });
+          }
+          return await sync(cell, options);
+        };
+
+        expect(await settle(fixture.serving.activate())).toBe(true);
+        // The invalidated root parks once its retry reads the written value,
+        // so the pass parks more often than it has roots.
+        await awaitEach(
+          cycles,
+          () => fixture.stats.structureLoadTerminal > rootIds.length,
+        );
+
+        expect(wrote).toBe(true);
+        expect(fixture.stats.structureLoadDeferred).toBe(1);
+        expect(fixture.stats.structureLoadFailures).toBe(0);
+        expect(fixture.stats.structureLoadStuck).toBe(0);
       });
 
       it("syncs each demanded root it terminalizes, and terminalizes each one once", async () => {
