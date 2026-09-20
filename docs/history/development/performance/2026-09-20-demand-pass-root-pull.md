@@ -144,10 +144,12 @@ span. A deferral there is the guard doing what it was widened to do — a commit
 touched a root's document between the pull that read it and the root's own
 turn, so the reading is not trusted and the root retries inside the same
 settle. What it is not is free, and this record does not claim it is: against
-661 and 663 terminal parks it is 3 and 9 retries, and those two rounds carry
-the lowest fix-arm watch-add counts of the six, so the retries did not eat the
-saving. `structureLoadStuck` staying zero is what says none of them became a
-root that stops resolving.
+661 and 663 terminal parks it is 3 and 9 retries, and those two rounds hold the
+largest and the third-largest per-round saving of the six, −283 and −233, so
+the retries did not eat it. That is the delta rather than the absolute count,
+because the count rides whatever load the base arm caught.
+`structureLoadStuck` staying zero is what says none of them became a root that
+stops resolving.
 
 ## What this does not establish
 
