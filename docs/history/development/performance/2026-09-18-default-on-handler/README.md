@@ -36,14 +36,24 @@ with accounting disabled. Deno reports eight timed samples per case; the phase
 stream contains nine dispatch records per case, including warmup. Do not average
 all phase records and describe that as the Deno timing mean.
 
-Each timed interval starts at event send and ends after the commit callback.
-Runtime preparation, reset/reseeding, post-callback drains, and correctness
-assertions are outside that interval. Variants run sequentially, with the
-previous runtime disposed before the next variant is prepared. Phase values are
-milliseconds accumulated between timer snapshots for that dispatch. Some phases
-enclose others, so their values are not an additive decomposition of the total.
-`elapsed` in the phase stream is the dispatch's internal timer; the Deno timer
-also includes its surrounding call overhead.
+The pinned benchmark declares `n: 7, warmup: 1`; `n` is not an exact sample
+count in this Deno version. The
+[Deno 2.9.4 measurement loop](https://github.com/denoland/deno/blob/v2.9.4/cli/js/40_bench.js#L299-L356)
+uses a 10 ms budget before decrementing the requested iteration count. A first
+invocation that consumes that budget is followed by seven further measured
+invocations. The committed artifact's `n: 8` is the observed count, not a
+changed benchmark configuration.
+
+The table uses Deno's explicit timer: `b.start()` runs before calling
+`prepared.dispatch()`, and `b.end()` runs after that awaited call returns. The
+phase stream's internal `elapsed` timer starts immediately before `send()` and
+ends inside its commit callback. Deno's interval therefore also includes call
+setup and promise resumption overhead. Runtime preparation, reset/reseeding,
+post-callback drains, and correctness assertions are outside both intervals.
+Variants run sequentially, with the previous runtime disposed before the next
+variant is prepared. Phase values are milliseconds accumulated between timer
+snapshots for that dispatch. Some phases enclose others, so their values are not
+an additive decomposition of the total.
 
 ## Observed dispatch times
 
