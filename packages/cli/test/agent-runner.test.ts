@@ -646,6 +646,123 @@ describe("agent runner", () => {
     );
   });
 
+  for (
+    const conflict of [
+      "recovered",
+      "renewed",
+      "cancelled",
+      "cancel requested",
+      "finished",
+    ] as const
+  ) {
+    it(`rechecks a record ${conflict} by another client before its write commits`, async () => {
+      const result = await submit();
+      const recovering = conflict === "recovered" || conflict === "renewed";
+      await patternSide.editWithRetry((tx) => {
+        const record = recordOf(result).withTx(tx);
+        if (recovering) {
+          record.key("state").set("running");
+          record.key("attempts").set(1);
+          record.key("claim").set({
+            runner: "did:key:remote#1",
+            leaseUntil: "2026-09-18T11:00:00.000Z",
+          });
+        }
+        if (conflict === "cancelled") {
+          record.key("cancelRequestedAt").set(clock.toISOString());
+        }
+      });
+      const runnerSide = connect(CLOUD);
+      const original = runnerSide.editWithRetry.bind(runnerSide);
+      let callbacks = 0;
+      const interleaveAt = conflict === "finished" ? 2 : 1;
+      runnerSide.editWithRetry = ((fn, ...rest) =>
+        original((tx) => {
+          const value = fn(tx);
+          if (++callbacks === interleaveAt) {
+            const commit = tx.commit.bind(tx);
+            tx.commit = async (...args) => {
+              await patternSide.editWithRetry((competing) => {
+                const record = recordOf(result).withTx(competing);
+                if (conflict === "renewed") {
+                  record.key("claim").key("leaseUntil").set(
+                    "2026-09-18T13:00:00.000Z",
+                  );
+                } else if (conflict === "cancel requested") {
+                  record.key("cancelRequestedAt").set(clock.toISOString());
+                } else {
+                  record.key("state").set("cancelled");
+                  record.key("outcome").set("cancelled");
+                  record.key("errorCode").set("CANCELLED");
+                  record.key("finishedAt").set(clock.toISOString());
+                  record.key("claim").set(undefined);
+                }
+              });
+              return commit(...args);
+            };
+          }
+          return value;
+        }, ...rest)) as typeof runnerSide.editWithRetry;
+      let executed = false;
+      const runner = await startRunner(() => {
+        executed = true;
+        return Promise.resolve({ outcome: "refused" });
+      }, { runtimeForHost: () => Promise.resolve(runnerSide) });
+      await runner.idle();
+
+      const record = recordOf(result, runnerSide).get();
+      expect(callbacks).toBeGreaterThan(interleaveAt);
+      expect(executed).toBe(false);
+      expect(record?.state).toBe(
+        conflict === "renewed" ? "running" : "cancelled",
+      );
+      if (conflict === "renewed") {
+        expect(record?.claim?.leaseUntil).toBe("2026-09-18T13:00:00.000Z");
+      }
+      if (conflict === "cancel requested") {
+        expect(record?.attempts).toBeUndefined();
+      }
+    });
+  }
+
+  it("does not execute a record deleted after its running-state write commits", async () => {
+    const result = await submit();
+    const runnerSide = connect(CLOUD);
+    const original = runnerSide.editWithRetry.bind(runnerSide);
+    let writes = 0;
+    runnerSide.editWithRetry = (async (fn, ...rest) => {
+      const sequence = ++writes;
+      const committed = await original(fn, ...rest);
+      if (sequence === 2) {
+        await patternSide.editWithRetry((tx) => {
+          recordOf(result).withTx(tx).setRaw(undefined);
+        });
+        await waitForCellValue(
+          runnerSide,
+          recordOf(result, runnerSide),
+          (value) => value === undefined,
+        );
+      }
+      return committed;
+    }) as typeof runnerSide.editWithRetry;
+    const reports: string[] = [];
+    let executed = false;
+    const runner = await startRunner(() => {
+      executed = true;
+      return Promise.resolve({ outcome: "refused" });
+    }, {
+      runtimeForHost: () => Promise.resolve(runnerSide),
+      report: (message) => reports.push(message),
+    });
+    await runner.idle();
+
+    expect(executed).toBe(false);
+    expect(reports).toContain(
+      "agent runner: a run failed: the claimed record does not read",
+    );
+    expect(recordOf(result, runnerSide).get()).toBeUndefined();
+  });
+
   it("reports a scan that fails, and goes on following the queue", async () => {
     const reports: string[] = [];
     await patternSide.editWithRetry((tx) => {
@@ -827,6 +944,10 @@ describe("agent runner", () => {
         signal?: AbortSignal;
         emit: () => Promise<void>;
       }) => Promise<HarnessPromptLoopResult>,
+      options: {
+        report?: (message: string) => void;
+        omitHarnessArgs?: boolean;
+      } = {},
     ) => {
       const sessionRuntime = connect(CLOUD);
       const pieces = new PiecesController(
@@ -842,15 +963,19 @@ describe("agent runner", () => {
         identityKeyPath: join(workRoot, "unused.key"),
         requester: home,
         workRoot,
-        report: (m) => Deno.env.get("AGENT_TEST_DEBUG") && console.log(m),
-        harnessArgs: [
+        report: options.report ??
+          ((m) => Deno.env.get("AGENT_TEST_DEBUG") && console.log(m)),
+        harnessArgs: options.omitHarnessArgs ? undefined : [
           "--model-provider",
           "openai-compatible-gateway",
           "--gateway-auth-mode",
           "none",
         ],
         harnessDeps: {
-          env: {},
+          env: {
+            CF_HARNESS_MODEL_PROVIDER: "openai-compatible-gateway",
+            CF_HARNESS_GATEWAY_AUTH_MODE: "none",
+          },
           fabricSessionFactory: () => Promise.resolve({ pieces }),
           createPromptLoop: (options) => ({
             runPrompt: (prompt) => {
@@ -1087,6 +1212,43 @@ describe("agent runner", () => {
 
       expect(record.errorCode).toBe("PROVIDER_FAILURE");
       expect(record.modelTurns).toBe(3);
+    });
+
+    it("fails when the validated result file disappears before the writer reads it", async () => {
+      let file: string | undefined;
+      let removed = false;
+      await startHarnessRunner(async ({ resultPath }) => {
+        file = resultPath;
+        await Deno.writeTextFile(
+          resultPath,
+          JSON.stringify({ answer: "Solaris" }),
+        );
+        return loopResult("run-disappearing-result");
+      }, {
+        omitHarnessArgs: true,
+        report: (message) => {
+          if (message.includes("Done.") && file !== undefined) {
+            Deno.removeSync(file);
+            removed = true;
+          }
+        },
+      });
+      const result = await submit();
+      const record = await waitForState(result, "failed");
+
+      expect(removed).toBe(true);
+      expect(record.errorCode).toBe("PROVIDER_FAILURE");
+      expect(record.result).toBeUndefined();
+    });
+
+    it("reports a prompt-loop provider error as `PROVIDER_FAILURE`", async () => {
+      await startHarnessRunner(() =>
+        Promise.reject(new Error("provider disconnected"))
+      );
+      const result = await submit();
+      const record = await waitForState(result, "failed");
+
+      expect(record.errorCode).toBe("PROVIDER_FAILURE");
     });
 
     it("fails as `PROVIDER_FAILURE` a result that does not fit the schema", async () => {
