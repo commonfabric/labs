@@ -345,10 +345,15 @@ board's package does not upgrade those existing children.
 
 1. Inventory target piece IDs, source revisions, stored input/result contracts,
    linked spaces, active generations, each topic's stored `topicStateVersion`,
-   and which topics hold `boardCrossrefs`, `mentionable`, and `boardNames` and
-   what each links to. Inspect the deployed parent's stored demand, not just its
-   current repository source. Record whether each improvement changes only
-   derived computation, a public result, or persisted state.
+   and which topics hold `boardCrossrefs`, `mentionable`, and the legacy
+   `boardNames`, and what each links to. A topic no longer declares
+   `boardNames` — it stores the number its board calls it by, which `addTopic`
+   passes at create and `recordName` writes onto a topic that predates it — so
+   what an inventory finds there is a stored link the current projection no
+   longer reaches, on topics created before that changed. Inspect the deployed
+   parent's stored demand, not just its current repository source. Record
+   whether each improvement changes only derived computation, a public result,
+   or persisted state.
 2. Confirm the target runtime/compiler supports the operators. A change to
    derived computation alone needs no upgrade step. A change the topic pattern
    makes to its own persisted state is a new step under
