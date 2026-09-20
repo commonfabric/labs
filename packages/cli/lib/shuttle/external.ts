@@ -38,6 +38,12 @@ import { type RecordEntry } from "./record.ts";
 const HOME_SCHEME = "file";
 
 /**
+ * The last code point a URL parser drops from the front of a reference before
+ * it reads anything else, the space itself among them.
+ */
+const BLANK = 0x20;
+
+/**
  * What moving the external location did: it landed somewhere, or it was
  * refused.
  */
@@ -120,6 +126,47 @@ function notAbsolute(token: string): string {
 function spellsNoPlace(token: string): string {
   return `\`${token}\` spells no place: it names a scheme and a path, and ` +
     `what is written between them is not an address that scheme can carry.`;
+}
+
+/**
+ * The refusal a `file:` token carrying a host gets.
+ *
+ * `file:` names a file on this machine, and `file://server/share` names one
+ * on another — a place shuttle has no way to reach and, worse, one whose host
+ * a conversion to a path drops in silence, leaving a location that looks like
+ * the one asked for and is not.
+ *
+ * `file://localhost/tmp` is not one of these: the URL parser resolves that
+ * host away, so what arrives here already names a local file.
+ */
+const NAMES_ANOTHER_MACHINE =
+  "`file:` names a file on this machine, so a host after the separator " +
+  "names a place shuttle does not reach. Write the path on its own.";
+
+/**
+ * Returns `path` with a leading run of blanks written as its own characters,
+ * so a URL reference cannot be read past them.
+ *
+ * A URL parser drops leading blanks before it reads anything else, which
+ * turns ` file:out.json` into a schemed reference — past the check that would
+ * have refused the scheme, and onto another plane. Encoding them leaves the
+ * token naming what it says it names, which is what the same token does on
+ * the plane that reads a path.
+ */
+function withLeadingBlanksKept(path: string): string {
+  // Walked rather than matched: a character class over this range is a
+  // control character written into a regular expression, which `deno lint`
+  // turns down (`no-control-regex`) for the reason it is written as an
+  // escape everywhere else.
+  let past = 0;
+  while (past < path.length && path.charCodeAt(past) <= BLANK) past += 1;
+  if (past === 0) return path;
+  let kept = "";
+  for (let at = 0; at < past; at += 1) {
+    const code = path.charCodeAt(at).toString(16).padStart(2, "0");
+    kept += `%${code.toUpperCase()}`;
+  }
+  return kept + path.slice(past);
 }
 
 const NAMES_NO_HOME =
@@ -233,10 +280,11 @@ export class ExternalLocation {
       return { kind: "refused", reason: notAbsolute(token) };
     }
     try {
-      return {
-        kind: "external",
-        at: onFilePlane ? toFileUrl(path) : new URL(`${scheme}:${path}`),
-      };
+      if (onFilePlane) return { kind: "external", at: toFileUrl(path) };
+      const at = new URL(`${scheme}:${path}`);
+      return at.protocol === `${HOME_SCHEME}:` && at.host !== ""
+        ? { kind: "refused", reason: NAMES_ANOTHER_MACHINE }
+        : { kind: "external", at };
     } catch {
       return { kind: "refused", reason: spellsNoPlace(token) };
     }
@@ -252,7 +300,10 @@ export class ExternalLocation {
   #rooted(path: string): Landing {
     try {
       if (this.#at.protocol !== `${HOME_SCHEME}:`) {
-        return { kind: "external", at: new URL(path, this.#at) };
+        return {
+          kind: "external",
+          at: new URL(withLeadingBlanksKept(path), this.#at),
+        };
       }
       const expanded = expandHome(path, this.#home);
       if (expanded === undefined) {

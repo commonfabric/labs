@@ -160,6 +160,33 @@ describe("external", () => {
       expect(location.render()).toBe("file:///home/a%23b/data/");
     });
 
+    it("refuses a `file:` token naming a host, which is another machine", () => {
+      // The host would be dropped in silence by the conversion to a path,
+      // leaving a location that looks like the one asked for and is not.
+
+      const location = at("file:///tmp/work/");
+      expect(refusal(location.xcd("file://server/share/a")))
+        .toContain("does not reach");
+      expect(location.render()).toBe("file:///tmp/work/");
+    });
+
+    it("takes `localhost` as the local machine, the parser resolving it away", () => {
+      const location = at("file:///tmp/");
+      location.xcd("file://localhost/work");
+      expect(location.render()).toBe("file:///work/");
+    });
+
+    it("cannot be read past a leading blank into a scheme, on a URL plane", () => {
+      // A URL parser drops leading blanks before it reads anything else,
+      // which would turn this into a schemed reference — past the check that
+      // refuses the scheme, and onto another plane.
+
+      const location = at("https://example.test/a/");
+      location.xcd(" file:out.json");
+      expect(location.render())
+        .toBe("https://example.test/a/%20file:out.json/");
+    });
+
     it("refuses a path opening at a home the run was given none of", () => {
       const homeless = new ExternalLocation(new URL("file:///tmp/"), undefined);
       expect(refusal(homeless.xcd("file:~/work"))).toContain("no home");
