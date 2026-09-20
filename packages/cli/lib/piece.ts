@@ -16,6 +16,7 @@ import { createSession, type Identity, Session } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
 import { collectDataFileNames } from "@commonfabric/js-compiler";
 import { TARGET } from "@commonfabric/js-compiler/typescript";
+import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { setLLMUrl } from "@commonfabric/llm";
 import {
@@ -191,6 +192,7 @@ export interface SpaceConfig {
 /** Metadata returned for a piece whose stored data matches a search query. */
 export interface PieceSearchResult {
   id: string;
+  reference: string;
   name?: string;
   patternRef?: PiecePatternRef;
 }
@@ -787,26 +789,33 @@ export async function listPieces(
   config: SpaceConfig,
   deps: PieceOperationDependencies = {},
 ): Promise<
-  { id: string; name?: string; patternRef?: PiecePatternRef; error?: string }[]
+  (PieceSearchResult & { error?: string })[]
 > {
   const pieces = await (deps.loadPieces ?? loadPieces)(config);
   const registeredPieces = await pieces.getRegisteredPieces();
   return Promise.all(
     registeredPieces.map(async (piece) => {
+      const reference = createLLMFriendlyLink(
+        piece.getCell().getAsNormalizedFullLink(),
+      );
       try {
-        const livePiece = await pieces.get(piece.id, true);
+        const owner = piece.pieces();
+        const cell = await owner.getPieceCell(piece.getCell(), true);
+        const livePiece = new PieceController(owner, cell);
         const name = (await (
           livePiece.getCell().key(NAME) as Cell<unknown>
         ).pull()) as string | undefined;
         const patternRef = await livePiece.getPatternRef();
         return {
           id: piece.id,
+          reference,
           name,
           patternRef,
         };
       } catch (err) {
         return {
           id: piece.id,
+          reference,
           error: err instanceof Error ? err.message : String(err),
         };
       }
@@ -936,6 +945,12 @@ function cellValueTraversalKey(cell: Cell<unknown>): string {
   });
 }
 
+/** Identify a piece's document independently of its selected fields or view labels. */
+function pieceDocumentIdentity(cell: Cell<unknown>): string {
+  const { space, id, scope } = cell.getAsNormalizedFullLink();
+  return hashStringOf({ space, id, scope });
+}
+
 interface PieceOwnerCache {
   cells: Map<string, Promise<string | undefined>>;
   documents: Map<string, string | null>;
@@ -943,7 +958,7 @@ interface PieceOwnerCache {
 
 async function resolveRegisteredDocumentOwner(
   cell: Cell<unknown>,
-  registeredPieceIds: ReadonlySet<string>,
+  registeredPieceDocuments: ReadonlySet<string>,
   ownerCache: PieceOwnerCache,
 ): Promise<string | undefined> {
   let current = cell;
@@ -975,8 +990,9 @@ async function resolveRegisteredDocumentOwner(
     const currentId = pieceId(current);
     // Nested piece results can point to a parent result. Stop at the nearest
     // registered result before following its parent metadata.
-    if (currentId !== undefined && registeredPieceIds.has(currentId)) {
-      return finish(currentId);
+    const currentDocument = pieceDocumentIdentity(current);
+    if (registeredPieceDocuments.has(currentDocument)) {
+      return finish(currentDocument);
     }
 
     await current.sync();
@@ -986,7 +1002,7 @@ async function resolveRegisteredDocumentOwner(
       (getPatternIdentityRef(current) !== undefined ||
         argumentLink !== undefined)
     ) {
-      return finish(currentId);
+      return finish(currentDocument);
     }
     const resultLink = getMetaLink(current, "result");
     if (resultLink === undefined) return finish(undefined);
@@ -1002,7 +1018,7 @@ async function resolveRegisteredDocumentOwner(
 
 function registeredDocumentOwner(
   cell: Cell<unknown>,
-  registeredPieceIds: ReadonlySet<string>,
+  registeredPieceDocuments: ReadonlySet<string>,
   ownerCache: PieceOwnerCache,
 ): Promise<string | undefined> {
   const key = cellDocumentTraversalKey(cell);
@@ -1011,28 +1027,28 @@ function registeredDocumentOwner(
   }
   return resolveRegisteredDocumentOwner(
     cell,
-    registeredPieceIds,
+    registeredPieceDocuments,
     ownerCache,
   );
 }
 
 async function resolveRegisteredPieceOwner(
   cell: Cell<unknown>,
-  registeredPieceIds: ReadonlySet<string>,
+  registeredPieceDocuments: ReadonlySet<string>,
   ownerCache: PieceOwnerCache,
   cellIsMaterialized: boolean,
 ): Promise<string | undefined> {
   if (!cellIsMaterialized) await cell.sync();
   return registeredDocumentOwner(
     cell.resolveAsCell(),
-    registeredPieceIds,
+    registeredPieceDocuments,
     ownerCache,
   );
 }
 
 function registeredPieceOwner(
   cell: Cell<unknown>,
-  registeredPieceIds: ReadonlySet<string>,
+  registeredPieceDocuments: ReadonlySet<string>,
   ownerCache: PieceOwnerCache,
   cellIsMaterialized: boolean,
 ): Promise<string | undefined> {
@@ -1041,7 +1057,7 @@ function registeredPieceOwner(
   if (owner === undefined) {
     owner = resolveRegisteredPieceOwner(
       cell,
-      registeredPieceIds,
+      registeredPieceDocuments,
       ownerCache,
       cellIsMaterialized,
     );
@@ -1051,8 +1067,8 @@ function registeredPieceOwner(
 }
 
 interface SearchOwnership {
-  pieceId: string;
-  registeredPieceIds: ReadonlySet<string>;
+  pieceDocument: string;
+  registeredPieceDocuments: ReadonlySet<string>;
   ownerCache: PieceOwnerCache;
 }
 
@@ -1127,11 +1143,11 @@ async function searchTextMatches(
   if (isCell(rootCell)) {
     const owner = await registeredPieceOwner(
       rootCell,
-      ownership.registeredPieceIds,
+      ownership.registeredPieceDocuments,
       ownership.ownerCache,
       false,
     );
-    if (owner !== undefined && owner !== ownership.pieceId) return false;
+    if (owner !== undefined && owner !== ownership.pieceDocument) return false;
   }
 
   const value = await rootCell.pull();
@@ -1177,11 +1193,13 @@ async function searchTextMatches(
         if (!next.value.ownershipEstablished) {
           const owner = await registeredPieceOwner(
             current,
-            ownership.registeredPieceIds,
+            ownership.registeredPieceDocuments,
             ownership.ownerCache,
             false,
           );
-          if (owner !== undefined && owner !== ownership.pieceId) continue;
+          if (owner !== undefined && owner !== ownership.pieceDocument) {
+            continue;
+          }
         }
 
         const nested = await current.pull();
@@ -1200,11 +1218,11 @@ async function searchTextMatches(
       try {
         const owner = await registeredPieceOwner(
           sourceCell,
-          ownership.registeredPieceIds,
+          ownership.registeredPieceDocuments,
           ownership.ownerCache,
           true,
         );
-        if (owner !== undefined && owner !== ownership.pieceId) continue;
+        if (owner !== undefined && owner !== ownership.pieceDocument) continue;
         ownershipEstablished = true;
       } catch (error) {
         reportReadError?.(error);
@@ -1232,11 +1250,13 @@ async function searchTextMatches(
         if (!ownershipEstablished) {
           const owner = await registeredPieceOwner(
             sourceCell,
-            ownership.registeredPieceIds,
+            ownership.registeredPieceDocuments,
             ownership.ownerCache,
             true,
           );
-          if (owner !== undefined && owner !== ownership.pieceId) continue;
+          if (owner !== undefined && owner !== ownership.pieceDocument) {
+            continue;
+          }
           ownershipEstablished = true;
         }
 
@@ -1345,8 +1365,8 @@ export async function searchPieces(
   // against a server-hosted index.
   const pieces = await (deps.loadPieces ?? loadPieces)(config);
   const registeredPieces = await pieces.getRegisteredPieces();
-  const registeredPieceIds = new Set(
-    registeredPieces.map((piece) => piece.id),
+  const registeredPieceDocuments = new Set(
+    registeredPieces.map((piece) => pieceDocumentIdentity(piece.getCell())),
   );
   const ownerCache: PieceOwnerCache = {
     cells: new Map(),
@@ -1380,7 +1400,11 @@ export async function searchPieces(
         inputMatches = await searchTextMatches(
           inputCell,
           normalizedQuery,
-          { pieceId: piece.id, registeredPieceIds, ownerCache },
+          {
+            pieceDocument: pieceDocumentIdentity(piece.getCell()),
+            registeredPieceDocuments,
+            ownerCache,
+          },
           NO_IGNORED_ROOT_KEYS,
           (error) => reportSearchError(piece.id, "input data", error),
         );
@@ -1395,7 +1419,11 @@ export async function searchPieces(
           resultMatches = await searchTextMatches(
             resultCell,
             normalizedQuery,
-            { pieceId: piece.id, registeredPieceIds, ownerCache },
+            {
+              pieceDocument: pieceDocumentIdentity(piece.getCell()),
+              registeredPieceDocuments,
+              ownerCache,
+            },
             RESULT_IGNORED_ROOT_KEYS,
             (error) => reportSearchError(piece.id, "result data", error),
           );
@@ -1417,7 +1445,14 @@ export async function searchPieces(
         } catch (error) {
           reportSearchError(piece.id, "metadata", error);
         }
-        matches[index] = { id: piece.id, name, patternRef };
+        matches[index] = {
+          id: piece.id,
+          reference: createLLMFriendlyLink(
+            piece.getCell().getAsNormalizedFullLink(),
+          ),
+          name,
+          patternRef,
+        };
       }
     }
   };
@@ -1637,8 +1672,9 @@ async function lifecycleClient(
 
 /**
  * The served half of `newPiece`: the serving runtime compiles the program
- * and materializes the piece — the creation act, with its registry entry
- * and its name in the same transaction — and this connection then starts
+ * and materializes the piece with its name and creation receipt in one
+ * transaction, then awaits the default pattern's registration action.
+ * This connection then starts
  * it the way it starts any piece it opens, running the graph as
  * speculation while the server derives on demand. The request is awaited
  * without a wall-clock bound: a creation the server is still committing
@@ -1650,22 +1686,48 @@ async function createOnServer(
   pieces: PiecesController,
   program: RuntimeProgram,
   entry: EntryConfig,
-  options: { start?: boolean; slug?: string; force?: boolean } | undefined,
+  options: {
+    start?: boolean;
+    slug?: string;
+    force?: boolean;
+    requestKey?: string;
+  } | undefined,
   deps: PieceOperationDependencies,
   boundStart: <T>(start: Promise<T>) => Promise<T>,
 ): Promise<{ id: string; getCell: () => Cell<unknown> }> {
-  const receipt = await (deps.instantiatePieceOnServer ??
-    instantiatePieceOnServer)(await lifecycleClient(config, deps), {
-      space: pieces.getSpace(),
-      program,
-      ...(entry.repository === undefined
-        ? {}
-        : { repository: entry.repository }),
-      ...(options?.slug === undefined ? {} : { slug: options.slug }),
-      ...(options?.force === undefined ? {} : { force: options.force }),
-      register: true,
-      ...(options?.start === false ? { start: false } : {}),
-    });
+  const requestKey = options?.requestKey ?? crypto.randomUUID();
+  const receipt = await (async () => {
+    try {
+      return await (deps.instantiatePieceOnServer ??
+        instantiatePieceOnServer)(await lifecycleClient(config, deps), {
+          space: pieces.getSpace(),
+          requestKey,
+          program,
+          ...(entry.repository === undefined
+            ? {}
+            : { repository: entry.repository }),
+          ...(options?.slug === undefined ? {} : { slug: options.slug }),
+          ...(options?.force === undefined ? {} : { force: options.force }),
+          register: true,
+          ...(options?.start === false ? { start: false } : {}),
+        });
+    } catch (error) {
+      throw new Error(
+        `Piece creation outcome may be incomplete. Retry the same command ` +
+          `with --request-key ${requestKey}. ` +
+          (error instanceof Error ? error.message : String(error)),
+        { cause: error },
+      );
+    }
+  })();
+  if (receipt.registration?.status !== "handled") {
+    throw new Error(
+      `Piece ${receipt.pieceId} was created but registration is ` +
+        `${receipt.registration?.status ?? "unconfirmed"}. ` +
+        `Retry the same command with --request-key ${requestKey}. ` +
+        (receipt.registration?.error ?? ""),
+    );
+  }
   const cell = await pieces.getPieceCell(receipt.pieceId, false);
   if (options?.start !== false) await boundStart(pieces.startPiece(cell));
   return { id: receipt.pieceId, getCell: () => cell };
@@ -1684,7 +1746,12 @@ async function createOnServer(
 export async function newPiece(
   config: SpaceConfig,
   entry: EntryConfig,
-  options?: { start?: boolean; slug?: string; force?: boolean },
+  options?: {
+    start?: boolean;
+    slug?: string;
+    force?: boolean;
+    requestKey?: string;
+  },
   deps: PieceOperationDependencies = {},
 ): Promise<string> {
   const pieces = await timeCliPhase(
@@ -1779,8 +1846,7 @@ export async function newPiece(
   // the space, and a slug or registry step that throws afterwards leaves a
   // partial write that the operator is owed the location of.
   noteWroteTo(config.space);
-  // A served creation named and registered the piece in its own
-  // transaction; what follows is the client-side creation's second half.
+  // Served creation returns after both setup and registration commit.
   if (served) return piece.id;
 
   if (options?.slug) {

@@ -4,6 +4,7 @@ import { Identity } from "@commonfabric/identity";
 import { resolveScopeKey } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
+import type { Cell } from "../src/cell.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { dataUriFromValueWithResolvedLinks } from "../src/data-uri.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
@@ -11,6 +12,7 @@ import { dataURISyncKey } from "../src/storage/v2.ts";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
+const foreign = (await Identity.fromPassphrase("foreign opaque target")).did();
 
 describe("data URI sync", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -43,6 +45,60 @@ describe("data URI sync", () => {
     );
     const result = await cell.sync();
     expect(result).toBeDefined();
+  });
+
+  it("retains foreign unknown-valued handles without syncing their targets", async () => {
+    const target = runtime.getCell(
+      foreign,
+      "opaque-target",
+      undefined,
+      undefined,
+      "user",
+    ).key("nested");
+    const schema = {
+      type: "object",
+      properties: {
+        ref: { type: "unknown", asCell: ["cell"] },
+        refs: {
+          type: "array",
+          items: { type: "unknown", asCell: ["readonly"] },
+        },
+      },
+      required: ["ref", "refs"],
+    } as const;
+    const dataCell = runtime.getImmutableCell<{
+      ref: Cell<unknown>;
+      refs: Cell<unknown>[];
+    }>(space, { ref: target, refs: [target] }, schema);
+    const provider = storageManager.open(foreign);
+    const originalSync = provider.sync.bind(provider);
+    const syncedIds: string[] = [];
+    provider.sync = (...args) => {
+      syncedIds.push(args[0]);
+      return originalSync(...args);
+    };
+
+    await dataCell.sync();
+    const value = dataCell.get({ traverseCells: true });
+    const direct = dataCell.key("ref").get();
+    const { space: targetSpace, scope, id, path } = target
+      .getAsNormalizedFullLink();
+    for (const cell of [value.ref, value.refs[0], direct]) {
+      expect(cell.getAsNormalizedFullLink()).toMatchObject({
+        space: targetSpace,
+        scope,
+        id,
+        path,
+      });
+    }
+    await storageManager.synced();
+    expect(syncedIds).toEqual([]);
+
+    await dataCell.asSchema({
+      type: "object",
+      properties: { ref: { type: "number", asCell: ["cell"] } },
+    }).sync();
+    expect(syncedIds).toContain(id);
   });
 
   it("sync on a data: URI cell containing a sigil link calls sync on the linked cell", async () => {

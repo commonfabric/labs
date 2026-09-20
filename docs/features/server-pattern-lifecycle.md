@@ -39,26 +39,26 @@ it, every file by name, with `main`, an optional `mainExport`, optional
 `{ identity, symbol }` pointer to a closure the space already holds. A body
 naming both or neither fails validation.
 
-| verb          | body                                                                                              | receipt                                                                            |
-| ------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
-| `upload`      | `program`                                                                                         | `{ pattern }` — the pointer the space now holds the program under                  |
-| `instantiate` | `program` or `pattern`; optional `argument`, `repository`, `slug`, `force`, `register`, `start`   | `{ pieceId, pattern, slug? }`                                                      |
+| verb          | body                                                                                                                     | receipt                                                                                                                                          |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `upload`      | `program`                                                                                                                | `{ pattern }` — the pointer the space now holds the program under                                                                                |
+| `instantiate` | `program` or `pattern`; optional `argument`, `repository`, `slug`, `force`, `register`, `start`, `requestKey`            | `{ pieceId, pattern, slug?, requestKey, registration: { status, error? } }`                                                                      |
 | `setsrc`      | `piece`; `program` or `pattern`; optional `repository`, `dangerouslyAllowIncompatibleSchema`, `expectedPattern`, `start` | `{ pieceId, pattern, revisionId, seq, detachedOrigin }` — the accepted setup transaction's receipt, `seq` its position in the space's commit log |
 
 A refusal is a JSON body `{ error, code }`. `code` is stable and is what a
 client branches on; `error` is prose for a person.
 
-| status | code                                   | meaning                                                                      |
-| ------ | -------------------------------------- | ---------------------------------------------------------------------------- |
-| 401    | `unauthorized`                         | no valid first-party request proof                                           |
-| 403    | `forbidden`                            | the caller is not a writer of the space, or there is no such space           |
-| 404    | `pattern-not-found`, `piece-not-found` | the named pattern, or the named piece, is not in the space                   |
-| 409    | `slug-taken`, `source-moved`           | the slug names something and `force` was not set; the piece is not on the pattern the update was proved against |
-| 413    | `payload-too-large`                    | the body exceeds the limit, checked before authentication                    |
+| status | code                                                              | meaning                                                                                                                                                                                           |
+| ------ | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 401    | `unauthorized`                                                    | no valid first-party request proof                                                                                                                                                                |
+| 403    | `forbidden`                                                       | the caller is not a writer of the space, or there is no such space                                                                                                                                |
+| 404    | `pattern-not-found`, `piece-not-found`                            | the named pattern, or the named piece, is not in the space                                                                                                                                        |
+| 409    | `slug-taken`, `source-moved`                                      | the slug names something and `force` was not set; the piece is not on the pattern the update was proved against                                                                                   |
+| 413    | `payload-too-large`                                               | the body exceeds the limit, checked before authentication                                                                                                                                         |
 | 422    | `compile-failed`, `setup-failed`, `no-space-root`, `incompatible` | the program did not compile; setup refused the pattern or the argument; nothing to register the piece with; the candidate cannot run over the piece's retained state and the override was not set |
-| 429    | `rate-limited`                         | the caller's request budget is spent, checked before authentication         |
-| 500    | `internal`                             | the serving side failed for a reason it does not name                        |
-| 503    | `server-execution-off`, `space-not-served` | no serving loop on this deployment; the space's lease is held elsewhere |
+| 429    | `rate-limited`                                                    | the caller's request budget is spent, checked before authentication                                                                                                                               |
+| 500    | `internal`                                                        | the serving side failed for a reason it does not name                                                                                                                                             |
+| 503    | `server-execution-off`, `space-not-served`                        | no serving loop on this deployment; the space's lease is held elsewhere                                                                                                                           |
 
 Body validation runs after authentication and answers 422 with the
 validator's own body — a body naming both `program` and `pattern`, or
@@ -78,6 +78,12 @@ deployment with ACL enforcement off admits every authenticated caller, as its
 memory server does. One denial covers a malformed DID, a space the deployment
 does not host, an absent ACL, and a caller without a grant, so the route is
 not an existence oracle over the deployment's spaces.
+
+The hosted authority check reads the ACL through the memory server's internal
+document reader. It grants no graph READ or WRITE to the process identity: a
+private space can admit its owner and writers without adding the toolshed
+operator to its ACL. Every call reads current access; a removed writer cannot
+reuse a cached authorization decision.
 
 The verb's own writes are the serving loop's, under the space's lease. The
 instantiation transaction carries the requester's CFC trust snapshot, so a
@@ -119,11 +125,35 @@ first run and serves it in the cycle after. A reader that needs the derived
 value pulls it, which is demand the loop serves, rather than expecting a
 creation to have run the graph.
 
-The served creation takes the whole creation act into one transaction:
-with `register`, the piece joins the space root's registry, and with `slug`
-it is named — a name already pointing somewhere refuses the creation
-outright unless `force` is set, so a refused creation leaves nothing
-behind. `cf piece new` asks for both.
+Served creation commits setup, the optional slug, and a caller-scoped creation
+receipt together. A taken slug refuses creation unless `force` is set. A stable
+`requestKey` identifies this act: retrying it returns the same piece.
+
+With `register: true`, the route prepares the default pattern's `addPiece`
+delivery and retains its attempt in a serving wave. It then invokes the stream
+through trusted ingress, retaining the authenticated caller's identity. The
+caller must also have WRITE access to the stream's target space before any
+trusted observation or delivery, including when a root exports a foreign
+handler. An observer outside the serving wave watches the prepared stream's
+durable event sidecar, including a read after subscription to recover already
+completed replays. A separate serving wave reads the computed registry and
+records `registration.status: "handled"`; its receipt is checked after the wave
+commits. The process needs delegation authority, without a READ or WRITE grant
+in the space: private reads and receipt writes use the serving runtime, and the
+out-of-wave observer reads only the prepared event's sidecar through the trusted
+memory service. Waiting outside the wave lets the event's consequences commit.
+This permits a default pattern to derive its registry from panels; the route
+never writes that export. The event and receipt make a lost response retryable
+without another panel. `register: false` returns `skipped`. If registration
+fails after setup, the response retains the created `pieceId`, `requestKey`, and
+a `failed` status with its error. Retrying that key does not create another
+piece. The receipt retains a registration attempt number. A proven terminal
+stream failure, or a successful durable event whose readable registry omits the
+piece, advances that number atomically on retry, allowing a repaired handler to
+run again for the same piece. Concurrent retries select the same pending
+attempt. An unknown transport outcome or failed registry read keeps its delivery
+identity. A late uncertain result cannot erase a proven terminal result for the
+same attempt, and a handled receipt cannot be downgraded.
 
 That seat rules out two things the client-side operations do. A transaction
 the runtime seals into a wave cannot mint a durability receipt of its own, so
@@ -189,21 +219,22 @@ confirmation failed (`failures`).
 ## What the client still does
 
 The seed this implements records the direction as "client speculative-local,
-server-state wins", and for `cf` there is nothing to speculate: the CLI
-resolves the program locally — reading the files, pinning fabric imports —
-and sends it. What `cf piece new` still does in its own process after the
-receipt is what any client does when it opens a piece: it starts the piece,
-which under the flag runs the graph as speculation while the serving loop
-serves the derived values. `--no-start` skips that and sends `start: false`,
-which leaves the piece set up and undemanded on the serving side too: the
-loop derives it when something first demands it, not in the cycle after
-the creation. The registry entry and the slug are part of the served
-creation, and so is the space root the registry lives in: the serving loop
-ensures the root on activation, ahead of the verb, so the client no longer
-initializes it in its own process; a creation that finds no root is refused
-with `no-space-root`. The request is awaited without a wall-clock bound,
-since a creation the server is still committing lands whether or not the
-client waits; the bound the client keeps is on its own start.
+server-state wins", and for `cf` there is nothing to speculate: the CLI resolves
+the program locally — reading the files, pinning fabric imports — and sends it.
+What `cf piece new` still does in its own process after the receipt is what any
+client does when it opens a piece: it starts the piece, which under the flag
+runs the graph as speculation while the serving loop serves the derived values.
+`--no-start` skips that and sends `start: false`, which leaves the piece set up
+and undemanded on the serving side too: the loop derives it when something first
+demands it, not in the cycle after the creation. Registration still runs under
+`--no-start`. The serving loop ensures the default root on activation; if
+registration cannot find that root, the response reports the created piece and
+failed registration. The CLI exits unsuccessfully unless registration is
+handled, printing the retry key and created piece when available.
+`cf piece new --request-key <key>` resumes an uncertain creation or incomplete
+registration. The request is awaited without a wall-clock bound, since a
+creation the server is still committing lands whether or not the client waits;
+the bound the client keeps is on its own start.
 
 `cf piece setsrc` resolves the program the same way and sends it with the
 piece's id; the receipt is the accepted setup transaction's. What the command

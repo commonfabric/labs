@@ -129,3 +129,5 @@ Add a line for each new document to the index below.
 - [`llm-testing.md`](llm-testing.md) — testing patterns and server routes that
   call a language model, covering the test-environment guard, the mocks, and
   the conversation fixtures
+
+- [Custom roots at space genesis](custom-space-roots.md) — seal a custom default-pattern reservation with the initial ACL.

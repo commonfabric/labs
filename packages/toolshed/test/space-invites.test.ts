@@ -501,7 +501,7 @@ describe("space-invites", () => {
             code: write.code,
           }),
         ).toMatchObject({ outcome: "already-redeemed", currentAccess: null });
-        expect(guest.session.closeError?.name).toBe("SessionRevokedError");
+        expect(guest.session.closeError?.name).toBe("AuthorizationError");
         await expect(f.memory(f.guest)).rejects.toThrow();
       } finally {
         await guest.client.close();

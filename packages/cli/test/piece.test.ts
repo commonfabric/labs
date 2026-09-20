@@ -6,6 +6,7 @@ import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { FabricHash } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import { pieceId, SlugResolutionError } from "@commonfabric/piece";
+import { PieceController, PiecesController } from "@commonfabric/piece/ops";
 import {
   type Cell,
   getCellOrThrow,
@@ -19,6 +20,8 @@ import {
   newLoopbackServer,
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
+
+import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 
 import { toCell } from "../../runner/src/back-to-cell.ts";
 import { setResultCell } from "../../runner/src/result-utils.ts";
@@ -1179,13 +1182,18 @@ describe("cli piece parsing", () => {
           pieceId: PIECE,
           pattern: { identity: "i", symbol: "default" },
           slug: "named",
+          requestKey: "retry-key",
+          registration: { status: "handled" as const },
         });
       },
     };
     const config = { apiUrl: API_URL, space: SPACE, identity: ID };
     const entry = { mainPath: "/main.tsx", repository: "repo" };
 
-    const started = await newPiece(config, entry, { slug: "named" }, deps);
+    const started = await newPiece(config, entry, {
+      slug: "named",
+      requestKey: "retry-key",
+    }, deps);
     expect(started).toBe(PIECE);
     expect(seen.requests[0]).toEqual({
       space: SPACE_DID,
@@ -1193,13 +1201,14 @@ describe("cli piece parsing", () => {
       repository: "repo",
       slug: "named",
       register: true,
+      requestKey: "retry-key",
     });
     expect(seen.started).toEqual([cell]);
 
     const unstarted = await newPiece(
       config,
       entry,
-      { start: false, force: true },
+      { start: false, force: true, requestKey: "retry-key" },
       deps,
     );
     expect(unstarted).toBe(PIECE);
@@ -1209,10 +1218,157 @@ describe("cli piece parsing", () => {
       repository: "repo",
       force: true,
       register: true,
+      requestKey: "retry-key",
       start: false,
     });
     expect(seen.started).toEqual([cell]);
     expect(seen.ensured).toBeUndefined();
+  });
+
+  describe("served registration", () => {
+    type Dependencies = NonNullable<Parameters<typeof newPiece>[3]>;
+    type Instantiate = NonNullable<Dependencies["instantiatePieceOnServer"]>;
+    type Request = Parameters<Instantiate>[1];
+    type Receipt = Awaited<ReturnType<Instantiate>>;
+
+    /** Observe the CLI boundary without starting a runtime or a live service. */
+    async function fixture() {
+      const requests: Request[] = [];
+      const opened: string[] = [];
+      const started: unknown[] = [];
+      const cell = { name: "created piece" };
+      const controller = {
+        runtime: { experimental: { serverExecution: true } },
+        getSpace: () => SPACE_DID,
+        getPieceCell: (id: string, run: boolean) => {
+          expect(run).toBe(false);
+          opened.push(id);
+          return Promise.resolve(cell);
+        },
+        startPiece: (value: unknown) => {
+          started.push(value);
+          return Promise.resolve();
+        },
+      };
+      const identity = await Identity.fromPassphrase("cli served registration");
+      const state: {
+        status: Receipt["registration"]["status"];
+        transportError?: Error;
+      } = { status: "handled" };
+      const deps: Dependencies = {
+        loadPieces: () =>
+          Promise.resolve(
+            controller as unknown as Awaited<
+              ReturnType<NonNullable<Dependencies["loadPieces"]>>
+            >,
+          ),
+        loadIdentity: () => Promise.resolve(identity),
+        getPinnedProgramFromFile: () =>
+          Promise.resolve({ main: "/main.tsx", files: [] }),
+        instantiatePieceOnServer: (_config, request) => {
+          requests.push(request);
+          if (state.transportError) return Promise.reject(state.transportError);
+          return Promise.resolve({
+            pieceId: PIECE,
+            pattern: { identity: "i", symbol: "default" },
+            requestKey: request.requestKey ?? "server-created-key",
+            registration: {
+              status: state.status,
+              ...(state.status === "failed"
+                ? { error: "root addPiece refused" }
+                : {}),
+            },
+          });
+        },
+      };
+      const create = (options?: Parameters<typeof newPiece>[2]) =>
+        newPiece(
+          { apiUrl: API_URL, space: SPACE, identity: ID },
+          { mainPath: "/main.tsx" },
+          options,
+          deps,
+        );
+      return { create, state, requests, opened, started, cell };
+    }
+
+    for (const status of ["pending", "failed"] as const) {
+      it(`stops before opening or starting a piece when registration is ${status}`, async () => {
+        const run = await fixture();
+        run.state.status = status;
+        const result = await run.create({ requestKey: "registration-retry" })
+          .then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+        expect(result).toBeInstanceOf(Error);
+        expect((result as Error).message).toContain(
+          `Piece ${PIECE} was created but registration is ${status}`,
+        );
+        expect((result as Error).message).toContain(
+          "--request-key registration-retry",
+        );
+        if (status === "failed") {
+          expect((result as Error).message).toContain("root addPiece refused");
+        }
+        expect(run.opened).toEqual([]);
+        expect(run.started).toEqual([]);
+      });
+    }
+
+    it("registers an unstarted piece and leaves it unstarted after registration completes", async () => {
+      const run = await fixture();
+      expect(await run.create({ start: false, requestKey: "unstarted-retry" }))
+        .toBe(PIECE);
+      expect(run.requests).toHaveLength(1);
+      expect(run.requests[0]).toMatchObject({
+        register: true,
+        start: false,
+        requestKey: "unstarted-retry",
+      });
+      expect(run.opened).toEqual([PIECE]);
+      expect(run.started).toEqual([]);
+    });
+
+    it("reports its generated key and forwards that same key when failed registration is retried", async () => {
+      const run = await fixture();
+      run.state.status = "failed";
+      const result = await run.create().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(result).toBeInstanceOf(Error);
+      const retryKey = run.requests[0].requestKey;
+      expect(typeof retryKey).toBe("string");
+      expect(retryKey).not.toBe("");
+      expect((result as Error).message).toContain(`--request-key ${retryKey}`);
+      expect(run.started).toEqual([]);
+      run.state.status = "handled";
+      expect(await run.create({ requestKey: retryKey })).toBe(PIECE);
+      expect(run.requests.map((request) => request.requestKey)).toEqual([
+        retryKey,
+        retryKey,
+      ]);
+      expect(run.opened).toEqual([PIECE]);
+      expect(run.started).toEqual([run.cell]);
+    });
+
+    it("retains the retry key after an unknown transport outcome and does not start", async () => {
+      const run = await fixture();
+      run.state.transportError = new Error("response connection closed");
+      const result = await run.create().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      expect(result).toBeInstanceOf(Error);
+      expect((result as Error).cause).toBe(run.state.transportError);
+      const retryKey = run.requests[0].requestKey;
+      expect(typeof retryKey).toBe("string");
+      expect(retryKey).not.toBe("");
+      expect((result as Error).message).toContain(`--request-key ${retryKey}`);
+      expect((result as Error).message).toContain("response connection closed");
+      expect(run.opened).toEqual([]);
+      expect(run.started).toEqual([]);
+    });
   });
 
   it("setPiecePattern() asks a serving deployment to replace the source and refreshes the piece here", async () => {
@@ -3380,45 +3536,275 @@ describe("cli piece parsing", () => {
   });
 
   it("lists pattern provenance and isolates unreadable pieces", async () => {
-    const patternRef = {
-      identity: "A".repeat(43),
-      symbol: "default",
-      source: {
-        ref: `cf:pattern:${"A".repeat(43)}`,
-        repository: "https://github.com/commonfabric/labs",
-        entry: "/notes/note.tsx",
-      },
-    };
-    const controller = {
-      getRegisteredPieces: () =>
-        Promise.resolve([
-          { id: "of:readable" },
-          { id: "of:unreadable" },
-        ]),
-      get: (id: string) =>
-        id === "of:unreadable"
-          ? Promise.reject(new Error("not readable"))
-          : Promise.resolve({
-            getCell: () => ({
-              key: () => ({ pull: () => Promise.resolve("Readable") }),
-            }),
-            getPatternRef: () => Promise.resolve(patternRef),
-          }),
-    };
-
-    const listed = await listPieces({
-      apiUrl: API_URL,
-      space: SPACE,
-      identity: ID,
-    }, {
-      loadPieces: () => Promise.resolve(controller as any),
-    });
-
-    expect(listed).toEqual([
-      { id: "of:readable", name: "Readable", patternRef },
-      { id: "of:unreadable", error: "not readable" },
-    ]);
+    const signer = await Identity.fromPassphrase("cli list provenance");
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({ apiUrl: new URL(API_URL), storageManager });
+    try {
+      const owner = new PiecesController(
+        { as: signer, space: signer.did() },
+        runtime,
+      );
+      const readable = await owner.create({
+        main: "/notes/note.tsx",
+        files: [{
+          name: "/notes/note.tsx",
+          contents:
+            'import { NAME, pattern } from "commonfabric"; export default pattern(() => ({[NAME]: "Readable"}));',
+        }],
+      }, { start: false, repository: "https://github.com/commonfabric/labs" });
+      const patternRef = await readable.getPatternRef();
+      expect(patternRef?.source?.repository).toBe(
+        "https://github.com/commonfabric/labs",
+      );
+      const inaccessible = new PiecesController({
+        as: signer,
+        space: OTHER_SPACE_DID,
+      }, runtime);
+      inaccessible.getPieceCell = () =>
+        Promise.reject(new Error("not readable"));
+      const unreadable = new PieceController(
+        inaccessible,
+        runtime.getCell(OTHER_SPACE_DID, "unreadable"),
+      );
+      const listed = await listPieces({
+        apiUrl: API_URL,
+        space: SPACE,
+        identity: ID,
+      }, {
+        loadPieces: () =>
+          Promise.resolve({
+            getRegisteredPieces: () => Promise.resolve([readable, unreadable]),
+            get: (id: string) =>
+              id === unreadable.id
+                ? Promise.reject(new Error("not readable"))
+                : owner.get(id, true),
+          } as PiecesController),
+      });
+      expect(listed).toEqual([
+        {
+          id: readable.id,
+          reference: createLLMFriendlyLink(
+            readable.getCell().getAsNormalizedFullLink(),
+          ),
+          name: "Readable",
+          patternRef,
+        },
+        {
+          id: unreadable.id,
+          reference: createLLMFriendlyLink(
+            unreadable.getCell().getAsNormalizedFullLink(),
+          ),
+          error: "not readable",
+        },
+      ]);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
   });
+
+  it("lists equal document IDs in different spaces using each registered target", async () => {
+    const signer = await Identity.fromPassphrase("cli list foreign targets");
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({ apiUrl: new URL(API_URL), storageManager });
+    try {
+      const local = new PiecesController(
+        { as: signer, space: SPACE_DID },
+        runtime,
+      );
+      const foreign = new PiecesController({
+        as: signer,
+        space: OTHER_SPACE_DID,
+      }, runtime);
+      const program = {
+        main: "/main.tsx",
+        files: [{
+          name: "/main.tsx",
+          contents:
+            'import { NAME, pattern } from "commonfabric"; export default pattern<{title:string}>(({title}) => ({[NAME]: title}));',
+        }],
+      };
+      const localPiece = await local.create(program, {
+        input: { title: "Local" },
+        start: false,
+      }, "same-document");
+      const foreignPiece = await foreign.create(program, {
+        input: { title: "Foreign" },
+        start: false,
+      }, "same-document");
+      expect(localPiece.id).toBe(foreignPiece.id);
+      local.getRegisteredPieces = () =>
+        Promise.resolve([localPiece, foreignPiece]);
+      const rows = await listPieces({
+        apiUrl: API_URL,
+        space: SPACE,
+        identity: ID,
+      }, { loadPieces: () => Promise.resolve(local) });
+      expect(rows.map((row) => row.reference)).toEqual([
+        createLLMFriendlyLink(localPiece.getCell().getAsNormalizedFullLink()),
+        createLLMFriendlyLink(foreignPiece.getCell().getAsNormalizedFullLink()),
+      ]);
+      expect(rows.map((row) => row.name)).toEqual(["Local", "Foreign"]);
+      expect(rows.map((row) => row.error)).toEqual([undefined, undefined]);
+      expect(foreignPiece.getCell().getAsNormalizedFullLink().space).toBe(
+        OTHER_SPACE_DID,
+      );
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  for (
+    const target of [
+      { space: OTHER_SPACE_DID, scope: "space", difference: "space" },
+      { space: SPACE_DID, scope: "user", difference: "scope" },
+    ] as const
+  ) {
+    it(`does not attribute another ${target.difference}'s piece data to a local piece with the same document ID`, async () => {
+      const signer = await Identity.fromPassphrase("cli search equal IDs");
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({ apiUrl: new URL(API_URL), storageManager });
+      try {
+        const foreignTx = runtime.edit();
+        const foreignResult = runtime.getCell<{ text: string }>(
+          target.space,
+          "same-result",
+          undefined,
+          foreignTx,
+          target.scope,
+        );
+        const foreignInput = runtime.getCell(
+          target.space,
+          "input",
+          undefined,
+          foreignTx,
+          target.scope,
+        );
+        foreignResult.set({ text: "foreign-only-needle" });
+        foreignInput.set({});
+        setResultCell(foreignInput, foreignResult);
+        expect((await foreignTx.commit()).error).toBeUndefined();
+        const tx = runtime.edit();
+        const localResult = runtime.getCell(
+          SPACE_DID,
+          "same-result",
+          undefined,
+          tx,
+        );
+        const localInput = runtime.getCell(SPACE_DID, "input", {
+          type: "object",
+          properties: {
+            linked: {
+              type: "object",
+              properties: { text: { type: "string" } },
+              asCell: ["cell"],
+            },
+          },
+        }, tx);
+        localResult.set({});
+        localInput.set({ linked: foreignResult.withTx() });
+        setResultCell(localInput, localResult);
+        expect((await tx.commit()).error).toBeUndefined();
+        await runtime.idle();
+        expect(pieceId(localResult)).toBe(pieceId(foreignResult));
+        const linked = (await localInput.pull()).linked;
+        expect(isCell(linked)).toBe(true);
+        expect(await (linked as Cell<unknown>).pull()).toEqual({
+          text: "foreign-only-needle",
+        });
+        const member = (
+          name: string,
+          input: Cell<unknown>,
+          result: Cell<unknown>,
+        ) => ({
+          id: pieceId(result)!,
+          name: () => name,
+          getCell: () => result,
+          getPatternRef: () => Promise.resolve(undefined),
+          input: { getCell: () => Promise.resolve(input) },
+          result: { getCell: () => Promise.resolve(result) },
+        });
+        const registered = [
+          member("Local", localInput, localResult),
+          member("Foreign", foreignInput, foreignResult),
+        ];
+        const matches = await searchPieces(
+          { apiUrl: API_URL, space: SPACE, identity: ID },
+          "foreign-only-needle",
+          {
+            loadPieces: () =>
+              Promise.resolve({
+                getRegisteredPieces: () => Promise.resolve(registered),
+              } as unknown as PiecesController),
+          },
+        );
+        expect(matches.map((match) => match.reference)).toEqual([
+          createLLMFriendlyLink(foreignResult.getAsNormalizedFullLink()),
+        ]);
+        expect(matches.map((match) => match.name)).toEqual(["Foreign"]);
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    });
+  }
+
+  /** Supply root addresses to search fixtures that model data with plain objects. */
+  async function searchFixtureController(controller: {
+    getRegisteredPieces(): Promise<
+      Array<{
+        id: string;
+        getCell?: () => unknown;
+        result: { getCell(): Promise<unknown> };
+      }>
+    >;
+  }): Promise<PiecesController> {
+    const registered = await controller.getRegisteredPieces();
+    const complete = await Promise.all(registered.map(async (piece) => {
+      if (piece.getCell) return piece;
+      let result: unknown;
+      try {
+        result = await piece.result.getCell();
+      } catch {
+        // Unreadable-data fixtures still have an address; the search reports their error.
+      }
+      const address = isCell(result)
+        ? result.getAsNormalizedFullLink()
+        : { space: SPACE_DID, id: piece.id, scope: "space", path: [] };
+      return {
+        ...piece,
+        getCell: () => ({ getAsNormalizedFullLink: () => address }),
+      };
+    }));
+    return {
+      getRegisteredPieces: () => Promise.resolve(complete),
+    } as unknown as PiecesController;
+  }
+
+  async function searchFixtureRows(
+    controller: Parameters<typeof searchFixtureController>[0],
+    rows: Array<
+      {
+        id: string;
+        name?: string;
+        patternRef?: Awaited<ReturnType<PieceController["getPatternRef"]>>;
+      }
+    >,
+  ) {
+    const registered = await (await searchFixtureController(controller))
+      .getRegisteredPieces();
+    return rows.map((row) => {
+      const piece = registered.find((piece) => piece.id === row.id);
+      if (!piece) throw new Error(`Missing search fixture ${row.id}`);
+      return {
+        ...row,
+        reference: createLLMFriendlyLink(
+          piece.getCell().getAsNormalizedFullLink(),
+        ),
+      };
+    });
+  }
 
   it("searches nested input and result data without matching metadata", async () => {
     const patternRef = {
@@ -3513,25 +3899,29 @@ describe("cli piece parsing", () => {
     };
     const config = { apiUrl: API_URL, space: SPACE, identity: ID };
     const deps = {
-      loadPieces: () => Promise.resolve(controller as any),
+      loadPieces: () => searchFixtureController(controller),
     };
 
     const matches = await searchPieces(config, "NEEDLE", deps);
 
-    expect(matches).toEqual([
-      { id: "of:input-match", name: "Input match", patternRef },
-      { id: "of:key-match", name: "Key match", patternRef },
-      {
-        id: "of:fabric-special-object",
-        name: "Fabric special object",
+    expect(matches).toEqual(
+      await searchFixtureRows(controller, [
+        { id: "of:input-match", name: "Input match", patternRef },
+        { id: "of:key-match", name: "Key match", patternRef },
+        {
+          id: "of:fabric-special-object",
+          name: "Fabric special object",
+          patternRef,
+        },
+      ]),
+    );
+    expect(await searchPieces(config, fabricHash.toString(), deps)).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:fabric-hash",
+        name: "Fabric hash",
         patternRef,
-      },
-    ]);
-    expect(await searchPieces(config, fabricHash.toString(), deps)).toEqual([{
-      id: "of:fabric-hash",
-      name: "Fabric hash",
-      patternRef,
-    }]);
+      }]),
+    );
   });
 
   it("searches scalar data and rejects an empty query", async () => {
@@ -3550,14 +3940,16 @@ describe("cli piece parsing", () => {
     };
     const config = { apiUrl: API_URL, space: SPACE, identity: ID };
     const deps = {
-      loadPieces: () => Promise.resolve(controller as any),
+      loadPieces: () => searchFixtureController(controller),
     };
 
-    expect(await searchPieces(config, "048", deps)).toEqual([{
-      id: "of:number-match",
-      name: "Number match",
-      patternRef: undefined,
-    }]);
+    expect(await searchPieces(config, "048", deps)).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:number-match",
+        name: "Number match",
+        patternRef: undefined,
+      }]),
+    );
     await expect(searchPieces(config, "", deps)).rejects.toThrow(
       "Search query must not be empty.",
     );
@@ -3589,16 +3981,18 @@ describe("cli piece parsing", () => {
     };
     const config = { apiUrl: API_URL, space: SPACE, identity: ID };
     const deps = {
-      loadPieces: () => Promise.resolve(controller as any),
+      loadPieces: () => searchFixtureController(controller),
     };
 
     expect(
       await searchPieces(config, "named array property", deps),
-    ).toEqual([{
-      id: "of:named-array-property",
-      name: "Named array property",
-      patternRef: undefined,
-    }]);
+    ).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:named-array-property",
+        name: "Named array property",
+        patternRef: undefined,
+      }]),
+    );
     expect(
       await searchPieces(config, "ignored result metadata", deps),
     ).toEqual([]);
@@ -3649,7 +4043,7 @@ describe("cli piece parsing", () => {
         { apiUrl: API_URL, space: SPACE, identity: ID },
         "absent search value",
         {
-          loadPieces: () => Promise.resolve(controller as any),
+          loadPieces: () => searchFixtureController(controller),
           reportSearchError: (_pieceId, _source, error) => errors.push(error),
         },
       ),
@@ -3686,7 +4080,7 @@ describe("cli piece parsing", () => {
           { apiUrl: API_URL, space: SPACE, identity: ID },
           "needle",
           {
-            loadPieces: () => Promise.resolve(controller as any),
+            loadPieces: () => searchFixtureController(controller),
           },
         ),
       ).toEqual([]);
@@ -3725,16 +4119,18 @@ describe("cli piece parsing", () => {
         { apiUrl: API_URL, space: SPACE, identity: ID },
         "needle",
         {
-          loadPieces: () => Promise.resolve(controller as any),
+          loadPieces: () => searchFixtureController(controller),
           reportSearchError: (_pieceId, source, error) =>
             errors.push({ source, error }),
         },
       ),
-    ).toEqual([{
-      id: "of:unreadable-metadata",
-      name: undefined,
-      patternRef: undefined,
-    }]);
+    ).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:unreadable-metadata",
+        name: undefined,
+        patternRef: undefined,
+      }]),
+    );
     expect(errors).toEqual([
       { source: "metadata", error: nameError },
       { source: "metadata", error: patternError },
@@ -3764,29 +4160,37 @@ describe("cli piece parsing", () => {
     };
     const config = { apiUrl: API_URL, space: SPACE, identity: ID };
     const deps = {
-      loadPieces: () => Promise.resolve(controller as any),
+      loadPieces: () => searchFixtureController(controller),
     };
 
-    expect(await searchPieces(config, "MASSE", deps)).toEqual([{
-      id: "of:full-fold",
-      name: "of:full-fold",
-      patternRef: undefined,
-    }]);
-    expect(await searchPieces(config, "CAFE\u0301", deps)).toEqual([{
-      id: "of:canonical-equivalence",
-      name: "of:canonical-equivalence",
-      patternRef: undefined,
-    }]);
-    expect(await searchPieces(config, "\u{16EBB}", deps)).toEqual([{
-      id: "of:unicode-17",
-      name: "of:unicode-17",
-      patternRef: undefined,
-    }]);
-    expect(await searchPieces(config, "ष", deps)).toEqual([{
-      id: "of:indic-substring",
-      name: "of:indic-substring",
-      patternRef: undefined,
-    }]);
+    expect(await searchPieces(config, "MASSE", deps)).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:full-fold",
+        name: "of:full-fold",
+        patternRef: undefined,
+      }]),
+    );
+    expect(await searchPieces(config, "CAFE\u0301", deps)).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:canonical-equivalence",
+        name: "of:canonical-equivalence",
+        patternRef: undefined,
+      }]),
+    );
+    expect(await searchPieces(config, "\u{16EBB}", deps)).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:unicode-17",
+        name: "of:unicode-17",
+        patternRef: undefined,
+      }]),
+    );
+    expect(await searchPieces(config, "ष", deps)).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:indic-substring",
+        name: "of:indic-substring",
+        patternRef: undefined,
+      }]),
+    );
     expect(await searchPieces(config, "s", deps)).toEqual([]);
     expect(await searchPieces(config, "CAFE", deps)).toEqual([]);
   });
@@ -3871,14 +4275,16 @@ describe("cli piece parsing", () => {
       };
       const config = { apiUrl: API_URL, space: SPACE, identity: ID };
       const deps = {
-        loadPieces: () => Promise.resolve(controller as any),
+        loadPieces: () => searchFixtureController(controller),
       };
 
-      expect(await searchPieces(config, "nested runtime", deps)).toEqual([{
-        id: "of:runtime-cell-piece",
-        name: "needle only in the piece name",
-        patternRef: undefined,
-      }]);
+      expect(await searchPieces(config, "nested runtime", deps)).toEqual(
+        await searchFixtureRows(controller, [{
+          id: "of:runtime-cell-piece",
+          name: "needle only in the piece name",
+          patternRef: undefined,
+        }]),
+      );
       expect(await searchPieces(config, "opaque-search-secret", deps)).toEqual(
         [],
       );
@@ -3921,13 +4327,15 @@ describe("cli piece parsing", () => {
       };
       expect(
         await searchPieces(config, "nested runtime cell", {
-          loadPieces: () => Promise.resolve(viewController as any),
+          loadPieces: () => searchFixtureController(viewController),
         }),
-      ).toEqual([{
-        id: "of:multiple-runtime-cell-views",
-        name: "Multiple runtime cell views",
-        patternRef: undefined,
-      }]);
+      ).toEqual(
+        await searchFixtureRows(viewController, [{
+          id: "of:multiple-runtime-cell-views",
+          name: "Multiple runtime cell views",
+          patternRef: undefined,
+        }]),
+      );
 
       const brokenNested = runtime.getCell(
         space,
@@ -3962,15 +4370,17 @@ describe("cli piece parsing", () => {
       };
       expect(
         await searchPieces(config, "surviving nested", {
-          loadPieces: () => Promise.resolve(partialController as any),
+          loadPieces: () => searchFixtureController(partialController),
           reportSearchError: (_pieceId, _source, error) =>
             nestedErrors.push(error),
         }),
-      ).toEqual([{
-        id: "of:partial-runtime-cell-piece",
-        name: "Partial runtime cell piece",
-        patternRef: undefined,
-      }]);
+      ).toEqual(
+        await searchFixtureRows(partialController, [{
+          id: "of:partial-runtime-cell-piece",
+          name: "Partial runtime cell piece",
+          patternRef: undefined,
+        }]),
+      );
       expect(nestedErrors).toEqual([new Error("nested cell unavailable")]);
     } finally {
       await runtime.dispose();
@@ -4208,34 +4618,40 @@ describe("cli piece parsing", () => {
       };
       const config = { apiUrl: API_URL, space: SPACE, identity: ID };
       const deps = {
-        loadPieces: () => Promise.resolve(controller as any),
+        loadPieces: () => searchFixtureController(controller),
       };
 
       expect(
         await searchPieces(config, "explicit ownership", deps),
-      ).toEqual([{
-        id: ownerId,
-        name: "Owner",
-        patternRef: undefined,
-      }]);
+      ).toEqual(
+        await searchFixtureRows(controller, [{
+          id: ownerId,
+          name: "Owner",
+          patternRef: undefined,
+        }]),
+      );
       expect(
         await searchPieces(config, "proxy ownership", deps),
-      ).toEqual([{
-        id: ownerId,
-        name: "Owner",
-        patternRef: undefined,
-      }]);
+      ).toEqual(
+        await searchFixtureRows(controller, [{
+          id: ownerId,
+          name: "Owner",
+          patternRef: undefined,
+        }]),
+      );
       expect(
         await searchPieces(config, "scalar ownership", deps),
-      ).toEqual([{
-        id: ownerId,
-        name: "Owner",
-        patternRef: undefined,
-      }]);
-      const referrerAndOwner = [
+      ).toEqual(
+        await searchFixtureRows(controller, [{
+          id: ownerId,
+          name: "Owner",
+          patternRef: undefined,
+        }]),
+      );
+      const referrerAndOwner = await searchFixtureRows(controller, [
         { id: referrerId, name: "Referrer", patternRef: undefined },
         { id: ownerId, name: "Owner", patternRef: undefined },
-      ];
+      ]);
       expect(
         await searchPieces(config, "ownerless explicit", deps),
       ).toEqual(referrerAndOwner);
@@ -4404,7 +4820,10 @@ describe("cli piece parsing", () => {
         getRegisteredPieces: () =>
           Promise.resolve([
             piece("of:owned-proxy-referrer", "Referrer", [ownedProxy]),
-            piece(ownerId, "Owner", "owned proxy coverage needle"),
+            {
+              ...piece(ownerId, "Owner", "owned proxy coverage needle"),
+              getCell: () => ownerResult,
+            },
             piece("of:repeated-cell", "Repeated cell", [
               repeatedCellView,
               repeatedCellView,
@@ -4428,7 +4847,7 @@ describe("cli piece parsing", () => {
         error: unknown;
       }> = [];
       const searchDeps = {
-        loadPieces: () => Promise.resolve(controller as any),
+        loadPieces: () => searchFixtureController(controller),
         reportSearchError: (
           pieceId: string,
           source: "input data" | "result data" | "metadata",
@@ -4442,11 +4861,13 @@ describe("cli piece parsing", () => {
           "owned proxy coverage needle",
           searchDeps,
         ),
-      ).toEqual([{
-        id: ownerId,
-        name: "Owner",
-        patternRef: undefined,
-      }]);
+      ).toEqual(
+        await searchFixtureRows(controller, [{
+          id: ownerId,
+          name: "Owner",
+          patternRef: undefined,
+        }]),
+      );
       expect(repeatedCellPulls).toBe(1);
       expect(repeatedProxyMaterializations).toBe(1);
       expect(errors.length).toBeGreaterThan(0);
@@ -4536,7 +4957,7 @@ describe("cli piece parsing", () => {
           { apiUrl: API_URL, space: SPACE, identity: ID },
           "cyclic ownership",
           {
-            loadPieces: () => Promise.resolve(controller as any),
+            loadPieces: () => searchFixtureController(controller),
             reportSearchError: (_pieceId, _source, error) => errors.push(error),
           },
         ),
@@ -4639,14 +5060,16 @@ describe("cli piece parsing", () => {
           },
           "cold-cache-needle",
           {
-            loadPieces: () => Promise.resolve(controller as any),
+            loadPieces: () => searchFixtureController(controller),
           },
         ),
-      ).toEqual([{
-        id: "of:cold-runtime-piece",
-        name: "Cold runtime piece",
-        patternRef: undefined,
-      }]);
+      ).toEqual(
+        await searchFixtureRows(controller, [{
+          id: "of:cold-runtime-piece",
+          name: "Cold runtime piece",
+          patternRef: undefined,
+        }]),
+      );
     } finally {
       await reader.dispose();
       await readerStorage.close();
@@ -4683,14 +5106,16 @@ describe("cli piece parsing", () => {
         },
         "large-array-needle",
         {
-          loadPieces: () => Promise.resolve(controller as any),
+          loadPieces: () => searchFixtureController(controller),
         },
       ),
-    ).toEqual([{
-      id: "of:large-array",
-      name: "Large array",
-      patternRef: undefined,
-    }]);
+    ).toEqual(
+      await searchFixtureRows(controller, [{
+        id: "of:large-array",
+        name: "Large array",
+        patternRef: undefined,
+      }]),
+    );
   });
 
   it("searches current data after a query proxy changes shape", async () => {
@@ -4762,13 +5187,13 @@ describe("cli piece parsing", () => {
       };
       const config = { apiUrl: API_URL, space: SPACE, identity: ID };
       const deps = {
-        loadPieces: () => Promise.resolve(controller as any),
+        loadPieces: () => searchFixtureController(controller),
       };
-      const match = [{
+      const match = await searchFixtureRows(controller, [{
         id: "of:stale-array-proxy",
         name: "Stale array proxy",
         patternRef: undefined,
-      }];
+      }]);
 
       expect(
         await searchPieces(config, "changedShape", deps),
@@ -4867,38 +5292,40 @@ describe("cli piece parsing", () => {
         },
         "needle",
         {
-          loadPieces: () => Promise.resolve(controller as any),
+          loadPieces: () => searchFixtureController(controller),
           reportSearchError: (pieceId, source, error) =>
             errors.push({ pieceId, source, error }),
         },
       ),
-    ).toEqual([
-      {
-        id: "of:first-match",
-        name: "of:first-match",
-        patternRef: undefined,
-      },
-      {
-        id: "of:unreadable",
-        name: "Result-only match",
-        patternRef: undefined,
-      },
-      {
-        id: "of:partial-object",
-        name: "Partial object",
-        patternRef: undefined,
-      },
-      {
-        id: "of:partial-array",
-        name: "Partial array",
-        patternRef: undefined,
-      },
-      {
-        id: "of:second-match",
-        name: "of:second-match",
-        patternRef: undefined,
-      },
-    ]);
+    ).toEqual(
+      await searchFixtureRows(controller, [
+        {
+          id: "of:first-match",
+          name: "of:first-match",
+          patternRef: undefined,
+        },
+        {
+          id: "of:unreadable",
+          name: "Result-only match",
+          patternRef: undefined,
+        },
+        {
+          id: "of:partial-object",
+          name: "Partial object",
+          patternRef: undefined,
+        },
+        {
+          id: "of:partial-array",
+          name: "Partial array",
+          patternRef: undefined,
+        },
+        {
+          id: "of:second-match",
+          name: "of:second-match",
+          patternRef: undefined,
+        },
+      ]),
+    );
     expect(errors).toHaveLength(3);
     expect(errors).toContainEqual({
       pieceId: "of:unreadable",

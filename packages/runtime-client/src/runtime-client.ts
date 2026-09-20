@@ -66,6 +66,7 @@ import {
   RequestType,
   type RuntimeSecurityContext,
   type SlugRefusal,
+  type SpaceAccessLostNotification,
   type SpaceAclCapability,
   type SpaceAclView,
   TelemetryNotification,
@@ -119,6 +120,7 @@ export type RuntimeClientEvents = {
   console: [ConsoleMessage];
   navigaterequest: [{ cell: CellHandle }];
   error: [ErrorNotification];
+  spaceaccesslost: [{ space: string }];
   telemetry: [RuntimeTelemetryMarkerResult];
   pendingwriteschange: [{ pending: boolean }];
   eventneedsattention: [EventAttentionNotice];
@@ -199,6 +201,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     this.#conn.on("console", this.#onConsole);
     this.#conn.on("navigaterequest", this.#onNavigateRequest);
     this.#conn.on("error", this.#onError);
+    this.#conn.on("spaceaccesslost", this.#onSpaceAccessLost);
     this.#conn.on("telemetry", this.#onTelemetry);
     this.#conn.on("pendingwriteschange", this.#onPendingWritesChange);
     this.#conn.on("operationupdate", this.#onOperationUpdate);
@@ -1225,6 +1228,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
 
   #onError = (data: ErrorNotification): void => {
     this.emit("error", data);
+  };
+
+  #onSpaceAccessLost = ({ space }: SpaceAccessLostNotification): void => {
+    this.emit("spaceaccesslost", { space });
   };
 
   #onTelemetry = (data: TelemetryNotification): void => {

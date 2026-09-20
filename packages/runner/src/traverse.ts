@@ -75,7 +75,7 @@ import { cfcEnvelopeLabelDocumentHashes } from "./cfc/label-documents.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { dataUriFromValueWithResolvedLinks } from "./data-uri.ts";
 import { FABRIC_SPECIAL_OBJECT_BRAND } from "./fabric-special-object-brand.ts";
-import type { LastNode } from "./link-resolution.ts";
+import { type LastNode, readMaybeLink } from "./link-resolution.ts";
 import {
   type IMemorySpaceValueAddress,
   isSigilLink,
@@ -4851,10 +4851,30 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // let createdDataURI = false;
       // const maybeLink = parseLink(item, arrayLink);
       if (isSigilLink(item)) {
+        const elementLink = parseLink(item, curDoc.address);
+        // A foreign unknown-valued handle carries an address across an access
+        // boundary. Only a consumer reading through it needs the target.
+        if (
+          isUnknownCellSchema(curSelector.schema) &&
+          !isWriteRedirectLink(item) &&
+          elementLink !== undefined &&
+          elementLink.space !== curDoc.address.space
+        ) {
+          this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
+          const cellLink = getNextCellLink(
+            this.tx,
+            curDoc,
+            curSelector.schema!,
+          );
+          arrayObj[index] = this.objectCreator.createObject(
+            cellLink,
+            undefined,
+          );
+          return;
+        }
         // The element hop is a crossing whichever machinery dereferences
         // it — including the prepared fast path below, which bypasses
         // followPointer — so the seam runs here.
-        const elementLink = parseLink(item, curDoc.address);
         if (elementLink !== undefined) {
           markIfcBearingLinkCrossing(
             this.tx,
@@ -5255,15 +5275,20 @@ export class SchemaObjectTraverser<V extends FabricValue>
     const alreadyTracked = this.traverseCells &&
       this.isLinkedDocumentCovered(doc, selector);
 
-    // In the case of an opaque cell, we want to skip any deeper reads
-    // This means we don't follow any redirects
+    // Opaque handles preserve their link directly. A foreign unknown-valued
+    // handle also preserves an ordinary link: transferring its address needs
+    // no target read authority. Write redirects still resolve the local slot.
     const asCellValues = ContextualFlowControl.getAsCellValues(schema);
-    if (ContextualFlowControl.getAsCellKind(asCellValues.at(0)) === "opaque") {
+    const pointerLink = parseLink(doc.value, doc.address);
+    if (
+      ContextualFlowControl.getAsCellKind(asCellValues.at(0)) === "opaque" ||
+      (isUnknownCellSchema(schema) && !isWriteRedirectLink(doc.value) &&
+        pointerLink !== undefined && pointerLink.space !== doc.address.space)
+    ) {
       const cellLink = getNextCellLink(this.tx, doc, schema);
       return { ok: this.objectCreator.createObject(cellLink, undefined) };
     }
 
-    const pointerLink = parseLink(doc.value, doc.address);
     if (
       this.traverseCells && alreadyTracked &&
       pointerLink?.id !== doc.address.id
@@ -5745,6 +5770,14 @@ function _mergeAnyOfBranchSchemasUncached(
   } as JSONSchemaObj;
 }
 
+/** Returns whether a schema requests a cell handle with no declared value shape. */
+export function isUnknownCellSchema(schema: JSONSchema | undefined): boolean {
+  if (!isObjectOrArray(schema)) return false;
+  const resolved = resolveSchemaRefsCanonical(schema);
+  return isObjectOrArray(resolved) && resolved.type === "unknown" &&
+    SchemaObjectTraverser.hasAsCell(resolved);
+}
+
 /**
  * Get the link for a cell reached by following one link if available.
  * If doc.value does not contain a link, the cell will point to doc.address.
@@ -5765,6 +5798,11 @@ function getNextCellLink(
   // that location, so we effectively follow one more link if available.
   const lastLink = parseLink(doc.value, doc.address);
   if (lastLink !== undefined) {
+    if (lastLink.space !== doc.address.space && isUnknownCellSchema(schema)) {
+      // Observing a handle consumes the source pointer's own label even when
+      // its target value is unavailable or outside this reader's authority.
+      readMaybeLink(tx, getNormalizedLink(doc.address));
+    }
     if (readStatsActive) recordLinkResolution(tx);
     // This extra hop bypasses followPointer, so it carries the crossing
     // seam itself.

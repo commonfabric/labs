@@ -112,6 +112,7 @@ import {
   type InviteResult,
 } from "./invites.ts";
 import { SpaceInviteError } from "../space-invites.ts";
+import { isGenesisRoot, readGenesisRoot } from "./genesis-root.ts";
 import {
   executionLeaseHolder,
   liveExecutionLeaseHolder,
@@ -2098,6 +2099,26 @@ export class Server {
     principal: string | undefined,
     commit: ClientCommit,
   ): V2Error | null {
+    if (commit.genesisRoot !== undefined) {
+      if (!isGenesisRoot(commit.genesisRoot)) {
+        return toError("ProtocolError", "Invalid genesis root reservation");
+      }
+      if (
+        principal !== space || Engine.serverSeq(engine) !== 0 ||
+        commit.operations.length !== 1 || commit.operations[0].op !== "set" ||
+        commit.operations[0].id !== aclDocId(space) ||
+        (commit.operations[0].scope !== undefined &&
+          commit.operations[0].scope !== "space") ||
+        (commit.branch !== undefined && commit.branch !== "") ||
+        !isACL(commit.operations[0].value?.value) ||
+        !hasConcreteOwner(commit.operations[0].value?.value)
+      ) {
+        return toError(
+          "AuthorizationError",
+          "A root reservation requires space-key ACL genesis",
+        );
+      }
+    }
     if (this.#aclMode() === "off") return null;
 
     const state = this.#aclState(engine, space);
@@ -3319,6 +3340,21 @@ export class Server {
       );
       if (deny) {
         return respondTypedError<SessionOpenResult>(message.requestId, deny);
+      }
+      const requestedRoot = message.session.genesisRoot;
+      if (
+        requestedRoot !== undefined &&
+        (!isGenesisRoot(requestedRoot) ||
+          (Engine.serverSeq(engine) > 0 &&
+            !valueEqual(readGenesisRoot(engine), requestedRoot)))
+      ) {
+        return respondTypedError<SessionOpenResult>(
+          message.requestId,
+          toError(
+            "ProtocolError",
+            "The requested root intent differs from the space's immutable genesis",
+          ),
+        );
       }
       const opened = this.#sessions.open(
         message.space,
@@ -7981,6 +8017,10 @@ export const parseClientMessage = (
     if (holdings === null) return null;
     // A malformed ceiling refuses the message: a session opened without the
     // ceiling its client asked for would read unbounded, silently.
+    if (
+      parsed.session.genesisRoot !== undefined &&
+      !isGenesisRoot(parsed.session.genesisRoot)
+    ) return null;
     const readCeiling = parseSessionReadCeiling(parsed.session.readCeiling);
     if (readCeiling === null) return null;
     return {
@@ -8007,6 +8047,9 @@ export const parseClientMessage = (
           ? (parsed.session.actingAs as "space-owner")
           : undefined,
         ...(readCeiling !== undefined ? { readCeiling } : {}),
+        ...(isGenesisRoot(parsed.session.genesisRoot)
+          ? { genesisRoot: parsed.session.genesisRoot }
+          : {}),
       },
       invocation: isFabricPlainObject(parsed.invocation)
         ? parsed.invocation

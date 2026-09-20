@@ -33,6 +33,7 @@
     "./v2/operation-codec": "./v2/operation-codec.ts",
     "./v2/client": "./v2/client.ts",
     "./v2/message-compression": "./v2/message-compression.ts",
+    "./v2/genesis-root": "./v2/genesis-root.ts",
     "./v2/engine": "./v2/engine.ts",
     "./v2/execution-lease": "./v2/execution-lease.ts",
     "./v2/execution-outbox": "./v2/execution-outbox.ts",

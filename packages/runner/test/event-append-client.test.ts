@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type {
   ClientCommit,
@@ -40,7 +41,11 @@ import {
 } from "../src/storage/event-append-queue.ts";
 import { ArrivalLog } from "./support/serving-waits.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import { newSharedServer } from "./memory-v2-test-utils.ts";
+import {
+  newSharedServer,
+  TEST_MEMORY_SERVER_AUTH,
+  testPrincipalSessionOpenAuthFactory,
+} from "./memory-v2-test-utils.ts";
 import {
   flushMicrotasks,
   scriptedIntentManager,
@@ -66,6 +71,76 @@ const appendOf = (
 });
 
 describe("event-append queue (events.md §5, LT9)", () => {
+  it("settles a READ principal's authoritative append refusal without retrying it", async () => {
+    const server = new MemoryV2Server.Server({
+      sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
+      authorizeSessionOpen: (message) =>
+        (message.authorization as { principal: string }).principal,
+      acl: { mode: "enforce" },
+    });
+    const engine = await server.engineForSpace(space);
+    Engine.applyCommit(engine, {
+      sessionId: "read-append-genesis",
+      space,
+      principal: space,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: `of:${space}`,
+          value: { value: { [space]: "OWNER", [aliceSigner.did()]: "READ" } },
+        }],
+      },
+    });
+    const client = await MemoryV2Client.connect({
+      transport: MemoryV2Client.loopback(server),
+    });
+    const session = await client.mount(
+      space,
+      {},
+      testPrincipalSessionOpenAuthFactory(aliceSigner),
+    );
+    const retried = Promise.withResolvers<"retried">();
+    let attempts = 0;
+    let refusal: unknown;
+    const queue = new EventAppendQueue({
+      space,
+      nextLocalSeq: () => ++attempts,
+      transact: async (commit) => {
+        if (attempts > 1) retried.resolve("retried");
+        try {
+          return await session.transact(commit);
+        } catch (error) {
+          refusal = error;
+          throw error;
+        }
+      },
+    });
+    try {
+      const result = await Promise.race([
+        queue.enqueue(appendOf("reader-denied")),
+        retried.promise,
+      ]);
+      expect(refusal).toMatchObject({
+        name: "AuthorizationError",
+        permanentEvidence: true,
+        aclRevision: 1,
+      });
+      expect(result).toEqual({
+        delivered: false,
+        refused: expect.stringContaining("lacks WRITE"),
+      });
+      expect(attempts).toBe(1);
+      expect(queue.pending).toHaveLength(0);
+      expect(Engine.serverSeq(engine)).toBe(1);
+    } finally {
+      queue.close();
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("discharges in fired order, one in flight", async () => {
     const sent = new ArrivalLog<string>();
     let release: (() => void) | undefined;
@@ -158,6 +233,39 @@ describe("event-append queue (events.md §5, LT9)", () => {
       "send:evt-after",
     ]);
     queue.close();
+  });
+
+  it("retries authorization failures without a permanent current-ACL verdict", async () => {
+    for (
+      const details of [
+        {},
+        { permanentEvidence: true },
+        { permanentEvidence: true, aclRevision: 1, retriable: true },
+      ]
+    ) {
+      let attempts = 0;
+      const queue = new EventAppendQueue({
+        space,
+        nextLocalSeq: () => ++attempts,
+        transact: () =>
+          attempts === 1
+            ? Promise.reject(
+              Object.assign(
+                namedError("AuthorizationError", "session challenge"),
+                details,
+              ),
+            )
+            : Promise.resolve(),
+      });
+      try {
+        expect(await queue.enqueue(appendOf("auth-recovery"))).toEqual({
+          delivered: true,
+        });
+        expect(attempts).toBe(2);
+      } finally {
+        queue.close();
+      }
+    }
   });
 
   it("duplicate-eventId fires each settle their own outcome (the per-entry keying — a per-id map would wedge the pending-commit barrier)", async () => {

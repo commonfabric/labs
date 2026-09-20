@@ -1,23 +1,34 @@
 // The pattern-lifecycle verbs behind the route: authorize the caller as a
 // writer of the space, hand the verb to the space's serving runtime, and
-// turn what comes back into a status and a body. Everything that touches
-// the space runs inside `@commonfabric/piece`'s served operations on the
-// serving loop's own cycle (docs/features/server-pattern-lifecycle.md);
+// turn what comes back into a status and a body. Creation and source changes
+// run inside `@commonfabric/piece`'s served operations on the serving loop's
+// cycle; registration uses trusted event ingress after creation commits
+// (docs/features/server-pattern-lifecycle.md);
 // this module holds the transport's half and is tested against a real
 // memory server and serving host.
 
 import { createSession, type Identity } from "@commonfabric/identity";
 import type { DID, MemorySpace } from "@commonfabric/memory/interface";
 import {
+  streamEntriesDocId,
+  type StreamEventsDocValue,
+} from "@commonfabric/memory/v2";
+import type { Server } from "@commonfabric/memory/v2/server";
+import {
   confirmServedInstantiate,
+  confirmServedRegistration,
   confirmServedSetSource,
+  finishServedRegistration,
   PiecesController,
+  prepareServedRegistration,
   servedInstantiatePiece,
   type ServedInstantiateReceipt,
   ServedLifecycleRefusal,
   type ServedLifecycleRefusalCode,
   type ServedPatternRef,
   type ServedPatternSource,
+  type ServedRegistrationOutcome,
+  type ServedRegistrationPreparation,
   servedSetPieceSource,
   type ServedSetSourceReceipt,
   servedUploadPattern,
@@ -49,6 +60,13 @@ export interface LifecycleDeps {
    * bookkeeping under the lease.
    */
   serviceIdentity: Identity;
+
+  /** Trusted event ingress after this route authenticates and authorizes the caller. */
+  append: Server["commitDelegatedAppend"];
+
+  /** Trusted, narrowly addressed observation of the prepared event's durable sidecar. */
+  readDocument: Server["readDocument"];
+  watchAdmittedCommits: Server["watchAdmittedCommits"];
 
   logger?: {
     warn: (obj: unknown, msg: string) => void;
@@ -206,7 +224,7 @@ export function processUpload(
  * it. A piece created without that demand runs when something first
  * demands it, the served meaning of a setup-only creation.
  */
-export function processInstantiate(
+export async function processInstantiate(
   deps: LifecycleDeps,
   callerDid: string,
   input: WireSource & {
@@ -217,6 +235,7 @@ export function processInstantiate(
     force?: boolean;
     register?: boolean;
     start?: boolean;
+    requestKey?: string;
   },
 ): Promise<LifecycleResult<ServedInstantiateReceipt>> {
   const source = wireSource(input);
@@ -227,26 +246,157 @@ export function processInstantiate(
       "Supply exactly one of `program` and `pattern`.",
     ));
   }
-  return runServedVerb(deps, callerDid, input.space, {
-    name: "instantiate",
+  const result = await runServedVerb<ServedInstantiateReceipt>(
+    deps,
+    callerDid,
+    input.space,
+    {
+      name: "instantiate",
+      run: (pieces) =>
+        servedInstantiatePiece(pieces, {
+          source,
+          ...(input.argument === undefined ? {} : { argument: input.argument }),
+          ...(input.repository === undefined
+            ? {}
+            : { repository: input.repository }),
+          ...(input.slug === undefined ? {} : { slug: input.slug }),
+          ...(input.force === undefined ? {} : { force: input.force }),
+          ...(input.register === undefined ? {} : { register: input.register }),
+          ...(input.requestKey === undefined
+            ? {}
+            : { requestKey: input.requestKey }),
+          actingUser: callerDid,
+        }),
+      confirm: (runtime, receipt) =>
+        confirmServedInstantiate(runtime, input.space as MemorySpace, receipt),
+      ...(input.start === false
+        ? {}
+        : { demandRoots: (receipt) => [pieceRootDocId(receipt.pieceId)] }),
+    },
+  );
+  if (result.status !== 200) return result;
+  if (
+    result.body.registration.status === "skipped" ||
+    result.body.registration.status === "handled"
+  ) return result;
+  const prepared = await runServedVerb<ServedRegistrationPreparation>(
+    deps,
+    callerDid,
+    input.space,
+    {
+      name: "registration-prepare",
+      run: (pieces) =>
+        prepareServedRegistration(pieces, result.body, callerDid),
+      confirm: (runtime, prepared) =>
+        confirmServedRegistration(
+          runtime,
+          input.space as MemorySpace,
+          prepared.receipt,
+          callerDid,
+        ),
+    },
+  );
+  if (prepared.status !== 200) return prepared;
+  const outcome = prepared.body.delivery === undefined
+    ? {}
+    : await observeRegistrationDelivery(
+      deps,
+      callerDid,
+      prepared.body.delivery,
+    );
+  return runServedVerb<ServedInstantiateReceipt>(deps, callerDid, input.space, {
+    name: "registration-finish",
     run: (pieces) =>
-      servedInstantiatePiece(pieces, {
-        source,
-        ...(input.argument === undefined ? {} : { argument: input.argument }),
-        ...(input.repository === undefined
-          ? {}
-          : { repository: input.repository }),
-        ...(input.slug === undefined ? {} : { slug: input.slug }),
-        ...(input.force === undefined ? {} : { force: input.force }),
-        ...(input.register === undefined ? {} : { register: input.register }),
-        actingUser: callerDid,
-      }),
+      finishServedRegistration(pieces, prepared.body, callerDid, outcome),
     confirm: (runtime, receipt) =>
-      confirmServedInstantiate(runtime, input.space as MemorySpace, receipt),
-    ...(input.start === false
-      ? {}
-      : { demandRoots: (receipt) => [pieceRootDocId(receipt.pieceId)] }),
+      confirmServedRegistration(
+        runtime,
+        input.space as MemorySpace,
+        receipt,
+        callerDid,
+      ),
   });
+}
+
+/** Observe only a server-prepared stream; no process-identity session reads private space data. */
+async function observeRegistrationDelivery(
+  deps: LifecycleDeps,
+  callerDid: string,
+  delivery: NonNullable<ServedRegistrationPreparation["delivery"]>,
+): Promise<ServedRegistrationOutcome> {
+  const { stream, eventId, piece } = delivery;
+  const authority = await authorizeSpaceWriter(
+    deps.authority,
+    stream.space,
+    callerDid,
+  );
+  if (!authority.ok) return { error: authority.message };
+  const targetStream = streamEntriesDocId(stream);
+  const readOutcome = async (): Promise<
+    ServedRegistrationOutcome | undefined
+  > => {
+    const document = await deps.readDocument(stream.space, targetStream);
+    const value = document?.value as StreamEventsDocValue | undefined;
+    const entry = value?.entries?.find((entry) => entry.eventId === eventId);
+    if (entry === undefined) return undefined;
+    if (
+      entry.status === "dropped" || entry.status === "needs-attention" ||
+      entry.error
+    ) {
+      return {
+        error: entry.error ?? entry.reason ?? entry.status,
+        terminal: true,
+      };
+    }
+    return entry.consequenced ? {} : undefined;
+  };
+  const consequence = Promise.withResolvers<ServedRegistrationOutcome>();
+  let finished = false;
+  let observations = Promise.resolve();
+  const observe = () => {
+    observations = observations.then(async () => {
+      if (finished) return;
+      const outcome = await readOutcome();
+      if (outcome !== undefined) consequence.resolve(outcome);
+    }).catch((error) => consequence.reject(error));
+  };
+  const cancel = deps.watchAdmittedCommits((notice) => {
+    if (
+      notice.space === stream.space &&
+      notice.writes.some((write) => write.id === targetStream)
+    ) observe();
+  });
+  observe();
+  try {
+    const [, outcome] = await Promise.all([
+      deps.append({
+        targetSpace: stream.space,
+        targetStream,
+        targetStreamLink: stream,
+        eventId,
+        payload: { piece },
+        actingPrincipal: callerDid,
+        actingSession: callerDid,
+        capabilityRef: `stream-append:${targetStream}`,
+        sessionId: crypto.randomUUID(),
+        localSeq: 1,
+      }),
+      consequence.promise,
+    ]);
+    return outcome;
+  } catch (error) {
+    // Only durable terminal evidence advances an attempt after an uncertain append.
+    try {
+      const retained = await readOutcome();
+      if (retained?.terminal) return retained;
+    } catch {
+      /* Retain the original delivery identity when readback also fails. */
+    }
+    return { error: error instanceof Error ? error.message : String(error) };
+  } finally {
+    finished = true;
+    cancel();
+  }
 }
 
 /**

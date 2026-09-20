@@ -32,6 +32,7 @@ import type {
   EntityIdListOptions,
   EntityIdListResult,
   EventAttentionResolveResult,
+  GenesisRoot,
   OperationFieldQuery,
   OperationFieldSnapshot,
   PatchOp,
@@ -358,7 +359,7 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    */
   registerSpaceIdentity?(
     identity: Signer,
-    options?: { owner?: string; genesisAcl?: ACL },
+    options?: { owner?: string; genesisAcl?: ACL; genesisRoot?: GenesisRoot },
   ): void;
 
   /**
@@ -437,6 +438,18 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * managers may omit it.
    */
   authorizationError?(space: MemorySpace): Error | undefined;
+
+  /** The latest authoritative access loss for a space, cleared on reopening. */
+  spaceAccessError?(space: MemorySpace): Error | undefined;
+
+  /**
+   * Observes authoritative access loss synchronously. Transient connection
+   * failures and normal closure do not emit; `spaceAccessError()` supplies
+   * the current snapshot for subscriptions installed after a loss.
+   */
+  subscribeSpaceAccessLoss?(
+    observer: (space: MemorySpace, error: Error) => void,
+  ): Cancel;
 
   /**
    * Register an in-flight commit so the durability barrier

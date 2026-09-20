@@ -18,6 +18,7 @@ import {
   normalizeRenderDeclassificationPolicy,
   type RenderConfidentialityCeiling,
   type RenderDeclassificationPolicy,
+  type SpaceAccessProvider,
   WorkerReconciler,
 } from "@commonfabric/html/worker";
 import { DID, Identity, type Session } from "@commonfabric/identity";
@@ -26,6 +27,7 @@ import type { Program } from "@commonfabric/js-compiler";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { setLLMUrl } from "@commonfabric/llm";
 import { type ACL, isACLUser, isCapability } from "@commonfabric/memory/acl";
+import type { MemorySpace } from "@commonfabric/memory/interface";
 import {
   dbNeedsColumnProvenance,
   eventAttentionEntryKey,
@@ -669,6 +671,20 @@ export const hasExplicitSubscriptionSchema = (schema: unknown): boolean =>
     isObjectOrArray(schema) &&
     Object.keys(schema).length > 0);
 
+/** Connects render boundaries to authoritative storage access loss. */
+export function renderSpaceAccessProviderFor(
+  runtime: Pick<Runtime, "storageManager">,
+): SpaceAccessProvider {
+  const storage = runtime.storageManager;
+  return {
+    error: (space) => storage.spaceAccessError?.(space as MemorySpace),
+    subscribe: (space, onLoss) =>
+      storage.subscribeSpaceAccessLoss?.((lostSpace) => {
+        if (lostSpace === space) onLoss();
+      }) ?? (() => {}),
+  };
+}
+
 /**
  * Where a mount's render errors go: the client that mounted it, and no other.
  *
@@ -829,6 +845,7 @@ export class RuntimeProcessor {
    * ceiling is in force.
    */
   #renderMembershipProvider?: SpaceMembershipProvider;
+  #cancelSpaceAccessLoss?: Cancel;
 
   private constructor(
     runtime: Runtime,
@@ -845,6 +862,16 @@ export class RuntimeProcessor {
     this.#telemetry = telemetry;
     this.#telemetry.addEventListener("telemetry", this.#onTelemetry);
     this.#securityContext = securityContext;
+    this.#cancelSpaceAccessLoss = runtime.storageManager
+      ?.subscribeSpaceAccessLoss?.((space) => {
+        const clients = new Set([
+          ownerClient,
+          ...[...this.#vdomMounts.values()].map((mount) => mount.client),
+        ]);
+        for (const client of clients) {
+          client.post({ type: NotificationType.SpaceAccessLost, space });
+        }
+      });
   }
 
   /**
@@ -1093,6 +1120,8 @@ export class RuntimeProcessor {
       this.#telemetry.removeEventListener("telemetry", this.#onTelemetry);
       try {
         this.#intentOutcomeCancel?.();
+        this.#cancelSpaceAccessLoss?.();
+        this.#cancelSpaceAccessLoss = undefined;
         this.#intentOutcomeCancel = undefined;
         this.#siteTableCancel?.();
         this.#siteTableCancel = undefined;
@@ -3135,6 +3164,7 @@ export class RuntimeProcessor {
       renderConfidentialityCeiling: this.#renderConfidentialityCeiling,
       resolveRenderConfidentiality: this.#renderConfidentialityResolver,
       membershipProvider: this.#renderMembershipProvider,
+      spaceAccess: renderSpaceAccessProviderFor(this.#runtime),
       onOps: (ops: VDomOp[]) => {
         const batchId = this.#vdomBatchIdCounter++;
         // `mountId` as the client sent it: the scoping is this worker's

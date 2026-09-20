@@ -12,6 +12,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { Database } from "@db/sqlite";
 
+import { readGenesisRoot } from "../v2/genesis-root.ts";
 import { Server, SessionRegistry } from "../v2/server.ts";
 import { sameAcl } from "../acl.ts";
 import {
@@ -277,6 +278,106 @@ describe("v2-server-acl", () => {
           1,
         );
         expect(write.error?.name).toBe("AuthorizationError");
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("seals a custom root reservation at genesis and refuses changing it afterward", async () => {
+      const server = createAclServer("memory://custom-root-genesis", {
+        mode: "enforce",
+      });
+      const space = "did:key:z6Mk-custom-root-space";
+      const root = {
+        source: "system:loom/main.tsx",
+        cause: "publication-seed",
+      };
+      try {
+        const authority = await connect(server);
+        const opened = await openSession(authority, space, space);
+        expectExists(opened.ok);
+        const commit = {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          genesisRoot: root,
+          operations: [{
+            op: "set" as const,
+            id: `of:${space}`,
+            value: { value: { [ALICE]: "OWNER" } },
+          }],
+        };
+        await authority.connection.receive(
+          encodeMemoryBoundary({
+            type: "transact",
+            requestId: nextRequestId("root"),
+            space,
+            sessionId: opened.ok.sessionId,
+            commit,
+          }),
+        );
+        expect(nextResponse(authority.messages).error).toBeUndefined();
+        expect(readGenesisRoot(await server.engineForSpace(space))).toEqual(
+          root,
+        );
+        const owner = await connect(server);
+        const ownerSession = await openSession(owner, space, ALICE);
+        expectExists(ownerSession.ok);
+        await owner.connection.receive(
+          encodeMemoryBoundary({
+            type: "transact",
+            requestId: nextRequestId("root-replace"),
+            space,
+            sessionId: ownerSession.ok.sessionId,
+            commit: {
+              ...commit,
+              genesisRoot: { ...root, cause: "replacement" },
+            },
+          }),
+        );
+        expect(nextResponse(owner.messages).error?.name).toBe(
+          "AuthorizationError",
+        );
+        expect(readGenesisRoot(await server.engineForSpace(space))).toEqual(
+          root,
+        );
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("refuses a custom root source outside the deployment's system sources", async () => {
+      const server = createAclServer("memory://custom-root-invalid-source", {
+        mode: "enforce",
+      });
+      const space = "did:key:z6Mk-invalid-custom-root-space";
+      try {
+        const authority = await connect(server);
+        const opened = await openSession(authority, space, space);
+        expectExists(opened.ok);
+        await authority.connection.receive(encodeMemoryBoundary({
+          type: "transact",
+          requestId: nextRequestId("invalid-root"),
+          space,
+          sessionId: opened.ok.sessionId,
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            genesisRoot: {
+              source: "https://example.com/untrusted.tsx",
+              cause: "seed",
+            },
+            operations: [{
+              op: "set",
+              id: `of:${space}`,
+              value: { value: { [ALICE]: "OWNER" } },
+            }],
+          },
+        }));
+        expect(nextResponse(authority.messages).error?.name).toBe(
+          "ProtocolError",
+        );
+        expect(readGenesisRoot(await server.engineForSpace(space)))
+          .toBeUndefined();
       } finally {
         await server.close();
       }

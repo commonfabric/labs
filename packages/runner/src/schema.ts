@@ -85,6 +85,7 @@ import {
   combineSchemaForLink,
   createDefaultTraversalContext,
   IObjectCreator,
+  isUnknownCellSchema,
   mergeAnyOfMatches,
   SchemaObjectTraverser,
 } from "./traverse.ts";
@@ -1109,9 +1110,18 @@ export function validateAndTransform(
   // We'll use this for the value, and potentially merge the schema
   // This gets me the result of following all the links, so I can get the value
   const valueTraceStart = tx.getCfcState().dereferenceTraces.length;
-  const resolvedValueLink = resolveLink(runtime, tx, link, "value", {
-    markIfcCrossings: true,
-  });
+  // A foreign unknown-valued handle transfers its address without reading
+  // through the target's access boundary. The handle branch below records the
+  // link crossing and applies its schema before returning the cell.
+  const handleTarget = isUnknownCellSchema(effectiveSchema)
+    ? readMaybeLink(tx, link)
+    : undefined;
+  const resolvedValueLink = handleTarget !== undefined &&
+      handleTarget.space !== link.space
+    ? link
+    : resolveLink(runtime, tx, link, "value", {
+      markIfcCrossings: true,
+    });
   cfcLabelView = mergeCfcLabelViews([
     cfcLabelView,
     deriveDereferenceLabelView(

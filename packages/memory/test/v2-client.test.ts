@@ -3903,3 +3903,27 @@ Deno.test("memory v2 client rejects outstanding commits when session ID changes 
     await client.close();
   }
 });
+
+Deno.test("memory v2 client refuses root expectations without server capability", async () => {
+  const client = await connect({
+    transport: handshakeTransport({
+      ...HELLO_OK,
+      flags: { ...HELLO_OK.flags, genesisRoot: false },
+    }),
+  });
+  try {
+    await assertRejects(
+      () =>
+        client.mount("did:key:unsupported-root-host", {
+          genesisRoot: {
+            source: "system:loom/main.tsx",
+            cause: "expected-root",
+          },
+        }),
+      Error,
+      "does not support a custom root intent",
+    );
+  } finally {
+    await client.close();
+  }
+});

@@ -7,11 +7,15 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity, type Session } from "@commonfabric/identity";
+import { streamEntriesDocId } from "@commonfabric/memory/v2";
 import type { DID, MemorySpace } from "@commonfabric/memory/interface";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import {
+  type Cell,
+  entityIdFrom,
   getPatternIdentityRef,
   getPieceSourceRevisions,
+  type NormalizedFullLink,
   Runtime,
   type RuntimeProgram,
 } from "@commonfabric/runner";
@@ -23,6 +27,7 @@ import { PiecesController } from "../src/ops/pieces-controller.ts";
 import { pieceId } from "../src/piece-id.ts";
 import { resolveSlugTargetCell } from "../src/slugs.ts";
 import {
+  completeServedRegistration,
   confirmServedInstantiate,
   confirmServedSetSource,
   servedInstantiatePiece,
@@ -211,7 +216,12 @@ describe("served lifecycle verbs", () => {
   const instantiate = (
     source: ServedPatternSource,
     argument?: object,
-    naming: { slug?: string; force?: boolean; register?: boolean } = {},
+    naming: {
+      slug?: string;
+      force?: boolean;
+      register?: boolean;
+      requestKey?: string;
+    } = {},
   ) =>
     served(
       "instantiate",
@@ -236,6 +246,309 @@ describe("served lifecycle verbs", () => {
   };
 
   describe("instantiate", () => {
+    it("retries a terminal registration failure after repair without creating another piece", async () => {
+      const rootReceipt = await instantiate({
+        program: programOf(`
+import { computed, handler, pattern, Writable } from "commonfabric";
+const addPiece = handler<{piece: Writable<unknown>}, {blocked: Writable<boolean>, panels: Writable<Writable<unknown>[]>}>(
+  ({piece}, {blocked, panels}) => { if (blocked.get()) throw new Error("Registration blocked"); panels.addUnique(piece); },
+);
+export default pattern(() => {
+  const blocked = new Writable(true);
+  const panels = new Writable<Writable<unknown>[]>([]);
+  return { blocked, panels, pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({blocked, panels}) };
+});
+`),
+      });
+      const pieces = await clientPieces();
+      const root = await pieces.get(rootReceipt.pieceId);
+      await pieces.linkDefaultPattern(root.getCell());
+      const pending = await instantiate({ program: BASE_PROGRAM }, undefined, {
+        register: true,
+      });
+      const events: string[] = [];
+      const options = {
+        append: async (
+          { stream, eventId, piece }: {
+            stream: NormalizedFullLink;
+            eventId: string;
+            piece: Cell<unknown>;
+          },
+        ) => {
+          events.push(eventId);
+          await server.commitDelegatedAppend({
+            targetSpace: stream.space,
+            targetStream: streamEntriesDocId(stream),
+            targetStreamLink: stream,
+            eventId,
+            payload: { piece: piece.getAsLink() },
+            actingPrincipal: aliceSigner.did(),
+            actingSession: aliceSigner.did(),
+            capabilityRef: `stream-append:${streamEntriesDocId(stream)}`,
+            sessionId: `repair:${crypto.randomUUID()}`,
+            localSeq: 1,
+          });
+        },
+      };
+      const failed = await completeServedRegistration(
+        pieces,
+        pending,
+        aliceSigner.did(),
+        options,
+      );
+      expect(failed.registration.status).toBe("failed");
+      const repair = await pieces.runtime.editWithRetry((tx) =>
+        root.getCell().withTx(tx).key("blocked").set(false)
+      );
+      expect(repair.error).toBeUndefined();
+      const retried = await instantiate({ program: BASE_PROGRAM }, undefined, {
+        register: true,
+        requestKey: pending.requestKey,
+      });
+      const [handled, concurrent] = await Promise.all([
+        completeServedRegistration(pieces, retried, aliceSigner.did(), options),
+        completeServedRegistration(pieces, retried, aliceSigner.did(), options),
+      ]);
+      expect(handled.registration.status).toBe("handled");
+      expect(concurrent.registration.status).toBe("handled");
+      expect(handled.pieceId).toBe(pending.pieceId);
+      expect(events.length).toBe(3);
+      expect(events[0]).not.toBe(events[1]);
+      expect(events[1]).toBe(events[2]);
+      const registry = await pieces.getRegisteredPieces();
+      expect(registry.length).toBe(1);
+    });
+
+    it("retries a committed no-op registration after repair without creating another piece", async () => {
+      const rootReceipt = await instantiate({
+        program: programOf(`
+import { computed, handler, pattern, Writable } from "commonfabric";
+const addPiece = handler<{piece: Writable<unknown>}, {blocked: Writable<boolean>, panels: Writable<Writable<unknown>[]>}>(
+  ({piece}, {blocked, panels}) => { if (blocked.get()) return; panels.addUnique(piece); },
+);
+export default pattern(() => {
+  const blocked = new Writable(true);
+  const panels = new Writable<Writable<unknown>[]>([]);
+  return { blocked, panels, pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({blocked, panels}) };
+});
+`),
+      });
+      const pieces = await clientPieces();
+      const root = await pieces.get(rootReceipt.pieceId);
+      await pieces.linkDefaultPattern(root.getCell());
+      const pending = await instantiate({ program: BASE_PROGRAM }, undefined, {
+        register: true,
+      });
+      const events: string[] = [];
+      const options = {
+        append: async (
+          { stream, eventId, piece }: {
+            stream: NormalizedFullLink;
+            eventId: string;
+            piece: Cell<unknown>;
+          },
+        ) => {
+          events.push(eventId);
+          await server.commitDelegatedAppend({
+            targetSpace: stream.space,
+            targetStream: streamEntriesDocId(stream),
+            targetStreamLink: stream,
+            eventId,
+            payload: { piece: piece.getAsLink() },
+            actingPrincipal: aliceSigner.did(),
+            actingSession: aliceSigner.did(),
+            capabilityRef: `stream-append:${streamEntriesDocId(stream)}`,
+            sessionId: `repair:${crypto.randomUUID()}`,
+            localSeq: 1,
+          });
+        },
+      };
+      const appended = Promise.withResolvers<void>();
+      const releaseAcknowledgment = Promise.withResolvers<void>();
+      const uncertainCompletion = completeServedRegistration(
+        pieces,
+        pending,
+        aliceSigner.did(),
+        {
+          append: async (input: Parameters<typeof options.append>[0]) => {
+            await options.append(input);
+            appended.resolve();
+            await releaseAcknowledgment.promise;
+            throw new Error("Lost delayed append acknowledgment");
+          },
+        },
+      );
+      await appended.promise;
+      const failed = await completeServedRegistration(
+        pieces,
+        pending,
+        aliceSigner.did(),
+        options,
+      ).finally(() => releaseAcknowledgment.resolve());
+      const uncertain = await uncertainCompletion;
+      expect(uncertain.registration.terminal).toBe(true);
+      expect(failed.registration.status).toBe("failed");
+      expect(failed.registration.error).toBe(
+        "The addPiece handler committed without registering the piece",
+      );
+      const repair = await pieces.runtime.editWithRetry((tx) =>
+        root.getCell().withTx(tx).key("blocked").set(false)
+      );
+      expect(repair.error).toBeUndefined();
+      const retried = await instantiate({ program: BASE_PROGRAM }, undefined, {
+        register: true,
+        requestKey: pending.requestKey,
+      });
+      const [handled, concurrent] = await Promise.all([
+        completeServedRegistration(pieces, retried, aliceSigner.did(), options),
+        completeServedRegistration(pieces, retried, aliceSigner.did(), options),
+      ]);
+      expect(handled.registration.status).toBe("handled");
+      expect(handled.registration.attempt).toBe(1);
+      expect(concurrent.registration.status).toBe("handled");
+      expect(handled.pieceId).toBe(pending.pieceId);
+      expect(events.length).toBe(4);
+      expect(events[0]).toBe(events[1]);
+      expect(events[1]).not.toBe(events[2]);
+      expect(events[2]).toBe(events[3]);
+      const registry = await pieces.getRegisteredPieces();
+      expect(registry.length).toBe(1);
+    });
+
+    for (
+      const mode of [
+        "client event",
+        "trusted delegated ingress",
+        "lost append acknowledgment",
+      ]
+    ) {
+      const delegated = mode !== "client event";
+      it(`registers through the computed root action using ${mode}`, async () => {
+        const rootReceipt = await instantiate({
+          program: programOf(`
+import { computed, handler, pattern, Writable } from "commonfabric";
+const addPiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>}>(
+  ({piece}, {panels}) => { panels.addUnique(piece); },
+);
+const removePiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>}>(
+  ({piece}, {panels}) => { panels.set(panels.get().filter(member => !member.equals(piece))); },
+);
+export default pattern(() => {
+  const panels = new Writable<Writable<unknown>[]>([]);
+  return { panels, pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({panels}), removePiece: removePiece({panels}) };
+});
+`),
+        });
+        const pieces = await clientPieces();
+        const root = await pieces.get(rootReceipt.pieceId);
+        await pieces.linkDefaultPattern(root.getCell());
+        const pending = await instantiate(
+          { program: BASE_PROGRAM },
+          undefined,
+          { register: true },
+        );
+        let appends = 0;
+        const options = delegated
+          ? {
+            append: async (
+              { stream, eventId, piece }: {
+                stream: NormalizedFullLink;
+                eventId: string;
+                piece: Cell<unknown>;
+              },
+            ) => {
+              appends++;
+              await server.commitDelegatedAppend({
+                targetSpace: stream.space,
+                targetStream: streamEntriesDocId(stream),
+                targetStreamLink: stream,
+                eventId,
+                payload: { piece: piece.getAsLink() },
+                actingPrincipal: aliceSigner.did(),
+                actingSession: aliceSigner.did(),
+                capabilityRef: `stream-append:${streamEntriesDocId(stream)}`,
+                sessionId: `lifecycle-test:${crypto.randomUUID()}`,
+                localSeq: 1,
+              });
+              if (mode === "lost append acknowledgment" && appends === 1) {
+                throw new Error("Lost append acknowledgment");
+              }
+            },
+          }
+          : {};
+        const created = await completeServedRegistration(
+          pieces,
+          pending,
+          aliceSigner.did(),
+          options,
+        );
+        if (mode === "client event") {
+          expect(created.registration.error).toBeUndefined();
+        }
+        const retried = await instantiate(
+          { program: BASE_PROGRAM },
+          undefined,
+          { requestKey: pending.requestKey, register: true },
+        );
+        expect(
+          (await completeServedRegistration(
+            pieces,
+            retried,
+            aliceSigner.did(),
+            options,
+          )).registration,
+        ).toMatchObject({ status: "handled" });
+        if (delegated) {
+          expect(appends).toBe(mode === "lost append acknowledgment" ? 2 : 1);
+        }
+        expect(created.registration.status).toBe(
+          mode === "lost append acknowledgment" ? "failed" : "handled",
+        );
+        const panels = root.getCell().asSchema({
+          type: "object",
+          required: ["panels"],
+          properties: {
+            panels: {
+              type: "array",
+              items: { type: "unknown", asCell: ["cell"] },
+            },
+          },
+        }).key("panels");
+        await panels.pull();
+        expect(panels.get().length).toBe(1);
+        expect(
+          panels.key(0).resolveAsCell().equals(
+            pieces.runtime.getCellFromEntityId(
+              space,
+              entityIdFrom(created.pieceId),
+            ),
+          ),
+        ).toBe(true);
+        expect(await pieces.remove(created.pieceId)).toBe(true);
+        await panels.pull();
+        expect(panels.get().length).toBe(0);
+      });
+    }
+
+    it("retries one request key without creating another piece or resetting its argument", async () => {
+      const first = await instantiate({ program: BASE_PROGRAM }, {
+        seed: "first",
+      }, {
+        requestKey: "same-creation",
+      });
+      const second = await instantiate({ program: BASE_PROGRAM }, {
+        seed: "retry",
+      }, {
+        requestKey: "same-creation",
+      });
+      expect(second.pieceId).toBe(first.pieceId);
+      const pieces = await clientPieces();
+      const piece = await pieces.get(first.pieceId, false);
+      const argument = pieces.getArgument<{ seed: string }>(piece.getCell());
+      await argument.sync();
+      expect(argument.get().seed).toBe("first");
+    });
+
     it("creates a piece a later client reads with the pattern pointer and argument the verb wrote", async () => {
       const receipt = await instantiate({ program: BASE_PROGRAM }, {
         seed: "planted",
@@ -300,10 +613,23 @@ describe("served lifecycle verbs", () => {
     });
 
     it("refuses to register a piece in a space with no root", async () => {
-      const refusal = await refusalOf(
-        instantiate({ program: BASE_PROGRAM }, undefined, { register: true }),
+      const pending = await instantiate({ program: BASE_PROGRAM }, undefined, {
+        register: true,
+      });
+      const pieces = await clientPieces();
+      const receipt = await completeServedRegistration(
+        pieces,
+        pending,
+        aliceSigner.did(),
       );
-      expect(refusal.code).toBe("no-space-root");
+      expect(receipt.registration.status).toBe("failed");
+      expect(receipt.registration.error).toContain("no default pattern");
+      expect(receipt.pieceId).toBe(pending.pieceId);
+      const retried = await instantiate({ program: BASE_PROGRAM }, undefined, {
+        requestKey: pending.requestKey,
+        register: true,
+      });
+      expect(retried.pieceId).toBe(pending.pieceId);
     });
 
     it("refuses a program that does not compile, naming the failure", async () => {

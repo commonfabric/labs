@@ -396,11 +396,18 @@ export class Engine extends EventTarget {
    * acted on. Re-resolving a program the engine already holds goes through
    * `#resolveModules()`, which follows imports and nothing else.
    */
-  async resolve(program: ProgramResolver): Promise<RuntimeProgram> {
-    return await attachDeclaredDataFiles(
-      await this.#resolveModules(program),
-      program,
-    );
+  async resolve(
+    program: ProgramResolver,
+    options: { sourceRoots?: readonly string[] } = {},
+  ): Promise<RuntimeProgram> {
+    const roots = [...new Set(options.sourceRoots ?? [])];
+    const resolved = roots.length === 0
+      ? await this.#resolveModules(program)
+      : {
+        ...await this.#resolveWithSourceRoots(program, roots),
+        sourceRoots: roots,
+      };
+    return await attachDeclaredDataFiles(resolved, program);
   }
 
   /** Resolve the module closure an entry's imports reach. */

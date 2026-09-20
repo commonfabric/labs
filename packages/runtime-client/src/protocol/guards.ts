@@ -30,6 +30,7 @@ import {
   OperationUpdateNotification,
   PendingWritesNotification,
   RequestType,
+  SpaceAccessLostNotification,
   TelemetryNotification,
   TransportNotificationType,
   VDomBatchNotification,
@@ -153,7 +154,8 @@ export function isIPCRemoteNotification(
     isNavigateRequestNotification(value) || isErrorNotification(value) ||
     isVDomBatchNotification(value) || isPendingWritesNotification(value) ||
     isOperationUpdateNotification(value) ||
-    isEventNeedsAttentionNotification(value);
+    isEventNeedsAttentionNotification(value) ||
+    isSpaceAccessLostNotification(value);
 }
 
 /**
@@ -231,6 +233,14 @@ export function isErrorNotification(
     value.type === NotificationType.ErrorReport &&
     typeof value.message === "string"
   );
+}
+
+/** Recognizes a space-scoped authoritative access-loss notification. */
+export function isSpaceAccessLostNotification(
+  value: unknown,
+): value is SpaceAccessLostNotification {
+  return isObjectNotArray(value) &&
+    value.type === NotificationType.SpaceAccessLost && isDID(value.space);
 }
 
 /**

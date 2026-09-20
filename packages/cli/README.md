@@ -258,6 +258,11 @@ shows by the name the space's index confirmed for it, and by its handle where no
 name was confirmed. `pwd` is the complete address — every level, the piece by
 handle, the scope written even when it is the base — which is what to copy.
 
+A `pieces` listing uses the registered target's full reference when its space,
+scope, or path differs from the current place. A target in another space keeps
+that address in the listing; `cd` refuses it because a shuttle connection serves
+one space. It does not substitute the current space for the target's space.
+
 `cd` reads before it moves: a slug resolves to the piece it names, a handle is
 looked up in the space's identifier index, and a path that is not there is
 refused with the keys that are. A scope on its own is read the same way — the
@@ -796,25 +801,29 @@ pattern-lifecycle route, signed with the identity the command connects as; the
 space's serving runtime compiles it, creates the piece, and answers with the
 receipt the command prints. Where the deployment enforces ACLs, the identity
 must hold WRITE or OWNER on the space; a deployment with enforcement off admits
-any signed caller, as its memory server does. The registry entry and the slug
-travel with the creation, so a taken name refuses it before anything is created,
-and the space root is the serving loop's to ensure rather than this command's.
-What stays in this process after the receipt is what opening a piece does
-anyway: the start, which `--no-start` skips; `--no-start` also asks the serving
-loop not to derive the piece until something demands it. The receipt returns
-once the piece is durable; the serving loop derives it in the cycle after, so a
-reader that needs the derived value pulls it. Against any other deployment, and
-under `cf test`, the command performs every step itself, as before.
-`cf piece setsrc` requests the same way against a serving deployment: it
-resolves and pins the program, sends it with the piece's id, and prints the
-receipt of the setup transaction the serving runtime committed — directly to the
-store, since a source update publishes module update authority that requires a
-transaction committing to storage itself. What stays in this process is the
-refresh a client-side update runs after its commit: the command starts the piece
-it holds and reports that outcome beside the receipt, exiting non-zero when the
-refresh fails over a durable commit. A piece addressed at a scope keeps the
-client-side path. `cf piece setsrc --check` performs every step in this process
-on every deployment. The contract, including the refusals and their codes, is
+any signed caller, as its memory server does. Setup, slug, and creation receipt
+commit together, so a taken name refuses before anything is created.
+Registration then invokes the default pattern's `addPiece` handler and waits for
+its durable consequence and registry readback. A failure names the created piece
+and a retry key; repeat `cf piece new` with `--request-key <key>` to resume that
+creation. The space root is the serving loop's to ensure rather than this
+command's. What stays in this process after the receipt is what opening a piece
+does anyway: the start, which `--no-start` skips; `--no-start` also asks the
+serving loop not to derive the piece until something demands it. The receipt
+returns once the piece is durable and registered, including with `--no-start`;
+the serving loop derives it on demand, so a reader that needs the derived value
+pulls it. Against any other deployment, and under `cf test`, the command
+performs every step itself, as before. `cf piece setsrc` requests the same way
+against a serving deployment: it resolves and pins the program, sends it with
+the piece's id, and prints the receipt of the setup transaction the serving
+runtime committed — directly to the store, since a source update publishes
+module update authority that requires a transaction committing to storage
+itself. What stays in this process is the refresh a client-side update runs
+after its commit: the command starts the piece it holds and reports that outcome
+beside the receipt, exiting non-zero when the refresh fails over a durable
+commit. A piece addressed at a scope keeps the client-side path.
+`cf piece setsrc --check` performs every step in this process on every
+deployment. The contract, including the refusals and their codes, is
 [`server-pattern-lifecycle.md`](../../docs/features/server-pattern-lifecycle.md).
 
 ## Piece discovery
@@ -953,6 +962,13 @@ naming the piece it just created so an operator can name it another way. Its
 `--force` takes the name and is accepted only alongside `--slug`, which is the
 only thing it applies to.
 
+`cf piece ls` and `cf piece search` return a `reference` alongside the legacy
+`id`. This canonical cell reference preserves the registered target's space,
+scope, document, and path, and can be used as a CLI cell address. The human
+table includes it in the `REFERENCE` column. Use `reference` to distinguish
+targets with the same document ID in different spaces or scopes. Listing retains
+the reference even when the target cannot be read.
+
 `cf piece search` also starts from the registry. It searches readable input and
 result data, but returns registered pieces only. `cf piece map` likewise shows
 connections among registered pieces rather than walking the complete stored
@@ -975,11 +991,13 @@ and scalar values. Canonically equivalent text matches, and a match cannot stop
 partway through one character's multi-letter fold. Readable nested cell values
 are included when they belong to the piece being searched. A cell owned by
 another piece is searched only with that owner, not with every piece that links
-to it. Data owned by a piece absent from the piece registry is not attributed to
-its referrers. A cell with no piece ownership metadata remains searchable
-through each piece that links to it. Opaque, write-only, comparable, stream, and
-SQLite cell handles are not read. Piece IDs, names, and pattern metadata are
-returned for context, but they do not count as searchable data.
+to it. Ownership compares the complete space, scope, and document identity;
+equal document IDs in different spaces or scopes remain different owners. Data
+owned by a piece absent from the piece registry is not attributed to its
+referrers. A cell with no piece ownership metadata remains searchable through
+each piece that links to it. Opaque, write-only, comparable, stream, and SQLite
+cell handles are not read. Piece IDs, names, and pattern metadata are returned
+for context, but they do not count as searchable data.
 
 ```bash
 cf piece search --space team-space "invoice 1042"

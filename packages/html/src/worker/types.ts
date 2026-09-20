@@ -353,9 +353,16 @@ export function normalizeRenderConfidentialityCeiling(
   };
 }
 
-/**
- * Options for the worker reconciler.
- */
+/** Authoritative session access for rendered cells and their followed targets. */
+export interface SpaceAccessProvider {
+  /** Current authoritative access loss, if any, for the named space. */
+  error(space: string): Error | undefined;
+
+  /** Observes future losses; the current snapshot is read through `error()`. */
+  subscribe(space: string, onLoss: () => void): Cancel;
+}
+
+/** Options for a worker-side renderer and its host authority boundaries. */
 export interface WorkerReconcilerOptions {
   /** Callback when operations are ready to send to main thread */
   onOps: (
@@ -364,6 +371,9 @@ export interface WorkerReconcilerOptions {
 
   /** Optional: callback when an error occurs */
   onError?: (error: Error) => void;
+
+  /** Authoritative session access, independent of cell confidentiality labels. */
+  spaceAccess?: SpaceAccessProvider;
 
   /**
    * Policy for honoring author-supplied render-boundary declassification.

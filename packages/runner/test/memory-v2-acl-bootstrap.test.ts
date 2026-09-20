@@ -1,3 +1,5 @@
+import { FabricLink } from "@commonfabric/data-model/fabric-instances";
+import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import {
   assert,
   assertEquals,
@@ -1827,6 +1829,139 @@ Deno.test("runtime.resolveSpaceName: a joiner shares a failed resolution's rejec
   } finally {
     await runtime.dispose();
     await manager.close();
+    await server.close();
+  }
+});
+
+Deno.test("custom root genesis snapshots preserve typed Fabric links", async () => {
+  const user = await Identity.fromPassphrase("root link snapshot user");
+  const spaceIdentity = await Identity.fromPassphrase(
+    "root link snapshot space",
+  );
+  const space = spaceIdentity.did();
+  const server = createServer("root-link-snapshot");
+  const factory = new RecordingLoopbackSessionFactory(server);
+  const manager = TestStorageManager.overServer({ as: user }, factory);
+  const link = new FabricLink({
+    id: "of:fid1:target",
+    space,
+    scope: "user",
+    path: ["nested"],
+  });
+  try {
+    manager.registerSpaceIdentity(spaceIdentity, {
+      genesisAcl: { [user.did()]: "OWNER" },
+      genesisRoot: {
+        source: "system:loom/main.tsx",
+        cause: "root-link",
+        argument: { target: link },
+      },
+    });
+    const sync = await manager.open(space).sync(`of:${space}` as URI);
+    assert(!sync.error, sync.error?.message);
+    const stored = readGenesisRoot(await server.engineForSpace(space));
+    assert(stored?.argument?.target instanceof FabricLink);
+    assertEquals(stored.argument.target, link);
+  } finally {
+    await manager.close();
+    await server.close();
+  }
+});
+
+Deno.test("custom root resume requires the complete original intent", async () => {
+  const user = await Identity.fromPassphrase("root intent user");
+  const spaceIdentity = await Identity.fromPassphrase("root intent space");
+  const space = spaceIdentity.did();
+  const server = createServer("root-intent");
+  const genesisRoot = {
+    source: "system:loom/main.tsx",
+    cause: "root-intent",
+    sourceRoots: ["system:loom/main.test.tsx"],
+    argument: { title: "Original" },
+  };
+  async function open(root: typeof genesisRoot) {
+    const manager = TestStorageManager.overServer(
+      { as: user },
+      new RecordingLoopbackSessionFactory(server),
+    );
+    try {
+      manager.registerSpaceIdentity(spaceIdentity, {
+        genesisAcl: { [user.did()]: "OWNER" },
+        genesisRoot: root,
+      });
+      return await manager.open(space).sync(`of:${space}` as URI);
+    } finally {
+      await manager.close();
+    }
+  }
+  try {
+    assert(!(await open(genesisRoot)).error);
+    assert(!(await open(genesisRoot)).error);
+    for (
+      const changed of [
+        { ...genesisRoot, source: "system:system/default-app.tsx" },
+        { ...genesisRoot, argument: { title: "Changed" } },
+        { ...genesisRoot, sourceRoots: [] },
+        { ...genesisRoot, cause: "changed-cause" },
+      ]
+    ) {
+      const result = await open(changed);
+      assert(result.error, "A different root intent must fail closed");
+      assert(
+        result.error.message.includes("root intent"),
+        result.error.message,
+      );
+    }
+  } finally {
+    await server.close();
+  }
+});
+
+Deno.test("concurrent custom-root sealers converge with an explicit management owner", async () => {
+  const user = await Identity.fromPassphrase("root race manager");
+  const spaceIdentity = await Identity.fromPassphrase("root race space");
+  const space = spaceIdentity.did();
+  const server = createServer("root-race");
+  const barrier = Promise.withResolvers<void>();
+  let arrivals = 0;
+  class ConcurrentFactory extends RecordingLoopbackSessionFactory {
+    override async create(
+      space: MemorySpace,
+      signer?: Signer,
+      requested: MemoryV2Client.MountOptions = {},
+    ) {
+      const opened = await super.create(space, signer, requested);
+      if (signer?.did() === spaceIdentity.did()) {
+        const transact = opened.session.transact.bind(opened.session);
+        opened.session.transact = async (
+          ...args: Parameters<typeof transact>
+        ) => {
+          if (args[0].genesisRoot) {
+            if (++arrivals === 2) barrier.resolve();
+            await barrier.promise;
+          }
+          return await transact(...args);
+        };
+      }
+      return opened;
+    }
+  }
+  const managers = [0, 1].map(() =>
+    TestStorageManager.overServer({ as: user }, new ConcurrentFactory(server))
+  );
+  try {
+    for (const manager of managers) {
+      manager.registerSpaceIdentity(spaceIdentity, {
+        genesisAcl: { [user.did()]: "OWNER" },
+        genesisRoot: { source: "system:loom/main.tsx", cause: "same-root" },
+      });
+    }
+    const results = await Promise.all(
+      managers.map((manager) => manager.open(space).sync(`of:${space}` as URI)),
+    );
+    for (const result of results) assert(!result.error, result.error?.message);
+  } finally {
+    await Promise.all(managers.map((manager) => manager.close()));
     await server.close();
   }
 });

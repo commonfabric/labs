@@ -62,7 +62,10 @@ import type {
   CfcReadOnExceed,
   CfcWriteFloorMode,
 } from "@commonfabric/runner/cfc";
-import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
+import {
+  entityKindOfIdString,
+  hashStringForEntityAddress,
+} from "@commonfabric/runner/entity-kind";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import {
   type NameSchema,
@@ -713,9 +716,16 @@ export class PiecesController<T = unknown> {
   async getRegisteredPieces() {
     const piecesCell = await this.getPieceRegistry();
     const pieces = await this.syncPieces(piecesCell);
-    return pieces.map((piece) =>
-      new PieceController(this, piece.asSchema(undefined))
-    );
+    return pieces.map((piece) => {
+      const target = piece.resolveAsCell();
+      const space = target.getAsNormalizedFullLink().space;
+      const controller = space === this.#space ? this : new PiecesController(
+        { as: this.#session.as, space },
+        this.runtime,
+        { deferSpaceCellSync: true },
+      );
+      return new PieceController(controller, target.asSchema(undefined));
+    });
   }
 
   async add(newPieces: Cell<unknown>[]): Promise<void> {
@@ -1292,8 +1302,8 @@ export class PiecesController<T = unknown> {
    * Remove a piece from this space's registry. Does not clean up the piece's
    * cells. Returns whether this call removed the piece — `false` means the
    * piece was not registered, and nothing was written. When the removed piece
-   * is the space's default pattern, the link to it is cleared in the same
-   * commit, so the registry and the link cannot land in a split state. A
+   * is the space's default pattern, the link to it is cleared with a tracked
+   * transaction. Other removals invoke the default pattern's removePiece action. A
    * removal that cannot commit throws instead, so `false` never stands in for
    * a storage failure.
    *
@@ -1317,6 +1327,55 @@ export class PiecesController<T = unknown> {
       : pieceOrId;
     const piecesCell = await this.getPieceRegistry();
     await this.syncPieces(piecesCell);
+
+    const registryAddress = piecesCell.resolveAsCell()
+      .getAsNormalizedFullLink();
+    const root = await this.getDefaultPattern(true);
+    const declaredRemove = root === undefined
+      ? undefined
+      : await root.asSchema({
+        type: "object",
+        properties: { removePiece: { type: "unknown" } },
+      }).key("removePiece").pull();
+    if (
+      entityKindOfIdString(registryAddress.id) === "computed" ||
+      isStream(declaredRemove)
+    ) {
+      if (!root || root.resolveAsCell().equals(piece.resolveAsCell())) {
+        throw new Error(
+          "A computed default-pattern registry requires its composition actions; unlinking the root is a separate operation",
+        );
+      }
+      if (!piecesCell.get().some((member) => member.equals(piece))) {
+        return false;
+      }
+      const remove = await root.asSchema({
+        type: "object",
+        properties: { removePiece: { asCell: ["stream"] } },
+      }).key("removePiece").pull();
+      if (!isStream(remove)) {
+        throw new Error(
+          "The computed registry has no removePiece action; use the default pattern's composition actions",
+        );
+      }
+      await new Promise<void>((resolve, reject) =>
+        remove.send({ piece }, (tx) => {
+          const status = tx.status();
+          if (status.status === "error") {
+            reject(new Error(status.error.message));
+          } else resolve();
+        })
+      );
+      await this.runtime.idle();
+      await this.synced();
+      const remaining = await this.syncPieces(piecesCell);
+      if (remaining.some((member) => member.equals(piece))) {
+        throw new Error(
+          "The removePiece action committed without unregistering the piece",
+        );
+      }
+      return true;
+    }
 
     const { ok, error } = await this.runtime.editWithRetry((tx) => {
       const pieces = piecesCell.withTx(tx);

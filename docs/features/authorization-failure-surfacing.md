@@ -59,6 +59,13 @@ The reconnect loop therefore has no unbounded retry-on-anything path: a permanen
 failure ends it (per session for an authorization denial, client-wide for a
 handshake mismatch), and only recoverable and transport-level conditions retry.
 
+`SpaceSession.subscribeAccessLoss` also delivers an authoritative
+`AuthorizationError` immediately when an established session loses access. An
+`unauthorized` revocation carries that error; a `taken-over` revocation remains a
+`SessionRevokedError`. Normal close, disconnect, protocol failure, and a
+recoverable challenge race do not emit access loss. A late subscriber receives
+the retained authorization verdict until the session is replaced successfully.
+
 ## Runner storage: record it per space, keep the barrier silent
 
 `packages/runner/src/storage/v2.ts` preserves the failure and exposes it without
@@ -82,6 +89,20 @@ changing what the sync barrier does:
   must reach a particular space reads this after `synced()` and surfaces it
   deliberately, so the denial is scoped to the space the caller asked for and
   never leaks onto an unrelated cross-space read.
+
+The storage provider exposes `subscribeSpaceAccessLoss` and `spaceAccessError`
+for consumers of already-rendered cells. An authoritative session loss updates
+the affected space immediately, without waiting for another document watch.
+An explicit successful session replacement after a new grant clears the old
+verdict. The runtime client forwards `spaceaccesslost` with the affected space;
+it does not send the server's diagnostic error text to the UI.
+
+The worker renderer subscribes at cell boundaries. Revoking a foreign target
+removes that target's content and event handlers while retaining the authorized
+Loom root and sibling panels. Revoking the root removes its rendered content.
+Subscription teardown also cancels pending render callbacks so they cannot
+restore a removed subtree. Transient transport errors preserve the mounted
+content and do not masquerade as revoked authority.
 
 ## CLI: surface the denial for the space it was asked to reach
 

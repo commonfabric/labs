@@ -30,7 +30,8 @@
  * that seam lists.
  */
 
-import { isStreamValue } from "@commonfabric/runner";
+import { idStringForEntityAddress, isStreamValue } from "@commonfabric/runner";
+import { renderCellReference } from "@commonfabric/runner/shared";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { keysOf } from "../cell-listing.ts";
@@ -339,9 +340,10 @@ export function handleFor(number: number): string {
  * compile here instead of silently taking the other one's read.
  *
  * A piece stands as its id and carries the name it holds beside it, where
- * `listPieces` read one. The id is what the row is called in the facet and
- * what `cd` takes back to it; the name is what the piece calls itself, and
- * costs nothing to show, that read having already fetched it.
+ * `listPieces` read one. An id alone is the operand only when its complete
+ * reference names the local document at the current scope. Otherwise the
+ * registered reference is the operand, preserving a foreign space, scope,
+ * or path instead of resolving that id against the listing's space.
  */
 async function listFacet(
   config: SpaceConfig,
@@ -368,12 +370,21 @@ async function listFacet(
         loadPieces,
       });
       return {
-        rows: pieces.map((row) =>
-          rowFor(place, row.id, "piece", {
+        rows: pieces.map((row) => {
+          const entry = rowFor(place, row.id, "piece", {
             ownName: row.name,
             error: row.error,
-          })
-        ),
+          });
+          const localReference = renderCellReference({
+            space: place.position.space,
+            id: idStringForEntityAddress(row.id),
+            scope: place.scope,
+            path: [],
+          });
+          return row.reference === localReference
+            ? entry
+            : { ...entry, operand: row.reference };
+        }),
       };
     }
   }

@@ -123,6 +123,12 @@ describe("pieces-controller", () => {
           expect(await registeredIds()).not.toContain(id);
         });
 
+        it("preserves writable registry removal when computed cell IDs are disabled", async () => {
+          runtime.experimental.computedCellIds = false;
+          expect(await pieces.remove(piece)).toBe(true);
+          expect(await registeredIds()).not.toContain(pieceId(piece)!);
+        });
+
         it("returns `false` for a piece that is not registered", async () => {
           await pieces.remove(piece);
 

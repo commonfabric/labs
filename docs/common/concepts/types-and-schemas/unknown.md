@@ -69,6 +69,12 @@ Prefer whichever names the smaller surface. A reference that is only compared
 wants `unknown`; one whose title is rendered wants a two-field projection, not
 the piece.
 
+A `Cell<unknown>` handle can name a target in another space. Passing that
+handle through an event or storing it in an array preserves its target space,
+scope, and path without loading the foreign target during dependency preflight.
+Reading through the handle still requires the target's read authority; storing
+the link grants no access to its source space.
+
 ### A pattern's own screen is not a reference
 
 `[UI]` on a pattern's result holds the tree that pattern built, not a pointer at

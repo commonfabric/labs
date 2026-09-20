@@ -106,7 +106,13 @@ export async function createdByThisCall(
   if (candidates.length <= 1) return candidates[0];
   const named: [string, Cell<unknown>][] = [];
   for (const candidate of candidates) {
-    const argument = getMetaLink(candidate[1], "argument");
+    // A foreign list handle can address a redirect slot. Load and resolve it
+    // outside the list snapshot before reading the profile result metadata.
+    const addressed = candidate[1].withTx().asSchema(undefined);
+    await addressed.sync();
+    const profile = addressed.resolveAsCell();
+    await profile.sync();
+    const argument = getMetaLink(profile, "argument");
     if (argument === undefined) continue;
     const initialName = candidate[1].runtime.getCellFromLink(argument)
       .key("initialName");
