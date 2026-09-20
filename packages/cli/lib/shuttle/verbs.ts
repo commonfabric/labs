@@ -115,6 +115,7 @@ import {
   type PiecePosition,
   type Place,
   referenceForPlace,
+  RELATIVE_HEAD,
   type ResolvedPlace,
   type ResolvedTarget,
   scopeMoveHint,
@@ -229,16 +230,21 @@ export async function runLine(
 /**
  * What a completion offers where a token may stand.
  *
- * Three arms and no fourth, since what a v1 verb reads an operand as is a
- * reference or a verb name, and everything else is a word only the fabric
- * could supply: a `#name` entry point is resolved by a read of its own rather
- * than listed, so `wish` declares `nothing` and says so where it declares it.
+ * Every arm is a list this process can write without asking the fabric for
+ * it: the verbs, the rows of the place a listing already read, and the words
+ * the ambient record names its dimensions by. Everything else is a word only
+ * the fabric could supply — a `#name` entry point is resolved by a read of
+ * its own rather than listed, so `wish` declares `nothing` and says so where
+ * it declares it — and so is a path on the external plane, which is a
+ * directory nothing here has opened.
  */
 export type Candidates =
   /** The words that name a verb. */
   | "verbs"
   /** The children of the place, as the operands `cd` takes to reach them. */
   | "children"
+  /** The words `where` names the dimensions it sets by. */
+  | "dimensions"
   /** Nothing: no token this can name stands there. */
   | "nothing";
 
@@ -286,6 +292,21 @@ type Arity =
   /** Two, both needed, `names` being what a refusal calls the pair. */
   | {
     readonly operands: "pair";
+    readonly names: string;
+    readonly completes: readonly [Candidates, Candidates];
+  }
+  /**
+   * None or two, and nothing between, `names` being what a refusal calls the
+   * pair.
+   *
+   * It is the arm for a verb that reads with no operand and writes with two,
+   * which is `where`: the record is one surface, and naming a dimension with
+   * no value after it is neither of the two acts rather than a read of that
+   * dimension. What the count buys is that the refusal is the dispatch's and
+   * says the same thing however the verb grows.
+   */
+  | {
+    readonly operands: "none-or-pair";
     readonly names: string;
     readonly completes: readonly [Candidates, Candidates];
   }
@@ -582,6 +603,56 @@ function pwd(shuttle: Shuttle): Outcome {
 }
 
 /**
+ * The refusal a heavyweight dimension of the ambient record gets.
+ *
+ * One connection serves one space, so the api endpoint, the identity and the
+ * space are what this process was built around rather than values it holds:
+ * changing one is building it again (`docs/plans/shuttle/README.md`,
+ * decision 22).
+ */
+const FIXED_AT_LAUNCH =
+  "The api endpoint, the identity and the space are fixed at launch, and " +
+  "starting shuttle again is what switches them.";
+
+/** Returns the external working location, which is a position of its own. */
+function xpwd(shuttle: Shuttle): Outcome {
+  return { kind: "text", text: shuttle.external.render() };
+}
+
+/**
+ * Moves the external working location as the operand says, and writes where
+ * it now stands.
+ *
+ * It writes, where `cd` does not, because the prompt carries the place and
+ * carries nothing about this one: a move nothing reports is a move a person
+ * has to ask `xpwd` about to see.
+ *
+ * The operand is read on the external plane already, which is what lets a
+ * plain relative path move the location without naming a scheme
+ * (`external.ts`). Nothing is opened, so a location that is not there is a
+ * location this takes: what the plane holds is the read's to find out, in the
+ * read's own words.
+ */
+function xcd(shuttle: Shuttle, line: VerbLine): Outcome {
+  return moveExternal(shuttle, line.operands[0]);
+}
+
+/**
+ * Helper for {@link xcd} and for the setter `where` reaches the same
+ * dimension through, which is the whole of the move.
+ *
+ * The two spellings are one act and share a body rather than a call, because
+ * what `xcd` adds to it is the convenience of a shorter line and nothing
+ * else (`docs/plans/shuttle/README.md`, decision 22).
+ */
+function moveExternal(shuttle: Shuttle, token: string): Outcome {
+  const landing = shuttle.external.xcd(token);
+  return landing.kind === "refused"
+    ? landing
+    : { kind: "text", text: shuttle.external.render() };
+}
+
+/**
  * Reads the value a named entry point resolves to.
  *
  * The resolution is the fabric's own (`readWish`), so a target this answers
@@ -612,28 +683,104 @@ async function wish(
 }
 
 /**
- * Returns the whole ambient record: what this process connects as, and where
- * it stands.
+ * Returns the whole ambient record, or sets one dimension of it.
  *
- * It prints the record `pwd` prints, so the two share one format
- * (`record.ts`) and the two dimensions `pwd` prints stand inside this one
- * whole. A milestone that adds a dimension to the record adds it here.
- *
- * Nothing here reads. Every dimension is a value this process is already
+ * With no operand it prints the record `pwd` prints, so the two share one
+ * format (`record.ts`) and the two dimensions `pwd` prints stand inside this
+ * one whole. A milestone that adds a dimension to the record adds it here.
+ * That half reads nothing: every dimension is a value this process is already
  * holding, so a shuttle whose connection will not open still says what it was
  * launched as and where it stands — which is what a verb for saying where you
  * are should do.
+ *
+ * With a dimension and a value it sets the light ones ({@link SETTERS}). That
+ * half reads what the act it delegates to reads, which for the scope is the
+ * read `cd` makes before it adopts a place; the external location still reads
+ * nothing.
  */
-function where(shuttle: Shuttle): Outcome {
-  return {
-    kind: "text",
-    text: renderRecord([
-      ...connectionEntries(shuttle.config),
-      ...shuttle.place.entries(),
-      ...watchEntries(shuttle.session.watches),
-    ]),
-  };
+function where(
+  shuttle: Shuttle,
+  line: VerbLine,
+  deps: VerbDeps,
+): Promise<Outcome> | Outcome {
+  const [dimension, value] = line.operands;
+  if (dimension === undefined) {
+    return {
+      kind: "text",
+      text: renderRecord([
+        ...connectionEntries(shuttle.config),
+        ...shuttle.place.entries(),
+        ...shuttle.external.entries(),
+        ...watchEntries(shuttle.session.watches),
+      ]),
+    };
+  }
+  const setter = SETTERS.get(dimension);
+  if (setter !== undefined) return setter(shuttle, value, deps);
+  const elsewhere = SET_ELSEWHERE.get(dimension);
+  return refuse(
+    elsewhere ??
+      `\`${dimension}\` names no dimension of the ambient record. The ones ` +
+        `\`where\` sets are ${listed(DIMENSION_WORDS)}.`,
+  );
 }
+
+/** What setting one dimension of the ambient record does. */
+type Setter = (
+  shuttle: Shuttle,
+  value: string,
+  deps: VerbDeps,
+) => Promise<Outcome> | Outcome;
+
+/**
+ * The dimensions `where` sets, by the word it prints each one by.
+ *
+ * They are the light ones, which is the whole of what a running shuttle can
+ * change: the heavyweight dimensions are fixed at launch and restarting is
+ * the switch (`docs/plans/shuttle/README.md`, decision 22).
+ *
+ * Neither setter is a second mechanism. The scope moves the place the way an
+ * operand carrying a qualifier moves it, so `where scope @session` and
+ * `cd .@session` are one act read twice; the external location moves the way
+ * `xcd` moves it, for the same reason and with `xcd` as the convenience over
+ * it. That is why the scope comes back a move and the external location comes
+ * back a line: each says what its own act did, and a move is what the prompt
+ * already knows how to show.
+ */
+const SETTERS: ReadonlyMap<string, Setter> = new Map<string, Setter>([
+  [
+    "scope",
+    (shuttle, value, deps) =>
+      landing(shuttle, shuttle.place.cd(`${RELATIVE_HEAD}${value}`), deps),
+  ],
+  ["external", (shuttle, value) => moveExternal(shuttle, value)],
+]);
+
+/**
+ * The words `where` names the dimensions it sets by, which is what a
+ * completion offers in that slot.
+ *
+ * It is {@link SETTERS}'s own keys rather than a list beside them, so a
+ * dimension that becomes settable is offered without a second table being
+ * remembered — the relationship {@link VERB_WORDS} has to {@link VERBS}.
+ */
+export const DIMENSION_WORDS: readonly string[] = [...SETTERS.keys()];
+
+/**
+ * The dimensions `where` prints and does not set, each with the sentence
+ * saying what does.
+ *
+ * A dimension named here is refused for a reason of its own rather than as an
+ * unknown word, because the person naming it found it in the record: what
+ * they need is where the act lives, not that they misspelled something.
+ */
+const SET_ELSEWHERE: ReadonlyMap<string, string> = new Map([
+  ["api", FIXED_AT_LAUNCH],
+  ["identity", FIXED_AT_LAUNCH],
+  ["space", FIXED_AT_LAUNCH],
+  ["position", "`cd` moves the position."],
+  ["watches", "`watch` and `unwatch` change what is watched."],
+]);
 
 /**
  * What a write onto a whole piece is refused with, and what `set`'s page says
@@ -1675,16 +1822,32 @@ const VERBS: ReadonlyMap<string, VerbEntry> = new Map<string, VerbEntry>([
   }],
   ["where", {
     run: where,
-    arity: { operands: "none" },
-    usage: "where",
+    arity: {
+      operands: "none-or-pair",
+      names: "a dimension and the value to set it to, or no operand at all",
+      // The dimensions are words this process writes itself, so the first
+      // position completes. The second is whatever that dimension takes —
+      // a scope word or a path outside the fabric — which is two grammars
+      // and neither of them a list.
+      completes: ["dimensions", "nothing"],
+    },
+    usage: "where [<dimension> <value>]",
     summary:
-      "Writes the whole ambient record: connection, place, and what is watched.",
-    detail:
-      "Every dimension this process holds prints, one to a line: what it " +
-      "connects\nas, the two halves of the place `pwd` prints, and the " +
-      "watches this run\nhas armed, which `watches` numbers. Nothing here " +
-      "reads, so a shuttle whose\nconnection will not open still says what " +
-      "it was launched as, where it\nstands, and what it is watching.",
+      "Writes the whole ambient record, and sets the dimensions a run can change.",
+    detail: "With no operand every dimension prints, one to a line: what it " +
+      "connects\nas, the two halves of the place `pwd` prints, the " +
+      "external working location\n`xpwd` prints, and the watches this run " +
+      "has armed, which `watches`\nnumbers. Nothing there reads, so a " +
+      "shuttle whose connection will not open\nstill says what it was " +
+      "launched as, where it stands, and what it is\nwatching.\n\nWith a " +
+      "dimension and a value it sets the light ones: `where scope @session`\n" +
+      "moves the scope as `cd .@session` does, and " +
+      "`where external file:/tmp`\nmoves the external location as `xcd` " +
+      "does. The api endpoint, the identity\nand the space are fixed at " +
+      "launch, and starting shuttle again is what\nswitches them.\n\nA " +
+      "dimension written with no value after it is refused: the record is " +
+      "one\nsurface, so naming one line of it is neither reading it nor " +
+      "writing it.",
   }],
   ["wish", {
     run: wish,
@@ -1702,6 +1865,39 @@ const VERBS: ReadonlyMap<string, VerbEntry> = new Map<string, VerbEntry>([
       "one\n`cf wish` answers. A target that resolved in another space is " +
       "answered\nrather than refused: reading across spaces costs nothing, " +
       "where\nstanding in one is what a single connection cannot do.",
+  }],
+  ["xcd", {
+    run: xcd,
+    arity: {
+      operands: "required",
+      names: "a place on the external plane to move to",
+      // A path outside the fabric is a directory nothing here has opened, and
+      // opening one to complete a token would be a read the line never asked
+      // for.
+      completes: ["nothing"],
+    },
+    usage: "xcd <path>",
+    summary: "Moves the external working location, and writes where it lands.",
+    detail:
+      "The operand is read on the external plane already, so a plain path " +
+      "moves\nthe location without naming a scheme — `xcd ../foo` and " +
+      "`xcd /tmp` both\nstay on the plane it stands on — and a whole " +
+      "schemed path moves it to\nanother: `xcd file:~/data`, " +
+      "`xcd https://example.test/a/b/`.\n\nA scheme is legal only on an " +
+      "absolute complete path. Nothing is opened\nhere, so a location that " +
+      "is not there is one this takes, and what the\nplane holds is the " +
+      "read's to find out.",
+  }],
+  ["xpwd", {
+    run: xpwd,
+    arity: { operands: "none" },
+    usage: "xpwd",
+    summary: "Writes the external working location, whole.",
+    detail:
+      "It is the position `x:` roots a relative external path at, and it " +
+      "prints\nin the one spelling that reads back as the same place. The " +
+      "prompt carries\nthe fabric place and carries nothing about this " +
+      "one, which is what this is\nfor.",
   }],
 ]);
 
@@ -3331,6 +3527,11 @@ function wrongOperandCount(
     case "pair":
       if (given === 2) return undefined;
       return given < 2
+        ? refuse(`\`${verb}\` takes ${arity.names}.`)
+        : tooMany(verb, "two operands", given);
+    case "none-or-pair":
+      if (given === 0 || given === 2) return undefined;
+      return given === 1
         ? refuse(`\`${verb}\` takes ${arity.names}.`)
         : tooMany(verb, "two operands", given);
     case "section":

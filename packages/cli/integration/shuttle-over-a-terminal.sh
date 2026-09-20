@@ -316,6 +316,9 @@ watch settings/note
 @frame q
 watches
 unwatch %1
+xpwd
+xcd ../elsewhere
+xpwd
 LINES
 EDITOR="$EDITOR_SCRIPT" python3 "$DRIVER" "$SCRIPT" "$TRANSCRIPT" -- \
   $CF sh $ARGS >/dev/null
@@ -360,6 +363,8 @@ WHERE=$(said 1 "where")
 contains "api       $API_URL" "$WHERE" "where names the host it connected to"
 contains "space     $SPACE" "$WHERE" "where names the space it connected to"
 contains "identity  $CF_IDENTITY" "$WHERE" "where names the identity it opened"
+contains "external  file://" "$WHERE" \
+  "where names the external working location beside the fabric place"
 
 step "6. ls at the root lists the facets, and cd takes one of them"
 check "%1 slugs
@@ -916,6 +921,19 @@ check "%1 first/settings/note @space" "$(said 76 "watches")" \
   "the view closing left the watch armed, as it does when nothing was typed at it"
 check "Disarmed the watch on \`first/settings/note @space\`." \
   "$(said 77 "unwatch %1")" "unwatch disarms the watch the view was opened onto"
+
+step "32. The external working location starts at the process's own directory, and xcd moves it"
+# The half no unit test reaches: the location is seeded from `Deno.cwd()` at
+# startup, so what proves the seeding is a shell started from a real directory
+# rather than one handed a location by a case.
+STARTED=$(said 78 "xpwd")
+contains "file:///" "$STARTED" \
+  "xpwd writes the location as a whole address on the plane that reads a path"
+MOVED=$(said 79 "xcd ../elsewhere")
+contains "/elsewhere/" "$MOVED" \
+  "xcd writes where it landed, a plain relative path staying on the same plane"
+check "$MOVED" "$(said 80 "xpwd")" \
+  "xpwd afterwards writes what the move wrote, the two being one spelling"
 
 # What step 11 does not reach: a piece that changes under a shell already
 # standing on it. Step 11 reads storage before the session and the shell's own

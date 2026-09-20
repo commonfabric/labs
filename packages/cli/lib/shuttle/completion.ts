@@ -50,7 +50,7 @@
 import { quoteToken, tailOfLine } from "./line.ts";
 import { type Listing, listPlace } from "./listing.ts";
 import { operandForChild } from "./place.ts";
-import { candidatesAfter, VERB_WORDS } from "./verbs.ts";
+import { candidatesAfter, DIMENSION_WORDS, VERB_WORDS } from "./verbs.ts";
 import { guarded, type Shuttle, type VerbDeps } from "./vocabulary.ts";
 
 /**
@@ -77,6 +77,7 @@ export async function completeLine(
   const wanted = candidatesAfter(tail.before);
   if (wanted === "nothing") return undefined;
   let offered: readonly string[] = VERB_WORDS;
+  if (wanted === "dimensions") offered = DIMENSION_WORDS;
   if (wanted === "children") {
     const listed = await guarded(deps, childOperands, shuttle, deps);
     if (listed.kind !== "ran") return undefined;

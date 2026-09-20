@@ -1618,8 +1618,13 @@ function samePosition(one: Position, other: Position): boolean {
  * This module writes it and never reads it — the reader does that — in two
  * places: in front of a key a bare path would not reach, and in front of what
  * follows a handle, which is read as what follows this head is.
+ *
+ * It is exported because a verb writes it too. `where scope <value>` sets the
+ * scope by moving the place the way `cd` moves it, which means composing the
+ * operand that carries a qualifier and no walk, and one spelling of the head
+ * is what keeps that operand the same operand a person types.
  */
-const RELATIVE_HEAD = ".";
+export const RELATIVE_HEAD = ".";
 
 /**
  * The character a numbered handle opens with, which a listing prints in front

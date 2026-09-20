@@ -21,6 +21,7 @@ import type { PiecesController } from "@commonfabric/piece/ops";
 import type { SpaceConfig } from "../lib/piece.ts";
 import { completeLine } from "../lib/shuttle/completion.ts";
 import { HeldConnection } from "../lib/shuttle/connection.ts";
+import { ExternalLocation } from "../lib/shuttle/external.ts";
 import { CurrentPlace } from "../lib/shuttle/place.ts";
 import { ShuttleSession } from "../lib/shuttle/session.ts";
 import { moved } from "./shuttle-place-helpers.ts";
@@ -68,6 +69,7 @@ function shuttleIn(): Shuttle {
   return {
     config: CONFIG,
     place: new CurrentPlace(SPACE),
+    external: new ExternalLocation(new URL("file:///work/"), "/home/someone"),
     connection: new HeldConnection({
       kind: "borrowed",
       pieces: {
@@ -203,6 +205,8 @@ describe("completion", () => {
         "watches",
         "where",
         "wish",
+        "xcd",
+        "xpwd",
       ];
       expect([...VERB_WORDS]).toEqual(words);
       for (const word of words) {

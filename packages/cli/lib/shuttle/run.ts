@@ -27,11 +27,14 @@
  * and what arrives is the connection it settled on.
  */
 
+import { toFileUrl } from "@std/path";
+
 import { loadPieces, type SpaceConfig } from "../piece.ts";
 import { newSessionId } from "../session.ts";
 import { announcingOutput } from "./announce.ts";
 import { type ConnectionOpener, HeldConnection } from "./connection.ts";
 import { openEditor } from "./editor.ts";
+import { ExternalLocation } from "./external.ts";
 import { CurrentPlace } from "./place.ts";
 import { runPrompt } from "./prompt.ts";
 import { ShuttleSession } from "./session.ts";
@@ -54,6 +57,16 @@ export interface ShuttleDeps {
   readonly newSessionId?: typeof newSessionId;
 
   /**
+   * The external working location the run starts at; the process's own
+   * working directory where a caller names none.
+   *
+   * It is a seam because the two things it is built from — the working
+   * directory and the home — are facts about the machine, and a case that
+   * read them would assert what that machine happens to hold.
+   */
+  readonly external?: ExternalLocation;
+
+  /**
    * Reads lines against what this composed, which is where everything above
    * ends up.
    *
@@ -64,6 +77,23 @@ export interface ShuttleDeps {
    * reaches it without a cell to read first.
    */
   readonly prompt?: typeof runPrompt;
+}
+
+/**
+ * Returns the external location a run starts at: the process's own working
+ * directory, on the plane that reads a directory.
+ *
+ * A shell starts where it was started from, and the external plane is the one
+ * a `file:` path is read against, so the process's working directory is what
+ * makes `xcd ../foo` on the first line mean what a person typing it means.
+ * The home is read here for the same reason and passed on rather than reached
+ * for again (`external.ts`).
+ */
+function startingExternal(): ExternalLocation {
+  return new ExternalLocation(
+    toFileUrl(`${Deno.cwd()}/`),
+    Deno.env.get("HOME"),
+  );
 }
 
 /**
@@ -97,6 +127,7 @@ export async function runShuttle(
     const shuttle: Shuttle = {
       config,
       place: new CurrentPlace(pieces.getSpace()),
+      external: deps.external ?? startingExternal(),
       connection,
       session: new ShuttleSession(),
       invocationSession: (deps.newSessionId ?? newSessionId)(),
