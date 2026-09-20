@@ -111,6 +111,7 @@ import type {
   StoreReadThrough,
   TransactionSealDestination,
   Unit,
+  URI,
 } from "../storage/interface.ts";
 import {
   ensurePieceRunningVerdict,
@@ -4755,165 +4756,178 @@ export class SpaceServer implements TransactionSealDestination {
         );
       }
     }
-    // The STRUCTURE LOAD, per watch ROOT — unchanged in scope (flag 4)
-    // and in mechanism (stage P2-F, the OW19 terminal state, the
-    // commit-triggered re-arm); only the demand-walk install is gone.
-    for (const key of rootKeys) {
-      const root = rowByKey.get(key)!;
-      const firstDemand = !this.#demandedRoots.has(key);
-      // A known root re-enters this loop ONLY while its structure load
-      // is still owed (the retry arm).
-      if (!firstDemand && !this.#pendingStructureLoads.has(key)) continue;
-      if (firstDemand) this.#demandedRoots.add(key);
-      // A root parked TERMINAL stays parked until a commit touching one
-      // of its observed docs re-arms it (the #drainFeed re-arm) — no
-      // per-cycle ensure churn (stage P2-F, the OW19 design).
-      if (this.#terminalStructureLoads.has(key)) {
-        continue;
-      } // Id-class exclusion (RULED 2026-08-07): well-known never-a-piece
-      // ids register NO piece demand — no `ensurePieceRunning` attempt,
-      // no retry, no `structureLoadDeferred` increment (the counter
-      // stays meaningful for genuinely not-yet-loadable pieces).
-      // `computed:` docs are derivation results, `cid:` docs are
-      // content-addressed bundles, and the watermark doc is the
-      // settledness subscription every waitForSettled/overlay client
-      // holds — none can ever carry `patternIdentity` meta. The remaining
-      // `of:` ids — which id classes cannot split into not-yet-created
-      // pieces vs never-a-piece value docs — are covered by the TERMINAL
-      // state below (stage P2-F): confirmed-synced-no-meta parks the
-      // root, and the commit-triggered re-arm keeps the creation race
-      // sound.
-      else if (neverAPieceRootId(root.id)) {
-        this.#pendingStructureLoads.delete(key);
-        this.#structureLoadDeferralStreaks.delete(key);
-        continue;
-      } else {
-        const changedDocs = new Set<string>();
-        this.#structureLoadChangedDocs = changedDocs;
-        try {
-          // propagateErrors: the catch below is the loop's FAILURE arm
-          // (§7 structureLoadFailures); with the helper's default
-          // collapse-to-false it was unreachable and every real
-          // load/start error masqueraded as a creation-race deferral,
-          // silently retried each input-driven cycle (r3739139521).
-          // A demand naming an argument or derived doc resolves to the
-          // OWNING piece root; the per-(action × instance) run supply
-          // finds the demand's identity from that piece's actions through
-          // this mapping (stage P2-F). Recorded before the piece starts,
-          // so a run the start releases finds it. The piece may already
-          // be running, started by another key's load earlier in this
-          // pass, with its nodes run before this key's demanders were
-          // reachable: those nodes re-arm for them exactly as they do for
-          // a demander who arrives after the mapping (the arrival re-arm
-          // below).
-          const onOwningRoot = (rootId: string) => {
-            if (rootId === root.id) return;
-            if (this.#pieceRootByDemandKey.get(key) === rootId) return;
-            this.#pieceRootByDemandKey.set(key, rootId);
-            this.#indexResolvedRoot(key, rootId);
-            runtime.scheduler.invalidateActionsForDemandRoots([rootId]);
-          };
-          const attempt = await this.#attemptStructureLoad(
-            runtime,
-            root,
-            onOwningRoot,
-          );
-          const verdict = attempt.verdict;
-          if (!this.#active || this.#runtime !== runtime) return;
-          if (verdict.started) {
-            this.#pendingStructureLoads.delete(key);
-            this.#structureLoadDeferralStreaks.delete(key);
-          } else if (verdict.reason === "no-pattern-meta") {
-            // Each traversal syncs the complete addresses it reads. Put the
-            // question again before terminalizing, so metadata arriving
-            // during the first traversal can start the piece — to the engine
-            // where it can answer, and to the chain where it cannot.
-            const confirmed = (await this.#confirmNoPatternMeta(
+    // ONE changed-doc collection for the whole pass, opened BEFORE the pull
+    // below rather than per root inside it. The pull is what registers each
+    // root's watch, and a registered watch is what lets the traversal read
+    // from the replica instead of fetching, so between the two a root's
+    // reading is only as current as frame delivery has made it. The terminal
+    // arm's invalidation check has to test the span the reading was taken
+    // over, and that span starts here.
+    const changedDocs = new Set<string>();
+    this.#structureLoadChangedDocs = changedDocs;
+    try {
+      // Ahead of the loop, and so ahead of the demand-root bookkeeping it
+      // does, which is what lets it read `firstDemand` the way the loop will.
+      await this.#loadStructureRootDocs(runtime, rootKeys, rowByKey);
+      // The STRUCTURE LOAD, per watch ROOT — unchanged in scope (flag 4)
+      // and in mechanism (stage P2-F, the OW19 terminal state, the
+      // commit-triggered re-arm); only the demand-walk install is gone.
+      for (const key of rootKeys) {
+        const root = rowByKey.get(key)!;
+        const firstDemand = !this.#demandedRoots.has(key);
+        // A known root re-enters this loop ONLY while its structure load
+        // is still owed (the retry arm).
+        if (!firstDemand && !this.#pendingStructureLoads.has(key)) continue;
+        if (firstDemand) this.#demandedRoots.add(key);
+        // A root parked TERMINAL stays parked until a commit touching one
+        // of its observed docs re-arms it (the #drainFeed re-arm) — no
+        // per-cycle ensure churn (stage P2-F, the OW19 design).
+        if (this.#terminalStructureLoads.has(key)) {
+          continue;
+        } // Id-class exclusion (RULED 2026-08-07): well-known never-a-piece
+        // ids register NO piece demand — no `ensurePieceRunning` attempt,
+        // no retry, no `structureLoadDeferred` increment (the counter
+        // stays meaningful for genuinely not-yet-loadable pieces).
+        // `computed:` docs are derivation results, `cid:` docs are
+        // content-addressed bundles, and the watermark doc is the
+        // settledness subscription every waitForSettled/overlay client
+        // holds — none can ever carry `patternIdentity` meta. The remaining
+        // `of:` ids — which id classes cannot split into not-yet-created
+        // pieces vs never-a-piece value docs — are covered by the TERMINAL
+        // state below (stage P2-F): confirmed-synced-no-meta parks the
+        // root, and the commit-triggered re-arm keeps the creation race
+        // sound.
+        else if (neverAPieceRootId(root.id)) {
+          this.#pendingStructureLoads.delete(key);
+          this.#structureLoadDeferralStreaks.delete(key);
+          continue;
+        } else {
+          try {
+            // propagateErrors: the catch below is the loop's FAILURE arm
+            // (§7 structureLoadFailures); with the helper's default
+            // collapse-to-false it was unreachable and every real
+            // load/start error masqueraded as a creation-race deferral,
+            // silently retried each input-driven cycle (r3739139521).
+            // A demand naming an argument or derived doc resolves to the
+            // OWNING piece root; the per-(action × instance) run supply
+            // finds the demand's identity from that piece's actions through
+            // this mapping (stage P2-F). Recorded before the piece starts,
+            // so a run the start releases finds it. The piece may already
+            // be running, started by another key's load earlier in this
+            // pass, with its nodes run before this key's demanders were
+            // reachable: those nodes re-arm for them exactly as they do for
+            // a demander who arrives after the mapping (the arrival re-arm
+            // below).
+            const onOwningRoot = (rootId: string) => {
+              if (rootId === root.id) return;
+              if (this.#pieceRootByDemandKey.get(key) === rootId) return;
+              this.#pieceRootByDemandKey.set(key, rootId);
+              this.#indexResolvedRoot(key, rootId);
+              runtime.scheduler.invalidateActionsForDemandRoots([rootId]);
+            };
+            const attempt = await this.#attemptStructureLoad(
               runtime,
               root,
-              attempt,
               onOwningRoot,
-            )).verdict;
+            );
+            const verdict = attempt.verdict;
             if (!this.#active || this.#runtime !== runtime) return;
-            if (confirmed.started) {
+            if (verdict.started) {
               this.#pendingStructureLoads.delete(key);
               this.#structureLoadDeferralStreaks.delete(key);
-            } else if (confirmed.reason === "no-pattern-meta") {
-              const changed = [
-                ...verdict.observedDocIds,
-                ...confirmed.observedDocIds,
-              ]
-                .some((id) => changedDocs.has(id));
-              const shadowed = runtime.storageManager.open(this.#options.space)
-                .replica.unappliedForeignSeqFloor?.() !== undefined;
-              if (changed || shadowed) {
+            } else if (verdict.reason === "no-pattern-meta") {
+              // Each traversal syncs the complete addresses it reads. Put the
+              // question again before terminalizing, so metadata arriving
+              // during the first traversal can start the piece — to the engine
+              // where it can answer, and to the chain where it cannot.
+              const confirmed = (await this.#confirmNoPatternMeta(
+                runtime,
+                root,
+                attempt,
+                onOwningRoot,
+              )).verdict;
+              if (!this.#active || this.#runtime !== runtime) return;
+              if (confirmed.started) {
                 this.#pendingStructureLoads.delete(key);
-                this.#rearmedAwaitingSettle.add(key);
-                this.#pendingStructureRetryWake = true;
+                this.#structureLoadDeferralStreaks.delete(key);
+              } else if (confirmed.reason === "no-pattern-meta") {
+                const changed = [
+                  ...verdict.observedDocIds,
+                  ...confirmed.observedDocIds,
+                ]
+                  .some((id) => changedDocs.has(id));
+                const shadowed =
+                  runtime.storageManager.open(this.#options.space)
+                    .replica.unappliedForeignSeqFloor?.() !== undefined;
+                if (changed || shadowed) {
+                  this.#pendingStructureLoads.delete(key);
+                  this.#rearmedAwaitingSettle.add(key);
+                  this.#pendingStructureRetryWake = true;
+                  stats.structureLoadDeferred += 1;
+                  this.#noteStructureLoadDeferral(
+                    key,
+                    root.id,
+                    "confirmation-invalidated",
+                    stats,
+                  );
+                  continue;
+                }
+                this.#pendingStructureLoads.delete(key);
+                this.#structureLoadDeferralStreaks.delete(key);
+                this.#terminalStructureLoads.set(
+                  key,
+                  new Set(confirmed.observedDocIds),
+                );
+                stats.structureLoadTerminal += 1;
+                logger.info?.("structure-load-terminal", () => [
+                  `demanded root ${root.id} confirmed synced with no ` +
+                  "pattern meta; parked terminal until a commit touches " +
+                  "it (stage P2-F, OW19)",
+                ]);
+              } else {
+                this.#pendingStructureLoads.add(key);
                 stats.structureLoadDeferred += 1;
                 this.#noteStructureLoadDeferral(
                   key,
                   root.id,
-                  "confirmation-invalidated",
+                  confirmed.reason,
                   stats,
                 );
-                continue;
               }
-              this.#pendingStructureLoads.delete(key);
-              this.#structureLoadDeferralStreaks.delete(key);
-              this.#terminalStructureLoads.set(
-                key,
-                new Set(confirmed.observedDocIds),
-              );
-              stats.structureLoadTerminal += 1;
-              logger.info?.("structure-load-terminal", () => [
-                `demanded root ${root.id} confirmed synced with no ` +
-                "pattern meta; parked terminal until a commit touches " +
-                "it (stage P2-F, OW19)",
-              ]);
             } else {
+              // Not loadable YET for a non-terminal reason (a chain
+              // cycle mid-write, an unloadable pattern awaiting its
+              // source docs). Counted per attempt (§7
+              // structureLoadDeferred) and left pending: the next
+              // input-driven cycle retries.
               this.#pendingStructureLoads.add(key);
               stats.structureLoadDeferred += 1;
               this.#noteStructureLoadDeferral(
                 key,
                 root.id,
-                confirmed.reason,
+                verdict.reason,
                 stats,
               );
+              logger.debug?.("structure-load-deferred", () => [
+                `demanded root ${root.id} not loadable yet ` +
+                `(${verdict.reason ?? "unclassified"}); ` +
+                "retrying next demand cycle",
+              ]);
             }
-          } else {
-            // Not loadable YET for a non-terminal reason (a chain
-            // cycle mid-write, an unloadable pattern awaiting its
-            // source docs). Counted per attempt (§7
-            // structureLoadDeferred) and left pending: the next
-            // input-driven cycle retries.
+          } catch (error) {
+            if (!this.#active || this.#runtime !== runtime) return;
             this.#pendingStructureLoads.add(key);
-            stats.structureLoadDeferred += 1;
-            this.#noteStructureLoadDeferral(
-              key,
-              root.id,
-              verdict.reason,
-              stats,
-            );
-            logger.debug?.("structure-load-deferred", () => [
-              `demanded root ${root.id} not loadable yet ` +
-              `(${verdict.reason ?? "unclassified"}); ` +
-              "retrying next demand cycle",
+            stats.structureLoadFailures += 1;
+            logger.warn("structure-load-failed", () => [
+              `demanded root ${root.id} did not load`,
+              error,
             ]);
           }
-        } catch (error) {
-          if (!this.#active || this.#runtime !== runtime) return;
-          this.#pendingStructureLoads.add(key);
-          stats.structureLoadFailures += 1;
-          logger.warn("structure-load-failed", () => [
-            `demanded root ${root.id} did not load`,
-            error,
-          ]);
-        } finally {
-          if (this.#structureLoadChangedDocs === changedDocs) {
-            this.#structureLoadChangedDocs = undefined;
-          }
         }
+      }
+    } finally {
+      if (this.#structureLoadChangedDocs === changedDocs) {
+        this.#structureLoadChangedDocs = undefined;
       }
     }
     if (arrivals.size > 0) {
@@ -4970,6 +4984,58 @@ export class SpaceServer implements TransactionSealDestination {
     d.notCurrentRearms += notCurrentRearms;
     d.demandPasses += 1;
     d.demandPassMs += performance.now() - passStart;
+  }
+
+  /**
+   * Bring every root document this pass's structure loads will read into the
+   * serving replica, in one pull.
+   *
+   * The pass's structure loads are sequential — each root's traversal may
+   * START a piece, and a start's writes belong to the wave that asked for it
+   * — and each begins by syncing the root document it was handed. Awaiting
+   * them one at a time puts each of those syncs in a `session.watch.add` of
+   * its own, so a pass over a board's roots costs a round trip per root
+   * inside the wave's settle. Issued together, the replica's refresh queue
+   * coalesces them into one add, and the traversals that follow find their
+   * documents already held.
+   *
+   * What this changes is when the pass waits, not what it reads: every
+   * address here is one a load would have synced anyway, through the same
+   * session and under the same identity, and a root whose sync fails is left
+   * to its own traversal to report.
+   *
+   * The skips restate the pass's own — a terminal park, an id class that
+   * never owns a piece, and a known root whose load is no longer owed —
+   * and only the coalescing rests on their agreeing. A root this pulls that
+   * the pass then skips is one a client demands either way, and a root this
+   * misses is one its traversal fetches as it always did.
+   */
+  async #loadStructureRootDocs(
+    runtime: Runtime,
+    rootKeys: ReadonlySet<string>,
+    rowByKey: ReadonlyMap<string, { id: string; scope?: string }>,
+  ): Promise<void> {
+    const pending: Promise<unknown>[] = [];
+    for (const key of rootKeys) {
+      const root = rowByKey.get(key)!;
+      const firstDemand = !this.#demandedRoots.has(key);
+      if (!firstDemand && !this.#pendingStructureLoads.has(key)) continue;
+      if (this.#terminalStructureLoads.has(key)) continue;
+      if (neverAPieceRootId(root.id)) continue;
+      const cell = runtime.getCellFromLink({
+        space: this.#options.space,
+        id: root.id as URI,
+        scope: (root.scope ?? "space") as CellScope,
+        path: [],
+      });
+      // A sync that rejects is not this pass's to report: the root's own
+      // traversal issues the same sync a moment later and its failure arm
+      // counts and logs what went wrong.
+      pending.push(cell.sync().catch(() => {}));
+    }
+    if (pending.length === 0) return;
+    this.#options.stats.demand.structureRootsPreloaded += pending.length;
+    await Promise.all(pending);
   }
 
   /** (d′) — flag 6's index (root id → the registry keys whose

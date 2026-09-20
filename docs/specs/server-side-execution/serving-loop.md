@@ -1560,7 +1560,8 @@ foreignEngineFailures, warmRequests, watermarkLag, demandArrivals,
 undemandedNarrowingRuns, earlyEmitRefusals, demand: {demandedRows,
 demandedInstances, demandedInstancesMax, demandedPairs, demandedWriters,
 demandedWritersMax, demandRootEnters, demandRootLeaves, notCurrentRearms,
-demandPasses, demandPassMs, pushGrowthWakes, watchWakes, warmWakes}, settle:
+demandPasses, demandPassMs, structureRootsPreloaded, pushGrowthWakes,
+watchWakes, warmWakes}, settle:
 {series, dropped}, settleAdvances: {count, lastDelta, series, dropped}, events:
 {appended, processed, coalescedPerWaveMax, skippedIdempotent,
 drainInFlightSkips, visibilityBarriers, visibilityRecoveries,
@@ -1679,6 +1680,15 @@ time — which INCLUDES the awaited structure-load segments
 (`ensurePieceRunning`) for first-demand/pending root keys, NOT only the
 O(rows) reconcile (the reconcile does no per-row engine read and runs on
 registry deltas; the label is wall time, review MINOR-3);
+`structureRootsPreloaded` counts the root documents the pass pulls TOGETHER
+before those segments run. Each is one a segment syncs as its first step, so
+issuing them in one pull is what lets the replica's refresh queue coalesce
+them into a single `session.watch.add` rather than one per root inside the
+settle; counted per document per pass, so a root whose load stays owed across
+passes counts once for each. The pull is also where the pass opens the
+changed-document collection its terminal arm invalidates against, because a
+root's reading is taken over the span from that pull to the root's own
+segment;
 `pushGrowthWakes`/`watchWakes`/`warmWakes` count NOTIFIES (the push-time
 `demandChanged`, the `session.watch.set`/`.add` notifies, and the warm
 request's staged-instance captures — the third kept apart so

@@ -277,6 +277,15 @@ export type ServingLoopStats = {
     notCurrentRearms: number;
     demandPasses: number;
     demandPassMs: number;
+
+    /** Root documents the pass pulled TOGETHER before its sequential
+     * structure loads ran (`SpaceServer.#loadStructureRootDocs`). Each is a
+     * document one of those loads syncs as its first step, so issuing them
+     * in one pull is what lets the replica's refresh queue coalesce them
+     * into a single `session.watch.add` instead of one per root inside the
+     * wave's settle. Counted per document per pass, so a root whose load
+     * stays owed across passes counts once for each. */
+    structureRootsPreloaded: number;
     pushGrowthWakes: number;
     watchWakes: number;
 
@@ -659,6 +668,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
     notCurrentRearms: 0,
     demandPasses: 0,
     demandPassMs: 0,
+    structureRootsPreloaded: 0,
     pushGrowthWakes: 0,
     watchWakes: 0,
     warmWakes: 0,
