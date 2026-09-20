@@ -75,11 +75,13 @@ import type {
 } from "./storage/interface.ts";
 import { fromURI, toURI } from "./uri-utils.ts";
 
-/** The §2b delegated carriage a cross-space cache writeback rides (OW31
- * seat S-A): captured verbatim from the TRIGGERING run's wave context
+/**
+ * The delegated carriage (`protocol.md` §2b) that a cross-space cache
+ * writeback rides: captured verbatim from the TRIGGERING run's wave context
  * (the provisioning handler / demanded run) at `replicatePatternToSpace`
  * and threaded to the writeback stamps, where it applies only to writes
- * FOREIGN to the serving manager's home space. */
+ * FOREIGN to the serving manager's home space.
+ */
 export type WritebackDelegation = NonNullable<ServerRunInfo["delegated"]>;
 
 /**
@@ -113,14 +115,13 @@ type SourceUpdatePreparation = {
 
 const logger = getLogger("pattern-manager");
 
-// Cap for `#parkedFailedReplications` (distinct WANTED identities with at
-// least one parked failed replication). Parks only exist while a real
-// supply failure is outstanding — a handful per session in every observed
-// incident — so the cap is a safety net against a pathological session,
-// not a working-set bound; eviction is loud (`closure-replication-park-
-// evicted`) and costs at most one lost heal, never a wrong copy (the
-// evicted failure already logged its one-shot `closure-replication-failed`
-// line, exactly the pre-heal contract).
+// Cap for `#parkedFailedReplications` (distinct WANTED identities with at least
+// one parked failed replication). Parks only exist while a real supply failure
+// is outstanding, so the cap is a safety net against a pathological session,
+// not a working-set bound; eviction is loud
+// (`closure-replication-park-evicted`) and costs at most one lost heal, never a
+// wrong copy (the evicted failure already logged its one-shot
+// `closure-replication-failed` line).
 const MAX_PARKED_FAILED_REPLICATIONS = 64;
 
 // Bound for the in-memory identity->module cache. Higher than the pattern cache
@@ -373,13 +374,13 @@ function sourcePackagePaths(
  * a dependency-recursion frame is the DEPENDENCY's identity, not the
  * entry's (`#replicateClosures()` re-enters with it as `entryIdentity`) —
  * so the failure-registration site can park under the identity a future
- * supply record will name (the ruled 3b close; see
- * `#parkedFailedReplications`).
+ * supply record will name (see `#parkedFailedReplications`).
  *
- * The class deliberately does NOT set `this.name`: `String(error)` in the
- * `closure-replication-failed` line must stay `Error: <reason>` with the
- * production reason strings byte-identical — five direct-CI probe
- * classifications in the OW45 arc grep for exactly those lines.
+ * The class deliberately does NOT set `this.name`, so `String(error)` in the
+ * `closure-replication-failed` line reads `Error: <reason>`, exactly as it
+ * does for a plain `Error` carrying the same reason. That is the form
+ * `verification-coverage.md` quotes the line in, and so the form a search of
+ * the logs for this failure matches.
  */
 class ClosureReplicationSupplyError extends Error {
   constructor(reason: string, readonly wantedIdentity: string) {
@@ -567,10 +568,9 @@ export class PatternManager {
    * replication _into_ it (e.g. the content-cache hit's fire-and-forget sibling
    * ahead of the runner's cross-space child replication in one handler run); a
    * one-shot origin read would then fail with nothing ever re-issuing it, and
-   * the target space's demanded roots would park `pattern-unloadable` forever
-   * (`verification-coverage.md` OW45 carries the incident evidence). The
-   * sibling lives in `#compileCacheWrites`, the one set the origin read must
-   * _not_ await wholesale (it would await itself), so replications also
+   * the target space's demanded roots would park `pattern-unloadable` forever.
+   * The sibling lives in `#compileCacheWrites`, the one set the origin read
+   * must _not_ await wholesale (it would await itself), so replications also
    * register _here_ and the read awaits only the _strictly older_ entries
    * targeting its origin — registration order keeps the await graph acyclic (no
    * from/to mutual wait), and genuine absence still throws loudly after the
@@ -592,34 +592,33 @@ export class PatternManager {
    * the caller-named origin is a provenance heuristic — the in-memory artifact
    * index serves patterns with no per-space persist, so a running piece's space
    * can lack the closure entirely — while the closure is content-addressed, so
-   * any recorded persist target holds byte-identical, integrity-gated docs
-   * (`verification-coverage.md` OW45 carries the incident evidence). Growth:
-   * monotonic for the session, bounded by the module identities × spaces this
-   * manager actually persisted (strings plus small DID sets).
+   * any recorded persist target holds byte-identical, integrity-gated docs.
+   * Growth: monotonic for the session, bounded by the module identities ×
+   * spaces this manager actually persisted (strings plus small DID sets).
    */
   #persistedClosureSpaces = new Map<string, Set<MemorySpace>>();
 
   /**
-   * Failed replications _parked_ for event-driven re-supply
-   * (`verification-coverage.md` OW45: the one supplier-timing geometry no await
-   * can see is a supplier that has not _started_ by consult time, so the
-   * failure parks and the supply's own _record_ re-issues it). Keyed by the
-   * _wanted_ identity — the identity whose _read_ failed, which for a
-   * dependency-recursion frame is the _dependency_'s identity, not the entry's:
-   * the dependency's supplier records the dependency's own module identities,
-   * so an entry-keyed registry would miss exactly that record event. The inner
-   * map keys by (entry, from, to) so a re-registration after a failed re-issue
-   * _replaces_ its predecessor instead of accumulating. Entries drop at wake
-   * time — one wake per matching persist event; a re-issue that fails again
-   * re-parks and waits for the _next_ record, so there is no self-clocking loop
-   * — and otherwise die with the session. Growth: FIFO-capped at
-   * `MAX_PARKED_FAILED_REPLICATIONS` wanted keys (loud eviction); a stale park
-   * costs one wasted loud re-issue on a matching record, never a wrong copy
-   * (the re-issue re-runs the full verified, fail-closed read). The cap bounds
-   * _wanted keys_ only — the inner (entry, from, to) map is deliberately not
-   * capped in its own right: filling one takes that many _distinct_ real supply
-   * failures for a single identity, each carrying its own loud failure and park
-   * line, and _one_ matching record wakes the whole set at once.
+   * Failed replications _parked_ for event-driven re-supply (the one supplier
+   * timing no await can see is a supplier that has not _started_ by consult
+   * time, so the failure parks and the supply's own _record_ re-issues it).
+   * Keyed by the _wanted_ identity — the identity whose _read_ failed, which
+   * for a dependency-recursion frame is the _dependency_'s identity, not the
+   * entry's: the dependency's supplier records the dependency's own module
+   * identities, so an entry-keyed registry would miss exactly that record
+   * event. The inner map keys by (entry, from, to) so a re-registration after a
+   * failed re-issue _replaces_ its predecessor instead of accumulating. Entries
+   * drop at wake time — one wake per matching persist event; a re-issue that
+   * fails again re-parks and waits for the _next_ record, so there is no
+   * self-clocking loop — and otherwise die with the session. Growth:
+   * FIFO-capped at `MAX_PARKED_FAILED_REPLICATIONS` wanted keys (loud
+   * eviction); a stale park costs one wasted loud re-issue on a matching
+   * record, never a wrong copy (the re-issue re-runs the full verified,
+   * fail-closed read). The cap bounds _wanted keys_ only — the inner (entry,
+   * from, to) map is deliberately not capped in its own right: filling one
+   * takes that many _distinct_ real supply failures for a single identity, each
+   * carrying its own loud failure and park line, and _one_ matching record
+   * wakes the whole set at once.
    */
   #parkedFailedReplications = new Map<
     string,
@@ -634,19 +633,16 @@ export class PatternManager {
    * (a pattern served from the in-memory index carries its own module's
    * identity while the space was supplied by its importer's persist).
    *
-   * Also the WAKE half of the ruled 3b close: a recorded supply re-issues
+   * Also the WAKE for `#parkedFailedReplications`: a recorded supply re-issues
    * every parked failed replication WANTING the recorded identity. Skip
    * parks whose `toSpace` is the recorded space — a record for the child
    * itself cannot feed the read (the fallback loop skips `toSpace`), and
    * the re-issue's own success records into its `toSpace`, so this filter
    * is also what keeps a heal from waking itself. A record into a park's
    * `fromSpace` DOES wake it: the re-issue's PRIMARY read consults that
-   * space, and the observed lunch geometry records exactly there (the
-   * sidecar supplier persists into the PARENT space — the child
-   * replication's origin). The re-issue is fire-and-forget via
-   * `queueMicrotask`: this method runs inside the persistence promise the
-   * E4 path AWAITS, so the hook must add neither latency nor a throw to
-   * that chain. */
+   * space. The re-issue is fire-and-forget via `queueMicrotask`: this
+   * method runs inside the persistence promise a compile AWAITS, so the
+   * hook must add neither latency nor a throw to that chain. */
   #recordPersistedClosureSpaces(
     identities: Iterable<string>,
     space: MemorySpace,
@@ -697,27 +693,27 @@ export class PatternManager {
     }
   }
 
-  /** Failure-registration half of the ruled 3b close: park `record` under
-   * `wantedIdentity` so a future matching supply record re-issues it (see
+  /**
+   * Registers a failed replication: parks `record` under `wantedIdentity` so
+   * a future matching supply record re-issues it (see
    * `#parkedFailedReplications` and the wake in
    * `#recordPersistedClosureSpaces()`).
    *
-   * With `checkRecordedSupply` (first-time failures only — never the
-   * re-park of a failed re-issue), consult `#persistedClosureSpaces` ONCE
-   * for the wanted identity and re-issue IMMEDIATELY when a usable record
-   * already exists: the record EVENT has already passed and may never
-   * recur (review-6502 F1-ii — a supplier that completed entirely inside
-   * the failing attempt's read window records before the failure
-   * registers, and parking then would wait for an event that already
-   * happened). Usable means any recorded space except `toSpace` (the
-   * fallback read skips the target; a record into the attempt's own
-   * `fromSpace` IS usable — the re-issue's primary read consults it). The
-   * check is skipped for failed re-issues because their read just
-   * consulted this very map — an immediate retry could only spin on state
-   * it already read; the next matching record wakes them instead. So
-   * immediate re-issues are bounded by original failures, wake re-issues
-   * by matching persist events — no timers, no polling, no self-clocking
-   * loop anywhere. */
+   * With `checkRecordedSupply` (first-time failures only — never the re-park of
+   * a failed re-issue), consult `#persistedClosureSpaces` ONCE for the wanted
+   * identity and re-issue IMMEDIATELY when a usable record already exists: the
+   * record EVENT has already passed and may never recur (a supplier that
+   * completed entirely inside the failing attempt's read window records before
+   * the failure registers, and parking then would wait for an event that
+   * already happened). Usable means any recorded space except `toSpace` (the
+   * fallback read skips the target; a record into the attempt's own `fromSpace`
+   * IS usable — the re-issue's primary read consults it). The check is skipped
+   * for failed re-issues because their read just consulted this very map — an
+   * immediate retry could only spin on state it already read; the next matching
+   * record wakes them instead. So immediate re-issues are bounded by original
+   * failures, wake re-issues by matching persist events — no timers, no
+   * polling, no self-clocking loop anywhere.
+   */
   #registerFailedReplication(
     wantedIdentity: string,
     record: ParkedReplication,
@@ -920,26 +916,22 @@ export class PatternManager {
   }
 
   /**
-   * Whether any pattern work that produces or persists PROGRAM DOCS is
-   * in flight: a by-identity load (whose cold-load arm recompiles and
-   * RE-PERSISTS a space's program closure) or a compile-cache
-   * write-back (which IS the program-materialization commit). Consulted
-   * by the client durability barrier
-   * (`Scheduler.idleWithPendingCommits` — verification-coverage.md
-   * OW45, seat S-B): the barrier's contract is "once it resolves,
-   * tearing the page down loses no writes", and a program commit
-   * issued from a post-arrival load chain is exactly a write a reload
-   * would otherwise kill (the home-profile program-write loss). Three
-   * registries cover the chains end to end: `#inProgressCompilations`
-   * registers SYNCHRONOUSLY at `compileOrGetPattern` — which
-   * `compile-and-run` launches as a FLOATING promise, so nothing else
-   * holds the scheduler while TypeScript compiles — and its promise
-   * resolves only after `compilePattern` has awaited persistence; the
-   * single-flight load slot registers in the load's first awaits
-   * (before any storage read); and the persistence slot registers at
-   * `#persistCompileCacheTracked` entry. A chain running when the
-   * barrier's fixpoint drains is visible through whichever registry
-   * currently holds it.
+   * Whether any pattern work that produces or persists PROGRAM DOCS is in
+   * flight: a by-identity load (whose cold-load arm recompiles and RE-PERSISTS
+   * a space's program closure) or a compile-cache write-back (which IS the
+   * program-materialization commit). Consulted by the client durability barrier
+   * (`Scheduler.idleWithPendingCommits`): the barrier's contract is "once it
+   * resolves, tearing the page down loses no writes", and a program commit
+   * issued from a post-arrival load chain is exactly a write a reload would
+   * otherwise kill. Three registries cover the chains end to end:
+   * `#inProgressCompilations` registers SYNCHRONOUSLY at `compileOrGetPattern`
+   * — which `compile-and-run` launches as a FLOATING promise, so nothing else
+   * holds the scheduler while TypeScript compiles — and its promise resolves
+   * only after `compilePattern` has awaited persistence; the single-flight load
+   * slot registers in the load's first awaits (before any storage read); and
+   * the persistence slot registers at `#persistCompileCacheTracked` entry. A
+   * chain running when the barrier's fixpoint drains is visible through
+   * whichever registry currently holds it.
    */
   hasPendingPatternWork(): boolean {
     return this.#inProgressCompilations.size > 0 ||
@@ -951,8 +943,7 @@ export class PatternManager {
    * Settle every currently-registered in-progress compilation,
    * by-identity load, and compile-cache write-back (failures SETTLE —
    * allSettled by contract: they are the original caller's to surface,
-   * never the barrier's to hang on; the rejecting-promise pin guards
-   * the allSettled→all regression). Work registered WHILE awaiting is
+   * never the barrier's to hang on). Work registered WHILE awaiting is
    * the caller's to re-check: the scheduler barrier re-evaluates from
    * scratch after each settle, the same joint-fixpoint structure
    * pending commits use, so a chain that registers its follow-on work
@@ -971,11 +962,11 @@ export class PatternManager {
 
   /**
    * Attach a rehydration `program` to a hand-built pattern object (one with no
-   * module-scope entry ref). The only surviving job of the old
-   * `registerPattern`: source-bearing tests/builtins that construct a Pattern in
-   * hand can associate its source so `getPatternProgram` (and thus
-   * `getPatternProgramBySync`) returns it. No-op when the pattern already carries a
-   * program. Walks to the derivation root so a copy inherits the association.
+   * module-scope entry ref). Source-bearing tests/builtins that construct a
+   * Pattern in hand use it to associate the pattern's source, so that
+   * `getPatternProgram` (and thus `getPatternProgramBySync`) returns it. No-op
+   * when the pattern already carries a program. Walks to the derivation root so
+   * a copy inherits the association.
    */
   associatePatternProgram(
     pattern: Pattern | Module,
@@ -1018,10 +1009,10 @@ export class PatternManager {
    * identity is a CONTENT hash of the pattern's structure (`createRef`), so two
    * structurally-identical hand-built patterns share one identity: a lift that
    * returns the same sub-pattern shape on every run does not churn its result
-   * cell's pointer (the CT-1623 structural-dedup property the old per-structure
-   * patternId provided). The pattern is branded + indexed so
-   * `artifactFromIdentitySync` / `loadPatternByIdentity` resolve it. SESSION-ONLY
-   * (no source/compiled closure behind a hand-built structure hash).
+   * cell's pointer. The pattern is branded + indexed so
+   * `artifactFromIdentitySync` / `loadPatternByIdentity` resolve it.
+   * SESSION-ONLY (no source/compiled closure behind a hand-built structure
+   * hash).
    */
   ensureKeylessPatternIdentity(
     pattern: Pattern,
@@ -1029,13 +1020,12 @@ export class PatternManager {
     const root = resolveOriginal(pattern);
     const existing = getArtifactEntryRef(root);
     if (existing) return existing;
-    // Mint-site tripwire (the keyless close-out's insurance): the sanctioned
-    // keyless population is runtime-BUILT pattern values — the transformer
-    // hoists all source-authored lift()/handler() code to cf:module
-    // (CT-1644/CT-1655), so a COMPILED pattern reaching this mint means its
-    // content-addressed association went missing (a registration that never
-    // ran, or a ref lost to shadowing). The source path is stamped by the
-    // same module-indexing loop that assigns entry refs
+    // Mint-site tripwire: the sanctioned keyless population is runtime-BUILT
+    // pattern values — the transformer hoists all source-authored
+    // lift()/handler() code to cf:module, so a COMPILED pattern reaching this
+    // mint means its content-addressed association went missing (a registration
+    // that never ran, or a ref lost to shadowing). The source path is stamped
+    // by the same module-indexing loop that assigns entry refs
     // (`registerEvaluatedModules`), so "has a source path, needs a mint" is
     // that bug surfacing — count it and say so loudly.
     if (getPatternSourcePath(root) !== undefined) {
@@ -1102,25 +1092,25 @@ export class PatternManager {
   }
 
   /**
-   * Make a cross-space child piece independently loadable from its own space
-   * (CT-1687). A fresh runtime navigating to a `Factory.inSpace(...)` child
-   * loads pattern artifacts from the CHILD's space — but the parent bundle's
-   * compile-cache write-back targets the space the parent compiled into, so the
-   * child space had nothing and the load died with "has no stored source".
-   * Replicates the content-addressed source + compiled closures into `toSpace`
-   * when the pattern carries an artifact entry ref (the by-identity reload path
-   * — the only one a `{ identity, symbol }` piece pointer can take).
+   * Make a cross-space child piece independently loadable from its own space. A
+   * fresh runtime navigating to a `Factory.inSpace(...)` child loads pattern
+   * artifacts from the CHILD's space — but the parent bundle's compile-cache
+   * write-back targets the space the parent compiled into, so without this copy
+   * the child space has nothing to load from. Replicates the content-addressed
+   * source + compiled closures into `toSpace` when the pattern carries an
+   * artifact entry ref (the by-identity reload path — the only one a
+   * `{ identity, symbol }` piece pointer can take).
    *
    * Closure replication is fire-and-forget (tracked in `#compileCacheWrites`,
    * awaited by `flushCompileCacheWrites`): the child is loadable in-session
    * regardless, this only affects fresh runtimes. A failure is logged and
-   * retried on the next child creation and on the next persist event —
-   * never on the caller's commit path. (The persist-event retry is the
-   * ruled 3b close: a supply-timing failure parks under the WANTED
-   * identity and `#recordPersistedClosureSpaces` re-issues it when a
-   * matching supply records — see `#parkedFailedReplications`. Genuine
-   * absence — an identity no server-side persist ever records — keeps
-   * exactly the loud one-shot behavior this contract always had.)
+   * retried on the next child creation and on the next persist event — never on
+   * the caller's commit path. (The persist-event retry: a supply-timing failure
+   * parks under the WANTED identity and `#recordPersistedClosureSpaces`
+   * re-issues it when a matching supply records — see
+   * `#parkedFailedReplications`. Genuine absence — an identity no server-side
+   * persist ever records — stays a loud one-shot failure, since no record ever
+   * wakes its park.)
    */
   replicatePatternToSpace(
     pattern: Pattern | Module,
@@ -1140,13 +1130,13 @@ export class PatternManager {
    * (so a replication issued later in the same synchronous stretch
    * observes this entry when it awaits its origin's suppliers) and in
    * `#compileCacheWrites` (so `flushCompileCacheWrites` and the durability
-   * barrier observe it). Shared by `replicatePatternToSpace` and the 3b
-   * heal's re-issues, so a re-issued replication is a FULL fresh
+   * barrier observe it). Shared by `replicatePatternToSpace` and the
+   * re-issues of parked failures, so a re-issued replication is a FULL fresh
    * replication — same ticket discipline, same acyclicity (the ticket
    * await stays strictly-older-only; compiles and loads never await
    * replications), same idempotent diff-to-no-op persists.
    *
-   * Failures log the loud one-shot line unchanged; a SUPPLY-class failure
+   * Failures log the loud one-shot line; a SUPPLY-class failure
    * (the wanted identity readable nowhere — never a store-level throw or
    * a persist failure) additionally parks for event-driven re-supply.
    * `reissueOf` marks a park-triggered re-issue: its success logs the
@@ -1346,8 +1336,8 @@ export class PatternManager {
      * identities and the CFC integrity gate stays fail-closed), so retry
      * the read against the recorded persist targets before failing. Loud
      * on use: the lane log shows when the heuristic origin was dry. An
-     * incomplete result carries the PRIMARY origin's reason — the
-     * production error string the arc's forensics grep for. */
+     * incomplete result carries the PRIMARY origin's reason, which becomes
+     * the message of the `closure-replication-failed` line. */
     const readOriginWithFallbacks = async (): Promise<
       Awaited<ReturnType<typeof readOrigin>>
     > => {
@@ -1388,45 +1378,37 @@ export class PatternManager {
 
     let origin = await readOriginWithFallbacks();
     if (!origin.complete) {
-      // GEOMETRY 3 (verification-coverage.md OW45; direct-CI probe 4, run
-      // 33165960083): the SUPPLIER COMPILE itself can still be mid-flight
-      // at consult time — no persist has completed anywhere yet, so the
-      // heuristic origin AND the fallback map are both correctly dry, and
-      // a one-shot throw here parks the target space's demanded roots
-      // `pattern-unloadable` forever. Await the in-flight compile
-      // registries ONCE — a SNAPSHOT, allSettled (a failing compile must
-      // neither hang nor reject this replication; entries registered
-      // after the snapshot are the next consult's business), covering
-      // BOTH cold compiles AND by-identity loads (a supplier can be a
-      // load's recovery compile) but NEVER `#compileCacheWrites`: this
-      // replication promise lives there and would await itself. Acyclic:
-      // compiles and loads never await replications (their only
-      // replication call is fire-and-forget), and a compile promise
-      // resolves only after its E4 persist recorded into
+      // The SUPPLIER COMPILE itself can still be mid-flight at consult time —
+      // no persist has completed anywhere yet, so the heuristic origin AND the
+      // fallback map are both correctly dry, and a read made once the supplier
+      // settles can succeed. Await the in-flight compile registries ONCE — a
+      // SNAPSHOT, allSettled (a failing compile must neither hang nor reject
+      // this replication; entries registered after the snapshot are the next
+      // consult's business), covering BOTH cold compiles AND by-identity loads
+      // (a supplier can be a load's recovery compile) but NEVER
+      // `#compileCacheWrites`: this replication promise lives there and would
+      // await itself. Acyclic: compiles and loads never await replications
+      // (their only replication call is fire-and-forget), and a compile promise
+      // resolves only after its awaited persist recorded into
       // `#persistedClosureSpaces`.
       //
-      // EMPTY SNAPSHOT → NO RETRY, byte-identical one-shot throw below.
-      // Deliberate, twice over: (a) with nothing in the registries there
-      // is no supplier whose completion the await could observe — every
+      // EMPTY SNAPSHOT → NO RETRY, the one-shot throw below. Deliberate,
+      // twice over: (a) with nothing in the registries there is no
+      // supplier whose completion the await could observe — every
       // `#pendingCacheWriteBacks` member belongs to a compile or load
       // (registry-covered here) or to a sibling replication, which the
       // strictly-older-ticket await above already covers at registration
-      // time, so an empty-registry retry adds no coverage the design
-      // claims; (b) an empty-registry re-read WOULD still re-race the
-      // sibling window nondeterministically, quietly double-covering the
-      // ticket await — the exact masking that made the F1 pin soft. The
-      // absence of a `closure-replication-await-inflight` line before a
-      // `closure-replication-failed` line is therefore the pre-declared
-      // geometry-3b signature. Precisely (review-6502 F1): zero-announce
-      // proves "no supplier REGISTERED at snapshot time" — a strict
-      // superset of "not started" that also admits a supplier completed
-      // inside the read window or a load resolved with its repair
-      // persist floating. All of it — 3b proper and both slivers — now
-      // ends in the same place: the throw below parks the failure for
-      // event-driven re-supply (the ruled 3b close; see
-      // `#parkedFailedReplications` and the register's RULING block), so
-      // the short-circuit stays exactly as cheap and mask-free as
-      // designed while no rescueable interleaving is lost.
+      // time, so an empty-registry retry adds no coverage; (b) an
+      // empty-registry re-read WOULD still re-race the sibling window
+      // nondeterministically, quietly double-covering the ticket await,
+      // which would mask a defect in that await. The absence of a
+      // `closure-replication-await-inflight` line before a
+      // `closure-replication-failed` line therefore means "no supplier
+      // REGISTERED at snapshot time". That covers a supplier that has not
+      // started, a supplier that completed inside the read window, and a
+      // load that resolved with its repair persist floating. All three
+      // end in the same place: the throw below parks the failure for
+      // event-driven re-supply (see `#parkedFailedReplications`).
       const inFlightCompilations = Array.from(
         this.#inProgressCompilations.values(),
         ({ promise }) => promise,
@@ -1452,15 +1434,14 @@ export class PatternManager {
       }
     }
     if (!origin.complete) {
-      // The one-shot contract stands byte-identical on the still-failing
-      // path: same loud throw, same production reason string (the error
-      // class keeps name "Error", so `String(error)` in the failure line
-      // is unchanged). The class carries the WANTED identity — THIS
-      // frame's `entryIdentity`, which for the dependency recursion is
-      // the dependency's own identity — so the catch in
-      // `#issueReplication` can park the failure for event-driven
-      // re-supply under the identity a future persist record will name
-      // (the ruled 3b close).
+      // The still-failing path throws loudly, with the origin read's reason
+      // string as the message (the error class keeps name "Error", so
+      // `String(error)` in the failure line reads `Error: <reason>`). The
+      // class carries the WANTED identity — THIS frame's `entryIdentity`,
+      // which for the dependency recursion is the dependency's own
+      // identity — so the catch in `#issueReplication` can park the
+      // failure for event-driven re-supply under the identity a future
+      // persist record will name.
       throw new ClosureReplicationSupplyError(origin.reason, entryIdentity);
     }
     const { sourceDocs, compiledDocs } = origin;
@@ -1774,13 +1755,13 @@ export class PatternManager {
    * returning the full module namespace (`EvaluateResult`).
    *
    * This is the load seam for callers that need the raw evaluated namespace —
-   * `main.default`, a named `fetchMocks` export, multi-user descriptors — rather
-   * than the single `Pattern` that `compilePattern` returns. It is the reason the
-   * CLI pattern-test harness and the multi-user worker previously reached for the
-   * lower-level `Engine.compileAndEvaluateModules` directly and skipped
-   * registration (CT-1811): map/filter/flatMap ops then had no content-addressed
-   * entry ref and fell back to a defer-corrupted embedded graph instead of their
-   * canonical `$patternRef` artifact.
+   * `main.default`, a named `fetchMocks` export, multi-user descriptors —
+   * rather than the single `Pattern` that `compilePattern` returns. A caller
+   * that gets that namespace from the lower-level
+   * `Engine.compileAndEvaluateModules` skips registration: map/filter/flatMap
+   * ops then have no content-addressed entry ref and fall back to a
+   * defer-corrupted embedded graph instead of their canonical `$patternRef`
+   * artifact.
    *
    * Registration is fused with evaluation here on purpose, so it cannot be
    * forgotten — mirroring what the runtime's own `compilePattern` /
@@ -2069,16 +2050,16 @@ export class PatternManager {
       this.#esmCacheStats[compiledBodiesServed ? "hits" : "misses"]++;
     }
     if (cacheCtx.persist !== false && !warmHit) {
-      // Persist the module set into this space. AWAITED (identity E4): refs-only
-      // pattern JSON makes artifact persistence part of ordinary compilation.
-      // Preview callers explicitly skip persistence and cannot use the returned
+      // Persist the module set into this space. AWAITED: refs-only pattern JSON
+      // makes artifact persistence part of ordinary compilation. Preview
+      // callers explicitly skip persistence and cannot use the returned
       // artifact as a durable source until an ordinary compile saves it. This
       // covers BOTH a cold compile AND a process-byte-cache hit: in the latter
       // the transform-and-emit step was skipped, but this space's persisted
-      // cache may be empty (e.g. a fresh space), and the by-identity reload path
-      // needs the closure here. A failed write fails the compile: persisted
-      // refs-only pattern JSON would otherwise point at a closure that is not
-      // durable in `space`.
+      // cache may be empty (e.g. a fresh space), and the by-identity reload
+      // path needs the closure here. A failed write fails the compile:
+      // persisted refs-only pattern JSON would otherwise point at a closure
+      // that is not durable in `space`.
       await this.#persistCompileCacheTracked(
         space,
         modules,
@@ -2266,8 +2247,8 @@ export class PatternManager {
     // A keyless identity is session-only by construction: no source or
     // compiled closure exists behind it anywhere, so once the in-memory index
     // missed, storage cannot help. Answer definitively without probing (a
-    // pointer like this read from durable state is a pre-guard legacy orphan
-    // — tolerated, never loadable; see L3(a), RULED 2026-08-27).
+    // pointer like this read from durable state is a legacy orphan —
+    // tolerated, never loadable).
     if (isKeylessPatternIdentity(entryIdentity)) {
       logger.debug("keyless-identity-load-skipped", () => [
         `session-synthetic identity ${entryIdentity}#${symbol} is not in the`,
@@ -2278,9 +2259,9 @@ export class PatternManager {
     if (this.#runtime.cfcEnforcementMode === "disabled") {
       return undefined;
     }
-    // In-memory fast path (CT-1623): the module may already be live from a
-    // parent bundle's evaluation (e.g. a sub-pattern of the just-loaded
-    // space root). Reuse it directly — no storage closure read, no SES re-eval.
+    // In-memory fast path: the module may already be live from a parent
+    // bundle's evaluation (e.g. a sub-pattern of the just-loaded space root).
+    // Reuse it directly — no storage closure read, no SES re-eval.
     const live = retryFailedRecovery
       ? undefined
       : this.#patternFromEvaluatedModule(entryIdentity, symbol);
@@ -2675,8 +2656,7 @@ export class PatternManager {
     // `{ identity, symbol }` ref for a NON-pattern artifact was already set by
     // `registerEvaluatedModules` via `#indexArtifact`, whose gate is the wider
     // `isTrustedBuilderArtifact` — narrowing `#indexArtifact` would drop
-    // exported lift/handler forward refs (the gap Codex flagged on an earlier
-    // revision of #3912).
+    // exported lift/handler forward refs.
     if (isTrustedPattern(pattern)) {
       setArtifactEntryRef(pattern, { identity: entryIdentity, symbol });
     }
@@ -2684,22 +2664,24 @@ export class PatternManager {
   }
 
   /**
-   * Index every module of a just-evaluated ESM bundle by its content identity
-   * (CT-1623). Lets `loadPatternByIdentity` reuse a sub-pattern module already
-   * evaluated as part of its parent's bundle — no storage read, no SES re-eval.
+   * Index every module of a just-evaluated ESM bundle by its content identity.
+   * Lets `loadPatternByIdentity` reuse a sub-pattern module already evaluated
+   * as part of its parent's bundle — no storage read, no SES re-eval.
    *
    * Public because it is the shared indexing step every path that RUNS a
-   * just-evaluated pattern must perform: the runtime's own load path calls it via
-   * `#patternFromEvaluation`, and the namespace load seam `compileAndRegisterModules`
-   * (used by the CLI test harness and the multi-user worker) calls it too.
-   * Skipping it leaves anonymous map/filter/flatMap ops un-indexed, so
-   * `getArtifactEntryRef` misses and the op falls back to its embedded graph
-   * instead of the content-addressed canonical artifact — the CT-1811 defer
-   * corruption. It is deliberately NOT folded into `Engine.compileAndEvaluateModules`,
-   * since that primitive is also used to inspect serialized/verified output
-   * without running (engine unit tests), where the side effect of stamping entry
-   * refs is unwanted — `compileAndRegisterModules` is the fused seam callers use to
-   * run. Idempotent per identity (re-registering refreshes the LRU), so paths that
+   * just-evaluated pattern must perform: the runtime's own load path calls it
+   * via `#patternFromEvaluation`, and the namespace load seam
+   * `compileAndRegisterModules` (used by the CLI test harness and the
+   * multi-user worker) calls it too. Skipping it leaves anonymous
+   * map/filter/flatMap ops un-indexed, so `getArtifactEntryRef` misses and the
+   * op falls back to its embedded graph instead of the content-addressed
+   * canonical artifact. The embedded round-trip corrupts nested output-alias
+   * defer levels. It is deliberately NOT folded into
+   * `Engine.compileAndEvaluateModules`, since that primitive is also used to
+   * inspect serialized/verified output without running (engine unit tests),
+   * where the side effect of stamping entry refs is unwanted —
+   * `compileAndRegisterModules` is the fused seam callers use to run.
+   * Idempotent per identity (re-registering refreshes the LRU), so paths that
    * already registered are unaffected.
    */
   registerEvaluatedModules(result: EvaluateResult): void {
@@ -2714,7 +2696,7 @@ export class PatternManager {
         this.#modulesByIdentity.set(identity, { exports });
         // Index each exported builder artifact for addressing by its export name.
         // (Reload relies on this so a sub-pattern's result cell loads BY IDENTITY
-        // instead of cold-recompiling — CT-1623.)
+        // instead of cold-recompiling.)
         const sourcePath = result.sourcePathByIdentity?.get(identity);
         for (const exportName of Object.keys(exports)) {
           if (exportName === "__esModule") continue;
@@ -2853,7 +2835,7 @@ export class PatternManager {
     // result cell references a transformer HOIST (`__cfReg`, e.g. `__cfPattern_1`)
     // which is NOT a module export — it lives in the artifact index. Resolving it
     // there (instead of falling through to a cold source recompile) is what keeps
-    // a reloaded op compile-free (CT-1623).
+    // a reloaded op compile-free.
     const pattern =
       (symbol in cached.exports
         ? cached.exports[symbol]
@@ -2869,17 +2851,11 @@ export class PatternManager {
   }
 
   /**
-   * Write the module set into `space` and AWAIT it, tracking the in-flight
-   * promise in `#compileCacheWrites` + `#pendingCacheWriteBacks` (so graceful
-   * shutdown and closure replication can observe it). A failure PROPAGATES and
-   * fails the compile: refs-only pattern JSON makes a durable closure in `space`
-   * part of the compilation contract.
+   * Attaches the trigger's delegated carriage (`protocol.md` §2b) ONLY for a
+   * write target FOREIGN to the serving manager's home space. Home-space
+   * writebacks and every client writeback are plain bookkeeping and carry
+   * none.
    */
-
-  /** Attach the trigger's §2b carriage ONLY for a write target FOREIGN
-   * to the serving manager's home space (OW31 seat S-A): home-space
-   * writebacks and every client writeback stay plain bookkeeping —
-   * byte-identical to before. */
   #writebackDelegationFor(
     space: MemorySpace,
     delegated: WritebackDelegation | undefined,
@@ -2890,6 +2866,13 @@ export class PatternManager {
       : {};
   }
 
+  /**
+   * Write the module set into `space` and AWAIT it, tracking the in-flight
+   * promise in `#compileCacheWrites` + `#pendingCacheWriteBacks` (so graceful
+   * shutdown and closure replication can observe it). A failure PROPAGATES and
+   * fails the compile: refs-only pattern JSON makes a durable closure in
+   * `space` part of the compilation contract.
+   */
   async #persistCompileCacheTracked(
     space: MemorySpace,
     modules: CacheableModule[],
@@ -3112,14 +3095,13 @@ export class PatternManager {
     let committedModuleDelegations = moduleDelegations;
     const { error } = await this.#runtime.editWithRetry((tx) => {
       // Compile-cache writeback is runtime-internal bookkeeping
-      // (serving-loop.md §3d, RULED 2026-08-05): it runs from async
-      // compile flows with no scheduler run around it, and a SERVING
-      // runtime's wave refuses unstamped seals — unstamped, the cache
-      // never heals server-side and every cold load recompiles. No-op
-      // on the OFF arm and for plain clients. A FOREIGN-space writeback
-      // additionally carries the triggering run's §2b delegated
-      // carriage (OW31 seat S-A) — without it the wave's accept gate
-      // refuses the crossing.
+      // (serving-loop.md §3d): it runs from async compile flows with no
+      // scheduler run around it, and a SERVING runtime's wave refuses unstamped
+      // seals — unstamped, the cache never heals server-side and every cold
+      // load recompiles. No-op on the OFF arm and for plain clients. A
+      // FOREIGN-space writeback additionally carries the triggering run's
+      // delegated carriage (protocol.md §2b) — without it the wave's accept
+      // gate refuses the crossing.
       this.#runtime.stampServerRun(tx, {
         actionId: `compile-cache/source-writeback/${entryIdentity}`,
         kind: "bookkeeping",
