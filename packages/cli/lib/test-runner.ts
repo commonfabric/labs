@@ -602,7 +602,8 @@ function matchesTimingPrefix(name: string, prefixes: string[]): boolean {
   );
 }
 
-function printLoggerStats(
+/** Prints timing and call-count summaries, using absolute or baseline deltas. */
+export function printLoggerStats(
   elapsedMs: number,
   useDelta: boolean,
   label?: string,

@@ -6,6 +6,7 @@ import {
   loomComposeTool,
   loomInspectTool,
 } from "./loom-authoring.ts";
+import { LOOM_RETRIEVAL_TOOLS } from "./loom-retrieval.ts";
 import { bashTool } from "./bash.ts";
 import { browserTool } from "./browser.ts";
 import { delegateTaskTool } from "./delegate-task.ts";
@@ -51,6 +52,7 @@ export const BUILTIN_TOOLS = [
   loomComposeTool,
   loomInspectTool,
   loomAuthoringContextTool,
+  ...LOOM_RETRIEVAL_TOOLS,
 ] as const;
 
 export const BUILTIN_TOOL_REGISTRY = new Map<

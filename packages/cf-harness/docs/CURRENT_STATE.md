@@ -25,7 +25,9 @@ The runtime has four main boundaries:
    typed `browser` tool the harness binds to a leased local CDP endpoint itself.
    The optional `run_pattern` tool is a distinct trusted-host path whose Fabric
    identity stays outside Docker and whose authority is constrained to one
-   configured space.
+   configured space. The agent result writer is a second such path, invoked by a
+   host caller rather than by the model, writing a run's structured result into
+   that same space.
 4. The artifact store records run state, the model-facing transcript, a sibling
    record of the omission rules and full-artifact locations applied to each tool
    result, reports, capability and policy snapshots, tool outputs, child
@@ -55,6 +57,12 @@ The current package provides:
   include verified authored Loom receipts and the submitted origin. See
   [Durable Loom authoring](LOOM_AUTHORING.md) for authority, custody, and retry
   contracts;
+- read-only Loom retrieval — search, page discovery, inspection, and reads,
+  person resolution, calendar events, ambient context, and the profile — over
+  the same kind of host command transport, every row measured against the run's
+  observation ceiling before it enters model context. A row loom returns without
+  a label is given the query's label, an assumption the implementation profile
+  publishes as a deviation. See [Read-only Loom retrieval](LOOM_RETRIEVAL.md);
 - batch CLI execution with bounded model turns and optional streamed events;
 - machine-readable capability discovery with `--describe-capabilities`;
 - persistent provider configuration and structured config/auth control, with
@@ -287,6 +295,24 @@ The current package provides:
   identifiers;
 - content-addressed snapshots for in-run `view_image` observations, while
   run-start images remain source-integrity-locked;
+- a host-side agent result writer (`writeAgentResult`, exported from the package
+  root) over the same fabric session, for a caller that runs the harness on
+  behalf of a pattern's agent request: it validates a run's structured result
+  against its schema, writes it as one document in the session's space, and
+  returns a link to it. Every handle the result names at a value position
+  becomes a link, `asCell` position or not; a property name is held to the same
+  ownership rule and stays text, since a name cannot hold a link — a cell handle
+  to its cell, a non-cell referent the run observed (a Loom row, a SQLite row)
+  to a document minted under the label the tool reported — and a handle the run
+  does not hold fails the write before any document is written. Inline
+  model-authored text carries the join the writing transaction derives from
+  reading every observed cell; the write is attributed to the `agent` builtin,
+  so the result carries `LlmDerived`; the run's observation ceiling is declared
+  as the result's store policy, so a join that does not fit is refused by the
+  runner's commit boundary and surfaces as a typed `cfc_commit_refused` failure
+  whose message names no label. A handle at a position whose schema declares a
+  `maxConfidentiality` the referent's label exceeds is sealed rather than
+  linked;
 - opt-in fabric-session tools — `run_pattern` and `assign_slug`
   (`--fabric-api-url`, `--fabric-identity`, and `--fabric-space` configured
   together, or their `CF_HARNESS_FABRIC_*` environment fallbacks).

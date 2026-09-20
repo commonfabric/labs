@@ -30,6 +30,7 @@
     "./artifacts": "./src/artifacts.ts",
     "./cli": "./src/cli.ts",
     "./provenance": "./src/provenance.ts",
+    "./result-writer": "./src/result-writer.ts",
     "./gateway/openai-client": "./src/gateway/openai-client.ts",
     "./model/client": "./src/model/client.ts",
     "./model/usage": "./src/model/usage.ts",

@@ -824,4 +824,62 @@ export function checkFlavor(flavor: string): void {
 }
 ```
 
+### Putting a value into a message
+
+The example above puts backticks around a string by hand, which is fine for a
+value known to be a short string with no backtick in it. Most values a message
+reports are not that. A value may be an object, a `FabricValue`, a symbol, or
+something whose `toString()` throws. Its rendering may hold a backtick, which
+ends a hand-written code span early, and it may run to thousands of characters.
+
+Compose such a message with the `debugStr` template tag from
+`@commonfabric/data-model`. A _directive_ right before a substitution, a dollar
+sign and then comma-separated words, asks for the value's debug rendering,
+quoted and cut to length:
+
+```ts
+// Shown at module scope.
+
+import { debugStr } from "@commonfabric/data-model";
+
+export function checkTopping(topping: unknown): void {
+  if (typeof topping !== "string") {
+    throw new Error(debugStr`Not a topping: $quote${topping}`);
+  }
+}
+```
+
+The words a directive can hold:
+
+| Words | Rendering of the value |
+| --- | --- |
+| `quote` | compact, cut to 50 characters, as a Markdown code span |
+| `quote,long` or `quote,xlong` | the same, cut to 500 or 5000 characters |
+| `short`, `long`, `xlong` alone | compact and cut as above, without the quoting |
+| `indent` | indented, cut to 5 lines, or with `long` to 50, or with `xlong` to 500 |
+| `quote,indent` | the same, as a Markdown fenced code block on lines of its own |
+
+Reach for `$quote` by default. Use `$quote,long` when the reader has to
+recognize which value it was, compare two renderings, or read a list to its
+end. A substitution with no directive before it converts the way a template
+literal converts one, except that the conversion never throws. A backslash
+before the dollar sign, as in `\$quote${value}`, keeps directive-like text
+literal.
+
+How a value renders is not a contract: the renderings are for a person reading
+a diagnostic, and they change as that reading is improved.
+
+The `cf-debug-str/valid-directive` lint rule (`tasks/lint-debug-str.ts`,
+registered in the root `deno.jsonc`) reports a directive holding a word other
+than these, or more than one of the size words. At run time such a directive
+stays in the message as text and the value gets the default rendering, so a
+message composed on an error path still says something.
+
+Two pairs of functions serve the cases a template does not fit.
+`backtickQuote()` and `backtickFence()` from `@commonfabric/utils/markdown`
+quote text of any content as a code span or a fenced block.
+`toCompactDebugString()` and `toIndentedDebugString()` from
+`@commonfabric/data-model` render a value where the rendering is handed on as
+a value rather than placed in a message.
+
 [survey]: #not-a-survey-of-the-rest-of-the-system

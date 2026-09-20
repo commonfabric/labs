@@ -1,23 +1,6 @@
-import type { JSONSchema } from "@commonfabric/api";
-import { cfcAtom } from "@commonfabric/api/cfc";
 import { internSchema } from "@commonfabric/data-model-schema";
 
-// Epic D1b (docs/history/plans/cfc-future-work-implementation.md): model output written
-// by the `llm`, `generateText`, and `generateObject` builtins carries an
-// explicit `LlmDerived` provenance stamp — the same mark D1 attaches to dialog
-// messages, so "model-derived" is explicit provenance rather than mere absence
-// of integrity. The stamp is applied AT the model-output writeback (llm.ts), not
-// on the shared result schemas: keeping it off the schema means the builtins'
-// control-state writes (the `pending`/`error` resets of the initial run and the
-// error path) stay CFC-inert — only the actual model bytes are stamped and made
-// CFC-relevant, mirroring D1's `pushModelMessages` (which stamps the model push,
-// not every message-cell write). The write is attributed to the builtin because
-// `LlmDerived` is a runtime-minted evidence family: the persist-time gate
-// (`gateRuntimeMintedIntegrity`, audit S4) admits it only from a builtin author,
-// which also stops pattern code from forging it.
-export const LLM_DERIVED_RESULT_STAMP_SCHEMA = internSchema(
-  { ifc: { addIntegrity: [cfcAtom.llmDerived()] } } as JSONSchema,
-);
+export { LLM_DERIVED_RESULT_STAMP_SCHEMA } from "../cfc/llm-derived-stamp.ts";
 
 /** Runtime schema for {@link BuiltInLLMContent} (packages/api/index.ts). */
 export const LLMContentSchema = internSchema(

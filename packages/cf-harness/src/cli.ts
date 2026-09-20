@@ -1,4 +1,5 @@
 import { readLoomAuthoringConfig } from "./loom-authoring.ts";
+import { readLoomRetrievalConfig } from "./loom-retrieval.ts";
 import { parseArgs } from "@std/cli/parse-args";
 import {
   basename,
@@ -59,7 +60,10 @@ import {
   HARNESS_SUBAGENT_PROFILES,
   type HarnessSubagentProfile,
 } from "./contracts/subagent.ts";
-import { type BuiltinToolId } from "./contracts/tool-descriptor.ts";
+import {
+  type BuiltinToolId,
+  LOOM_RETRIEVAL_TOOL_IDS,
+} from "./contracts/tool-descriptor.ts";
 import { renderCfcPostureReport } from "./cfc-posture.ts";
 import {
   describeHarnessDocsCorpus,
@@ -203,6 +207,7 @@ const CLI_STRING_FLAGS = [
   "max-model-turns",
   "fabric-mount",
   "loom-authoring-config",
+  "loom-retrieval-config",
   "fabric-api-url",
   "fabric-identity",
   "fabric-space",
@@ -492,12 +497,13 @@ Options:
   --workspace <path>            Workspace host path (defaults to current directory)
   --cwd <path>                  Initial working directory inside the workspace
   --focus-root <path>           Narrow exploration to a workspace subpath when possible
-  --allow-tool <tool>           Restrict available tools (repeatable: bash | read_file | view_image | web_fetch | read_skill_resource | run_skill_script | edit_file | write_file | delegate_task | describe_handle | finish_task | run_pattern | assign_slug | search_patterns | record_feedback | search_skills | acquire_skill | research | loom_compose | loom_inspect | loom_authoring_context);
+  --allow-tool <tool>           Restrict available tools (repeatable: bash | read_file | view_image | web_fetch | read_skill_resource | run_skill_script | edit_file | write_file | delegate_task | describe_handle | finish_task | run_pattern | assign_slug | search_patterns | record_feedback | search_skills | acquire_skill | research | loom_compose | loom_inspect | loom_authoring_context | loom_search | loom_page_discover | loom_page_inspect | loom_page_read | loom_people | loom_calendar_list | loom_context | loom_profile);
                                 run_pattern, assign_slug, and acquire_skill additionally require the three --fabric-* session flags,
                                 search_patterns and record_feedback require --pattern-index-url,
                                 search_skills and acquire_skill require --skills-registry-url,
                                 research requires a documentation corpus or pattern index (query_docs is a deprecated input alias),
-                                and the three loom_* tools require --loom-authoring-config (or CF_HARNESS_LOOM_AUTHORING_CONFIG)
+                                loom_compose, loom_inspect, and loom_authoring_context require --loom-authoring-config (or CF_HARNESS_LOOM_AUTHORING_CONFIG),
+                                and the eight read-only loom_* tools require --loom-retrieval-config (or CF_HARNESS_LOOM_RETRIEVAL_CONFIG)
   --allow-skill-scripts         Run skill scripts in the sandbox, for every skill this run holds,
                                 registry and acquired alike. Off unless named.
   --allow-skill-script <spec>   Allow one exact skill script (repeatable: skill:scripts/path,
@@ -550,7 +556,8 @@ Options:
   --sandbox-image <image>       Docker image for the runsc-cfc sandbox (default: ${DEFAULT_DOCKER_RUNSC_IMAGE})
   --sandbox-docker-runtime <n>  Docker runtime for the sandbox (default: runsc-cfc)
   --fabric-mount <path>         Host path for a Fabric FUSE mount (mounted at /fabric in the sandbox)
-  --loom-authoring-config <path> Absolute host-owned JSON file backing Loom tools
+  --loom-authoring-config <path> Absolute host-owned JSON file backing the Loom authoring tools
+  --loom-retrieval-config <path> Absolute host-owned JSON file backing the read-only Loom tools
   --fabric-api-url <url>        Deployed Fabric API URL for the fabric-session tools (run_pattern, assign_slug)
   --fabric-identity <path>      PKCS#8 identity keyfile for the fabric session
   --fabric-space <space>        Target space (name or did:key) for the fabric-session tools;
@@ -599,6 +606,7 @@ Environment:
   CF_HARNESS_SKILLS_REGISTRY_URL Default value for --skills-registry-url
   CF_HARNESS_DOCKER_NETWORK_MODE none | bridge | host (default: bridge)
   CF_HARNESS_LOOM_AUTHORING_CONFIG Default host authoring configuration file
+  CF_HARNESS_LOOM_RETRIEVAL_CONFIG Default host retrieval configuration file
   CF_HARNESS_FABRIC_API_URL     Default value for --fabric-api-url
   CF_HARNESS_FABRIC_IDENTITY    Default value for --fabric-identity
   CF_HARNESS_FABRIC_SPACE       Default value for --fabric-space
@@ -670,6 +678,14 @@ const CLI_PARENT_TOOL_IDS = [
   "loom_compose",
   "loom_inspect",
   "loom_authoring_context",
+  "loom_search",
+  "loom_page_discover",
+  "loom_page_inspect",
+  "loom_page_read",
+  "loom_people",
+  "loom_calendar_list",
+  "loom_context",
+  "loom_profile",
   "run_pattern",
   "assign_slug",
   "search_patterns",
@@ -1486,6 +1502,12 @@ export const parseCfHarnessCliArgs = async (
       CF_HARNESS_FABRIC_API_URL: Deno.env.get("CF_HARNESS_FABRIC_API_URL"),
       CF_HARNESS_FABRIC_IDENTITY: Deno.env.get("CF_HARNESS_FABRIC_IDENTITY"),
       CF_HARNESS_FABRIC_SPACE: Deno.env.get("CF_HARNESS_FABRIC_SPACE"),
+      CF_HARNESS_LOOM_AUTHORING_CONFIG: Deno.env.get(
+        "CF_HARNESS_LOOM_AUTHORING_CONFIG",
+      ),
+      CF_HARNESS_LOOM_RETRIEVAL_CONFIG: Deno.env.get(
+        "CF_HARNESS_LOOM_RETRIEVAL_CONFIG",
+      ),
       CF_HARNESS_SPACE_DB: Deno.env.get("CF_HARNESS_SPACE_DB"),
       CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE: Deno.env.get(
         "CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE",
@@ -1607,6 +1629,12 @@ export const parseCfHarnessCliArgs = async (
     typeof args["loom-authoring-config"] === "string"
       ? args["loom-authoring-config"]
       : env.CF_HARNESS_LOOM_AUTHORING_CONFIG,
+    readTextFile,
+  );
+  const loomRetrieval = await readLoomRetrievalConfig(
+    typeof args["loom-retrieval-config"] === "string"
+      ? args["loom-retrieval-config"]
+      : env.CF_HARNESS_LOOM_RETRIEVAL_CONFIG,
     readTextFile,
   );
   const inputCells = parseInputCells(
@@ -1810,6 +1838,14 @@ export const parseCfHarnessCliArgs = async (
       "--allow-tool acquire_skill requires a skills registry; missing --skills-registry-url",
     );
   }
+  const retrievalTool = allowedToolIds?.find((toolId) =>
+    LOOM_RETRIEVAL_TOOL_IDS.has(toolId)
+  );
+  if (retrievalTool !== undefined && loomRetrieval === undefined) {
+    throw new Error(
+      `--allow-tool ${retrievalTool} requires a Loom retrieval configuration; missing --loom-retrieval-config`,
+    );
+  }
   const apiKey = env.CF_HARNESS_API_KEY ?? env.OPENAI_API_KEY;
   const apiKeySource = env.CF_HARNESS_API_KEY !== undefined
     ? "CF_HARNESS_API_KEY"
@@ -1890,6 +1926,7 @@ export const parseCfHarnessCliArgs = async (
     ...(fabricSession !== undefined ? { fabricSession } : {}),
     ...(spaceDbPath !== undefined ? { spaceDbPath } : {}),
     ...(loomAuthoring !== undefined ? { loomAuthoring } : {}),
+    ...(loomRetrieval !== undefined ? { loomRetrieval } : {}),
     ...(patternIndex !== undefined ? { patternIndex } : {}),
     ...(skillsSh !== undefined ? { skillsSh } : {}),
     hostMounts,

@@ -104,7 +104,7 @@ export const TASK_TEST_WEIGHTS: Readonly<Record<string, number>> = {
   "ci-check-lib.test.ts": 1,
   "ci-lane.test.ts": 3.5,
   "coverage-report.test.ts": 37,
-  "pattern-vintage-derived-corrections.test.ts": 72,
+  "pattern-vintage-derived-corrections.test.ts": 3.7,
   "pattern-vintage-run.test.ts": 63,
   "post-main-report.test.ts": 21,
   "typecheck.test.ts": 2.2,

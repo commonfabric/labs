@@ -53,6 +53,7 @@ import { vintageCompanionDir } from "../packages/piece/test/vintage-layout.ts";
 import {
   acceptedDropKey,
   acceptedDropsFor,
+  type AcceptedStateDrop,
   withoutAcceptedDrops,
 } from "./pattern-vintage-accepted-drops.ts";
 import { derivedCorrectionsFor } from "./pattern-vintage-derived-corrections.ts";
@@ -69,6 +70,17 @@ export interface GateRoots {
 
   /** Signer every capture and replay runs as. */
   signer: Identity;
+}
+
+/** What a replay reads beyond the tree it is pointed at. */
+export interface ReplayOptions {
+  /**
+   * Removals the state comparison forgives, defaulting to the repository's
+   * own `ACCEPTED_STATE_DROPS`. A test supplies its own list so that a case
+   * about the accounting is written against a pattern it wrote, rather than
+   * against whichever entries the repository's list holds today.
+   */
+  acceptedDrops?: readonly AcceptedStateDrop[];
 }
 
 async function withRuntime<T>(
@@ -328,6 +340,7 @@ export interface ReplayReport {
 export async function replayVintage(
   roots: GateRoots,
   vintage: VintageRef,
+  options: ReplayOptions = {},
 ): Promise<ReplayReport> {
   const where = {
     testKey: vintage.testKey,
@@ -842,7 +855,11 @@ export async function replayVintage(
         // schema `before` came from: an asymmetric strip would measure the
         // stripping. `applied` is counted from the vintage's side only, since
         // that is where "the vintage held it" is a fact.
-        const drops = acceptedDropsFor(entry.main ?? "", vintage.stamp);
+        const drops = acceptedDropsFor(
+          entry.main ?? "",
+          vintage.stamp,
+          options.acceptedDrops,
+        );
         const paths = drops?.paths ?? new Set<string>();
         const keptBefore = withoutAcceptedDrops(before, paths, isReduction);
         const keptAfter = withoutAcceptedDrops(after, paths, isReduction);
@@ -927,7 +944,7 @@ export async function replayVintage(
 }
 
 /** How `replayAll` reports what it walked. */
-export interface ReplayAllOptions {
+export interface ReplayAllOptions extends ReplayOptions {
   /**
    * Spool one gate record per fixture replayed.
    *
@@ -1032,7 +1049,7 @@ export async function replayAll(
     : undefined;
   for (const vintage of vintages) {
     const replayStarted = performance.now();
-    const report = await replayVintage(roots, vintage);
+    const report = await replayVintage(roots, vintage, options);
     recordsFragment?.append({
       line: "record",
       test: {
