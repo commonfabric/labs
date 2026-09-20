@@ -81,8 +81,8 @@ function markdown(prose: string): Document[] {
  * prose that this check reads when it scans this file, so every fixture
  * composes its openers instead and stays inert here.
  */
-const LINE = "/" + "/";
-const BLOCK_OPEN = "/" + "*";
+const LINE_OPENER = "/" + "/";
+const BLOCK_OPENER = "/" + "*";
 
 describe("check-address-examples", () => {
   describe("governedKind()", () => {
@@ -107,7 +107,7 @@ describe("check-address-examples", () => {
 
   describe("commentsOf()", () => {
     it("keeps a comment and blanks the code around it", () => {
-      const comment = `${LINE} \`/tracker/items\` is the address.`;
+      const comment = `${LINE_OPENER} \`/tracker/items\` is the address.`;
       const source = [
         'const target = "/@bakery/glaze-tracker";',
         comment,
@@ -128,10 +128,10 @@ describe("check-address-examples", () => {
     });
 
     it("leaves every character at the offset the file gave it", () => {
-      const source = ["const a = 1;", "const b = 2;", `${LINE} note`]
+      const source = ["const a = 1;", "const b = 2;", `${LINE_OPENER} note`]
         .join("\n");
 
-      expect(commentsOf(source).split("\n")[2]).toBe(`${LINE} note`);
+      expect(commentsOf(source).split("\n")[2]).toBe(`${LINE_OPENER} note`);
       expect(commentsOf(source).length).toBe(source.length);
     });
 
@@ -140,14 +140,15 @@ describe("check-address-examples", () => {
       // it as one: a match can only start at a comment opener, so the comment
       // after it reaches the scan whole.
 
-      const comment = `${LINE} Use \`/@bakery/glaze-tracker\` and say "done".`;
+      const comment =
+        `${LINE_OPENER} Use \`/@bakery/glaze-tracker\` and say "done".`;
       const source = `const quoted = /"/; ${comment}\n`;
 
       expect(commentsOf(source)).toContain(comment);
     });
 
     it("keeps a comment that follows a regular expression holding a backtick", () => {
-      const comment = `${LINE} Read \`/@bakery/glaze-tracker\`.`;
+      const comment = `${LINE_OPENER} Read \`/@bakery/glaze-tracker\`.`;
       const source = "const pattern = /`/;\n" + comment + "\n";
 
       expect(commentsOf(source)).toContain(comment);
@@ -158,10 +159,10 @@ describe("check-address-examples", () => {
       // which can fall inside a later comment. The comment's own opener
       // contributes a region of its own, so all of it is kept either way.
 
-      const comment = `${LINE} Read \`/@bakery/glaze-tracker\` ${
+      const comment = `${LINE_OPENER} Read \`/@bakery/glaze-tracker\` ${
         "*" + "/"
       } on.`;
-      const source = `const glob = "${BLOCK_OPEN}";\n${comment}\n`;
+      const source = `const glob = "${BLOCK_OPENER}";\n${comment}\n`;
 
       expect(commentsOf(source)).toContain(comment);
     });
@@ -171,7 +172,7 @@ describe("check-address-examples", () => {
       // or a literal. Reading it to the end of the file would put everything
       // under a comment that names those two characters into prose.
 
-      const source = `${LINE} the ${BLOCK_OPEN} characters\n` +
+      const source = `${LINE_OPENER} the ${BLOCK_OPENER} characters\n` +
         "const url = `/x/y`;\n";
 
       expect(commentsOf(source)).not.toContain("`/x/y`");
@@ -182,7 +183,8 @@ describe("check-address-examples", () => {
       // `//` in a literal is read as prose. It can add a candidate and can
       // never take one away, which is the direction this check needs.
 
-      const source = `const separator = "${LINE}"; const url = \`/x/y\`;`;
+      const source =
+        `const separator = "${LINE_OPENER}"; const url = \`/x/y\`;`;
 
       expect(commentsOf(source)).toContain("`/x/y`");
     });
@@ -282,7 +284,7 @@ describe("check-address-examples", () => {
 
     it("returns the string a source directive names", () => {
       const found = exemptions(
-        `${LINE} line one\n${LINE} ` +
+        `${LINE_OPENER} line one\n${LINE_OPENER} ` +
           "check-address-examples-ignore: /@bakery/tracker why\n",
       );
 
@@ -346,10 +348,11 @@ describe("check-address-examples", () => {
       // was consumed with them and its address never reached the parser.
 
       const quoted = commentsOf(
-        `const q = /"/; ${LINE} Use \`/@bakery/glaze-tracker\` then say "no".\n`,
+        `const q = /"/; ${LINE_OPENER} Use \`/@bakery/glaze-tracker\` then say "no".\n`,
       );
       const ticked = commentsOf(
-        "const p = /`/;\n" + `${LINE} Read \`/@bakery/glaze-tracker\`.\n`,
+        "const p = /`/;\n" +
+          `${LINE_OPENER} Read \`/@bakery/glaze-tracker\`.\n`,
       );
 
       expect(collectFindings([{ path: "a.ts", prose: quoted }]).length).toBe(1);
@@ -449,7 +452,7 @@ describe("check-address-examples", () => {
     it("reads a source comment and leaves the code around it alone", async () => {
       const root = await fixtureRepo({
         "src/render.ts": [
-          `${LINE} The header writes \`/@bakery/glaze-tracker\`.`,
+          `${LINE_OPENER} The header writes \`/@bakery/glaze-tracker\`.`,
           'export const prefix = "/@bakery/glaze-tracker";',
         ].join("\n"),
       });
