@@ -14,6 +14,7 @@ import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type { HarnessPromptLoopResult } from "@commonfabric/cf-harness/prompt-loop";
 import {
   createHarnessHandleTable,
@@ -958,6 +959,7 @@ describe("agent runner", () => {
         argv?: unknown;
         slotRole?: string;
         allowedTools?: readonly string[];
+        observationCeiling?: unknown;
       } = {};
       const execute = createHarnessAgentRunExecutor({
         identityKeyPath: join(workRoot, "unused.key"),
@@ -983,6 +985,8 @@ describe("agent runner", () => {
                 slotRole: prompt.promptSlotBinding?.role,
                 argv: options.inputCells,
                 allowedTools: options.allowedToolIds,
+                observationCeiling: options.fabricSession
+                  ?.cfcReadMaxConfidentiality,
               };
               return script({
                 resultPath: join(
@@ -1040,6 +1044,35 @@ describe("agent runner", () => {
         (seen().argv as { name: string }[]).map((cell) => cell.name),
       ).toEqual(["finished"]);
     });
+
+    for (const explicitCeiling of [false, true]) {
+      it(`bounds observations by ${explicitCeiling ? "the explicit request ceiling" : "the requester by default"}`, async () => {
+        const seen = await startHarnessRunner(async ({ resultPath }) => {
+          await Deno.writeTextFile(
+            resultPath,
+            JSON.stringify({ answer: "Solaris" }),
+          );
+          return loopResult("run-observation-ceiling");
+        });
+        const result = await submit(
+          explicitCeiling
+            ? { maxConfidentiality: ["https://cfc.test/atom/reading"] }
+            : {},
+        );
+        const record = await waitForCellValue<AgentRunRecord>(
+          patternSide,
+          recordOf(result),
+          (value) => value?.outcome !== undefined,
+        );
+
+        expect(record.state).toBe("completed");
+        expect(seen().observationCeiling).toEqual(
+          explicitCeiling
+            ? ["https://cfc.test/atom/reading"]
+            : [{ type: CFC_ATOM_TYPE.User, subject: home }],
+        );
+      });
+    }
 
     for (const schema of [true, false]) {
       it(`preserves a boolean result schema of \`${schema}\``, async () => {

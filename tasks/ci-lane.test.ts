@@ -45,7 +45,7 @@ import {
   batchMeasurementName,
   MEASURED_BATCH_SUFFIX,
 } from "./lane-measurement.ts";
-import { census } from "./test-selection/census.ts";
+import { census, standIn } from "./test-selection/census.ts";
 import type { CommandContext, Suite } from "./test-topology/suite.ts";
 import {
   plan,
@@ -645,10 +645,10 @@ describe("how many lanes the full run asks for", () => {
 
   it("charges a stand-in what the census charged it, not the dial", async () => {
     // A suite whose measured units have all been renamed away carries
-    // its old median onto every stand-in, so the units cost far more
-    // than the bare unmeasured figure. A count that assumed the figure
-    // would be out by that whole multiple, and each lane would run past
-    // the bound its job is killed at.
+    // what the units it lost cost onto every stand-in, so the units cost
+    // far more than the bare unmeasured figure. A count that assumed the
+    // figure would be out by that whole multiple, and each lane would
+    // run past the bound its job is killed at.
     const units = Array.from({ length: 300 }, (_, i) => `new/u-${i}.test.ts`);
     const suites = [suite({ id: "pattern-integration", units })];
     const renamed = manifestOf(
@@ -980,10 +980,8 @@ describe("running a lane's work", () => {
           cost: 900,
         }],
         [],
-        { selections: [], projectedSeconds: 0 },
+        { manifest: manifestOf([]), selections: [], projectedSeconds: 0 },
         LANE_BUDGET_SECONDS,
-        0,
-        0,
       );
     } finally {
       console.log = log;
@@ -1026,10 +1024,8 @@ describe("running a lane's work", () => {
           identities: 21889,
           heldNowhere: 21889,
         }],
-        { selections: [], projectedSeconds: 0 },
+        { manifest: manifestOf([]), selections: [], projectedSeconds: 0 },
         LANE_BUDGET_SECONDS,
-        0,
-        0,
       );
     } finally {
       console.log = log;
@@ -1059,10 +1055,8 @@ describe("running a lane's work", () => {
           identities: 12,
           heldNowhere: 0,
         }],
-        { selections: [], projectedSeconds: 0 },
+        { manifest: manifestOf([]), selections: [], projectedSeconds: 0 },
         LANE_BUDGET_SECONDS,
-        0,
-        0,
       );
     } finally {
       console.log = log;
@@ -1102,12 +1096,11 @@ describe("running a lane's work", () => {
         [],
         [],
         {
+          manifest: manifestOf([]),
           selections: [{ entry, reason: "value", repeats: 2 }],
           projectedSeconds: 96,
         },
         LANE_BUDGET_SECONDS,
-        0,
-        1,
       );
     } finally {
       console.log = log;
@@ -1116,6 +1109,97 @@ describe("running a lane's work", () => {
     expect(printed).toContain("Projected: 96s");
     expect(printed).toContain("3.0s");
     expect(printed).toContain("value 1");
+    // Every cost in this lane was measured, so the projection stands on
+    // nothing but measurements and the line says only what it comes to.
+    expect(printed).not.toContain("nothing has measured");
+  });
+
+  /**
+   * What `describePlan` prints for a lane holding these selections
+   * against a suite whose correction is `correction`, projected at 96
+   * seconds.
+   */
+  function projectionLine(
+    selections: readonly Selection[],
+    correction: number,
+  ): string {
+    const manifest = manifestOf([]);
+    manifest.calibration.suites["workspace-unit"] = {
+      overhead: 0,
+      correction,
+      unitOverhead: 0,
+    };
+    const lines: string[] = [];
+    const log = console.log;
+    console.log = (line: string) => lines.push(line);
+    try {
+      describePlan(
+        lane,
+        [],
+        ["deno"],
+        { objectName: "manifest-x.json.gz" },
+        [],
+        [],
+        { manifest, selections, projectedSeconds: 96 },
+        LANE_BUDGET_SECONDS,
+      );
+    } finally {
+      console.log = log;
+    }
+    return lines.join("\n").split("\n")
+      .find((line) => line.startsWith("Projected:")) ?? "";
+  }
+
+  /** A measured entry of the workspace unit suite, costing `cost`. */
+  function measured(unit: string, cost: number): ManifestEntry {
+    return {
+      test: { k: "unit", s: "bakery", n: `${unit} > sets` },
+      suite: "workspace-unit",
+      unit: `packages/bakery/${unit}.test.ts`,
+      cost,
+      score: 0.5,
+      inputs: { catches: 0, sources: 0, churn: 0 },
+      flakeRate: 0,
+      repeats: 1,
+    };
+  }
+
+  /** A stand-in of that suite, charged what a suite of `costs` gives it. */
+  function unmeasured(unit: string, costs: readonly number[]): ManifestEntry {
+    return standIn(
+      runnable(["true"], "workspace-unit"),
+      `packages/bakery/${unit}.test.ts`,
+      costs,
+    );
+  }
+
+  it("says how much of the projection stands on unmeasured units", () => {
+    // Two stand-ins beside a measured entry: one at 30 seconds run
+    // twice, one at 25 run once, which is 85 of the 96 seconds
+    // projected. The measured entry's own 4 are not in that figure.
+    expect(
+      projectionLine([
+        { entry: measured("glaze", 4), reason: "value", repeats: 1 },
+        { entry: unmeasured("proof", [30]), reason: "unknown", repeats: 2 },
+        { entry: unmeasured("knead", [25]), reason: "unknown", repeats: 1 },
+      ], 1),
+    ).toBe(
+      "Projected: 96s of 230s, 85s of it charged to 2 units " +
+        "nothing has measured",
+    );
+  });
+
+  it("reads a stand-in's seconds through its suite's correction", () => {
+    // A suite whose batches run their files in parallel has a correction
+    // below one, and the packer charged the stand-in at that. Reading
+    // its bare cost instead would report 80 seconds of a 96-second
+    // projection that holds 20.
+    expect(projectionLine([
+      { entry: unmeasured("proof", [40]), reason: "unknown", repeats: 2 },
+    ], 0.25)).toBe(
+      "Projected: 96s of 230s, 20s of it charged to 1 unit " +
+        "nothing has measured",
+    );
   });
 
   it("says it is running unselected when there is no manifest", () => {
@@ -1130,10 +1214,8 @@ describe("running a lane's work", () => {
         { absent: "the store is unreachable" },
         [],
         [],
-        { selections: [], projectedSeconds: 0 },
+        { manifest: manifestOf([]), selections: [], projectedSeconds: 0 },
         LANE_BUDGET_SECONDS,
-        0,
-        0,
       );
     } finally {
       console.log = log;
@@ -1506,10 +1588,8 @@ describe("the lane's own housekeeping", () => {
         { objectName: "manifest-x.json.gz" },
         [],
         [],
-        { selections: [], projectedSeconds: 0 },
+        { manifest: manifestOf([]), selections: [], projectedSeconds: 0 },
         LANE_BUDGET_SECONDS,
-        0,
-        0,
       );
     } finally {
       console.log = log;
@@ -1544,10 +1624,8 @@ describe("the lane's own housekeeping", () => {
         { objectName: "manifest-x.json.gz" },
         tooSlow,
         [],
-        { selections: [], projectedSeconds: 0 },
+        { manifest: manifestOf([]), selections: [], projectedSeconds: 0 },
         LANE_BUDGET_SECONDS,
-        0,
-        0,
       );
     } finally {
       console.log = log;
