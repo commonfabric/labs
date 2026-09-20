@@ -56,6 +56,10 @@ one it has. A line mapping a whole scope, for a package rename, goes in
 aliases, so which file holds a line changes nothing about what it means;
 the division keeps two changes that rename tests in different test files
 from appending to the same file, and so from conflicting when they merge.
+Two renames that land in one alias file — the same test file, or test files
+sharing a last path segment — do still append to it, and `.gitattributes` gives
+the directory's files the `union` merge driver, which keeps both sides' lines
+rather than raising a conflict.
 `deno task check-test-aliases` holds the directory to append-only,
 no-double-mapping, acyclic rules: each file only ever grows, none goes
 away, and no identity is mapped twice across all of them. It also fails a
