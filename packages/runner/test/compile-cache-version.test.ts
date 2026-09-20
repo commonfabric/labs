@@ -13,10 +13,10 @@ type VersionGlobal = typeof globalThis & {
 
 describe("compile-cache runtime-version resolution", () => {
   // The compile-cache runtimeVersion decides when deployed pieces recompile (a
-  // version move sends every cold load through the recovery write-back — the
-  // CT-1824 arc), so the resolution ladder is load-bearing: defined global
-  // override  >  baked build version  >  live compiler fingerprint (Deno dev
-  // runtime)  >  undefined (no fingerprint source).
+  // version move sends every cold load through the recovery write-back), so
+  // the resolution ladder is load-bearing: defined global override  >  baked
+  // build version  >  live compiler fingerprint (Deno dev runtime)  >
+  // undefined (no fingerprint source).
 
   it("a defined global version overrides everything", async () => {
     const g = globalThis as VersionGlobal;
