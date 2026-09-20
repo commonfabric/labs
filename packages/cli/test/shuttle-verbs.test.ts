@@ -8,12 +8,14 @@
  * exception and drives the real derivation: which space a name denotes is a
  * fact two callers have to agree about, so that case asks both.
  *
- * The connection is a borrowed one in every case but one. No verb opens or
+ * The connection is a borrowed one in nearly every case. No verb opens or
  * closes one, so which arm a case stands it up through decides nothing here,
  * and the borrowed arm is the one that needs no opener behind it. The
- * exception is `where` over a connection that will not open, which is the one
- * question the arm decides: the borrowed arm has a controller already, so only
- * an owned one can be asked what it answers when the opening fails.
+ * exceptions are the cases asking what a verb answers when the opening fails,
+ * which is the one question the arm decides: the borrowed arm has a controller
+ * already, so only an owned one can be asked. `where` and `xcd` are those
+ * cases, and they are those cases for the same reason — each reads nothing, so
+ * each owes an answer to a shuttle whose server has gone away.
  *
  * Two properties the file exists for run through it. A read never moves the
  * place, and a move never happens twice, so each of the two verbs that resolve
@@ -50,6 +52,7 @@ import type {
   SpaceConfig,
 } from "../lib/piece.ts";
 import { HeldConnection } from "../lib/shuttle/connection.ts";
+import { ExternalLocation } from "../lib/shuttle/external.ts";
 import { CurrentPlace, operandForChild } from "../lib/shuttle/place.ts";
 import { ShuttleSession } from "../lib/shuttle/session.ts";
 import { ASSUMED_ROWS } from "../lib/shuttle/page.ts";
@@ -147,6 +150,9 @@ const READS_NOTHING: VerbDeps = {
     getCellValue: () => {
       throw new Error("The cell was listed.");
     },
+    listCallableKeys: () => {
+      throw new Error("The cell's callables were listed.");
+    },
   },
   setCellValue: () => {
     throw new Error("A cell was written.");
@@ -183,6 +189,7 @@ function shuttleIn(pieces: PiecesController = PIECES): Shuttle {
   return {
     config: CONFIG,
     place: new CurrentPlace(SPACE),
+    external: new ExternalLocation(new URL("file:///work/"), "/home/someone"),
     connection: new HeldConnection({ kind: "borrowed", pieces }),
     session: new ShuttleSession(),
     invocationSession: "a-session",
@@ -230,6 +237,7 @@ function answering(over: VerbDeps = {}): VerbDeps {
       Promise.resolve({ piece: token, pathAfter: [...path] }),
     listing: {
       getCellValue: () => Promise.resolve({ title: "a" }),
+      listCallableKeys: () => Promise.resolve(new Set<string>()),
       listSpaceSlugs: () => Promise.resolve([]),
       listPieces: () => Promise.resolve([]),
     },
@@ -383,6 +391,7 @@ function walking(value: unknown): VerbDeps {
     listing: {
       ...READS_NOTHING.listing,
       getCellValue: (_config, path) => at(path),
+      listCallableKeys: () => Promise.resolve(new Set<string>()),
     },
   };
 }
@@ -391,9 +400,6 @@ function walking(value: unknown): VerbDeps {
 function cellKeys(keys: string[]): VerbDeps {
   return listedCell(Object.fromEntries(keys.map((key) => [key, "a value"])));
 }
-
-/** Helper for the cases below, which is the sentinel a stream reads as. */
-const STREAM = { $stream: true };
 
 /**
  * Helper for the cases below, which reports a terminal `rows` rows tall and
@@ -407,13 +413,20 @@ function screen(rows: number, deps: VerbDeps, columns = 200): VerbDeps {
   return { ...deps, rows: () => rows, columns: () => columns };
 }
 
-/** Helper for the cases below, which stands `value` in for a listed cell. */
-function listedCell(value: unknown): VerbDeps {
+/**
+ * Helper for the cases below, which stands `value` in for a listed cell and
+ * `callables` in for the keys whose stored links declare a stream.
+ */
+function listedCell(
+  value: unknown,
+  callables: readonly string[] = [],
+): VerbDeps {
   return {
     ...READS_NOTHING,
     listing: {
       ...READS_NOTHING.listing,
       getCellValue: () => Promise.resolve(value),
+      listCallableKeys: () => Promise.resolve(new Set(callables)),
     },
   };
 }
@@ -475,7 +488,7 @@ function reasonOf(outcome: Outcome): string {
  */
 const VERB_ARITY: readonly (readonly [
   string,
-  "none" | "optional" | "required" | "pair" | "section",
+  "none" | "optional" | "required" | "pair" | "none-or-pair" | "section",
 ])[] = [
   ["call", "section"],
   ["cd", "required"],
@@ -492,8 +505,10 @@ const VERB_ARITY: readonly (readonly [
   ["verbs", "optional"],
   ["watch", "optional"],
   ["watches", "none"],
-  ["where", "none"],
+  ["where", "none-or-pair"],
   ["wish", "required"],
+  ["xcd", "required"],
+  ["xpwd", "none"],
 ];
 
 /**
@@ -509,6 +524,7 @@ const MOST_OPERANDS: ReadonlyMap<string, number> = new Map([
   ["optional", 1],
   ["required", 1],
   ["pair", 2],
+  ["none-or-pair", 2],
 ]);
 
 /** Helper for the cases below, which is what the dispatch calls that maximum. */
@@ -517,6 +533,7 @@ const TAKES: ReadonlyMap<string, string> = new Map([
   ["optional", "one operand"],
   ["required", "one operand"],
   ["pair", "two operands"],
+  ["none-or-pair", "two operands"],
 ]);
 
 /**
@@ -547,7 +564,13 @@ const NEEDS_ONE: ReadonlyMap<string, string> = new Map([
     "unwatch",
     "`unwatch` takes the watch to disarm, as in `unwatch %1`.",
   ],
+  [
+    "where",
+    "`where` takes a dimension and the value to set it to, or no operand " +
+    "at all.",
+  ],
   ["wish", "`wish` takes the target to resolve, as in `wish #favorites`."],
+  ["xcd", "`xcd` takes a place on the external plane to move to."],
 ]);
 
 /**
@@ -562,7 +585,7 @@ const NEEDS_ONE: ReadonlyMap<string, string> = new Map([
  */
 const THE_VERBS = "The verbs are `call`, `cd`, `describe`, `edit`, `get`, " +
   "`help`, `link`, `ls`, `more`, `pwd`, `set`, `unwatch`, `verbs`, `watch`, " +
-  "`watches`, `where`, and `wish`.";
+  "`watches`, `where`, `wish`, `xcd`, and `xpwd`.";
 
 /** Helper for the cases below, which is every verb, in that same order. */
 const VERB_WORDS = VERB_ARITY.map(([word]) => word);
@@ -594,6 +617,8 @@ const LINE_PER_VERB: ReadonlyMap<string, string> = new Map([
   ["watches", "watches"],
   ["where", "where"],
   ["wish", "wish #favorites"],
+  ["xcd", "xcd ../elsewhere"],
+  ["xpwd", "xpwd"],
 ]);
 
 describe("verbs", () => {
@@ -830,10 +855,13 @@ describe("verbs", () => {
     });
 
     for (const [word, arity] of VERB_ARITY) {
-      if (arity !== "required" && arity !== "pair" && arity !== "section") {
+      if (
+        arity !== "required" && arity !== "pair" &&
+        arity !== "none-or-pair" && arity !== "section"
+      ) {
         continue;
       }
-      const given = arity === "pair" ? 1 : 0;
+      const given = arity === "required" || arity === "section" ? 0 : 1;
       it(
         `refuses a line naming ${given} operand${
           given === 1 ? "" : "s"
@@ -847,7 +875,7 @@ describe("verbs", () => {
     }
 
     for (const [word, arity] of VERB_ARITY) {
-      if (arity !== "optional") continue;
+      if (arity !== "optional" && arity !== "none-or-pair") continue;
       it(`runs \`${word}\` given no operand, which is a default and not too few`, async () => {
         // The half a maximum alone cannot express. `get` reads where it stands
         // and `help` lists the verbs, so neither is a line the dispatch may
@@ -898,6 +926,17 @@ describe("verbs", () => {
         space: SPACE,
         facet: "slugs",
       });
+    });
+
+    it("leaves the external working location where it stood", async () => {
+      // The other direction of the independence `xcd` is asserted for. The
+      // two positions move independently, and a claim made in one direction
+      // only is one a change to this verb could break without failing.
+
+      const shuttle = shuttleIn();
+      const before = shuttle.external.render();
+      await runLine("cd slugs", shuttle, READS_NOTHING);
+      expect(shuttle.external.render()).toBe(before);
     });
 
     it("returns the reason a place gave an operand it would not take, and moves nowhere", async () => {
@@ -1160,6 +1199,10 @@ describe("verbs", () => {
         const shuttle: Shuttle = {
           config: CONFIG,
           place: new CurrentPlace(SPACE),
+          external: new ExternalLocation(
+            new URL("file:///work/"),
+            "/home/someone",
+          ),
           connection: new HeldConnection({
             kind: "borrowed",
             pieces: lookingUp(false),
@@ -2252,7 +2295,11 @@ describe("verbs", () => {
       // than off a second read taken later.
 
       const shuttle = atPiece();
-      await runLine("ls", shuttle, listedCell({ "add-reply": STREAM }));
+      await runLine(
+        "ls",
+        shuttle,
+        listedCell({ "add-reply": {} }, ["add-reply"]),
+      );
       expect(shuttle.session.handles?.rows).toEqual([{
         name: "add-reply",
         kind: "callable",
@@ -2523,6 +2570,7 @@ describe("verbs", () => {
           `space     ${SPACE}\n` +
           `position  //${SPACE}/${HANDLE}@space/title\n` +
           "scope     @space\n" +
+          "external  file:///work/\n" +
           "watches   none",
       });
     });
@@ -2547,6 +2595,10 @@ describe("verbs", () => {
       const shuttle: Shuttle = {
         config: CONFIG,
         place: new CurrentPlace(SPACE),
+        external: new ExternalLocation(
+          new URL("file:///work/"),
+          "/home/someone",
+        ),
         connection: new HeldConnection({
           kind: "owned",
           record: CONFIG,
@@ -2562,6 +2614,7 @@ describe("verbs", () => {
             `space     ${SPACE}\n` +
             `position  @${SPACE}/\n` +
             "scope     @space\n" +
+            "external  file:///work/\n" +
             "watches   none",
         );
     });
@@ -2574,6 +2627,10 @@ describe("verbs", () => {
       const shuttle: Shuttle = {
         config: { ...CONFIG, space: SPACE_NAME },
         place: new CurrentPlace(SPACE),
+        external: new ExternalLocation(
+          new URL("file:///work/"),
+          "/home/someone",
+        ),
         connection: new HeldConnection({ kind: "borrowed", pieces: PIECES }),
         session: new ShuttleSession(),
         invocationSession: "a-session",
@@ -2591,6 +2648,10 @@ describe("verbs", () => {
       const shuttle: Shuttle = {
         config: { ...CONFIG, space: "boa\u009brd", identity: "/k\u007fey" },
         place: new CurrentPlace(SPACE),
+        external: new ExternalLocation(
+          new URL("file:///work/"),
+          "/home/someone",
+        ),
         connection: new HeldConnection({ kind: "borrowed", pieces: PIECES }),
         session: new ShuttleSession(),
         invocationSession: "a-session",
@@ -2599,6 +2660,162 @@ describe("verbs", () => {
       expect(text).toContain("space     boa␦rd");
       expect(text).toContain("identity  /k␡ey");
       expect(/\p{Cc}/u.test(text.replaceAll("\n", ""))).toBe(false);
+    });
+
+    it("sets the scope, moving the place as the operand for it does", async () => {
+      // One act and not two: what `where scope` reaches is what `cd .@session`
+      // reaches, so the outcome is the move the prompt already knows how to
+      // show rather than a line of its own.
+
+      const shuttle = atPiece("title");
+      const set = await runLine("where scope @session", shuttle, answering());
+      const moved = await runLine(
+        "cd .@session",
+        atPiece("title"),
+        answering(),
+      );
+      expect(set).toEqual(moved);
+    });
+
+    it("sets the external location, moving it as `xcd` does", async () => {
+      const shuttle = atPiece("title");
+      expect(await runLine("where external ../other", shuttle, READS_NOTHING))
+        .toEqual({ kind: "text", text: "file:///other/" });
+      expect(textOf(await runLine("where", shuttle, READS_NOTHING)))
+        .toContain("external  file:///other/");
+    });
+
+    it("refuses a value for the scope that is not a scope word", async () => {
+      // The setter composes an operand out of what it is given, so a value
+      // wider than a word would hand the caller the navigation grammar under
+      // a name that says it sets one dimension.
+
+      const shuttle = shuttleIn();
+      const reason = reasonOf(
+        await runLine("where scope /pieces", shuttle, READS_NOTHING),
+      );
+      expect(reason).toContain("is no scope");
+      expect(textOf(await runLine("pwd", shuttle, READS_NOTHING)))
+        .toBe(textOf(await runLine("pwd", shuttleIn(), READS_NOTHING)));
+    });
+
+    it("refuses a bare scope name, the sigil being part of the word", async () => {
+      expect(
+        reasonOf(
+          await runLine("where scope session", shuttleIn(), READS_NOTHING),
+        ),
+      )
+        .toContain("`@session`");
+    });
+
+    it("refuses a heavyweight dimension, naming restart as the switch", async () => {
+      for (const dimension of ["api", "identity", "space"]) {
+        const reason = reasonOf(
+          await runLine(`where ${dimension} x`, shuttleIn(), READS_NOTHING),
+        );
+        expect({ dimension, says: reason.includes("fixed at launch") })
+          .toEqual({ dimension, says: true });
+      }
+    });
+
+    it("refuses a dimension another verb moves, naming that verb", async () => {
+      expect(
+        reasonOf(await runLine("where position x", shuttleIn(), READS_NOTHING)),
+      )
+        .toContain("`cd`");
+      expect(
+        reasonOf(await runLine("where watches x", shuttleIn(), READS_NOTHING)),
+      )
+        .toContain("`watch`");
+    });
+
+    it("refuses a word that names no dimension, listing the ones it sets", async () => {
+      const reason = reasonOf(
+        await runLine("where frob x", shuttleIn(), READS_NOTHING),
+      );
+      expect(reason).toContain("names no dimension");
+      expect(reason).toContain("`scope`");
+      expect(reason).toContain("`external`");
+    });
+
+    it("refuses a dimension written with no value, which is neither act", async () => {
+      // The record is one surface, so naming one line of it is not a read of
+      // that line. The count is the dispatch's, which is what keeps the
+      // refusal the same sentence however the verb grows.
+
+      expect(reasonOf(await runLine("where scope", shuttleIn(), READS_NOTHING)))
+        .toBe(
+          "`where` takes a dimension and the value to set it to, or no " +
+            "operand at all.",
+        );
+    });
+  });
+
+  describe("xpwd", () => {
+    it("returns the external working location, whole", async () => {
+      expect(await runLine("xpwd", shuttleIn(), READS_NOTHING))
+        .toEqual({ kind: "text", text: "file:///work/" });
+    });
+
+    it("returns the dimension `where` prints for it, character for character", async () => {
+      const shuttle = shuttleIn();
+      const one = textOf(await runLine("xpwd", shuttle, READS_NOTHING));
+      expect(textOf(await runLine("where", shuttle, READS_NOTHING)))
+        .toContain(`external  ${one}`);
+    });
+  });
+
+  describe("xcd", () => {
+    it("moves the location with a plain relative path, and writes where it landed", async () => {
+      const shuttle = shuttleIn();
+      expect(await runLine("xcd ../other", shuttle, READS_NOTHING))
+        .toEqual({ kind: "text", text: "file:///other/" });
+    });
+
+    it("moves it to another plane with a whole schemed path", async () => {
+      const shuttle = shuttleIn();
+      await runLine("xcd https://example.test/a/b/", shuttle, READS_NOTHING);
+      expect(textOf(await runLine("xpwd", shuttle, READS_NOTHING)))
+        .toBe("https://example.test/a/b/");
+    });
+
+    it("refuses a scheme on a path that is not absolute, and moves nowhere", async () => {
+      const shuttle = shuttleIn();
+      expect(reasonOf(await runLine("xcd file:other", shuttle, READS_NOTHING)))
+        .toContain("absolute");
+      expect(textOf(await runLine("xpwd", shuttle, READS_NOTHING)))
+        .toBe("file:///work/");
+    });
+
+    it("leaves the fabric place where it stood", async () => {
+      // The two positions move independently, which is what makes the fabric
+      // the ambient plane rather than one of two a verb has to choose
+      // between.
+
+      const shuttle = atPiece("title");
+      const before = textOf(await runLine("pwd", shuttle, READS_NOTHING));
+      await runLine("xcd ../other", shuttle, READS_NOTHING);
+      expect(textOf(await runLine("pwd", shuttle, READS_NOTHING))).toBe(before);
+    });
+
+    it("reads nothing, so it answers over a connection that will not open", async () => {
+      const shuttle: Shuttle = {
+        config: CONFIG,
+        place: new CurrentPlace(SPACE),
+        external: new ExternalLocation(
+          new URL("file:///work/"),
+          "/home/someone",
+        ),
+        connection: new HeldConnection({
+          kind: "owned",
+          record: CONFIG,
+          open: () => Promise.reject(new Error("The server refused.")),
+        }),
+        session: new ShuttleSession(),
+        invocationSession: "a-session",
+      };
+      expect(await runLine("xcd ../other", shuttle, READS_NOTHING))
+        .toEqual({ kind: "text", text: "file:///other/" });
     });
   });
 
@@ -5255,7 +5472,10 @@ describe("verbs", () => {
       const shuttle = atPiece();
       const nested = answering({
         getCellValue: () => Promise.resolve({ title: { deeper: 1 } }),
-        listing: { getCellValue: () => Promise.resolve({ title: {} }) },
+        listing: {
+          getCellValue: () => Promise.resolve({ title: {} }),
+          listCallableKeys: () => Promise.resolve(new Set<string>()),
+        },
       });
       await runLine("ls", shuttle, nested);
       await runLine("cd %1/deeper", shuttle, nested);
@@ -5293,7 +5513,10 @@ describe("verbs", () => {
       const shuttle = atPiece();
       const spaced = answering({
         getCellValue: () => Promise.resolve({ "first name": {} }),
-        listing: { getCellValue: () => Promise.resolve({ "first name": {} }) },
+        listing: {
+          getCellValue: () => Promise.resolve({ "first name": {} }),
+          listCallableKeys: () => Promise.resolve(new Set<string>()),
+        },
       });
       const listing = textOf(await runLine("ls", shuttle, spaced));
       expect(listing).toBe("%1 'first name'");
@@ -5767,6 +5990,7 @@ describe("verbs", () => {
               order.push("list");
               return Promise.resolve({ title: "a" });
             },
+            listCallableKeys: () => Promise.resolve(new Set<string>()),
           },
         }),
       );
@@ -5833,6 +6057,7 @@ describe("verbs", () => {
       "listSpaceSlugs",
       "listPieces",
       "listing.getCellValue",
+      "listing.listCallableKeys",
       "entityIdExists",
       "warmPiece",
       "setCellValue",
@@ -5928,9 +6153,15 @@ describe("verbs", () => {
             note("listPieces");
             return Promise.resolve([]);
           },
+          // A key, so that the listing goes on to its second read, which a
+          // cancel inside the first has to stop.
           getCellValue: () => {
             note("listing.getCellValue");
-            return Promise.resolve({});
+            return Promise.resolve({ title: "a" });
+          },
+          listCallableKeys: () => {
+            note("listing.listCallableKeys");
+            return Promise.resolve(new Set<string>());
           },
         },
         warmPiece: (config) => {
@@ -6026,6 +6257,7 @@ describe("verbs", () => {
       ["ls", atFacet("slugs"), "listSpaceSlugs"],
       ["ls", atFacet("pieces"), "listPieces"],
       ["ls", onPiece, "listing.getCellValue"],
+      ["ls", onPiece, "listing.listCallableKeys"],
       ['set title "a"', onPiece, "suspend"],
       ['set title "a"', onPiece, "warmPiece"],
       ['set title "a"', onPiece, "setCellValue"],
@@ -6071,6 +6303,8 @@ describe("verbs", () => {
       "unwatch",
       "watches",
       "where",
+      "xcd",
+      "xpwd",
     ];
 
     it("cancels a line of every verb, or says why the verb has no read", async () => {
@@ -6310,7 +6544,11 @@ describe("verbs", () => {
       const gate = inFlight<Record<string, string>>();
       const first = runLine("ls", shuttle, {
         ...READS_NOTHING,
-        listing: { ...READS_NOTHING.listing, getCellValue: gate.read },
+        listing: {
+          ...READS_NOTHING.listing,
+          getCellValue: gate.read,
+          listCallableKeys: () => Promise.resolve(new Set<string>()),
+        },
         signal: stopper.signal,
       });
       await gate.started;

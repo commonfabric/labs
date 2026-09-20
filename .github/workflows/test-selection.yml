@@ -136,9 +136,14 @@ jobs:
             fi
             args+=(--days "$PUBLISH_DAYS")
           fi
+          # The standard error joins the standard output in the log. The
+          # publisher says on it what stopped a run — which stored
+          # aggregates it could not read, what stopped it in each, and
+          # what to do about it — and the summary below, which is where a
+          # person reads a failed run, is built from this log alone.
           deno run --allow-read --allow-env --allow-net --allow-write \
             tasks/test-selection-publish.ts "${args[@]}" \
-            | tee publish.log
+            2>&1 | tee publish.log
 
       # A job summary is taken whole or not at all: GitHub refuses one
       # past 1024 KiB, and what it held is lost rather than shortened. So

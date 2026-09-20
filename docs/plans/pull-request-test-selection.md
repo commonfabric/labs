@@ -2954,9 +2954,9 @@ is why it cannot be the whole of this — but those costs are what the
 lanes will actually be packed against, so an answer below what they
 imply is one the lanes cannot honor whatever else is true. That matters
 most where a stand-in costs more than the bare unmeasured figure. A
-suite whose measured units have all been renamed away carries its old
-median onto every stand-in, and a count that assumed the bare figure
-would be out by that whole multiple.
+suite whose measured units have all been renamed away carries what the
+units it lost cost onto every stand-in, and a count that assumed the bare
+figure would be out by that whole multiple.
 
 What comes out is a bound rather than a plan: the lanes still pack
 themselves, and one of them may hold several suites.

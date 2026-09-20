@@ -6,10 +6,17 @@
   },
   "imports": {
     // Dependency guide: ../../docs/development/DEPENDENCIES.md
+    "@": "./src/index.ts",
     "@/": "./src/",
+    "@/codec-common": "./src/codec-common/index.ts",
+    "@/codec-json": "./src/codec-json/index.ts",
+    "@/codec-realm": "./src/codec-realm/index.ts",
     "@/comparison": "./src/comparison/index.ts",
+    "@/fabric-bases": "./src/fabric-bases/index.ts",
+    "@/fabric-instances": "./src/fabric-instances/index.ts",
+    "@/fabric-primitives": "./src/fabric-primitives/index.ts",
     "@/types": "./src/types/index.ts",
-    "@/value-debug": "./src/value-debug/index.ts",
+    "@/value-debug": "./src/value-debug-internal.ts",
     "@/value-visit": "./src/value-visit/index.ts",
     "@node/crypto": "node:crypto"
   },

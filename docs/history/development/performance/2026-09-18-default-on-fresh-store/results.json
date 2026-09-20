@@ -1,0 +1,355 @@
+{
+  "order": [
+    "cross-space",
+    "same-space"
+  ],
+  "independentFreshStores": true,
+  "runs": [
+    {
+      "location": "cross-space",
+      "metadata": {
+        "did": "did:key:z6MksHnZGdHxNoCqcC3kPvBSo2goCzLSWheQ8LrVpAtQwgwW",
+        "gitSha": "f3494fe9547d6589dad8e382e2392f14b8e0cebf",
+        "shellServerExecutionDefine": null,
+        "experimental": {
+          "commitPreconditions": true,
+          "computedCellIds": true,
+          "contentAddressedSchemas": true,
+          "lazyMaterialization": true,
+          "modernCellRep": false,
+          "plainResultReceipts": true,
+          "readerSchemaPrecedence": true,
+          "serverExecution": false
+        },
+        "cfc": {
+          "provenance": "resolved",
+          "enforcementMode": {
+            "rung": "enforce-explicit",
+            "diagnosticOnly": false,
+            "decidesOn": "a recorded reason, which rejects the commit"
+          },
+          "flowLabels": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; no derived label component comes into existence"
+          },
+          "writeFloor": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; the write-side integrity floor is not checked"
+          },
+          "triggerReadGating": false,
+          "decomposedEnvelopes": false,
+          "contentAddressedLabels": false,
+          "policyEvaluation": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; gated labels reach the gates un-rewritten"
+          },
+          "labelMetadataProtection": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; label metadata writes are not gated"
+          },
+          "declaredMonotonicity": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; a declared-monotonicity violation is not checked"
+          },
+          "policyDigest": null,
+          "sinks": [
+            {
+              "sink": "fetchBinary",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "fetchText",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "fetchJson",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "fetchJsonUnchecked",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "fetchProgram",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "streamData",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "llm",
+              "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+            },
+            {
+              "sink": "llmDialog",
+              "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+            },
+            {
+              "sink": "generateText",
+              "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+            },
+            {
+              "sink": "generateObject",
+              "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+            }
+          ],
+          "deviations": [
+            {
+              "what": "sink `llm` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+              "owner": "CFC runtime (Epic B, sink governance)",
+              "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+            },
+            {
+              "what": "sink `llmDialog` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+              "owner": "CFC runtime (Epic B, sink governance)",
+              "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+            },
+            {
+              "what": "sink `generateText` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+              "owner": "CFC runtime (Epic B, sink governance)",
+              "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+            },
+            {
+              "what": "sink `generateObject` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+              "owner": "CFC runtime (Epic B, sink governance)",
+              "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+            }
+          ]
+        }
+      },
+      "diagnosticSamples": [
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        }
+      ],
+      "timingNanoseconds": {
+        "n": 4,
+        "min": 1464301292.0,
+        "max": 3343663125.0,
+        "avg": 1990155417.0,
+        "p75": 1584990959.0,
+        "p99": 3343663125.0,
+        "p995": 3343663125.0,
+        "p999": 3343663125.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      }
+    },
+    {
+      "location": "same-space",
+      "metadata": {
+        "did": "did:key:z6MksHnZGdHxNoCqcC3kPvBSo2goCzLSWheQ8LrVpAtQwgwW",
+        "gitSha": "f3494fe9547d6589dad8e382e2392f14b8e0cebf",
+        "shellServerExecutionDefine": null,
+        "experimental": {
+          "commitPreconditions": true,
+          "computedCellIds": true,
+          "contentAddressedSchemas": true,
+          "lazyMaterialization": true,
+          "modernCellRep": false,
+          "plainResultReceipts": true,
+          "readerSchemaPrecedence": true,
+          "serverExecution": false
+        },
+        "cfc": {
+          "provenance": "resolved",
+          "enforcementMode": {
+            "rung": "enforce-explicit",
+            "diagnosticOnly": false,
+            "decidesOn": "a recorded reason, which rejects the commit"
+          },
+          "flowLabels": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; no derived label component comes into existence"
+          },
+          "writeFloor": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; the write-side integrity floor is not checked"
+          },
+          "triggerReadGating": false,
+          "decomposedEnvelopes": false,
+          "contentAddressedLabels": false,
+          "policyEvaluation": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; gated labels reach the gates un-rewritten"
+          },
+          "labelMetadataProtection": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; label metadata writes are not gated"
+          },
+          "declaredMonotonicity": {
+            "rung": "off",
+            "diagnosticOnly": true,
+            "decidesOn": "nothing; a declared-monotonicity violation is not checked"
+          },
+          "policyDigest": null,
+          "sinks": [
+            {
+              "sink": "fetchBinary",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "fetchText",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "fetchJson",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "fetchJsonUnchecked",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "fetchProgram",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "streamData",
+              "ungated": "no confidentiality ceiling is configured for this sink"
+            },
+            {
+              "sink": "llm",
+              "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+            },
+            {
+              "sink": "llmDialog",
+              "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+            },
+            {
+              "sink": "generateText",
+              "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+            },
+            {
+              "sink": "generateObject",
+              "ungated": "ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process"
+            }
+          ],
+          "deviations": [
+            {
+              "what": "sink `llm` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+              "owner": "CFC runtime (Epic B, sink governance)",
+              "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+            },
+            {
+              "what": "sink `llmDialog` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+              "owner": "CFC runtime (Epic B, sink governance)",
+              "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+            },
+            {
+              "what": "sink `generateText` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+              "owner": "CFC runtime (Epic B, sink governance)",
+              "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+            },
+            {
+              "what": "sink `generateObject` releases with no confidentiality ceiling, so no policy evaluation runs for it: ceiling membership is exact clause subsumption, so a public-only ceiling would refuse the risk-caveated ingested content an llm sink exists to process",
+              "owner": "CFC runtime (Epic B, sink governance)",
+              "retirement": "a boundary-scoped admission mechanism exists \u2014 a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries"
+            }
+          ]
+        }
+      },
+      "diagnosticSamples": [
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        },
+        {
+          "runs": 70,
+          "accesses": 2409,
+          "maxAccesses": 1190,
+          "linkHops": 2620,
+          "eventCommits": 2,
+          "eventCommitErrors": 0
+        }
+      ],
+      "timingNanoseconds": {
+        "n": 4,
+        "min": 1366320917.0,
+        "max": 1724371125.0,
+        "avg": 1499222615.0,
+        "p75": 1477031459.0,
+        "p99": 1724371125.0,
+        "p995": 1724371125.0,
+        "p999": 1724371125.0,
+        "highPrecision": true,
+        "usedExplicitTimers": true
+      }
+    }
+  ]
+}

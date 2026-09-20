@@ -337,7 +337,7 @@ describe("fetch builtins (fetchBinary / fetchText / fetchJson)", () => {
 });
 
 describe("schemaWithOpenObjects", () => {
-  it("opens object schemas inside prefixItems slots (CT-1895)", () => {
+  it("opens object schemas inside `prefixItems` slots", () => {
     const opened = schemaWithOpenObjects({
       type: "array",
       prefixItems: [

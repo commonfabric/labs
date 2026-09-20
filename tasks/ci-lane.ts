@@ -58,6 +58,7 @@ import {
   crowdingLine,
   type CrowdingSuite,
   fullLaneCount,
+  ownLoad,
   plan,
   type Selection,
   type SelectionReason,
@@ -1003,49 +1004,82 @@ function chosenFor(
 }
 
 /**
+ * How much of a lane's projection stands on units nothing has measured:
+ * how many of its selections are stand-ins, and the seconds of the
+ * projection their own cost decides.
+ *
+ * Read through `ownLoad`, which is the term the packer charged them by,
+ * so that the seconds are a share of the projection and not a second
+ * reading of the same quantity in other units. The overheads a lane pays
+ * around a stand-in are measured rather than guessed, and are not here.
+ */
+function standingOnStandIns(
+  manifest: Manifest,
+  selections: readonly Selection[],
+): { units: number; seconds: number } {
+  let units = 0;
+  let seconds = 0;
+  for (const selection of selections) {
+    if (!isStandIn(selection.entry)) continue;
+    units++;
+    seconds += ownLoad(manifest, selection.entry, selection.repeats);
+  }
+  return { units, seconds };
+}
+
+/**
  * Prints what the lane is about to do, for the job summary.
  *
  * Where the lane is running a selection, each batch says what it is
  * expected to take and why each of its identities was chosen. "Why did
  * my test not run" is the question a selected run provokes, and a
  * summary that only names the suites cannot begin to answer it. The
- * seconds are the tests' own measured time and not what the lane will
- * take: the overheads the packer charged on top are per lane rather than
- * per identity, and `projectedSeconds` is where the whole figure is.
+ * seconds in the table are the tests' own time and not what the lane
+ * will take: the overheads the packer charged on top are per lane rather
+ * than per identity, and `projectedSeconds` is where the whole figure is.
+ *
+ * Not all of that time is measured. A unit nothing has recorded is
+ * carried on a stand-in whose cost comes from the suite around it, and
+ * the projection line says how many of its seconds those account for.
  */
 export function describePlan(
   options: LaneOptions,
   batches: readonly Batch[],
   capabilities: readonly CapabilityId[],
-  manifest: { objectName?: string; absent?: string },
+  fetched: { objectName?: string; absent?: string },
   unschedulable: readonly UnschedulableEntry[],
   crowding: readonly CrowdingSuite[],
-  chosen: { selections: readonly Selection[]; projectedSeconds: number },
+  chosen: {
+    /** The manifest these selections were made against and costed by. */
+    manifest: Manifest;
+    selections: readonly Selection[];
+    projectedSeconds: number;
+  },
   budget: number,
-  unmeasured: number,
-  entries: number,
 ): void {
   const lines: string[] = [];
   lines.push(`## Lane ${options.lane} of ${options.of}`);
   lines.push("");
   lines.push(
-    manifest.absent === undefined
-      ? `Manifest: \`${manifest.objectName}\``
-      : `Running unselected: ${manifest.absent}`,
+    fetched.absent === undefined
+      ? `Manifest: \`${fetched.objectName}\``
+      : `Running unselected: ${fetched.absent}`,
   );
   lines.push("");
   lines.push(`Capabilities: ${capabilities.join(", ") || "none"}`);
   lines.push("");
+  // A stand-in's cost is taken from the suite around it rather than from
+  // the unit it stands for, so a projection resting on several says what
+  // the lane would take if those figures held. Somebody reading this
+  // beside a lane that ran four times as long is told as much.
+  const standing = standingOnStandIns(chosen.manifest, chosen.selections);
   lines.push(
     `Projected: ${chosen.projectedSeconds.toFixed(0)}s of ${budget}s` +
-      // Every stand-in in that figure is a guess at what a unit costs,
-      // so a projection carrying many of them says what the lane would
-      // take if the guesses were right rather than what it will take.
-      // Somebody reading a summary beside a lane that ran four times as
-      // long deserves to be told which of the two they have.
-      (unmeasured === 0
+      (standing.units === 0
         ? ""
-        : `, ${unmeasured} of ${entries} costs unmeasured`),
+        : `, ${standing.seconds.toFixed(0)}s of it charged to ` +
+          `${standing.units} unit${standing.units === 1 ? "" : "s"} ` +
+          `nothing has measured`),
   );
   lines.push("");
   lines.push(
@@ -1231,9 +1265,9 @@ export async function fullLanes(
     // answer below what they imply is one the lanes cannot honor
     // whatever else is true. That matters most where a stand-in costs
     // more than the bare unmeasured figure: a suite whose measured units
-    // have all been renamed away carries its old median onto every
-    // stand-in, and a count that assumed the bare figure would be out by
-    // that whole multiple.
+    // have all been renamed away carries what the units it lost cost
+    // onto every stand-in, and a count that assumed the bare figure
+    // would be out by that whole multiple.
     const running = suites.filter((suite) => {
       const unavailable = unavailableUnits(suite);
       return suite.units.some((unit) => !unavailable.has(unit));
@@ -1300,10 +1334,12 @@ export async function runLane(
     fetched,
     laid.unschedulable,
     laid.crowding,
-    { selections: mine.selections, projectedSeconds: mine.projectedSeconds },
+    {
+      manifest: seen.manifest,
+      selections: mine.selections,
+      projectedSeconds: mine.projectedSeconds,
+    },
     laid.budgetSeconds,
-    seen.unmeasured,
-    seen.manifest.entries.length,
   );
   describeWithheld(laid.withheld, seen.mandatory);
   if (options.dryRun) return true;

@@ -600,8 +600,10 @@ expectations and assertions of the built-in default. The
 and [navigation-policy follow-up](../history/development/performance/2026-09-15-notebook-reload-navigation-policy.md)
 separate nullable-read errors from a test's assumption about the selected page.
 The flag owner decides whether and when to retire the switch. The
-[fast-follow plan](../plans/lazy-materialization-fast-follow.md) owns remaining
-default-on measurements and guidance; its completion does not require retirement.
+[fast-follow record](../history/plans/lazy-materialization-fast-follow.md) contains
+pinned measurements and their limits. Use the [benchmark guidance](BENCHMARKS.md)
+for new comparisons; neither the measurement record nor read-count equality
+qualifies an operational rollback.
 
 One behavior difference is deliberate rather than a defect, and it is the point
 of the mode: a lift that FORWARDS its argument onward without reading through it

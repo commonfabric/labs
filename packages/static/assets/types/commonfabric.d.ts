@@ -893,6 +893,9 @@ export declare const TILE_UI: "$TILE_UI";
 export declare const CHIP_UI: "$CHIP_UI";
 export declare const FS: "$FS";
 export declare const TESTS: "$TESTS";
+// The single field under which a pattern offers named groups of facts and
+// streams a host may draw with its own toolkit. [UI] remains the floor.
+export declare const VIEWS: "$VIEWS";
 
 /**
  * The size/representation spectrum a piece can be rendered at (CT-1321):
@@ -3196,11 +3199,27 @@ export interface BuiltInCompileAndRunState<T> {
  * The reserved output fields the runtime reads off a pattern's result, each
  * typed so a value of the wrong shape under a reserved key is a compile error.
  * `[NAME]` and `[TYPE]` label the piece; `[UI]`, `[TILE_UI]` and `[CHIP_UI]`
- * are its renderings; `[FS]` is its filesystem projection. Those are each
+ * are its renderings; `[FS]` is its filesystem projection; `[VIEWS]` holds the
+ * named groups it offers a host to draw natively. Those are each
  * `FactoryInput`-wrapped, so a reactive value (a `computed()`, a cell) is
  * accepted alongside a plain one. `[TESTS]` is the exception: it holds a
  * `TestStep[]` written out at build time, not a reactive value, so it is not
  * wrapped.
+ *
+ * `[VIEWS]` is typed as an object and no further. What a group holds is the
+ * pattern's to declare and a consumer's to demand through a schema, so the
+ * framework types the field that carries them rather than their members — a
+ * value that is not a group map at all is the error worth catching here.
+ *
+ * `object` is the looser of two live choices, and what it buys is the
+ * `interface` idiom. It rejects a primitive and nothing else, so an array or a
+ * view node under this key compiles — pinned in `reserved-output-types.test.ts`
+ * so that narrowing the field later is a deliberate act rather than a silent
+ * one. `Record<string, unknown>` would reject both, and would also reject a
+ * group map declared as an `interface`, which has no implicit index signature.
+ * A `type` alias does satisfy it, so the stricter field is available for one
+ * keyword of author cost, at the price of a compile error on the declaration
+ * form a group is most naturally written in.
  */
 type ReservedOutput = {
   [NAME]?: FactoryInput<string>;
@@ -3210,6 +3229,7 @@ type ReservedOutput = {
   [CHIP_UI]?: FactoryInput<VNode> | JSXElement;
   [FS]?: FactoryInput<FsProjection>;
   [TESTS]?: TestStep[];
+  [VIEWS]?: FactoryInput<object>;
 };
 
 /**

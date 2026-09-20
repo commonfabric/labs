@@ -10,14 +10,14 @@
 
 import type { Primitive } from "@commonfabric/utils/types";
 
-import {
-  type FabricArrayPlus,
-  type FabricContainerValuePlus,
-  type FabricInstancePlus,
-  type FabricPlainObjectPlus,
-  type FabricPrimitive,
-} from "@/interface.ts";
-import { type PrimitiveValueTag } from "@/types";
+import type {
+  FabricArrayPlus,
+  FabricContainerValuePlus,
+  FabricInstancePlus,
+  FabricPlainObjectPlus,
+  FabricPrimitive,
+  PrimitiveValueTag,
+} from "@";
 import {
   type BaselineVisitResult,
   type DispatchingVisitorResult,

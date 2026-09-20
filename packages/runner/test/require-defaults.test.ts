@@ -310,8 +310,8 @@ const _stripDefaultTuple: MustBeTrue<
   >
 > = true;
 
-// CT-1640: the documented `T[] | Default<[]>` shape strips to exactly `T[]`,
-// NOT `T[] | never[]`. `Default<[]>` keeps only its branded arm, so the bare
+// The documented `T[] | Default<[]>` shape strips to exactly `T[]`, NOT
+// `T[] | never[]`. `Default<[]>` keeps only its branded arm, so the bare
 // empty-tuple member never enters the union and the sibling `T[]` supplies the
 // value type.
 const _stripArrayUnionEmptyDefault: MustBeTrue<
@@ -319,9 +319,8 @@ const _stripArrayUnionEmptyDefault: MustBeTrue<
 > = true;
 
 // Consequence: parameter-position array methods keep the element type (not
-// `never`). This is the actual CT-1640 symptom. The body is type-checked but
-// never executed (these are static assertions; the `declare`d binding has no
-// runtime value).
+// `never`). The body is type-checked but never executed (these are static
+// assertions; the `declare`d binding has no runtime value).
 function _ct1640ParamPositionMethods(
   ids: StripDefaultBrand<string[] | Default<[]>>,
 ): void {

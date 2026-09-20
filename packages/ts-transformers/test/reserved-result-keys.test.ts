@@ -6,9 +6,13 @@ import ts from "typescript";
 import type { DiagnosticInput } from "../src/core/mod.ts";
 import { reportOpaqueReservedResultKeys } from "../src/transformers/reserved-result-keys.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { parseModule, patternSchemas } from "./transformed-ast.ts";
 import { validateSource } from "./utils.ts";
 
 const DIAGNOSTIC_TYPE = "pattern-result:opaque-reserved-key";
+
+/** A schema node, read positionally rather than through a declared shape. */
+type Obj = Record<string, unknown>;
 
 /** The diagnostics one schema draws, reported straight rather than compiled. */
 function diagnosticsFor(
@@ -146,6 +150,80 @@ describe("reserved-result-keys", () => {
       ]);
       expect(diagnostics.length).toBe(1);
       expect(diagnostics[0]!.message).toContain("`$UI`");
+    });
+
+    it("reports a declared result that leaves its offered views opaque", async () => {
+      const diagnostics = await reservedKeyDiagnostics([
+        "/// <cts-enable />",
+        'import { pattern, VIEWS } from "commonfabric";',
+        "type Out = { [VIEWS]: unknown; label: string };",
+        "export default pattern<{ label: string }, Out>(",
+        "  (s) => ({ [VIEWS]: { inbox: { label: s.label } }, label: s.label }),",
+        ");",
+      ]);
+      expect(diagnostics.length).toBe(1);
+      expect(diagnostics[0]!.severity).toBe("error");
+      expect(diagnostics[0]!.message).toContain("`$VIEWS`");
+    });
+
+    it("accepts a result that names the groups its views field holds", async () => {
+      const diagnostics = await reservedKeyDiagnostics([
+        "/// <cts-enable />",
+        'import { pattern, VIEWS } from "commonfabric";',
+        "type Out = { [VIEWS]: { inbox: { label: string } }; label: string };",
+        "export default pattern<{ label: string }, Out>(",
+        "  (s) => ({ [VIEWS]: { inbox: { label: s.label } }, label: s.label }),",
+        ");",
+      ]);
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("emits a result schema naming each offered group and its stream payloads", async () => {
+      // What one-round discovery rests on. A host holding the static result
+      // schema decides native-or-floor from `$VIEWS.properties` without
+      // reading a value at all, and drives a group's streams from the payload
+      // schemas carried beside them — labs describes an event contract
+      // nowhere else. A `$VIEWS` that reached a reader as a bare `object`,
+      // or a stream member that lost its brand, would leave the field
+      // present and the capability undiscoverable.
+      const { diagnostics, output } = await validateSource(
+        [
+          "/// <cts-enable />",
+          "import { handler, pattern, type Stream, VIEWS, type Writable }" +
+          ' from "commonfabric";',
+          "interface InboxView {",
+          "  threads: { title: string }[];",
+          "  setSearch: Stream<{ query: string }>;",
+          "}",
+          "type Out = { [VIEWS]: { inboxView: InboxView }; label: string };",
+          "const setSearch = handler<",
+          "  { query: string },",
+          "  { label: Writable<string> }",
+          ">(({ query }, state) => state.label.set(query));",
+          "export default pattern<{ label: Writable<string> }, Out>(",
+          "  (s) => ({",
+          "    [VIEWS]: { inboxView: { threads: [], setSearch: setSearch(s) } },",
+          "    label: s.label,",
+          "  }),",
+          ");",
+        ].join("\n"),
+        { types: COMMONFABRIC_TYPES },
+      );
+      expect(diagnostics.filter((d) => d.severity === "error")).toEqual([]);
+
+      const result = patternSchemas(parseModule(output)).output;
+      const views = (result.properties as Obj).$VIEWS as Obj;
+      expect(views?.type).toBe("object");
+      // The group is named at the field, so its presence is readable without
+      // following the reference that describes it.
+      expect((views.properties as Obj).inboxView).toEqual({
+        $ref: "#/$defs/InboxView",
+      });
+
+      const group = (result.$defs as Obj).InboxView as Obj;
+      const stream = (group.properties as Obj).setSearch as Obj;
+      expect(stream?.asCell).toEqual(["stream"]);
+      expect((stream.properties as Obj).query).toEqual({ type: "string" });
     });
 
     it("accepts a result that names the type its reserved key holds", async () => {

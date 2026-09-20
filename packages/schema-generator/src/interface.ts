@@ -1,5 +1,9 @@
 import type ts from "typescript";
-import type { JSONSchema } from "@commonfabric/api";
+import type {
+  JSONSchema,
+  MutableJSONSchema,
+  MutableJSONSchemaObj,
+} from "@commonfabric/api";
 import { type Mutable } from "@commonfabric/utils/types";
 
 /**
@@ -59,6 +63,14 @@ export interface SchemaGenerationOptions {
   readonly writerIdentityForSourceFile?: (
     fileName: string,
   ) => WriterSourceIdentity;
+
+  /**
+   * The program's own word on whether a source file is a default library
+   * (`program.isSourceFileDefaultLibrary`). The transformer supplies it; a
+   * generator running without a program falls back to file names
+   * (`typescript/default-library.ts`).
+   */
+  readonly isDefaultLibrarySourceFile?: (sourceFile: ts.SourceFile) => boolean;
 }
 
 /**
@@ -83,6 +95,21 @@ export interface GenerationContext {
 
   /** Which $refs have been emitted */
   emittedRefs: Set<string>;
+
+  /**
+   * Source distinctions needed while reducing intersections. Schemas can
+   * coincide for different types, and a fallback can hide its constituents.
+   * Constituents are formatted lazily when an enclosing intersection needs
+   * them; standalone fallbacks retain their normal formatter behavior. The
+   * record is keyed on the schema object itself, so it reaches a reader only
+   * through the object a formatter returned — the one the definitions hold
+   * and a `$ref` resolves to — and a copy carries none of it.
+   */
+  schemaOrigins?: WeakMap<
+    MutableJSONSchemaObj,
+    | { kind: "void" }
+    | { kind: "intersection" | "union"; parts: () => MutableJSONSchema[] }
+  >;
 
   // Stack state (push/pop during recursion)
 
@@ -117,11 +144,23 @@ export interface GenerationContext {
     fileName: string,
   ) => WriterSourceIdentity;
 
+  /** The program's word on default-library membership, when supplied. */
+  isDefaultLibrarySourceFile?: (sourceFile: ts.SourceFile) => boolean;
+
   /** Schema hints for overriding default behavior (keyed by TypeNode) */
   schemaHints?: SchemaHints;
 
   /** Override for array items schema, propagated from wrapper types */
   arrayItemsOverride?: JSONSchema;
+
+  /**
+   * Synthetic type nodes that node-based analysis could not fully interpret,
+   * including type literals with unreadable property names. A caller that also
+   * holds a usable type for the position installs an array here, and a non-empty
+   * one afterwards tells it the node-driven schema is incomplete. Shared by
+   * every child context.
+   */
+  uninterpretedTypeNodes?: ts.TypeNode[];
 }
 
 /**

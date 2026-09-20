@@ -34,8 +34,12 @@ INSERT INTO branch (name, head_seq, status) VALUES ('', 6, 'active');
 
 const MODULE_IDENTITY = "pf1v3J_M5Nep7cq-Uh8EYG0ZQaE217FfDfcjbwGdjVI";
 
-function link(id: string) {
-  return { "/": { "link@1": { id, path: [] } } };
+function link(id: string, schema?: unknown) {
+  return {
+    "/": {
+      "link@1": { id, path: [], ...(schema === undefined ? {} : { schema }) },
+    },
+  };
 }
 
 function seed(path: string) {
@@ -88,6 +92,10 @@ function seed(path: string) {
       internal: [
         { partialCause: "q", link: link("of:owned") },
         { partialCause: "q", link: link("of:stream") },
+        {
+          partialCause: "q",
+          link: link("of:stream-ref", { $ref: "cid:streamschema" }),
+        },
       ],
       patternIdentity: { identity: MODULE_IDENTITY, symbol: "default" },
       schema: {
@@ -122,6 +130,28 @@ function seed(path: string) {
     5,
     JSON.stringify({ value: { $stream: true }, result: link("of:piece") }),
     5,
+  );
+  // a stream holding no value, declared by the manifest link its owner keeps
+  // for it, which references the schema document holding the schema
+  commit.run(10, 10);
+  rev.run(
+    "cid:streamschema",
+    10,
+    JSON.stringify({
+      value: {
+        asCell: ["stream"],
+        type: "object",
+        properties: { tag: { type: "string" } },
+      },
+    }),
+    10,
+  );
+  commit.run(11, 11);
+  rev.run(
+    "of:stream-ref",
+    11,
+    JSON.stringify({ result: link("of:piece") }),
+    11,
   );
   // an import cell: { link, specifier }
   commit.run(6, 6);
@@ -211,6 +241,22 @@ Deno.test("html explorer: rich bundle + self-contained render", async (t) => {
           "payload shape present",
         );
         assertStringIncludes(stream.schemaSource ?? "", "addNote");
+        // A stream whose document holds no value is a stream by its owner's
+        // manifest, and the schema shown is the one the manifest link
+        // references; the source names the manifest and the schema document.
+        const declared = byId("of:stream-ref");
+        assertEquals(declared.kind, "stream");
+        assertEquals(declared.label, "⊙ stream");
+        assert(declared.streamPayload, "stream payload schema resolved");
+        assert(declared.schemaKeys?.includes("properties"));
+        assertStringIncludes(
+          declared.schemaSource ?? "",
+          "declared in owner manifest · of:piece",
+        );
+        assertStringIncludes(
+          declared.schemaSource ?? "",
+          "schema document · cid:streamschema",
+        );
         // A `{ link, specifier }` cell is a module import.
         const imp = byId("of:imp");
         assertEquals(imp.label, "import ./dep.tsx");

@@ -22,22 +22,17 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { FabricInstance, type FabricValue } from "@/interface.ts";
-import {
-  DEEP_FREEZE,
-  IS_DEEP_FROZEN,
-} from "@/fabric-bases/BaseFabricInstance.ts";
-import { CODEC } from "@/codec-interface/interface.ts";
-import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricNativeWrapper } from "@/fabric-instances/FabricNativeWrapper.ts";
 import {
   deepFreeze,
+  FabricInstance,
+  type FabricValue,
   isDeepFrozen,
   isValidDeepFrozenFabricValue,
-} from "@/deep-freeze.ts";
+} from "@";
+import { CODEC, CODEC_TYPE_TAGS, NULL_LIVE_ENVIRONMENT } from "@/codec-common";
+import { DEEP_FREEZE, IS_DEEP_FROZEN } from "@/fabric-bases";
+import { FabricError, FabricNativeWrapper } from "@/fabric-instances";
+import { FabricEpochNsec } from "@/fabric-primitives";
 import { dummyEnv, subFreeze, subIsDeepFrozen } from "./fixtures.ts";
 
 describe("FabricError", () => {
@@ -728,6 +723,41 @@ describe("FabricError", () => {
         it("returns `true` for a record", () => {
           expect(codec.canDecode({ type: "Error", message: "boop" }))
             .toBe(true);
+        });
+
+        it("returns `true` for a record with every checked field absent", () => {
+          expect(codec.canDecode({})).toBe(true);
+          expect(codec.canDecode({ cause: 42, code: 7 })).toBe(true);
+        });
+
+        it("returns `true` for a `null` `name`, which means same as `type`", () => {
+          expect(codec.canDecode({ type: "Error", name: null, message: "" }))
+            .toBe(true);
+        });
+
+        it("returns `true` for a `name` with no `type` (back-compat)", () => {
+          expect(codec.canDecode({ name: "TypeError", message: "old format" }))
+            .toBe(true);
+        });
+
+        it("returns `false` for a checked field that is not a string", () => {
+          // Each of these fields reaches a getter typed `string` unchecked by
+          // the constructor, so the predicate is the one place a mistyped one
+          // is refused.
+
+          for (const key of ["type", "name", "message", "stack"]) {
+            for (const value of [42, true, undefined, ["x"], { x: 1 }]) {
+              const state = { type: "Error", message: "boop", [key]: value };
+              expect(codec.canDecode(state as never)).toBe(false);
+            }
+          }
+        });
+
+        it("returns `false` for a `null` in a field other than `name`", () => {
+          for (const key of ["type", "message", "stack"]) {
+            const state = { type: "Error", message: "boop", [key]: null };
+            expect(codec.canDecode(state as never)).toBe(false);
+          }
         });
 
         it("returns `false` for state that is not a plain object", () => {

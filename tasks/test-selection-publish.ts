@@ -7,11 +7,21 @@
  *   deno run -A tasks/test-selection-publish.ts [--days N] [--bootstrap]
  *     [--out <dir>] [--dry-run] [--concurrency N]
  *
- * A run reads the newest aggregate and folds what that aggregate does not
- * already hold, which in the steady state is about two thousand objects.
- * A cold start has no aggregate to read and cannot fold three weeks of
- * raw history in one job either, so `--bootstrap` is the one-off that
- * starts from an empty one over a wider window, run by hand.
+ * A run folds what the newest aggregate it can read does not already
+ * hold, which in the steady state is about two thousand objects. A cold
+ * start has no aggregate to read and cannot fold three weeks of raw
+ * history in one job either, so `--bootstrap` is the one-off that starts
+ * from an empty one over a wider window, run by hand.
+ *
+ * A store with no aggregate under the area at all is the whole of what
+ * asks for it. Nothing that happens to a stored aggregate does: the area
+ * they are written under is named rather than numbered and does not
+ * move, a body written in a shape under this publisher's is read
+ * forward, and one this publisher cannot read is passed over for the
+ * newest one behind it that it can. A bootstrap in any of those cases
+ * would publish from an empty aggregate and throw away the catches the
+ * stored ones hold, which accumulate over unbounded history and which no
+ * window of records rebuilds.
  *
  * That is the whole of what the flag does. What to read is `inputChoice`
  * asked of each source and date the window covers, and both modes ask it
@@ -67,12 +77,16 @@ import {
   manifestObjectName,
   manifestPrefix,
   newestAtOrBefore,
+  stateDayOf,
   stateObjectName,
   statePrefix,
 } from "./test-selection/store.ts";
 import {
   type CoverageBaseline,
+  declaredSchema,
+  MANIFEST_SCHEMA_VERSION,
   serializeManifest,
+  writtenAhead,
 } from "./test-selection/manifest.ts";
 import { costliestUnschedulable, plan } from "./test-selection/plan.ts";
 import {
@@ -342,18 +356,40 @@ export function byDayThenName(left: string, right: string): number {
   return day !== 0 ? day : left.localeCompare(right);
 }
 
+/** One state object a run could not read, and what stopped it. */
+interface PassedOver {
+  /** The object's name, so a reader can go and look at it. */
+  name: string;
+
+  /**
+   * The shape it declares, for the one fault that names its own remedy:
+   * a body written further ahead than this publisher. Undefined for
+   * every other fault, which is a body that is not an aggregate at all.
+   */
+  ahead?: number;
+}
+
+/** Why a state was passed over, as a sentence fragment. */
+function faultOf({ ahead }: PassedOver): string {
+  return ahead === undefined
+    ? "it is not an aggregate this publisher understands"
+    : `it is written in shape ${ahead}, and this publisher reads shape ` +
+      `${MANIFEST_SCHEMA_VERSION}`;
+}
+
 /** What reading the rolling aggregate found. */
 type AggregateRead =
 
-  /** The state a previous run left. */
-  | { state: AggregateState }
+  /** The state to fold onto, and what was passed over to reach it. */
+  | { state: AggregateState; name: string; passedOver: readonly PassedOver[] }
   /** The area holds no state at all, so this would be a first run. */
   | { absent: true }
-  /** Something went wrong, and what a previous run left is unknown. */
-  | { failed: string };
+  /** Nothing to fold onto, with the lines saying what stopped it. */
+  | { failed: readonly string[] };
 
 /**
- * Reads the newest aggregate.
+ * Reads the aggregate to fold onto, which is the newest state object
+ * this publisher can read.
  *
  * The three outcomes are kept apart because folding into an empty
  * aggregate while a real one exists is the worst thing this program can
@@ -365,8 +401,39 @@ type AggregateRead =
  * outcome — the previous manifest stays newest and selection decays
  * slowly — so an unreadable state is told apart from an absent one rather
  * than both becoming an empty one.
+ *
+ * Passing over a state this publisher cannot read is what keeps one from
+ * stopping it for good. Nothing but the publisher creates a state, and it
+ * creates one only where it folded, so a newest state it cannot read is
+ * one every later run comes to in the same condition: a body written in
+ * a shape from further ahead, which is what a lowered shape leaves
+ * behind, and a body that arrives and is not an aggregate, which the
+ * store's create-only credentials mean nothing can replace.
+ *
+ * A read that does not arrive is neither of those and is refused, as a
+ * listing that fails is. It says nothing about the object, so a run that
+ * passed over on it would be reading a fault of its own as a fact about
+ * the store, and the state it then wrote would supersede the one it
+ * skipped for good.
+ *
+ * `from` is the first day this run reads, and it bounds how far back a
+ * state may be passed over. What a passed-over state folded and the one
+ * behind it did not comes back from the records, so the walk reaches
+ * back over the days this run reads and no further. That bound is the
+ * one this run can state rather than an exact account of the gap: the
+ * runs that wrote the passed-over states read windows of their own,
+ * reaching a day earlier than their own day for as many days as their
+ * window held, and a record that arrived for one of those earlier days
+ * after the state behind it was written is outside what this run reads.
+ * A run that passes over says which state it passed over and which it
+ * folded onto, rather than reporting the gap as closed. The newest state
+ * is read whatever day it carries, since taking it is not a choice
+ * between two aggregates.
  */
-async function readAggregate(store: StoreAccess): Promise<AggregateRead> {
+async function readAggregate(
+  store: StoreAccess,
+  from: string,
+): Promise<AggregateRead> {
   const prefix = statePrefix();
   let names: string[];
   try {
@@ -374,20 +441,83 @@ async function readAggregate(store: StoreAccess): Promise<AggregateRead> {
     // bare prefix matches a longer sibling too.
     names = await store.list(`${prefix}/`);
   } catch (error) {
-    return { failed: `listing ${prefix} failed: ${error}` };
+    return { failed: [`listing ${prefix} failed: ${error}`] };
   }
-  const newest = names.filter((name) => name.endsWith(".json.gz")).sort().at(
-    -1,
+  // Newest first, which for these names is by the day they carry and
+  // then by the identifier the run that created them drew. An object
+  // under the prefix named some other way is not one of the publisher's
+  // states, so it is neither read as an aggregate nor counted as one.
+  const states = names.filter((name) => stateDayOf(name) !== undefined)
+    .sort().reverse();
+  if (states.length === 0) return { absent: true };
+  const passedOver: PassedOver[] = [];
+  let cutOff = false;
+  for (const [index, name] of states.entries()) {
+    if (index > 0 && stateDayOf(name)! < from) {
+      cutOff = true;
+      break;
+    }
+    let text: string;
+    try {
+      text = await store.readText(name);
+    } catch (error) {
+      return { failed: [`reading ${name} failed: ${error}`] };
+    }
+    // Parsed here rather than inside each reader, so that one body is
+    // parsed once however many questions are asked of it.
+    let body: unknown;
+    try {
+      body = JSON.parse(text);
+    } catch {
+      body = undefined;
+    }
+    const state = parseAggregate(body);
+    if (state !== undefined) return { state, name, passedOver };
+    const ahead = writtenAhead(body) ? declaredSchema(body) : undefined;
+    passedOver.push({ name, ...(ahead === undefined ? {} : { ahead }) });
+  }
+  return { failed: refusal(passedOver, cutOff ? from : undefined) };
+}
+
+/**
+ * What a run says when every state it looked at was one it could not
+ * read: each object and its fault, then where there are more states to
+ * reach and what reaches them, then the thing not to do.
+ *
+ * `cutOffAt` is the first day the run reads, given where the day bound
+ * is what stopped the walk and absent where the walk ran out of states.
+ * Only in the first case are there states behind these at all, and what
+ * is said of them is that they are there, since whether one of them
+ * reads is what the run that reaches them finds out.
+ */
+function refusal(
+  passedOver: readonly PassedOver[],
+  cutOffAt: string | undefined,
+): readonly string[] {
+  const lines = passedOver.map((entry) => `${entry.name}: ${faultOf(entry)}`);
+  const shapes = passedOver.flatMap(({ ahead }) =>
+    ahead === undefined ? [] : [ahead]
   );
-  if (newest === undefined) return { absent: true };
-  try {
-    const state = parseAggregate(await store.readText(newest));
-    return state === undefined
-      ? { failed: `${newest} is not an aggregate this reader understands` }
-      : { state };
-  } catch (error) {
-    return { failed: `reading ${newest} failed: ${error}` };
+  if (shapes.length > 0) {
+    lines.push(
+      `deploy a publisher that reads shape ${Math.max(...shapes)} or ` +
+        `above, which is the highest shape any of these is written in`,
+    );
   }
+  if (cutOffAt !== undefined) {
+    lines.push(
+      `the states behind these are named for days before ${cutOffAt}, ` +
+        `which is the first day this run reads, and --days is what ` +
+        `reaches them`,
+    );
+  }
+  lines.push(
+    `do not bootstrap before establishing that no stored state reads at ` +
+      `all: it starts from an empty aggregate, and the catches the stored ` +
+      `states hold accumulate over unbounded history and are not in the ` +
+      `records any window reads`,
+  );
+  return lines;
 }
 
 /**
@@ -444,13 +574,19 @@ export async function publish(
 
   const startedAt = now;
   const today = startedAt.toISOString().slice(0, 10);
+  const partitions = dayPartitions(startedAt, options.days);
   let aggregate: AggregateState;
   if (options.bootstrap) {
     aggregate = emptyAggregate(today);
   } else {
-    const read = await readAggregate(store);
+    // The first day this run reads, written the way a state object's name
+    // writes a day, which is how far back a state may be passed over.
+    const read = await readAggregate(
+      store,
+      partitions[0]!.replaceAll("/", "-"),
+    );
     if ("failed" in read) {
-      console.warn(`test selection: ${read.failed}`);
+      for (const line of read.failed) console.warn(`test selection: ${line}`);
       console.warn(
         "test selection: refusing to publish from an empty aggregate, " +
           "which would score every test at the floor. The previous " +
@@ -465,9 +601,20 @@ export async function publish(
       );
       return 1;
     }
+    for (const entry of read.passedOver) {
+      console.log(
+        `test selection: passing over ${entry.name}: ${faultOf(entry)}`,
+      );
+    }
+    if (read.passedOver.length > 0) {
+      console.log(
+        `test selection: folding onto ${read.name}, the newest aggregate ` +
+          `this publisher can read. What the states above it folded from ` +
+          `days this run does not read is not counted.`,
+      );
+    }
     aggregate = read.state;
   }
-  const partitions = dayPartitions(startedAt, options.days);
   const resolver = await loadAliasResolver();
   const fold = new Fold(aggregate, resolver, today);
   const runs = new Set<string>();

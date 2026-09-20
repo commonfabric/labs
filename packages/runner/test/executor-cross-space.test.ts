@@ -909,7 +909,7 @@ describe("Phase 5 cross-space serving", () => {
           operations: [{
             op: "set",
             id: streamDocId,
-            value: { value: { $stream: true } } as never,
+            value: { schema: { asCell: ["stream"] } } as never,
           }],
         },
       });
@@ -933,7 +933,7 @@ describe("Phase 5 cross-space serving", () => {
       const servingStream = serving.getCell<unknown>(
         foreignSpace,
         "xspace-send-stream",
-        undefined,
+        { asCell: ["stream"] },
       );
       await servingStream.sync();
       const homeAnchor = serving.getCell<{ n: number }>(

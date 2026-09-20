@@ -36,9 +36,11 @@ about one aspect of the runtime, are indexed in
   spellings. Naming the bare package name is worse than that. The entry point
   reaches every module the package exports, so naming it from inside completes
   a cycle, and the order in which the package's modules initialize starts to
-  depend on the order the entry point lists its exports. The
+  depend on the order the entry point lists its exports. An alias that reaches
+  the entry point's file, `@` or `@/index.ts` in a package that defines them,
+  is that same import under another name. The
   `cf-package/no-self-import` lint rule (`tasks/lint-self-import.ts`,
-  registered in the root `deno.jsonc`) reports both forms, so a plain
+  registered in the root `deno.jsonc`) reports all of these, so a plain
   `deno lint` catches them. It exempts a package's own tests, which name their
   package on purpose: the surface a consumer sees is the thing they are there
   to check.

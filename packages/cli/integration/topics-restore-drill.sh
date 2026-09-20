@@ -12,25 +12,24 @@
 #
 # Requirements beyond the usual: sqlite3 on PATH (for the VACUUM INTO
 # snapshot — preinstalled on the CI runners and on macOS, so it is checked
-# rather than installed), and CF_DRILL_STORE_DIR pointing at the serving
-# toolshed's MEMORY_DIR (default <server cwd>/cache/memory), because a
-# snapshot is taken from the store file, not over the API.
+# rather than installed), and a server whose store this process can read,
+# because a snapshot is taken from the store file, not over the API. Which
+# file that is, `cf inspect` answers; the snapshot step below says how.
 #
 # An identity is minted when CF_IDENTITY names none, the way
 # verbs-over-the-cli.sh does: CI sets no key, and every cf command here needs
 # one.
 #
-#   API_URL=http://localhost:8000 CF_DRILL_STORE_DIR=cache/memory \
+#   API_URL=http://localhost:8000 \
 #     packages/cli/integration/topics-restore-drill.sh
 #
-# CI runs it through integration.sh's `piece-call` section, which supplies the
-# store directory; `topics-drill` runs it alone.
+# CI runs it through integration.sh's `piece-call` section; `topics-drill`
+# runs it alone.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 API_URL="${API_URL:-http://localhost:8000}"
-STORE_DIR="${CF_DRILL_STORE_DIR:-cache/memory}"
 
 if [ -n "${CF_BINARY:-}" ]; then
   CF="$CF_BINARY"
@@ -58,13 +57,20 @@ command -v jq > /dev/null || {
   echo "jq is required" >&2
   exit 1
 }
-# The inner directory holds the per-space files and is created with the first
-# space, so a fresh server has only the outer one — which is what to check,
-# since this script is about to create that first space itself.
-ENGINE_DIR="$STORE_DIR/engine-v3/engine-v3"
-[ -d "$STORE_DIR/engine-v3" ] || {
-  echo "no store at $STORE_DIR/engine-v3 — point CF_DRILL_STORE_DIR at the" \
-    "serving toolshed's MEMORY_DIR (its default is <server cwd>/cache/memory)" >&2
+# The space name is minted with python3 below. Without this check a missing
+# python3 leaves every run naming the same space, and the drill then fails
+# somewhere in the export talking about a board it did not create.
+command -v python3 > /dev/null || {
+  echo "python3 is required to mint the drill's space name" >&2
+  exit 1
+}
+# CF_DRILL_STORE_DIR named the store before `cf inspect` found it, and MEMORY_DIR
+# is the name it answers to now. A caller who still sets the old one means to
+# point the drill at a particular store, so say that it is not read rather than
+# ignore it and hand back a result about whichever store was found instead.
+[ -z "${CF_DRILL_STORE_DIR:-}" ] || {
+  echo "CF_DRILL_STORE_DIR is no longer read; set MEMORY_DIR to the store" \
+    "directory of the toolshed serving $API_URL" >&2
   exit 1
 }
 
@@ -84,10 +90,6 @@ fi
 export CF_IDENTITY
 
 step "deploy the topics board into a fresh space ($SPACE)"
-# `.sqlite` only: each store also carries -wal and -shm companions, and a
-# snapshot is taken from the database file itself.
-ls "$ENGINE_DIR" 2> /dev/null | grep '\.sqlite$' | sort > "$WORK/dbs-before" ||
-  true
 # `--root` is the repository root because the board imports the member-naming
 # library from a sibling directory (`../collection-naming/`). Without it the
 # program root is the entry's own directory, every such import is refused as
@@ -164,32 +166,45 @@ $CF piece call -q --piece "$TOPIC_ALIAS" --space "$SPACE" \
 ok "seeded"
 
 step "snapshot the space store (VACUUM INTO) and export from it"
-ls "$ENGINE_DIR" 2> /dev/null | grep '\.sqlite$' | sort > "$WORK/dbs-after"
-NEW_DBS="$(comm -13 "$WORK/dbs-before" "$WORK/dbs-after")"
-[ -n "$NEW_DBS" ] || {
-  bad "no new space DB under $ENGINE_DIR — is API_URL served from this store?"
+# Where the server put this run's space. `cf inspect` resolves a space name to
+# the store file holding it, through the discovery in
+# packages/state-inspector/discover.ts: the one place that knows both the
+# on-disk layout and the directories a Toolshed started from this checkout keeps
+# its store in, and that reads MEMORY_DIR for a store kept anywhere else. It is
+# also what knows how a space name becomes a DID, a derivation this script is
+# better off asking for than restating.
+#
+# Asking for the space by name is what makes the answer THIS run's space. A
+# checkout that has served from more than one working directory holds a store in
+# each, and a server creates its store as it starts, so a store an earlier run
+# left behind looks exactly as live as the one being served. Which file inside a
+# store belongs to this run is no more decidable by looking than which store is.
+SPACE_DB="$(
+  $CF inspect summary "$SPACE" --json 2> "$WORK/inspect.err" |
+    jq -r '.path // empty'
+)"
+[ -n "$SPACE_DB" ] && ok "space store: $SPACE_DB" || {
+  bad "could not find the store holding $SPACE — set MEMORY_DIR to the store
+directory of the toolshed serving $API_URL if it is outside this checkout.
+cf inspect said:
+$(head -1 "$WORK/inspect.err" 2> /dev/null)"
   exit 1
 }
-# More than one store can be new: a run that minted its own identity also
-# created that identity's home space. Rather than guess between them —
-# whichever sorts first is a coin flip, and picking wrong fails later in the
-# export where the cause is invisible — snapshot each and let the export say
-# which holds the topics. "The store the export can read" IS the criterion.
-NEW_DB=""
-while read -r candidate; do
-  [ -n "$candidate" ] || continue
-  sqlite3 "$ENGINE_DIR/$candidate" "VACUUM INTO '$WORK/$candidate'" \
-    2> /dev/null || continue
-  if deno run --allow-read --allow-write --allow-env --allow-ffi \
-    --allow-net=github.com,release-assets.githubusercontent.com \
-    "$REPO_ROOT/scripts/topics-export.ts" "$WORK/$candidate" \
-    --out "$WORK/export.json" > "$WORK/export.log" 2>&1; then
-    NEW_DB="$candidate"
-    break
-  fi
-done <<< "$NEW_DBS"
-[ -n "$NEW_DB" ] && ok "snapshot and export: $NEW_DB" || {
-  bad "no new store exported as a topics space; last attempt said:
+# The copy keeps the name it was taken from, because `topics-export.ts` reads
+# the space DID out of the snapshot's file name rather than out of the
+# database.
+SNAPSHOT="$WORK/$(basename "$SPACE_DB")"
+sqlite3 "$SPACE_DB" "VACUUM INTO '$SNAPSHOT'" 2> "$WORK/vacuum.err" || {
+  bad "could not snapshot $SPACE_DB:
+$(cat "$WORK/vacuum.err" 2> /dev/null)"
+  exit 1
+}
+deno run --allow-read --allow-write --allow-env --allow-ffi \
+  --allow-net=github.com,release-assets.githubusercontent.com \
+  "$REPO_ROOT/scripts/topics-export.ts" "$SNAPSHOT" \
+  --out "$WORK/export.json" > "$WORK/export.log" 2>&1 &&
+  ok "exported the snapshot" || {
+  bad "the snapshot of $SPACE_DB did not export as a topics space:
 $(cat "$WORK/export.log" 2> /dev/null)"
   exit 1
 }

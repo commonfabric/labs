@@ -1033,20 +1033,6 @@ export function hasDefaultMarker(
   return getDefaultMarkerProperty(member, typeChecker) !== undefined;
 }
 
-/**
- * Selects candidate brand constituents for expanded-default extraction.
- * Empty objects and other symbol brands remain candidates; the payload reader
- * requires an actual DEFAULT_MARKER on every candidate before accepting a value.
- */
-export function isDefaultBrandedMember(
-  member: ts.Type,
-  typeChecker: ts.TypeChecker,
-): boolean {
-  if (isBrandOnlyMarkerType(member, typeChecker)) return true;
-  if (!member.isIntersection()) return false;
-  return member.types.some((part) => isBrandOnlyMarkerType(part, typeChecker));
-}
-
 /** Finds the marker on a brand-only constituent of an expanded Default. */
 function getDefaultMarkerProperty(
   member: ts.Type,
@@ -1120,7 +1106,7 @@ export function extractDefaultBrandPayloadValue(
 ): { value: unknown } | undefined {
   const members = type.isUnion() ? type.types : [type];
   const branded = members.filter((member) =>
-    isDefaultBrandedMember(member, typeChecker)
+    hasDefaultMarker(member, typeChecker)
   );
   return extractDefaultValueFromBrandedMembers(branded, typeChecker);
 }

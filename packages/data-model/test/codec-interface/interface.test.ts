@@ -1,16 +1,12 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import type { FabricInstancePlus, FabricValue, FabricValuePlus } from "@";
 import type {
   LiveEnvironment,
   NonterminalCodec,
   TerminalCodec,
-} from "@/codec-interface/interface.ts";
-import type {
-  FabricInstancePlus,
-  FabricValue,
-  FabricValuePlus,
-} from "@/interface.ts";
+} from "@/codec-common";
 
 // The assertions in this file are made when it is type-checked, which the
 // package's `test` task does before it runs anything, not when it runs. Each
