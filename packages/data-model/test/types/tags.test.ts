@@ -34,33 +34,13 @@ import type { JsTypeTagIncludingNull, Same } from "@commonfabric/utils/types";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
-  BaseFabricPrimitive,
-  VALUE_TAG,
-} from "@/fabric-bases/BaseFabricPrimitive.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricMap } from "@/fabric-instances/FabricMap.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
-import { FabricEpochDay } from "@/fabric-primitives/FabricEpochDay.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
-import { FabricKeyPair } from "@/fabric-primitives/FabricKeyPair.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
-import { FabricUnavailable } from "@/fabric-primitives/FabricUnavailable.ts";
-import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/fabric-primitives/for-testing-only.ts";
-import {
-  FABRIC_PRIMITIVE_VALUE_TAGS,
-  type FabricPrimitiveValueTag,
-} from "@/fabric-primitives/interface.ts";
-import {
+  type ConvertibleJsValueTag,
+  FABRIC_VALUE_PLUS_TAGS,
+  FABRIC_VALUE_TAGS,
   FabricPrimitive,
   type FabricValue,
   type FabricValuePlus,
   type FabricValuePlusLayer,
-} from "@/interface.ts";
-import {
-  type ConvertibleJsValueTag,
-  FABRIC_VALUE_PLUS_TAGS,
-  FABRIC_VALUE_TAGS,
   type FabricValuePlusTag,
   type FabricValueTag,
   isValidFabricConvertibleJsObject,
@@ -75,7 +55,21 @@ import {
   tagOfFabricValueElseNull,
   VALUE_TAGS,
   type ValueTag,
-} from "@/types";
+} from "@";
+import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { FabricError, FabricMap } from "@/fabric-instances";
+import {
+  FABRIC_PRIMITIVE_VALUE_TAGS,
+  FabricBytes,
+  FabricEpochDay,
+  FabricEpochNsec,
+  FabricHash,
+  FabricKeyPair,
+  type FabricPrimitiveValueTag,
+  FabricRegExp,
+  FabricUnavailable,
+} from "@/fabric-primitives";
+import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.ts";
 import { LAYER_CORPUS } from "../fabric-value-corpus.ts";
 
 /**

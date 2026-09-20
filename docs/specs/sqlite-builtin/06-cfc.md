@@ -483,6 +483,29 @@ runtime's option governs the queries it executes itself. The runtime's
 ceiling joins the request hash, so a settled result is a hit only for a
 runtime reading under the same ceiling.
 
+**Under server execution the ceiling travels with the session.** A client
+runtime under server execution (`experimental.serverExecution` on, without
+the serving posture) executes no query of its own — the space server's
+runtime serves them — so its option cannot bound them where it sits. It
+declares the ceiling instead, once, in every session it opens: the signed
+`session.open` descriptor carries `readCeiling` (memory-v2 `04-protocol.md`
+§4.1.2), the memory server records it on the session, and the SpaceServer
+stamps it onto every run it serves AS that session (`WaveRunContext.readCeiling`,
+serving-loop.md §3c). The served `db.query` then reads under the serving
+runtime's own option met with the carried ceiling, through the one path
+above: the meet joins the request hash, decides the rows, and supplies the
+`onExceed` default (the mode meets toward `fail`). A served run acting as a
+session that declared none reads under the serving runtime's option alone.
+The session record is the seam: a ceiling the server assigns to a session
+lands in the same record and reaches the run the same way. Fail-closed at
+the edges: a client carrying a ceiling refuses a server that does not
+advertise the `sessionReadCeiling` protocol flag, since an older server
+would accept the descriptor and serve unbounded; a runtime whose storage
+manager cannot carry the ceiling refuses to be built with one; and the
+session-scoped-result rule holds on a served run exactly as on a client —
+a query whose result is broader is refused on the serving runtime before it
+is staged.
+
 **Read-time clearance (Phase 3.b).** Filtering by *who is asking*, rather than
 by a declared contract: `db.query(sql, { readClearance: true })` keeps only the
 rows the **acting reader** may read and drops the rest. The acting reader is

@@ -29,7 +29,7 @@ import {
   trackListSetupRollback,
 } from "./list-element-rollback.ts";
 import { listInstanceCoordinator } from "./list-instance-coordinator.ts";
-import { seedResultContainerWhenPullSettles } from "./list-result-container-seed.ts";
+import { resumeContainerWait } from "./list-result-container-seed.ts";
 import { issueResultContainerSetup } from "./list-result-container.ts";
 import { resumeSettleRunKind } from "./resume-republish.ts";
 import { exposedResultCell } from "./scope-policy.ts";
@@ -160,6 +160,15 @@ function createMapInstance(
   const rearmReconcile = (): void => {
     if (registeredAction) runtime.scheduler.invalidateAction(registeredAction);
   };
+
+  // The wait this coordinator takes on its result container, which it takes
+  // once per container.
+  const containerWait = resumeContainerWait(
+    runtime,
+    logger,
+    `map/resume-seed/${parentCell.sourceURI}`,
+    identity,
+  );
 
   // Identity-based tracking: maps element address key → { resultCell, lastIndex }
   // for reuse across position changes. We pass list[i] directly each time, so
@@ -321,33 +330,23 @@ function createMapInstance(
       );
     // Resume against confirmed state, not the not-yet-loaded value: on the
     // resume reconcile an undefined container is its durable value still
-    // streaming in (a map that has run persisted at least []). Reconciling now
-    // would write a stale-basis result that conflicts on commit and re-runs
-    // against the same absent value until it happens to sync — the reload
-    // commit storm. Pull the container and defer; its arrival re-triggers this
-    // reconcile, which then no-ops against the durable value.
+    // streaming in (a map that has run persisted at least []). Reconciling
+    // now would write a stale-basis result that conflicts on commit and
+    // re-runs against the same absent value until it happens to sync — the
+    // reload commit storm. Wait for the container's pull instead; the wait
+    // re-arms this reconcile once the pull settles, and it is taken once per
+    // container, so the reconcile that follows reconciles against whatever the
+    // container reads by then. Same shape in filter.ts/flatmap.ts.
     if (
       elementAwaitSync &&
+      containerWait.mayWait(result) &&
       probeScoped(() => resultWithLog.get()) === undefined
     ) {
-      // The container's durable value is still streaming in; the pull
-      // below is what ends this wait, whatever the container turns out to
-      // hold: it re-triggers this reconcile once it settles, and seeds the
-      // empty array a fresh coordinator would have written when the
-      // container was never persisted. The id names the
-      // seed's out-of-band recovery write; the helper stamps it with the
-      // sanctioned bookkeeping kind (serving-loop.md §3d) so a SERVING
-      // runtime's wave accepts the seal. Same shape in filter.ts/flatmap.ts.
       const container = result;
-      seedResultContainerWhenPullSettles(
-        runtime,
+      containerWait.begin(
         container,
         () => active && result === container,
         rearmReconcile,
-        syncCellForIdentity(container, identity),
-        logger,
-        `map/resume-seed/${parentCell.sourceURI}`,
-        identity,
       );
       return;
     }

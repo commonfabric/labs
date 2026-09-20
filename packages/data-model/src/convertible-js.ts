@@ -47,11 +47,13 @@ import {
   tagOfConvertibleJsValueElseNull,
   VALUE_TAGS,
 } from "@/types";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
+import {
+  FabricBytes,
+  FabricEpochNsec,
+  FabricRegExp,
+} from "@/fabric-primitives";
 import { FabricError } from "@/fabric-instances/FabricError.ts";
 import { FabricNativeWrapper } from "@/fabric-instances/FabricNativeWrapper.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
 import { cloneHelper } from "./value-clone.ts";
 import { isValidDeepFrozenFabricValue } from "./deep-freeze.ts";
 

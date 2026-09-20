@@ -1,8 +1,8 @@
 import type { JSONSchemaObj } from "@commonfabric/api";
 import {
+  debugStr,
   hashStringOf,
   isWalkableObjectOrArray,
-  toCompactDebugString,
 } from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
@@ -246,9 +246,7 @@ export function patternFromFrame<T, R>(
 export function assertNoReservedCauseKeys(cause: unknown): void {
   if (isObjectOrArray(cause) && "$generated" in cause) {
     throw new Error(
-      `Cannot use cause ${
-        toCompactDebugString(cause)
-      }: top-level key "$generated" is reserved\n` +
+      debugStr`Cannot use cause $quote${cause}: top-level key "$generated" is reserved\n` +
         `help: "$generated" marks system-generated cell causes; rename the key`,
     );
   }

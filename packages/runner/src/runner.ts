@@ -1,5 +1,6 @@
 import {
   convertibleJsFromFabricValue,
+  debugStr,
   fabricFromConvertibleJsValue,
   FabricInstance,
   type FabricValue,
@@ -9,8 +10,6 @@ import {
   isKeyableObjectOrArray,
   isWalkableObjectOrArray,
   refuseFabricInstance,
-  toCompactDebugString,
-  toLongQuotedDebugString,
   valueEqual,
 } from "@commonfabric/data-model";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
@@ -9032,7 +9031,7 @@ export class Runner {
       // TODO(seefeld): Implement, a dynamic node
       return undefined;
     } else {
-      throw new Error(`Unknown module: ${toCompactDebugString(module)}`);
+      throw new Error(debugStr`Unknown module: $quote${module}`);
     }
   }
 
@@ -9645,9 +9644,7 @@ export class Runner {
       // which must not be followed at this level.
       if (!isWriteRedirectLink(event)) {
         throw new Error(
-          `Handler ${label}'s \`$event\` input is not a link (got: ${
-            toLongQuotedDebugString(event)
-          })`,
+          debugStr`Handler ${label}'s \`$event\` input is not a link (got: $quote,long${event})`,
         );
       }
       return parseLink(event, base);

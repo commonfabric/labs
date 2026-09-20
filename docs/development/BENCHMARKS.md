@@ -9,6 +9,25 @@ files' subject matter without being bench files themselves — the Topics browse
 measurement and the Topics board demo below are both of that kind — so that a
 reader looking for how a workload is measured finds all of it in one place.
 
+## Report the measured boundary
+
+Record the revision, resolved runtime posture, machine and tool versions, fixture
+size, and demanded outputs with the result. Report the observed sample count from
+benchmark JSON; a requested iteration count is not necessarily the number of
+samples the harness collects. Keep warmup and diagnostic invocations distinct
+from the samples included in the reported timing statistic.
+
+Name each timer's actual start and end. An explicit timer around an awaited
+operation includes call setup and promise resumption that an internal timer may
+exclude. Nested phase timers are not an additive decomposition of wall-clock
+time. Collect read accounting separately with instrumentation disabled for timing;
+stable read counts alone establish neither stable latency nor a speedup.
+
+Use repeated interleaved arms and matched fresh fixtures for comparative latency
+claims. For retention claims, warm the runtime and take repeated post-GC samples
+that separate surviving state from setup garbage; one cold-runtime heap delta
+cannot establish retained memory cost.
+
 ## The pipeline
 
 The Benchmarks workflow (`.github/workflows/benchmarks.yml`) runs every four
@@ -859,7 +878,18 @@ keyed vote entities and assigns their membership once during setup, avoiding a
 full membership-array update for each seeded vote. No timing limit is added by
 these fixtures.
 
-Run all three from the repository root:
+`clock-tick.test.tsx` beside them covers a different window: the poll's clock
+advances by one `#now/300` tick inside one local day between two renders of the
+74-vote poll, and the second render is held to 100 accesses in total and 50 in
+one reactive body. That render measures 11 and 7. The poll filters its votes
+down to the current day, so a filter keyed on the tick rather than on the day
+rescans every stored vote whenever the tick advances, which measures 234 and
+224 there — the ceilings sit between the two rather than close to either. The
+clock comes from the fixture rather than from the runner's five-minute timer,
+through the poll's `clock` input, so the tick lands inside the measured window
+on every run.
+
+Run them all from the repository root:
 
 ```sh
 deno task cf test packages/patterns/integration/fixtures/lunch-poll-read-scale --verbose

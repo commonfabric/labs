@@ -373,6 +373,13 @@ function errorMessage(error: unknown): string {
  * the flags parsed fine, the values they carry don't fit the verb.
  */
 export class VerbInputValidationError extends Error {
+  /**
+   * The canonical address of the piece the verb was resolved on, set when the
+   * target named a path and the piece was reached through the link stored
+   * there. A report that names a piece names this one.
+   */
+  linkedPiece?: string;
+
   constructor(readonly verb: string, readonly detail: string) {
     super(`Invalid input for "${verb}": ${detail}`);
     this.name = "VerbInputValidationError";

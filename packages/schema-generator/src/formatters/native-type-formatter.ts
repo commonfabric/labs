@@ -2,6 +2,7 @@ import ts from "typescript";
 import type { MutableJSONSchema } from "@commonfabric/api";
 import { fabricPrimitiveClassesByName } from "@commonfabric/data-model/fabric-primitives";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
+import { isDefaultLibrarySourceFile } from "../typescript/default-library.ts";
 
 const NATIVE_TYPE_SCHEMAS: Record<string, MutableJSONSchema> = {
   // This schema is embedded in the code, so we can have simpler links.
@@ -254,24 +255,9 @@ export class NativeTypeFormatter implements TypeFormatter {
     context: GenerationContext,
   ): boolean {
     const symbol = NativeTypeFormatter.#getTypeSymbol(type);
-    return symbol?.declarations?.some((declaration) => {
-      const sourceFile = declaration.getSourceFile();
-      const program = (
-        context.typeChecker as ts.TypeChecker & {
-          getProgram?: () => ts.Program;
-        }
-      ).getProgram?.();
-      if (program?.isSourceFileDefaultLibrary(sourceFile)) {
-        return true;
-      }
-
-      const fileName = sourceFile.fileName;
-      return fileName === "lib.d.ts" ||
-        fileName.endsWith("/lib.d.ts") ||
-        /(^|\/)lib\.[^/]+\.d\.ts$/i.test(fileName) ||
-        /(^|\/)(es\d+(?:\.[^/]+)?|dom|jsx)\.d\.ts$/i.test(fileName) ||
-        /(^|[\\/])node_modules[\\/]@types[\\/]node[\\/]/.test(fileName);
-    }) ?? false;
+    return symbol?.declarations?.some((declaration) =>
+      isDefaultLibrarySourceFile(declaration.getSourceFile(), context)
+    ) ?? false;
   }
 
   /** Returns whether `typeName` names a native type, which gets no `$defs`. */

@@ -13,10 +13,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import {
-  NULL_LIVE_ENVIRONMENT,
-  NullLiveEnvironment,
-} from "@/codec-interface/NullLiveEnvironment.ts";
+import { NULL_LIVE_ENVIRONMENT, NullLiveEnvironment } from "@/codec-common";
 
 describe("NullLiveEnvironment", () => {
   describe("NULL_LIVE_ENVIRONMENT", () => {

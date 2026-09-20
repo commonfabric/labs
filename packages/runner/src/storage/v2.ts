@@ -53,6 +53,7 @@ import {
   type ScopeKey,
   type ScopeKeyIdentity,
   type SessionHolding,
+  type SessionReadCeiling,
   type SessionSync,
   type SessionSyncUpsert,
   type SqliteDbRef,
@@ -1218,6 +1219,11 @@ export class StorageManager implements IStorageManager {
   /** Phase 5: the serving manager's home space (Options.servingHomeSpace). */
   #servingHomeSpace?: MemorySpace;
 
+  /** The read ceiling every session this manager opens declares
+   * (`setSessionReadCeiling`); undefined on a manager whose sessions read
+   * unbounded. */
+  #sessionReadCeiling?: SessionReadCeiling;
+
   #spaceIdentities = new Map<MemorySpace, Signer>();
 
   /** Genesis ACL documents registered beside a space identity — the exact
@@ -1629,6 +1635,34 @@ export class StorageManager implements IStorageManager {
       : {};
   }
 
+  /**
+   * The descriptor fields every session this manager opens carries beyond
+   * its id: the serving binding and the declared read ceiling. One place,
+   * so a reopen, a resume and a fresh mount all declare the same session.
+   */
+  #sessionDescriptorFields(): {
+    actingAs?: "space-owner";
+    readCeiling?: SessionReadCeiling;
+  } {
+    return {
+      ...this.#servingActingAs(),
+      ...(this.#sessionReadCeiling !== undefined
+        ? { readCeiling: this.#sessionReadCeiling }
+        : {}),
+    };
+  }
+
+  /** See `IStorageManager.setSessionReadCeiling`. */
+  setSessionReadCeiling(ceiling: SessionReadCeiling): void {
+    if (this.#providers.size > 0) {
+      throw new Error(
+        "setSessionReadCeiling: a session is already open; a ceiling " +
+          "declared now would leave it reading unbounded",
+      );
+    }
+    this.#sessionReadCeiling = ceiling;
+  }
+
   /** The serving manager's HOME space (Options.servingHomeSpace) —
    * undefined on every client manager. Consumers use it to decide
    * whether a write target is FOREIGN to the serving loop (OW31 seat
@@ -1768,7 +1802,7 @@ export class StorageManager implements IStorageManager {
           : (_routeGeneration, routeSignal) =>
             this.#sessionFactory.create(space, signer, {
               sessionId: this.#sessionId,
-              ...this.#servingActingAs(),
+              ...this.#sessionDescriptorFields(),
             }, routeSignal),
         syncReplayDependencies: (document) =>
           this.#syncCfcSchemaDocument(space, document),
@@ -1860,7 +1894,10 @@ export class StorageManager implements IStorageManager {
           signer,
           detached !== undefined && detached.routeGeneration === routeGeneration
             ? detached.options
-            : { sessionId: this.#sessionId, ...this.#servingActingAs() },
+            : {
+              sessionId: this.#sessionId,
+              ...this.#sessionDescriptorFields(),
+            },
           routeSignal,
         ),
       );
@@ -1877,7 +1914,7 @@ export class StorageManager implements IStorageManager {
         ...(normal.session.sessionToken !== undefined
           ? { sessionToken: normal.session.sessionToken }
           : {}),
-        ...this.#servingActingAs(),
+        ...this.#sessionDescriptorFields(),
       };
       this.#detachedSessionResumes.set(space, {
         options: resumeNormal,

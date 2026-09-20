@@ -36,6 +36,7 @@ import {
   resolveScopeKey,
   type ScopeKey,
   type ScopeKeyIdentity,
+  type SessionReadCeiling,
   STREAM_ENTRIES_DOC_PREFIX,
   toDirtyKey,
 } from "@commonfabric/memory/v2";
@@ -171,6 +172,17 @@ export interface WaveRunContext {
    * cardinality-1 posture, and pre-narrowing space-scope runs, which
    * resolve no scoped addresses at all). */
   scopeKeyIdentity?: ScopeKeyIdentity;
+
+  /** The read ceiling this run's `db.query` reads are bounded by: the
+   * ceiling of the session the run acts as (`scopeKeyIdentity.sessionId`),
+   * read from the memory server's session record at the stamp
+   * (`Server.sessionReadCeiling`) — declared by the client in its signed
+   * `session.open` descriptor, or assigned by the server. The sqlite
+   * builtin meets it with the serving runtime's own option, exactly as it
+   * meets a query's declared ceiling with a runtime's (06-cfc.md, "Runtime
+   * read ceiling"). Absent on a run acting as no session, or as one that
+   * declared none: such a run reads under the runtime's option alone. */
+  readCeiling?: SessionReadCeiling;
 
   /** The capability grant a provisioning run's FOREIGN writes are
    * admitted under (protocol.md §2's server-produced authored row, §2b):

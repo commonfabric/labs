@@ -91,10 +91,6 @@ a record: archive it to `docs/history/plans/` following the procedure in
   [`../features/vouched-ingest-channel-mint.md`](../features/vouched-ingest-channel-mint.md).
 - [Integration-test video demos](integration-test-video-demos.md) tracks
   optional CI adoption and further fixture hardening.
-- [Lazy materialization fast-follow](lazy-materialization-fast-follow.md)
-  owns the handler investigation, default-on evidence, and renewed measurements
-  after the computation-cost arc. Optional owner-led flag retirement does not
-  block its completion.
 - [Lazy cell materialization](lazy-cell-materialization.md) sequences a
   schema-observing lazy view over a cell, a transaction mode that hands one back
   from every read, and the runner disposition for a reader that touches data the

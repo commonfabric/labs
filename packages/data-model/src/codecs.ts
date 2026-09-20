@@ -17,7 +17,7 @@
 
 import { isInstance, isObjectOrArray } from "@commonfabric/utils/types";
 
-import type { FabricValue } from "./index.ts";
+import type { FabricValue } from "@/interface.ts";
 import type { LiveEnvironment } from "./codec-interface/interface.ts";
 import { NULL_LIVE_ENVIRONMENT } from "./codec-interface/NullLiveEnvironment.ts";
 import type { CodecRegistry } from "./codec-common/CodecRegistry.ts";
@@ -31,7 +31,7 @@ import type {
 import { RealmCodecEngine } from "./codec-realm/RealmCodecEngine.ts";
 import { createBaseRealmRegistry } from "./codec-realm/createBaseRealmRegistry.ts";
 import { codecClasses as primitiveClasses } from "./fabric-primitives/impl.ts";
-import { codecClasses as instanceClasses } from "./fabric-instances/index.ts";
+import { codecClasses as instanceClasses } from "./fabric-instances/impl.ts";
 
 /**
  * Creates a registry pairing the JSON format with the fabric classes this

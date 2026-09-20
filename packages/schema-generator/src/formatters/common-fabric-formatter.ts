@@ -439,24 +439,29 @@ export class CommonFabricFormatter implements TypeFormatter {
     let innerType: ts.Type;
     try {
       innerType = context.typeRegistry?.get(innerTypeNode) ??
-        registeredWrapperInfo?.typeRef.typeArguments?.[0] ??
+        (registeredWrapperInfo &&
+          this.#firstTypeArgument(registeredWrapperInfo.typeRef, context)) ??
         context.typeChecker.getTypeFromTypeNode(innerTypeNode);
     } catch {
       innerType = context.typeChecker.getAnyType();
     }
 
-    // Only adopt the resolved type's inner when the node's inner is a bare named
-    // reference (a `TypeReferenceNode`) that degrades to `any` — the case where
-    // node-driven formatting can recover NOTHING and would emit `{}`, dropping
-    // the inner `$ref`/`$defs`. Structured inner nodes (unions, literals, arrays)
-    // carry recoverable shape even when the checker resolves them to `any` from a
-    // synthetic position, so the node-driven result must win there (e.g. a
-    // `string | undefined` inner whose `| undefined` lives only on the node).
+    // Ahead of formatting, adopt the resolved type's inner only when the node's
+    // inner is a bare named reference (a `TypeReferenceNode`) that degrades to
+    // `any` — the case where node-driven formatting can recover NOTHING and
+    // would emit `{}`, dropping the inner `$ref`/`$defs`. Structured inner nodes
+    // (unions, literals, arrays) carry recoverable shape even when the checker
+    // resolves them to `any` from a synthetic position, so the node-driven
+    // result is tried first there (e.g. a `string | undefined` inner whose
+    // `| undefined` lives only on the node).
     if (
       this.#isUnusableInnerType(innerType) && fallbackInnerTypeRef &&
       ts.isTypeReferenceNode(innerTypeNode)
     ) {
-      const fallbackInner = fallbackInnerTypeRef.typeArguments?.[0];
+      const fallbackInner = this.#firstTypeArgument(
+        fallbackInnerTypeRef,
+        context,
+      );
       if (fallbackInner && !this.#isUnusableInnerType(fallbackInner)) {
         innerType = fallbackInner;
       }
@@ -476,11 +481,36 @@ export class CommonFabricFormatter implements TypeFormatter {
       }
     }
 
-    const innerSchema = this.#schemaGenerator.formatChildType(
+    const uninterpreted: ts.TypeNode[] = [];
+    let innerSchema = this.#schemaGenerator.formatChildType(
       innerType,
-      childContext,
+      { ...childContext, uninterpretedTypeNodes: uninterpreted },
       innerTypeNode,
     );
+
+    // A structured inner node wins over the resolved type only while it can be
+    // read. The printer emits forms that node-based analysis cannot interpret
+    // from a synthetic position — `import("./mod.ts").T` for a name the
+    // emitting module does not import, and the `T & { [DEFAULT_MARKER]: V }`
+    // arm of an expanded `Default`. An unreadable member can turn a union into
+    // accept-anything; skipping a computed brand can lose its default metadata.
+    // The resolved wrapper's inner supplies the complete value schema instead,
+    // at the cost of any narrowing the node carried: the schema is then that
+    // of the whole stored value.
+    if (uninterpreted.length > 0) {
+      const resolvedInner = fallbackInnerTypeRef &&
+        this.#firstTypeArgument(fallbackInnerTypeRef, context);
+      if (resolvedInner && !this.#isUnusableInnerType(resolvedInner)) {
+        innerType = resolvedInner;
+        innerSchema = this.#schemaGenerator.formatChildType(
+          resolvedInner,
+          childContext,
+          undefined,
+        );
+      } else {
+        context.uninterpretedTypeNodes?.push(...uninterpreted);
+      }
+    }
 
     if (wrapperKind === "Stream") {
       if (typeof innerSchema === "boolean") {
@@ -508,6 +538,20 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     return this.#applyWrapperSemantics(innerSchema, wrapperKind);
+  }
+
+  /**
+   * Helper for `#formatWrapperTypeFromNode()`, which reads a wrapper's payload
+   * type. A reference whose arguments are still deferred carries none on the
+   * object and yields them through the checker.
+   */
+  #firstTypeArgument(
+    typeRef: ts.TypeReference,
+    context: GenerationContext,
+  ): ts.Type | undefined {
+    const typeArgs = typeRef.typeArguments ??
+      context.typeChecker.getTypeArguments(typeRef);
+    return typeArgs[0];
   }
 
   #formatScopeWrapperTypeFromNode(

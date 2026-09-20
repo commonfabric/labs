@@ -3,7 +3,7 @@
 // other to reach them.
 
 import { ENCODING_PREFIX_TAG, type JsonCodecValue } from "./interface.ts";
-import { ProblematicStateError } from "@/codec-common/ProblematicStateError.ts";
+import { ProblematicStateError } from "@/codec-common";
 import { backtickQuote } from "@commonfabric/utils/markdown";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { deepFreeze } from "@/deep-freeze.ts";

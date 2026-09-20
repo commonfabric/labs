@@ -582,6 +582,40 @@ such as `/tracker/title` that continues inside the piece is refused. `--watch`
 reports later UI changes from the resolved piece, and `--no-start` renders its
 stored state without starting it.
 
+### Calling the piece a path links to
+
+`cf piece call` takes a piece, so a path on its target is read as a pointer: the
+link stored at that path is followed, and the call goes to the piece the link
+names.
+
+```
+cf piece call //profile-space/of:fid1:…/inbox/piece receive '{"id":"offer-1"}'
+cf piece call --cell //profile-space/of:fid1:…/inbox/piece receive '{…}'
+```
+
+The link is resolved by the runtime, as a read through the same path resolves
+it, so the caller never reads a `$link` or rebuilds an address. The linked piece
+may sit in another space on the same host: the call opens a connection to that
+space under the same `--identity`, and that space's ACL and the CFC policy
+decide whether it is allowed, as for a call addressed there directly. `--space`
+and a space embedded in the reference name the space the _path_ sits in, and
+must agree with each other as everywhere else; the linked piece's space comes
+from the stored link and is never written.
+
+A path that leads to no piece is refused with exit code 1, before anything is
+dispatched:
+
+- `The path "…" on piece … names no piece: …` — no link is stored there (a plain
+  value, or nothing), or the linked document is not a piece. `names no piece` is
+  the stable phrase to match on to tell "no pointer here" from every other
+  failure.
+- `The path "…" on piece … links to a cell inside a piece (…), not to a piece.`
+  — a link is stored there, and it names a cell rather than a piece.
+
+Only `cf piece call` follows a path this way. The other commands that take a
+piece and nothing inside it — `cf piece verbs`, `describe`, `inspect`, `step`
+and the rest — refuse a path on a handle.
+
 ### Writing the target
 
 On `cf cell get`, `cf cell set`, and `cf piece call`, the reference goes in the
@@ -1448,6 +1482,13 @@ typed. Where the marked position holds anything else, `topic@` among them, the
 address is that position's own. Marking below an array — `notes.title@` — is
 element-wise for the same reason, and answers with each note's own id followed
 by `/title`.
+
+A marked position that holds a link to a single piece — `inbox.piece@` — is one
+of those: the address printed is the position's own (`/of:…/inbox/piece`), not
+the address of the piece the link points at. That address is what
+`cf piece call` takes to reach the linked piece, since it follows the link
+stored at the path it is given; see
+[Calling the piece a path links to](#calling-the-piece-a-path-links-to).
 
 A path that is only `@` names the position the read is already at, which no
 field path reaches because it sits above every field:

@@ -8,7 +8,7 @@ reason: "F1/F2 record of the lazy-materialization fast-follow: the handler bound
 # Lazy handler context: contract, prototype, and deferral
 
 This is the F1 and F2 record for the [lazy materialization
-fast-follow](../../../plans/lazy-materialization-fast-follow.md). It specifies
+fast-follow](../../plans/lazy-materialization-fast-follow.md). It specifies
 how a handler's bound context could be read through a view while its event
 payload stays eager, describes the prototype that implements that contract on
 the runner's handler path, reports what its tests and its measurements showed,

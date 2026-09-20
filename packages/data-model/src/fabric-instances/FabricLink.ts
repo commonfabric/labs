@@ -11,7 +11,7 @@ import {
   DEEP_FREEZE,
   IS_DEEP_FROZEN,
   SHALLOW_UNFROZEN_CLONE,
-} from "@/fabric-bases/BaseFabricInstance.ts";
+} from "@/fabric-bases";
 import { cloneIfNecessary } from "@/value-clone.ts";
 import { deepFreeze } from "@/deep-freeze.ts";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
@@ -21,7 +21,7 @@ import {
   type LiveEnvironment,
   type NonterminalCodec,
 } from "@/codec-interface/interface.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
+import { ProblematicValue } from "@/codec-common";
 
 /**
  * A link value in the fabric type system: the modern, object-shaped form of a

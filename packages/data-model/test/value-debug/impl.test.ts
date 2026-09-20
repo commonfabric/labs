@@ -19,21 +19,18 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { REALM_CODEC } from "@/codec-interface/interface.ts";
 import {
   type CompactDebugStringOptions,
   type DebugValueOptions,
   FabricPrimitive,
-} from "@/interface.ts";
-import {
   toCompactDebugString,
   toIndentedDebugString,
   toLongQuotedDebugString,
   toShortQuotedDebugString,
-} from "@/value-debug";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricLink } from "@/fabric-instances/FabricLink.ts";
+} from "@";
+import { REALM_CODEC } from "@/codec-common";
+import { FabricLink } from "@/fabric-instances";
+import { FabricBytes, FabricEpochNsec } from "@/fabric-primitives";
 
 describe("impl", () => {
   describe("toCompactDebugString", () => {

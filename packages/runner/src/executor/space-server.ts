@@ -34,7 +34,7 @@
 // annotated from the outbox carriage captured at the original run's
 // seal; the durable outbound-append rows deliver and retire through
 // the outbox; `memo.*`/`outbox.*` counters are live.
-import { toLongQuotedDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 import {
   type CellScope,
   type ConfirmedRead,
@@ -2166,6 +2166,10 @@ export class SpaceServer implements TransactionSealDestination {
     const principal = info.scopeKeyIdentity?.principal;
     const attributionFromScope = info.kind === "derivation" &&
       info.acting === undefined && principal !== undefined;
+    const sessionId = info.scopeKeyIdentity?.sessionId;
+    const readCeiling = info.kind !== "bookkeeping" && sessionId !== undefined
+      ? this.#options.server.sessionReadCeiling(this.#options.space, sessionId)
+      : undefined;
     // The S-A carriage (OW31; protocol.md §2b): a bookkeeping run
     // sanctioned to cross — the compile-cache / program materialization
     // writeback into the piece's own space — carries the TRIGGERING
@@ -2228,6 +2232,14 @@ export class SpaceServer implements TransactionSealDestination {
       ...(info.scopeKeyIdentity !== undefined
         ? { scopeKeyIdentity: info.scopeKeyIdentity }
         : {}),
+      // The read ceiling of the session this run acts as, read from the
+      // memory server's session record — the seam a declared ceiling (the
+      // client's signed `session.open` descriptor) and a server-assigned
+      // one both reach the run through. Stamped with the identity, before
+      // the run's first read, so the sqlite builtin's request hash and
+      // its flush read one value. Never for bookkeeping: the loop's own
+      // writes act as no session.
+      ...(readCeiling !== undefined ? { readCeiling } : {}),
       ...(info.actionScopeKey !== undefined
         ? { actionScopeKey: info.actionScopeKey }
         : {}),
@@ -3847,7 +3859,7 @@ export class SpaceServer implements TransactionSealDestination {
             this.#options.stats.events.visibilityDeferrals += 1;
             logger.warn("event-view-lag", () => [
               `drain deferring ${entry.eventId}: replica view holds ` +
-              `${toLongQuotedDebugString(viewEntry)} at index ${index}; ` +
+              debugStr`$quote,long${viewEntry} at index ${index}; ` +
               "later-arrived events wait behind it",
             ]);
             // The same barrier as above: the deferred entry's

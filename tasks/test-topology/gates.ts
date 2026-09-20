@@ -31,6 +31,12 @@ import {
   type UnitRequest,
 } from "./suite.ts";
 import type { CapabilityId } from "../ci-capabilities.ts";
+import {
+  collectVintages,
+  VINTAGE_GATE,
+  vintageRecordName,
+  VINTAGES_DIR,
+} from "../pattern-vintage-layout.ts";
 
 /** One repository gate: what it is called, and what runs it. */
 export interface Gate {
@@ -648,19 +654,31 @@ async function patternCompatSuite(root: string): Promise<Suite> {
  * The vintage replay, which runs every committed fixture under today's
  * source. It records one identity per vintage and takes no way of
  * running part of itself, so the suite is one unit.
+ *
+ * The names it claims are read from the fixture tree, so an identity is
+ * claimed while the tree holds the fixture it names. A claimed identity
+ * is one a published manifest carries and the publisher scores on every
+ * run, and `departed` in `tasks/test-selection/build.ts` drops an
+ * identity from the aggregate only while no suite claims it.
  */
-function patternVintageSuite(): Suite {
-  const unit = "pattern-vintage";
+async function patternVintageSuite(root: string): Promise<Suite> {
+  const unit = VINTAGE_GATE;
+  const known = new Set(
+    (await collectVintages(path.join(root, VINTAGES_DIR)))
+      .map((vintage) => vintageRecordName(vintage)),
+  );
   const recordSurfaces = [{ kind: "gate", scope: "repo" }];
   return {
-    id: "pattern-vintage",
+    id: unit,
     recordSurfaces,
     needs: ["deno", "git-history"],
     units: [unit],
     unavailable: [],
     locate(record): Location | undefined {
       if (!claimsIdentity({ recordSurfaces }, record.test)) return undefined;
-      return record.test.n === unit || record.test.n.startsWith(`${unit} `)
+      // The wrapper's own record carries the suite's bare name and what
+      // the whole replay took.
+      return record.test.n === unit || known.has(record.test.n)
         ? { level: "unit", unit }
         : undefined;
     },
@@ -696,6 +714,6 @@ export async function loadGateSuites(root: string): Promise<Suite[]> {
     await typecheckSuite(root),
     await cfcheckSuite(root),
     await patternCompatSuite(root),
-    patternVintageSuite(),
+    await patternVintageSuite(root),
   ];
 }

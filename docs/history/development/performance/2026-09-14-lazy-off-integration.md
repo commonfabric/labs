@@ -10,7 +10,7 @@ reason: "Lazy-materialization retirement evidence from isolated integration runs
 This record extends the
 [rollout evidence](2026-09-11-lazy-materialization-f3-rollout-evidence.md) for
 the
-[lazy-materialization fast-follow](../../../plans/lazy-materialization-fast-follow.md).
+[lazy-materialization fast-follow](../../plans/lazy-materialization-fast-follow.md).
 It does not retire the flag or change the handler deferral.
 
 ## Method

@@ -1770,7 +1770,11 @@ whose runtime is not bounded as configured; the manifest's declaration is
 projected into the policy snapshot and every invocation context for the audit;
 and the operator summary prints the ceiling beside the other session dials. A
 delegated child runs on its parent's session and records the parent's ceiling as
-its own.
+its own. The ceiling bounds the session on either server-execution arm: a
+session's own runtime reads under it, and under server execution the session
+declares it to the space server, whose runtime reads under it for every run
+served as that session — a server too old to record a session's ceiling is
+refused rather than trusted to bound anything.
 
 The tool takes `sourceText` (inline pattern source, at most 256 KiB — an
 over-cap source is a structured tool error), an optional `inputs` object, and an

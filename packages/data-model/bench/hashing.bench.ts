@@ -7,8 +7,7 @@
  *       --allow-env --no-check bench/hashing.bench.ts
  */
 
-import { hashOf } from "@/value-hash.ts";
-import { deepFreeze } from "@/deep-freeze.ts";
+import { deepFreeze, hashOf } from "@";
 
 //
 // Pre-generated test data

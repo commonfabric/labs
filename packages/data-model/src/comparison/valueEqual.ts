@@ -1,7 +1,7 @@
 import { isObjectOrArray, isPlainObject } from "@commonfabric/utils/types";
 import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
-import { codecOf } from "@/codec-common/codecOf.ts";
+import { codecOf } from "@/codec-common";
 import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
 import {
   type FabricArray,

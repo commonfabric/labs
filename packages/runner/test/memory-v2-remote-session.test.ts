@@ -32,6 +32,7 @@ import {
 } from "../src/storage/memory-socket.ts";
 import { SpaceHostValidationError } from "../src/space-host.ts";
 import { StorageManager } from "../src/storage/v2.ts";
+import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { TEST_HELLO_SESSION_OPEN } from "./memory-v2-test-utils.ts";
 
 function captureError(run: () => unknown): Error {
@@ -346,6 +347,25 @@ describe("StorageManager per-space host wiring", () => {
       await manager.setMessageCompressionEnabled(false);
     } finally {
       await manager.closeNow();
+    }
+  });
+});
+
+describe("StorageManager.setSessionReadCeiling", () => {
+  it("throws once a session is open, so a late ceiling never leaves a session reading unbounded", async () => {
+    const identity = await Identity.fromPassphrase(
+      "read-ceiling-late-declaration",
+    );
+    const manager = EmulatedStorageManager.emulate({ as: identity });
+    try {
+      manager.open(identity.did());
+      expect(() =>
+        manager.setSessionReadCeiling({
+          maxConfidentiality: [identity.did()],
+        })
+      ).toThrow(/already open/);
+    } finally {
+      await manager.close();
     }
   });
 });
@@ -672,6 +692,39 @@ describe("WebSocketTransport failure signaling", () => {
       },
     }));
   };
+
+  it("refuses to open a session declaring a read ceiling on a server that does not advertise `sessionReadCeiling`", async () => {
+    // Such a server would accept the descriptor and serve every query
+    // unbounded, so the refusal lands before the session opens.
+    const identity = await Identity.fromPassphrase(
+      "read-ceiling-gate-remote-session",
+    );
+    await withTransport(async (_transport, socket) => {
+      const factory = new RemoteSessionFactory(
+        () => new URL("wss://memory.test/api/storage/memory"),
+        identity,
+        createNativeMemorySocket,
+      );
+      const opening = factory.create(identity.did(), identity, {
+        readCeiling: { maxConfidentiality: [identity.did()] },
+      });
+      const activeSocket = socket();
+      activeSocket.openConnection();
+      await activeSocket.whenSent(1);
+      const { sessionReadCeiling: _, ...older } = getMemoryProtocolFlags();
+      activeSocket.receive(encodeMemoryBoundary({
+        type: "hello.ok",
+        protocol: MEMORY_PROTOCOL,
+        flags: older,
+        sessionOpen: TEST_HELLO_SESSION_OPEN,
+      }));
+      await expect(opening).rejects.toThrow(/sessionReadCeiling/);
+      expect(activeSocket.readyState).toBe(DrivableWebSocket.CLOSED);
+      // Only the hello went out: no session.open was signed for a server
+      // that could not honor it.
+      expect(activeSocket.sent).toHaveLength(1);
+    });
+  });
 
   it("rejects the in-flight send and closes cleanly when the socket closes before opening", async () => {
     await withTransport(async (transport, socket) => {

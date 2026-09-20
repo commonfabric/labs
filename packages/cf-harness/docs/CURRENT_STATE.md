@@ -351,9 +351,12 @@ The current package provides:
   governs only query results declared per session (`PerSession<>`,
   `scope: "session"`, `.asScope("session")`, or a session-scoped db) and the
   runtime refuses any other query under it, so a pattern authored for a bounded
-  run declares its results per session; it is refused without a fabric session,
-  recorded with its source as `readMaxConfidentiality` in `fabricSessionCfc`,
-  printed in the operator summary, and inherited unchanged by a delegated child;
+  run declares its results per session; it bounds the session on either
+  server-execution arm (under server execution the session declares it to the
+  space server, whose runtime reads under it); it is refused without a fabric
+  session, recorded with its source as `readMaxConfidentiality` in
+  `fabricSessionCfc`, printed in the operator summary, and inherited unchanged
+  by a delegated child;
 - an opt-in pattern index (`--pattern-index-url`, or its
   `CF_HARNESS_PATTERN_INDEX_URL` environment fallback), which needs the fabric
   session configuration: index requests are signed with the session identity

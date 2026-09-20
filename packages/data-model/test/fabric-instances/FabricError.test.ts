@@ -22,22 +22,17 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { FabricInstance, type FabricValue } from "@/interface.ts";
-import {
-  DEEP_FREEZE,
-  IS_DEEP_FROZEN,
-} from "@/fabric-bases/BaseFabricInstance.ts";
-import { CODEC } from "@/codec-interface/interface.ts";
-import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricNativeWrapper } from "@/fabric-instances/FabricNativeWrapper.ts";
 import {
   deepFreeze,
+  FabricInstance,
+  type FabricValue,
   isDeepFrozen,
   isValidDeepFrozenFabricValue,
-} from "@/deep-freeze.ts";
+} from "@";
+import { CODEC, CODEC_TYPE_TAGS, NULL_LIVE_ENVIRONMENT } from "@/codec-common";
+import { DEEP_FREEZE, IS_DEEP_FROZEN } from "@/fabric-bases";
+import { FabricError, FabricNativeWrapper } from "@/fabric-instances";
+import { FabricEpochNsec } from "@/fabric-primitives";
 import { dummyEnv, subFreeze, subIsDeepFrozen } from "./fixtures.ts";
 
 describe("FabricError", () => {

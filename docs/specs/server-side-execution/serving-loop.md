@@ -866,6 +866,21 @@ action's public write. Therefore, normatively:
 - Handler runs are actions: a server-side handler run gets per-run CFC
   exactly as its client run did. D-v2-1 moves WHERE handlers run, never
   the enforcement unit.
+- **The run carries the READ CEILING of the session it acts as.** The
+  stamp reads the memory server's session record for the run's
+  `scopeKeyIdentity.sessionId` (`Server.sessionReadCeiling`) and
+  attaches it as `WaveRunContext.readCeiling` — the ceiling the
+  client declared in its signed `session.open` descriptor
+  (protocol.md §1), or one the server assigned to the session. The
+  sqlite builtin resolves one effective ceiling per run: the serving
+  runtime's own option met with the carried one, `onExceed` meeting
+  toward `fail` — and reads under it exactly as a client's own run
+  reads under its option (06-cfc.md, "Runtime read ceiling"): the
+  meet joins the request hash, decides the rows, and a query whose
+  result is not session-scoped is refused before it is staged. Never
+  for a bookkeeping run, which acts as no session; a run acting as a
+  session that declared none reads under the serving runtime's option
+  alone. Verification-coverage.md OW64 is the coverage row.
 - **The run's CFC trust snapshot carries the run's ACTING principal** —
   the event's server-stamped actor, the demanded instance's principal,
   or the delegated carriage's actor — never the serving runtime's

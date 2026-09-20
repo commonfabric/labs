@@ -13,7 +13,10 @@
  *     back, so the module graph gains a cycle. When the import brings in a
  *     value rather than a type that cycle is there at run time, and the order
  *     in which the modules of the package initialize starts to depend on the
- *     order in which the entry point lists its exports.
+ *     order in which the entry point lists its exports. An alias from the
+ *     package's own `imports` map that resolves to the entry point's file, such
+ *     as `@` or `@/index.ts` where `@/` maps to `./src/`, is the same import
+ *     and is reported the same way.
  *   - A subpath such as `@scope/pkg/thing` names one module rather than the
  *     whole package, so it adds no cycle. It still leaves the package and comes
  *     back, so the same file arrives under two spellings, and the shorter one
@@ -58,6 +61,8 @@ interface OwningPackage {
   readonly name: string;
   /** The `exports` map, from specifier suffix to a path under `root`. */
   readonly exports: ReadonlyMap<string, string>;
+  /** The `imports` map, from key to the address it stands for. */
+  readonly imports: ReadonlyMap<string, string>;
 }
 
 /**
@@ -105,6 +110,17 @@ function exportMap(exports: unknown): ReadonlyMap<string, string> {
   return map;
 }
 
+/** The `imports` map of a configuration, keeping the entries that are strings. */
+function importMap(imports: unknown): ReadonlyMap<string, string> {
+  const map = new Map<string, string>();
+  if (isObjectOrArray(imports)) {
+    for (const [key, value] of Object.entries(imports)) {
+      if (typeof value === "string") map.set(key, value);
+    }
+  }
+  return map;
+}
+
 /**
  * The package that owns files in `directory`. The nearest enclosing directory
  * with a Deno configuration is the package, and a configuration that declares
@@ -128,7 +144,43 @@ function computeOwner(directory: string): OwningPackage | null {
   }
   const name = config.name;
   if (typeof name !== "string" || name === "") return null;
-  return { root: directory, name, exports: exportMap(config.exports) };
+  return {
+    root: directory,
+    name,
+    exports: exportMap(config.exports),
+    imports: importMap(config.imports),
+  };
+}
+
+/**
+ * The file `specifier` names through the package's `imports` map, or null when
+ * it names none. The match is the one an import map makes: a key equal to the
+ * specifier, and failing that the longest key ending in `/` that the specifier
+ * starts with. The winning entry is chosen from the whole map, and only then
+ * asked whether it is a path relative to the configuration, so an entry naming
+ * another package shadows a shorter one naming a directory here.
+ */
+function aliasTarget(owner: OwningPackage, specifier: string): string | null {
+  let key = owner.imports.has(specifier) ? specifier : null;
+  if (key === null) {
+    for (const candidate of owner.imports.keys()) {
+      if (!candidate.endsWith("/") || !specifier.startsWith(candidate)) {
+        continue;
+      }
+      if (key === null || candidate.length > key.length) key = candidate;
+    }
+  }
+  if (key === null) return null;
+  const address = owner.imports.get(key);
+  if (address === undefined || !address.startsWith("./")) return null;
+  return resolve(owner.root, address, specifier.slice(key.length));
+}
+
+/** True when `specifier` is an alias for the package's entry point. */
+function isEntryPointAlias(owner: OwningPackage, specifier: string): boolean {
+  const entryPoint = owner.exports.get(".");
+  if (entryPoint === undefined) return false;
+  return aliasTarget(owner, specifier) === resolve(owner.root, entryPoint);
 }
 
 /** The specifier that reaches `to` from the file at `from`. */
@@ -140,6 +192,13 @@ function relativeSpecifier(from: string, to: string): string {
 /** The advice given when the rule cannot name the file to import. */
 const GENERAL_ADVICE =
   "Import the module that defines it by relative path instead.";
+
+/**
+ * The advice given for an alias of the entry point. A package that has aliases
+ * addresses its own modules through them as readily as by relative path, so
+ * this names no form.
+ */
+const ALIAS_ADVICE = "Import the module that defines it instead.";
 
 /**
  * What to import instead: the module the offending subpath resolves to, named
@@ -165,11 +224,13 @@ function message(
   // The entry point gets no file named for it: the relative path to it reaches
   // the same barrel, so the fix is a path to whichever module defines the
   // imported name, which the rule does not know.
-  if (specifier === owner.name) {
+  const isAlias = isEntryPointAlias(owner, specifier);
+  if (specifier === owner.name || isAlias) {
+    const advice = isAlias ? ALIAS_ADVICE : GENERAL_ADVICE;
     return `\`${specifier}\` is the entry point of the package this file ` +
       "belongs to. Importing it from inside the package puts a cycle in the " +
       "module graph, and makes the order in which this module initializes " +
-      `depend on the order the entry point lists its exports. ${GENERAL_ADVICE}`;
+      `depend on the order the entry point lists its exports. ${advice}`;
   }
   return `\`${specifier}\` is an export of the package this file belongs to, ` +
     "and it resolves back to a file inside that package. Naming it this way " +
@@ -191,7 +252,10 @@ export default {
         const check = (node: Deno.lint.Node, source: unknown) => {
           const value = (source as { value?: unknown } | null)?.value;
           if (typeof value !== "string") return;
-          if (value !== owner.name && !value.startsWith(`${owner.name}/`)) {
+          if (
+            value !== owner.name && !value.startsWith(`${owner.name}/`) &&
+            !isEntryPointAlias(owner, value)
+          ) {
             return;
           }
           context.report({
