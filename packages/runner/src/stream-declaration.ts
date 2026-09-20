@@ -129,10 +129,14 @@ export function externalReferenceResolverOver(
       ? root
       : definitionNamed(root, parsed.defName);
     if (target === undefined) return undefined;
-    const schemaRead = isObjectOrArray(target) && Object.keys(siblings).length
-      ? { ...target, ...siblings } as JSONSchema
+    if (Object.keys(siblings).length === 0) return { schema: target, root };
+    // A boolean target takes the keywords beside the reference as well: the
+    // schema admitting everything is the empty object, and the one admitting
+    // nothing is its negation.
+    const body = typeof target === "boolean"
+      ? (target ? {} : { not: {} })
       : target;
-    return { schema: schemaRead, root };
+    return { schema: { ...body, ...siblings } as JSONSchema, root };
   };
 }
 

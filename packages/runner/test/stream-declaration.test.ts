@@ -480,6 +480,7 @@ describe("stream declaration", () => {
         wrapper: { $ref: "cid:evt", description: "An event" } as JSONSchema,
         defs: { $defs: { Ev: event } } as JSONSchema,
         plain: { type: "number" } as JSONSchema,
+        anything: true,
         loop: { $ref: "cid:loop" } as JSONSchema,
       };
       const resolveExternal = externalReferenceResolverOver((hash) =>
@@ -502,6 +503,11 @@ describe("stream declaration", () => {
       it("reads a keyword beside the reference over the document", () => {
         expect(
           declared({ $ref: "cid:plain", asCell: ["stream"] } as JSONSchema),
+        )
+          .toBe("stream");
+        // A boolean document takes the keyword as well.
+        expect(
+          declared({ $ref: "cid:anything", asCell: ["stream"] } as JSONSchema),
         )
           .toBe("stream");
       });
