@@ -26,6 +26,7 @@
 
 import { fromFileUrl, resolve, toFileUrl } from "@std/path/posix";
 
+import { holdsControlCharacter } from "./place.ts";
 import { type RecordEntry } from "./record.ts";
 
 /**
@@ -38,10 +39,12 @@ import { type RecordEntry } from "./record.ts";
 const HOME_SCHEME = "file";
 
 /**
- * The last code point a URL parser drops from the front of a reference before
- * it reads anything else, the space itself among them.
+ * The character a URL parser drops from the front of a reference before it
+ * reads anything else, and the only one of those that reaches this module:
+ * the rest of that set is the characters a terminal acts on, which
+ * {@link ExternalLocation.xcd} refuses before anything reads them.
  */
-const BLANK = 0x20;
+const BLANK = " ";
 
 /**
  * What moving the external location did: it landed somewhere, or it was
@@ -53,8 +56,16 @@ export type Landing =
   /** The token names no place, for the reason given. */
   | { readonly kind: "refused"; readonly reason: string };
 
-/** Where a scheme ends in a token that carries one. */
-const SCHEMED = /^([A-Za-z][A-Za-z0-9+.-]*):(.*)$/;
+/**
+ * The scheme a token opens with, matched at its start and nowhere else.
+ *
+ * It matches the scheme alone and leaves the rest to be taken by position. A
+ * pattern that tried to carry the rest as a group would have to say what the
+ * rest may hold, and the answer is anything at all — a group written `.*` is
+ * a group that stops at a line break, which would leave a token carrying one
+ * reading as though it named no scheme.
+ */
+const SCHEMED = /^[A-Za-z][A-Za-z0-9+.-]*:/;
 
 /**
  * Returns the scheme `token` is written with and the rest of it, or
@@ -66,7 +77,11 @@ const SCHEMED = /^([A-Za-z][A-Za-z0-9+.-]*):(.*)$/;
  */
 function schemeOf(token: string): { scheme: string; rest: string } | undefined {
   const match = SCHEMED.exec(token);
-  return match === null ? undefined : { scheme: match[1], rest: match[2] };
+  if (match === null) return undefined;
+  return {
+    scheme: match[0].slice(0, -1),
+    rest: token.slice(match[0].length),
+  };
 }
 
 /**
@@ -154,20 +169,21 @@ const NAMES_ANOTHER_MACHINE =
  * the plane that reads a path.
  */
 function withLeadingBlanksKept(path: string): string {
-  // Walked rather than matched: a character class over this range is a
-  // control character written into a regular expression, which `deno lint`
-  // turns down (`no-control-regex`) for the reason it is written as an
-  // escape everywhere else.
   let past = 0;
-  while (past < path.length && path.charCodeAt(past) <= BLANK) past += 1;
-  if (past === 0) return path;
-  let kept = "";
-  for (let at = 0; at < past; at += 1) {
-    const code = path.charCodeAt(at).toString(16).padStart(2, "0");
-    kept += `%${code.toUpperCase()}`;
-  }
-  return kept + path.slice(past);
+  while (path[past] === BLANK) past += 1;
+  return past === 0 ? path : `${"%20".repeat(past)}${path.slice(past)}`;
 }
+
+/**
+ * The refusal a token holding a character a terminal acts on gets.
+ *
+ * No plane in the family names a place with one, and a parser that met one
+ * would drop it rather than refuse it — leaving a location that is not the
+ * one asked for and says nothing about the difference.
+ */
+const ACTS_ON_A_TERMINAL =
+  "A place outside the fabric is not named with a character a terminal acts " +
+  "on, so a token holding one names no place.";
 
 const NAMES_NO_HOME =
   "`~` names this run's own home and nobody else's, so a path opening `~` " +
@@ -232,8 +248,18 @@ export class ExternalLocation {
    * `xcd /tmp` both land on whatever plane the location stands on. A scheme
    * moves it to another plane, and is legal only on an absolute complete
    * path.
+   *
+   * A token holding a character a terminal acts on is refused first, as a
+   * place refuses a part holding one (`place.ts`). It is the same rule for
+   * the same reason on both planes, and it is what keeps the readings below
+   * free of a class every one of them would otherwise have to allow for: a
+   * line break inside a token is not a path a plane can hold, and a URL
+   * parser drops one rather than refusing it.
    */
   xcd(token: string): Landing {
+    if (holdsControlCharacter(token)) {
+      return { kind: "refused", reason: ACTS_ON_A_TERMINAL };
+    }
     const landing = this.#landing(token);
     if (landing.kind === "external") this.#at = asContainer(landing.at);
     return landing;

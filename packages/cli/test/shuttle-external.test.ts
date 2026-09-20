@@ -187,6 +187,28 @@ describe("external", () => {
         .toBe("https://example.test/a/%20file:out.json/");
     });
 
+    it("refuses a token holding a character a terminal acts on", () => {
+      // The same rule a place makes about a part holding one, for the same
+      // reason. A URL parser would drop it rather than refuse it, which is
+      // what makes it the reading's problem rather than the plane's.
+
+      const location = at("file:///tmp/work/");
+      expect(refusal(location.xcd("file:out\n.json")))
+        .toContain("a terminal acts on");
+      expect(location.render()).toBe("file:///tmp/work/");
+    });
+
+    it("reads the scheme of a token whatever the rest of it holds", () => {
+      // The refusal above is the door; this is the reading behind it. A
+      // pattern that carried the rest as a group would stop at a line break
+      // and leave the token reading as though it named no scheme, which is a
+      // relative path landing where an absolute one was refused.
+
+      const location = at("https://example.test/a/");
+      expect(refusal(location.xcd("file:out.json"))).toContain("absolute");
+      expect(location.render()).toBe("https://example.test/a/");
+    });
+
     it("refuses a path opening at a home the run was given none of", () => {
       const homeless = new ExternalLocation(new URL("file:///tmp/"), undefined);
       expect(refusal(homeless.xcd("file:~/work"))).toContain("no home");
