@@ -141,10 +141,16 @@ export type ExternalReferenceResolver = (
  * reader supplies, or a member the document does not carry, resolves to
  * nothing.
  *
- * The runtime goes further for a sibling carrying a local reference of its
- * own, whose definitions belong to the referring document rather than the
- * referenced one, and namespaces them apart. A keyword read at a root, as a
- * declaration is, does not reach that case.
+ * A sibling can carry a local reference of its own — a composition written
+ * beside the `$ref` that names a definition of the referring document — and
+ * that reference's definitions belong to the referring document rather than
+ * the referenced one. This resolver moves the root to the referenced
+ * document, so such a reference resolves against the wrong `$defs`, and a
+ * declaration read through it can come out differently from the runtime's
+ * reading, which namespaces the two documents' definitions apart. How
+ * definitions are scoped across documents reached through several `cid:`
+ * references is open; a reader that needs that form takes the runtime's
+ * resolution.
  */
 export function externalReferenceResolverOver(
   readSchemaDocument: (taggedHash: string) => JSONSchema | undefined,
