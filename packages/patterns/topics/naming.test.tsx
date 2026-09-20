@@ -69,7 +69,11 @@ import {
   type RecordNamesResult,
 } from "../collection-naming/naming.ts";
 import { findNodeByProp, hasText } from "../test/vnode-helpers.ts";
-import Topics, { type TopicDemand } from "./main.tsx";
+import Topics, {
+  submitProfileTopic,
+  type TopicCrossrefRow,
+  type TopicDemand,
+} from "./main.tsx";
 import Topic, { TOPIC_STATE_VERSION } from "./topic.tsx";
 
 /**
@@ -413,6 +417,40 @@ export default pattern(() => {
     nameOf(madeTopics.key(0), made.namesTable ?? []) === "1"
   );
 
+  // The browser composer passes its allocated number into the topic too, and
+  // it is a SECOND create path: `submitProfileTopic` and `addTopic` hand
+  // `createNamed` separate callbacks, so a pass-through dropped from one is
+  // not dropped from the other. Witnessed the way the headless create is —
+  // the composed topic refusing a second number — because the composer builds
+  // its topic inside the handler, so no cell here is that topic's input.
+  const composerNames = new Writable<NamesMap>({});
+  const composerTopics = new Writable<TopicDemand[] | Default<[]>>([]);
+  const composerCrossrefs = new Writable<TopicCrossrefRow[] | Default<[]>>([]);
+  const composerDraft = new Writable("Composed topic");
+  const composerSubmit = submitProfileTopic({
+    topics: composerTopics,
+    mentionable: composerTopics,
+    boardCrossrefs: composerCrossrefs,
+    names: composerNames,
+    newTitle: composerDraft,
+    profileName: "Ada",
+    profileAvatar: "🦊",
+  });
+  const action_compose_a_topic = action(() => {
+    composerSubmit.send();
+  });
+  const assert_composer_allocated_into_the_namespace = assert(() =>
+    Object.keys(composerNames.get() ?? {}).join(",") === "1" &&
+    (composerTopics.get() ?? []).length === 1 &&
+    equals(
+      (composerNames.get() ?? {})["1"] as object,
+      composerTopics.key(0),
+    )
+  );
+  const action_offer_the_composed_topic_another = action(() => {
+    composerTopics.key(0).resolveAsCell().key("recordName").send({ name: "9" });
+  });
+
   // A write that could not land on one run and lands on the next, which is the
   // recovery a re-run exists for. The obstruction is real and removable: this
   // topic opens at a state version no source supports, so `recordName` refuses
@@ -489,6 +527,85 @@ export default pattern(() => {
     foreignNumber.get() === "1"
   );
 
+  // A topic filed before this change existed at all: composed with no
+  // `shortName` key, so its durable argument has no such path, which is what
+  // every topic on the deployed board holds. The step numbers it and asks it
+  // to store what it allocated.
+  //
+  // Nothing here supplies a cell for its number, and that is the case rather
+  // than an oversight — a pre-input topic is exactly one nothing was handed a
+  // cell for. So the store is read the only way it can be: the topic's own
+  // refusal of a SECOND number, which `recordName` gives for a number
+  // disagreeing with one already stored. A topic that stored nothing would
+  // accept `9`. That refusal is one of this file's expected runtime errors,
+  // and dropping the step's send makes the call succeed and the count fall.
+  const preInputNames = new Writable<NamesMap>({});
+  const preInputTopics = new Writable<TopicDemand[] | Default<[]>>([]);
+  const preInput = Topics({
+    topics: preInputTopics,
+    names: preInputNames,
+  });
+  const action_file_a_pre_input_topic = action(() => {
+    preInputTopics.push(Topic({ title: "Pre-input", createdAt: 1 }));
+  });
+  const action_number_the_pre_input_topic = action(() => {
+    preInput.backfillNames.send({ agentName: "Sol" });
+  });
+  const assert_pre_input_topic_is_numbered = assert(() =>
+    Object.keys(preInputNames.get() ?? {}).join(",") === "1" &&
+    (preInput.namesTable ?? []).length === 1 &&
+    preInput.namesTable?.[0]?.name === "1" &&
+    equals(
+      preInput.namesTable?.[0]?.member as object,
+      preInput.topics?.[0] as object,
+    )
+  );
+  const action_offer_the_pre_input_topic_another = action(() => {
+    preInputTopics.key(0).resolveAsCell().key("recordName").send({ name: "9" });
+  });
+
+  // A second run stores nothing new, seen rather than assumed. A re-write of
+  // the same string leaves every value it could be compared against unchanged,
+  // so comparing values cannot detect one. The verb can: `recordName` returns
+  // BEFORE `upgradeTopicState` when the number asked for is the number stored,
+  // and `upgradeTopicState` refuses a state version no source supports. So a
+  // topic parked at such a version after its number is stored is refused if
+  // and only if the verb goes on to write, and the second run's silence
+  // becomes observable — no error means no write. Drop the early return and
+  // this run rejects, whichever guard it reaches first.
+  const settledNumber = new Writable<string | undefined>(undefined);
+  const settledVersion = new Writable<number | Default<0>>(
+    TOPIC_STATE_VERSION,
+  );
+  const settledNames = new Writable<NamesMap>({});
+  const settledTopics = new Writable<TopicDemand[] | Default<[]>>([]);
+  const settled = Topics({ topics: settledTopics, names: settledNames });
+  const action_file_a_settled_topic = action(() => {
+    settledTopics.push(
+      Topic({
+        title: "Settled",
+        createdAt: 1,
+        shortName: settledNumber,
+        topicStateVersion: settledVersion,
+      }),
+    );
+  });
+  const action_number_the_settled_topic = action(() => {
+    recordNames(settledTopics, settledNames);
+  });
+  const assert_settled_topic_stored_its_number = assert(() =>
+    Object.keys(settledNames.get() ?? {}).join(",") === "1" &&
+    settledNumber.get() === "1"
+  );
+  const action_park_the_settled_version = action(() => {
+    settledVersion.set(99);
+  });
+  const assert_second_run_wrote_nothing = assert(() =>
+    Object.keys(settledNames.get() ?? {}).join(",") === "1" &&
+    settledNumber.get() === "1" &&
+    settledVersion.get() === 99
+  );
+
   // The number a topic holds is the topic's, not the board's reading of it.
   // This one stores `9` and the namespace has never heard of it, so the step
   // allocates `1`, asks for `1`, and the topic refuses: a number is permanent,
@@ -517,12 +634,15 @@ export default pattern(() => {
   );
 
   return {
-    // Three refusals a topic's own verb makes, and each is a case above
-    // working: the board-created topic declining a second number, the blocked
-    // topic before its state version is repaired, and the mislabeled topic
-    // keeping the number it holds. An exact count, so a guard that quietly
-    // stopped refusing fails here rather than passing on a silent overwrite.
-    expectRuntimeErrors: 3,
+    // Five refusals a topic's own verb makes, and each is a case above
+    // working: the board-created topic, the composed topic and the pre-input
+    // topic each declining a second number, the blocked topic before its state
+    // version is repaired, and the mislabeled topic keeping the number it
+    // holds. An exact count, so
+    // a guard that quietly stopped refusing fails here rather than passing on
+    // a silent overwrite — and so does a second run that writes, which the
+    // settled topic's parked version would refuse.
+    expectRuntimeErrors: 5,
     [TESTS]: [
       { assertion: assert_initial },
       { assertion: assert_declaration },
@@ -558,6 +678,9 @@ export default pattern(() => {
       { action: action_make_one },
       { action: action_record_a_second_number },
       { assertion: assert_create_allocated_into_the_namespace },
+      { action: action_compose_a_topic },
+      { assertion: assert_composer_allocated_into_the_namespace },
+      { action: action_offer_the_composed_topic_another },
       { action: action_file_a_blocked_topic },
       { action: action_record_blocked },
       { assertion: assert_blocked_write_did_not_land },
@@ -568,6 +691,16 @@ export default pattern(() => {
       { assertion: assert_foreign_key_is_no_name },
       { action: action_record_foreign },
       { assertion: assert_foreign_keyed_topic_is_numbered },
+      { action: action_file_a_pre_input_topic },
+      { action: action_number_the_pre_input_topic },
+      { assertion: assert_pre_input_topic_is_numbered },
+      { action: action_offer_the_pre_input_topic_another },
+      { action: action_file_a_settled_topic },
+      { action: action_number_the_settled_topic },
+      { assertion: assert_settled_topic_stored_its_number },
+      { action: action_park_the_settled_version },
+      { action: action_number_the_settled_topic },
+      { assertion: assert_second_run_wrote_nothing },
       { action: action_file_a_mislabeled_topic },
       { action: action_record_mislabeled },
       { assertion: assert_mislabeled_keeps_its_own },

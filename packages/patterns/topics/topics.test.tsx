@@ -530,11 +530,12 @@ export default pattern(() => {
   // and the map stays empty while the topic still lands.
   //
   // That the composer also passes the number INTO the topic is covered in
-  // naming.test.tsx, on the headless create the two share through
-  // `createNamed`. It cannot be covered here, and the reason is worth knowing:
-  // the composer builds the topic inside the handler, so no cell of this
-  // file's is its number input, and `SHOW_TOPIC_NUMBERS` gates the published
-  // `shortName`, so reading that would assert an absence every topic has.
+  // naming.test.tsx, which binds this same handler and witnesses the
+  // pass-through through the composed topic's refusal of a second number. It
+  // cannot be covered here, and the reason is worth knowing: the composer
+  // builds the topic inside the handler, so no cell of this file's is its
+  // number input, and `SHOW_TOPIC_NUMBERS` gates the published `shortName`, so
+  // reading that would assert an absence every topic has.
   const assert_profile_topic_named = assert(() =>
     Object.keys(profileNames.get()).join(",") === "1" &&
     equals(
