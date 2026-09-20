@@ -9,10 +9,12 @@ Factory phase machine or server-primary pattern execution.
 ## Status
 
 Not started, and likely superseded: the
-[agent requests plan](agent-requests-and-work-queue.md) covers hosting a
+[archived agent requests design](../history/plans/agent-requests-and-work-queue.md)
+records the design for hosting a
 `cf-harness` run for a person's request as a general capability, with the
-`pattern-author` profile doing the authoring. Read that plan before starting a
-stage here; the stages below stay as the inventory of what an authoring
+`pattern-author` profile doing the authoring. The live
+[agent capability](../common/capabilities/agent.md) describes the implemented
+request surface; the stages below stay as the inventory of what an authoring
 request additionally owes (target binding, verification, publication).
 
 ## Working rules

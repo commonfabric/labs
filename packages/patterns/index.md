@@ -111,15 +111,15 @@ profile roster — every participant's cross-space profile badge), `self.tsx`,
 `text-swapper.tsx`.
 
 App and integration directories: `activity-log/`, `agent/`, `base/`,
-`battleship/`, `budget-tracker/`, `calendar/`, `card-piles/`,
-`collection-naming/` (the member-naming library and the board that exercises it;
-the library is the reference, the board is a demo), `contacts/`, `cozy-poll/`,
-`examples/`, `experimental/` (explicitly unhardened explorations), `file-share/`
-(a minimal file-sharing example: bytes go to the blob store, cells hold
-descriptors), `habit-tracker/`, `lobby/`, `lunch-poll/`, `profile-group-chat/`,
-`project-list/`, `router/`, `scoped-group-chat/`, `scoped-user-directory/`,
-`scrabble/`, `shared-profile-demo/`, `shared-profile-roster/`, `suggestable/`,
-`weekly-calendar/`.
+`battleship/`, `book-recommendations/`, `budget-tracker/`, `calendar/`,
+`card-piles/`, `collection-naming/` (the member-naming library and the board
+that exercises it; the library is the reference, the board is a demo),
+`contacts/`, `cozy-poll/`, `examples/`, `experimental/` (explicitly unhardened
+explorations), `file-share/` (a minimal file-sharing example: bytes go to the
+blob store, cells hold descriptors), `habit-tracker/`, `lobby/`, `lunch-poll/`,
+`profile-group-chat/`, `project-list/`, `router/`, `scoped-group-chat/`,
+`scoped-user-directory/`, `scrabble/`, `shared-profile-demo/`,
+`shared-profile-roster/`, `suggestable/`, `weekly-calendar/`.
 
 Connector-owned patterns live with their connector families: the
 [agent debug view](../connectors/agents/debug-view/README.md) and

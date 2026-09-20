@@ -694,7 +694,7 @@ holds the measurements and the conditions for revisiting.
   on the other value would stage requests the deployment never picks up, or
   refuse ones it would.
 - **Added by.** Bernhard Seefeld, agent requests stage 3
-  ([`docs/plans/agent-requests-implementation.md`](../plans/agent-requests-implementation.md)).
+  ([`docs/history/plans/agent-requests-implementation.md`](../history/plans/agent-requests-implementation.md)).
 - **Purpose.** Gates the `agent` builtin
   ([`docs/common/capabilities/agent.md`](../common/capabilities/agent.md)):
   a pattern's request for an agent run, staged as a sink request under the

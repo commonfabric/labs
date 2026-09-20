@@ -143,6 +143,9 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 
 ## Executed plans and work orders
 
+- [Agent requests — implementation plan](plans/agent-requests-implementation.md) — 2026-09-20; stages 1 through 6 implemented and verified through the book demonstration, with stage 7 ceiling work retained as pending at the archival boundary.
+- [Agent requests from a pattern, and the queue that runs them](plans/agent-requests-and-work-queue.md) — 2026-09-20; design and rulings at the stage 6 demonstration boundary, including linked inputs and results, the per-user runner, inspection, enforcement limitations, and pending stage 7 ceiling work.
+
 - [view-replication-server-currency.md](plans/view-replication-server-currency.md) — executed plan for initial client view currency from settled server input/output evidence, with provenance, wake dependencies, and registration-only adoption.
 - [Pattern computation cost implementation](plans/pattern-computation-cost-implementation.md) — executed #7155 sequence, copy-based acceptance, explicit B3a deferral, and D1/D2 handoff.
 
