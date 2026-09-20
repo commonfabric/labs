@@ -59,8 +59,9 @@ describe("Pattern run via the ESM module loader", () => {
 
     const compiled = await runtime.patternManager.compilePattern(program);
     // The exported pattern is hardened (transitively frozen) at the module
-    // boundary, yet its rehydration program still associates afterward — proving
-    // the metadata moved off the (now frozen) object into the WeakMap side-table.
+    // boundary, yet its rehydration program still associates afterward: the
+    // association lives in a `WeakMap` side-table, and a write to one does not
+    // mutate the frozen object.
     expect(Object.isFrozen(compiled)).toBe(true);
     expect(getPatternProgram(compiled)?.main).toEqual("/main.tsx");
 
@@ -78,11 +79,9 @@ describe("Pattern run via the ESM module loader", () => {
   });
 
   it("runs a pattern through a named re-export barrel (`export { x } from`)", async () => {
-    // CT-1661: a barrel that re-exports a sibling's binding compiles to a `var
-    // ... = require(...)` preamble plus a live getter, which the import-preamble
-    // fast-path once rejected at runtime ("Top-level mutable bindings are not
-    // allowed"). The re-export must both verify AND resolve the live binding
-    // correctly end-to-end.
+    // A barrel that re-exports a sibling's binding compiles to a `var ... =
+    // require(...)` preamble plus a live getter. The re-export must both verify
+    // AND resolve the live binding correctly end-to-end.
     const program: RuntimeProgram = {
       main: "/main.tsx",
       files: [

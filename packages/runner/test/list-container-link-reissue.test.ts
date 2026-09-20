@@ -24,20 +24,21 @@ import { map } from "../src/builtins/map.ts";
 import { filter } from "../src/builtins/filter.ts";
 import { flatMap } from "../src/builtins/flatmap.ts";
 
-// A list coordinator reaches its result container two ways, and only one of
-// them is re-issued when a reconcile has to run again.
+// A list coordinator mints its result container and then holds it in memory
+// across reconciles. The link that makes the container reachable is a write
+// like any other: the reconcile carrying it can fail to commit.
 //
-// `sendResult` writes the link from the node's output spot to the container it
-// mints, and the reconcile that mints the container is the only one that calls
-// it: every later reconcile takes the `result` the coordinator already holds in
-// memory and writes the container's VALUE alone. The per-element setup writes
-// have a ledger for exactly this — `trackListSetupRollback` marks each element
-// `needsSetup` when the transaction carrying its writes fails, stale basis
-// included, so the next reconcile issues them again. The container link has no
-// such ledger, so a first reconcile whose commit is rejected leaves the
-// coordinator holding a container that nothing points at, and every retry
-// commits the container's value without the link. The output spot then reads
-// `undefined` for as long as the coordinator lives.
+// `sendResult` writes the link from the node's output spot to the container the
+// coordinator mints. A later reconcile takes the `result` the coordinator
+// already holds in memory, and unless the link is owed it writes the
+// container's VALUE alone. The per-element setup writes have a ledger for
+// exactly this — `trackListSetupRollback` marks each element `needsSetup` when
+// the transaction carrying its writes fails, stale basis included, so the next
+// reconcile issues them again. The container link is on that ledger too:
+// `issueResultContainerSetup()` records it as issued, and a reconcile that
+// finds the record marked `needsSetup` issues the link again against the
+// container already in hand. A container that nothing points at would leave
+// the output spot reading `undefined` for as long as the coordinator lives.
 //
 // Each coordinator gets the same two runs, differing only in whether its first
 // reconcile commits, so the rejection is what they isolate:
@@ -57,8 +58,8 @@ import { flatMap } from "../src/builtins/flatmap.ts";
 //      reconcile commits, and the link comes back. That control is what pins
 //      the rejection, rather than the emptied spot, as the cause.
 //
-// `map` is the coordinator issue #5633 (CT-1989) traced; `filter` and `flatMap`
-// carry the same guard and the same single `sendResult` call site.
+// `map`, `filter` and `flatMap` carry the same guard and the same single
+// `sendResult` call site.
 
 const signer = await Identity.fromPassphrase("list container link reissue");
 const space = signer.did();
@@ -377,7 +378,7 @@ describe("list container link reissue", () => {
         );
 
         // The scenario this test exists to cover: the reconcile that issued the
-        // link lost its commit, and a later one converged without it. Found by
+        // link lost its commit, and a later one converged. Found by
         // attempt, not by position in the log: a reconcile's verdict lands
         // when its commit settles, and a rejected first attempt's rejection
         // rides a catch-up that later, fresher attempts can commit ahead of —

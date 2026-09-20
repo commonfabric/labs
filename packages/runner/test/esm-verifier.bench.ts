@@ -1,5 +1,5 @@
 /**
- * ESM verifier body-vs-graph split benchmark (CT-1623).
+ * ESM verifier body-vs-graph split benchmark.
  *
  * Isolates the per-module body scan (`verifyCompiledModuleBody` summed over all
  * authored bodies) from the whole-graph structural check (`verifyModuleGraph`),
@@ -36,11 +36,10 @@ import {
   normalizeExact,
 } from "../src/sandbox/tslib-helpers.ts";
 
-// Pre-shadow-detection baseline: the single-pass verifyCompiledModuleBody from
-// Phase D2.1 (commit 4e3f69d05), before the helper-shadow bypass fix landed in
-// 3517a3433 / a0213d532 added a second full statement scan.
-// This is used ONLY in the regression-delta bench group to quantify the cost of
-// the shadow-detection pass. Product code is untouched.
+// Single-pass baseline: a body verifier that omits the shadow-detection pass,
+// which in `verifyCompiledModuleBody()` is a full scan over the statements
+// ahead of classification. This is used ONLY in the `shadow-delta` bench groups
+// to quantify the cost of the shadow-detection pass. Product code is untouched.
 
 const EMPTY_BINDING_SET: ReadonlySet<string> = new Set<string>();
 
@@ -51,9 +50,8 @@ const REQUIRE_IMPORT_LEGACY = new RegExp(
 );
 
 /**
- * Single-pass body verifier (pre-shadow-detection, Phase D2.1).
- * Omits the shadow-name scan over all statements; used only to measure
- * the overhead that the shadow-detection pass adds.
+ * Single-pass body verifier. Omits the shadow-name scan over all statements;
+ * used only to measure the overhead that the shadow-detection pass adds.
  */
 function verifyCompiledModuleBodyLegacy(
   compiled: string,
@@ -66,8 +64,8 @@ function verifyCompiledModuleBodyLegacy(
   const classifiable: typeof parsed.body.statements = [];
   for (const statement of parsed.body.statements) {
     const text = wrapped.slice(statement.start, statement.end).trim();
-    // Inline tslib helper declarations: skip (not present in Phase D2.1 but
-    // cheap to add here so the diff is strictly the shadow-scan cost).
+    // Inline tslib helper declarations: skip, as `verifyCompiledModuleBody()`
+    // does.
     if (isAllowedTsLibHelperDeclaration(normalizeExact(text))) continue;
     const match = REQUIRE_IMPORT_LEGACY.exec(text);
     if (match && isAllowedAuthoredImportSpecifier(match[2])) {
@@ -334,15 +332,15 @@ for (const [specifier, body] of parkingBodies) {
 }
 
 //
-// Regression delta: shadow-detection pass overhead
+// Shadow-detection pass overhead
 //
-// Compare current `verifyCompiledModuleBody` (two passes: shadow-scan + classify)
-// against the pre-shadow-detection single-pass version from Phase D2.1.
-// The delta is the overhead introduced by commits 3517a3433 + a0213d532.
+// Compare `verifyCompiledModuleBody()` (two passes: shadow-scan + classify)
+// against the single-pass verifier above. The delta is the overhead of the
+// shadow-detection pass.
 //
 
 // Use only the dominant large module (first parking body by size) for the
-// per-module regression delta, so the signal is not diluted by tiny modules.
+// per-module delta, so the signal is not diluted by tiny modules.
 const [dominantSpec, dominantBody] = parkingBodies.reduce((max, cur) =>
   cur[1].length > max[1].length ? cur : max
 );
@@ -368,7 +366,7 @@ Deno.bench(
 );
 
 //
-// Regression delta, all parking bodies summed
+// Shadow-detection pass overhead, all parking bodies summed
 //
 
 Deno.bench(

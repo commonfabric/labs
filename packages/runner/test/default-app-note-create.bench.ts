@@ -48,7 +48,7 @@ const noteSchema = {
   },
   // All three fields are always populated by noteValue(); marking them required
   // makes the schema-materialized callback input match the `Note` type under
-  // lift's function-first schema-mode overload (CT-1625).
+  // lift's function-first schema-mode overload.
   required: ["title", "content", "tags"],
   additionalProperties: false,
 } as const satisfies JSONSchema;
