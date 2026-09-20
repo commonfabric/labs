@@ -13,6 +13,7 @@ import { expect } from "@std/expect";
 import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { getLogger } from "@commonfabric/utils/logger";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 
@@ -172,6 +173,39 @@ describe("agent builtin", () => {
     expect(raw.claim).toBeUndefined();
     expect(raw.result).toBeUndefined();
     expect(raw.outcome).toBeUndefined();
+  });
+
+  it("uses the canonical run scope when the stored queue has an unscoped item schema", async () => {
+    setUp();
+    const entries = runtime.getCell(space, "stored-agent-entries", {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          run: { type: "object" },
+          host: { type: "string" },
+        },
+        required: ["run", "host"],
+      },
+    }, tx);
+    entries.set([]);
+    agentQueueIndexCell(runtime, space, tx).key("entries").set(entries);
+    const logger = getLogger("normalizeAndDiff");
+    const warningsBefore = logger.counts.warn;
+    const result = runAgentPattern("agent-stored-queue-scope");
+    await tx.commit();
+
+    const record = await waitForRecord(result);
+    const index = agentQueueIndexCell(runtime, space);
+    await waitForCellValue<{ run: unknown; host: string }[]>(
+      runtime,
+      index.key("entries"),
+      (value) => value?.length === 1,
+    );
+    const indexed = index.key("entries").key(0).key("run").resolveAsCell();
+    expect(indexed.getAsNormalizedFullLink().scope).toBe("user");
+    expect(indexed.equals(record)).toBe(true);
+    expect(logger.counts.warn).toBe(warningsBefore);
   });
 
   it("appends one `{run, host}` entry to the requester's home index", async () => {

@@ -539,9 +539,11 @@ export function agent(
         if (listed) return;
         // The record's id determines the entry's address, so concurrent
         // index writes cannot reuse an element from the same list position.
-        const entry = entries.elementById(recordId) as Cell<
-          { run: Cell<unknown>; host: string }
-        >;
+        // The stored array can carry a different item schema. The writer's
+        // canonical contract declares that each run resolves per user.
+        const entry = entries.elementById(recordId).asSchema(
+          AgentQueueIndexSchema.properties.entries.items,
+        ) as Cell<{ run: Cell<unknown>; host: string }>;
         entry.set({ run: record, host });
         entries.addUnique(entry);
       });

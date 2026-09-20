@@ -230,7 +230,7 @@ export const AgentQueueIndexSchema = internSchema(
         items: {
           type: "object",
           properties: {
-            run: { asCell: ["cell"] },
+            run: { asCell: ["cell"], scope: "user" },
             host: { type: "string" },
           },
           required: ["run", "host"],
