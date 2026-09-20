@@ -37,6 +37,8 @@ import {
 } from "@commonfabric/cf-harness/result-writer";
 import type { JSONSchema } from "@commonfabric/api";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { cloneIfNecessary } from "@commonfabric/data-model";
+import { cloneSchemaMutable } from "@commonfabric/data-model-schema";
 import {
   LIMIT_REACHED,
   PROVIDER_FAILURE,
@@ -50,7 +52,7 @@ import type {
   ClaimedAgentRun,
 } from "./agent-runner.ts";
 
-/** The file, in the run's workspace, the model writes its result to. */
+/** The workspace file the host writes when the model calls `submit_result`. */
 const RESULT_FILE = "agent-result.json";
 
 export interface HarnessAgentRunExecutorOptions {
@@ -121,12 +123,13 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
 
   // The record reads as live proxies; the harness and the writer take plain
   // values.
-  const resultSchema = JSON.parse(
-    JSON.stringify(record.resultSchema),
-  ) as JSONSchema;
+  const requestedSchema = record.resultSchema as JSONSchema;
+  const resultSchema = typeof requestedSchema === "boolean"
+    ? requestedSchema
+    : cloneSchemaMutable(requestedSchema, true);
   const maxConfidentiality = record.maxConfidentiality === undefined
     ? undefined
-    : JSON.parse(JSON.stringify(record.maxConfidentiality)) as unknown[];
+    : cloneIfNecessary(record.maxConfidentiality, { frozen: false });
   const inputs = record.inputs as Record<string, Cell<unknown>>;
   // A request naming no tools runs with the surface its session backs.
   const tools = record.tools ?? [];

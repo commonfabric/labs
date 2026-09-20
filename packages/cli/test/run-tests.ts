@@ -43,6 +43,7 @@ function parseCliTestShard(): { index: number; count: number } {
 // CLI it spawns does not belong here; `cf` in test/utils.ts gives the spawned
 // command its environment directly.
 const SERIAL_TESTS = [
+  "test/agent-command.test.ts",
   "test/completion-output.test.ts",
   "test/completion-providers.test.ts",
   "test/fuse.test.ts",

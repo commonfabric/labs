@@ -1113,7 +1113,8 @@ What the runner does, in order:
 A `claimed` or `running` record whose `leaseUntil` has passed belongs to a
 runner that stopped. The next runner to see it, on start or on a queue change,
 queues it again when its `attempts` is 1 and ends it `failed` as `RUNNER_LOST`
-when its `attempts` is 2.
+when its `attempts` is 2. If `cancelRequestedAt` is set, recovery ends the
+expired record as `cancelled` instead. A live lease stays with its runner.
 
 A runner connects to at most two deployments, and only the home one is a full
 connection; the other is read and written as storage. This is the one command

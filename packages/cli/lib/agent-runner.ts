@@ -169,12 +169,14 @@ export class AgentRunner {
 
   /** Aborts held runs, waits for them to end, and stops following. */
   async stop(): Promise<void> {
+    this.#stopped = true;
     this.#stopQueue?.();
+    // A claim already committing must become active before we abort held runs.
+    await this.#scan;
     for (const run of this.#active.values()) {
       run.abort.abort(new Error("the agent runner is stopping"));
     }
     await this.idle();
-    this.#stopped = true;
     for (const followed of this.#followed.values()) {
       followed.stopFollowing();
     }
@@ -276,10 +278,11 @@ export class AgentRunner {
       if (value.cancelRequestedAt !== undefined) {
         if (active !== undefined) {
           active.abort.abort(new Error("the requester cancelled the run"));
+          continue;
         } else if (value.state === "queued") {
           await this.#cancelQueued(followed);
+          continue;
         }
-        continue;
       }
 
       if (value.state === "queued") {
@@ -300,7 +303,9 @@ export class AgentRunner {
 
     queued.sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
     for (const candidate of queued) {
-      if (this.#active.size >= this.#options.maxConcurrent) break;
+      if (
+        this.#stopped || this.#active.size >= this.#options.maxConcurrent
+      ) break;
       await this.#claim(candidate.key, candidate.followed);
     }
   }
@@ -308,8 +313,9 @@ export class AgentRunner {
   /**
    * Recovers a record whose runner stopped writing: back to `queued` when it
    * has been claimed once, `failed` as `RUNNER_LOST` when it has been claimed
-   * twice. The transaction re-reads the state and lease, so a record another
-   * runner moved in the meantime is left alone.
+   * twice. A cancellation request ends the expired run as `cancelled`.
+   * The transaction re-reads the state and lease, so a record another runner
+   * moved in the meantime is left alone.
    */
   async #recover({ runtime, record }: FollowedRecord): Promise<void> {
     const now = this.#now();
@@ -325,6 +331,13 @@ export class AgentRunner {
       const attempts = current.key("attempts").get() ?? 1;
       current.key("claim").set(undefined);
       current.key("stateSince").set(stamp);
+      if (current.key("cancelRequestedAt").get() !== undefined) {
+        current.key("state").set("cancelled");
+        current.key("outcome").set("cancelled");
+        current.key("errorCode").set(CANCELLED);
+        current.key("finishedAt").set(stamp);
+        return "cancelled";
+      }
       if (attempts <= 1) {
         current.key("state").set("queued");
         return "re-queued";

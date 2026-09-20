@@ -342,8 +342,10 @@ describe("agent runner", () => {
   it("claims once when two runners race for one record", async () => {
     const held = defer<AgentRunExecution>();
     const claims: string[] = [];
+    const started = defer<void>();
     const execute = (name: string) => (_run: ClaimedAgentRun) => {
       claims.push(name);
+      started.resolve();
       return held.promise;
     };
     // Both runners follow the queue before the request exists, so both see
@@ -354,14 +356,17 @@ describe("agent runner", () => {
     ]);
 
     const result = await submit();
-    await waitForState(result, "running");
-    await patternSide.idle();
+    try {
+      await started.promise;
+      await waitForState(result, "running");
+      await patternSide.idle();
 
-    expect(claims.length).toBe(1);
-    expect(a.activeRuns + b.activeRuns).toBe(1);
-    expect(recordOf(result).get()?.attempts).toBe(1);
-
-    held.resolve({ outcome: "failed", errorCode: "PROVIDER_FAILURE" });
+      expect(claims.length).toBe(1);
+      expect(a.activeRuns + b.activeRuns).toBe(1);
+      expect(recordOf(result).get()?.attempts).toBe(1);
+    } finally {
+      held.resolve({ outcome: "failed", errorCode: "PROVIDER_FAILURE" });
+    }
     await waitForState(result, "failed");
   });
 
@@ -384,6 +389,41 @@ describe("agent runner", () => {
     held.resolve({ outcome: "refused" });
     await waitForState(second, "refused");
     expect(runs).toBe(2);
+  });
+
+  it("leaves queued requests unclaimed when stopping an active run", async () => {
+    const started = defer<void>();
+    const stopped = defer<void>();
+    const release = defer<AgentRunExecution>();
+    const runnerSide = connect(CLOUD);
+    let runs = 0;
+    const runner = await startRunner((run) => {
+      runs += 1;
+      if (runs > 1) return Promise.resolve({ outcome: "refused" });
+      started.resolve();
+      run.signal.addEventListener("abort", () => stopped.resolve(), {
+        once: true,
+      });
+      return release.promise;
+    }, { runtimeForHost: () => Promise.resolve(runnerSide) });
+    const first = await submit();
+    await started.promise;
+    const second = await submit();
+    await waitForCellValue<unknown[]>(
+      runnerSide,
+      agentQueueIndexCell(runnerSide, home).key("entries"),
+      (entries) => entries?.length === 2,
+    );
+
+    const stopping = runner.stop();
+    await stopped.promise;
+    release.resolve({ outcome: "cancelled" });
+    await stopping;
+    await waitForState(first, "cancelled");
+    await patternSide.idle();
+
+    expect(runs).toBe(1);
+    expect(recordOf(second).get()?.state).toBe("queued");
   });
 
   for (const left of ["claimed", "running"] as const) {
@@ -442,6 +482,47 @@ describe("agent runner", () => {
       expect(record.claim).toBeUndefined();
       expect(ran).toBe(false);
     });
+  }
+
+  for (const state of ["claimed", "running"] as const) {
+    for (const expired of [false, true]) {
+      it(`${expired ? "cancels" : "preserves"} a cancellation-requested \`${state}\` record with ${expired ? "an expired" : "a live"} remote lease`, async () => {
+        const result = await submit();
+        await patternSide.editWithRetry((tx) => {
+          const record = recordOf(result).withTx(tx);
+          record.key("state").set(state);
+          record.key("attempts").set(2);
+          record.key("cancelRequestedAt").set("2026-09-18T11:59:00.000Z");
+          record.key("claim").set({
+            runner: "did:key:remote#1",
+            leaseUntil: expired
+              ? "2026-09-18T11:00:00.000Z"
+              : "2026-09-18T13:00:00.000Z",
+          });
+        });
+        const runnerSide = connect(CLOUD);
+        let executions = 0;
+        const runner = await startRunner(() => {
+          executions++;
+          return Promise.resolve({ outcome: "refused" });
+        }, { runtimeForHost: () => Promise.resolve(runnerSide) });
+        await runner.idle();
+
+        const record = recordOf(result, runnerSide).get();
+        expect(record?.state).toBe(expired ? "cancelled" : state);
+        expect(record?.attempts).toBe(2);
+        expect(executions).toBe(0);
+        if (expired) {
+          expect(record?.errorCode).toBe("CANCELLED");
+          expect(record?.outcome).toBe("cancelled");
+          expect(record?.claim).toBeUndefined();
+          expect(record?.finishedAt).toBe(clock.toISOString());
+        } else {
+          expect(record?.claim?.runner).toBe("did:key:remote#1");
+          expect(record?.finishedAt).toBeUndefined();
+        }
+      });
+    }
   }
 
   it("leaves a claimed record alone while its lease reaches past now", async () => {
@@ -752,7 +833,11 @@ describe("agent runner", () => {
         await createSession({ identity: signer, spaceDid: home }),
         sessionRuntime,
       );
-      let seen: { argv?: unknown; slotRole?: string } = {};
+      let seen: {
+        argv?: unknown;
+        slotRole?: string;
+        allowedTools?: readonly string[];
+      } = {};
       const execute = createHarnessAgentRunExecutor({
         identityKeyPath: join(workRoot, "unused.key"),
         requester: home,
@@ -772,6 +857,7 @@ describe("agent runner", () => {
               seen = {
                 slotRole: prompt.promptSlotBinding?.role,
                 argv: options.inputCells,
+                allowedTools: options.allowedToolIds,
               };
               return script({
                 resultPath: join(
@@ -790,7 +876,7 @@ describe("agent runner", () => {
           }),
         },
       });
-      await startRunner(execute);
+      await startRunner(execute, { tools: ["describe_handle"] });
       return () => seen;
     };
 
@@ -828,6 +914,48 @@ describe("agent runner", () => {
       expect(
         (seen().argv as { name: string }[]).map((cell) => cell.name),
       ).toEqual(["finished"]);
+    });
+
+    for (const schema of [true, false]) {
+      it(`preserves a boolean result schema of \`${schema}\``, async () => {
+        await startHarnessRunner(async ({ resultPath }) => {
+          await Deno.writeTextFile(
+            resultPath,
+            JSON.stringify({ answer: "Hyperion" }),
+          );
+          return loopResult(`run-boolean-schema-${schema}`);
+        });
+        const result = await submit({ resultSchema: schema });
+
+        const record = await waitForCellValue<AgentRunRecord>(
+          patternSide,
+          recordOf(result),
+          (value) => value?.outcome !== undefined,
+        );
+
+        expect(record.state).toBe(schema ? "completed" : "failed");
+        expect(record.errorCode).toBe(schema ? undefined : "PROVIDER_FAILURE");
+      });
+    }
+
+    it("allows `submit_result` alongside an explicit request tool list", async () => {
+      const seen = await startHarnessRunner(async ({ resultPath }) => {
+        await Deno.writeTextFile(
+          resultPath,
+          JSON.stringify({ answer: "Hyperion" }),
+        );
+        return loopResult("run-explicit-tools");
+      });
+      const result = await submit({ tools: ["describe_handle"] });
+
+      const record = await waitForCellValue<AgentRunRecord>(
+        patternSide,
+        recordOf(result),
+        (value) => value?.outcome !== undefined,
+      );
+
+      expect(record.state).toBe("completed");
+      expect(seen().allowedTools).toEqual(["describe_handle", "submit_result"]);
     });
 
     it("accepts a handle token at an `asCell` position and writes a link there", async () => {

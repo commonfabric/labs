@@ -6,6 +6,7 @@
 
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import { ValidationError } from "@cliffy/command";
 
 import { Identity } from "@commonfabric/identity";
@@ -18,6 +19,7 @@ import {
   type AgentRunnerCommandConfig,
   type AgentRunnerCommandDeps,
   createAgentCommand,
+  defaultAgentRunnerCommandDeps,
   resolveRunnerTools,
   startAgentRunner,
 } from "../commands/agent.ts";
@@ -59,6 +61,17 @@ const run = (deps: AgentRunnerCommandDeps, argv: string[]) =>
   createAgentCommand(deps).throwErrors().noExit().parse(argv);
 
 describe("cf agent runner", () => {
+  it("reports runner diagnostics on stderr", () => {
+    const messages: unknown[][] = [];
+    using _stderr = stub(console, "error", (...args: unknown[]) => {
+      messages.push(args);
+    });
+
+    defaultAgentRunnerCommandDeps.report("agent runner: stopping");
+
+    expect(messages).toEqual([["agent runner: stopping"]]);
+  });
+
   it("resolves flags to a configuration, starts, waits, and stops", async () => {
     const { deps, started, events } = stubDeps({
       CF_HARNESS_HOME: "/harness-home",
@@ -201,6 +214,26 @@ describe("cf agent runner", () => {
     expect(events.at(-1)).toBe("stop");
   });
 
+  it("removes both stop signal listeners after receiving `SIGTERM`", async () => {
+    const listeners = new Map<Deno.Signal, () => void>();
+    using add = stub(Deno, "addSignalListener", (signal, listener) => {
+      listeners.set(signal, listener);
+    });
+    using remove = stub(Deno, "removeSignalListener", (signal, listener) => {
+      expect(listeners.get(signal)).toBe(listener);
+      listeners.delete(signal);
+    });
+
+    const stopped = defaultAgentRunnerCommandDeps.untilStopped();
+    expect([...listeners.keys()]).toEqual(["SIGINT", "SIGTERM"]);
+    listeners.get("SIGTERM")!();
+    await stopped;
+
+    expect(listeners.size).toBe(0);
+    expect(add.calls.length).toBe(2);
+    expect(remove.calls.length).toBe(2);
+  });
+
   describe("startAgentRunner()", () => {
     /** A home runtime whose home pattern is seeded data with a live stream. */
     const openHome = async (options: { queue: boolean }) => {
@@ -312,6 +345,44 @@ describe("cf agent runner", () => {
 
       await running.stop();
       await opened.close();
+    });
+
+    it("reuses one connection for two entries on the same toolshed", async () => {
+      const opened = await openHome({ queue: true });
+      const remote = await openHome({ queue: false });
+      await opened.runtime.editWithRetry((tx) => {
+        const entries = agentQueueIndexCell(
+          opened.runtime,
+          opened.config.home as never,
+          tx,
+        ).key("entries");
+        for (const id of ["first", "second"]) {
+          entries.push({
+            run: remote.runtime.getCell(remote.config.home as never, id),
+            host: "https://other.example/",
+          });
+        }
+      });
+      const hosts: string[] = [];
+      const connected = Promise.withResolvers<void>();
+      const running = await startAgentRunner(opened.config, () => {}, {
+        openHome: () =>
+          Promise.resolve({
+            runtime: opened.runtime,
+            homePattern: opened.homePattern,
+          }),
+        openHost: (_config, origin) => {
+          hosts.push(origin);
+          connected.resolve();
+          return Promise.resolve(remote.runtime);
+        },
+      });
+      await connected.promise;
+      await running.stop();
+
+      expect(hosts).toEqual(["https://other.example"]);
+      await opened.close();
+      await remote.close();
     });
 
     it("throws, and disposes the home runtime, when the home space holds no agent queue", async () => {
