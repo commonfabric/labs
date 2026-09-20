@@ -8,8 +8,15 @@ reason: "T1's measured result for the Topics computation-cost arc: what sharing 
 # Sharing the Topics retraction filter: T1's measured result
 
 Stage T1 of `docs/plans/topics-computation-cost.md` shares the "not retracted"
-predicate that a topic's body applied three times over links and twice over
-comments. This records what that changed, and how it was measured.
+predicate that a topic's body applied three times over links and three times
+over comments. Links keep one reader afterwards and comments keep two, so three
+of the six passes go — which is what the run count below measures. This records
+what that changed, and how it was measured.
+
+The six, at `394db11c23`: over links, `linksView`, `hasLinks` and
+`linksToResolve`; over comments, `commentsView`, `hasComments` and the
+`presentCommentCountOf` lift. `hasLinks`, `hasComments` and `linksToResolve`
+are the three that go.
 
 Every figure below is in
 [`2026-09-20-topics-t1-shared-derivations.results.json`](2026-09-20-topics-t1-shared-derivations.results.json)

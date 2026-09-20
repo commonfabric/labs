@@ -119,12 +119,17 @@ implementation and prototypes can begin earlier.
         those four costs have baseline figures; rendering has none, for the
         reason under [measurement and acceptance](#measurement-and-acceptance)
         below.
-- [ ] **T1 — Share individual-topic derivations.** Reuse `commentCount` for
+- [x] **T1 — Share individual-topic derivations.** Reuse `commentCount` for
       `hasComments`; evaluate sharing the active-link view with `hasLinks` and
       link resolution. Preserve narrow compatibility schemas and stable links.
       Exit: behavior tests pass, repeated work falls, and sharing does not
       unintentionally broaden board demand. Can proceed independently of T2;
-      acceptance depends on T0.
+      acceptance depends on T0. Measured in
+      [sharing the Topics retraction filter](../history/development/performance/2026-09-20-topics-t1-shared-derivations.md):
+      initialization proxy accesses fall by 38% to 67% across three fixture
+      shapes, demand narrows at both shared hoists, and every behavior suite
+      passes. `commentsView` keeps its own pass, recorded there with the reason.
+      No latency conclusion was available from those runs.
 - [ ] **T2 — Prototype one shared backlink-row index.** Index the existing
       cross-reference rows by topic identity once at the board level. Compare
       direct lookup with each topic scanning the table. Prove two boundaries,
