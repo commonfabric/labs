@@ -86,8 +86,7 @@ describe("resume the fuse-exec piece by identity and invoke its handler", () => 
       // Force the storage-rehydration path (as cf exec hits it): the resumed
       // piece's nodes come from the PERSISTED graph (module.implementation is a
       // ref, not a live function), so resolution relies solely on by-identity
-      // lookup (getVerifiedImplementation) — the path that fails under
-      // source-free by-identity.
+      // lookup (getVerifiedImplementation).
       await resultCell2.sync();
       const started = await rt2.start(resultCell2);
       expect(started).toBe(true);

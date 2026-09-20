@@ -654,11 +654,11 @@ describe("plain-schema array traversal", () => {
 
 //
 // The covering schema for a tuple element is index-determined —
-// prefixItems[index] within the slots, `items` past them — so
-// elementSchemaFor takes the index when the caller knows it. Without one
-// (elementById is id-keyed), a tuple schema yields undefined: there is no
-// principled per-element schema to pick, and the schema/$defs loss is the
-// documented cost.
+// `prefixItems[index]` within the slots, `items` past them — so
+// `elementSchemaFor()` takes the index when the caller knows it. Without one
+// (`elementById()` is id-keyed), the element counts as past the slots and
+// `items` covers it; a pure tuple (no `items`) yields `undefined`, since
+// there is no principled per-element schema to pick.
 //
 
 describe("elementSchemaFor tuple (prefixItems) schemas", () => {

@@ -70,7 +70,7 @@ describe("argument scheduler read links", () => {
   });
 
   it("visits items-covered elements past the tuple slots", () => {
-    // Parity pin: the rest region keeps its pre-existing items coverage.
+    // Parity pin: `items` covers the rest region beside `prefixItems`.
     const resultCell = runtime.getCell(space, "sched-read-rest-result");
     const sourceCell = runtime.getCell<number>(space, "sched-read-rest-src");
     const argumentSchema = {

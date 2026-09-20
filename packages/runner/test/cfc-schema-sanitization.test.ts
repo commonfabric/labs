@@ -1814,7 +1814,7 @@ describe("schema-based prompt injection sanitization compatibility", () => {
   it("sanitizes tuple (prefixItems) elements against their slot schema", () => {
     // `itemSchemaForIndex` collects the `prefixItems` slot schema for a
     // covered index, so a tuple element is sanitized against its own slot: a
-    // raw string in a number slot goes through the opaque-link gate.
+    // raw string in a number slot is replaced with an opaque link.
     const schema = {
       type: "object",
       properties: {

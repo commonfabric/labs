@@ -419,7 +419,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
       ])).toBe(true);
     });
 
-    it("grant on clause k leaves independent clause j untouched (inv-11)", () => {
+    it("leaves independent clause j untouched when a grant lands on clause k (inv-11)", () => {
       // Both clauses match the appliesTo pattern (each binds its own $owner);
       // the resolver holds a grant for ALICE only. The rewrite must land on
       // Alice's clause alone — a grant discovered from clause k must not widen

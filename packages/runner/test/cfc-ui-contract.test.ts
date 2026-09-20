@@ -219,7 +219,7 @@ describe("CFC UI contract matching", () => {
 
   it("collects contracts declared in tuple (prefixItems) slots at their index", () => {
     // A contract declared in a tuple element schema is collected under its
-    // slot index, so a UI contract declared on a slot is enforced.
+    // slot index.
     const contracts = uiContractsFromSchema({
       type: "array",
       prefixItems: [
@@ -262,10 +262,9 @@ describe("CFC UI contract matching", () => {
   });
 
   it("does not fall back to $defs contracts for unknown-typed tuples", () => {
-    // PR #4969 review: the $defs fallback's no-children guard did not count
-    // prefixItems, so an unknown-typed tuple with one contract-bearing
-    // definition minted that contract at the array's own path — enforced
-    // for every array write instead of just the referencing slot.
+    // The `$defs` fallback's no-children guard counts `prefixItems`, so an
+    // unknown-typed tuple with one contract-bearing definition mints that
+    // contract at the referencing slot, and none at the array's own path.
     const contracts = uiContractsFromSchema({
       type: "unknown",
       prefixItems: [
