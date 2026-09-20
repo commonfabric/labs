@@ -1,0 +1,119 @@
+---
+status: historical
+created: 2026-09-20
+archived: 2026-09-20
+reason: "T1's measured result for the Topics computation-cost arc: what sharing the topic body's retraction filter costs and saves, measured against a purpose-built instrument because T0's two tiers cannot see body derivations."
+---
+
+# Sharing the Topics retraction filter: T1's measured result
+
+Stage T1 of `docs/plans/topics-computation-cost.md` shares the "not retracted"
+predicate that a topic's body applied three times over links and twice over
+comments. This records what that changed, and how it was measured.
+
+Every figure below is in
+[`2026-09-20-topics-t1-shared-derivations.results.json`](2026-09-20-topics-t1-shared-derivations.results.json)
+beside this file. The two arms are `394db11c23`, T1's merge base, and
+`933632931c`, the change.
+
+## Why a new instrument was needed
+
+Neither T0 tier can see this change, and T0 recorded that in advance. The
+baseline report says of the rendering derivations:
+
+> In the headless tier they never run. The fixture starts the four lifts
+> directly over emulated storage and instantiates no pattern body, so the
+> derivations that rendering performs never start, and are absent by
+> construction rather than measured at zero.
+
+and of the browser tier, that `hasLinks` and `hasComments` "all fall into the
+sample's `remaining` row, which the helper aggregates without keeping any run's
+identity." The plan states the consequence: "T1, whose target is exactly these
+derivations, has no rendering baseline to improve on."
+
+So the measurement reaches the derivations directly. `topic.tsx`'s hoisted
+lifts register by name under the module's content identity, so the arm's
+derivations can be resolved from the runtime's artifact index and started over
+the T0 fixture's synthetic topics, under the same read accounting the probe
+uses. Four topics, `lazyMaterialization` on, `serverExecution` off, demand
+`aggregates`, and no mentions, so the pivot contributes nothing.
+
+## What it cost before, and costs now
+
+Initialization, the sampler bucket the started derivations' runs land in:
+
+| fixture | measure | before | after | change |
+| --- | --- | --- | --- | --- |
+| 100 comments, 100 links | proxy accesses | 4,544 | 2,144 | −53% |
+| | link resolutions | 2,892 | 1,409 | −51% |
+| | registered dependencies | 13,456 | 6,993 | −48% |
+| | graph nodes / edges | 967 / 4,584 | 947 / 3,097 | −20 / −1,487 |
+| 3 comments, 1,000 links | proxy accesses | 24,076 | 8,052 | −67% |
+| | link resolutions | 17,458 | 6,763 | −61% |
+| | graph nodes / edges | 4,179 / 21,586 | 4,159 / 10,887 | −20 / −10,699 |
+| 1,000 comments, 3 links | proxy accesses | 21,416 | 13,368 | −38% |
+| | link resolutions | 10,808 | 6,761 | −37% |
+| | graph nodes / edges | 4,179 / 22,912 | 4,159 / 18,861 | −20 / −4,051 |
+
+Warm updates, same bucket:
+
+| fixture | phase | proxy accesses | runs |
+| --- | --- | --- | --- |
+| 100c / 100l | comment retraction | 530 → 330 | 6 → 6 |
+| 100c / 100l | link removal | 603 → 203 | 6 → 4 |
+| 3c / 1,000l | link removal | 6,003 → 2,003 | 6 → 4 |
+| 1,000c / 3l | comment retraction | 5,330 → 3,330 | 6 → 6 |
+
+**The run count is the check that this measures the intended thing.**
+Initialization runs go from 84 to 72 in all three fixtures — twelve fewer,
+which is the three removed passes across four topics, and it does not vary with
+how many comments or links each topic holds. The proxy-access ratios follow
+from it arithmetically: three passes over links become one, three over comments
+become two.
+
+## No latency conclusion
+
+The same runs give initialization elapsed times that do not support one. The
+after arm at 100 comments and 100 links took 1,401 ms against the before arm's
+618 ms — the wrong direction — and a separate series on a more loaded machine
+put the same arm between 531 ms and 4,131 ms. These runs shared a machine with
+other work throughout. The read counts are deterministic and repeat exactly
+across rounds; the timings are recorded in the extract and are not a result.
+
+## Demand narrowed rather than broadening
+
+The stage's third exit condition is that sharing must not broaden board demand.
+Four things were compared:
+
+- **The two shared hoists' emitted input schemas**, from `cf check
+  --show-transformed`. `hasLinks` went from declaring the whole `TopicLink[]`,
+  with the full `TopicLink` and `TopicAuthor` definitions, to
+  `{ linksView: { length: number } }`; `hasComments` from
+  `StoredTopicComment[]` to `{ commentCount: number }`. Both read strictly less.
+- **The headless probe's 44-case read accounting**, byte-identical across the
+  two arms in every non-timing field.
+- **The four CI read-budget gates**, each gated count inside its limit.
+- **The topic's own argument and result contract**, unchanged; nothing crossing
+  the board/topic boundary moved.
+
+## Hoist movement
+
+The `handler` and `pattern` sequences do not move. The `lift` sequence goes from
+33 hoists to 32: numbers 1 through 31 keep their numbers and their bodies, the
+removed third link filter was 32, and the former 33 becomes 32 — a shift of one,
+from index 33 onward.
+
+Two hoists keep their numbers while their bodies change, which is the revision
+this stage makes rather than a renumbering: the two shared predicates. The
+scope of the plan's hoist requirement against that case was open when this was
+recorded. `deno task pattern-vintage` replayed eight vintages, 134 recorded
+instantiations, with no state stranded.
+
+## What this does not establish
+
+- Anything about a real board's stored data. The fixture builds synthetic
+  topics; the stored-generation evidence is T5's.
+- Anything at board scale. Every figure here is four topics, chosen so the
+  per-topic derivations dominate; the counts are per-topic and the fixture
+  varies comments and links rather than topic count.
+- Anything under `serverExecution`. Both arms ran with it off.

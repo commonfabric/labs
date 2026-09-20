@@ -1,0 +1,306 @@
+{
+  "record": "2026-09-20-topics-t1-shared-derivations",
+  "what": "Read accounting for the Topics topic-body retraction-filter derivations, before and after T1 shares them.",
+  "sources": {
+    "before": {
+      "revision": "394db11c23",
+      "description": "main at T1's merge base"
+    },
+    "after": {
+      "revision": "933632931c",
+      "description": "T1 on mike/topics-t1-share-derivations"
+    }
+  },
+  "environment": {
+    "deno": "deno 2.9.4 (stable, release, aarch64-apple-darwin)",
+    "platform": "darwin/aarch64",
+    "experimental": {
+      "lazyMaterialization": true,
+      "serverExecution": false
+    }
+  },
+  "fixture": {
+    "topicCount": 4,
+    "mentions": "none",
+    "demand": "aggregates"
+  },
+  "bucket": "other \u2014 the sampler bucket the started derivations' runs land in",
+  "samples": [
+    {
+      "arm": "before",
+      "commentsPerTopic": 100,
+      "linksPerTopic": 100,
+      "initialization": {
+        "other": {
+          "runs": 84,
+          "actions": 84,
+          "proxyAccesses": 4544,
+          "linkResolutions": 2892,
+          "distinctDocuments": 2980,
+          "registeredDependencies": 13456,
+          "maxRunProxyAccesses": 333
+        },
+        "elapsedMs": 618.4309590000003,
+        "graph": {
+          "nodes": 967,
+          "edges": 4584
+        }
+      },
+      "errors": [],
+      "commentRetraction": {
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 530,
+          "linkResolutions": 275,
+          "distinctDocuments": 281,
+          "registeredDependencies": 1397,
+          "maxRunProxyAccesses": 329
+        },
+        "elapsedMs": 61.87320799999998
+      },
+      "linkRemoval": {
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 603,
+          "linkResolutions": 444,
+          "distinctDocuments": 451,
+          "registeredDependencies": 1941,
+          "maxRunProxyAccesses": 201
+        },
+        "elapsedMs": 55.63829199999964
+      }
+    },
+    {
+      "arm": "after",
+      "commentsPerTopic": 100,
+      "linksPerTopic": 100,
+      "initialization": {
+        "other": {
+          "runs": 72,
+          "actions": 72,
+          "proxyAccesses": 2144,
+          "linkResolutions": 1409,
+          "distinctDocuments": 1489,
+          "registeredDependencies": 6993,
+          "maxRunProxyAccesses": 333
+        },
+        "elapsedMs": 1401.4522920000009,
+        "graph": {
+          "nodes": 947,
+          "edges": 3097
+        }
+      },
+      "errors": [],
+      "commentRetraction": {
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 330,
+          "linkResolutions": 175,
+          "distinctDocuments": 182,
+          "registeredDependencies": 962,
+          "maxRunProxyAccesses": 329
+        },
+        "elapsedMs": 146.71795799999927
+      },
+      "linkRemoval": {
+        "other": {
+          "runs": 4,
+          "actions": 4,
+          "proxyAccesses": 203,
+          "linkResolutions": 174,
+          "distinctDocuments": 179,
+          "registeredDependencies": 762,
+          "maxRunProxyAccesses": 201
+        },
+        "elapsedMs": 70.88345800000025
+      }
+    },
+    {
+      "arm": "before",
+      "commentsPerTopic": 3,
+      "linksPerTopic": 1000,
+      "initialization": {
+        "other": {
+          "runs": 84,
+          "actions": 84,
+          "proxyAccesses": 24076,
+          "linkResolutions": 17458,
+          "distinctDocuments": 17546,
+          "registeredDependencies": 76557,
+          "maxRunProxyAccesses": 2001
+        },
+        "elapsedMs": 1881.7017079999996,
+        "graph": {
+          "nodes": 4179,
+          "edges": 21586
+        }
+      },
+      "errors": [],
+      "commentRetraction": {
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 14,
+          "linkResolutions": 17,
+          "distinctDocuments": 23,
+          "registeredDependencies": 73,
+          "maxRunProxyAccesses": 7
+        },
+        "elapsedMs": 86.3672919999999
+      },
+      "linkRemoval": {
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 6003,
+          "linkResolutions": 4344,
+          "distinctDocuments": 4351,
+          "registeredDependencies": 19041,
+          "maxRunProxyAccesses": 2001
+        },
+        "elapsedMs": 524.0719589999999
+      }
+    },
+    {
+      "arm": "after",
+      "commentsPerTopic": 3,
+      "linksPerTopic": 1000,
+      "initialization": {
+        "other": {
+          "runs": 72,
+          "actions": 72,
+          "proxyAccesses": 8052,
+          "linkResolutions": 6763,
+          "distinctDocuments": 6843,
+          "registeredDependencies": 29776,
+          "maxRunProxyAccesses": 2001
+        },
+        "elapsedMs": 1383.3853329999993,
+        "graph": {
+          "nodes": 4159,
+          "edges": 10887
+        }
+      },
+      "errors": [],
+      "commentRetraction": {
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 8,
+          "linkResolutions": 14,
+          "distinctDocuments": 21,
+          "registeredDependencies": 59,
+          "maxRunProxyAccesses": 7
+        },
+        "elapsedMs": 79.53195799999958
+      },
+      "linkRemoval": {
+        "other": {
+          "runs": 4,
+          "actions": 4,
+          "proxyAccesses": 2003,
+          "linkResolutions": 1674,
+          "distinctDocuments": 1679,
+          "registeredDependencies": 7362,
+          "maxRunProxyAccesses": 2001
+        },
+        "elapsedMs": 246.20949999999993
+      }
+    },
+    {
+      "arm": "before",
+      "commentsPerTopic": 1000,
+      "linksPerTopic": 3,
+      "initialization": {
+        "other": {
+          "runs": 84,
+          "actions": 84,
+          "proxyAccesses": 21416,
+          "linkResolutions": 10808,
+          "distinctDocuments": 10896,
+          "registeredDependencies": 55274,
+          "maxRunProxyAccesses": 3333
+        },
+        "elapsedMs": 2265.793208,
+        "graph": {
+          "nodes": 4179,
+          "edges": 22912
+        }
+      },
+      "errors": [],
+      "commentRetraction": {
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 5330,
+          "linkResolutions": 2675,
+          "distinctDocuments": 2681,
+          "registeredDependencies": 13697,
+          "maxRunProxyAccesses": 3329
+        },
+        "elapsedMs": 397.33841699999994
+      },
+      "linkRemoval": {
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 21,
+          "linkResolutions": 23,
+          "distinctDocuments": 30,
+          "registeredDependencies": 95,
+          "maxRunProxyAccesses": 7
+        },
+        "elapsedMs": 85.69512499999928
+      }
+    },
+    {
+      "arm": "after",
+      "commentsPerTopic": 1000,
+      "linksPerTopic": 3,
+      "initialization": {
+        "other": {
+          "runs": 72,
+          "actions": 72,
+          "proxyAccesses": 13368,
+          "linkResolutions": 6761,
+          "distinctDocuments": 6841,
+          "registeredDependencies": 37742,
+          "maxRunProxyAccesses": 3333
+        },
+        "elapsedMs": 1637.196125,
+        "graph": {
+          "nodes": 4159,
+          "edges": 18861
+        }
+      },
+      "errors": [],
+      "commentRetraction": {
+        "other": {
+          "runs": 6,
+          "actions": 6,
+          "proxyAccesses": 3330,
+          "linkResolutions": 1675,
+          "distinctDocuments": 1682,
+          "registeredDependencies": 9362,
+          "maxRunProxyAccesses": 3329
+        },
+        "elapsedMs": 385.90962500000023
+      },
+      "linkRemoval": {
+        "other": {
+          "runs": 4,
+          "actions": 4,
+          "proxyAccesses": 9,
+          "linkResolutions": 12,
+          "distinctDocuments": 17,
+          "registeredDependencies": 49,
+          "maxRunProxyAccesses": 7
+        },
+        "elapsedMs": 78.51837499999965
+      }
+    }
+  ]
+}
