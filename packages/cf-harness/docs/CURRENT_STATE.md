@@ -2,7 +2,7 @@
 
 Status: current implementation reference\
 Last verified: 2026-09-21\
-Revision: `88a36fe0d3+resolve-piece`
+Revision: `13494844ee+agent-review-fixes`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -224,13 +224,14 @@ The current package provides:
   and resolves tokens in model-authored tool arguments before policy evaluation
   and dispatch, `delegate_task` arguments excepted;
 - cross-agent handles: a delegation seeds the child's own table with a verbatim
-  copy of every parent entry whose token the `goal` or `context` names, and
-  nothing else, so a child resolves exactly the references the delegation handed
-  it while the tokens stay identical across the hierarchy; a reference the child
-  produces is resolved through the child's table and minted through the parent's
-  boundary, reaching the parent as a parent-resolvable token, and any
-  token-shaped text still standing after that resolution is scrubbed to fixed
-  inert text so it cannot resolve later in the parent's own table;
+  copy of every parent address entry or non-cell referent whose token the `goal`
+  or `context` names or a selected current research kit declares as an input,
+  and nothing else, so a child resolves exactly the references the delegation
+  handed it while the tokens stay identical across the hierarchy; a reference
+  the child produces is resolved through the child's table and minted through
+  the parent's boundary, reaching the parent as a parent-resolvable token, and
+  any token-shaped text still standing after that resolution is scrubbed to
+  fixed inert text so it cannot resolve later in the parent's own table;
 - skill by handle: `delegate_task` takes an optional `skillHandle` naming a cell
   whose string value is skill text for the child, materialized trusted-side at
   child spawn under `resolveHandleValue`'s contract (table membership,

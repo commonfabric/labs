@@ -340,8 +340,9 @@ stream is passed to other spaces, which then append intents to it.
 - `wish` home-space materialization under serving — LIFTED by Phase 5
   as **per-demanding-identity wish resolution** (RULED 2026-08-14;
   supersedes the (c)-ruled interim refusal): on a serving runtime the
-  wish's home-space targets (favorite hashtags and `#favorites`/`#journal`/`#profile`
-  family) resolve against the RUN's demanding identity — the
+  wish's home-space targets (favorite hashtags and the
+  `#favorites`/`#journal`/`#agent_queue`/`#profile` family) resolve against the
+  RUN's demanding identity — the
   demand-supplied instance identity (P2-F's run supply) or the
   event's stamped actor, read from the stamped run context — NEVER
   the service identity (`Runtime.homeSpacePrincipalFor`); a

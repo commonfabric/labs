@@ -5796,7 +5796,13 @@ export class CfHarnessPromptLoop {
           delegateInput,
           patternRefResolution.records,
           inheritedResearchRuns,
-          childEngine.handleTable?.entries.map((entry) => entry.token) ?? [],
+          [
+            ...(childEngine.handleTable?.entries.map((entry) => entry.token) ??
+              []),
+            ...(childEngine.handleTable?.referents?.map((referent) =>
+              referent.token
+            ) ?? []),
+          ],
           parentRunState.researchGoal,
         ),
         contextMessages: childSkillContextMessages,

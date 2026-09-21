@@ -168,7 +168,7 @@ export default pattern<AgentRunViewInput, AgentRunViewOutput>(({ run }) => {
             ].filter((part) => part !== "").join(" · ");
           })}
         </span>
-        {computed(() => terminal)
+        {terminal
           ? null
           : <cf-button size="sm" onClick={cancel}>Cancel</cf-button>}
       </cf-vstack>
