@@ -261,8 +261,8 @@ export abstract class DefaultValueVisitor<
    * of course just override this implementation.
    */
   visitFabricContainerValue(
-    value: FabricValuePlus<PlusType>,
-    tag: FabricContainerValueTag,
+    _value: FabricValuePlus<PlusType>,
+    _tag: FabricContainerValueTag,
   ): LeafVisitorResult<PlusType, ResultType> {
     return DO_RECURSE_VALUES;
   }
