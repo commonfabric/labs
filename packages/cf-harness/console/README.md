@@ -12,6 +12,13 @@ turn's inputs. A `pending: true` output declared by the piece's top-level result
 schema prevents naming it as a ready page, and data-only probes stay unnamed.
 Reread the same piece after its read settles and verify the result.
 
+A successful `run_pattern` result may carry `outputConcerns`: `error-branch`
+reports an observed failure, `pending` marks an unfinished read, and `no-rows`
+marks a settled empty read. Pending counts are placeholders. Reread the same
+piece through a minimal unnamed reader, passing its result reference in `inputs`
+and exposing pending, error, and counts in `resultSchema`. Repair observed
+failures; for a settled empty filtered result, compare the unfiltered count.
+
 The server binds `127.0.0.1` and asks one thing of a request: that it names this
 server's own host. A hostile name that resolves to `127.0.0.1` would otherwise
 make these routes same-origin to a browser, and that name is visible on the

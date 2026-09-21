@@ -1748,10 +1748,10 @@ export const runPatternTool: HarnessToolDefinition<
         };
       }
     }
-    // What every pattern this run materialized says about its own reads,
-    // read off each one's result rather than off the single value this call
-    // answers with. A composed reader exposes its failure and its emptiness
-    // as outputs, and a pattern composing it need pass neither on — which is
+    // The run's exact captured result seeds the report alongside the
+    // materialized results retained in the instantiation window. A composed
+    // reader exposes its failure, pending state, and emptiness
+    // as outputs, and a pattern composing it need not pass them on — which is
     // how a run answers `ok` over a result of zeros. The reads are
     // host-side and nothing they find travels as text, so they are not part
     // of the release measurement above and are taken on a transaction of
