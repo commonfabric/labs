@@ -294,7 +294,8 @@ and a result link, and observes `pending: false` and `result` on the node.
       runtime is not built.
 - [x] Home index — `packages/patterns/system/agent-queue.tsx`: a piece holding
       `entries: { run: link, host: string }[]` and the `agentRunner` entry
-      `{ host, tools, registeredAt, lastClaimAt }` owner-protected the way
+      `{ host, tools, registrationId, registeredAt, lastClaimAt }`
+      owner-protected the way
       `ProfileInboxPointer` is on `profile-home.tsx`, written through the
       piece's `setAgentRunner` stream; held by `home.tsx` in an `agentQueue`
       field of the home default pattern, beside `favorites` and `journal`, and

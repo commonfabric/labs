@@ -37,13 +37,13 @@ import {
 } from "@commonfabric/cf-harness/result-writer";
 import type { JSONSchema } from "@commonfabric/api";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
-import { cloneIfNecessary } from "@commonfabric/data-model";
+import { cloneIfNecessary, hashStringOf } from "@commonfabric/data-model";
 import { cloneSchemaMutable } from "@commonfabric/data-model-schema";
 import {
   LIMIT_REACHED,
   PROVIDER_FAILURE,
 } from "@commonfabric/runner/agent-run";
-import { renderCellReference } from "@commonfabric/runner/shared";
+import { addressKey, renderCellReference } from "@commonfabric/runner/shared";
 import type { Cell } from "@commonfabric/runner";
 
 import type {
@@ -64,6 +64,9 @@ export interface HarnessAgentRunExecutorOptions {
 
   /** The directory each run's workspace and artifacts are created under. */
   workRoot: string;
+
+  /** The tools this runner advertises and permits when a request omits them. */
+  allowedTools: readonly string[];
 
   /** The host-owned file backing the read-only Loom tools. */
   loomRetrievalConfigPath?: string;
@@ -116,7 +119,10 @@ export const createHarnessAgentRunExecutor = (
 ) =>
 async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
   const { record } = run;
-  const runRoot = join(options.workRoot, record.requestHash);
+  const runRoot = join(
+    options.workRoot,
+    hashStringOf([run.host, addressKey(run.link)]),
+  );
   const workspace = join(runRoot, "workspace");
   await Deno.mkdir(workspace, { recursive: true });
   const resultPath = join(workspace, RESULT_FILE);
@@ -137,8 +143,7 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
     ? [{ type: CFC_ATOM_TYPE.User, subject: options.requester }]
     : cloneIfNecessary(record.maxConfidentiality, { frozen: false });
   const inputs = record.inputs as Record<string, Cell<unknown>>;
-  // A request naming no tools runs with the surface its session backs.
-  const tools = record.tools;
+  const tools = record.tools ?? options.allowedTools;
   const argv = [
     "--output-mode",
     "batch",
@@ -173,7 +178,7 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
     ]),
     // A request naming its tools narrows the run to them, and to the tool
     // the run returns its result through.
-    ...(tools === undefined ? [] : [...tools, "submit_result"]).flatMap(
+    ...[...tools, "submit_result"].flatMap(
       (tool) => ["--allow-tool", tool],
     ),
     ...(options.model !== undefined ? ["--model", options.model] : []),

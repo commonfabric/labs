@@ -57,6 +57,7 @@ type MaterializedAgentQueueEntry = {
 export type AgentRunnerEntry = {
   host: string;
   tools: string[];
+  registrationId?: string;
   registeredAt: string;
   lastClaimAt?: string;
 };
@@ -72,17 +73,25 @@ type OwnerProtectedQueueWrite<T, Binding> = RepresentsCurrentUser<
 
 export type SetAgentRunnerEvent = {
   runner?: AgentRunnerEntry;
+  expectedRegistrationId?: string;
 };
 
 /**
  * The single authorized writer of `agentRunner`. A runner sends its whole
- * entry when it starts and again, with `lastClaimAt` moved, on every claim;
- * an event without one clears the registration.
+ * entry when it starts and again, with `lastClaimAt` moved, on every claim.
+ * A clear naming `expectedRegistrationId` applies only to that registration,
+ * so an older process cannot clear its replacement.
  */
 export const setAgentRunner = handler<
   SetAgentRunnerEvent,
   { agentRunner: Writable<AgentRunnerEntry | undefined> }
 >((event = {}, state) => {
+  if (
+    event.runner === undefined && event.expectedRegistrationId !== undefined &&
+    state.agentRunner.get()?.registrationId !== event.expectedRegistrationId
+  ) {
+    return;
+  }
   state.agentRunner.set(event.runner);
 });
 

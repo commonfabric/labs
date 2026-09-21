@@ -546,6 +546,7 @@ the runner when it starts and refreshed on every claim:
 agentRunner (in the home space, owner-protected like the profile's inbox pointer)
   host          the runner's toolshed origin (http(s) origin, like ProfileInboxPointer.host)
   tools         the tool names this runner offers
+  registrationId  the runner process whose cleanup may clear this entry
   registeredAt, lastClaimAt
 ```
 

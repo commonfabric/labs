@@ -1097,8 +1097,9 @@ What the runner does, in order:
 
 1. Connects to the home toolshed as the identity, creates the home pattern if
    the home space has none, and writes the queue's `agentRunner` entry
-   `{ host, tools, registeredAt }`. It refreshes the entry, with `lastClaimAt`,
-   on every claim.
+   `{ host, tools, registrationId, registeredAt }`. It refreshes the entry, with
+   `lastClaimAt`, on every claim and clears it on stop only while its
+   `registrationId` still matches.
 2. Subscribes to the queue's `entries` and to every record they name, reading
    each record from the toolshed its entry's `host` names. It acts on a change
    to either; it has no polling timer.

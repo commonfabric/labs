@@ -149,10 +149,13 @@ The piece holds two things:
   `host` is the origin of the toolshed serving that space, carried beside the
   link because a link resolves a space and not the host that serves it.
 - `agentRunner` - the user's registered runner:
-  `{ host, tools, registeredAt, lastClaimAt }`. `cf agent runner` writes it
+  `{ host, tools, registrationId, registeredAt, lastClaimAt }`.
+  `cf agent runner` writes it
   when it starts and refreshes it on every claim. It is owner-protected the way
   the profile's share-inbox pointer is: the only writer is the piece's
-  `setAgentRunner` stream, and only the owner may send it. It holds no secret.
+  `setAgentRunner` stream, and only the owner may send it. Cleanup names the
+  process's `registrationId`, so a stopped process cannot clear a replacement
+  registration. It holds no secret.
   It exists so a consumer can say that no runner is registered, and so the
   `agent` builtin can fail a request naming a tool the runner does not offer
   before the request is staged.
