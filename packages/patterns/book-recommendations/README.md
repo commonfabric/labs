@@ -77,7 +77,6 @@ mkdir -p "$agent_demo_memory" "$AGENT_DEMO_EVIDENCE_DIR"
 
 MEMORY_DIR="file://$agent_demo_memory/" \
 EXPERIMENTAL_SERVER_EXECUTION=false \
-EXPERIMENTAL_AGENT_BUILTIN=true \
   ./scripts/start-local-dev.sh --port-offset 429
 
 deno test -A packages/patterns/integration/agent-book-recommendations.test.ts
@@ -96,8 +95,8 @@ those files. Without `AGENT_DEMO_API_URL`, this integration test is skipped.
 
 ## Enforcement limits
 
-`agentBuiltin` remains off by default. In the harness's default `enforce-strict`
-mode, a task in the `context` role can call `submit_result` but cannot call its
+`agentBuiltin` is on by default. In the harness's default `enforce-strict` mode,
+a task in the `context` role can call `submit_result` but cannot call its
 retrieval tools. The integration explicitly selects `enforce-explicit` for the
 harness so its Loom reads can run. Its fabric clients use `enforce-strict` with
 persisted flow labels. These are separate enforcement settings; this test does

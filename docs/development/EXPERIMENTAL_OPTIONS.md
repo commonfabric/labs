@@ -38,7 +38,7 @@ was last checked against the code.
 | [`viewScopedReplication` / `webViewScopedReplication`](#viewscopedreplication--webviewscopedreplication) | `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` / `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`, or `RuntimeOptions.experimental` | global off; web inherits global | Bernhard Seefeld (2026-09-09) | validate view selection and guarded previews, then graduate per client class | experimental, off by default |
 | [`viewScopedReplicationV1`](#viewscopedreplicationv1) | Memory hello capability | available when server execution is on | Bernhard Seefeld (2026-09-09) | retain as protocol negotiation until older clients and servers retire | optional capability |
 | [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental` | **off** (`SERVER_EXECUTION_DEFAULT_ENABLED = false`; explicit `true` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; Phase-7 gate dispositions govern a renewed rollout; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
-| [`agentBuiltin`](#agentbuiltin) | `EXPERIMENTAL_AGENT_BUILTIN` env, or `RuntimeOptions.experimental` | off | Bernhard Seefeld (agent requests stage 3) | flip on once the runner and the queue pieces exist, then delete the flag | implemented, off by default |
+| [`agentBuiltin`](#agentbuiltin) | `EXPERIMENTAL_AGENT_BUILTIN` env, or `RuntimeOptions.experimental` | on | Bernhard Seefeld (agent requests stage 3) | delete the flag after the default-on posture soaks | implemented, on by default |
 | [`cfcEnforcementMode`](#cfcenforcementmode)                                 | `RuntimeOptions.cfcEnforcementMode` (`CF_CFC_MODE` in the cf-harness / fuse)                                                                    | `enforce-strict`                                                                     | Bernhard Seefeld (#3263)                              | the ladder stays; the default is at its top rung                                                                                                                                                                                  | implemented, on by default at the strictest rung                                |
 | [`cfcFlowLabels`](#cfcflowlabels)                                           | `RuntimeOptions.cfcFlowLabels`                                                                                                                  | `persist`                                                                            | Bernhard Seefeld (#4011)                              | move toward `persist`                                                                                                                                                                                                             | implemented, on by default at `persist`                                         |
 | [`cfcWriteFloor`](#cfcwritefloor)                                           | `RuntimeOptions.cfcWriteFloor`                                                                                                                  | `enforce`                                                                            | Bernhard Seefeld (#4479)                              | move toward `enforce`                                                                                                                                                                                                             | implemented, on by default at `enforce`                                         |
@@ -74,7 +74,7 @@ These flags make up the `ExperimentalOptions` interface in
 are passed as `new Runtime({ experimental: { ... } })`. Each flag defaults to
 `undefined`, which means "take the built-in default". `commitPreconditions`,
 `contentAddressedSchemas`, `plainResultReceipts`, `computedCellIds`,
-`lazyMaterialization` and `readerSchemaPrecedence` default on;
+`lazyMaterialization`, `readerSchemaPrecedence`, and `agentBuiltin` default on;
 `serverExecution` resolves an unset flag to the ONE first-party default
 `SERVER_EXECUTION_DEFAULT_ENABLED` in the deployed-topology presets (the
 summary table above states its current value and its section carries the
@@ -692,27 +692,30 @@ holds the measurements and the conditions for revisiting.
   Server-authoritative in `EXPERIMENTAL_FLAG_AUTHORITY`: under server
   execution the server runs the builtin and creates the record, so a client
   on the other value would stage requests the deployment never picks up, or
-  refuse ones it would.
+  refuse ones it would. A client connecting to an older server that publishes
+  no value for this flag adopts that server's legacy off posture.
 - **Added by.** Bernhard Seefeld, agent requests stage 3
   ([`docs/history/plans/agent-requests-implementation.md`](../history/plans/agent-requests-implementation.md)).
 - **Purpose.** Gates the `agent` builtin
   ([`docs/common/capabilities/agent.md`](../common/capabilities/agent.md)):
   a pattern's request for an agent run, staged as a sink request under the
-  `agent` sink and handed to a runner through an `AgentRun` record. Off, the
-  builtin is registered — a pattern naming it compiles — and every request
-  settles with `pending: false` and an error naming this flag; nothing is
-  staged and no record is written.
-- **Current default and planned end state.** Off by default. The flag flips
-  on once a runner process and the home-space queue pieces exist to act on a
-  record; until then a request would queue with nothing to claim it. After
-  the flip, delete the flag and the refusal branch in
+  `agent` sink and handed to a runner through an `AgentRun` record. With the
+  flag set to `false`, the builtin stays registered — a pattern naming it
+  compiles — but every request settles with `pending: false` and an error
+  naming this flag; nothing is staged and no record is written.
+- **Current default and planned end state.** On by default. Set
+  `EXPERIMENTAL_AGENT_BUILTIN=false` or pass
+  `RuntimeOptions.experimental.agentBuiltin: false` to refuse requests while
+  the rollback flag exists. A queued request needs a configured runner for the
+  requester's home space to claim it. After the default-on posture soaks,
+  delete the flag and the refusal branch in
   `packages/runner/src/builtins/agent.ts`.
-- **Status on 2026-09-18.** Implemented behind the flag; the builtin's
+- **Status on 2026-09-21.** Implemented behind the flag; the builtin's
   staging, memo, abandonment, tool check, and record derivation are covered
   by `packages/runner/test/agent-builtin.test.ts`, and its sink governance by
   `packages/runner/test/agent-sink-governance.test.ts`.
-- **Path to removal.** Flip the default on; remove the env mapping, the
-  runtime option and its authority entry, and the refusal branch.
+- **Path to removal.** Remove the env mapping, the runtime option and its
+  authority entry, and the refusal branch after the default-on posture soaks.
 
 ## Category 2: Contextual Flow Control enforcement rollout dials
 
@@ -1748,17 +1751,15 @@ built-in defaults and preset resolution included, not a second reading of its
 own environment that could disagree with the first — flattened at
 publish. A flag the server left unresolved is omitted, and a server
 that has no `Runtime` yet publishes `experimental: null`; a client reads
-either as "this deployment said nothing" and keeps its own default. The one
-exception rides on the pre-flag document shapes specifically: a fetched
-posture RECORD that declares no `readerSchemaPrecedence`, or a meta document
-with no `experimental` field at all, is a pre-flag server necessarily
-running the strict combine, and adoption reads that absence as the legacy
-`false` (its section has the detail) — while `experimental: null` is a
-current server with no posture yet, so it stays with the built-in default
-(`parseServerExperimentalOptions` draws the line). With that one exception,
-absence of a declaration is never a declaration of `false`, which is what
-lets a client of an older server behave exactly as it did before the server
-published anything.
+either as "this deployment said nothing" and keeps its own default. A fetched
+posture record that declares no `readerSchemaPrecedence` or `agentBuiltin`, or
+a meta document with no `experimental` field at all, uses the corresponding
+legacy `false` for those flags. An older server runs strict schema combining
+and refuses agent requests, so this preserves its posture for newer clients.
+An explicit `experimental: null` means a current server has no posture yet and
+leaves the built-in defaults in force (`parseServerExperimentalOptions` draws
+the line). For every other flag, absence of a declaration is not a declaration
+of `false`.
 
 A serving toolshed runs two kinds of runtime, and what it publishes is the
 posture it SERVES at. The generic runtime it constructs for webhook pattern
