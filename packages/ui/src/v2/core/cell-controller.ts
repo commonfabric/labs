@@ -104,42 +104,41 @@ export class CellController<T> implements ReactiveController {
    * A locally-edited value that bound state has not yet confirmed. While set,
    * it wins over stale bound state in getValue(), so a re-render cannot
    * repaint a pre-write snapshot over what the user just typed. Released after
-   * commit and subscription convergence, on refusal, or when the binding moves
+   * commit and a fresh worker read, on refusal, or when the binding moves
    * to a different cell. `writing` distinguishes a default-setter write from
    * a custom setter, whose completion this controller cannot observe.
    */
-  private _localEdit: { value: T; writing: boolean } | undefined;
+  private _localEdit:
+    | { value: T; writing: boolean; committed: boolean }
+    | undefined;
 
   /**
-   * Re-entrancy marker: a subscription delivery firing synchronously from our
-   * own optimistic set() (as opposed to a backend push). A local echo must not
-   * release the edit — only durable/bound state catching up may.
+   * Re-entrancy marker for a custom setter that synchronously publishes through
+   * ordinary `set()`. The default setter owns only the controller display and
+   * does not optimistically publish through the handle.
    */
   private _applyingLocalWrite = false;
 
-  /**
-   * The current edit committed but bound state has not converged. A live
-   * delivery after that commit acknowledgment supersedes the edit; a rebound
-   * handle's initial cache echo carries no such ordering guarantee.
-   */
-  private _settledAwaitingRelease = false;
+  /** Identifies the read reconciling the current edit and bound handle. */
+  #reconciliation: object | undefined;
 
   /**
-   * Last displayed value. Survives same-cell rebinds so a
-   * replacement handle that has not hydrated yet (get() still undefined)
-   * does not repaint emptiness over it.
+   * Last displayed value, including an authoritative clear. A same-cell
+   * replacement handle's initial cache has no ordering guarantee, so keep
+   * this display until its subscription or a fresh read supplies a value.
    */
-  private _lastKnownValue: T | undefined;
+  private _lastKnownValue: { value: T | undefined } | undefined;
 
   /**
-   * Whether the current subscription has received a real (asynchronous)
-   * delivery. subscribe()'s synchronous initial callback merely echoes the
-   * handle's local cache — for a freshly minted rebound handle that is
-   * "no information yet", NOT an authoritative undefined. Once any real
-   * delivery arrives, an undefined value is an authoritative clear and must
-   * repaint (it may not be masked by _lastKnownValue).
+   * Whether live delivery has made the bound handle's cache current. A rebind
+   * preserves the display over its initial cache. A reconciliation read also
+   * supplies its own display snapshot: `sync()` can decline to cache its
+   * result when another handle updated the shared operation queue.
    */
-  private _bindingHydrated = false;
+  private _boundCacheCurrent = false;
+
+  /** Counts live deliveries to the bound view, excluding initial echoes. */
+  #deliveryGeneration = 0;
 
   /** True only while subscribe() runs its synchronous initial callback. */
   private _subscribeEcho = false;
@@ -191,9 +190,9 @@ export class CellController<T> implements ReactiveController {
       if (!samePersistentCell) {
         this._bindEpoch++;
         this._localEdit = undefined;
-        this._settledAwaitingRelease = false;
+        this.#reconciliation = undefined;
         this._lastKnownValue = undefined;
-        this._bindingHydrated = false;
+        this._boundCacheCurrent = false;
       }
       this._cleanupCellSubscription();
       // Only apply the component's schema when the CellHandle doesn't already
@@ -210,6 +209,7 @@ export class CellController<T> implements ReactiveController {
         this._currentValue = value;
       }
       this._setupCellSubscription();
+      this.#reconcileCommittedEdit();
     }
   }
 
@@ -225,18 +225,12 @@ export class CellController<T> implements ReactiveController {
     if (this._currentValue === undefined || this._currentValue === null) {
       return undefined as T;
     }
-    // A same-cell rebind can install a handle that has not hydrated yet
-    // (get() still undefined). Keep showing the last known value until its
-    // first real delivery arrives instead of repainting emptiness. Once the
-    // subscription has delivered, an undefined value is an authoritative
-    // clear and must show the component's normal empty fallback.
     if (
-      !this._bindingHydrated &&
+      !this._boundCacheCurrent &&
       isCellHandle(this._currentValue) &&
-      (this._currentValue as CellHandle<T>).get() === undefined &&
       this._lastKnownValue !== undefined
     ) {
-      return this._lastKnownValue as Readonly<T>;
+      return this.options.getValue(this._lastKnownValue.value as T);
     }
     return this.options.getValue(this._currentValue);
   }
@@ -253,9 +247,9 @@ export class CellController<T> implements ReactiveController {
       // Track the edit so stale bound-state deliveries (late hydration,
       // partial echoes of earlier keystrokes, pre-write snapshots on rebound
       // handles) cannot repaint over it while the write is pending.
-      this._localEdit = { value: newValue, writing: false };
-      this._settledAwaitingRelease = false;
-      this._lastKnownValue = newValue;
+      this._localEdit = { value: newValue, writing: false, committed: false };
+      this.#reconciliation = undefined;
+      this._lastKnownValue = { value: newValue };
     }
 
     const performUpdate = () => {
@@ -313,10 +307,11 @@ export class CellController<T> implements ReactiveController {
    */
   cancel(): void {
     this._inputTiming?.cancel();
+    this._lastKnownValue = { value: this.defaultGetValue(this._currentValue!) };
     // A cancelled pending write abandons its local edit; bound state is
     // authoritative again.
     this._localEdit = undefined;
-    this._settledAwaitingRelease = false;
+    this.#reconciliation = undefined;
   }
 
   /**
@@ -383,7 +378,8 @@ export class CellController<T> implements ReactiveController {
       void value.setForUI(newValue).then(
         () => {
           if (epoch !== this._bindEpoch || this._localEdit !== edit) return;
-          this._releaseLocalEditAfterSettle();
+          if (edit) edit.committed = true;
+          this.#reconcileCommittedEdit();
         },
         (error) => {
           if (!value.runtime().signal.aborted) {
@@ -393,8 +389,10 @@ export class CellController<T> implements ReactiveController {
             !edit || epoch !== this._bindEpoch || this._localEdit !== edit
           ) return;
           this._localEdit = undefined;
-          this._settledAwaitingRelease = false;
-          this._lastKnownValue = this.defaultGetValue(this._currentValue!);
+          this.#reconciliation = undefined;
+          this._lastKnownValue = {
+            value: this.defaultGetValue(this._currentValue!),
+          };
           const restored = this.getValue();
           if (!deepValueEqual(restored, edit.value)) {
             this.options.onChange(restored as T, edit.value);
@@ -410,32 +408,58 @@ export class CellController<T> implements ReactiveController {
   }
 
   /**
-   * Releases a committed edit when the bound value has converged. Otherwise
-   * preserves it until a live delivery follows the commit acknowledgment.
+   * Reads after commit so a handler edit delivered before the acknowledgment
+   * can supersede the input without needing another subscription delivery.
+   * A rebind starts its own read; only that handle and edit may reconcile.
    */
-  private _releaseLocalEditAfterSettle(): void {
-    if (this._localEdit === undefined) return;
-    const raw = isCellHandle(this._currentValue)
-      ? (this._currentValue as CellHandle<T>).get()
-      : undefined;
-    if (raw !== undefined && deepValueEqual(raw, this._localEdit.value)) {
+  #reconcileCommittedEdit(): void {
+    const edit = this._localEdit;
+    const cell = this._currentValue;
+    if (!edit?.committed || !isCellHandle(cell)) return;
+    const reconciliation = this.#reconciliation = {};
+    const deliveryGeneration = this.#deliveryGeneration;
+    const finish = (snapshot: Readonly<T> | undefined) => {
+      if (
+        this.#reconciliation !== reconciliation || this._localEdit !== edit ||
+        this._currentValue !== cell
+      ) return;
       this._localEdit = undefined;
-    } else {
-      this._settledAwaitingRelease = true;
-    }
+      this.#reconciliation = undefined;
+      this._boundCacheCurrent = false;
+      this._lastKnownValue = {
+        value: this.#deliveryGeneration === deliveryGeneration
+          ? snapshot as T | undefined
+          : this.defaultGetValue(cell as CellHandle<T>),
+      };
+      const restored = this.getValue();
+      if (!deepValueEqual(restored, edit.value)) {
+        this.options.onChange(restored as T, edit.value);
+      }
+      if (this.options.triggerUpdate) this.host.requestUpdate();
+    };
+    void (cell as CellHandle<T>).sync().then(finish, (error) => {
+      if (!cell.runtime().signal.aborted) {
+        console.error("[CellController] Reconciliation failed:", error);
+      }
+      // A failed read must not pin an optimistic display indefinitely.
+      finish(this.defaultGetValue(cell as CellHandle<T>));
+    });
   }
 
   private _setupCellSubscription(): void {
     if (isCellHandle(this._currentValue)) {
       let previousValue: T | undefined;
-      this._bindingHydrated = false;
+      this._boundCacheCurrent = false;
       this._subscribeEcho = true;
       try {
         this._cellUnsubscribe = this._currentValue.subscribe((newValue) => {
           // Call onChange when the cell value changes from the backend
           // This ensures components like cf-select can update their DOM state
           const typedNewValue = newValue as T | undefined;
-          if (!this._subscribeEcho) this._bindingHydrated = true;
+          if (!this._subscribeEcho) {
+            this._boundCacheCurrent = true;
+            this.#deliveryGeneration++;
+          }
           const suppressed = this._classifyDelivery(typedNewValue);
           // `Object.is`, not `!==`: an unchanged `NaN` must not re-announce,
           // and a `0` -> `-0` change is a real change.
@@ -466,49 +490,23 @@ export class CellController<T> implements ReactiveController {
    * repaint nor be announced over the user's pending edit.
    */
   private _classifyDelivery(value: T | undefined): boolean {
+    if (this._subscribeEcho && this._lastKnownValue !== undefined) {
+      return true;
+    }
     if (this._localEdit === undefined) {
-      if (value !== undefined) {
-        this._lastKnownValue = value;
-      } else if (this._bindingHydrated) {
-        // An authoritative clear (a real delivery of undefined, not the
-        // no-information initial echo of a fresh handle): forget the last
-        // known value so a later same-cell rebind cannot resurrect it.
-        this._lastKnownValue = undefined;
+      if (value !== undefined || this._boundCacheCurrent) {
+        this._lastKnownValue = { value };
       }
       return false;
     }
     if (this._applyingLocalWrite) {
-      // Our own optimistic apply echoing back synchronously. Deliver it as
-      // before, but a local echo does not confirm the edit — only bound state
-      // catching up (below) or the write settling may release it.
-      if (value !== undefined) this._lastKnownValue = value;
+      // Custom setters may synchronously publish their own optimistic echo.
+      this._lastKnownValue = { value };
       return false;
     }
-    if (value !== undefined && deepValueEqual(value, this._localEdit.value)) {
-      // A matching echo can still be speculative. Only the commit outcome
-      // permits it to release protection against a subsequent stale value.
-      if (this._settledAwaitingRelease) {
-        this._localEdit = undefined;
-        this._settledAwaitingRelease = false;
-      }
-      this._lastKnownValue = value;
-      return false;
-    }
-    if (
-      this._settledAwaitingRelease && !this._subscribeEcho
-    ) {
-      // The commit acknowledgment precedes this live delivery on the worker
-      // connection, so a remote edit or clear supersedes the committed edit.
-      this._localEdit = undefined;
-      this._settledAwaitingRelease = false;
-      this._lastKnownValue = value;
-      return false;
-    }
-    // Stale pre-write snapshot: late hydration, the partial echo of an
-    // earlier keystroke, or a rebound handle's initial state. The local edit
-    // wins until the commit and echo confirm it or a post-commit delivery
-    // supersedes it.
-    return true;
+    // Matching echoes can still be speculative. Commit followed by a fresh
+    // read reconciles both stale snapshots and intervening handler writes.
+    return !deepValueEqual(value, this._localEdit.value);
   }
 
   private _cleanupCellSubscription(): void {

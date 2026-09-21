@@ -1,16 +1,18 @@
-import type { ReactiveControllerHost } from "lit";
 import { expect } from "@std/expect";
-import { stub } from "@std/testing/mock";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
+import type { ReactiveControllerHost } from "lit";
 
 import type { Runtime } from "@commonfabric/runner";
 import {
   $conn,
   $onCellUpdate,
+  type CellGetRequest,
   CellHandle,
   type CellRef,
   type CellSetRequest,
   type InitializedRuntimeConnection,
+  RequestType,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
 
@@ -24,9 +26,23 @@ type CommitResult = Awaited<ReturnType<Runtime["commitUiCellWrite"]>>;
  * Drives real handles and the processor's acknowledgment handler, with each
  * storage outcome controlled by the test. Subscription deliveries are explicit.
  */
-function setup() {
+function setup({ holdReads = false } = {}) {
   const lifetime = new AbortController();
   const requests: CellSetRequest[] = [];
+  const stored = new Map<string, unknown>();
+  const reads: Promise<unknown>[] = [];
+  const readGates: Array<{
+    started: ReturnType<typeof Promise.withResolvers<void>>;
+    result: ReturnType<
+      typeof Promise.withResolvers<{ value: string | undefined }>
+    >;
+  }> = [];
+  const readGate = (index: number) =>
+    readGates[index] ??= {
+      started: Promise.withResolvers<void>(),
+      result: Promise.withResolvers<{ value: string | undefined }>(),
+    };
+  let readCount = 0;
   const writes: Promise<void>[] = [];
   const changes: string[] = [];
   const commits: Array<{
@@ -46,7 +62,14 @@ function setup() {
     },
   });
   const connection = {
-    request: async (request: CellSetRequest) => {
+    request: async (request: CellSetRequest | CellGetRequest) => {
+      if (request.type === RequestType.CellGet) {
+        const gate = readGate(readCount++);
+        gate.started.resolve();
+        if (holdReads) return await gate.result.promise;
+        return { value: stored.get(request.cell.id) };
+      }
+      stored.set(request.cell.id, request.value);
       const index = requests.length;
       requests.push(request);
       commit(index).started.resolve(request);
@@ -81,6 +104,13 @@ function setup() {
       schema: { type: "string" },
       ...extra,
     }, value);
+    if (!stored.has(cell.ref().id)) stored.set(cell.ref().id, value);
+    const sync = cell.sync.bind(cell);
+    cell.sync = () => {
+      const read = sync();
+      reads.push(read);
+      return read;
+    };
     // Capture the actual completion promise, including for the negative
     // control that uses ordinary `set()` instead of commit-aware UI writes.
     for (const method of ["set", "setStrict", "setForUI"] as const) {
@@ -101,6 +131,13 @@ function setup() {
     controller,
     handle,
     changes,
+    store: (value: string | undefined) => stored.set(cell.ref().id, value),
+    read: () => Promise.all(reads.map((read) => read.catch(() => {}))),
+    readStarted: (index: number) => readGate(index).started.promise,
+    answerRead: (index: number, value: string | undefined | Error) => {
+      if (value instanceof Error) readGate(index).result.reject(value);
+      else readGate(index).result.resolve({ value });
+    },
     disposeRuntime: () => lifetime.abort(),
     get updates() {
       return updates;
@@ -114,6 +151,7 @@ function setup() {
       // The controller attached its outcome observer when it started this
       // write, before the test attaches this completion observer.
       await writes[index]?.catch(() => {});
+      await Promise.all(reads.map((read) => read.catch(() => {})));
     },
   };
 }
@@ -179,6 +217,208 @@ describe("CellController commit acknowledgment", () => {
       afterCommit[$onCellUpdate]("favorites");
       expect(f.controller.getValue()).toBe("favorites");
     } finally {
+      await f.finish(0);
+      f.controller.hostDisconnected();
+    }
+  });
+
+  it("keeps the reconciled value through matching and stale cache-only rebinds", async () => {
+    const f = setup();
+    try {
+      f.controller.setValue("profile");
+      await f.started(0);
+      await f.finish(0);
+      for (const [reader, cached] of [["one", "profile"], ["two", "spaces"]]) {
+        f.controller.bind(f.handle(cached, {
+          cfcLabelView: {
+            version: 1,
+            entries: [{
+              path: [],
+              label: {
+                confidentiality: [`did:key:${reader}`],
+              },
+            }],
+          },
+        }));
+        expect(f.controller.getValue()).toBe("profile");
+      }
+    } finally {
+      f.controller.hostDisconnected();
+    }
+  });
+
+  it("reconciles a clear that arrived before the acknowledgment without another delivery", async () => {
+    const f = setup();
+    try {
+      f.controller.setValue("hello");
+      await f.started(0);
+      f.cell[$onCellUpdate]("hello");
+      f.store("");
+      f.cell[$onCellUpdate]("");
+      expect(f.controller.getValue()).toBe("hello");
+      await f.finish(0);
+      expect(f.controller.getValue()).toBe("");
+      expect(f.changes.at(-1)).toBe("");
+    } finally {
+      await f.finish(0);
+      f.controller.hostDisconnected();
+    }
+  });
+
+  it("keeps a newer unsent edit when the committed edit's read returns", async () => {
+    const f = setup({ holdReads: true });
+    try {
+      f.controller.setValue("profile");
+      await f.started(0);
+      const finishing = f.finish(0);
+      await f.readStarted(0);
+      f.controller.updateTimingOptions({ strategy: "blur" });
+      f.controller.setValue("favorites");
+      f.answerRead(0, "profile");
+      await finishing;
+      expect(f.controller.getValue()).toBe("favorites");
+    } finally {
+      f.answerRead(0, "profile");
+      await f.finish(0);
+      f.controller.cancel();
+      f.controller.hostDisconnected();
+    }
+  });
+
+  it("reads the current view when rebinding during reconciliation", async () => {
+    const f = setup({ holdReads: true });
+    try {
+      f.controller.setValue("profile");
+      await f.started(0);
+      const finishing = f.finish(0);
+      await f.readStarted(0);
+      const rebound = f.handle("spaces", {
+        cfcLabelView: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: ["did:key:reader"],
+            },
+          }],
+        },
+      });
+      f.controller.bind(rebound);
+      f.answerRead(0, "old-view");
+      await f.readStarted(1);
+      expect(f.controller.getValue()).toBe("profile");
+      f.answerRead(1, "current-view");
+      await finishing;
+      await f.read();
+      expect(f.controller.getValue()).toBe("current-view");
+      expect(f.changes).not.toContain("old-view");
+    } finally {
+      f.answerRead(0, "profile");
+      f.answerRead(1, "profile");
+      await f.finish(0);
+      f.controller.hostDisconnected();
+    }
+  });
+
+  it("keeps a live delivery that supersedes an in-flight reconciliation read", async () => {
+    const f = setup({ holdReads: true });
+    try {
+      f.controller.setValue("profile");
+      await f.started(0);
+      const finishing = f.finish(0);
+      await f.readStarted(0);
+      f.cell[$onCellUpdate]("favorites");
+      f.answerRead(0, "profile");
+      await finishing;
+      expect(f.controller.getValue()).toBe("favorites");
+    } finally {
+      f.answerRead(0, "profile");
+      await f.finish(0);
+      f.controller.hostDisconnected();
+    }
+  });
+
+  it("uses the read result when another handle invalidates the shared read cache", async () => {
+    const f = setup({ holdReads: true });
+    try {
+      f.controller.setValue("profile");
+      await f.started(0);
+      const finishing = f.finish(0);
+      await f.readStarted(0);
+      const sibling = f.handle("spaces");
+      sibling[$onCellUpdate]("profile");
+      f.answerRead(0, "profile");
+      await finishing;
+      expect(f.cell.get()).toBe("spaces");
+      expect(f.controller.getValue()).toBe("profile");
+    } finally {
+      f.answerRead(0, "profile");
+      await f.finish(0);
+      f.controller.hostDisconnected();
+    }
+  });
+
+  it("releases to the bound value and reports a failed reconciliation read", async () => {
+    const f = setup({ holdReads: true });
+    using errors = stub(console, "error");
+    try {
+      f.controller.setValue("profile");
+      await f.started(0);
+      const finishing = f.finish(0);
+      await f.readStarted(0);
+      f.answerRead(0, new Error("read failed"));
+      await finishing;
+      expect(f.controller.getValue()).toBe("spaces");
+      expect(errors.calls).toHaveLength(1);
+      expect(errors.calls[0].args[0]).toContain("Reconciliation failed");
+    } finally {
+      f.answerRead(0, "profile");
+      await f.finish(0);
+      f.controller.hostDisconnected();
+    }
+  });
+
+  it("preserves a read of undefined across a stale cache-only rebind", async () => {
+    const f = setup();
+    try {
+      f.controller.setValue("hello");
+      await f.started(0);
+      f.store(undefined);
+      await f.finish(0);
+      expect(f.controller.getValue()).toBe("");
+      f.controller.bind(f.handle("hello", {
+        cfcLabelView: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: ["did:key:reader"],
+            },
+          }],
+        },
+      }));
+      expect(f.controller.getValue()).toBe("");
+    } finally {
+      await f.finish(0);
+      f.controller.hostDisconnected();
+    }
+  });
+
+  it("releases a reconciliation canceled by runtime disposal quietly", async () => {
+    const f = setup({ holdReads: true });
+    using errors = stub(console, "error");
+    try {
+      f.controller.setValue("profile");
+      await f.started(0);
+      const finishing = f.finish(0);
+      await f.readStarted(0);
+      f.disposeRuntime();
+      f.answerRead(0, new Error("runtime disposed"));
+      await finishing;
+      expect(f.controller.getValue()).toBe("spaces");
+      expect(errors.calls).toHaveLength(0);
+    } finally {
+      f.answerRead(0, "profile");
       await f.finish(0);
       f.controller.hostDisconnected();
     }

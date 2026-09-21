@@ -36,8 +36,12 @@ component implementation.
 `CellHandle.setForUI()` to observe their commit outcomes. Input dispatch stays
 responsive while persistence is pending. Subscription echoes, including a value
 equal to the edit, cannot release that edit before commit. After commit, the
-controller releases a converged edit or waits for the next live delivery when a
-replacement handle still holds an older snapshot.
+controller reads the current bound view and reconciles with that value or a live
+delivery received during the read. This also picks up a handler clear that
+arrived before the acknowledgment, without waiting for another delivery. The
+read adds one worker round trip per completed edit that is still current.
+Rebinding during reconciliation starts a read of the new view. Initial cached
+echoes on replacement handles cannot overwrite the last displayed value.
 
 Write refusal is logged and releases the affected edit, notifying the component
 to render the bound value. Completion of an older write does not release a newer

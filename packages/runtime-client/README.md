@@ -17,7 +17,16 @@ the stored value through a subscription. A matching value delivery can still be
 speculative; the control retains that edit until the commit outcome arrives. A
 refused write must release the edit and repaint from the bound state. The commit
 promise is distinct from the subscription stream: resolving it does not itself
-publish a value or guarantee that a component has rendered.
+publish a value or guarantee that a component has rendered. `get()` therefore
+keeps its cached value until a worker delivery or explicit read updates it;
+other subscribers receive no synchronous optimistic publication. A following
+`push()` may briefly display an optimistic array built from that older cache,
+although its native append is applied to the correct worker-side array.
+
+Controls that reconcile after commit must account for handler writes already
+delivered before the acknowledgment. `CellController` follows the commit with a
+fresh read of the current bound view; it does not require another subscription
+delivery to release the edit.
 
 ## Refused event admission
 
