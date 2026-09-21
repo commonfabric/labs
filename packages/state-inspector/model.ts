@@ -858,19 +858,18 @@ export function visibleEntityRows(
   // a farther link is hidden by the nearer branch that claimed it.
   const gone = new Set<string>();
   if (!opts.includeDeleted) {
-    const tombstoned = space.db.prepare(
-      `SELECT r.id FROM revision r
+    const tombstoned = `SELECT r.id FROM revision r
        WHERE r.branch = ? AND r.scope_key = ? AND r.op = 'delete' AND r.seq <= ?
          AND NOT EXISTS (
            SELECT 1 FROM revision h
            WHERE h.branch = r.branch AND h.id = r.id
              AND h.scope_key = r.scope_key AND h.seq <= ?
              AND (h.seq > r.seq OR (h.seq = r.seq AND h.op_index > r.op_index))
-         )`,
-    );
+         )`;
     for (const link of branchReadChain(space, branch)) {
       for (
-        const r of tombstoned.all<{ id: string }>(
+        const r of space.all<{ id: string }>(
+          tombstoned,
           link.branch,
           scope,
           link.atSeq,
