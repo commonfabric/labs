@@ -132,18 +132,14 @@ export type VisitResult<PlusType = never, ResultType = FabricValue> =
  * functions.
  */
 export type MainVisitResult<ResultType = FabricValue> =
-  BaselineVisitorMethodResult<
-    ResultType
-  >;
+  BaselineVisitorMethodResult<ResultType>;
 
 /**
  * Possible results from `visited*()` calls (container iteration post-visit
  * methods).
  */
 export type VisitedResult<ResultType = FabricValue> =
-  BaselineVisitorMethodResult<
-    ResultType
-  >;
+  BaselineVisitorMethodResult<ResultType>;
 
 //
 // Visitor interface
