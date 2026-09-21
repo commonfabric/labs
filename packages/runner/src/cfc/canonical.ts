@@ -552,6 +552,9 @@ export const canonicalizePreparedDigestInput = (
       ),
     }
     : {}),
+  // External-content observations are an order-insensitive set of opaque
+  // runtime receipts. Empty collapses to absent so adding support for the
+  // channel does not change digests of transactions that observed none.
   ...(input.externalContentObservations !== undefined &&
       input.externalContentObservations.length > 0
     ? {

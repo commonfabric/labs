@@ -322,7 +322,7 @@ describe("submit_result", () => {
     });
   });
 
-  it("reports replacement when a resumed run overwrites an existing result", async () => {
+  it("restores result configuration when a resumed run overwrites an existing result", async () => {
     const first = await run("run-resumed-result", [
       submit("call-1", { answer: "Hyperion" }),
       finalTurn("Done."),
@@ -330,7 +330,6 @@ describe("submit_result", () => {
     const resumed = new CfHarnessEngine({
       sandboxRuntime: new FakeSandboxRuntime(),
       runState: first.engine.getRunState(),
-      structuredResult: { schema: RESULT_SCHEMA, path: resultPath },
     });
 
     const { output } = await resumed.invokeBuiltinTool("submit_result", {
@@ -341,6 +340,25 @@ describe("submit_result", () => {
     expect(JSON.parse(await Deno.readTextFile(resultPath))).toEqual({
       answer: "Ubik",
     });
+  });
+
+  it("refuses a conflicting result configuration on resume", async () => {
+    const first = await run("run-conflicting-resumed-result", [
+      finalTurn("Done."),
+    ]);
+
+    expect(() =>
+      new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        runState: first.engine.getRunState(),
+        structuredResult: {
+          schema: RESULT_SCHEMA,
+          path: `${resultPath}.different`,
+        },
+      })
+    ).toThrow(
+      "resumed run structured-result configuration does not match the recorded configuration",
+    );
   });
 
   it("keeps a handle token in the result a token", async () => {
@@ -400,7 +418,7 @@ describe("submit_result", () => {
     );
   });
 
-  it("offers the configured result tool when the CLI resumes a run", async () => {
+  it("restores and validates the result contract when the CLI resumes a run", async () => {
     const runId = "run-resumed-result";
     const runRoot = join(dir, "artifacts", runId);
     const runState = {
@@ -412,12 +430,14 @@ describe("submit_result", () => {
       currentDir: "/workspace",
       policyEvents: [],
       toolOutputs: [],
+      structuredResult: { schema: RESULT_SCHEMA, path: resultPath },
     };
     const transcript = [{
       role: "user" as const,
       content: "Recommend a book.",
     }];
     const errors: string[] = [];
+    const reads: string[] = [];
     let resultAvailable: boolean | undefined;
     await Deno.mkdir(join(dir, "workspace"));
     await Deno.writeTextFile(
@@ -432,13 +452,13 @@ describe("submit_result", () => {
       join(dir, "workspace"),
       "--gateway-auth-mode",
       "none",
-      "--structured-result-schema",
-      JSON.stringify(RESULT_SCHEMA),
-      "--structured-result-path",
-      "result.json",
     ], {
       env: {},
       io: { stdout: () => {}, stderr: (text) => errors.push(text) },
+      readTextFile: (path) => {
+        reads.push(path);
+        return Deno.readTextFile(path);
+      },
       readRunArtifacts: () =>
         Promise.resolve({
           runRoot,
@@ -468,6 +488,7 @@ describe("submit_result", () => {
     expect(errors).toEqual([]);
     expect(exitCode).toBe(0);
     expect(resultAvailable).toBe(true);
+    expect(reads).toEqual([await Deno.realPath(resultPath)]);
   });
 
   it("returns `not_configured` when invoked outside a run that takes a result", async () => {

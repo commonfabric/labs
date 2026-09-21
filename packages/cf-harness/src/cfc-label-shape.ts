@@ -10,7 +10,8 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 /** Whether a decoded value has the supported shape of one CFC atom. */
 export const isCfcAtomShape = (value: unknown): boolean =>
   typeof value === "string" ||
-  (isObjectNotArray(value) && typeof value.type === "string");
+  (isObjectNotArray(value) && typeof value.type === "string" &&
+    !Object.hasOwn(value, "anyOf"));
 
 /** Whether a decoded value has the supported shape of one CFC clause. */
 export const isCfcClauseShape = (
