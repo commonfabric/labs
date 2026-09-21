@@ -46,7 +46,11 @@ export const RUN_PATTERN_INPUT_SCHEMA = {
     },
     reuseReasons: {
       type: "object",
-      additionalProperties: { type: "string", minLength: 1 },
+      additionalProperties: {
+        type: "string",
+        minLength: 1,
+        pattern: "^[^\\r\\n]*\\S[^\\r\\n]*(?![\\s\\S])",
+      },
       description:
         "One-line reasons keyed by patternId for selected kit.patterns entries this source does not import. Explain why each omitted pattern does not fit this call, including when this is a separate atom or a reader of an existing result. Required for each omission from retained research, even when its kit is incomplete. Unverified leads do not require a reason. Reasons remain in the tool-call record.",
     },

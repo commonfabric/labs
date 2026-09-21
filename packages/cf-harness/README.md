@@ -1974,10 +1974,12 @@ refusal: the request is already true. `assign_slug` sets the address, not the
 title: what the piece list displays is the pattern's own `NAME` result, so a
 pattern that wants a title sets `NAME` in its source.
 
-Every `run_pattern` invocation persists a piece in the configured space, named
-or not. A cancelled run stops its piece, but no piece is ever deleted, and each
-piece's source-history revision is a storage-retention root the piece list does
-not reveal. Naming changes only whether a piece is findable, never whether it is
+An invocation rejected by the retained-pattern preflight returns before opening
+Fabric or compiling, so it persists nothing. A `run_pattern` invocation that
+creates a piece persists it in the configured space, named or not. A cancelled
+run stops its piece, but no piece is ever deleted, and each piece's
+source-history revision is a storage-retention root the piece list does not
+reveal. Naming changes only whether a piece is findable, never whether it is
 retained: an unnamed piece is exactly as durable as a named one, and naming
 makes a retained piece visible to the tooling that could otherwise not see it.
 Tooling that enumerates a space's contents from the piece list must not assume

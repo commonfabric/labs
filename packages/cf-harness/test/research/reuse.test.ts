@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import type { HarnessResearchRunSummary } from "../../src/contracts/research.ts";
+import { RUN_PATTERN_INPUT_SCHEMA } from "../../src/contracts/run-pattern.ts";
 import { unexplainedResearchPatterns } from "../../src/research/reuse.ts";
 import { REUSE_RESEARCH_RUNS } from "../fixtures/research-reuse.ts";
 
@@ -52,6 +53,12 @@ describe("reuse", () => {
     }
 
     it("accepts a one-line reason addressed to the omitted selection", async () => {
+      expect(" This atom reads Linear. ").toMatch(
+        new RegExp(
+          RUN_PATTERN_INPUT_SCHEMA.properties.reuseReasons.additionalProperties
+            .pattern,
+        ),
+      );
       expect(
         await unexplainedResearchPatterns(
           REUSE_RESEARCH_RUNS,
@@ -65,9 +72,23 @@ describe("reuse", () => {
     });
 
     for (
-      const reason of ["", "  \t", "First line\nSecond line", "First\rSecond"]
+      const reason of [
+        "",
+        "  \t",
+        "First line\nSecond line",
+        "First\rSecond",
+        "First\n",
+        "First\r\n",
+      ]
     ) {
       it(`returns the omission for a reason that is not one nonblank line ${JSON.stringify(reason)}`, async () => {
+        expect(reason).not.toMatch(
+          new RegExp(
+            RUN_PATTERN_INPUT_SCHEMA.properties.reuseReasons
+              .additionalProperties
+              .pattern,
+          ),
+        );
         expect(
           await unexplainedResearchPatterns(
             REUSE_RESEARCH_RUNS,
