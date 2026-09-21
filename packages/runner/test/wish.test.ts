@@ -1638,11 +1638,7 @@ describe("wish built-in", () => {
         expect(data.type).toBe("from-other-space");
       });
 
-      it("answers nothing, not a no-match error, while the arbitrary DID space's mentionables are not there", async () => {
-        // The other space holds nothing when the wish runs: its mentionables
-        // read as not loaded, which is a pending answer — neither a match nor
-        // the no-match error a loaded, empty space would earn. Once the data
-        // is there, a wish over the same scope finds it.
+      it("reports confirmed absence in an arbitrary DID space and finds later arrivals", async () => {
         const wishPattern = pattern(() => {
           return {
             result: wish({ query: "#late-tag", scope: [otherSpace.did()] }),
@@ -1660,58 +1656,61 @@ describe("wish built-in", () => {
         await tx.commit();
         tx = runtime.edit();
 
-        await result.pull();
-        expect(result.key("result").get()?.result).toBeUndefined();
-        expect(result.key("result").get()?.error).toBeUndefined();
+        const arrived = Promise.withResolvers<void>();
+        const stopReading = result.key("result").key("result").sink((value) => {
+          if (value !== undefined) arrived.resolve();
+        });
+        try {
+          await result.pull();
+          expect(result.key("result").get()?.result).toBeUndefined();
+          expect(result.key("result").get()?.error).toContain(
+            "No 1 space(s) found",
+          );
 
-        const otherSpaceCell = runtime.getCell(
-          otherSpace.did(),
-          otherSpace.did(),
-        ).withTx(tx);
-        const otherDefaultPattern = runtime.getCell(
-          otherSpace.did(),
-          "other-late-default-pattern",
-          undefined,
-          tx,
-        );
-        const otherBacklinksIndex = runtime.getCell(
-          otherSpace.did(),
-          "other-late-backlinks-index",
-          undefined,
-          tx,
-        );
-        const otherMentionable = runtime.getCell(
-          otherSpace.did(),
-          "other-late-mentionable-item",
-          undefined,
-          tx,
-        );
-        const mentionableData: any = { type: "arrived-late" };
-        mentionableData[NAME] = "late-tag";
-        otherMentionable.set(mentionableData);
-        otherBacklinksIndex.set({ mentionable: [otherMentionable] });
-        otherDefaultPattern.set({ backlinksIndex: otherBacklinksIndex });
-        (otherSpaceCell as any).key("defaultPattern").set(otherDefaultPattern);
-        await tx.commit();
-        tx = runtime.edit();
+          const otherSpaceCell = runtime.getCell(
+            otherSpace.did(),
+            otherSpace.did(),
+          ).withTx(tx);
+          const otherDefaultPattern = runtime.getCell(
+            otherSpace.did(),
+            "other-late-default-pattern",
+            undefined,
+            tx,
+          );
+          const otherBacklinksIndex = runtime.getCell(
+            otherSpace.did(),
+            "other-late-backlinks-index",
+            undefined,
+            tx,
+          );
+          const otherMentionable = runtime.getCell(
+            otherSpace.did(),
+            "other-late-mentionable-item",
+            undefined,
+            tx,
+          );
+          const mentionableData: any = { type: "arrived-late" };
+          mentionableData[NAME] = "late-tag";
+          otherMentionable.set(mentionableData);
+          otherBacklinksIndex.set({ mentionable: [otherMentionable] });
+          otherDefaultPattern.set({ backlinksIndex: otherBacklinksIndex });
+          (otherSpaceCell as any).key("defaultPattern").set(
+            otherDefaultPattern,
+          );
+          expect((await tx.commit()).error).toBeUndefined();
+          tx = runtime.edit();
 
-        const laterCell = runtime.getCell<{
-          result?: { result?: unknown; error?: string };
-        }>(
-          patternSpace.did(),
-          "scope-arb-did-later-result",
-          undefined,
-          tx,
-        );
-        const later = runtime.run(tx, wishPattern, {}, laterCell);
-        await tx.commit();
-        tx = runtime.edit();
-
-        await later.pull();
-        const foundItem = later.key("result").get()?.result;
-        expect(foundItem).toBeDefined();
-        const data = (foundItem as any).get?.() ?? foundItem;
-        expect(data.type).toBe("arrived-late");
+          await arrived.promise;
+          await result.pull();
+          const recovered = result.key("result").get();
+          expect(recovered?.error).toBeUndefined();
+          const foundItem = recovered?.result;
+          expect(foundItem).toBeDefined();
+          const data = (foundItem as any).get?.() ?? foundItem;
+          expect(data.type).toBe("arrived-late");
+        } finally {
+          stopReading();
+        }
       });
 
       it('searches both current space and arbitrary DID with scope: [".", did]', async () => {

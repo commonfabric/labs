@@ -3461,6 +3461,198 @@ describe("piece schema compatibility", () => {
     });
   });
 
+  describe("type lists inside alternatives", () => {
+    // A `type` list and the `anyOf` spelling of the same union describe the
+    // same values, and a list wrapped in a one-branch `anyOf` describes what
+    // the bare list does. The proof splits a list into one branch per named
+    // type wherever it is written, so none of those spellings decides a
+    // verdict on its own.
+    const spellings = (list: JSONSchema): [string, JSONSchema][] => [
+      ["bare", list],
+      ["inside `anyOf`", { anyOf: [list] }],
+      ["nested in `anyOf`", { anyOf: [{ anyOf: [list] }] }],
+    ];
+
+    for (
+      const [name, list, target, compatible] of [
+        [
+          "widening a list to the union spelling",
+          { type: ["boolean", "string"] },
+          { anyOf: [{ type: "boolean" }, { type: "string" }] },
+          true,
+        ],
+        [
+          "dropping a listed type",
+          { type: ["boolean", "string"] },
+          { anyOf: [{ type: "boolean" }] },
+          false,
+        ],
+        [
+          "a sibling constraint the target keeps",
+          { type: ["string", "number"], maxLength: 3 },
+          { anyOf: [{ type: "string", maxLength: 3 }, { type: "number" }] },
+          true,
+        ],
+        [
+          "a sibling constraint the target tightens",
+          { type: ["string", "number"], maxLength: 3 },
+          { anyOf: [{ type: "string", maxLength: 2 }, { type: "number" }] },
+          false,
+        ],
+        [
+          "a list naming `object`",
+          { type: ["object", "string"] },
+          { anyOf: [{ type: "object" }, { type: "string" }] },
+          true,
+        ],
+        [
+          // `unknown` admits every value, so no branch of the target covers it.
+          "a list naming `unknown`",
+          { type: ["unknown", "string"] },
+          { anyOf: [{ type: "boolean" }, { type: "string" }] },
+          false,
+        ],
+        [
+          // `object` admits every `FabricPrimitive`, so the primitive name adds
+          // no branch of its own and the runtime's `required` check is kept.
+          "a list naming `object` beside a `FabricPrimitive` and `required`",
+          {
+            type: ["object", "FabricBytes"],
+            properties: { k: { type: "string" } },
+            required: ["k"],
+          },
+          {
+            anyOf: [
+              {
+                type: "object",
+                properties: { k: { type: "string" } },
+                required: ["k"],
+              },
+              { type: "FabricBytes" },
+            ],
+          },
+          true,
+        ],
+      ] satisfies [string, JSONSchema, JSONSchema, boolean][]
+    ) {
+      it(`proves ${name} the same way wherever the list is spelled`, () => {
+        for (const [, source] of spellings(list)) {
+          if (compatible) {
+            expect(() => assertSchemaSubset(source, target)).not.toThrow();
+            expect(() =>
+              assertPatternSchemasBackwardCompatible(
+                pattern(source, target),
+                pattern(target, source),
+              )
+            ).not.toThrow();
+          } else {
+            expect(() => assertSchemaSubset(source, target)).toThrow();
+            expect(() =>
+              assertPatternSchemasBackwardCompatible(
+                pattern(source, true),
+                pattern(target, true),
+              )
+            ).toThrow(/argument:/);
+            expect(() =>
+              assertPatternSchemasBackwardCompatible(
+                pattern(true, target),
+                pattern(true, source),
+              )
+            ).toThrow(/result:/);
+          }
+        }
+      });
+    }
+
+    it("keeps a type list beside an unresolved reference whole", () => {
+      // The reference resolves with the branch's keywords laid over the
+      // referenced schema, so the list overrides the referenced `string`: the
+      // source admits every value. Splitting it would drop `type` from the
+      // untyped branch and let `string` return, proving only strings and
+      // objects against a target that rejects the rest.
+      const branch: JSONSchema = {
+        $ref: "#/$defs/value",
+        type: ["object", "unknown"],
+      };
+      const target: JSONSchema = {
+        anyOf: [{ type: "object" }, { type: "string" }],
+      };
+      for (
+        const source of [
+          { $defs: { value: { type: "string" } }, anyOf: [branch] },
+          {
+            $defs: { value: { type: "string" } },
+            anyOf: [{ anyOf: [branch] }],
+          },
+        ] satisfies JSONSchema[]
+      ) {
+        for (const value of [42, false, null]) {
+          expect(validateSchemaValue(source, value, source)).toBeUndefined();
+          expect(validateSchemaValue(target, value, target)).toBeDefined();
+        }
+        expect(() => assertSchemaSubset(source, target)).toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(source, true),
+            pattern(target, true),
+          )
+        ).toThrow(/argument:/);
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(true, target),
+            pattern(true, source),
+          )
+        ).toThrow(/result:/);
+      }
+    });
+
+    it("re-spells a generated scalar branch without breaking the contract", () => {
+      // `JsonValue` as the generator emits it: a scalar `type` list as one
+      // branch of the union (`agent-sessions-debug/main.tsx`).
+      const union = (scalars: JSONSchema[]): JSONSchema => ({
+        anyOf: [
+          ...scalars,
+          { type: "boolean" },
+          { type: "array", items: { type: "unknown" } },
+        ],
+      });
+      const listed = union([{
+        type: ["null", "number", "string", "undefined"],
+      }]);
+      for (
+        const respelled of [
+          union([
+            { type: "null" },
+            { type: "number" },
+            { type: "string" },
+            { type: "undefined" },
+          ]),
+          union([{ type: ["null", "number"] }, {
+            type: ["string", "undefined"],
+          }]),
+        ]
+      ) {
+        expect(() => assertSchemaSubset(listed, respelled)).not.toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(listed, respelled),
+            pattern(respelled, listed),
+          )
+        ).not.toThrow();
+      }
+
+      // Dropping a member of the list is still a break, however it is spelled.
+      const narrowed = union([{ type: ["null", "number", "string"] }]);
+      expect(() => assertSchemaSubset(listed, narrowed)).toThrow();
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(listed, true),
+          pattern(narrowed, true),
+        )
+      ).toThrow(/argument:/);
+    });
+  });
+
   describe("finite literal subsets", () => {
     it("does not throw for listed values excluded by the source's declared type", () => {
       for (

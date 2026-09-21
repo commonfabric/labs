@@ -42,7 +42,7 @@ import {
   formatErrorForLog,
   formatMetricDelta,
   formatMetricValueForTable,
-  githubApiOrSkip,
+  guardRateLimit,
   isComparableBaseline,
   main,
   metricTableRows,
@@ -1258,7 +1258,7 @@ Deno.test("formatErrorForLog keeps the first line only", () => {
   assertEquals(formatErrorForLog("plain\nsecond"), "plain");
 });
 
-Deno.test("githubApiOrSkip writes the stamped artifact and throws on rate limits", async () => {
+Deno.test("guardRateLimit writes the stamped artifact and throws on rate limits", async () => {
   const metrics = new Map<string, BaselineSample>([
     ["job: Check", makeSample()],
   ]);
@@ -1267,7 +1267,7 @@ Deno.test("githubApiOrSkip writes the stamped artifact and throws on rate limits
     const captured = await captureConsoleAsync(() =>
       assertRejects(
         () =>
-          githubApiOrSkip(
+          guardRateLimit(
             "collecting test data",
             () => Promise.reject(new Error("rate limit exceeded")),
             { metrics, compileCacheStates: { "pattern-unit": "cold" } },
@@ -1292,10 +1292,10 @@ Deno.test("githubApiOrSkip writes the stamped artifact and throws on rate limits
   });
 });
 
-Deno.test("githubApiOrSkip rethrows non-rate-limit errors", async () => {
+Deno.test("guardRateLimit rethrows non-rate-limit errors", async () => {
   await assertRejects(
     () =>
-      githubApiOrSkip(
+      guardRateLimit(
         "collecting test data",
         () => Promise.reject(new Error("plain failure")),
         { metrics: new Map() },

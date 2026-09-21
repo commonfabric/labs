@@ -1727,7 +1727,11 @@ function schemaMayProduceType(
  *
  * Source enums expand by type through {@link ownEnumPartitions} and
  * {@link sourceEnumAlternatives}, including beside a `type` list or inside
- * `anyOf`. Branch partitions stay beside their base in the conjunction, so
+ * `anyOf`. A `type` list expands through {@link ownTypePartitions}, at this
+ * node and inside a source branch alike, so a union written as a list proves
+ * like the same union written as branches; that helper and
+ * {@link sourceEnumAlternatives} name the nodes whose list stays whole.
+ * Branch partitions stay beside their base in the conjunction, so
  * their node-level keywords are compared at the branch boundary. Target enums
  * stay whole so an alternative listing values of several types can fit the
  * whole enum. Transparent nested source unions can split further through
@@ -1748,29 +1752,17 @@ function schemaAlternatives(
         : anyOf;
       return branches.map((alternative) => [base, alternative]);
     }
-    if (Array.isArray(fragment.type)) {
-      const { type: types, ...untyped } = fragment;
-      if (!types.includes("object")) {
-        return types.map((type) => [{ ...fragment, type }]);
-      }
-      // The runtime checks `required` on a `FabricPrimitive` when the type list
-      // includes `object`, and would not check it under a branch typed by a
-      // `FabricPrimitive` name or by `unknown` alone. `object` admits every
-      // `FabricPrimitive` already, so those names add no branch of their own,
-      // and `unknown` becomes the untyped branch, which admits every value and
-      // is checked.
-      return types.filter((type) => !isFabricPrimitiveSchemaType(type))
-        .map((type) => [type === "unknown" ? untyped : { ...untyped, type }]);
-    }
-    return [[fragment]];
+    return ownTypePartitions(fragment).map((partition) => [partition]);
   });
 }
 
 /**
  * Helper for {@link schemaAlternatives}, which partitions source enums by
- * their admitted literal types, retaining sibling constraints and branch-level
- * defaults and extensions. Distributes partitions inside `anyOf` through its
- * enclosing nodes. Enums containing an unclassified value stay whole, and
+ * their admitted literal types and source `type` lists by their named types,
+ * retaining sibling constraints and branch-level defaults and extensions. A
+ * branch that also carries an `anyOf` keeps its list whole for the proof at
+ * that branch, as a node does. Distributes partitions inside `anyOf` through
+ * its enclosing nodes. Enums containing an unclassified value stay whole, and
  * references remain for the scoped proof to resolve. During evolution, a branch
  * stays whole if any partition changes the effective default it supplies. Link
  * proofs compare target defaults only, so source defaults do not limit splitting.
@@ -1789,7 +1781,12 @@ function sourceEnumAlternatives(
       narrowed = branches.map((branch) => ({ ...schema, anyOf: [branch] }));
     }
   }
-  narrowed ??= ownEnumPartitions(schema);
+  // A branch carrying both a list and an `anyOf` keeps its list whole, as a
+  // node carrying both does: the list stays beside the base of that branch's
+  // own alternatives and is compared at its boundary.
+  narrowed ??= schema.anyOf === undefined
+    ? ownEnumPartitions(schema).flatMap(ownTypePartitions)
+    : ownEnumPartitions(schema);
   if (
     context.defaultComparison === "evolution" &&
     narrowed.length > 1 &&
@@ -1824,6 +1821,37 @@ function ownEnumPartitions(schema: SchemaObject): SchemaObject[] {
     }
   }
   return [schema];
+}
+
+/**
+ * Partitions a node's `type` list into one branch per named type, keeping its
+ * other keywords intact. A node naming a single type, or none, stays whole.
+ * The partitions cover every value the list admitted, so proving each of them
+ * proves the list. {@link schemaAlternatives} applies this at the node for
+ * either side; {@link sourceEnumAlternatives} applies it inside a source
+ * branch, where a target's list instead stays whole with its branch.
+ *
+ * A node still carrying a `$ref` stays whole too. The reference resolves with
+ * this node's keywords laid over the referenced schema, so this node's list
+ * overrides a referenced `type`. The untyped partition below drops `type`,
+ * which would let the referenced one return and cover fewer values than the
+ * list admitted.
+ */
+function ownTypePartitions(schema: SchemaObject): SchemaObject[] {
+  const types = schema.type;
+  if (!Array.isArray(types) || schema.$ref !== undefined) return [schema];
+  if (!types.includes("object")) {
+    return types.map((type) => ({ ...schema, type }));
+  }
+  // The runtime checks `required` on a `FabricPrimitive` when the type list
+  // includes `object`, and would not check it under a branch typed by a
+  // `FabricPrimitive` name or by `unknown` alone. `object` admits every
+  // `FabricPrimitive` already, so those names add no branch of their own,
+  // and `unknown` becomes the untyped branch, which admits every value and
+  // is checked.
+  const { type: _types, ...untyped } = schema;
+  return types.filter((type) => !isFabricPrimitiveSchemaType(type))
+    .map((type) => type === "unknown" ? untyped : { ...untyped, type });
 }
 
 /**

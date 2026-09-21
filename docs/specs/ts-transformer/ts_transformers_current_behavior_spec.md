@@ -1280,6 +1280,68 @@ inside nested callbacks. Parameters and locals declared within the wrapped
 expression stay inside it, including when the wrapper belongs to a reactive
 collection callback. Module bindings remain lexical references.
 
+A capture's type is inferred from its expression, with literal types widened.
+One case reads the declaration instead. Inside a pattern body, a binding
+destructured from the callback parameter has its `Default` and scope wrappers
+(`PerSpace`, `PerUser`, `PerSession`, `PerAny`) stripped from its type. A
+binding whose declared property type carries one — as the type itself, as a
+member of a union or an intersection, or as the argument of `Writable` — is
+therefore emitted from the type node its author wrote
+(`getPreservedTypeForBindingElement`, `src/ast/type-building.ts`). A wrapper's
+name counts only where it resolves to the declaration `commonfabric` exports: a
+type of the author's own named `Default` is an ordinary type, and its binding is
+typed by inference. At any of those positions, a reference to a non-generic type
+alias whose type carries a wrapper is replaced by the type the alias names, so
+`type Draft = Writable<string | Default<"">>` captures with the schema of the
+wrapper written in place, including when the alias is imported from another
+module. A reference to an alias that carries no wrapper stays a reference, which
+schema generation emits under the alias's name. A reference to a generic alias
+also stays as written, and when nothing else in the declared type carries a
+wrapper the capture is typed by inference.
+
+A property of a generic input is declared in terms of the input's type
+parameters. The pattern builder's type argument supplies the caller's arguments,
+before callback normalization strips defaults and scopes; inherited properties
+and nested or renamed destructuring follow that type. A parameter that sits in a
+union, an intersection, parentheses, or a wrapper is replaced by a node printed
+from its argument, which gives the schema of the concrete type written in place.
+That holds where the printed argument reads the same wherever it is emitted:
+keywords, literals, type literals, and a name without type arguments that names
+the argument's own type where the binding is declared. The printer writes a bare
+name without asking what it resolves to there, so the name is checked against
+the symbols the argument's type mentions. Every other generic binding — a
+parameter inside another type expression such as `Box<T>`, `T[K]`, or `T[]`, or
+an argument that prints as a reference with type arguments, as `import("…").T`,
+as `typeof x`, or as a name that is out of scope there or names another type —
+is emitted as its instantiated declared type. That keeps the wrapper and the
+complete value type, and keeps a default's value as a member of the union:
+`anyOf: [T, V]` with the default, where the concrete type written in place emits
+`T` with the default. The pattern body's view of such a binding is not used,
+because stripping `Default<{}>` from `T | {}` lets the union reduce to `{}`.
+When the builder's type argument cannot be found, as when
+`pattern<Input<number>>` is bound to a name before it is called, the only
+instantiated type on hand is the pattern body's view, and the binding is emitted
+with its concrete value type and without its default.
+
+A union of two instantiations of one generic input gives a type parameter two
+arguments. No node stands for both, so such a parameter is not substituted and
+the binding takes its instantiated declared type, which holds every branch.
+
+Pattern result inference reads returned input bindings through the same
+function when a returned binding carries a scope wrapper. Scope detection reads
+both the emitted node and the recovered declaration: the printer can emit
+`unknown` for a scoped generic array, while its declaration still names the
+scope the result must retain. A node printed from a type is registered with that
+type rather than with the type at the expression, which is the pattern body's
+view: the names a printed node spells
+resolve to nothing where it is emitted, so schema generation reads it by the
+type behind it. An authored node keeps the view's type, and so keeps being
+emitted in place rather than under the name of whatever alias the declared
+type carries.
+
+`aliased-binding-declared-type.test.ts` and
+`ast/getPreservedBindingTypeNode.test.ts` pin these.
+
 ### 9.2 Handler strategy
 
 Transforms inline JSX event handlers:

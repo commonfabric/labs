@@ -1,1 +1,3 @@
 {"date":"2026-09-19","from":{"k":"unit","s":"tasks","n":"githubApiOrSkip writes the stamped artifact and exits on rate limits"},"to":{"k":"unit","s":"tasks","n":"githubApiOrSkip writes the stamped artifact and throws on rate limits"}}
+{"date":"2026-09-21","from":{"k":"unit","s":"tasks","n":"githubApiOrSkip writes the stamped artifact and throws on rate limits"},"to":{"k":"unit","s":"tasks","n":"guardRateLimit writes the stamped artifact and throws on rate limits"}}
+{"date":"2026-09-21","from":{"k":"unit","s":"tasks","n":"githubApiOrSkip rethrows non-rate-limit errors"},"to":{"k":"unit","s":"tasks","n":"guardRateLimit rethrows non-rate-limit errors"}}

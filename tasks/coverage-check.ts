@@ -186,7 +186,7 @@ export class CoverageRateLimitedError extends Error {}
  * short still publishes what it measured, stamped with its compile cache
  * states, for a later run to read as a baseline.
  */
-export async function githubApiOrSkip<T>(
+export async function guardRateLimit<T>(
   description: string,
   operation: () => Promise<T>,
   artifact: PerfMetricsArtifact,
@@ -848,7 +848,7 @@ export interface SelectBaselinesOptions {
     baseSha: string,
   ) => Promise<Set<string>>;
 
-  /** Wraps the GitHub calls made here so a rate limit skips the check. */
+  /** Wraps the GitHub calls made here so a rate limit ends the check as one. */
   guard?: <T>(description: string, operation: () => Promise<T>) => Promise<T>;
 
   log?: (message: string) => void;
@@ -2796,7 +2796,7 @@ async function ratchetAgainstBaselines(
 
   // 3. Read the workflow's run listing, which is where a `main` run is found by
   // the commit it measured.
-  const listing = await githubApiOrSkip(
+  const listing = await guardRateLimit(
     "reading the workflow's run listing",
     () => readListing({ currentRunId: input.currentRunId }),
     perfArtifact,
@@ -2831,7 +2831,7 @@ async function ratchetAgainstBaselines(
 
   const readBaselineRun = input.readBaselineRun ??
     ((run: WorkflowRun): Promise<BaselineRunReading> =>
-      githubApiOrSkip("reading a baseline run", async () => {
+      guardRateLimit("reading a baseline run", async () => {
         const context = await buildBaselineRunContext({ run });
         visitedContexts.push(context);
 
@@ -2872,7 +2872,7 @@ async function ratchetAgainstBaselines(
     readRun: readBaselineRun,
     isPullRequest: prNumber !== null,
     guard: (description, operation) =>
-      githubApiOrSkip(description, operation, perfArtifact),
+      guardRateLimit(description, operation, perfArtifact),
   }).finally(() => reportBaselineContextResults(visitedContexts));
 
   if (acceptingRuns > 0) {

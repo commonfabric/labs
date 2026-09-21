@@ -8,16 +8,19 @@ import { describe, it } from "@std/testing/bdd";
 
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
-import { decodeMemoryBoundary } from "@commonfabric/memory/v2";
+import {
+  type ClientMessage,
+  decodeMemoryBoundary,
+} from "@commonfabric/memory/v2";
 import { connect, loopback } from "@commonfabric/memory/v2/client";
 import { defer } from "@commonfabric/utils/defer";
 
 import type { JSONSchema } from "../../src/builder/types.ts";
 import { wish } from "../../src/builtins/wish.ts";
 import {
-  createWishProfileReadiness,
-  WishProfilePending,
-} from "../../src/builtins/wish-profile-readiness.ts";
+  createDocumentReadiness,
+  DocumentPending,
+} from "../../src/document-readiness.ts";
 import type { Cell } from "../../src/cell.ts";
 import { canonicalizeCfcLabel } from "../../src/cfc/canonical.ts";
 import { readStoredCfcMetadata } from "../../src/cfc/metadata.ts";
@@ -108,7 +111,7 @@ describe("wish-profile-readiness", () => {
         },
       });
       expect((await seed.commit()).error).toBeUndefined();
-      const readiness = createWishProfileReadiness(
+      const readiness = createDocumentReadiness(
         runtime,
         (cancel) => cancels.push(cancel),
       );
@@ -149,6 +152,9 @@ describe("wish-profile-readiness", () => {
         as: user,
       });
       const seed = makeRuntime(seedManager);
+      const profile = seed.getCell(persona.did(), "profile-result");
+      const alias = seed.getCell(persona.did(), "profile-alias");
+      const aliasId = alias.getAsNormalizedFullLink().id;
       const requested = defer<void>();
       const released = defer<void>();
       let held = true;
@@ -159,13 +165,18 @@ describe("wish-profile-readiness", () => {
             transport: {
               ...base,
               async send(payload) {
-                const message = decodeMemoryBoundary(payload) as {
-                  type: string;
-                };
+                const message = decodeMemoryBoundary(payload) as ClientMessage;
+                const roots = message.type === "graph.query"
+                  ? message.query.roots
+                  : message.type === "session.watch.add" ||
+                      message.type === "session.watch.set"
+                  ? message.watches.flatMap((watch) =>
+                    watch.kind === "operation" ? [] : watch.query.roots
+                  )
+                  : [];
                 if (
                   held && space === persona.did() &&
-                  ["session.watch.add", "session.watch.set", "graph.query"]
-                    .includes(message.type)
+                  roots.some((root) => root.id === aliasId)
                 ) {
                   requested.resolve();
                   await released.promise;
@@ -195,8 +206,6 @@ describe("wish-profile-readiness", () => {
       const runtime = makeRuntime(manager);
       const cancels: (() => void)[] = [];
       try {
-        const profile = seed.getCell(persona.did(), "profile-result");
-        const alias = seed.getCell(persona.did(), "profile-alias");
         {
           const tx = seed.edit();
           profile.withTx(tx).asSchema(profileSchema).set({
@@ -443,7 +452,7 @@ describe("wish-profile-readiness", () => {
           const state = output!.withTx(undefined);
           expect(String(state.key("error").get())).toContain(
             outcome === "failed"
-              ? "Could not load profile selection data"
+              ? "Could not load document"
               : "Profile data is unavailable",
           );
           expect(
@@ -543,7 +552,7 @@ describe("wish-profile-readiness", () => {
         expect(output).toBeDefined();
         const state = output!.withTx(undefined);
         expect(state.key("error").get()).toBe(
-          "Error: Could not load profile selection data",
+          "Error: Could not load document",
         );
         expect(
           state.key("$UI").key("props").key("data-profile-create-ui").get(),
@@ -598,14 +607,14 @@ describe("wish-profile-readiness", () => {
         value: undefined,
         configurable: true,
       });
-      const readiness = createWishProfileReadiness(
+      const readiness = createDocumentReadiness(
         runtime,
         (cancel) => cancels.push(cancel),
       );
       const tx = runtime.edit();
       try {
         expect(() => readiness.requireDocument(runtime.getHomeSpaceCell(), tx))
-          .toThrow(WishProfilePending);
+          .toThrow(DocumentPending);
       } finally {
         tx.abort();
       }
@@ -643,7 +652,7 @@ describe("wish-profile-readiness", () => {
         subscriptions.push(subscription);
         originalSubscribe(subscription);
       };
-      const readiness = createWishProfileReadiness(
+      const readiness = createDocumentReadiness(
         runtime,
         (cancel) => cancels.push(cancel),
       );
@@ -665,7 +674,7 @@ describe("wish-profile-readiness", () => {
           tx.abort();
         }
       };
-      expect(requireDocument).toThrow(WishProfilePending);
+      expect(requireDocument).toThrow(DocumentPending);
       expect(loads).toHaveLength(1);
       runtime.scheduler.setDebounce(registered, 60_000);
       const resetAt = performance.now();
@@ -678,7 +687,7 @@ describe("wish-profile-readiness", () => {
       loads[0].resolve();
       await manager.crossSpaceSettled();
       // The old epoch's completion must not confirm the new replica.
-      expect(requireDocument).toThrow(WishProfilePending);
+      expect(requireDocument).toThrow(DocumentPending);
       expect(loads).toHaveLength(2);
       loads[1].resolve();
       await manager.crossSpaceSettled();

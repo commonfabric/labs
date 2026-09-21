@@ -28,11 +28,10 @@ import {
   widenLiteralType,
 } from "../ast/mod.ts";
 import {
-  cloneTypeNode,
   createRegisteredTypeLiteral,
-  getDeclaredTypeNodeForBindingElement,
+  getPreservedTypeForBindingElement,
+  type PreservedBindingType,
   reportUnknownReactiveType,
-  shouldPreserveBindingDeclaredTypeNode,
 } from "../ast/type-building.ts";
 import {
   type CapabilityParamSummary,
@@ -1971,12 +1970,16 @@ function buildObjectLiteralReturnTypeNode(
       return undefined;
     }
 
-    const valueTypeNode = getExplicitValueTypeNode(valueExpr, checker) ??
+    const explicit = getExplicitValueTypeNode(valueExpr, checker, typeRegistry);
+    const valueTypeNode = explicit?.typeNode ??
       typeToSchemaTypeNode(valueType, checker, sourceFile);
     if (!valueTypeNode) {
       return undefined;
     }
-    typeRegistry?.set(valueTypeNode, valueType);
+    // A node printed from a type is read by that type: the names it spells
+    // resolve to nothing here, and the type carries the wrappers the body's
+    // view of the binding has stripped. An authored node reads on its own.
+    typeRegistry?.set(valueTypeNode, explicit?.printedFrom ?? valueType);
     const valueHint = context
       ? getUiContractHintFromNode(valueExpr, context)
       : undefined;
@@ -2000,10 +2003,12 @@ function buildObjectLiteralReturnTypeNode(
   );
 }
 
+/** The type node a returned identifier declares. */
 function getExplicitValueTypeNode(
   valueExpr: ts.Expression,
   checker: ts.TypeChecker,
-): ts.TypeNode | undefined {
+  typeRegistry?: WeakMap<ts.Node, ts.Type>,
+): PreservedBindingType | undefined {
   if (!ts.isIdentifier(valueExpr)) {
     return undefined;
   }
@@ -2017,16 +2022,14 @@ function getExplicitValueTypeNode(
       shorthandValueSymbol?.declarations?.[0];
   }
   if (declaration && ts.isVariableDeclaration(declaration)) {
-    return declaration.type;
+    return declaration.type ? { typeNode: declaration.type } : undefined;
   }
   if (declaration && ts.isBindingElement(declaration)) {
-    const typeNode = getDeclaredTypeNodeForBindingElement(
+    return getPreservedTypeForBindingElement(
       declaration,
       checker,
+      typeRegistry,
     );
-    return typeNode && shouldPreserveBindingDeclaredTypeNode(typeNode)
-      ? cloneTypeNode(typeNode)
-      : undefined;
   }
   return undefined;
 }
@@ -2046,8 +2049,15 @@ function objectLiteralHasExplicitScopeValueTypeNodes(
     const valueExpr = ts.isPropertyAssignment(property)
       ? unwrapExpression(property.initializer)
       : property.name;
-    const valueTypeNode = getExplicitValueTypeNode(valueExpr, checker);
-    if (valueTypeNode && typeNodeContainsScopeWrapper(valueTypeNode)) {
+    const explicit = getExplicitValueTypeNode(valueExpr, checker);
+    // The printer can emit `unknown` for a scoped generic array. The authored
+    // node it stands in for still names the scope the result must retain.
+    if (
+      explicit &&
+      (typeNodeContainsScopeWrapper(explicit.typeNode) ||
+        (explicit.preservedTypeNode &&
+          typeNodeContainsScopeWrapper(explicit.preservedTypeNode)))
+    ) {
       return true;
     }
   }
