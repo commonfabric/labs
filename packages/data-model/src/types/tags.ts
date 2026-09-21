@@ -38,11 +38,8 @@ export type FabricConvertibleJsObjectTag =
 /**
  * The tags of the JS primitive types (all of them other than `object` and
  * `function`), plus `null`.
- *
- * **Note:** This is intentionally not `export`ed; it's just a convenience for
- * keeping this file DRY-er.
  */
-const JS_PRIMITIVE_TYPE_VALUE_TAGS = Object.freeze(
+export const JS_PRIMITIVE_TYPE_VALUE_TAGS = Object.freeze(
   {
     bigint: "bigint",
     boolean: "boolean",
@@ -53,6 +50,10 @@ const JS_PRIMITIVE_TYPE_VALUE_TAGS = Object.freeze(
     undefined: "undefined",
   } as const,
 );
+
+/** One of the JS primitive type tag strings. */
+export type JsPrimitiveTypeValueTag =
+  typeof JS_PRIMITIVE_TYPE_VALUE_TAGS[keyof typeof JS_PRIMITIVE_TYPE_VALUE_TAGS];
 
 /**
  * The tags of all JS types other than `object`, plus `null`: the vocabulary of
