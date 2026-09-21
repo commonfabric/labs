@@ -155,14 +155,27 @@ describe("value-hash", () => {
       });
 
       it("hashes non-canonical `NaN` bit patterns to the canonical `NaN`", () => {
-        // Construct a NaN with a non-zero payload (still a valid quiet NaN) and
-        // confirm it canonicalizes. The hashed bytes must match those of the
-        // literal `NaN`.
+        // Each `NaN` is hashed as an array element, not at the top level.
+        // `hashOf()` caches the hash of a top-level primitive in a `Map`, and a
+        // `Map` treats every `NaN` as the same key, so the second of two
+        // top-level `NaN`s is a cache hit that never reaches the hasher. An
+        // array that is not frozen is hashed afresh each time.
+        //
+        // The container is an array and not a plain object because V8
+        // canonicalizes a `NaN` stored as an object property, and keeps the
+        // bits of one stored as an array element.
+
+        // A quiet `NaN` with a nonzero payload.
+        const nonCanonicalBits = 0x7ff8000000000001n;
         const view = new DataView(new ArrayBuffer(8));
-        view.setBigUint64(0, 0x7ff8000000000001n, false);
-        const nonCanonicalNaN = view.getFloat64(0, false);
-        expect(Number.isNaN(nonCanonicalNaN)).toBe(true);
-        expect(hex(hashBytesOf(nonCanonicalNaN))).toBe(hex(hashBytesOf(NaN)));
+        view.setBigUint64(0, nonCanonicalBits, false);
+        const subject: [number] = [view.getFloat64(0, false)];
+
+        // The premise: the element the hasher reads still has the payload.
+        view.setFloat64(0, subject[0], false);
+        expect(view.getBigUint64(0, false)).toBe(nonCanonicalBits);
+
+        expect(hex(hashBytesOf(subject))).toBe(hex(hashBytesOf([NaN])));
       });
 
       it("produces `TAG_NUMBER` + IEEE 754 `+Infinity` bit pattern for `Infinity`", () => {
