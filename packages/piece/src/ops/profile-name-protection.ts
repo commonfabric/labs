@@ -123,8 +123,8 @@ function readPlan(
   const positions: ProfileNameProtectionInspection["positions"] = [];
   const missing: ProfileNamePlan["missing"] = [];
   const evidence: unknown[] = [identity, setup, projection, envelope.metadata];
-  let name: string | undefined;
-  for (let depth = 0; depth < 2; depth++) {
+  let name: string;
+  for (let depth = 0;; depth++) {
     if (
       target.space !== profileLink.space || target.scope !== "space" ||
       target.path.length !== 0
@@ -173,9 +173,6 @@ function readPlan(
       throw new Error("The profile name has an unsupported legacy cell layout");
     }
     target = address(parseLink(value, target));
-  }
-  if (name === undefined) {
-    throw new Error("The profile name has no readable stored string");
   }
   const report = {
     status: missing.length === 0 ? "protected" as const : "repairable" as const,

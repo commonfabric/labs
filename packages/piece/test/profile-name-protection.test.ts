@@ -1,17 +1,21 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import {
   type Cell,
   getDerivedInternalCellLink,
+  getPatternIdentityRef,
+  type IExtendedStorageTransaction,
   isLink,
   parseLink,
   resolveEntryIdentity,
   Runtime,
   systemPatternSource,
 } from "@commonfabric/runner";
+import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { EmulatedStorageManager } from "../../runner/src/storage/v2-emulate.ts";
 import { newSharedServer } from "../../runner/test/memory-v2-test-utils.ts";
@@ -19,6 +23,7 @@ import { newSharedServer } from "../../runner/test/memory-v2-test-utils.ts";
 import { seedStoredEnvelope } from "../../runner/test/cfc-seed-envelope.ts";
 import {
   inspectProfileNameProtection,
+  type ProfileNameProtectionInspection,
   repairProfileNameProtection,
 } from "../src/ops/profile-name-protection.ts";
 
@@ -118,6 +123,217 @@ describe("profile name protection repair", () => {
   afterEach(async () => {
     await runtime.dispose();
     await server.close();
+  });
+
+  async function withInspectionTransaction(
+    tx: IExtendedStorageTransaction,
+    run: () => Promise<void>,
+  ) {
+    const identity = getPatternIdentityRef(profile)!;
+    const program = await runtime.patternManager
+      .getPatternSourceProgramByIdentity(
+        identity.identity,
+        profileSpace,
+      );
+    const pattern = await runtime.patternManager.loadPatternByIdentity(
+      identity.identity,
+      identity.symbol,
+      profileSpace,
+      { repairCache: false },
+    );
+    const read = runtime.readTx();
+    // Artifact loading has its own transactions. Hold its verified results
+    // fixed so the injected transaction belongs only to the inspection.
+    using _source = stub(
+      runtime.patternManager,
+      "getPatternSourceProgramByIdentity",
+      () => Promise.resolve(program),
+    );
+    using _pattern = stub(
+      runtime.patternManager,
+      "loadPatternByIdentity",
+      () => Promise.resolve(pattern),
+    );
+    using _read = stub(runtime, "readTx", (provided) => provided ?? read);
+    using _edit = stub(runtime, "edit", () => tx);
+    await run();
+  }
+
+  async function expectStoredStateRefused(
+    change: (
+      tx: IExtendedStorageTransaction,
+      before: ProfileNameProtectionInspection,
+    ) => void,
+    message: string,
+  ) {
+    const before = await inspectProfileNameProtection(runtime, profile);
+    const tx = runtime.edit();
+    change(tx, before);
+    await withInspectionTransaction(tx, async () => {
+      // Expose an invalid stored snapshot to inspection without persisting it
+      // through the runtime's own metadata validation.
+      await expect(inspectProfileNameProtection(runtime, profile)).rejects
+        .toThrow(message);
+    });
+    expect(await inspectProfileNameProtection(runtime, profile)).toEqual(
+      before,
+    );
+  }
+
+  it("refuses a detached profile or an incomplete source setup", async () => {
+    for (const key of ["patternSource", "patternSetupIdentity"] as const) {
+      await expectStoredStateRefused((tx) => {
+        profile.withTx(tx).setMetaRaw(
+          key,
+          undefined,
+          rawMetaWriteAuthorization,
+        );
+      }, "source-attached profile with completed setup");
+    }
+  });
+
+  it("requires a readable protection envelope on the profile root", async () => {
+    await expectStoredStateRefused((tx, before) => {
+      seedStoredEnvelope(tx, { ...before.profile, path: ["cfc"] }, undefined);
+    }, "profile's protection envelope is unavailable");
+  });
+
+  it("requires the name projection to identify its exact named cell", async () => {
+    await expectStoredStateRefused((tx, before) => {
+      seedStoredEnvelope(tx, {
+        ...before.profile,
+        path: ["value", "name"],
+      }, "Unlinked name");
+    }, "not a supported cell link");
+    await expectStoredStateRefused((tx, before) => {
+      seedStoredEnvelope(tx, {
+        ...before.profile,
+        path: ["value", "name"],
+      }, runtime.getCell(profileSpace, "unrelated name cell").getAsLink());
+    }, "outside its named internal cell");
+  });
+
+  it("refuses a name chain that crosses a storage scope or space", async () => {
+    await expectStoredStateRefused((tx, before) => {
+      const target = { ...before.positions[0].target, scope: "user" as const };
+      seedStoredEnvelope(tx, {
+        ...before.profile,
+        path: ["value", "name"],
+      }, runtime.getCellFromLink(target).getAsLink());
+    }, "leaves its supported space or scope");
+    await expectStoredStateRefused((tx, before) => {
+      seedStoredEnvelope(tx, {
+        ...before.positions[0].target,
+        path: ["value"],
+      }, runtime.getCell(owner.did(), "foreign name cell").getAsLink());
+    }, "leaves its supported space or scope");
+  });
+
+  it("refuses unreadable or conflicting protection already on a name cell", async () => {
+    await expectStoredStateRefused((tx, before) => {
+      seedStoredEnvelope(tx, {
+        ...before.positions[0].target,
+        path: ["cfc"],
+      }, { version: 99 });
+    }, "stored CFC metadata version 99");
+    await expectStoredStateRefused((tx, before) => {
+      seedStoredEnvelope(tx, {
+        ...before.positions[0].target,
+        path: ["cfc"],
+      }, {
+        version: 1,
+        schemaHash: "missing-schema",
+        labelMap: { version: 1, entries: [] },
+      });
+    }, "schema");
+    await expectStoredStateRefused((tx, before) => {
+      const source = { ...before.profile, path: ["avatar"] };
+      const value = tx.readValueOrThrow(source);
+      if (!isLink(value)) throw new Error("Expected the profile's avatar link");
+      const avatar = parseLink(value, source);
+      const metadata = tx.readOrThrow({ ...avatar, path: ["cfc"] });
+      seedStoredEnvelope(tx, {
+        ...before.positions[0].target,
+        path: ["cfc"],
+      }, metadata);
+    }, "conflicting or incomplete existing protection");
+  });
+
+  it("requires a retained identity and verified source and pattern", async () => {
+    await expect(
+      inspectProfileNameProtection(
+        runtime,
+        runtime.getCell(profileSpace, "empty"),
+      ),
+    ).rejects.toThrow("no retained pattern identity");
+    {
+      using _source = stub(
+        runtime.patternManager,
+        "getPatternSourceProgramByIdentity",
+        () => Promise.resolve(undefined),
+      );
+      await expect(inspectProfileNameProtection(runtime, profile)).rejects
+        .toThrow("verified profile source is unavailable or unsupported");
+    }
+    {
+      using _pattern = stub(
+        runtime.patternManager,
+        "loadPatternByIdentity",
+        () => Promise.resolve(undefined),
+      );
+      await expect(inspectProfileNameProtection(runtime, profile)).rejects
+        .toThrow("verified profile pattern is unavailable");
+    }
+    expect((await inspectProfileNameProtection(runtime, profile)).status).toBe(
+      "repairable",
+    );
+  });
+
+  it("requires the profile source to declare the supported named cell", async () => {
+    const tx = runtime.edit();
+    const pattern = await runtime.patternManager.compilePattern({
+      main: route,
+      files: [{
+        name: route,
+        contents: current.replace('.for("name")', '.for("differentName")'),
+      }],
+    }, { space: profileSpace, tx });
+    const renamed = runtime.getCell(profileSpace, "renamed-internal-cell");
+    runtime.runner.run(tx, pattern, {}, renamed, {
+      sourceOrigin: systemPatternSource("system/profile-home.tsx"),
+    });
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit()).error).toBeUndefined();
+    await renamed.pull();
+    await runtime.idle();
+    await expect(inspectProfileNameProtection(runtime, renamed)).rejects
+      .toThrow("does not have the supported named name cell");
+  });
+
+  it("reports a concurrent write without installing the inspected protection", async () => {
+    const before = await inspectProfileNameProtection(runtime, profile);
+    const target = before.positions.at(-1)!.target;
+    const tx = runtime.edit();
+    const commit = tx.commit.bind(tx);
+    const edit = runtime.edit.bind(runtime);
+    await withInspectionTransaction(tx, async () => {
+      using _commit = stub(tx, "commit", async () => {
+        const concurrent = edit();
+        concurrent.writeValueOrThrow(target, "Concurrent name");
+        runtime.prepareTxForCommit(concurrent);
+        expect((await concurrent.commit()).error).toBeUndefined();
+        return await commit();
+      });
+      await expect(
+        repairProfileNameProtection(runtime, profile, before.inspection),
+      ).rejects.toThrow("Transaction consistency violated");
+    });
+    const after = await inspectProfileNameProtection(runtime, profile);
+    expect(after.name).toBe("Concurrent name");
+    expect(
+      after.positions.every((position) => position.protection === "missing"),
+    )
+      .toBe(true);
   });
 
   it("protects the existing saved name without replacing its cells", async () => {

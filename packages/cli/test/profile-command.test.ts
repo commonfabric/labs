@@ -12,6 +12,7 @@ import { Identity } from "@commonfabric/identity";
 import { decode } from "@commonfabric/utils/encoding";
 
 import {
+  profile,
   type ProfileCommandDeps,
   profileCreateAction,
   profileRepairNameProtectionAction,
@@ -23,6 +24,7 @@ import {
   type ProfileNameProtectionConfig,
 } from "../lib/profile-name-protection.ts";
 import type { WishReadConfig, WishReadResult } from "../lib/wish.ts";
+import { withEnv } from "./utils.ts";
 
 const CREATED: CreatedProfile = {
   name: "Ada Lovelace",
@@ -81,6 +83,29 @@ async function makeTempKeyFile(): Promise<
 }
 
 describe("cf profile command actions", () => {
+  it("routes parsed subcommands through their action validation", async () => {
+    await withEnv(
+      "CF_IDENTITY",
+      undefined,
+      () =>
+        withEnv("CF_API_URL", undefined, async () => {
+          const command = profile.reset().throwErrors();
+          await expect(command.parse(["create", " "])).rejects.toThrow(
+            "A profile needs a name",
+          );
+          await expect(command.parse(["show"])).rejects.toThrow(
+            'Missing required option: "--identity"',
+          );
+          await expect(command.parse([
+            "repair-name-protection",
+            "--cell",
+            "/profile",
+            "--apply",
+          ])).rejects.toThrow("--apply and --expect");
+        }),
+    );
+  });
+
   describe("profileCreateAction()", () => {
     it("creates against the identity's home space and prints the address", async () => {
       const key = await makeTempKeyFile();
