@@ -39,6 +39,7 @@
  *   callback: ERROR (use a nested computed()/lift())
  */
 
+import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
 import ts from "typescript";
 import { reportNestedCollectionScans } from "../diagnostics/nested-collection-scan.ts";
 import { COMMONFABRIC_REACTIVE_ORIGIN_BUILDER_NAMES } from "../core/commonfabric-runtime-registry.ts";
@@ -1318,13 +1319,10 @@ export class PatternContextValidationTransformer
     return false;
   }
 
-  #isCallableTypeNode(type: ts.TypeNode): boolean {
+  #isCallableTypeNode(node: ts.TypeNode): boolean {
+    const type = unwrapTypeParentheses(node);
     if (ts.isFunctionTypeNode(type) || ts.isConstructorTypeNode(type)) {
       return true;
-    }
-
-    if (ts.isParenthesizedTypeNode(type)) {
-      return this.#isCallableTypeNode(type.type);
     }
 
     if (ts.isUnionTypeNode(type) || ts.isIntersectionTypeNode(type)) {

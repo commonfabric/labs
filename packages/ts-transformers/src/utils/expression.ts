@@ -17,6 +17,9 @@ import { CF_HELPERS_IDENTIFIER } from "../core/cf-helpers.ts";
  *
  * A stripper that reads a narrower set does so deliberately, and says why at
  * its own definition.
+ *
+ * Every member is an expression. A type node is read through the forms that
+ * stand for another type node by `@commonfabric/schema-generator/type-node`.
  */
 export type TransparentWrapper =
   | ts.ParenthesizedExpression

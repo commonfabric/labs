@@ -26,8 +26,8 @@ Authoritative implementation sources:
 If this document conflicts with code or passing tests, code/tests win.
 
 Package exports (`deno.jsonc`): `.` → `src/index.ts` (no `mod.ts`), plus
-five subpaths — `./cell-brand`, `./wrapper-names`, `./property-optionality`,
-`./property-name`, `./numeric-expression`.
+six subpaths — `./cell-brand`, `./wrapper-names`, `./property-optionality`,
+`./property-name`, `./numeric-expression`, `./type-node`.
 `src/index.ts` exports the `SchemaGenerator` class, the
 `SchemaGenerationOptions`, `SchemaGenerationDiagnostic`, and
 `WriterSourceIdentity` types, and re-exports `MutableJSONSchemaObj`.
@@ -45,8 +45,11 @@ consumer package is `@commonfabric/ts-transformers`, along two axes:
    directly: `cell-brand` (call-root-support, cell-type, opaque-get-validation,
    helper-owned-expression), `wrapper-names` (cast-validation, type-shrinking,
    call-kind), `property-name` (reactive-keys, type-shrinking),
-   `property-optionality` (`ast/utils.ts`). The `src/typescript/` tables are
-   load-bearing for the whole transformer pipeline, not just schema output.
+   `property-optionality` (`ast/utils.ts`), `type-node` (type-building,
+   type-shrinking, schema-injection, cast-validation,
+   pattern-context-validation, capability-analysis). The `src/typescript/`
+   tables are load-bearing for the whole transformer pipeline, not just schema
+   output.
 
 Instance state: `AnonymousType_N` naming lives on the `SchemaGenerator`
 instance (`anonymousNames` WeakMap + counter, `src/schema-generator.ts`)

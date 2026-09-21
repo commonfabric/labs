@@ -7,7 +7,8 @@
     "./wrapper-names": "./src/typescript/wrapper-names.ts",
     "./property-optionality": "./src/typescript/property-optionality.ts",
     "./property-name": "./src/typescript/property-name.ts",
-    "./numeric-expression": "./src/typescript/numeric-expression.ts"
+    "./numeric-expression": "./src/typescript/numeric-expression.ts",
+    "./type-node": "./src/typescript/type-node.ts"
   },
   "imports": {
     // Dependency guide: ../../docs/development/DEPENDENCIES.md

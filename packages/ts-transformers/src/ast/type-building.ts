@@ -1,4 +1,8 @@
 import ts from "typescript";
+import {
+  readAuthoredTypeNodeOnce,
+  unwrapTypeParentheses,
+} from "@commonfabric/schema-generator/type-node";
 import { resolvesToCommonFabricSymbol } from "../core/common-fabric-symbols.ts";
 import type { TransformationContext } from "../core/mod.ts";
 import type { CaptureTreeNode } from "../utils/capture-tree.ts";
@@ -961,7 +965,7 @@ function resolveTypeAliasReferences(
       : typeNode;
   }
 
-  const aliased = getAliasedTypeNode(typeNode, checker);
+  const aliased = readAuthoredTypeNodeOnce(typeNode, checker);
   // An alias already being resolved names itself; its reference stays.
   if (!aliased || resolving.has(aliased)) {
     return typeNode;
@@ -974,29 +978,6 @@ function resolveTypeAliasReferences(
   return shouldPreserveBindingDeclaredTypeNode(named, checker)
     ? named
     : typeNode;
-}
-
-/**
- * Helper for `resolveTypeAliasReferences()`, which returns the type node a
- * reference to a non-generic type alias names, or `undefined` for a reference
- * to anything else.
- */
-function getAliasedTypeNode(
-  reference: ts.TypeReferenceNode,
-  checker: ts.TypeChecker,
-): ts.TypeNode | undefined {
-  const name = ts.isIdentifier(reference.typeName)
-    ? reference.typeName
-    : reference.typeName.right;
-  let symbol = checker.getSymbolAtLocation(name);
-  // An imported alias resolves to its import binding first.
-  if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
-    symbol = checker.getAliasedSymbol(symbol);
-  }
-  const declaration = symbol?.declarations?.find(ts.isTypeAliasDeclaration);
-  return declaration && !declaration.typeParameters?.length
-    ? declaration.type
-    : undefined;
 }
 
 /**
@@ -1045,7 +1026,7 @@ export function shouldPreserveBindingDeclaredTypeNode(
   typeNode: ts.TypeNode,
   checker?: ts.TypeChecker,
 ): boolean {
-  const unwrapped = unwrapParenthesizedTypeNode(typeNode);
+  const unwrapped = unwrapTypeParentheses(typeNode);
   const carries = (node: ts.TypeNode) =>
     shouldPreserveBindingDeclaredTypeNode(node, checker);
 
@@ -1061,14 +1042,6 @@ export function shouldPreserveBindingDeclaredTypeNode(
   }
 
   return false;
-}
-
-function unwrapParenthesizedTypeNode(typeNode: ts.TypeNode): ts.TypeNode {
-  let current = typeNode;
-  while (ts.isParenthesizedTypeNode(current)) {
-    current = current.type;
-  }
-  return current;
 }
 
 /**

@@ -3,6 +3,7 @@ import {
   type MergeableOpMethodKind,
 } from "@commonfabric/api";
 import { type CellBrand } from "@commonfabric/schema-generator/cell-brand";
+import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
 import ts from "typescript";
 
 import {
@@ -375,10 +376,7 @@ function getExplicitCellKindFromTypeNode(
   // The depth guard bounds the type-parameter-constraint recursion below
   // against a circular constraint on ill-typed input.
   if (!typeNode || depth > 16) return undefined;
-
-  if (ts.isParenthesizedTypeNode(typeNode)) {
-    return getExplicitCellKindFromTypeNode(typeNode.type, checker, depth + 1);
-  }
+  typeNode = unwrapTypeParentheses(typeNode);
 
   if (ts.isUnionTypeNode(typeNode)) {
     const kinds = new Set<CellBrand>();
@@ -474,10 +472,7 @@ function isAmbiguousCellWrapperUnion(
   typeNode: ts.TypeNode | undefined,
   checker: ts.TypeChecker,
 ): boolean {
-  let node = typeNode;
-  while (node && ts.isParenthesizedTypeNode(node)) {
-    node = node.type;
-  }
+  const node = typeNode && unwrapTypeParentheses(typeNode);
   if (!node || !ts.isUnionTypeNode(node)) return false;
   // If the union collapses to a single capability it is readable; only flag when
   // it does not, yet at least one member is a recognized cell wrapper.
@@ -507,9 +502,7 @@ function getRestParameterElementTypeNode(
   typeNode: ts.TypeNode | undefined,
 ): ts.TypeNode | undefined {
   if (!typeNode) return undefined;
-  if (ts.isParenthesizedTypeNode(typeNode)) {
-    return getRestParameterElementTypeNode(typeNode.type);
-  }
+  typeNode = unwrapTypeParentheses(typeNode);
   if (
     ts.isTypeOperatorNode(typeNode) &&
     typeNode.operator === ts.SyntaxKind.ReadonlyKeyword

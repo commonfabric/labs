@@ -374,8 +374,11 @@ capability-bearing positions: a cell-like wrapper takes the capability the
 body's usage earns (writable where it writes, read-only where it reads,
 comparable where it only compares, OPAQUE where it never touches the
 position), and an identity-only comparison of a plain-declared position adds
-the comparable marker the runtime materializes it through. A named reference
-whose subtree holds no cell-like position passes through untouched; one
+the comparable marker the runtime materializes it through. A reference to a
+type alias that takes no type parameters is walked as the node the alias
+names, so a cell declared through an alias takes its capability the way the
+wrapper the alias names does. A named reference whose subtree holds no
+cell-like position passes through untouched; one
 expands only when a capability inside it must change, and a self-referential
 type ends that expansion at the cycle with the node kept as authored — the
 accepted residual, since a literal cannot spell its own recursion. Observed
@@ -403,25 +406,35 @@ receiver's complete stored shape, including when the result passes through a
 helper. Optional member reads retain the receiver without imposing a full-shape
 read.
 
-A cell reached through a type alias — `type ProfileCell = Writable<...>` —
-gives the transformer no authored node for its value, so the value type is
-printed inside the inferred capability wrapper. Schema generation can read
-some prints only from the type behind them: `import("./mod.ts").T` for a name
-the emitting module does not import, and the brand arm of an expanded
-`Default`. A skipped computed brand marks the node-driven schema as incomplete
-even when the remaining union and intersection members can be read, so the
-resolved value supplies the default metadata.
-Where the cell is a property, schema generation reads the value from the
-property's resolved type; where the cell is the whole argument there is no
-such type, so the printed node is registered in `typeRegistry` with the value
-type it was printed from. An aliased cell therefore emits the value schema the
-same wrapper emits written inline, under every inferred capability, for a
-generic alias, and for an alias imported from another module. One shape
-differs: `T | Default<V>` where `V` is an object type assignable to `T`.
-Inline, the authored `Default` node shows that `T` already covers `V`, and the
-schema is `T` with the default. Through an alias the resolved union keeps `V`
-as a member of its own, and the schema is `anyOf: [T, V]` with the default.
-`aliased-cell-value-schema.test.ts` pins these.
+A cell's value type is read from the node its author wrote. The wrapper is
+found through parentheses and through references to type aliases that take no
+type parameters (`getAuthoredCellValueTypeNode`, which reads with
+`readAuthoredTypeNode` from `@commonfabric/schema-generator/type-node`), in
+every position a cell is declared: a builder's argument and a property of it,
+a handler's state and event and a property of each, and a closure's capture.
+A cell declared as `type ProfileCell = Writable<...>`, or as
+`(Writable<...>)`, therefore emits the value schema the same wrapper emits
+written in place, under every inferred capability and for an alias imported
+from another module, and a `Default` the value type does not admit fails
+compilation the same way.
+
+A cell reached through a generic alias — `type MyCell<T> = Writable<...>` —
+has no authored node for its value, since the node the alias names is written
+in the alias's own type parameters, so the value type is printed inside the
+inferred capability wrapper. Schema generation can read some prints only from
+the type behind them: `import("./mod.ts").T` for a name the emitting module
+does not import, and the brand arm of an expanded `Default`. A skipped
+computed brand marks the node-driven schema as incomplete even when the
+remaining union and intersection members can be read, so the resolved value
+supplies the default metadata. Where the cell is a property, schema generation
+reads the value from the property's resolved type; where the cell is the whole
+argument there is no such type, so the printed node is registered in
+`typeRegistry` with the value type it was printed from. The print keeps a
+default's value as a member of its own: `T | Default<V>`, with `V` an object
+type `T` covers, emits `anyOf: [T, V]` with the default, where the same wrapper
+written in place emits `T` with the default.
+`aliased-cell-value-schema.test.ts` and `parenthesized-cell-type.test.ts` pin
+these.
 
 The type-driven shrink also guards its descent on (type, requested-paths): a
 pair already on the path falls back to the named type reference — no
