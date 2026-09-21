@@ -49,58 +49,26 @@
  * is judged as a named space and refused, exactly as it would be for a reader
  * who filled the hole with a name. A hole in a slot whose vocabulary is
  * closed — `@<scope>`, `#<member>` — has no reading the parser takes, so a
- * grammar line written that way is reported and takes the directive below.
- *
- * check-address-examples-ignore: /@<space>/top/42 the paragraph above names the
- * retired prefix to say what this check makes of it
+ * grammar line written that way is reported and recorded below.
  *
  * ## Marking a string the check must not judge
  *
- * Two kinds of string are written on purpose: one naming a retired form in
- * order to say it is retired, and one belonging to a neighboring notation —
- * the shell's page URL, which reads a `/@<space>/` prefix, or a grammar line
- * with a hole in a closed slot. A writer exempts such a string with a
- * directive naming it and saying why:
+ * Some strings are written on purpose: one naming a retired form in order to
+ * say it is retired, one belonging to a neighboring notation such as the
+ * shell's page URL, one that is a grammar line rather than an address. Each is
+ * recorded in {@link EXEMPTIONS}, in this file, naming the document, the exact
+ * string, and why it is written that way.
  *
- * ```text
- * check-address-examples-ignore: <the string> <why it is written>
- * ```
+ * The list is here rather than in the document because an exemption a scanned
+ * file could state is one that file could forge: a check that reads its own
+ * permission out of the text it checks has no way to tell a permission from
+ * the data next to it. Recording it here also puts every exemption in one
+ * place a reviewer can read at once. What it costs is that a writer adding a
+ * deliberate example edits two files, and the failure message says so.
  *
- * In Markdown the directive goes inside an HTML comment, so that it does not
- * render; in a source file it is an ordinary comment. It governs the file it
- * sits in, wherever in that file it sits, so re-wrapping cannot separate it
- * from what it exempts, and it exempts every occurrence of the string it
- * names. A directive naming a string no address example in its file carries is
- * reported too, so that an exemption cannot outlive its example.
- *
- * Where a directive may sit is as much of the rule as how it reads. It opens
- * its own line, so a sentence mentioning one is a sentence. In TypeScript it
- * sits in a comment, read by `commentsOnly`, which recognizes string and
- * template literals — so a directive-shaped line a program carries states
- * nothing. In Markdown it sits outside a fenced code block, since a fence is
- * where a document shows what a directive looks like rather than writing one.
- * And it belongs above the table or paragraph it speaks for, a row's line
- * opening no directive; `docs/specs/cell-reference-grammar.md` has the worked
- * example.
- *
- * What that leaves, stated rather than implied: a rule about text can be met
- * by text written to meet it, and this one has a residual worth naming.
- * Regular-expression literals are modeled by neither reader, so a `//` inside
- * one is not attributed to the regex. Reaching an exemption from there takes
- * both halves at once — the `//` has to open the line's kept region and the
- * directive has to follow it immediately — which means a character class
- * written to hold the directive whole: one opening `/[// ` and running through
- * the directive to `]/`. Measured over this tree, no file carries a
- * directive-shaped line outside a comment at all.
- *
- * And such a line hides nothing on its own. A directive whose string no
- * example in its file carries is reported, so a silent exemption needs the
- * same file to carry both that line and the very refused address it covers.
- * Both are written where a writer writes, in a file the writer owns.
- *
- * The string a directive names is an address example, and so begins with `/`.
- * That is what lets this file spell the directive out without exempting
- * anything.
+ * An entry is held to the tree the way a document is. One naming a string that
+ * its file no longer writes is reported, so an exemption cannot outlive its
+ * example, and one carrying no reason is reported too.
  *
  * Usage: deno task check-address-examples
  */
@@ -109,6 +77,78 @@ import { dirname, fromFileUrl } from "@std/path";
 import { parseCellReference } from "@commonfabric/runner/shared";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
+
+/** One string a named file writes on purpose, and why it is written. */
+export interface Exemption {
+  /** Repo-relative path of the file that writes it. */
+  file: string;
+
+  /** The address example, exactly as the check reads it. */
+  example: string;
+
+  /** Why that file writes a string the parser refuses. */
+  reason: string;
+}
+
+/**
+ * Every address example in the tree that the parser refuses on purpose.
+ *
+ * A reason here answers one question: why is this file writing a string a
+ * reader could not paste into a command? Quoting a retired form in order to
+ * say it is retired answers it; so does writing a spelling that belongs to a
+ * neighboring grammar, or a line that gives a shape rather than an address.
+ * An entry is about one file, since a string refused on purpose in one
+ * document can be a defect in another.
+ */
+export const EXEMPTIONS: readonly Exemption[] = [
+  {
+    file: "docs/common/verbs/over-the-cli.md",
+    example: "//space/piece@scope",
+    reason: "a grammar line, whose three parts are holes rather than " +
+      "one address",
+  },
+  {
+    file: "docs/specs/cell-reference-grammar.md",
+    example: "/@session/<handle>@user",
+    reason: "the collision the requirement it sits under answers, quoted " +
+      "as what the grammar refuses",
+  },
+  {
+    file: "docs/specs/cell-reference-grammar.md",
+    example: "/@bakery/glaze-tracker",
+    reason: "the table of refused forms is written out of what the parser " +
+      "refuses",
+  },
+  {
+    file: "docs/specs/collection-naming.md",
+    example: "/@<space>/top/42",
+    reason: "a page URL the shell reads, written with the mark the cell " +
+      "reference grammar retired",
+  },
+  {
+    file: "packages/cli/lib/callable.ts",
+    example: "//<space>/<id>@scope",
+    reason: "the doc comment writes the shape a caller reads the parts out " +
+      "of, with a hole in the scope slot, rather than one address",
+  },
+  {
+    file: "packages/navigation/test/view.test.ts",
+    example: "/@<space>/<collection>/<member>",
+    reason: "a page URL, which keeps the mark the cell reference grammar " +
+      "retired",
+  },
+  {
+    file: "skills/cf/SKILL.md",
+    example: "/@my-space/tracker/items",
+    reason: "the bullet quotes it as the spelling the CLI refuses",
+  },
+  {
+    file: "tasks/check-address-examples.ts",
+    example: "/@<space>/top/42",
+    reason: "the rule above names the retired prefix to say what this " +
+      "check makes of it",
+  },
+];
 
 /**
  * The tree this rule may not reach. `docs/history/` is a frozen record —
@@ -134,19 +174,16 @@ export function governedKind(path: string): GovernedKind | null {
 }
 
 //
-// Reading a file
+// Reading a file's prose
 //
-// Two readers over a source file, leaning opposite ways on purpose. `proseOf`
-// keeps every comment and sometimes more, and is what examples are read from,
-// so no comment's address can go unchecked. `commentsOnly` keeps only what is
-// certainly a comment and sometimes less, and is what directives are read
-// from, so nothing a program carries can state an exemption. Each is wrong
-// only where being wrong is visible: one offers a candidate a reader can see
-// is not prose, the other drops an exemption, and the gate then reports the
-// example the writer meant to exempt.
+// One reader, and it leans one way on purpose: it keeps every comment and
+// sometimes more. Being wrong offers a candidate a reader can see is not
+// prose, where a reader that kept too little would drop a finding nobody ever
+// sees. Nothing but examples is read out of a file, so there is nothing else
+// the looseness can reach.
 //
-// Both keep every character at the offset the file gave it, so a line number
-// in a finding names the line a reader will open.
+// It keeps every character at the offset the file gave it, so a line number in
+// a finding names the line a reader will open.
 //
 
 /** `text` with every character but the line breaks replaced by a space. */
@@ -189,10 +226,8 @@ function commentRegionEnd(source: string, at: number): number | null {
  * The cost is stated rather than avoided. A `//` or a `/*` inside a string, a
  * template literal or a regular expression opens a region here too, so the
  * code after it is read as prose, and an address written in that code is
- * checked. Over this tree that adds one candidate and removes none. The
- * direction is the one this check needs: a candidate too many is a finding a
- * reader can see is not prose, and a candidate too few is a finding nobody
- * ever sees.
+ * checked. A candidate too many is a finding a reader can see is not prose,
+ * and a candidate too few is a finding nobody ever sees.
  */
 export function proseOf(source: string): string {
   const parts: string[] = [];
@@ -213,66 +248,6 @@ export function proseOf(source: string): string {
   }
   parts.push(blanked(source.slice(at)));
   return parts.join("");
-}
-
-/**
- * One match per comment or literal, whichever opens first. Each match consumes
- * its own text, so a comment opener a literal carries is carried away with it.
- */
-const COMMENT_OR_LITERAL =
-  /\/\/[^\n]*|\/\*[\s\S]*?\*\/|`(?:[^`\\]|\\[\s\S])*`|"(?:[^"\\\n]|\\[\s\S])*"|'(?:[^'\\\n]|\\[\s\S])*'/g;
-
-/**
- * `source` with everything but its comments blanked out, keeping only what is
- * certainly one.
- *
- * `proseOf`'s opposite, and the pair is the point: a string literal and a
- * template literal are recognized here, so a directive-shaped line a program
- * carries is not in a comment and states nothing. Where this reader is wrong
- * it keeps too little, and an exemption that stops working is one the gate
- * reports.
- *
- * Regular-expression literals are not modeled, here or in `proseOf`. A `//`
- * inside one — `/[//]/`, where a character class holds the pair — opens a
- * region this reader takes for a comment, so a directive on that line would be
- * honored. That is the residual this file's header states.
- */
-export function commentsOnly(source: string): string {
-  const parts: string[] = [];
-  let at = 0;
-  for (const match of source.matchAll(COMMENT_OR_LITERAL)) {
-    const token = match[0];
-    parts.push(blanked(source.slice(at, match.index)));
-    parts.push(
-      token.startsWith("//") || token.startsWith("/*") ? token : blanked(token),
-    );
-    at = match.index + token.length;
-  }
-  parts.push(blanked(source.slice(at)));
-  return parts.join("");
-}
-
-/** A line that opens or closes a fenced code block. */
-const FENCE = /^[ \t]*(?:```|~~~)/;
-
-/**
- * `text` with the lines inside its fenced code blocks blanked out.
- *
- * A fence is where a document writes what a directive looks like rather than
- * writing one, so a line inside one states nothing. This is the Markdown half
- * of the pair above: there is no code in a Markdown file for `commentsOnly` to
- * separate out, and a fence is the one place a document quotes a directive
- * instead of giving one.
- */
-export function outsideFences(text: string): string {
-  let fenced = false;
-  return text.split("\n").map((line) => {
-    if (FENCE.test(line)) {
-      fenced = !fenced;
-      return blanked(line);
-    }
-    return fenced ? blanked(line) : line;
-  }).join("\n");
 }
 
 /**
@@ -347,69 +322,6 @@ export function addressExample(content: string): string | null {
 }
 
 //
-// The directive
-//
-
-/**
- * A directive, the rooted string it names, and the reason after it.
- *
- * A directive opens its own line. Before it may come an indent and one of the
- * things a writer puts in front of prose — an HTML comment's `<!--`, a line
- * comment's `//`, a block comment's `/*` or its continuation `*` — and
- * nothing else. The reason runs to the end of the line, less the `-->` that
- * closes an HTML comment around it.
- *
- * The optional opener carries its own trailing spaces rather than leaving them
- * to a second run beside it. Two runs of spaces around an optional part can
- * divide a run between them in as many ways as it is long, and the lines this
- * reads are blanked to spaces, so the ambiguous spelling costs the square of
- * the longest line.
- */
-const DIRECTIVE =
-  /^[ \t]*(?:(?:<!--|\/\*+|\/\/|\*)[ \t]*)?check-address-examples-ignore:[ \t]*(\/\S*)[ \t]*([^\n]*)/gm;
-
-/** A string a file's directives exempt, and the reason given for it. */
-export interface Exemption {
-  /** 1-based line of the directive. */
-  line: number;
-
-  /** What the directive gives as its reason, which may be empty. */
-  reason: string;
-}
-
-/** The 1-based line number holding `index` in `text`. */
-function lineAt(text: string, index: number): number {
-  let line = 1;
-  for (
-    let i = text.indexOf("\n");
-    i !== -1 && i < index;
-    i = text.indexOf("\n", i + 1)
-  ) {
-    line++;
-  }
-  return line;
-}
-
-/**
- * Every string the directives in `text` exempt, by the string they name.
- *
- * `text` is the file as written rather than the prose read out of it. Blanking
- * code to spaces keeps every character where the file put it, which leaves a
- * comment opener inside a string literal looking exactly like one at the head
- * of a line; the file itself still tells them apart. So a directive is read
- * from the file, and an exemption cannot be written by data a program happens
- * to carry.
- */
-export function exemptions(text: string): Map<string, Exemption> {
-  const found = new Map<string, Exemption>();
-  for (const match of text.matchAll(DIRECTIVE)) {
-    const reason = match[2].replace(/-->\s*$/, "").trim();
-    found.set(match[1], { line: lineAt(text, match.index), reason });
-  }
-  return found;
-}
-
-//
 // The check
 //
 
@@ -427,41 +339,75 @@ export interface Document {
 
 /** Something the check reports. */
 export interface Finding {
-  /** Repo-relative path of the file holding it. */
+  /** Repo-relative path of the file the finding is about. */
   file: string;
 
-  /** 1-based line within that file. */
-  line: number;
+  /** 1-based line within that file, where the finding has one. */
+  line?: number;
 
   /** The string, as the check read it. */
   example: string;
 
-  /** What the parser said about it, or what is wrong with the directive. */
+  /** What the parser said about it, or what is wrong with the entry. */
   message: string;
 }
 
+/** The 1-based line number holding `index` in `text`. */
+function lineAt(text: string, index: number): number {
+  let line = 1;
+  for (
+    let i = text.indexOf("\n");
+    i !== -1 && i < index;
+    i = text.indexOf("\n", i + 1)
+  ) {
+    line++;
+  }
+  return line;
+}
+
 /**
- * Every finding in `documents`: an address example the parser refuses, a
- * directive with no reason, and a directive whose string no example carries.
+ * What a reader is told about a value a parse threw.
  *
- * Examples come from the reader that keeps too much and exemptions from the
- * one that keeps too little, so a comment's address is always checked and only
- * a comment can exempt it. Pure — all input and output happens in `main`.
+ * `parseCellReference` throws an `Error`, whose message is the sentence the
+ * grammar wrote for the string it refused. A value of any other kind is
+ * rendered whole rather than reached into, so one this module did not expect
+ * still reaches the report as itself rather than as `undefined`.
  */
-export function collectFindings(documents: readonly Document[]): Finding[] {
+export function refusalMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** Keys an exemption by the file it is about and the string it names. */
+function exemptionKey(file: string, example: string): string {
+  return `${file} ${example}`;
+}
+
+/**
+ * Every finding in `documents`: an address example `exemptions` does not cover
+ * and the parser refuses, an entry carrying no reason, and an entry naming a
+ * string its file no longer writes.
+ *
+ * Pure — all input and output happens in `main`.
+ */
+export function collectFindings(
+  documents: readonly Document[],
+  exemptions: readonly Exemption[],
+): Finding[] {
+  const excused = new Map<string, Exemption>();
+  for (const exemption of exemptions) {
+    excused.set(exemptionKey(exemption.file, exemption.example), exemption);
+  }
+
   const findings: Finding[] = [];
+  const used = new Set<string>();
   for (const { path, kind, text } of documents) {
-    const markdown = kind === "markdown";
-    const prose = markdown ? text : proseOf(text);
-    const exempt = exemptions(
-      markdown ? outsideFences(text) : commentsOnly(text),
-    );
-    const used = new Set<string>();
+    const prose = kind === "markdown" ? text : proseOf(text);
     for (const span of codeSpans(prose)) {
       const example = addressExample(span.content);
       if (example === null) continue;
-      if (exempt.has(example)) {
-        used.add(example);
+      const key = exemptionKey(path, example);
+      if (excused.has(key)) {
+        used.add(key);
         continue;
       }
       try {
@@ -471,30 +417,31 @@ export function collectFindings(documents: readonly Document[]): Finding[] {
           file: path,
           line: lineAt(prose, span.at),
           example,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    for (const [example, { line, reason }] of exempt) {
-      if (reason === "") {
-        findings.push({
-          file: path,
-          line,
-          example,
-          message: "the directive gives no reason for the exemption",
-        });
-      } else if (!used.has(example)) {
-        findings.push({
-          file: path,
-          line,
-          example,
-          message: "no address example in this file is written this way",
+          message: refusalMessage(error),
         });
       }
     }
   }
+
+  for (const exemption of exemptions) {
+    const { file, example, reason } = exemption;
+    if (reason.trim() === "") {
+      findings.push({
+        file,
+        example,
+        message: "the entry in EXEMPTIONS gives no reason",
+      });
+    } else if (!used.has(exemptionKey(file, example))) {
+      findings.push({
+        file,
+        example,
+        message: "EXEMPTIONS excuses this, and the file no longer writes it",
+      });
+    }
+  }
+
   findings.sort((a, b) =>
-    a.file.localeCompare(b.file) || a.line - b.line ||
+    a.file.localeCompare(b.file) || (a.line ?? 0) - (b.line ?? 0) ||
     a.example.localeCompare(b.example)
   );
   return findings;
@@ -543,15 +490,22 @@ export async function readDocuments(root: string): Promise<Document[]> {
   return documents;
 }
 
+/** How a finding names where it is, with a line where it has one. */
+export function findingLocation(finding: Finding): string {
+  return finding.line === undefined
+    ? finding.file
+    : `${finding.file}:${finding.line}`;
+}
+
 function reportFindings(findings: readonly Finding[]): void {
   console.error(
     [
       "",
       "Address example(s) the reference parser does not read:",
       "",
-      ...findings.flatMap(({ file, line, example, message }) => [
-        `  ${file}:${line}  \`${example}\``,
-        `      ${message}`,
+      ...findings.flatMap((finding) => [
+        `  ${findingLocation(finding)}  \`${finding.example}\``,
+        `      ${finding.message}`,
       ]),
       "",
       "`parseCellReference` in packages/runner/src/cell-reference.ts is the",
@@ -560,25 +514,40 @@ function reportFindings(findings: readonly Finding[]): void {
       "string a reader cannot paste into a command.",
       "",
       "Write the address the way the parser reads it. Where the string is",
-      "written on purpose — a retired form quoted as retired, a spelling",
-      "of the shell's page URL, a grammar line with a hole in a closed slot",
-      "— name it in a directive, in an HTML comment in Markdown and an",
-      "ordinary comment in source:",
+      "written on purpose — a retired form quoted as retired, a spelling of",
+      "the shell's page URL, a grammar line rather than an address — record it",
+      "in EXEMPTIONS in tasks/check-address-examples.ts, which takes the file,",
+      "the string, and why that file writes it:",
       "",
-      "  check-address-examples-ignore: <the string> <why it is written>",
+      '  { file: "docs/specs/cell-reference-grammar.md",',
+      '    example: "/@bakery/glaze-tracker",',
+      '    reason: "the table of refused forms is written out of what the',
+      '      parser refuses" },',
       "",
-      "The directive governs the file it sits in, wherever in that file it",
-      "sits. See tasks/check-address-examples.ts for what counts as an address",
-      "example and what does not.",
+      "So a deliberate example is two edits: the document, and that list. The",
+      "list is in the task rather than in the document because an exemption a",
+      "scanned file could state is one that file could forge. See",
+      "tasks/check-address-examples.ts for what counts as an address example",
+      "and what does not.",
       "",
     ].join("\n"),
   );
 }
 
-/** Runs the check over `root`, reports, and returns a process exit code. */
-export async function main(root: string = REPO_ROOT): Promise<number> {
+/**
+ * Runs the check over `root` against `exemptions`, reports, and returns a
+ * process exit code.
+ *
+ * Both are arguments rather than defaults because both are facts about one
+ * tree: the recorded exemptions name files in this repository, and running
+ * them against another root would report every one of them as stale.
+ */
+export async function main(
+  root: string,
+  exemptions: readonly Exemption[],
+): Promise<number> {
   const documents = await readDocuments(root);
-  const findings = collectFindings(documents);
+  const findings = collectFindings(documents, exemptions);
   if (findings.length > 0) {
     reportFindings(findings);
     return 1;
@@ -587,4 +556,4 @@ export async function main(root: string = REPO_ROOT): Promise<number> {
   return 0;
 }
 
-if (import.meta.main) Deno.exit(await main());
+if (import.meta.main) Deno.exit(await main(REPO_ROOT, EXEMPTIONS));

@@ -47,21 +47,15 @@ spelling a grammar change retired, most often. It reaches skills and source
 comments on the same terms.
 
 A string written on purpose — the retired form quoted as retired, a spelling of
-the shell's page URL, a grammar line with a hole in the scope slot — is
-exempted by a directive naming it, inside an HTML comment so that it does not
-render:
+the shell's page URL, a grammar line rather than an address — is recorded in
+`EXEMPTIONS` in `tasks/check-address-examples.ts`, which takes the file, the
+exact string, and why that file writes it. So such an example is two edits: the
+document, and that list. Nothing written in the document exempts anything,
+because an exemption a scanned file could state is one that file could forge.
 
-```text
-<!-- check-address-examples-ignore: <the string> <why it is written> -->
-```
-
-The directive governs the file it sits in, wherever in that file it sits, and
-opens its own line outside every fenced code block — a line inside a fence or a
-table row opens no directive, so it goes above the table or the paragraph it
-speaks for. A fence is for showing what a directive looks like, as the one
-above does. `docs/specs/cell-reference-grammar.md` carries a real one above its
-table of refused forms. `tasks/check-address-examples.ts` states what counts as
-an address example and what does not.
+An entry whose file no longer writes its string is reported, the same way the
+address itself would be. `tasks/check-address-examples.ts` states what counts
+as an address example and what does not.
 
 ## Code blocks here are compiled
 

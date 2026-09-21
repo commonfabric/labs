@@ -8,14 +8,15 @@ import {
   addressExample,
   codeSpans,
   collectFindings,
-  commentsOnly,
   type Document,
-  exemptions,
+  type Exemption,
+  EXEMPTIONS,
+  findingLocation,
   governedKind,
   main,
-  outsideFences,
   proseOf,
   readDocuments,
+  refusalMessage,
 } from "./check-address-examples.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
@@ -83,7 +84,7 @@ function typescript(text: string): Document[] {
  * The two characters that open a line comment, and the two that open a block
  * comment, built rather than written.
  *
- * `commentsOf` reads a comment opener wherever it sits, a string literal
+ * `proseOf` reads a comment opener wherever it sits, a string literal
  * included. A fixture below that spelled one out would turn its own text into
  * prose that this check reads when it scans this file, so every fixture
  * composes its openers instead and stays inert here.
@@ -197,41 +198,6 @@ describe("check-address-examples", () => {
     });
   });
 
-  describe("commentsOnly()", () => {
-    it("blanks a directive-shaped line a template literal carries", () => {
-      // `proseOf`'s opposite: it recognizes literals, so a line a program
-      // carries is not a comment and states nothing.
-
-      const source = "const note = `data\n" +
-        `${LINE_OPENER} check-address-examples-ignore: /@bakery/x/y why\n` +
-        "`;\n";
-
-      expect(commentsOnly(source).trim()).toBe("");
-    });
-
-    it("keeps a comment no literal holds", () => {
-      const comment = `${LINE_OPENER} check-address-examples-ignore: /x/y why`;
-
-      expect(commentsOnly(`const a = 1;\n${comment}\n`)).toContain(comment);
-    });
-  });
-
-  describe("outsideFences()", () => {
-    it("blanks a line inside a fenced code block", () => {
-      const text = "Before.\n\n```text\n<!-- a directive -->\n```\n\nAfter.\n";
-      const outside = outsideFences(text);
-
-      expect(outside).not.toContain("a directive");
-      expect(outside).toContain("Before.");
-      expect(outside).toContain("After.");
-      expect(outside.length).toBe(text.length);
-    });
-
-    it("keeps a line a fence does not enclose", () => {
-      expect(outsideFences("<!-- a directive -->\n")).toContain("a directive");
-    });
-  });
-
   describe("codeSpans()", () => {
     it("returns the content between a backtick and the next one", () => {
       expect([...codeSpans("Read `/tracker/items` now.")].map((s) => s.content))
@@ -280,6 +246,10 @@ describe("check-address-examples", () => {
     });
 
     it("returns `null` for a span holding whitespace", () => {
+      // Rooted, so it reaches the rule this pins rather than stopping at the
+      // one above it. A span holding a space is a command line or a sentence.
+
+      expect(addressExample("/tracker items/0")).toBe(null);
       expect(addressExample("cf cell get /tracker")).toBe(null);
     });
 
@@ -312,43 +282,18 @@ describe("check-address-examples", () => {
     });
   });
 
-  describe("exemptions()", () => {
-    it("returns the string a Markdown directive names, with its reason", () => {
-      const found = exemptions(
-        "<!-- check-address-examples-ignore: /@bakery/tracker quoted as " +
-          "refused -->\n",
-      );
-
-      expect([...found.keys()]).toEqual(["/@bakery/tracker"]);
-      expect(found.get("/@bakery/tracker")?.reason).toBe("quoted as refused");
-      expect(found.get("/@bakery/tracker")?.line).toBe(1);
+  describe("refusalMessage()", () => {
+    it("returns the message of an `Error`", () => {
+      expect(refusalMessage(new Error("the prefix is retired")))
+        .toBe("the prefix is retired");
     });
 
-    it("returns the string a source directive names", () => {
-      const found = exemptions(
-        `${LINE_OPENER} line one\n${LINE_OPENER} ` +
-          "check-address-examples-ignore: /@bakery/tracker why\n",
-      );
+    it("returns a value of another kind whole", () => {
+      // Reaching into such a value for a `message` would put `undefined` in
+      // the report, which says less than the value does.
 
-      expect(found.get("/@bakery/tracker")?.reason).toBe("why");
-      expect(found.get("/@bakery/tracker")?.line).toBe(2);
-    });
-
-    it("returns an empty reason for a directive that gives none", () => {
-      const found = exemptions(
-        "<!-- check-address-examples-ignore: /@bakery/tracker -->\n",
-      );
-
-      expect(found.get("/@bakery/tracker")?.reason).toBe("");
-    });
-
-    it("returns nothing for the directive's own form written out", () => {
-      // The string a directive names begins with `/`, which is what lets the
-      // check spell its own form out without exempting anything.
-
-      expect(
-        exemptions("check-address-examples-ignore: <the string> <why>\n").size,
-      ).toBe(0);
+      expect(refusalMessage("refused")).toBe("refused");
+      expect(refusalMessage(undefined)).toBe("undefined");
     });
   });
 
@@ -358,30 +303,20 @@ describe("check-address-examples", () => {
         "Read `//bakery/glaze-tracker/items/0/title`, or `/tracker@user`.\n",
       );
 
-      expect(collectFindings(documents)).toEqual([]);
+      expect(collectFindings(documents, [])).toEqual([]);
     });
 
     it("returns the file, the line, the string, and what the parser said", () => {
       const documents = markdown(
         "One.\nTwo.\nWrite `/@bakery/glaze-tracker` to reach it.\n",
       );
-      const findings = collectFindings(documents);
+      const findings = collectFindings(documents, []);
 
       expect(findings.length).toBe(1);
       expect(findings[0].file).toBe("doc.md");
       expect(findings[0].line).toBe(3);
       expect(findings[0].example).toBe("/@bakery/glaze-tracker");
       expect(findings[0].message).toContain("is retired");
-    });
-
-    it("returns nothing for an example a directive names", () => {
-      const documents = markdown(
-        "<!-- check-address-examples-ignore: /@bakery/glaze-tracker the " +
-          "table quotes what the parser refuses -->\n\n" +
-          "| `/@bakery/glaze-tracker` | a name-shaped `@` space |\n",
-      );
-
-      expect(collectFindings(documents)).toEqual([]);
     });
 
     it("returns a finding from a comment after a regular expression", () => {
@@ -397,88 +332,8 @@ describe("check-address-examples", () => {
           `${LINE_OPENER} Read \`/@bakery/glaze-tracker\`.\n`,
       );
 
-      expect(collectFindings(quoted).length).toBe(1);
-      expect(collectFindings(ticked).length).toBe(1);
-    });
-
-    it("returns a finding past a directive a string literal carries", () => {
-      // An exemption is something a writer states, so it is read from the file
-      // rather than from the prose read out of it. Blanking code to spaces
-      // leaves an opener inside a literal looking like one at the head of a
-      // line, and the file still tells the two apart.
-
-      const documents = typescript(
-        `const note = "${LINE_OPENER} check-address-examples-ignore: ` +
-          `/@bakery/glaze-tracker string data";\n` +
-          `${LINE_OPENER} Use \`/@bakery/glaze-tracker\`.\n`,
-      );
-
-      expect(collectFindings(documents).length).toBe(1);
-    });
-
-    it("returns a finding past a directive named in a sentence", () => {
-      // A directive opens its own line, so prose about one is prose.
-
-      const documents = typescript(
-        `${LINE_OPENER} It is spelled check-address-examples-ignore: /@bakery/x/y here.\n` +
-          `${LINE_OPENER} Use \`/@bakery/x/y\`.\n`,
-      );
-
-      expect(collectFindings(documents).length).toBe(1);
-    });
-
-    it("returns nothing for a directive a comment opens its line with", () => {
-      const inLine = typescript(
-        `${LINE_OPENER} check-address-examples-ignore: /@bakery/glaze-tracker quoted as refused\n` +
-          `${LINE_OPENER} Use \`/@bakery/glaze-tracker\`.\n`,
-      );
-      const inBlock = typescript(
-        `${BLOCK_OPENER}*\n * check-address-examples-ignore: /@bakery/glaze-tracker quoted as ` +
-          `refused\n ${"*" + "/"}\n` +
-          `${LINE_OPENER} Use \`/@bakery/glaze-tracker\`.\n`,
-      );
-
-      expect(collectFindings(inLine)).toEqual([]);
-      expect(collectFindings(inBlock)).toEqual([]);
-    });
-
-    it("returns a finding past a directive a template literal carries", () => {
-      // A template literal's interior lines are lines of the file, so opening
-      // one's own line is not enough on its own. Only a comment states an
-      // exemption, with or without an opener written into the data.
-
-      const opened = typescript(
-        "const note = `data\n" +
-          `${LINE_OPENER} check-address-examples-ignore: /@bakery/x/y why\n` +
-          "`;\n" + `${LINE_OPENER} Use \`/@bakery/x/y\`.\n`,
-      );
-      const bare = typescript(
-        "const note = `data\ncheck-address-examples-ignore: /@bakery/x/y why\n" +
-          "`;\n" + `${LINE_OPENER} Use \`/@bakery/x/y\`.\n`,
-      );
-
-      expect(collectFindings(opened).length).toBe(1);
-      expect(collectFindings(bare).length).toBe(1);
-    });
-
-    it("returns a finding past a directive a fenced block shows", () => {
-      // A fence is where a document writes what a directive looks like.
-
-      const documents = markdown(
-        "```text\n<!-- check-address-examples-ignore: /@bakery/x/y why -->\n" +
-          "```\n\nWrite `/@bakery/x/y` to reach it.\n",
-      );
-
-      expect(collectFindings(documents).length).toBe(1);
-    });
-
-    it("returns nothing for a directive outside every fence", () => {
-      const documents = markdown(
-        "<!-- check-address-examples-ignore: /@bakery/x/y quoted as refused " +
-          "-->\n\nWrite `/@bakery/x/y` to reach it.\n",
-      );
-
-      expect(collectFindings(documents)).toEqual([]);
+      expect(collectFindings(quoted, []).length).toBe(1);
+      expect(collectFindings(ticked, []).length).toBe(1);
     });
 
     it("returns a finding for an example split across a line break", () => {
@@ -488,35 +343,11 @@ describe("check-address-examples", () => {
       const documents = markdown(
         "Write `/@bakery/glaze-\ntracker/items` to reach it.\n",
       );
-      const findings = collectFindings(documents);
+      const findings = collectFindings(documents, []);
 
       expect(findings.length).toBe(1);
       expect(findings[0].example).toBe("/@bakery/glaze-tracker/items");
       expect(findings[0].line).toBe(1);
-    });
-
-    it("returns a finding for a directive that gives no reason", () => {
-      const documents = markdown(
-        "<!-- check-address-examples-ignore: /@bakery/glaze-tracker -->\n\n" +
-          "`/@bakery/glaze-tracker`\n",
-      );
-      const findings = collectFindings(documents);
-
-      expect(findings.map((finding) => finding.message)).toEqual([
-        "the directive gives no reason for the exemption",
-      ]);
-    });
-
-    it("returns a finding for a directive no example in the file uses", () => {
-      const documents = markdown(
-        "<!-- check-address-examples-ignore: /@bakery/glaze-tracker quoted " +
-          "as refused -->\n\nNothing here writes it any more.\n",
-      );
-      const findings = collectFindings(documents);
-
-      expect(findings.map((finding) => finding.message)).toEqual([
-        "no address example in this file is written this way",
-      ]);
     });
 
     it("returns findings in file and line order", () => {
@@ -530,10 +361,77 @@ describe("check-address-examples", () => {
       ];
 
       expect(
-        collectFindings(documents).map((finding) =>
+        collectFindings(documents, []).map((finding) =>
           `${finding.file}:${finding.line}`
         ),
       ).toEqual(["first.md:2", "first.md:3", "second.md:1"]);
+    });
+
+    it("returns nothing for an example an entry names in that file", () => {
+      const documents = markdown("Write `/@bakery/glaze-tracker` there.\n");
+      const entry: Exemption = {
+        file: "doc.md",
+        example: "/@bakery/glaze-tracker",
+        reason: "quoted as the form the parser refuses",
+      };
+
+      expect(collectFindings(documents, [entry])).toEqual([]);
+    });
+
+    it("returns a finding for an example an entry names in another file", () => {
+      // An entry is about one file, since a string refused on purpose in one
+      // document can be a defect in another. The entry below is then also
+      // reported, since the file it names writes nothing.
+
+      const documents = markdown("Write `/@bakery/glaze-tracker` there.\n");
+      const entry: Exemption = {
+        file: "other.md",
+        example: "/@bakery/glaze-tracker",
+        reason: "quoted as the form the parser refuses",
+      };
+
+      expect(collectFindings(documents, [entry]).map((f) => f.file))
+        .toEqual(["doc.md", "other.md"]);
+    });
+
+    it("returns a finding for an entry whose file no longer writes it", () => {
+      const documents = markdown("Nothing here writes it any more.\n");
+      const entry: Exemption = {
+        file: "doc.md",
+        example: "/@bakery/glaze-tracker",
+        reason: "quoted as the form the parser refuses",
+      };
+      const findings = collectFindings(documents, [entry]);
+
+      expect(findings.length).toBe(1);
+      expect(findings[0].line).toBeUndefined();
+      expect(findings[0].message).toContain("no longer writes it");
+    });
+
+    it("returns a finding for an entry that gives no reason", () => {
+      const documents = markdown("Write `/@bakery/glaze-tracker` there.\n");
+      const entry: Exemption = {
+        file: "doc.md",
+        example: "/@bakery/glaze-tracker",
+        reason: "   ",
+      };
+
+      expect(collectFindings(documents, [entry]).map((f) => f.message))
+        .toEqual(["the entry in EXEMPTIONS gives no reason"]);
+    });
+  });
+
+  describe("findingLocation()", () => {
+    it("returns the file and the line where a finding has one", () => {
+      expect(
+        findingLocation({ file: "a.md", line: 7, example: "", message: "" }),
+      )
+        .toBe("a.md:7");
+    });
+
+    it("returns the file alone where it has none", () => {
+      expect(findingLocation({ file: "a.md", example: "", message: "" }))
+        .toBe("a.md");
     });
   });
 
@@ -545,7 +443,7 @@ describe("check-address-examples", () => {
       try {
         let code = -1;
         const { out } = await captureConsole(async () => {
-          code = await main(root);
+          code = await main(root, []);
         });
 
         expect(code).toBe(0);
@@ -555,21 +453,21 @@ describe("check-address-examples", () => {
       }
     });
 
-    it("returns 1 and reports the finding and the directive", async () => {
+    it("returns 1 and reports the finding and how to record it", async () => {
       const root = await fixtureRepo({
         "docs/guide.md": "One.\nRead `/@bakery/glaze-tracker`.\n",
       });
       try {
         let code = -1;
         const { err } = await captureConsole(async () => {
-          code = await main(root);
+          code = await main(root, []);
         });
 
         expect(code).toBe(1);
         expect(err).toContain("docs/guide.md:2");
         expect(err).toContain("`/@bakery/glaze-tracker`");
         expect(err).toContain("is retired");
-        expect(err).toContain("check-address-examples-ignore:");
+        expect(err).toContain("EXEMPTIONS in tasks/check-address-examples.ts");
       } finally {
         await Deno.remove(root, { recursive: true });
       }
@@ -583,7 +481,7 @@ describe("check-address-examples", () => {
         ].join("\n"),
       });
       try {
-        const findings = collectFindings(await readDocuments(root));
+        const findings = collectFindings(await readDocuments(root), []);
 
         expect(findings.map((finding) => finding.line)).toEqual([1]);
       } finally {
@@ -596,7 +494,42 @@ describe("check-address-examples", () => {
         "docs/history/rehearsal.md": "Ran `/@graft-rehearsal/top/2`.\n",
       });
       try {
-        expect(collectFindings(await readDocuments(root))).toEqual([]);
+        expect(collectFindings(await readDocuments(root), [])).toEqual([]);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+  });
+
+  describe("readDocuments()", () => {
+    it("drops a file the working tree has lost", async () => {
+      // git still holds it in the index, and reading it would fail. A gate
+      // that read the index alone would open a path that is not there.
+
+      const root = await fixtureRepo({
+        "docs/guide.md": "Read `/tracker/items`.\n",
+        "docs/kept.md": "Read `/tracker/other`.\n",
+      });
+      try {
+        await Deno.remove(join(root, "docs/guide.md"));
+        const documents = await readDocuments(root);
+
+        expect(documents.map((document) => document.path))
+          .toEqual(["docs/kept.md"]);
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("surfaces a git failure rather than reading nothing", async () => {
+      // A directory git cannot answer for would otherwise scan as a tree with
+      // no files in it, which is a gate that passes over nothing.
+
+      const root = await Deno.makeTempDir({ prefix: "check-address-nogit-" });
+      try {
+        await expect(readDocuments(root)).rejects.toThrow(
+          "git ls-files failed",
+        );
       } finally {
         await Deno.remove(root, { recursive: true });
       }
@@ -609,9 +542,37 @@ describe("check-address-examples", () => {
 
       expect(documents.length).toBeGreaterThan(0);
       expect(
-        collectFindings(documents).map((finding) =>
-          `${finding.file}:${finding.line} \`${finding.example}\` ${finding.message}`
+        collectFindings(documents, EXEMPTIONS).map((finding) =>
+          `${
+            findingLocation(finding)
+          } \`${finding.example}\` ${finding.message}`
         ),
+      ).toEqual([]);
+    });
+
+    it("holds every exemption to the file it names", async () => {
+      // The list answers to the tree the way a document does. Running each
+      // entry alone shows that every one of them is still load-bearing: an
+      // entry whose file stopped writing its string reports here rather than
+      // going quiet behind the others.
+
+      const documents = await readDocuments(REPO_ROOT);
+      const stale = EXEMPTIONS.filter((entry) =>
+        collectFindings(documents, [entry]).some((finding) =>
+          finding.file === entry.file && finding.example === entry.example &&
+          finding.line === undefined
+        )
+      );
+
+      expect(EXEMPTIONS.length).toBeGreaterThan(0);
+      expect(stale.map((entry) => `${entry.file} ${entry.example}`))
+        .toEqual([]);
+    });
+
+    it("gives every exemption a reason", () => {
+      expect(
+        EXEMPTIONS.filter((entry) => entry.reason.trim() === "")
+          .map((entry) => entry.file),
       ).toEqual([]);
     });
 

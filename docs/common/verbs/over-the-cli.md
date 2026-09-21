@@ -282,8 +282,6 @@ cf exec /tmp/cf/<space>/pieces/<piece>/result/addComment.handler \
   -- --select comment.writtenAt
 ```
 
-<!-- check-address-examples-ignore: //space/piece@scope a grammar line, whose three parts are holes rather than one address -->
-
 A tool prints its result on stdout as it always did, with the result cell's
 address on stderr. The line spells out the whole command that reads it back,
 and the address is one token that carries all three parts — space, id, and

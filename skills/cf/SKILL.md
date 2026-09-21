@@ -136,8 +136,6 @@ See `docs/development/EXPERIMENTAL_OPTIONS.md` for available flags.
 Every read and every call names a target, and the spelling decides whether the
 answer composes into the next command.
 
-<!-- check-address-examples-ignore: /@my-space/tracker/items the bullet below quotes it as the spelling `cf` refuses -->
-
 - `//<space>/<piece>[@<scope>][/<path>]`, and `/<piece>[@<scope>][/<path>]`
   where `--space` names the space — the reference, the one syntax the whole
   fabric shares. `<space>` is a name or a DID and `<piece>` is a slug or a

@@ -594,8 +594,6 @@ inside it. Resolving the two together is what the split is for — the path is
 the part that says which member, so a resolver handed the address on its own
 has nothing to walk with.
 
-<!-- check-address-examples-ignore: /@<space>/top/42 a page URL the shell reads, written with the mark the cell reference grammar retired -->
-
 **4. Walk segments in the URL layer.** Built for the shell's page URLs.
 `urlToAppView` (`packages/navigation/src/view.ts`) reads the segment after a
 slug as the member name and carries it in the view, which serializes back to
