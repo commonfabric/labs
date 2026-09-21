@@ -516,12 +516,13 @@ export class RuntimeInternals extends EventTarget {
 
   /**
    * Creates a piece in the given space, `options.argument` being the record of
-   * inputs it is created with.
+   * inputs it is created with. `options.cause` derives its identity within
+   * the space: repeated calls reapply setup to the same piece.
    */
   async createPiece<T>(
     space: DID,
     source: URL | Program | string,
-    options?: { argument?: FabricPlainObject; run?: boolean },
+    options?: { argument?: FabricPlainObject; run?: boolean; cause?: string },
   ): Promise<PieceHandle<T>> {
     this.#check();
     const piece = await this.#client.createPiece<T>(source, space, options);
