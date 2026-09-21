@@ -68,6 +68,8 @@ import {
   RequestType,
   type RuntimeSecurityContext,
   type SlugRefusal,
+  type SnapshotShareAudienceRef,
+  type SnapshotSharePreview,
   type SpaceAccessLostNotification,
   type SpaceAclCapability,
   type SpaceAclView,
@@ -213,6 +215,11 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     this.#conn.on("eventneedsattention", this.#onEventNeedsAttention);
   }
 
+  /** Acting principal established by the runtime connection posture. */
+  actingPrincipalDid(): DID | undefined {
+    return this.#principal;
+  }
+
   /** Returns an opaque identity for the scoped document instance in `ref`. */
   cellInstanceId(ref: CellRef): string {
     if (ref.scope !== undefined && ref.scope !== "space" && !this.#principal) {
@@ -235,6 +242,35 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    */
   hasPendingWrites(): boolean {
     return this.#pendingWrites;
+  }
+
+  /** Prepares the snapshot and audience the trusted host asks the user to share. */
+  async prepareSnapshotShare(
+    source: CellRef,
+    audience: SnapshotShareAudienceRef,
+  ): Promise<SnapshotSharePreview> {
+    return await this.#conn.request<RequestType.SnapshotSharePrepare>({
+      type: RequestType.SnapshotSharePrepare,
+      source,
+      audience,
+    });
+  }
+
+  /** Commits a preview after the trusted host receives the user's confirmation. */
+  async commitSnapshotShare<T = unknown>(id: string): Promise<CellHandle<T>> {
+    const response = await this.#conn.request<RequestType.SnapshotShareCommit>({
+      type: RequestType.SnapshotShareCommit,
+      id,
+    });
+    return new CellHandle<T>(this, response.cell);
+  }
+
+  /** Discards a preview when the host closes or replaces its confirmation. */
+  async cancelSnapshotShare(id: string): Promise<void> {
+    await this.#conn.request<RequestType.SnapshotShareCancel>({
+      type: RequestType.SnapshotShareCancel,
+      id,
+    });
   }
 
   async operationCodecs<T>(

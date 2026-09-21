@@ -160,6 +160,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-message-input` | Input + send button combo for chat-style item entry; emits a synthetic (untrusted) `cf-send` event, so use `cf-submit-input` when the submit must authorize an owner-protected write | |
 | `cf-modal` | Accessible modal dialog with bottom-sheet presentation mode | `$open` |
 | `cf-oauth` | Generic OAuth authentication | `$auth` |
+| `cf-owner-view` | Sets a per-user presentation predicate from the runtime's acting principal and a stored creator attestation (see [owner view](#cf-owner-view)) | `$originator`, `$result` |
 | `cf-picker` | Carousel selection over cells with `[UI]` | `$items`, `$selectedIndex` |
 | `cf-piece` | Provides piece context to child components | |
 | `cf-plaid-link` | Plaid banking integration | `$auth` |
@@ -179,6 +180,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-secret-viewer` | Trusted UI for revealing secret strings | `$value` |
 | `cf-select` | Dropdown taking `{ label, value }` items — not `<option>` elements | `$value` |
 | `cf-separator` | Visual divider line between content sections | |
+| `cf-share-snapshot` | Native confirmation of an exact JSON snapshot and runtime-verified audience (see [snapshot sharing](#cf-share-snapshot)) | `$source`, `$recipient`, `$result` |
 | `cf-skeleton` | Animated loading placeholder | |
 | `cf-slider` | Range input slider | |
 | `cf-space-link` | Renders a space as a clickable navigation pill | |
@@ -1033,6 +1035,40 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
   static wrapper. Repro: `packages/patterns/scope-bug-computed-vnode-blank/`.
 
 ---
+
+## cf-owner-view
+
+`cf-owner-view` checks whether the runtime's authenticated principal matches
+the single root `represents-principal` attestation on `$originator`. It writes
+the result to the per-user boolean `$result` cell and renders no content of its
+own. A missing, unreadable, or conflicting attestation leaves the result false.
+The component does not use the selected `#profile`, which may represent a
+different persona. The predicate selects presentation; CFC labels govern reads.
+
+## cf-share-snapshot
+
+`cf-share-snapshot` reviews a copy of a source cell before releasing that copy
+to another user or space. Bind `$source` to the JSON value to review,
+`$recipient` to a live profile or space cell, and `$result` to a writable cell
+that will receive the released cell link. Set `audience-kind` to `user` (the
+default) or `space`.
+
+The host must configure an authenticated, bounded runtime read ceiling for the
+confirming user. An unbounded runtime, including the default shell
+configuration, refuses preparation before returning a preview.
+
+The host displays the exact snapshot and the audience verified by the runtime in
+a native modal dialog. Its disclosure and preview are fixed host UI. The user
+must confirm with a trusted browser gesture; a scripted click cannot publish.
+The source stays private, and future changes are not included in the copy. JSON
+values containing links are refused.
+
+Changing a binding, dismissing the dialog, or disconnecting the component
+invalidates its preview. The runtime refuses a commit when the source or
+verified audience changed after preparation. Once the released link is stored
+successfully, the component emits `cf-shared` with no payload. A consuming
+handler reads its bound result cell; the event does not carry source values or
+identity claims.
 
 ## CFC Authorship
 

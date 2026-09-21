@@ -122,6 +122,7 @@ Useful references:
 | ------------------- | ---------------- | ------------- | ----------- |
 | `cf-alert`          | `cf-empty-state` | `cf-fab`      | `cf-loader` |
 | `cf-modal`          | `cf-progress`    | `cf-skeleton` | `cf-toast`  |
+| `cf-share-snapshot` |                  |               |             |
 | `cf-toast-provider` |                  |               |             |
 
 ### Charts And Maps
@@ -144,6 +145,7 @@ Useful references:
 | Element             | Element            | Element            | Element      |
 | ------------------- | ------------------ | ------------------ | ------------ |
 | `cf-cfc-authorship` | `cf-cfc-label`     | `cf-google-oauth`  | `cf-oauth`   |
+| `cf-owner-view`     |                    |                    |              |
 | `cf-plaid-link`     | `cf-profile-badge` | `cf-secret-viewer` | `cf-webhook` |
 
 ### Navigation And Routing

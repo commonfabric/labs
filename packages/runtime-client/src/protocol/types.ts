@@ -1,4 +1,5 @@
 import type { CellScope } from "@commonfabric/api";
+import type { CfcAtom } from "@commonfabric/api/cfc";
 import type {
   FabricArray,
   FabricPlainObject,
@@ -168,6 +169,15 @@ export enum RequestType {
 
   /** Reads a cell's display CFC label, without its value. */
   CellGetCfcLabel = "cell:getCfcLabel",
+
+  /** Prepares an exact snapshot and audience for trusted host confirmation. */
+  SnapshotSharePrepare = "snapshotShare:prepare",
+
+  /** Commits one client-owned snapshot confirmation without authored claims. */
+  SnapshotShareCommit = "snapshotShare:commit",
+
+  /** Discards an unconfirmed snapshot owned by this client. */
+  SnapshotShareCancel = "snapshotShare:cancel",
 
   /** Lists the operation codecs available for a cell. */
   OperationCapabilities = "operation:capabilities",
@@ -1134,6 +1144,35 @@ export type CellGetCfcLabelRequest = BaseRequest & {
    * The cell whose label to read.
    */
   cell: CellRef;
+};
+
+/** A held profile or space cell whose audience the runtime verifies. */
+export type SnapshotShareAudienceRef = { user: CellRef } | { space: CellRef };
+
+/** The exact value and verified audience a trusted host must show. */
+export type SnapshotSharePreview = {
+  id: string;
+  value: JSONValue;
+  audience: CfcAtom;
+};
+
+/** The {@link RequestType.SnapshotSharePrepare} request. */
+export type SnapshotSharePrepareRequest = BaseRequest & {
+  type: RequestType.SnapshotSharePrepare;
+  source: CellRef;
+  audience: SnapshotShareAudienceRef;
+};
+
+/** The {@link RequestType.SnapshotShareCommit} request. */
+export type SnapshotShareCommitRequest = BaseRequest & {
+  type: RequestType.SnapshotShareCommit;
+  id: string;
+};
+
+/** The {@link RequestType.SnapshotShareCancel} request. */
+export type SnapshotShareCancelRequest = BaseRequest & {
+  type: RequestType.SnapshotShareCancel;
+  id: string;
 };
 
 /** The {@link RequestType.OperationQuery} request. */
@@ -2838,6 +2877,9 @@ export type IPCClientRequest =
   | CellUnsubscribeRequest
   | CellResolveAsCellRequest
   | CellGetCfcLabelRequest
+  | SnapshotSharePrepareRequest
+  | SnapshotShareCommitRequest
+  | SnapshotShareCancelRequest
   | OperationCapabilitiesRequest
   | OperationQueryRequest
   | OperationApplyRequest
@@ -3491,6 +3533,7 @@ export type RemoteResponse =
   | CellGetResponse
   | CellResponse
   | CfcLabelViewResponse
+  | SnapshotSharePreview
   | SqliteQueryResponse
   | GraphSnapshotResponse
   | LoggerCountsResponse
@@ -3703,6 +3746,18 @@ export type Commands = {
   [RequestType.CellGetCfcLabel]: {
     request: CellGetCfcLabelRequest;
     response: CfcLabelViewResponse;
+  };
+  [RequestType.SnapshotSharePrepare]: {
+    request: SnapshotSharePrepareRequest;
+    response: SnapshotSharePreview;
+  };
+  [RequestType.SnapshotShareCommit]: {
+    request: SnapshotShareCommitRequest;
+    response: CellResponse;
+  };
+  [RequestType.SnapshotShareCancel]: {
+    request: SnapshotShareCancelRequest;
+    response: EmptyResponse;
   };
   [RequestType.OperationCapabilities]: {
     request: OperationCapabilitiesRequest;

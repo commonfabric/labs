@@ -35,6 +35,7 @@ weeks later.
 | 5 | Guarded-define idiom | API | `ui` | yes | `src/v2/components/host-embedding-guarded-define.test.ts` |
 | 6 | Trusted-mark threat model | policy record | `runner` | n/a | `test/cfc-ui-contract.test.ts` — `host embedding contract: trusted-mark threat model` |
 | 7 | Pinning is owner-gated | policy record | `patterns` | n/a | `system/profile-home.owner-gated.test.ts` |
+| 8 | Snapshot sharing | trusted host API | `runtime-client`, `runner` | available | `runtime-client/test/backends/snapshot-share.test.ts`; `runtime-client/test/snapshot-share.test.ts` |
 
 ---
 
@@ -385,6 +386,49 @@ pin/arrange flows ride the UI-variants abstraction (`UI` / `CHIP_UI` /
 asserts against the real pattern sources that the pin writer carries no
 `uiContract` while the create surface does, and that `addPiece` is a
 `Stream`.
+
+---
+
+## 8. Trusted snapshot sharing
+
+`RuntimeClient.prepareSnapshotShare(sourceRef, { user: recipientRef })` prepares
+a JSON snapshot for one recipient. The recipient must carry one persisted
+principal attestation at the selected path. The alternative
+`{ space: destinationRef }` selects the space holding that cell. The response
+contains an opaque `id`, the exact `value`, and the verified `audience` atom.
+The worker reads stored policy; client-provided schema and label views grant no
+authority.
+
+The runtime must have an authenticated, bounded read ceiling. Preparation in an
+unbounded runtime is refused before reading the source. The host must configure
+that ceiling for the confirming reader; the default shell's unbounded runtime
+does not support this operation.
+
+The trusted host displays that value and audience and requires a trusted user
+confirmation before calling `RuntimeClient.commitSnapshotShare(id)`. The result
+is a new `CellHandle` naming the shared copy. The source remains unchanged. The
+runtime permits release only of the authenticated actor's own User clauses.
+Other clauses must already admit the recipient and remain on the copy. A changed
+source, recipient, or actor invalidates the preview. Each confirmation is
+consumed once, including on a failed commit.
+
+This is a trusted host capability. Authored patterns cannot obtain the worker's
+consent object or call this transport. The host's confirmation command supplies
+the renderer-trusted `ShareSnapshot` provenance; it accepts no authored event
+claims. An embedder exposing this command to untrusted content would delegate
+its release authority. The boundary protects against authored code and does not
+prove user intent against a malicious host.
+
+Previews belong to the client that prepared them. Another attached client cannot
+use the id. The host calls `RuntimeClient.cancelSnapshotShare(id)` when it
+closes or replaces a confirmation; client detachment and backend disposal also
+discard pending consent. The worker retains the consent object; only the preview
+crosses IPC.
+
+**Tests.** `packages/runtime-client/test/backends/snapshot-share.test.ts` covers
+source-schema rejection, preview binding, client isolation, one-use consent, and
+disposal. `packages/runtime-client/test/snapshot-share.test.ts` holds the public
+client API and wire shapes.
 
 ---
 

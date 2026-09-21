@@ -91,11 +91,17 @@ import {
   cfcLabelViewForCell,
   createRenderConfidentialityResolver,
   createRuntimeSpaceMembershipProvider,
+  markRendererTrustedEvent,
   redactCaveatSourcesForDisplay,
   type RenderConfidentialityResolver,
   type SpaceMembershipProvider,
   stripSigilCfcLabelViews,
 } from "@commonfabric/runner/cfc";
+import {
+  commitSnapshotShare,
+  prepareSnapshotShare,
+  type SnapshotShareConsent,
+} from "@commonfabric/runner/cfc/share-snapshot";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
 import {
   NameSchema,
@@ -148,6 +154,7 @@ import {
   type CellInitializeRequest,
   type CellPullRequest,
   type CellPushRequest,
+  type CellRef,
   type CellResolveAsCellRequest,
   CellResponse,
   type CellSendRequest,
@@ -235,6 +242,9 @@ import {
   type SlugReferenceResponse,
   type SlugResolveRequest,
   type SlugResponse,
+  type SnapshotShareCommitRequest,
+  type SnapshotSharePrepareRequest,
+  type SnapshotSharePreview,
   type SpaceAclResponse,
   type SpaceGetAclRequest,
   type SpaceRemoveAclEntryRequest,
@@ -810,6 +820,8 @@ export class RuntimeProcessor {
     string,
     { token: string; prepared: PreparedPieceSourceChange }
   >();
+  #snapshotShares = new Map<string, SnapshotShareConsent>();
+  #snapshotShareDetachedClients = new WeakSet<WorkerClient>();
   #telemetry: RuntimeTelemetry;
 
   /**
@@ -1149,6 +1161,7 @@ export class RuntimeProcessor {
         this.#operationSubscriptions.clear();
         this.#operationSessions.clear();
         this.#pieceSourceConfirmations.clear();
+        this.#snapshotShares.clear();
 
         // Clean up VDOM mounts
         for (const { reconciler, cancel } of this.#vdomMounts.values()) {
@@ -1218,6 +1231,10 @@ export class RuntimeProcessor {
    */
   disposeClient(client: WorkerClient): void {
     const prefix = clientKeyPrefix(client);
+    this.#snapshotShareDetachedClients.add(client);
+    for (const key of this.#snapshotShares.keys()) {
+      if (key.startsWith(prefix)) this.#snapshotShares.delete(key);
+    }
 
     for (const [key, cancel] of [...this.#subscriptions]) {
       if (!key.startsWith(prefix)) continue;
@@ -1248,6 +1265,16 @@ export class RuntimeProcessor {
       if (session.clientId !== client.id) continue;
       this.#operationSessions.delete(sessionId);
     }
+  }
+
+  #snapshotShareCell(ref: CellRef): Cell<unknown> {
+    // The host selects an address; stored policy owns its schema and label.
+    return getCell(this.#runtime, {
+      space: ref.space,
+      id: ref.id,
+      path: ref.path,
+      scope: ref.scope,
+    });
   }
 
   /**
@@ -1846,6 +1873,60 @@ export class RuntimeProcessor {
     return {
       cell: ref,
     };
+  }
+
+  /** Keeps release authority in this backend while the host shows a preview. */
+  async handleSnapshotSharePrepare(
+    request: SnapshotSharePrepareRequest,
+    client: WorkerClient = ownerClient,
+  ): Promise<SnapshotSharePreview> {
+    if (this.#isDisposed || this.#snapshotShareDetachedClients.has(client)) {
+      throw new Error("Snapshot sharing is unavailable");
+    }
+    const source = this.#snapshotShareCell(request.source);
+    const audience = request.audience;
+    if (
+      !isObjectNotArray(audience) ||
+      ("user" in audience) === ("space" in audience)
+    ) throw new Error("Snapshot sharing requires one audience");
+    const audienceCell = this.#snapshotShareCell(
+      "user" in audience ? audience.user : audience.space,
+    );
+    await Promise.all([source.sync(), audienceCell.sync()]);
+    if (this.#isDisposed || this.#snapshotShareDetachedClients.has(client)) {
+      throw new Error("Snapshot sharing is unavailable");
+    }
+    const prepared = prepareSnapshotShare(
+      source,
+      "user" in audience ? { user: audienceCell } : { space: audienceCell },
+    );
+    const id = crypto.randomUUID();
+    this.#snapshotShares.set(clientScopedKey(client, id), prepared.consent);
+    return { id, value: prepared.value, audience: prepared.audience };
+  }
+
+  /** Consumes one preview through the dedicated trusted host transport. */
+  async handleSnapshotShareCommit(
+    request: SnapshotShareCommitRequest,
+    client: WorkerClient = ownerClient,
+  ): Promise<CellResponse> {
+    const key = clientScopedKey(client, request.id);
+    const consent = this.#snapshotShares.get(key);
+    this.#snapshotShares.delete(key);
+    if (consent === undefined) {
+      throw new Error("Snapshot share confirmation is unavailable");
+    }
+    const event = {
+      type: "click",
+      provenance: {
+        origin: "dom",
+        trusted: true,
+        ui: { pattern: "ShareSnapshot" },
+      },
+    };
+    markRendererTrustedEvent(event);
+    const shared = await commitSnapshotShare(consent, event);
+    return { cell: createCellRef(shared) };
   }
 
   handleCellGetCfcLabel(
@@ -2956,6 +3037,13 @@ export class RuntimeProcessor {
         return this.handleCellResolveAsCell(request);
       case RequestType.CellGetCfcLabel:
         return await this.handleCellGetCfcLabel(request);
+      case RequestType.SnapshotSharePrepare:
+        return await this.handleSnapshotSharePrepare(request, client);
+      case RequestType.SnapshotShareCommit:
+        return await this.handleSnapshotShareCommit(request, client);
+      case RequestType.SnapshotShareCancel:
+        this.#snapshotShares.delete(clientScopedKey(client, request.id));
+        return;
       case RequestType.OperationQuery:
         return await this.handleOperationQuery(request, client);
       case RequestType.OperationCapabilities:
