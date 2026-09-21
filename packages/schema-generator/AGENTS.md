@@ -42,6 +42,13 @@ via subpath exports. Entry point is `src/index.ts` (not `mod.ts`).
   `Default`'s brand check) — a user type named e.g. `Integrity` will lower to
   `ifc` metadata. Known foot-gun; don't "fix" silently, it's load-bearing for
   api aliases.
+- A scope wrapper is recognized by the `SCOPE_BRAND` its type carries
+  (`src/typescript/scope-brand.ts`) as well as by name, which is what finds one
+  behind a type alias. A branded type is never hoisted: the runtime reads a
+  slot's `scope` from that slot's own schema and not through a `$ref`, so a
+  `scope` inside `$defs` declares nothing. A wrapper that intersects over its
+  argument (a CFC alias, `Default`) carries the inner brand too, and has to
+  lower before the brand branch in `CommonFabricFormatter.formatType`.
 - JSDoc flows into schemas: first doc → `description`, `#hashtags` → `tags`,
   conflicting docs → `$comment`. Declaration files are excluded.
 - Two analysis paths — type-based and node-based (synthetic TypeNodes from

@@ -666,6 +666,45 @@ interface SchemaRoot {
       expect(defs).toEqual([]);
     });
 
+    it("emits the inline schema for an alias with a parenthesized body", async () => {
+      const { properties } = await propertiesOf(`
+type Wrapped = (PerSession<string | undefined>);
+interface SchemaRoot {
+  alias: Wrapped;
+  inline: PerSession<string | undefined>;
+}
+`);
+
+      expect(properties.inline).toEqual({
+        type: ["string", "undefined"],
+        scope: "session",
+      });
+      expect(properties.alias).toEqual(properties.inline);
+    });
+
+    for (
+      const [what, brand] of [
+        ["two scopes", '"user" | "session"'],
+        ["a value that is not a scope", '"galaxy"'],
+      ]
+    ) {
+      it(`throws for a brand naming ${what}`, async () => {
+        const { type, checker, typeNode } = await getTypeFromCode(
+          `
+type Tagged<T, S extends string> = T & { readonly [SCOPE_BRAND]?: S };
+interface SchemaRoot {
+  draft: Tagged<string, ${brand}>;
+}
+`,
+          "SchemaRoot",
+        );
+
+        expect(() =>
+          new SchemaGenerator().generateSchema(type, checker, typeNode)
+        ).toThrow("cannot be separated from the type it wraps");
+      });
+    }
+
     it("throws for an intersection of two different scopes", async () => {
       const { type, checker, typeNode } = await getTypeFromCode(
         `

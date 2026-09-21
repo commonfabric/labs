@@ -118,6 +118,26 @@ type CalculatorRequest = {
       // unknown returns { type: "unknown" } to distinguish from any (true)
       expect(schema).toEqual({ type: "unknown" });
     });
+
+    it("throws when asked for the formatters after one outside the chain", async () => {
+      const { type, checker } = await getTypeFromCode("type T = string;", "T");
+      const outsider = {
+        supportsType: () => true,
+        formatType: () => true,
+      };
+
+      expect(() =>
+        new SchemaGenerator().formatWithLaterFormatter(outsider, type, {
+          typeChecker: checker,
+          definitions: {},
+          definitionStack: new Set(),
+          inProgressNames: new Set(),
+          emittedRefs: new Set(),
+          cyclicTypes: new Set(),
+          cyclicNames: new Set(),
+        })
+      ).toThrow("needs a chain formatter");
+    });
   });
 
   describe("synthetic readonly arrays", () => {
