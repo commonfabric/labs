@@ -3517,11 +3517,14 @@ export class Runtime {
       // disabled mode where preparation is intentionally a no-op. Traversal
       // can discover an unloaded linked document and start its sync, so each
       // arrival is followed by another read until no link-target load remains.
+      // Each pass drops current-instant read memoization so a value materialized
+      // by the preceding load is traversed rather than answered from its hole.
       // The storage manager deduplicates every document load for the session;
       // a finite observed value therefore reaches this fixed point without a
       // timer or retrying a failed request.
       let loadRound = 0;
       for (; loadRound < EXTERNAL_OBSERVATION_LOAD_ROUNDS; loadRound++) {
+        tx.resetCurrentReadMemoization();
         cell.get({ traverseCells: true });
         // Link resolution can register its tracked sync in a promise
         // continuation. Let that continuation run before inspecting the

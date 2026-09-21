@@ -2,7 +2,7 @@
 
 Status: current implementation reference\
 Last verified: 2026-09-21\
-Revision: `94aab0d205+agent-review-fixes`
+Revision: `c5790da103+agent-review-fixes`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -20,7 +20,8 @@ The runtime has four main boundaries:
    optional structured-result schemas. A run configured with one offers
    `submit_result`, a host-side tool that validates the value and writes the
    structured-result file, so a run whose prompt-slot role admits no sandbox
-   write can still return one.
+   write can still return one. The schema and host path persist with root run
+   state and are restored on resume.
 2. The prompt loop performs bounded turns through the selected model provider
    and invokes only the configured tool/profile surface.
 3. Most tool execution uses Docker with a configurable runtime, normally

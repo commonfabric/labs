@@ -501,6 +501,52 @@ describe("writeAgentResult()", () => {
     }
   });
 
+  it("leaves no cited document when an uncited observation receipt is refused", async () => {
+    const resultCause = "result-mixed-observation-record-refused";
+    const uncitedToken = "cfh:v:hit2";
+    const refusal = Object.assign(new Error("synthetic recording refusal"), {
+      name: "CfcCommitRefusalError",
+      refusals: [{ gate: "observation-receipt" }],
+    });
+    const record = runtime.recordExternalContentObservation.bind(runtime);
+    runtime.recordExternalContentObservation = () => {
+      throw refusal;
+    };
+    try {
+      const failure = await writeAgentResult({
+        session,
+        handleTable,
+        resultSchema: {
+          type: "object",
+          properties: {
+            summary: { type: "string" },
+            source: { type: "object", asCell: ["cell"] },
+          },
+          required: ["summary", "source"],
+          additionalProperties: false,
+        },
+        structuredResult: {
+          summary: "Observed another row.",
+          source: ROW_TOKEN,
+        },
+        observedHandles: [rowReferent(), rowReferent(uncitedToken)],
+        maxConfidentiality: [LOOM_ROW],
+        cause: resultCause,
+      }).then(() => undefined, (error: unknown) => error);
+
+      expect(failure).toBeInstanceOf(AgentResultWriteError);
+      expect((failure as AgentResultWriteError).code).toBe(
+        "cfc_commit_refused",
+      );
+      expect(documentExists(resultCause)).toBe(false);
+      expect(
+        documentExists(agentResultReferentCause(resultCause, ROW_TOKEN)),
+      ).toBe(false);
+    } finally {
+      runtime.recordExternalContentObservation = record;
+    }
+  });
+
   it("aborts a referenced document mint when its commit fails", async () => {
     const resultCause = "result-mint-commit-failed";
     const mintCause = agentResultReferentCause(
@@ -509,6 +555,7 @@ describe("writeAgentResult()", () => {
     );
     const getCell = runtime.getCell.bind(runtime);
     let mintTargeted = false;
+    let mintAborted = false;
     runtime.getCell = ((...args: Parameters<Runtime["getCell"]>) => {
       const cell = getCell(...args);
       const cause = args[1] as {
@@ -524,6 +571,11 @@ describe("writeAgentResult()", () => {
         tx !== undefined
       ) {
         mintTargeted = true;
+        const abort = tx.abort.bind(tx);
+        tx.abort = ((reason?: unknown) => {
+          mintAborted = true;
+          return abort(reason);
+        }) as typeof tx.abort;
         tx.commit = (() =>
           Promise.resolve({
             error: {
@@ -551,6 +603,7 @@ describe("writeAgentResult()", () => {
       }).then(() => undefined, (error: unknown) => error);
 
       expect(mintTargeted).toBe(true);
+      expect(mintAborted).toBe(true);
       expect(failure).toBeInstanceOf(AgentResultWriteError);
       const writeError = failure as AgentResultWriteError;
       expect(writeError.code).toBe("commit_failed");

@@ -690,7 +690,11 @@ export type PreparedDigestInput = {
   // pre-Stage-2 digests are unchanged; canonicalized address-sorted.
   readonly labelMetadataObservations?: readonly CfcLabelMetadataObservation[];
 
-  /** Host-observed content admitted through an opaque runtime receipt. */
+  /**
+   * Host-observed content admitted through opaque runtime receipts. Absent
+   * when empty so a transaction with no such observation keeps the established
+   * prepared-digest spelling.
+   */
   readonly externalContentObservations?:
     readonly CfcExternalContentObservation[];
 };

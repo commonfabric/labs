@@ -63,7 +63,11 @@ the rest of the dashboard. A collection that remains active for one minute
 turns its tile gray with "refresh still pending" while retaining its last value
 and visuals. Its completed view replaces that pending state. A tile with
 `showOnlyCompletedViews` keeps its last completed color and values, ignores
-intermediate views, and still shows the pending warning.
+intermediate views, and still shows the pending warning. An intermediate view
+that carries no chart keeps the chart already on the tile, so a tile drawing
+its chart from the slower half of its collection has one throughout. A
+completed view carries every part of a tile, so a chart its collection no
+longer draws leaves the tile.
 A tile whose `collect()` throws is desaturated to a gray "unknown" — it keeps
 its last-known value and shows a short reason (e.g. "source unreachable"), with
 the full error in the server log — so one unreachable source never blanks or

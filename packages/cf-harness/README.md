@@ -133,6 +133,9 @@ What works today:
   - `delegate_task`
   - `finish_task` (parent-only question or reason the task cannot proceed; ends
     the turn through ordinary policy and artifacts)
+  - `submit_result` (present only when the root run configures a structured
+    result; validates the submitted value against that schema and writes the
+    host-owned result file)
   - `describe_handle` (shape and labels of a handle's referent, and the tables
     of one that is a database together with how full each of them is, never its
     data; see [Inspecting a handle's shape](#inspecting-a-handles-shape))
@@ -275,8 +278,10 @@ network confinement model.
 What is not done yet:
 
 - real runner-driven CFC feedback integration
-- session handle coverage beyond the wired seams: denial-path tool messages, and
-  value handles (`cfh:v:`)
+- session handle coverage beyond the wired seams: denial-path tool messages and
+  a general-purpose value-handle API. Loom retrieval already records admitted
+  document referents under `cfh:v:` tokens for delegation and result writing;
+  those tokens have no general dereference or release operation
 - richer opaque-handle/pass-through behavior outside schema-validated subagent
   returns, including an explicit release/readback mechanism
 - first-class browser operation policy on top of the provisional browser
@@ -908,13 +913,15 @@ retain the raw bytes for operators, and the table itself is run state.
 An address token is `cfh:a:<suffix>`, where the suffix is exactly five
 characters drawn from a 30-character alphabet — the digits `2`–`9` and the
 lowercase letters minus `i`, `l`, `o`, and `u` — chosen so a token survives
-being retyped. The `cfh:v:` prefix is reserved for a future value-handle kind
-and is not implemented. Token derivation is deterministic: the suffix is
-computed from the table's salt (the run id) and the normalized address, so the
-same referent yields the same token within a run and two spellings of one
-address (an LLM-friendly link and the bare entity URI, say) share one token. A
-suffix collision re-derives a fresh five-character suffix with a counter mixed
-into the hash, so no token is ever a prefix of another.
+being retyped. Loom retrieval uses the parallel `cfh:v:` grammar for admitted
+non-cell document referents, which can be delegated and consumed by the agent
+result writer. It does not expose a general value-handle dereference or release
+API. Token derivation is deterministic: the suffix is computed from the table's
+salt (the run id) and the normalized address, so the same referent yields the
+same token within a run and two spellings of one address (an LLM-friendly link
+and the bare entity URI, say) share one token. A suffix collision re-derives a
+fresh five-character suffix with a counter mixed into the hash, so no token is
+ever a prefix of another.
 
 The table supports swapping in both directions:
 
@@ -2268,7 +2275,9 @@ and prompt-slot role — under `enforce-strict`, a run whose prompt is bound as
 `context` or `quote` is refused `bash`, `edit_file`, and `write_file`, and so
 cannot write the file itself. A run that does hold such a tool may still write
 the file directly; both ways end at the same path. With `--allow-tool`, name
-`submit_result` alongside the run's other tools.
+`submit_result` alongside the run's other tools. The schema and host path are
+retained in run state, so a resumed root run keeps the same result contract
+without repeating the command-line flags; a conflicting restatement is refused.
 
 The structured result path must stay inside the workspace. The schema may be
 provided inline with `--structured-result-schema` or read from
