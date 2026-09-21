@@ -129,6 +129,38 @@ const SOURCE_HOME_TWO_EXPORT = [
   "",
 ].join("\n");
 
+// A roll target whose ARGUMENT gains an owner-protected field with its default
+// outside the Cfc wrapper — home.tsx's own `profiles: Default<TrustedProfileList,
+// []>` shape. A stored doc predating the field forces swap-setup to merge the
+// default INTO an owner-protected path of the EXISTING argument doc, a write
+// no runtime-held policy input authorizes.
+const SOURCE_HOME_GUARDED_DEFAULT = [
+  "import { Cfc, Default, Writable, WriteAuthorizedBy, handler, pattern } from 'commonfabric';",
+  "const bump = handler<void, { count: Writable<number> }>((_, { count }) => {",
+  "  count.set((count.get() ?? 0) + 1);",
+  "});",
+  "type GuardedRow = { label: string };",
+  "const addGuardedRow = handler<",
+  "  { label?: string },",
+  "  { guarded: Writable<GuardedRow[]> }",
+  ">((event, { guarded }) => {",
+  "  guarded.push({ label: event.label ?? '' });",
+  "});",
+  "type CurrentPrincipal = { readonly __ctCurrentPrincipal: true };",
+  "type GuardedList = Cfc<",
+  "  WriteAuthorizedBy<GuardedRow[], typeof addGuardedRow>,",
+  "  { ownerPrincipal: CurrentPrincipal }",
+  ">;",
+  "export default pattern<{",
+  "  items?: string[];",
+  "  guarded: Default<GuardedList, []>;",
+  "}>(({ items }) => {",
+  "  const count = new Writable<number>(0).for('count');",
+  "  return { items, count, bump: bump({ count }) };",
+  "});",
+  "",
+].join("\n");
+
 const IMPORTED_MODULE_URL = "/api/patterns/system/update-marker.ts";
 
 // A same-host custom-app path, as home config would supply via
@@ -1882,6 +1914,54 @@ describe("opening a space root", () => {
     await (after as unknown as { pull: () => Promise<unknown> }).pull();
     const afterEvent = (await controller.getDefaultPattern(false))!;
     expect(afterEvent.key("count").get()).toBe(1);
+  });
+
+  it("swaps in a pattern whose argument adds an owner-protected defaulted field", async () => {
+    // The swap target's argument schema carries a Cfc-wrapped
+    // (writeAuthorizedBy) field with its default outside the wrapper —
+    // home.tsx's `profiles: Default<TrustedProfileList, []>` shape. The
+    // stored doc predates the field, so setup must merge the default into an
+    // owner-protected path of the EXISTING argument doc. Enforcement is on
+    // (the default here): that runtime-context write needs an authorizing
+    // write-policy input, and without one the whole swap transaction aborts
+    // with `cfc-relevant-transaction-not-prepared` (here the ownerPrincipal
+    // arm: "requires matching represents-principal integrity at /guarded";
+    // sibling arms of the same class report writeAuthorizedBy binding
+    // identity, or "missing schema write-policy input" per target doc) —
+    // fail-closed, with no recovery: the roll-forward backstop matches only
+    // the schema-migration token, not this reason, so the root stays pinned
+    // to an unloadable identity.
+    await setupHome({ systemPatternAutoUpdate: true });
+    expect(runtime.cfcEnforcementMode).not.toBe("disabled");
+    await controller.recreateDefaultPattern({
+      customProgram: {
+        main: "/custom-home.tsx",
+        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
+      },
+    });
+    const root = (await manager.getDefaultPattern(false))!;
+    const staleRef = getPatternIdentityRef(root)!;
+    await manager.stopPiece(root);
+
+    stub.setSource(SOURCE_HOME_GUARDED_DEFAULT);
+    const restore = shadowLoadProbe(staleRef.identity, "undefined");
+    try {
+      expect(await controller.checkAndUpdateDefaultPattern()).toBe("updated");
+    } finally {
+      restore();
+    }
+    await runtime.idle();
+
+    const after = (await manager.getDefaultPattern(true))!;
+    await runtime.idle();
+    expect(getPatternIdentityRef(after)?.identity).toBe(
+      await identityForSource(
+        SOURCE_HOME_GUARDED_DEFAULT,
+        {},
+        HOME_PATTERN_PATH,
+      ),
+    );
+    expect(after.key("count").get()).toBe(0);
   });
 
   it("heals a root whose pinned pattern fails CFC migration by rolling forward to official", async () => {
