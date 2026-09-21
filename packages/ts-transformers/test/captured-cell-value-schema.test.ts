@@ -191,6 +191,24 @@ describe("captured-cell-value-schema", () => {
       });
     });
 
+    it("emits a payload union holding the parameter from the argument", async () => {
+      const schema = await capturedContactSchema({
+        "/test.tsx":
+          `import { computed, Confidential, pattern, Writable } from "commonfabric";
+          export type Secret<T = number> =
+            Confidential<{ name: T | null }, readonly ["owner"]>;
+          ${readContact("Secret<string>")}`,
+      });
+
+      expect(schema).toEqual({
+        type: "object",
+        properties: { name: { anyOf: [{ type: "string" }, { type: "null" }] } },
+        required: ["name"],
+        ifc: { confidentiality: ["owner"] },
+        asCell: ["readonly"],
+      });
+    });
+
     it("emits the labels of an alias the CFC lowering fills from the argument", async () => {
       const schema = await capturedContactSchema({
         "/test.tsx":

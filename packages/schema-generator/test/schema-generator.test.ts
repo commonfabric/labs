@@ -2976,6 +2976,58 @@ type CalculatorRequest = {
           });
         });
 
+        const COMPOUND: [string, string, unknown][] = [
+          ["a union", "T | null", {
+            anyOf: [{ type: "string" }, { type: "null" }],
+          }],
+          ["an intersection", "T & {}", { type: "string" }],
+          ["a named tuple member", "[value: T]", {
+            type: "array",
+            items: { type: "string" },
+          }],
+          ["an optional tuple element", "[T?]", {
+            type: "array",
+            items: { anyOf: [{ type: "string" }, { type: "undefined" }] },
+          }],
+        ];
+        for (const [form, field, expected] of COMPOUND) {
+          it(`reads a parameter under ${form} in the payload from the argument`, async () => {
+            const schema = await generate(
+              {
+                "/main.ts": CFC +
+                  "export type Secret<T = number> =\n" +
+                  `  Confidential<{ name: ${field} }, readonly ["owner"]>;`,
+              },
+              generic("Secret", keyword(ts.SyntaxKind.StringKeyword)),
+            );
+
+            expect(schema).toEqual({
+              type: "object",
+              properties: { name: expected },
+              required: ["name"],
+              ifc: { confidentiality: ["owner"] },
+            });
+          });
+        }
+
+        it("returns `true` for a payload holding a parameter where substitution does not reach", async () => {
+          // Substitution does not open an indexed access, so `T` would stay
+          // unbound in the payload.
+          const schema = await generate(
+            {
+              "/main.ts": CFC +
+                "export type Secret<T = number[]> =\n" +
+                '  Confidential<{ size: T["length"] }, readonly ["owner"]>;',
+            },
+            generic(
+              "Secret",
+              f.createArrayTypeNode(keyword(ts.SyntaxKind.StringKeyword)),
+            ),
+          );
+
+          expect(schema).toBe(true);
+        });
+
         it("leaves a generic the payload names unread, keeping the labels", async () => {
           const schema = await generate(
             {
