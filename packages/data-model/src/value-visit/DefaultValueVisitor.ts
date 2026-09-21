@@ -242,10 +242,12 @@ export abstract class DefaultValueVisitor<
   //
 
   /**
-   * Visits an arbitrary value. This is the method that gets called for any
-   * value which didn't end up handled by a non-default specific-tag or
-   * category-covering `visit*()` method. If not overridden, this returns
-   * `undefined`.
+   * Visits a value whose more specific `visit*()` methods all deferred to their
+   * defaults. As those defaults stand, every primitive and the `PlusType` end
+   * up here; a container does not, because `visitFabricContainerValue()`
+   * answers with `recurse` rather than deferring; and a value with the tag
+   * `null` does not, because `visitUnrecognizedValue()` throws. If not
+   * overridden, this returns `undefined`.
    */
   visitAnyValue(
     _value: FabricValuePlus<PlusType>,

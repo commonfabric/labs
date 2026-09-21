@@ -312,15 +312,13 @@ describe("tags", () => {
       expect(Object.isFrozen(JS_PRIMITIVE_TYPE_VALUE_TAGS)).toBe(true);
     });
 
-    it("holds every JS type tag but `function`, and nothing else", () => {
-      expect(new Set<string>(Object.values(JS_PRIMITIVE_TYPE_VALUE_TAGS)))
-        .toEqual(
-          new Set(
-            Object.values(JS_TYPE_VALUE_TAGS).filter((tag) =>
-              tag !== "function"
-            ),
-          ),
-        );
+    it("holds the tag of each JS primitive type and nothing else", () => {
+      // The sample table is the domain only while it covers every type, so
+      // the two are held equal rather than the table being trusted.
+
+      expect(new Set(JS_PRIMITIVE_TAGS.map(([, , tag]) => tag))).toEqual(
+        new Set(Object.values(JS_PRIMITIVE_TYPE_VALUE_TAGS)),
+      );
     });
 
     it("is the JS type vocabulary less `function`, and with the `FabricPrimitive` tags is the primitive vocabulary, in the type system", () => {

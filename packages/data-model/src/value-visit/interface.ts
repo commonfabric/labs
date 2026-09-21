@@ -57,8 +57,9 @@ export type RecurseForm = {
 /**
  * A `replace` form. `value` is a value that is to be used in place of the value
  * originally received by the visitor method which returns this. This tells the
- * visitor engine to redo a visit by calling `visitValue()` on the replacement
- * (as if the replacement were the value in the same position as the original).
+ * visitor engine to redo a visit on the replacement, as if the replacement were
+ * the value in the same position as the original: by calling `visitValue()`, or
+ * `visitCycle()` if the replacement is a container already being visited.
  */
 export type ReplaceForm<PlusType> = {
   readonly type: "replace";
