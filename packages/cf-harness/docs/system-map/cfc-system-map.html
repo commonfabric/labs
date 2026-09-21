@@ -671,7 +671,7 @@
     // map is re-verified; the stamp is drawn in the canvas's top-left corner.
     const SNAPSHOT = {
       date: "2026-09-21",
-      sha: "6580fd69e+return-schema-preflight",
+      sha: "d309ceb35+return-schema-preflight",
     };
     const W = 2760, H = 1840;
     const bands = [
@@ -1858,7 +1858,7 @@
         kind: "Harness",
         band: "agent",
         body:
-          `<p>The prompt loop. It builds the context, offers only the configured tools, and mediates every tool call: mode × effect class × prompt-slot authority. It swaps cell addresses to <code>cfh:a:</code> tokens in everything model-bound and resolves tokens in model-authored arguments before policy evaluation and dispatch.</p><p>It does not evaluate policy; it transports evidence, applies the selected exposure posture, and records what it decided. It does decide three boundaries with fixed local rules: tool mediation, observation rendering, and the <code>run_pattern</code> answer ceiling (a harness constant fitted with a runner helper). CT-2175 recommends moving that last one into the runner.</p>`,
+          `<p>The prompt loop. It builds the context, offers only the configured tools, and mediates every tool call: mode × effect class × prompt-slot authority. It swaps cell addresses to <code>cfh:a:</code> tokens in everything model-bound and resolves tokens in model-authored arguments before policy evaluation and dispatch.</p><p>The parent resolves a user-supplied piece slug with <code>resolve_piece</code> before author delegation or registry discovery. It uses the input-cell attachment resolver in the session's space and returns only a handle; reading and revising source remains on the pattern-author child. Missing slugs are actionable errors, and a failed read is unknown rather than absence.</p><p>It does not evaluate policy; it transports evidence, applies the selected exposure posture, and records what it decided. It does decide three boundaries with fixed local rules: tool mediation, observation rendering, and the <code>run_pattern</code> answer ceiling (a harness constant fitted with a runner helper). CT-2175 recommends moving that last one into the runner.</p>`,
         threats: ["t9", "t4"],
         close: [
           "Tool-level decisions have no label input at all; labels only reach a decision at the sinks the runner owns.",

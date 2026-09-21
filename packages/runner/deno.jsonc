@@ -31,6 +31,7 @@
     "ws": "npm:ws@^8.21.3"
   },
   "exports": {
+    "./space-invites": "./src/space-invites.ts",
     ".": "./src/index.ts",
     "./jsx-runtime": "./src/jsx-runtime.ts",
     "./jsx-dev-runtime": "./src/jsx-dev-runtime.ts",
@@ -38,6 +39,7 @@
     "./entity-kind": "./src/entity-kind.ts",
     "./fabric-special-object-brand": "./src/fabric-special-object-brand.ts",
     "./experimental-posture": "./src/experimental-posture.ts",
+    "./space-host": "./src/space-host.ts",
     "./fabric-url": "./src/fabric-url.ts",
     "./meta-seam": "./src/meta-seam.ts",
     "./slugs": "./src/slugs.ts",

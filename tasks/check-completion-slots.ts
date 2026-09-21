@@ -53,6 +53,18 @@ import { completionProviderKeys } from "../packages/cli/lib/completion/providers
  * to draw from, and offering a wrong one is worse than offering none.
  */
 export const NO_CANDIDATES = new Map<string, string>([
+  [
+    "space invite redeem:invite-id",
+    "an opaque invitation ID supplied with the code",
+  ],
+  [
+    "space invite revoke:invite-id",
+    "an opaque ID from invitation creation or listing",
+  ],
+  [
+    "space invite receipts:invite-id",
+    "an opaque ID from invitation creation or listing",
+  ],
   // Values a caller brings from outside the CLI.
   ["acl set:did", "a DID being granted access; nothing here enumerates them"],
   ["acl remove:did", "the same DID, and the same absence of a source"],
@@ -91,6 +103,18 @@ export const NO_CANDIDATES = new Map<string, string>([
  * under `<command path>:<long name>`.
  */
 export const NO_OPTION_CANDIDATES = new Map<string, string>([
+  ["piece new:request-key", "an opaque caller retry key"],
+  ["space invite create:ttl", "an admission lifetime in seconds"],
+  ["space invite create:max-uses", "a distinct identity count"],
+  ["space invite create:shell", "a caller-selected shell origin"],
+  [
+    "space invite create:request-file",
+    "a private creation request path, supplied explicitly",
+  ],
+  [
+    "space invite redeem:code-file",
+    "a secret input path or stdin marker, supplied explicitly",
+  ],
   // Numbers, durations and bounds. Nothing enumerates a count.
   ["limit", "a row count"],
   ["depth", "a graph depth"],

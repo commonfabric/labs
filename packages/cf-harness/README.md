@@ -136,6 +136,9 @@ What works today:
   - `describe_handle` (shape and labels of a handle's referent, and the tables
     of one that is a database together with how full each of them is, never its
     data; see [Inspecting a handle's shape](#inspecting-a-handles-shape))
+  - `resolve_piece` (parent-only exact slug resolution in the session's space;
+    returns a handle for child source reads and revisions, without source or
+    values; requires a Fabric session)
   - `run_pattern` (present only when the run configures a fabric session; see
     [Running patterns against a Fabric space](#running-patterns-against-a-fabric-space))
   - `search_patterns` (present only when the run configures a pattern index with
@@ -449,16 +452,27 @@ their failure-return contract and cannot call `finish_task`.
 For a request about an existing piece, the parent first uses an explicit
 attachment, a user-supplied reference, or an unambiguous target established in
 the conversation. With none of those and no piece name from the user, it asks
-which piece to use with zero registry reads. A user-supplied name permits at
-most one registry read across the parent and its children, proceeding only on
-exactly one released match. An ambiguous, missing, or unreadable match leads to
-a question, without candidate inspection, retrying discovery through another
-delegation, or replacement authoring. The one lookup must return the match count
-and usable reference or requested data together; a lost reference or missing
-requested value is a reason to ask for an attachment, not to reread the registry
-or infer a value from the piece name. This is shared model guidance, not a
-runtime quota, and does not limit an explicit request to list or analyze the
-space.
+which piece to use with zero registry reads. A user-supplied slug is resolved
+with the parent tool `resolve_piece` before author delegation or any registry
+read. It accepts a bare slug in the session's space or `pattern:<space>/<slug>`
+and uses the same exact-address resolver as input-cell attachments. It returns
+only a handle, so a display name differing from the slug does not affect
+resolution and source remains on the child-only read/revise path. Foreign spaces
+are refused. An unheld slug or a readable target that is not a usable piece
+returns recoverable `not-found` without failing the run. A failed read returns
+`unavailable` and does not establish absence. The same path serves a fresh
+request and a follow-up answering which piece the user meant.
+
+A display name without a slug permits at most one registry read across the
+parent and its children, proceeding only on exactly one released match. An
+ambiguous, missing, or unreadable match leads to a question, without candidate
+inspection, retrying discovery through another delegation, or replacement
+authoring. The one lookup must return the match count and usable reference or
+requested data together; a lost reference or missing requested value is a reason
+to ask for an attachment, not to reread the registry or infer a value from the
+piece name. This is shared model guidance, not a runtime quota, and does not
+limit an explicit request to list or analyze the space. A failed exact-slug
+lookup does not fall back to authoring a name matcher or crawling the registry.
 
 Private research receives the same explicit input-cell names and tokens as the
 parent, separately from the general handle inventory. Registry and connector

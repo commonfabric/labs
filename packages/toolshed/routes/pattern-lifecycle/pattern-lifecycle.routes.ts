@@ -142,6 +142,9 @@ export const instantiate = createRoute({
           schema: z.object({
             space: spaceField,
             ...sourceFields,
+            requestKey: z.string().min(1).max(256).optional().describe(
+              "Stable caller-scoped creation key. Retry this key after an uncertain outcome or failed registration.",
+            ),
             argument: z.record(z.string(), z.unknown()).optional().describe(
               "The new piece's argument; the pattern's defaults when absent.",
             ),
@@ -180,6 +183,13 @@ export const instantiate = createRoute({
             pieceId: z.string(),
             pattern: patternRefSchema,
             slug: z.string().optional(),
+            requestKey: z.string(),
+            registration: z.object({
+              status: z.enum(["skipped", "pending", "handled", "failed"]),
+              error: z.string().optional(),
+              attempt: z.number().int().nonnegative().optional(),
+              terminal: z.literal(true).optional(),
+            }),
           }),
         },
       },

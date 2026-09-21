@@ -7,7 +7,7 @@ import { BaseElement } from "../../core/base-element.ts";
 import "../cf-chip/index.ts";
 
 import type { DID } from "@commonfabric/identity/did";
-import { navigate, openInNewTab, spaceViewRef } from "@commonfabric/navigation";
+import { navigate, openInNewTab } from "@commonfabric/navigation";
 import {
   type CellHandle,
   CellRef,
@@ -383,16 +383,12 @@ export class CFCellLink extends BaseElement {
     if (this._isDragging) return;
     e.stopPropagation();
     if (this._resolvedCell) {
-      if (this._resolvedCell.ref().path.length > 0) {
-        throw new Error(
-          "Attempted to navigate to a cell that isn't a root cell",
-        );
-      }
-
-      // TODO(runtime-worker-refactor):
+      const { scope, path } = this._resolvedCell.ref();
       const view = {
-        ...spaceViewRef(this.spaceName, this._resolvedCell.space()),
+        spaceDid: this._resolvedCell.space(),
         pieceId: this._resolvedCell.id(),
+        ...(scope === "space" ? {} : { pieceScope: scope }),
+        ...(path.length === 0 ? {} : { piecePath: [...path] }),
       };
 
       // Cmd (Mac) or Ctrl (Windows/Linux) opens in new tab

@@ -414,7 +414,7 @@ export class CFRender extends BaseElement {
       if (this._renderGeneration !== generation) return;
       if (currentTarget === undefined) {
         this._resolvedCell = undefined;
-        this._hasRendered = true;
+        this.#showUnavailable();
         return;
       }
       this._resolvedCell = currentTarget;
@@ -422,7 +422,11 @@ export class CFRender extends BaseElement {
       // Full is the universal floor: render the piece's [UI] chain directly.
       if (kind === "full") {
         this._log("rendering full [UI] into container");
-        this._cleanup = render(container, cell as CellHandle<VNode>);
+        this._cleanup = render(
+          container,
+          cell as CellHandle<VNode>,
+          this.#renderErrorOptions(generation),
+        );
         this._hasRendered = true;
         return;
       }
@@ -438,6 +442,7 @@ export class CFRender extends BaseElement {
           container,
           (currentTarget as CellHandle<Record<string, VNode>>)
             .key(variantKey) as CellHandle<VNode>,
+          this.#renderErrorOptions(generation),
         );
         this._hasRendered = true;
         return;
@@ -528,6 +533,7 @@ export class CFRender extends BaseElement {
           this._renderGeneration++;
           this._hasRendered = true;
           this._cleanupRender();
+          this.#showUnavailable();
         } else {
           this._hasRendered = false;
           void this._renderCell();
@@ -596,7 +602,11 @@ export class CFRender extends BaseElement {
     scaler.className = "tile-default";
     clip.appendChild(scaler);
     container.appendChild(clip);
-    const inner = render(scaler, cell as CellHandle<VNode>);
+    const inner = render(
+      scaler,
+      cell as CellHandle<VNode>,
+      this.#renderErrorOptions(this._renderGeneration),
+    );
     const onClick = (e: MouseEvent) => this._navigateToPiece(e);
     clip.addEventListener("click", onClick);
     return () => {
@@ -699,9 +709,14 @@ export class CFRender extends BaseElement {
     try {
       const target = this._resolvedCell ?? this.cell;
       if (!target) return;
+      const reference = target.ref();
       const view = {
         spaceDid: target.space(),
         pieceId: target.id(),
+        ...(reference.scope === "space" ? {} : { pieceScope: reference.scope }),
+        ...(reference.path.length === 0
+          ? {}
+          : { piecePath: [...reference.path] }),
       };
       // Cmd (Mac) / Ctrl (Win/Linux) opens in a new tab.
       if (e.metaKey || e.ctrlKey) {
@@ -726,6 +741,8 @@ export class CFRender extends BaseElement {
     // A disposal race (runtime swap, logout) cancels an in-flight cell sync;
     // that is cancellation, not a render failure to surface.
     if (this.cell?.runtime().signal.aborted) return;
+    this._cleanupRender();
+    this._hasRendered = true;
     console.error("[cf-render] Error rendering cell:", error);
 
     const container = this._containerRef.value;
@@ -743,6 +760,27 @@ export class CFRender extends BaseElement {
         container.replaceChildren();
       };
     }
+  }
+
+  #renderErrorOptions(generation: number) {
+    return {
+      onError: (error: unknown) => {
+        if (this._renderGeneration === generation) {
+          this._handleRenderError(error);
+        }
+      },
+    };
+  }
+
+  #showUnavailable() {
+    this._hasRendered = true;
+    const container = this._containerRef.value;
+    if (!container) return;
+    container.textContent =
+      "This piece is unavailable or you do not have access.";
+    this._cleanup = () => {
+      container.textContent = "";
+    };
   }
 
   override disconnectedCallback() {

@@ -463,6 +463,7 @@ describe("runtimePresets conformance", () => {
         // flag and takes the legacy arm. Malformed declarations adopt
         // nothing.
         expect(parseServerExperimentalOptions(null)).toEqual({});
+        expect(parseServerExperimentalOptions([])).toEqual({});
         expect(parseServerExperimentalOptions(undefined)).toEqual({
           readerSchemaPrecedence: false,
         });
@@ -606,6 +607,19 @@ describe("runtimePresets conformance", () => {
         ).toEqual({});
       });
 
+      it("falls back to the environment when successful JSON is not a meta object", async () => {
+        for (const body of [null, [], "not metadata", 42, true]) {
+          expect(
+            await experimentalOptionsForDeployedClient({
+              apiUrl: new URL("https://deployment.example"),
+              env: (name) =>
+                name === "EXPERIMENTAL_MODERN_CELL_REP" ? "true" : undefined,
+              fetch: () => Promise.resolve(metaResponse(body)),
+            }),
+          ).toEqual({ modernCellRep: true });
+        }
+      });
+
       it("falls back to the environment for a server that publishes no posture", async () => {
         // An older server, whose meta document predates the field. It also
         // predates readerSchemaPrecedence, so that one flag adopts as the
@@ -650,6 +664,23 @@ describe("runtimePresets conformance", () => {
           signal: controller.signal,
           fetch: () => Promise.reject(new Error("must not be reached")),
         })).rejects.toThrow("shutting down");
+      });
+
+      it("refuses cancellation that arrives with a successfully decoded response", async () => {
+        for (const body of [{ experimental: {} }, null]) {
+          const controller = new AbortController();
+          const response = new Response();
+          response.json = () => {
+            controller.abort(new Error("decoded startup cancelled"));
+            return Promise.resolve(body);
+          };
+          await expect(experimentalOptionsForDeployedClient({
+            apiUrl: new URL("https://deployment.example"),
+            env: () => undefined,
+            signal: controller.signal,
+            fetch: () => Promise.resolve(response),
+          })).rejects.toThrow("decoded startup cancelled");
+        }
       });
 
       it("throws the abort reason when the body read is cancelled", async () => {

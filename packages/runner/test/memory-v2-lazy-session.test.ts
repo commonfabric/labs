@@ -29,7 +29,7 @@ function entityListingStorage(
           serverFlags,
           close: () => Promise.resolve(),
         } as never,
-        session: session as never,
+        session: { subscribeAccessLoss: () => () => {}, ...session } as never,
       }),
   });
   return { storage, provider: storage.open(space) };
@@ -82,7 +82,9 @@ describe("Memory v2 lazy session creation", () => {
         sessionCreates += 1;
         return Promise.resolve({
           client: { close: async () => {} } as never,
-          session: {} as never,
+          session: {
+            subscribeAccessLoss: () => () => {},
+          } as never,
         });
       },
     });
@@ -130,7 +132,9 @@ describe("Memory v2 lazy session creation", () => {
               return Promise.resolve();
             },
           } as never,
-          session: {} as never,
+          session: {
+            subscribeAccessLoss: () => () => {},
+          } as never,
         });
       },
     });
@@ -162,6 +166,7 @@ describe("Memory v2 lazy session creation", () => {
             },
           } as never,
           session: {
+            subscribeAccessLoss: () => () => {},
             transact: (commit: { operations: { id: URI }[] }) => {
               commits += 1;
               return Promise.resolve(
@@ -215,6 +220,7 @@ describe("Memory v2 lazy session creation", () => {
         return Promise.resolve({
           client: { close: () => Promise.resolve() } as never,
           session: {
+            subscribeAccessLoss: () => () => {},
             transact: (commit: { operations: { id: URI }[] }) => {
               commits += 1;
               return Promise.resolve(
@@ -267,6 +273,7 @@ describe("Memory v2 lazy session creation", () => {
             },
           } as never,
           session: {
+            subscribeAccessLoss: () => () => {},
             transact: (commit: { operations: { id: URI }[] }) => {
               commits += 1;
               return Promise.resolve(

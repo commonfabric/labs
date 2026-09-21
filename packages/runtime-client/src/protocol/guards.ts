@@ -17,6 +17,7 @@ import {
   ClientTransportNotificationType,
   ConsoleNotification,
   ErrorNotification,
+  EventIntentOutcomeNotification,
   EventNeedsAttentionNotification,
   InitializationData,
   IPCClientMessage,
@@ -30,6 +31,7 @@ import {
   OperationUpdateNotification,
   PendingWritesNotification,
   RequestType,
+  SpaceAccessLostNotification,
   TelemetryNotification,
   TransportNotificationType,
   VDomBatchNotification,
@@ -153,7 +155,9 @@ export function isIPCRemoteNotification(
     isNavigateRequestNotification(value) || isErrorNotification(value) ||
     isVDomBatchNotification(value) || isPendingWritesNotification(value) ||
     isOperationUpdateNotification(value) ||
-    isEventNeedsAttentionNotification(value);
+    isEventNeedsAttentionNotification(value) ||
+    isSpaceAccessLostNotification(value) ||
+    isEventIntentOutcomeNotification(value);
 }
 
 /**
@@ -231,6 +235,24 @@ export function isErrorNotification(
     value.type === NotificationType.ErrorReport &&
     typeof value.message === "string"
   );
+}
+
+/** Recognizes a payload-free event admission refusal. */
+export function isEventIntentOutcomeNotification(
+  value: unknown,
+): value is EventIntentOutcomeNotification {
+  return isObjectNotArray(value) &&
+    value.type === NotificationType.EventIntentOutcome && isDID(value.space) &&
+    typeof value.eventId === "string" && value.eventId.length > 0 &&
+    value.kind === "refused" && value.reason === "admission-refused";
+}
+
+/** Recognizes a space-scoped authoritative access-loss notification. */
+export function isSpaceAccessLostNotification(
+  value: unknown,
+): value is SpaceAccessLostNotification {
+  return isObjectNotArray(value) &&
+    value.type === NotificationType.SpaceAccessLost && isDID(value.space);
 }
 
 /**

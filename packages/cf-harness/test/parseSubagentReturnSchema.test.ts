@@ -84,6 +84,34 @@ describe("parseSubagentReturnSchema()", () => {
       .toBeUndefined();
   });
 
+  it("keeps format annotations valid through child return validation and sealing", () => {
+    for (const format of ["hostname", "private-format-annotation"]) {
+      const schema = {
+        type: "object",
+        properties: { summary: { type: "string", format } },
+        required: ["summary"],
+        additionalProperties: false,
+      } as const;
+      expect(parseSubagentReturnSchema(schema)?.schema).toEqual(schema);
+      const result = validateAndSanitizeSubagentReturn({
+        schema,
+        childRunId: "format-child",
+        value: { summary: "Untrusted child text" },
+      });
+      expect(result.linkedStringCount).toBe(1);
+      expect(result.value).toEqual({
+        summary: { "@link": "opaque:format-child#/summary" },
+      });
+      expect(() =>
+        validateAndSanitizeSubagentReturn({
+          schema,
+          childRunId: "format-child",
+          value: { summary: 42 },
+        })
+      ).toThrow();
+    }
+  });
+
   it("accepts every declared subagent profile return contract", () => {
     for (const profile of HARNESS_SUBAGENT_PROFILES) {
       const schema = getHarnessSubagentProfileConfig(profile).returnSchema;
