@@ -893,6 +893,40 @@ export function visibleEntityRows(
 }
 
 /**
+ * Every scope's entity rows in ONE pass, keyed by scope — for each scope,
+ * exactly what `visibleEntityRows(space, { branch, scope, includeDeleted: true })`
+ * returns, in the same order.
+ *
+ * The per-scope query filters on `scope_key` with no `id`, and the revision
+ * index leads with `id`, so SQLite cannot seek to a scope: it walks every
+ * revision on the branch and keeps the few that match. Asked once per scope,
+ * that is a whole-branch scan per scope, and a real store holds thousands of
+ * scopes — the Estuary Topics store has 13,571, most of them a handful of
+ * entities apiece, so enumerating it took hours. Asking once, unfiltered, walks
+ * the branch a single time and sorts the rows into their scopes as it goes.
+ *
+ * Tombstones stay, which is the records view `listEntityModels` reads: a
+ * `deleted` row models as `deleted` rather than disappearing.
+ */
+export function visibleEntityRowsByScope(
+  space: SpaceDb,
+  opts: { branch?: string } = {},
+): Map<string, EntityScanRow[]> {
+  const byScope = new Map<string, EntityScanRow[]>();
+  for (const r of visibleRevisionRows(space, { branch: opts.branch ?? "" })) {
+    let rows = byScope.get(r.scope);
+    if (rows === undefined) byScope.set(r.scope, rows = []);
+    rows.push({ id: r.id, revisions: r.revisions, link: r.link });
+  }
+  // The same comparator `visibleEntityRows` applies, so a scope's share of this
+  // pass is interchangeable with that function's answer for the scope.
+  for (const rows of byScope.values()) {
+    rows.sort((a, b) => b.revisions - a.revisions || utf8Compare(a.id, b.id));
+  }
+  return byScope;
+}
+
+/**
  * How many entities a read on this branch and scope can see — the size of
  * `visibleEntityRows`, and by construction the same set a scan walks.
  */
@@ -973,6 +1007,17 @@ export function listEntityModels(
     scope?: string;
     limit?: number;
     kind?: EntityKind;
+
+    /**
+     * This scope's rows, already fetched — exactly what
+     * `visibleEntityRows(space, { branch, scope, includeDeleted: true })`
+     * would return. A caller enumerating EVERY scope passes each scope's share
+     * of one {@link visibleEntityRowsByScope} pass rather than letting each call
+     * fetch its own: the per-scope query cannot seek on `scope_key` (the index
+     * leads with `id`), so it walks the branch's whole revision set, and one of
+     * those per scope is the cost of the listing rather than a part of it.
+     */
+    rows?: readonly EntityScanRow[];
   } = {},
 ): EntityListing {
   const branch = opts.branch ?? "";
@@ -983,7 +1028,7 @@ export function listEntityModels(
   // A listing describes the space's RECORDS, so it keeps tombstones (they model
   // as `deleted`, which is why `--kind deleted` can ask for them) — and that
   // keeps `extent.total` counting exactly the set this pass returns.
-  const rows = visibleEntityRows(space, {
+  const rows = opts.rows ?? visibleEntityRows(space, {
     branch,
     scope,
     includeDeleted: true,

@@ -23,7 +23,11 @@ import { hashOf } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 import type { SpaceDb } from "./db.ts";
-import { type EntityModel, listEntityModels } from "./model.ts";
+import {
+  type EntityModel,
+  listEntityModels,
+  visibleEntityRowsByScope,
+} from "./model.ts";
 import { type EntityAddress, reconstructDocument } from "./reconstruct.ts";
 import { listScopes } from "./scopes.ts";
 
@@ -68,11 +72,23 @@ function allEntities(
   cap: number = ENUMERATION_CAP,
 ): EntityModel[] {
   const out: EntityModel[] = [];
+  const rowsByScope = visibleEntityRowsByScope(space, { branch });
   for (const scope of listScopes(space, { branch })) {
+    // Both come from the same unscoped pass, so every listed scope has rows.
+    // A miss would mean they diverged, and enumerating it as empty would hash
+    // a partial space under a complete-looking verdict — so refuse instead.
+    const rows = rowsByScope.get(scope.raw);
+    if (rows === undefined) {
+      throw new Error(
+        `scope ${scope.raw} is listed but has no rows in the enumeration pass; ` +
+          `refusing to fingerprint a space whose scopes disagree.`,
+      );
+    }
     const listing = listEntityModels(space, {
       branch,
       scope: scope.raw,
       limit: cap,
+      rows,
     });
     if (listing.extent.truncated) {
       throw new Error(
