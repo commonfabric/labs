@@ -1059,6 +1059,27 @@ describe("running everything", () => {
     expect(run(corpus()).withheld).toEqual(corpus().withheld);
   });
 
+  it("gives a withheld identity the runs its own share asks for", () => {
+    // What a flake share asks for is read off the entry, and being
+    // withheld does not reduce it: these runs are the whole of what
+    // lets an excluded test's share rise again, so a plan placing such
+    // an identity once would leave the exclusion where it is for good.
+    const held = testIdentityKey({ k: "unit", s: "memory", n: "worthless" });
+    const manifest = sampleManifest({
+      entries: corpus().entries.map((entry) =>
+        testIdentityKey(entry.test) === held ? { ...entry, repeats: 4 } : entry
+      ),
+      withheld: corpus().withheld,
+    });
+    const placed = selected(run(manifest, { policy: "everything" }));
+    const runs = new Map(
+      placed.map((s) => [testIdentityKey(s.entry.test), s.repeats]),
+    );
+    expect(runs.get(held)).toBe(4);
+    expect([...runs].filter(([key]) => key !== held).every(([, n]) => n === 1))
+      .toBe(true);
+  });
+
   it("runs what a budgeted plan withholds and excludes", () => {
     const budgeted = keysOf(run(corpus()));
     const flaky = testIdentityKey({ k: "unit", s: "memory", n: "flaky" });

@@ -200,12 +200,6 @@ export interface ManifestEntry {
    * same corpus with replacement forever.
    */
   lastRun?: string;
-
-  /**
-   * Whether it has been shown to pass as the only test in its unit. Until
-   * it has, its siblings are not skipped and the unit is what runs.
-   */
-  independent?: boolean;
 }
 
 /**
@@ -447,11 +441,6 @@ function parseEntry(value: unknown): ManifestEntry | undefined {
   ) {
     return undefined;
   }
-  if (
-    value.independent !== undefined && typeof value.independent !== "boolean"
-  ) {
-    return undefined;
-  }
   if (value.lastRun !== undefined && !isNonEmptyString(value.lastRun)) {
     return undefined;
   }
@@ -470,7 +459,6 @@ function parseEntry(value: unknown): ManifestEntry | undefined {
     repeats: value.repeats,
   };
   if (value.lastRun !== undefined) entry.lastRun = value.lastRun;
-  if (value.independent !== undefined) entry.independent = value.independent;
   if (evidence !== undefined) entry.flakeEvidence = evidence;
   return entry;
 }

@@ -136,6 +136,9 @@ What works today:
   - `describe_handle` (shape and labels of a handle's referent, and the tables
     of one that is a database together with how full each of them is, never its
     data; see [Inspecting a handle's shape](#inspecting-a-handles-shape))
+  - `resolve_piece` (parent-only exact slug resolution in the session's space;
+    returns a handle for child source reads and revisions, without source or
+    values; requires a Fabric session)
   - `run_pattern` (present only when the run configures a fabric session; see
     [Running patterns against a Fabric space](#running-patterns-against-a-fabric-space))
   - `search_patterns` (present only when the run configures a pattern index with
@@ -449,16 +452,27 @@ their failure-return contract and cannot call `finish_task`.
 For a request about an existing piece, the parent first uses an explicit
 attachment, a user-supplied reference, or an unambiguous target established in
 the conversation. With none of those and no piece name from the user, it asks
-which piece to use with zero registry reads. A user-supplied name permits at
-most one registry read across the parent and its children, proceeding only on
-exactly one released match. An ambiguous, missing, or unreadable match leads to
-a question, without candidate inspection, retrying discovery through another
-delegation, or replacement authoring. The one lookup must return the match count
-and usable reference or requested data together; a lost reference or missing
-requested value is a reason to ask for an attachment, not to reread the registry
-or infer a value from the piece name. This is shared model guidance, not a
-runtime quota, and does not limit an explicit request to list or analyze the
-space.
+which piece to use with zero registry reads. A user-supplied slug is resolved
+with the parent tool `resolve_piece` before author delegation or any registry
+read. It accepts a bare slug in the session's space or `pattern:<space>/<slug>`
+and uses the same exact-address resolver as input-cell attachments. It returns
+only a handle, so a display name differing from the slug does not affect
+resolution and source remains on the child-only read/revise path. Foreign spaces
+are refused. An unheld slug or a readable target that is not a usable piece
+returns recoverable `not-found` without failing the run. A failed read returns
+`unavailable` and does not establish absence. The same path serves a fresh
+request and a follow-up answering which piece the user meant.
+
+A display name without a slug permits at most one registry read across the
+parent and its children, proceeding only on exactly one released match. An
+ambiguous, missing, or unreadable match leads to a question, without candidate
+inspection, retrying discovery through another delegation, or replacement
+authoring. The one lookup must return the match count and usable reference or
+requested data together; a lost reference or missing requested value is a reason
+to ask for an attachment, not to reread the registry or infer a value from the
+piece name. This is shared model guidance, not a runtime quota, and does not
+limit an explicit request to list or analyze the space. A failed exact-slug
+lookup does not fall back to authoring a name matcher or crawling the registry.
 
 Private research receives the same explicit input-cell names and tokens as the
 parent, separately from the general handle inventory. Registry and connector
@@ -2381,19 +2395,37 @@ establishes the source update, not the behavior the user asked for.
 For a classifier or filter change, the child is instructed to evaluate the old
 and new predicates over the same bounded sample before applying the revision.
 The check retains the existing readers, session scope, and filters. Its result
-reports `ready`, `sampleSize`, `beforeCount`, `afterCount`, and `changedCount`;
-the last counts rows whose inclusion changes, rather than subtracting totals.
-Pending reads, errors, and `outputConcerns` must be resolved before treating any
-counts as evidence. Sampling establishes the effect on that sample only.
+reports `pending`, `error`, `ready`, `sampleSize`, `beforeCount`, `afterCount`,
+and `changedCount`; the last counts rows whose inclusion changes, rather than
+subtracting totals. Pending reads, errors, and `outputConcerns` must be resolved
+before treating any counts as evidence. Sampling establishes the effect on that
+sample only.
 
 Either branch of the child return can carry an opaque `verificationRef` to that
-comparison. The parent reads it through ordinary `run_pattern` and
-`resultSchema`, under the existing release rules. The actual revised piece stays
-in `resultRef`; comparison counts, rows, and sender names get no new return
-channel. A zero delta, empty sample, or unavailable check leads to a
-`finish_task` question with the released finding and what the user can clarify.
-The rule remains unchanged. A nonzero check supports applying the tested rule
-and reporting its sampled delta, subject to any refresh warning.
+comparison. The parent passes it as an input to a minimal unnamed `run_pattern`
+reader whose `resultSchema` preserves all those status and comparison fields.
+Missing status fields are not defaulted and missing counts are not zero. A
+pending comparison is reread once through the same reference before interpreting
+its counts; a still-pending result remains unavailable. An observed query
+failure remains a failure, and a policy refusal calls for no reread. These reads
+use the existing release rules. The actual revised piece stays in `resultRef`;
+comparison counts, rows, and sender names get no new return channel. A released,
+ready check showing zero effect or an empty sample leads to a `finish_task`
+question with that finding and what the user can clarify. Readiness means the
+read settled without an error, independently of sample size or effect. A
+released nonzero check supports applying the tested rule and reporting its
+sampled delta, subject to any refresh warning.
+
+For both creation and revision, unavailable inspection does not prevent applying
+the requested source. When execution or the update succeeds but its result
+cannot be inspected, the child returns the piece with `ok: true` and
+`verification: "not-checked"`. The piece includes a visible summary stating that
+limitation. The parent states it in the final text, describes only the build or
+change, and points the user to the piece. It claims no unseen rows, counts,
+matches, or other results, and requests no nonexistent permission to release
+aggregates. A release refusal does not trigger repeated verification or another
+delegation. Compile errors, refused writes, and observed query failures remain
+failures to repair or report.
 
 For styling, a supplied computed-surface observation can establish the pane
 background. Source colors alone cannot. Without that observation or a permitted
@@ -2445,6 +2477,7 @@ it hands back is the point of the profile.
         "ok": { "type": "boolean", "const": true },
         "resultRef": { "type": "string" },
         "verificationRef": { "type": "string" },
+        "verification": { "type": "string", "enum": ["not-checked"] },
         "describes": { "type": "string" },
         "hashtags": {
           "type": "array",
@@ -2486,7 +2519,11 @@ failure branch, and a failure carries no `resultRef` at all. That is what stops
 a failed delegation from being answered with some other step's reference: the
 parent reads `ok`, and the piece's `resultRef` exists only on the success
 branch. An optional `verificationRef` on either branch points to a separate
-check and does not represent a completed revision.
+check and does not represent a completed revision. A successful build or update
+whose result was unavailable for inspection carries the fixed
+`verification: "not-checked"` marker through sanitization. Its absence is not
+proof that verification succeeded; claims about results require released
+evidence.
 
 The failure branch says why in a fixed vocabulary rather than in prose. A `code`
 is inert by construction — one of a closed set, carrying nothing read out of a

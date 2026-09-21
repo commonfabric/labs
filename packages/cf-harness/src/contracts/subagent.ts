@@ -255,8 +255,10 @@ const VERIFICATION_REF_SCHEMA: JSONSchema = {
  * names what stopped it from the fixed inert vocabulary — no data read out of
  * the space, no partial result dressed as a whole one.
  *
- * The success branch names the running pattern's result cell, with a line of
- * prose about what it computes and its publication hashtags. Either branch
+ * The success branch names the created or revised piece's result cell, with a
+ * line of prose about the build or change and its publication hashtags. An
+ * unavailable result inspection carries `verification: "not-checked"`; a
+ * successful source update does not establish its effect on data. Either branch
  * can name a separate verification result; reading its comparison goes
  * through run_pattern's ordinary release rules. There is no field for source,
  * in any encoding, because a parent has no use for source it should not be
@@ -266,8 +268,8 @@ const VERIFICATION_REF_SCHEMA: JSONSchema = {
  *
  * The free-form strings arrive at the parent as opaque links, the ordinary
  * treatment of unconstrained strings in a sanitized child return; `ok`, the
- * failure `code`, and the minted reference tokens are what the parent acts
- * on.
+ * failure `code`, fixed verification marker, and minted reference tokens are
+ * what the parent acts on.
  */
 export const PATTERN_AUTHOR_RETURN_SCHEMA: JSONSchema = {
   oneOf: [
@@ -281,10 +283,16 @@ export const PATTERN_AUTHOR_RETURN_SCHEMA: JSONSchema = {
             "The working piece's result reference from run_pattern or revise_piece, never the verification probe's reference.",
         },
         verificationRef: VERIFICATION_REF_SCHEMA,
+        verification: {
+          type: "string",
+          enum: ["not-checked"],
+          description:
+            "The piece was created or revised, but its result could not be inspected. State that limitation, describe only the build or change, and point the user to the piece. Omission does not establish verification.",
+        },
         describes: {
           type: "string",
           description:
-            "One or two inert sentences saying what the pattern computes. No data read out of the space.",
+            "One or two inert sentences describing what was built or changed, with any inspection limitation. No data read out of the space or claims about unseen results.",
         },
         hashtags: {
           type: "array",

@@ -149,6 +149,10 @@ import {
 } from "./skills-sh/search-client.ts";
 import type { HandleValueResolutionContext } from "./tools/handle-values.ts";
 import type {
+  ResolvePieceToolInput,
+  ResolvePieceToolOutput,
+} from "./tools/resolve-piece.ts";
+import type {
   HarnessConnectorGrantSpec,
   HarnessWellKnownGrant,
 } from "./contracts/well-known-grants.ts";
@@ -293,6 +297,7 @@ export interface BuiltinToolInputMap {
   read_piece_source: ReadPieceSourceToolInput;
   revise_piece: RevisePieceToolInput;
   assign_slug: AssignSlugToolInput;
+  resolve_piece: ResolvePieceToolInput;
   describe_handle: DescribeHandleToolInput;
   finish_task: FinishTaskInput;
   search_patterns: SearchPatternsToolInput;
@@ -328,6 +333,7 @@ export interface BuiltinToolOutputMap {
   read_piece_source: ReadPieceSourceToolOutput;
   revise_piece: RevisePieceToolOutput;
   assign_slug: AssignSlugToolOutput;
+  resolve_piece: ResolvePieceToolOutput;
   describe_handle: DescribeHandleToolOutput;
   finish_task: FinishTaskOutput;
   search_patterns: SearchPatternsToolOutput;
