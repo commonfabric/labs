@@ -115,6 +115,28 @@ describe("pattern-lifecycle client", () => {
   });
 
   describe("instantiatePieceOnServer", () => {
+    it("carries the same creation key across explicit retries", async () => {
+      const cfg = await configured();
+      await withStubbedFetch(
+        { body: { pieceId: "p1", pattern: { identity: "i", symbol: "s" } } },
+        async (calls) => {
+          const input = {
+            space: SPACE_DID,
+            program: PROGRAM,
+            requestKey: "stable-request",
+          };
+          await instantiatePieceOnServer(cfg, input);
+          await instantiatePieceOnServer(cfg, input);
+          expect(calls.map((call) => JSON.parse(call.body).requestKey)).toEqual(
+            [
+              "stable-request",
+              "stable-request",
+            ],
+          );
+        },
+      );
+    });
+
     it("signs the request with the identity and sends the bytes it signed", async () => {
       const cfg = await configured();
       await withStubbedFetch(

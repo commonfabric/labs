@@ -22,7 +22,11 @@
  */
 
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
-import { hashOf, isFabricPlainObject } from "@commonfabric/data-model";
+import {
+  hashOf,
+  isFabricPlainObject,
+  valueEqual,
+} from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { fromDID } from "../util.ts";
 import { MEMORY_PROTOCOL, type SessionOpenChallenge } from "../v2.ts";
@@ -53,6 +57,7 @@ const sameSessionDescriptor = (
     seenSeq?: number;
     sessionToken?: string;
     actingAs?: string;
+    genesisRoot?: FabricValue;
   },
 ): boolean =>
   (typeof left.sessionId === "string" ? left.sessionId : undefined) ===
@@ -65,11 +70,17 @@ const sameSessionDescriptor = (
   // a message-level marker that disagrees with the signed one is a
   // mismatch, so the binding cannot be injected or stripped in transit.
   (typeof left.actingAs === "string" ? left.actingAs : undefined) ===
-    right.actingAs;
+    right.actingAs &&
+  valueEqual(left.genesisRoot, right.genesisRoot);
 
 export type SessionOpenMessage = {
   space: string;
-  session: { sessionId?: string; seenSeq?: number; sessionToken?: string };
+  session: {
+    sessionId?: string;
+    seenSeq?: number;
+    sessionToken?: string;
+    genesisRoot?: FabricValue;
+  };
   invocation?: FabricPlainObject;
   authorization?: FabricValue;
 };

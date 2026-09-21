@@ -131,8 +131,10 @@ async function call<T>(
 
 /**
  * Create a piece in `space` from `program`, set up and not started here,
- * with its registry entry and its name when asked for, all in one
- * transaction. The serving loop derives the piece in the cycle after the
+ * with its name in the setup transaction and registration through the
+ * default pattern action after setup commits. Missing roots or handlers retain
+ * the created piece and report failed registration for a request-key retry.
+ * The serving loop derives the piece in the cycle after the
  * creation commits unless `start` is `false`, which leaves it to the
  * first demand.
  */
@@ -140,6 +142,9 @@ export async function instantiatePieceOnServer(
   config: LifecycleClientConfig,
   input: {
     space: string;
+
+    /** Stable key reused when a creation result is uncertain. */
+    requestKey?: string;
     program: RuntimeProgram;
     argument?: object;
     repository?: string;
@@ -148,9 +153,21 @@ export async function instantiatePieceOnServer(
     register?: boolean;
     start?: boolean;
   },
-): Promise<{ pieceId: string; pattern: PatternRef; slug?: string }> {
+): Promise<{
+  pieceId: string;
+  pattern: PatternRef;
+  slug?: string;
+  requestKey: string;
+  registration: {
+    status: "skipped" | "pending" | "handled" | "failed";
+    error?: string;
+    attempt?: number;
+    terminal?: true;
+  };
+}> {
   return await call(config, "instantiate", {
     space: input.space,
+    ...(input.requestKey === undefined ? {} : { requestKey: input.requestKey }),
     program: wireProgram(input.program),
     ...(input.argument === undefined ? {} : { argument: input.argument }),
     ...(input.repository === undefined ? {} : { repository: input.repository }),

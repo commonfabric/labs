@@ -797,42 +797,17 @@ the reasonable prior is that some exist.
 
 A scan finds over a hundred files in which one `it` assigns a binding
 another `it` reads. It cannot tell a real dependence from a `beforeEach`
-that resets the binding first, which is both why that number is a
-suspicion rather than a count and why the property has to be measured
-rather than read off the source. The check below is also the first thing
-this repository would have that could detect one at all.
+that resets the binding first, which is why that number is a suspicion
+rather than a count.
 
-So independence is established per identity, never assumed. Until it is
-established, an identity's siblings are not skipped and its file stays the
-unit — which is today's behaviour, so the starting point is no worse than
-what the repository has now, and it improves from there.
-
-#### Establishing it
-
-A test that passes as the only test running in its file depends on no
-sibling: its `beforeAll` and `beforeEach` still ran and nothing else did.
-So the check is one invocation per identity with every sibling skipped,
-and the answer is a flag carried in the manifest beside the score.
-
-It cannot be a sweep. One invocation per identity is around 18,000 of
-them, and every one pays a process start before it runs a test. At the
-rate one invocation per test file costs, which [the consequences
-below](#consequences-we-are-choosing) price at three and a half hours for
-two thousand, that is upwards of thirty hours. So `main` checks the
-identities in the files its own run touched, plus a rotating slice of
-everything else. The flags fill in over weeks and stay current where the
-code is moving, and an identity whose file changed loses its flag until it
-is checked again.
-
-#### When the flag is wrong
-
-A flag is only ever granted by an identity passing alone, so the failure
-that matters is the rarer one: a test that passed alone and fails when its
-siblings are skipped, because it depended on a sibling in a way one solo
-run did not expose. That fails a lane and passes on `main`, which is the
-case [the reporter](#telling-a-pull-request-what-main-found) already
-exists to explain. The failure is also evidence, and the identity loses
-its flag.
+Nothing establishes that a particular identity stands alone before a lane
+skips its siblings. A test that did lean on one fails, or waits for state
+nothing established until its job's step is killed, and that is the first
+evidence anybody has that the dependence is there. `main` is no refuge
+from it: the full run selects every identity, but the packer places each
+identity on its own, so one unit's identities can land in different lanes
+and each lane invokes that unit with the identities the other lanes took
+registered as ignored.
 
 ### `granularity` goes with it
 
@@ -1117,11 +1092,6 @@ what a `beforeAll` that throws should do to the rest of its group.
       several files at once, so the skip list is per file and the
       invocation is per package; module load is charged per unit either
       way, which is what `unitOverhead` measures.
-- [ ] The independence flag: a `main`-side check that runs an identity as
-      the only test in its file, a rotating slice per run plus every
-      identity whose file changed, the flag carried in the manifest, and
-      the packer refusing to skip the siblings of an identity that has
-      none.
 - [x] A fixture proving the four properties that make this safe: an
       unlisted new test runs, a renamed test runs, a listed test is
       reported as skipped rather than missing, and two files holding the
@@ -2041,26 +2011,19 @@ put a pass beside a spurious failure at its own commit, which classifies
 it as a disagreement rather than crediting it as a catch, so both
 paragraphs above close on one mechanism.
 
-**The independence flag is what these runs still want.** A repeat should
-invoke the identity's file with every other identity skipped, and an
-identity without the flag may not have its siblings skipped, so its file
-is invoked whole several times. Every sibling in that file then runs
-several times, and every sibling still gates, so a file holding one flaky
-test fails lanes several times as often for tests that are not flaky at
-all. [The `main`-side check that establishes the
-flag](#establishing-it) is already part of this design, and this gives it
-a second thing to be worth: with it, the identity is skipped in its
-file's own invocation and run alone, and the siblings go back to running
-once.
-
-The count of runs is what the identity gets either way, and the flag
-decides their shape. With it, the identity is skipped in its file's own
-invocation and run alone the whole count of times; every run of it at
-that commit is then the same shape, and the same shape the independence
-check uses. Running it once beside its siblings and again alone is the
-one shape to avoid, since a test sensitive to the difference would be
-recorded as disagreeing with itself at every commit, which would pin its
-exclusion in place for good.
+**Every run of the identity at one commit has the same shape.** All of
+its runs go in one lane, and a lane invokes a unit once per repeat
+against one skip list, so each run of the identity sits beside exactly
+the same siblings as the one before it. A test sensitive to whether a
+particular sibling ran would otherwise be recorded as disagreeing with
+itself at every commit, which would pin its exclusion in place for good.
+The siblings run as often: the unit is invoked as many times as the
+excluded test's share asks for, and every identity the lane placed in it
+runs that many times. The cost model does not charge that. It charges
+each identity its own cost times its own repeat count, so a sibling that
+asked for one run and is invoked four times is paid for once, and a lane
+holding a unit like that is projected at a fraction of what it will
+spend.
 
 **What these runs cannot separate is a bad machine.** All of an identity's
 runs at one commit go in one lane, so they run on one runner, and a runner
@@ -3795,13 +3758,12 @@ rise against a run the merge base does not contain reports, and a set with
 no baseline reports.
 
 The full run's treatment of a flaky test is tested at both ends. In
-`plan()`, a withheld and independent identity is placed under the
-`everything` policy with the count its share asks for and named in
-`nonGating`; a withheld identity without the independence flag is placed
-once; a withheld entry whose reason is not `flaky` is held back and not
-named in `nonGating`; and an identity whose runs do not fit gives them up
-until they do rather than putting its lane past the bound. In the lane runner, a fixture of batch results and records proves
-four cases: a batch failing only on non-gating identities does not fail the
+`plan()`, a withheld identity is placed under the `everything` policy
+with the count its share asks for and named in `nonGating`; a withheld
+entry whose reason is not `flaky` is held back and not named in
+`nonGating`; and an identity whose runs do not fit gives them up until
+they do rather than putting its lane past the bound. In the lane runner,
+a fixture of batch results and records proves four cases: a batch failing only on non-gating identities does not fail the
 lane, a batch failing on one other identity does, a batch failing on a
 non-gating identity in one run and not another does not, and a batch that
 recorded no outcome for some identity it was asked to run fails the lane

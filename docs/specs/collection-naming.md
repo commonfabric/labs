@@ -595,6 +595,13 @@ the part that says which member, so a resolver handed the address on its own
 has nothing to walk with.
 
 **4. Walk segments in the URL layer.** Built for the shell's page URLs.
+Identity routes preserve the target scope and JSON Pointer keys through the
+cell-reference grammar. A route containing a piece id and pointer path opens
+that nested view-bearing cell in its target space; navigation does not rebind
+the address to the current space or replace it with a root-piece slug.
+The URL carries a nonempty pointer path as a JSON string array in `cellPath` so
+spaces, punctuation, empty keys, and dot segments survive URL parsing. This
+query cannot accompany a slug, another `cellPath`, or a path after the id.
 `urlToAppView` (`packages/navigation/src/view.ts`) reads the segment after a
 slug as the member name and carries it in the view, which serializes back to
 `<space>/<collection>/<member>`. It walks no further: segments past the member

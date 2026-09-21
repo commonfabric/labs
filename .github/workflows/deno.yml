@@ -126,6 +126,12 @@ jobs:
           deno task run-recorded gate repo check-skill-facts --
           deno task check-skill-facts
 
+      - name: 🧭 Check address examples
+        timeout-minutes: *work-timeout
+        run: >-
+          deno task run-recorded gate repo check-address-examples --
+          deno task check-address-examples
+
       - name: 🚧 Check tripwires
         timeout-minutes: *work-timeout
         run: >-

@@ -48,6 +48,8 @@ import {
   type EventAttentionListResponse,
   type EventAttentionNotice,
   type EventAttentionResolveResponse,
+  EventIntentOutcomeNotice,
+  EventIntentOutcomeNotification,
   EventNeedsAttentionNotification,
   InitializationData,
   type LoggerCountsData,
@@ -66,6 +68,7 @@ import {
   RequestType,
   type RuntimeSecurityContext,
   type SlugRefusal,
+  type SpaceAccessLostNotification,
   type SpaceAclCapability,
   type SpaceAclView,
   TelemetryNotification,
@@ -119,9 +122,12 @@ export type RuntimeClientEvents = {
   console: [ConsoleMessage];
   navigaterequest: [{ cell: CellHandle }];
   error: [ErrorNotification];
+  spaceaccesslost: [{ space: DID }];
   telemetry: [RuntimeTelemetryMarkerResult];
   pendingwriteschange: [{ pending: boolean }];
   eventneedsattention: [EventAttentionNotice];
+  /** Refused event admission; this does not revoke read access. */
+  eventintentoutcome: [EventIntentOutcomeNotice];
 };
 
 /**
@@ -199,6 +205,8 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     this.#conn.on("console", this.#onConsole);
     this.#conn.on("navigaterequest", this.#onNavigateRequest);
     this.#conn.on("error", this.#onError);
+    this.#conn.on("spaceaccesslost", this.#onSpaceAccessLost);
+    this.#conn.on("eventintentoutcome", this.#onEventIntentOutcome);
     this.#conn.on("telemetry", this.#onTelemetry);
     this.#conn.on("pendingwriteschange", this.#onPendingWritesChange);
     this.#conn.on("operationupdate", this.#onOperationUpdate);
@@ -1225,6 +1233,16 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
 
   #onError = (data: ErrorNotification): void => {
     this.emit("error", data);
+  };
+
+  #onEventIntentOutcome = (
+    { space, eventId, kind, reason }: EventIntentOutcomeNotification,
+  ): void => {
+    this.emit("eventintentoutcome", { space, eventId, kind, reason });
+  };
+
+  #onSpaceAccessLost = ({ space }: SpaceAccessLostNotification): void => {
+    this.emit("spaceaccesslost", { space });
   };
 
   #onTelemetry = (data: TelemetryNotification): void => {

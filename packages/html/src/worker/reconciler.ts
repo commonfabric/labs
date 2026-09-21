@@ -245,12 +245,14 @@ export class WorkerReconciler {
    * gates soundly.
    */
   readonly #membershipProvider?: SpaceMembershipProvider;
+  readonly #spaceAccess?: WorkerReconcilerOptions["spaceAccess"];
 
   constructor(options: WorkerReconcilerOptions) {
     this.#onOps = options.onOps;
     this.#onError = options.onError;
     this.#resolveRenderConfidentiality = options.resolveRenderConfidentiality;
     this.#membershipProvider = options.membershipProvider;
+    this.#spaceAccess = options.spaceAccess;
     // Security knob: a present-but-unknown value fails closed to "deny";
     // only an absent option keeps the documented "allow" default.
     this.#renderDeclassificationPolicy = normalizeRenderDeclassificationPolicy(
@@ -371,17 +373,27 @@ export class WorkerReconciler {
         // own label against the root policy (the host ceiling when
         // configured) before rendering its resolved content. Checked per
         // update so label changes re-evaluate, mirroring renderCellChild.
+        const accessLost =
+          this.#cellAccessError(vnode as Cell<unknown>) !== undefined;
         if (
+          accessLost ||
           !this.#canRenderCellUnderPolicy(
             vnode as Cell<unknown>,
             this.#rootRenderPolicy,
           )
         ) {
-          this.#denyCellRender(vnode as Cell<unknown>, this.#rootRenderPolicy);
+          if (!accessLost) {
+            this.#denyCellRender(
+              vnode as Cell<unknown>,
+              this.#rootRenderPolicy,
+            );
+          }
           this.#reconcileIntoWrapper(
             ctx,
             wrapperState,
-            this.#blockedPlaceholderVNode(),
+            accessLost
+              ? this.#accessPlaceholderVNode()
+              : this.#blockedPlaceholderVNode(),
             this.#rootRenderPolicy,
           );
           this.#rootChildId = wrapperState.currentChild?.nodeId ?? null;
@@ -407,9 +419,10 @@ export class WorkerReconciler {
       };
 
       addCancel(
-        vnode.sink((resolvedVnode: unknown) => renderRoot(resolvedVnode), {
-          readOnly: true,
-        }),
+        this.#sinkCell(
+          vnode,
+          (resolvedVnode: unknown) => renderRoot(resolvedVnode),
+        ),
       );
     } else {
       // Static VNode - render directly into container
@@ -898,6 +911,72 @@ export class WorkerReconciler {
     } catch {
       return cell;
     }
+  }
+
+  /** Guards both the containing view and any linked event target at dispatch. */
+  #registerHandler(
+    ctx: ReconcileContext,
+    handler: (event: unknown) => void,
+    target?: Cell<unknown>,
+  ): number {
+    return ctx.registerHandler((event) => {
+      if (
+        (ctx.space !== undefined && this.#spaceAccess?.error(ctx.space)) ||
+        (target !== undefined && this.#cellAccessError(target))
+      ) {
+        return;
+      }
+      handler(event);
+    });
+  }
+
+  #cellAccessError(cell: Cell<unknown>): Error | undefined {
+    if (this.#spaceAccess === undefined) return undefined;
+    for (const candidate of [cell, this.#resolveCellForBinding(cell)]) {
+      const space = this.#spaceOfCell(candidate);
+      if (space !== undefined) {
+        const error = this.#spaceAccess.error(space);
+        if (error !== undefined) return error;
+      }
+    }
+    return undefined;
+  }
+
+  /** Keeps a rendered subscription responsive to session access loss and recovery. */
+  #sinkCell<T>(cell: Cell<T>, deliver: (value: T | undefined) => void): Cancel {
+    const [cancel, addCancel] = useCancelGroup();
+    const watched = new Set<string>();
+    let active = true;
+    let current: T | undefined;
+    const emit = () => {
+      if (active) deliver(this.#cellAccessError(cell) ? undefined : current);
+    };
+    addCancel(cell.sink((value) => {
+      current = value;
+      if (this.#spaceAccess !== undefined) {
+        for (const candidate of [cell, this.#resolveCellForBinding(cell)]) {
+          const space = this.#spaceOfCell(candidate);
+          if (space !== undefined && !watched.has(space)) {
+            watched.add(space);
+            addCancel(this.#spaceAccess.subscribe(space, emit));
+          }
+        }
+      }
+      emit();
+    }, { readOnly: true }));
+    return () => {
+      active = false;
+      cancel();
+    };
+  }
+
+  #accessPlaceholderVNode(): WorkerVNode {
+    return {
+      type: "vnode",
+      name: "span",
+      props: { "data-space-access-lost": "true", role: "status" },
+      children: ["Access unavailable"],
+    };
   }
 
   #cellRefForBinding(cell: Cell<unknown>): CellRef {
@@ -1827,7 +1906,7 @@ export class WorkerReconciler {
     deliver: (value: unknown) => void,
   ): Cancel {
     let referenced: { cell: Cell<unknown>; cancel: Cancel } | undefined;
-    const cancelOuter = cell.sink((value) => {
+    const cancelOuter = this.#sinkCell(cell, (value) => {
       const named = cellOfOpaqueReference(value);
       if (named === undefined) {
         referenced?.cancel();
@@ -1844,9 +1923,9 @@ export class WorkerReconciler {
       referenced?.cancel();
       referenced = {
         cell: scalar,
-        cancel: scalar.sink(deliver, { readOnly: true }),
+        cancel: this.#sinkCell(scalar, deliver),
       };
-    }, { readOnly: true });
+    });
     return () => {
       cancelOuter();
       referenced?.cancel();
@@ -2281,9 +2360,9 @@ export class WorkerReconciler {
 
     if (isStream(value)) {
       const stream = value as Stream<unknown>;
-      const handlerId = ctx.registerHandler((event) => {
+      const handlerId = this.#registerHandler(ctx, (event) => {
         stream.withTx(undefined).send(event);
-      });
+      }, stream.asSchema({}));
       state.eventHandlers.set(eventType, handlerId);
       this.#queueOps([{
         op: "set-event",
@@ -2297,7 +2376,7 @@ export class WorkerReconciler {
         currentValue: value,
       });
     } else if (isEventHandler(value)) {
-      const handlerId = ctx.registerHandler(value);
+      const handlerId = this.#registerHandler(ctx, value);
       state.eventHandlers.set(eventType, handlerId);
       this.#queueOps([{
         op: "set-event",
@@ -2315,7 +2394,8 @@ export class WorkerReconciler {
       // because the value passed to updateEventProp is usually the Cell itself.
       // If updatePropsInPlace passed the Cell, then `currentValue === value` check above covers it.
 
-      const cancel = (value as Cell<(event: unknown) => void>).sink(
+      const cancel = this.#sinkCell(
+        value as Cell<(event: unknown) => void>,
         (handler) => {
           if (this.#retireEventHandler(state, eventType) !== undefined) {
             this.#queueOps([{
@@ -2326,8 +2406,10 @@ export class WorkerReconciler {
           }
 
           if (handler) {
-            const handlerId = ctx.registerHandler(
+            const handlerId = this.#registerHandler(
+              ctx,
               handler as (event: unknown) => void,
+              value as Cell<unknown>,
             );
             state.eventHandlers.set(eventType, handlerId);
             this.#queueOps([{
@@ -2338,7 +2420,6 @@ export class WorkerReconciler {
             }]);
           }
         },
-        { readOnly: true },
       );
       state.propSubscriptions.set(key, {
         cell: value as Cell<unknown>,
@@ -2410,7 +2491,7 @@ export class WorkerReconciler {
       hasSeenInitialProps = true;
     };
 
-    const sinkCancel = propsCell.sink((resolvedProps) => {
+    const sinkCancel = this.#sinkCell(propsCell, (resolvedProps) => {
       logger.debug("cell-props-emit", () => ({
         nodeId: state.nodeId,
         props: resolvedProps,
@@ -2483,8 +2564,10 @@ export class WorkerReconciler {
           }
           if (existingState) existingState.cancel();
 
-          const handlerId = ctx.registerHandler((event) =>
-            resolvedTarget.withTx(undefined).send(event)
+          const handlerId = this.#registerHandler(
+            ctx,
+            (event) => resolvedTarget.withTx(undefined).send(event),
+            resolvedTarget,
           );
           state.eventHandlers.set(eventType, handlerId);
           this.#queueOps([{
@@ -2609,7 +2692,7 @@ export class WorkerReconciler {
         }
       }
       refreshPolicyAfterPropsUpdate();
-    }, { readOnly: true });
+    });
 
     state.propSubscriptions.set(CELL_PROPS_KEY, {
       cell: propsCell as Cell<unknown>,
@@ -2830,26 +2913,25 @@ export class WorkerReconciler {
       }
 
       // Set up new subscription
-      const cancel = (children as Cell<WorkerRenderNode | WorkerRenderNode[]>)
-        .sink(
-          (resolvedChildren) => {
-            logger.debug("children-update", () => ({
-              nodeId: state.nodeId,
-              count: Array.isArray(resolvedChildren)
-                ? resolvedChildren.length
-                : 1,
-            }));
-            this.#updateChildren(
-              ctx,
-              state,
-              resolvedChildren,
-              visited,
-              policy,
-              forceReplace,
-            );
-          },
-          { readOnly: true },
-        );
+      const cancel = this.#sinkCell(
+        children as Cell<WorkerRenderNode | WorkerRenderNode[]>,
+        (resolvedChildren) => {
+          logger.debug("children-update", () => ({
+            nodeId: state.nodeId,
+            count: Array.isArray(resolvedChildren)
+              ? resolvedChildren.length
+              : 1,
+          }));
+          this.#updateChildren(
+            ctx,
+            state,
+            resolvedChildren,
+            visited,
+            policy,
+            forceReplace,
+          );
+        },
+      );
 
       state.childrenState = {
         cell: children as Cell<unknown>,
@@ -3061,8 +3143,16 @@ export class WorkerReconciler {
   #createBlockedPlaceholder(
     ctx: ReconcileContext,
     policy: RenderPolicy,
-    reason: "policy" | "integrity" = "policy",
+    reason: "policy" | "integrity" | "access" = "policy",
   ): NodeState {
+    if (reason === "access") {
+      return this.#renderNode(
+        ctx,
+        this.#accessPlaceholderVNode(),
+        new Set(),
+        policy,
+      )!;
+    }
     const nodeId = ctx.nextNodeId();
     const textId = ctx.nextNodeId();
     const integrityBlocked = reason === "integrity";
@@ -3277,9 +3367,9 @@ export class WorkerReconciler {
         // Handle Streams (actions) - wrap in a handler that calls .send()
         if (isStream(value)) {
           const stream = value as Stream<unknown>;
-          const handlerId = ctx.registerHandler((event) => {
+          const handlerId = this.#registerHandler(ctx, (event) => {
             stream.withTx(undefined).send(event);
-          });
+          }, stream.asSchema({}));
           state.eventHandlers.set(eventType, handlerId);
           this.#queueOps([{
             op: "set-event",
@@ -3294,7 +3384,7 @@ export class WorkerReconciler {
           });
         } else if (isEventHandler(value)) {
           // Plain function event handler
-          const handlerId = ctx.registerHandler(value);
+          const handlerId = this.#registerHandler(ctx, value);
           state.eventHandlers.set(eventType, handlerId);
           this.#queueOps([{
             op: "set-event",
@@ -3310,7 +3400,8 @@ export class WorkerReconciler {
         } else if (isCell(value)) {
           // Cell containing event handler - not common but handle it
           const eventType = getEventType(key);
-          const sinkCancel = (value as Cell<(event: unknown) => void>).sink(
+          const sinkCancel = this.#sinkCell(
+            value as Cell<(event: unknown) => void>,
             (handler) => {
               if (this.#retireEventHandler(state, eventType) !== undefined) {
                 this.#queueOps([{
@@ -3322,8 +3413,10 @@ export class WorkerReconciler {
 
               if (handler) {
                 // Cast handler to mutable function type for registration
-                const handlerId = ctx.registerHandler(
+                const handlerId = this.#registerHandler(
+                  ctx,
                   handler as (event: unknown) => void,
+                  value as Cell<unknown>,
                 );
                 state.eventHandlers.set(eventType, handlerId);
                 this.#queueOps([{
@@ -3334,7 +3427,6 @@ export class WorkerReconciler {
                 }]);
               }
             },
-            { readOnly: true },
           );
           state.propSubscriptions.set(key, {
             cell: value as Cell<unknown>,
@@ -3495,11 +3587,12 @@ export class WorkerReconciler {
   ): void {
     // Handle Cell<children>
     if (isCell(children)) {
-      const sinkCancel = (
-        children as Cell<WorkerRenderNode | WorkerRenderNode[]>
-      ).sink((resolvedChildren) => {
-        this.#updateChildren(ctx, state, resolvedChildren, visited, policy);
-      }, { readOnly: true });
+      const sinkCancel = this.#sinkCell(
+        children as Cell<WorkerRenderNode | WorkerRenderNode[]>,
+        (resolvedChildren) => {
+          this.#updateChildren(ctx, state, resolvedChildren, visited, policy);
+        },
+      );
       // Track the children Cell for diffing
       state.childrenState = {
         cell: children as Cell<unknown>,
@@ -3876,7 +3969,9 @@ export class WorkerReconciler {
         addCancel,
         () => renderResolved(childState.currentValue, true),
       );
-      const blockedByPolicy = !this.#canRenderCellUnderPolicy(cell, policy);
+      const accessLost = this.#cellAccessError(cell) !== undefined;
+      const blockedByPolicy = accessLost ||
+        !this.#canRenderCellUnderPolicy(cell, policy);
       const blockedByIntegrity = !blockedByPolicy &&
         this.#shouldBlockTextFromCell(resolvedChild, cell, policy);
 
@@ -3901,7 +3996,7 @@ export class WorkerReconciler {
       }
 
       if (blockedByPolicy) {
-        this.#denyCellRender(cell, policy);
+        if (!accessLost) this.#denyCellRender(cell, policy);
         if (!isInitialRender) {
           if (currentCancel) {
             currentCancel();
@@ -3916,7 +4011,11 @@ export class WorkerReconciler {
         childState.isText = false;
         childState.hasPieceBoundary = false;
 
-        const blockedState = this.#createBlockedPlaceholder(ctx, policy);
+        const blockedState = this.#createBlockedPlaceholder(
+          ctx,
+          policy,
+          accessLost ? "access" : "policy",
+        );
         childState.nodeId = blockedState.nodeId;
         childState.elementState = blockedState;
         childState.isText = false;
@@ -4191,9 +4290,7 @@ export class WorkerReconciler {
     };
 
     addCancel(
-      cell.sink((resolvedChild) => renderResolved(resolvedChild), {
-        readOnly: true,
-      }),
+      this.#sinkCell(cell, (resolvedChild) => renderResolved(resolvedChild)),
     );
 
     // When the cancel group fires (parent teardown), also cancel the current

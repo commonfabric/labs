@@ -544,13 +544,19 @@ export class XAppView extends BaseView {
           return pattern;
         }
         if ("pieceId" in app.view && app.view.pieceId) {
+          const scope = app.view.pieceScope ?? "space";
           const target = await rt.getPattern(space, app.view.pieceId, {
             start: false,
+            scope,
           });
           if (signal.aborted) return;
           this.#selectedPatternTargetId = target.id();
-          const pattern = await rt.getPattern(space, app.view.pieceId);
-          const slug = await rt.getSlug(space, app.view.pieceId);
+          const pattern = await rt.getPattern(space, app.view.pieceId, {
+            scope,
+          });
+          const slug = scope === "space" && !app.view.piecePath?.length
+            ? await rt.getSlug(space, app.view.pieceId)
+            : undefined;
           if (!signal.aborted && slug) {
             this.#replacePieceUrlWithSlug(app.view, slug);
           }
@@ -1143,6 +1149,9 @@ export class XAppView extends BaseView {
         .rt="${this.rt}"
         .space="${this.space}"
         .activePattern="${activePattern}"
+        .piecePath="${"piecePath" in this.app.view
+          ? this.app.view.piecePath ?? []
+          : []}"
         .loadError="${loadError}"
         .runtimeError="${runtimeLoadError}"
         .showShellPieceListView="${config.showShellPieceListView ?? false}"

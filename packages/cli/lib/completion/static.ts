@@ -33,6 +33,7 @@ export interface Candidate {
  * `--from` are settled.
  */
 const ENUMERATED_OPTION_VALUES: Readonly<Record<string, readonly string[]>> = {
+  "access": ["READ", "WRITE"],
   "log-level": ["debug", "info", "warn", "error", "silent"],
   "color": ["auto", "always", "never"],
   "language": languageNames(),
