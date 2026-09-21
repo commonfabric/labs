@@ -29,6 +29,7 @@ import {
   isDefaultNodeWithUndefined,
   isOptionalSymbol,
 } from "../typescript/property-optionality.ts";
+import { withTypeArgumentsOf } from "../typescript/type-arguments.ts";
 import { attachUiContract, getUiContractHint } from "../ui-contract.ts";
 
 const logger = getLogger("schema-generator.object", {
@@ -280,6 +281,9 @@ export class ObjectFormatter implements TypeFormatter {
     const shouldRespectExplicitPropertyShape = isExplicitPropertyShapeTypeNode(
       context.typeNode,
     );
+    // A property's declared type node is written in its declaration's type
+    // parameters; this type may be an instantiation supplying their arguments.
+    const propertyContext = withTypeArgumentsOf(type, context);
 
     const props = checker.getPropertiesOfType(type);
     for (const prop of props) {
@@ -366,7 +370,7 @@ export class ObjectFormatter implements TypeFormatter {
       // Delegate to the main generator (specific formatters handle wrappers/defaults)
       const generated = this.#schemaGenerator.formatChildType(
         resolvedPropType,
-        context,
+        propertyContext,
         propTypeNode,
       );
       if (isObjectOrArray(generated)) {

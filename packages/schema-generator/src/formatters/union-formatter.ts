@@ -25,6 +25,10 @@ import {
   extractLiteralValueOfSymbol,
   resolveAliasedSymbol,
 } from "../typescript/literal-value.ts";
+import {
+  findInstantiation,
+  getTypeFromTypeNodeInContext,
+} from "../typescript/type-arguments.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 
 // Simple primitive schemas only have these keys (possibly just one)
@@ -41,12 +45,22 @@ interface DefaultUnionEntry {
   readonly defaultValue: unknown;
 }
 
+/**
+ * Returns the type a member node of a union stands for in `context`, matched
+ * against the union's own `members` where the node mentions a type parameter
+ * the context binds.
+ */
 function getTypeNodeMemberType(
   node: ts.TypeNode,
-  checker: ts.TypeChecker,
+  members: readonly ts.Type[],
+  context: GenerationContext,
 ): ts.Type | undefined {
   try {
-    return checker.getTypeFromTypeNode(node);
+    return findInstantiation(
+      getTypeFromTypeNodeInContext(node, context),
+      members,
+      context,
+    );
   } catch {
     return undefined;
   }
@@ -67,11 +81,12 @@ function unionMemberTypesMatch(
 function orderMemberNodesBySemanticType(
   members: readonly ts.Type[],
   memberNodes: readonly ts.TypeNode[],
-  checker: ts.TypeChecker,
+  context: GenerationContext,
 ): Array<ts.TypeNode | undefined> {
+  const checker = context.typeChecker;
   const remaining = memberNodes.map((node) => ({
     node,
-    type: getTypeNodeMemberType(node, checker),
+    type: getTypeNodeMemberType(node, members, context),
   }));
 
   return members.map((member) => {
@@ -110,11 +125,7 @@ export class UnionFormatter implements TypeFormatter {
     );
     const memberNodes = unionNode ? unionNode.types : undefined;
     const orderedMemberNodes = memberNodes
-      ? orderMemberNodesBySemanticType(
-        members,
-        memberNodes,
-        context.typeChecker,
-      )
+      ? orderMemberNodesBySemanticType(members, memberNodes, context)
       : undefined;
 
     if (members.length === 0) {
@@ -122,7 +133,7 @@ export class UnionFormatter implements TypeFormatter {
     }
 
     const defaultUnionSchema = memberNodes
-      ? this.#tryFormatDefaultUnion(memberNodes, context)
+      ? this.#tryFormatDefaultUnion(memberNodes, members, context)
       : undefined;
     if (defaultUnionSchema !== undefined) {
       return defaultUnionSchema;
@@ -336,6 +347,7 @@ export class UnionFormatter implements TypeFormatter {
 
   #tryFormatDefaultUnion(
     memberNodes: readonly ts.TypeNode[],
+    members: readonly ts.Type[],
     context: GenerationContext,
   ): MutableJSONSchema | undefined {
     const defaultEntries = memberNodes
@@ -364,15 +376,24 @@ export class UnionFormatter implements TypeFormatter {
       index !== defaultEntry.index
     );
 
+    const nonDefaultTypes = nonDefaultNodes.map((node) =>
+      findInstantiation(
+        getTypeFromTypeNodeInContext(node, context),
+        members,
+        context,
+      )
+    );
     const schemas: MutableJSONSchema[] = [];
-    for (const node of nonDefaultNodes) {
-      schemas.push(this.#formatTypeNodeMember(node, context));
-    }
+    nonDefaultNodes.forEach((node, index) => {
+      schemas.push(
+        this.#formatTypeNodeMember(node, context, nonDefaultTypes[index]),
+      );
+    });
 
     if (defaultEntry.entry.kind === "DeepDefault") {
       this.#assertDeepDefaultHasObjectTarget(
         defaultEntry.entry,
-        nonDefaultNodes,
+        nonDefaultTypes,
         context.typeChecker,
       );
       if (defaultEntry.entry.defaultValue === undefined) {
@@ -391,12 +412,12 @@ export class UnionFormatter implements TypeFormatter {
 
     const isCovered = this.#isDefaultCoveredByUnion(
       defaultEntry.entry,
-      nonDefaultNodes,
+      nonDefaultTypes,
       context.typeChecker,
     );
     this.#assertDefaultObjectDoesNotWidenExistingObject(
       defaultEntry.entry,
-      nonDefaultNodes,
+      nonDefaultTypes,
       isCovered,
       context.typeChecker,
     );
@@ -501,8 +522,8 @@ export class UnionFormatter implements TypeFormatter {
         kind: "DeepDefault",
         valueTypeNode,
         defaultTypeNode: valueTypeNode,
-        valueType: context.typeChecker.getTypeFromTypeNode(valueTypeNode),
-        defaultType: context.typeChecker.getTypeFromTypeNode(valueTypeNode),
+        valueType: getTypeFromTypeNodeInContext(valueTypeNode, context),
+        defaultType: getTypeFromTypeNodeInContext(valueTypeNode, context),
         defaultValue: this.#extractDefaultValueFromNode(
           valueTypeNode,
           context,
@@ -525,10 +546,8 @@ export class UnionFormatter implements TypeFormatter {
     if (!valueTypeNode || !defaultTypeNode) {
       throw new Error("Default<T,V> type arguments cannot be undefined");
     }
-    const valueType = context.typeChecker.getTypeFromTypeNode(valueTypeNode);
-    const defaultType = context.typeChecker.getTypeFromTypeNode(
-      defaultTypeNode,
-    );
+    const valueType = getTypeFromTypeNodeInContext(valueTypeNode, context);
+    const defaultType = getTypeFromTypeNodeInContext(defaultTypeNode, context);
     if (typeArgs.length === 1 && this.#isUndefinedType(valueType)) {
       throw new Error(
         "Default<undefined> is unsupported; use an optional field or a JSON value default.",
@@ -552,21 +571,17 @@ export class UnionFormatter implements TypeFormatter {
 
   #isDefaultCoveredByUnion(
     defaultEntry: DefaultUnionEntry,
-    nonDefaultNodes: readonly ts.TypeNode[],
+    nonDefaultTypes: readonly ts.Type[],
     checker: ts.TypeChecker,
   ): boolean {
-    return nonDefaultNodes.some((node) => {
-      const memberType = checker.getTypeFromTypeNode(node);
-      return checker.isTypeAssignableTo(
-        defaultEntry.defaultType,
-        memberType,
-      );
-    });
+    return nonDefaultTypes.some((memberType) =>
+      checker.isTypeAssignableTo(defaultEntry.defaultType, memberType)
+    );
   }
 
   #assertDefaultObjectDoesNotWidenExistingObject(
     defaultEntry: DefaultUnionEntry,
-    nonDefaultNodes: readonly ts.TypeNode[],
+    nonDefaultTypes: readonly ts.Type[],
     isCovered: boolean,
     checker: ts.TypeChecker,
   ): void {
@@ -576,8 +591,8 @@ export class UnionFormatter implements TypeFormatter {
       return;
     }
 
-    const hasObjectTarget = nonDefaultNodes.some((node) =>
-      this.#isPlainObjectType(checker.getTypeFromTypeNode(node), checker)
+    const hasObjectTarget = nonDefaultTypes.some((memberType) =>
+      this.#isPlainObjectType(memberType, checker)
     );
     if (!hasObjectTarget) {
       return;
@@ -590,11 +605,11 @@ export class UnionFormatter implements TypeFormatter {
 
   #assertDeepDefaultHasObjectTarget(
     defaultEntry: DefaultUnionEntry,
-    nonDefaultNodes: readonly ts.TypeNode[],
+    nonDefaultTypes: readonly ts.Type[],
     checker: ts.TypeChecker,
   ): void {
-    const hasObjectTarget = nonDefaultNodes.some((node) =>
-      this.#isPlainObjectType(checker.getTypeFromTypeNode(node), checker)
+    const hasObjectTarget = nonDefaultTypes.some((memberType) =>
+      this.#isPlainObjectType(memberType, checker)
     );
     if (
       hasObjectTarget &&
@@ -625,8 +640,8 @@ export class UnionFormatter implements TypeFormatter {
   #formatTypeNodeMember(
     typeNode: ts.TypeNode,
     context: GenerationContext,
+    type = getTypeFromTypeNodeInContext(typeNode, context),
   ): MutableJSONSchema {
-    const type = context.typeChecker.getTypeFromTypeNode(typeNode);
     const native = detectWrapperViaNode(typeNode, context.typeChecker) ===
         undefined
       ? getNativeTypeSchema(type, context.typeChecker)

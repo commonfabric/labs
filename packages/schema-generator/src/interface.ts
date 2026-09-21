@@ -133,6 +133,14 @@ export interface GenerationContext {
   /** Optional type registry for synthetic nodes */
   typeRegistry?: WeakMap<ts.Node, ts.Type>;
 
+  /**
+   * The argument each type parameter stands for, for a node written inside a
+   * generic declaration and read for an instantiation of it: a property's
+   * declared type node, read for the object type holding that property. Keyed
+   * by the parameter's type. `typescript/type-arguments.ts` fills and reads it.
+   */
+  typeArguments?: ReadonlyMap<ts.Type, ts.Type>;
+
   /** Widen literal types to base types during schema generation */
   widenLiterals?: boolean;
 

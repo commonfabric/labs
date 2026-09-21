@@ -244,7 +244,7 @@ export default pattern<Input<Stored>>(({ c }) => ({
 
       const [capture] = await schemasOf(
         `
-interface Box<T> { value: T; }
+interface Box<T> { value?: T; }
 interface Input<T> { c: Writable<T | Default<{}>>; }
 export default pattern<Input<Box<number>>>(({ c }) => ({
   s: computed(() => JSON.stringify(c.get())),
@@ -256,8 +256,7 @@ export default pattern<Input<Box<number>>>(({ c }) => ({
           { type: "object", properties: {} },
           {
             type: "object",
-            properties: { value: { type: "number" } },
-            required: ["value"],
+            properties: { value: { type: ["number", "undefined"] } },
           },
         ],
         default: {},
@@ -271,7 +270,7 @@ export default pattern<Input<Box<number>>>(({ c }) => ({
 
       const output = await transformFiles({
         "/types.ts": `import type { Default } from "commonfabric";
-export interface Shape { side: number }
+export interface Shape { side?: number }
 interface Generic<T> { v: T | Default<{}>; }
 export type Input = Generic<Shape>;`,
         "/main.tsx": `import { computed, pattern } from "commonfabric";
@@ -297,7 +296,6 @@ export default pattern<Input>(({ v }) => ({
           Shape: {
             type: "object",
             properties: { side: { type: "number" } },
-            required: ["side"],
           },
         },
       });
@@ -399,7 +397,7 @@ export default pattern<Input<${argument}>>(({ c }) => ({
 
       const output = await transformFiles({
         "/types.ts": `import type { Default } from "commonfabric";
-export interface Stored { remote: string }
+export interface Stored { remote?: string }
 interface Generic<T> { v: T | Default<{}>; }
 export type Input = Generic<Stored>;`,
         "/main.tsx": `import { computed, pattern } from "commonfabric";
@@ -414,7 +412,6 @@ export default pattern<Input>(({ v }) => ({
       expect((capture!.$defs as Record<string, Schema>).Stored).toEqual({
         type: "object",
         properties: { remote: { type: "string" } },
-        required: ["remote"],
       });
     });
 

@@ -20,6 +20,7 @@ import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import { UnionFormatter } from "./formatters/union-formatter.ts";
 import { IntersectionFormatter } from "./formatters/intersection-formatter.ts";
 import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
+import { resolveTypeArgument } from "./typescript/type-arguments.ts";
 import {
   detectWrapperViaNode,
   getNamedTypeKey,
@@ -1171,6 +1172,13 @@ export class SchemaGenerator {
     isRootType: boolean = false,
   ): MutableJSONSchema {
     if ((type.flags & ts.TypeFlags.TypeParameter) !== 0) {
+      // The node naming the parameter says nothing about its argument, so the
+      // argument is formatted without one.
+      const argument = resolveTypeArgument(type, context);
+      if (argument !== type) {
+        const { typeNode: _, ...argumentContext } = context;
+        return this.#formatType(argument, argumentContext, isRootType);
+      }
       const checker = context.typeChecker;
       const baseConstraint = checker.getBaseConstraintOfType(type);
       if (baseConstraint && baseConstraint !== type) {
