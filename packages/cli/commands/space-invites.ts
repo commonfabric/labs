@@ -1,5 +1,5 @@
 /** Generic invitation commands use the same signed client as browser shells. */
-import { resolve } from "@std/path";
+import { dirname, resolve } from "@std/path";
 import { Command, ValidationError } from "@cliffy/command";
 import { isDIDKey } from "@commonfabric/identity/did";
 import {
@@ -42,6 +42,15 @@ async function prepareInviteRequest(
   let requestFile: string;
   if (requestedPath !== undefined) {
     requestFile = resolve(requestedPath);
+    const parent = await Deno.lstat(dirname(requestFile));
+    if (
+      !parent.isDirectory || parent.isSymlink ||
+      (parent.mode !== null && (parent.mode & 0o077) !== 0)
+    ) {
+      throw new ValidationError(
+        "Invitation request parent must be a private directory (0700).",
+      );
+    }
   } else {
     const state = Deno.env.get("XDG_STATE_HOME");
     const home = Deno.env.get("HOME");
@@ -86,9 +95,20 @@ async function prepareInviteRequest(
         "Invitation request file must be a private regular file (0600).",
       );
     }
+    using retainedFile = await Deno.open(requestFile, { read: true });
+    const opened = await retainedFile.stat();
+    if (
+      !opened.isFile || info.ino === null ||
+      opened.dev !== info.dev || opened.ino !== info.ino ||
+      (opened.mode !== null && (opened.mode & 0o077) !== 0)
+    ) {
+      throw new ValidationError(
+        "Invitation request file changed while opening.",
+      );
+    }
     let stored: unknown;
     try {
-      stored = JSON.parse(await Deno.readTextFile(requestFile));
+      stored = JSON.parse(await new Response(retainedFile.readable).text());
     } catch {
       throw new ValidationError("Invalid invitation request file.");
     }

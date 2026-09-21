@@ -2223,12 +2223,15 @@ JSON and require no existing memory session to redeem.
 - `cf space invite receipts [invite-id]` lists unique invitation/DID pairs.
 
 Creation saves its credentials before sending HTTP. With
-`--request-file <path>`, the command exclusively creates a private file (0600),
-or loads an existing private regular file. Existing files are never overwritten;
-symlinks, malformed data, and mismatched host, space, signing identity, access,
-TTL, or max uses are refused before sending. Retry with the same creation flags
-and `--request-file` to reuse the exact invitation after a lost response or CLI
-restart. `--shell` only changes the output link and may differ on a retry.
+`--request-file <path>`, the command requires a private parent directory (0700)
+and exclusively creates a private file (0600), or loads an existing private
+regular file. Existing files are never overwritten; symlinks, malformed data,
+and mismatched host, space, signing identity, access, TTL, or max uses are
+refused before sending. Retry with the same creation flags and `--request-file`
+to reuse the exact invitation after a lost response or CLI restart. `--shell`
+only changes the output link and may differ on a retry. Retained requests are
+read through one verified open file descriptor. The CLI refuses reuse when it
+cannot verify the opened file's identity.
 
 Without `--request-file`, each creation saves a new file under
 `$XDG_STATE_HOME/commonfabric/space-invites`, defaulting to
