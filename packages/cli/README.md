@@ -1,5 +1,29 @@
 # @commonfabric/cli
 
+## Repairing profile name protection
+
+`cf profile repair-name-protection --cell <profile-address> --identity <keyfile>
+--api-url <url>`
+inspects a source-attached profile and prints JSON containing its saved name,
+durable owner DID, cell addresses, protection status, and an `inspection`
+receipt. The full profile address includes its space DID and piece ID; the
+login's home space is not the repair target. Inspection does not run the profile
+or change its data.
+
+Review the name and addresses, then repeat the command with
+`--apply --expect <inspection>`. This explicitly accepts the current name and
+adds its missing CFC protection in place. The name bytes and cell IDs stay the
+same. A changed name, source, link, or policy requires a new inspection. An
+already protected profile needs no repair.
+
+The signing identity must match the owner recorded by the profile's persisted
+name and avatar policies. The operation supports the profile's named name cell
+and its recognized legacy link to a terminal string. It refuses unreadable,
+conflicting, stronger, or unfamiliar policies and layouts. It does not infer
+historical authorship from the current name, and it does not modify the
+profile's source. Rehearse a repair of real data on a writable space clone using
+the [space clone procedure](../../docs/development/space-clone-rehearsal.md).
+
 ## Following a piece source
 
 `cf piece follow --cell <piece> <origin>` adopts the origin’s current pattern

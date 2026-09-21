@@ -14,9 +14,14 @@ import { decode } from "@commonfabric/utils/encoding";
 import {
   type ProfileCommandDeps,
   profileCreateAction,
+  profileRepairNameProtectionAction,
   profileShowAction,
 } from "../commands/profile.ts";
 import type { CreatedProfile, ProfileCreateConfig } from "../lib/profile.ts";
+import {
+  profileNameProtection,
+  type ProfileNameProtectionConfig,
+} from "../lib/profile-name-protection.ts";
 import type { WishReadConfig, WishReadResult } from "../lib/wish.ts";
 
 const CREATED: CreatedProfile = {
@@ -65,7 +70,9 @@ async function captureStdout(fn: () => Promise<void>): Promise<string> {
   return captured;
 }
 
-async function makeTempKeyFile(): Promise<{ path: string; did: string }> {
+async function makeTempKeyFile(): Promise<
+  { path: string; did: `did:${string}` }
+> {
   const path = await Deno.makeTempFile({ suffix: ".key" });
   const pkcs8 = await Identity.generatePkcs8();
   await Deno.writeFile(path, pkcs8);
@@ -193,6 +200,99 @@ describe("cf profile command actions", () => {
       } finally {
         await Deno.remove(key.path);
       }
+    });
+  });
+  describe("profileRepairNameProtectionAction()", () => {
+    it("inspects by default and forwards only an explicitly accepted receipt", async () => {
+      const key = await makeTempKeyFile();
+      const requests: ProfileNameProtectionConfig[] = [];
+      const result = {
+        status: "repairable" as const,
+        inspection: "receipt",
+        owner: key.did,
+        name: "Saved name",
+        profile: {
+          space: key.did,
+          id: "of:profile" as const,
+          scope: "space" as const,
+          path: [],
+        },
+        positions: [],
+      };
+      const run = (config: ProfileNameProtectionConfig) => {
+        requests.push(config);
+        return Promise.resolve(result);
+      };
+      try {
+        const options = {
+          apiUrl: "http://127.0.0.1:8000",
+          identity: key.path,
+          cell: "//did:key:zProfileSpace/of:profile",
+        };
+        expect(
+          JSON.parse(
+            await captureStdout(() =>
+              profileRepairNameProtectionAction(options, run)
+            ),
+          ),
+        ).toEqual(result);
+        await captureStdout(() =>
+          profileRepairNameProtectionAction({
+            ...options,
+            apply: true,
+            expect: "receipt",
+          }, run)
+        );
+        expect(requests.map((request) => request.expectedInspection)).toEqual([
+          undefined,
+          "receipt",
+        ]);
+        expect(requests.map((request) => request.cell)).toEqual([
+          options.cell,
+          options.cell,
+        ]);
+      } finally {
+        await Deno.remove(key.path);
+      }
+    });
+
+    it("requires apply and the inspection receipt together before opening an identity", async () => {
+      for (const flags of [{ apply: true }, { expect: "receipt" }]) {
+        await expect(
+          profileRepairNameProtectionAction({
+            cell: "/profile",
+            identity: "/unread.key",
+            ...flags,
+          }),
+        ).rejects.toThrow("--apply and --expect");
+      }
+    });
+
+    it("refuses ambiguous targets before connecting", async () => {
+      let connected = false;
+      const load = () => {
+        connected = true;
+        throw new Error("unexpected connection");
+      };
+      for (
+        const cell of [
+          "/profile",
+          "//home/profile",
+          "//did:key:zProfileSpace/profile",
+          "//did:key:zProfileSpace/of:fid1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/name",
+          "//did:key:zProfileSpace/of:fid1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@user",
+        ]
+      ) {
+        await expect(
+          profileNameProtection({
+            cell,
+            apiUrl: "http://127.0.0.1:8000",
+            identity: "/unread.key",
+            space: "home",
+          }, load),
+        ).rejects.toThrow("full profile cell address");
+      }
+      expect(connected).toBe(false);
     });
   });
 });

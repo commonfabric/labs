@@ -568,6 +568,13 @@ export type WritePolicyInput =
     readonly value: FabricValue;
   }
   | {
+    /** An explicit host-authorized acceptance of existing unlabeled bytes. */
+    readonly kind: "owner-adoption";
+    readonly target: CfcAddress;
+    readonly value: FabricValue;
+    readonly owner: string;
+  }
+  | {
     /** Authority is carried by the runtime's private mark, never this record alone. */
     readonly kind: "initialization";
     readonly target: CfcAddress;

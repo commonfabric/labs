@@ -74,3 +74,23 @@ Source following preserves existing state. Installing a new source does not
 prove who wrote an old value or permit silently accepting it as a trusted seed.
 Repairing such state requires an explicit owner-authorized adoption operation
 that preserves the value and installs its policy in the same commit.
+
+The profile-name repair is one such operation. Its host-only adoption input is
+private, exact-address, and exact-value. Preparation treats it as a policy
+attempt even when the value write would be a no-op, so the normal requirement
+gates and envelope persistence run. Only the writer-binding gate receives the
+adoption permission. No raw CFC metadata is installed by the repair caller.
+
+The operation reads the durable represented principal from declared stored
+labels and checks that the actor matches it. A schema's current-principal
+placeholder alone cannot establish ownership. It supports only the field-local
+owner, represented-principal, and writer-binding policy; additional provenance
+claims or ancestor policies are refused. Owner acceptance cannot confer an
+`authored-by` claim on an old value.
+
+An inspection receipt binds the profile's verified pattern identity and setup,
+name projection, stored policies, and exact name-chain values. Application
+revalidates them on one transaction, including ordinary concurrency reads of
+policy metadata. Missing protection commits atomically across the supported
+chain. Existing protection is never replaced or weakened. The CLI surface is
+[`cf profile repair-name-protection`](../../packages/cli/README.md#repairing-profile-name-protection).

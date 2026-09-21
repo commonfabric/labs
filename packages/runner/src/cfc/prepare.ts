@@ -1159,6 +1159,32 @@ const writePreservesRuntimeOutput = (
     );
 };
 
+/** An owner adoption accepts only the unchanged bytes at its exact target. */
+const writeIsOwnerAdoption = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean => {
+  return tx.getCfcState().writePolicyInputs.some((input) =>
+    input.kind === "owner-adoption" && tx.isRuntimeWritePolicyInput(input) &&
+    input.owner === tx.getCfcState().trustSnapshot?.actingPrincipal &&
+    input.target.space === target.space && input.target.id === target.id &&
+    normalizeCellScope(input.target.scope) === target.scope &&
+    arraysEqual(input.target.path, path) &&
+    loadStoredCfcEnvelope(tx, target).status === "none" &&
+    valueEqual(
+      tx.readValueOrThrow({ ...target, path: [...path] }, {
+        meta: INTERNAL_VERIFIER_META,
+      }),
+      input.value,
+    )
+  );
+};
+
 // The prepare pass's reader of a stored envelope. `cfc/metadata.ts` owns
 // what an envelope is and how its labels resolve; this settles only how the
 // reads are marked.
@@ -3928,7 +3954,14 @@ const ifcEntryAppliesToAttemptedWrite = (
   const wildcardIndex = path.indexOf("*");
   if (wildcardIndex === -1) {
     const writes = [...(tx.getWriteDetails?.(target.space) ?? [])];
-    let touched = false;
+    // Owner adoption changes policy while retaining the stored bytes. It is
+    // still a policy attempt and must pass every ordinary requirement gate.
+    let touched = tx.getCfcState().writePolicyInputs.some((input) =>
+      input.kind === "owner-adoption" && tx.isRuntimeWritePolicyInput(input) &&
+      input.target.space === target.space && input.target.id === target.id &&
+      normalizeCellScope(input.target.scope) === target.scope &&
+      arraysEqual(input.target.path, path)
+    );
     for (const write of writes) {
       if (write.address.id !== target.id) continue;
       if (normalizeCellScope(write.address.scope) !== target.scope) continue;
@@ -4557,7 +4590,8 @@ const verifyInputRequirements = (
       target,
       entry.path,
     ) || writeIsPatternSetupInitialization(tx, target, entry.path) ||
-      writeIsRuntimeInitialization(tx, target, entry.path);
+      writeIsRuntimeInitialization(tx, target, entry.path) ||
+      writeIsOwnerAdoption(tx, target, entry.path);
     if (writeAuthorizedByFailure !== undefined && !setupProjection) {
       if (
         entry.path.length !== 0 ||
