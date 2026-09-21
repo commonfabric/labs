@@ -116,7 +116,7 @@ export abstract class BaseValueVisitor<
   /** @inheritDoc */
   visitValue(
     _value: FabricValuePlus<PlusType>,
-    _tag: FabricValuePlusTag,
+    _tag: FabricValuePlusTag | null,
   ): DispatchingVisitorResult<PlusType, ResultType> {
     return DO_VISIT_SUBTYPE;
   }
