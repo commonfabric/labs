@@ -392,9 +392,13 @@ export function typeToTypeNodeWithRegistry(
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
   flags = DEFAULT_TYPE_NODE_FLAGS,
 ): ts.TypeNode {
-  const rawNode =
-    context.checker.typeToTypeNode(type, context.sourceFile, flags) ??
-      context.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
+  const printed = context.checker.typeToTypeNode(
+    type,
+    context.sourceFile,
+    flags,
+  );
+  const rawNode = printed ??
+    context.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
 
   // Rewrite commonfabric type references to the always-resolvable
   // `__cfHelpers.X` qualified form. The printer's natural output references
@@ -419,8 +423,24 @@ export function typeToTypeNodeWithRegistry(
   if (typeRegistry) {
     typeRegistry.set(node, type);
   }
+  if (printed) {
+    PRINTED_FROM.set(node, type);
+  }
 
   return node;
+}
+
+/** The nodes `typeToTypeNodeWithRegistry()` printed, with their types. */
+const PRINTED_FROM = new WeakMap<ts.TypeNode, ts.Type>();
+
+/**
+ * Returns `true` for a node `typeToTypeNodeWithRegistry()` printed from
+ * `type`. Such a node says what `type` says and nothing more: an `any` or
+ * `unknown` in it is one that `type` holds. The `unknown` put in place of a
+ * type the checker would not print is not one.
+ */
+export function isPrintedFrom(node: ts.TypeNode, type: ts.Type): boolean {
+  return PRINTED_FROM.get(node) === type;
 }
 
 export function createRegisteredTypeLiteral(

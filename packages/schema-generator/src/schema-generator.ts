@@ -1164,6 +1164,13 @@ export class SchemaGenerator {
     isRootType: boolean = false,
   ): MutableJSONSchema {
     if ((type.flags & ts.TypeFlags.TypeParameter) !== 0) {
+      const unbound = context.unboundTypeParameters;
+      if (
+        unbound?.parameters.has(type) &&
+        !context.uninterpretedTypeNodes?.includes(unbound.reference)
+      ) {
+        context.uninterpretedTypeNodes?.push(unbound.reference);
+      }
       const checker = context.typeChecker;
       const baseConstraint = checker.getBaseConstraintOfType(type);
       if (baseConstraint && baseConstraint !== type) {
@@ -1761,7 +1768,24 @@ export class SchemaGenerator {
       // A name declared as `any` reads as `any` does, accepting any value.
       if (resolved === checker.getAnyType()) return true;
       if (resolved) {
-        return this.formatChildType(resolved, context, typeNode);
+        // A name resolves to its declaration's own type, which binds none of
+        // the arguments written here: `Box<number>` reads as `Box<T>`.
+        const parameters = typeNode.typeArguments?.length
+          ? getOwnTypeParameters(resolved)
+          : [];
+        return this.formatChildType(
+          resolved,
+          parameters.length > 0
+            ? {
+              ...context,
+              unboundTypeParameters: {
+                parameters: new Set(parameters),
+                reference: typeNode,
+              },
+            }
+            : context,
+          typeNode,
+        );
       }
 
       if (
@@ -2314,4 +2338,16 @@ export class SchemaGenerator {
     if (Object.keys(filtered).length > 0) out.$defs = filtered;
     return out as MutableJSONSchema;
   }
+}
+
+/**
+ * Returns the type parameters of the generic declaration whose own type
+ * `declared` is: an interface's or class's, or a type alias's.
+ */
+function getOwnTypeParameters(declared: ts.Type): readonly ts.Type[] {
+  const ownParameters = (declared as ts.InterfaceType).typeParameters ??
+    declared.aliasTypeArguments;
+  return (ownParameters ?? []).filter((parameter) =>
+    (parameter.flags & ts.TypeFlags.TypeParameter) !== 0
+  );
 }

@@ -310,5 +310,58 @@ interface SchemaRoot {
         scope: "user",
       });
     });
+
+    for (
+      const [declaration, name] of [
+        ["interface Box<T> { value: T }", "an interface"],
+        ["type Box<T> = { value: T }", "a type alias"],
+      ] as const
+    ) {
+      it(`emits the resolved payload for a reference to ${name} printed with its arguments`, async () => {
+        // `Box<number>` resolves by name, in the module it is emitted into, to
+        // `Box<T>`, which binds no argument, so node analysis would read its
+        // `value` as the bare type parameter.
+        const { checker, sourceFile } = await createTestProgram(
+          `${declaration} interface X { authored: PerUser<Box<number>[]>; }`,
+        );
+        const symbol = checker.getSymbolsInScope(
+          sourceFile,
+          ts.SymbolFlags.Interface,
+        ).find((candidate) => candidate.name === "X");
+        if (!symbol) throw new Error("Interface X not found");
+        const authored = checker.getDeclaredTypeOfSymbol(symbol)
+          .getProperty("authored");
+        if (!authored) throw new Error("Property X.authored not found");
+
+        const schema = new SchemaGenerator().generateSchema(
+          checker.getTypeOfSymbolAtLocation(authored, sourceFile),
+          checker,
+          ts.factory.createTypeReferenceNode(
+            ts.factory.createQualifiedName(
+              ts.factory.createIdentifier("__cfHelpers"),
+              ts.factory.createIdentifier("PerUser"),
+            ),
+            [ts.factory.createArrayTypeNode(
+              ts.factory.createTypeReferenceNode("Box", [
+                ts.factory.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword),
+              ]),
+            )],
+          ),
+          undefined,
+          undefined,
+          sourceFile,
+        );
+
+        expect(schema).toEqual({
+          type: "array",
+          items: {
+            type: "object",
+            properties: { value: { type: "number" } },
+            required: ["value"],
+          },
+          scope: "user",
+        });
+      });
+    }
   });
 });

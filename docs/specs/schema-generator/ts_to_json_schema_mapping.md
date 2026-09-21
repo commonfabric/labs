@@ -79,10 +79,11 @@ no child node is supplied to avoid mismatched type/node pairs.
 The consumer adds a second trigger of its own: `SchemaGeneratorTransformer`
 routes to `generateSchemaFromSyntheticTypeNode` when (a) the type arg is
 synthetic (`pos === -1 && end === -1`) and resolved to `any`, or (b) the
-real-position type arg *contains* an `any`/`unknown` keyword anywhere
-(`containsAnyOrUnknownTypeNode`), "so the checker does not recover a wider
-semantic type"
-(`ts-transformers/src/transformers/schema-generator.ts`). Both
+real-position type arg *contains* an `unknown` keyword anywhere, or an `any`
+keyword in a node other than one the transformer printed from the resolved
+type (`isPrintedFrom`), "so the checker does not recover a wider semantic type"
+(`ts-transformers/src/transformers/schema-generator.ts`). A printed node holds
+an `any` only where the type does, and the type path reads it. Both
 triggers are documented in the ts-transformers behavior spec §12.
 
 **The node-based analyzer** (`analyzeTypeNodeStructure`,
@@ -116,6 +117,14 @@ one per schema, naming each unread type once. An authored `any`, or a name
 declared as `any`, is a reading, not a guess, and is not reported; nor is a
 guess inside an intersection that accepts nothing, which leaves nothing of it in
 the schema.
+
+A synthetic reference written with type arguments that resolves by name, such
+as a printed `Box<number>`, reads its declaration's own type, `Box<T>`, which
+binds none of the arguments. Formatting one of that declaration's type
+parameters is a guess at its argument, recorded against the reference
+(`unboundTypeParameters`), so a wrapper holding the instantiated type reads the
+value from that. A reading that reaches no such parameter, as a wrapper
+reference read through its node does, records nothing.
 
 An intersection node is settled the way the checker settles the type, each
 constituent read through its reference, and what remains is merged as

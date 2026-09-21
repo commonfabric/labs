@@ -161,6 +161,18 @@ export interface GenerationContext {
    * every child context.
    */
   uninterpretedTypeNodes?: ts.TypeNode[];
+
+  /**
+   * The type parameters of a generic declaration that node-based analysis
+   * reached through `reference`, a synthetic reference that resolves by name
+   * and whose type arguments the reading does not bind. A schema formatted for
+   * one of them is a guess at its argument, recorded as `reference` in
+   * `.uninterpretedTypeNodes`.
+   */
+  unboundTypeParameters?: {
+    readonly parameters: ReadonlySet<ts.Type>;
+    readonly reference: ts.TypeNode;
+  };
 }
 
 /**

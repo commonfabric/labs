@@ -2212,9 +2212,14 @@ Special path:
 
 - the generator uses its node-based path when the resolved type is `any` and
   the type-argument node is synthetic (`pos=-1,end=-1`), or when a
-  real-position type argument contains any `any` / `unknown` keyword. The
-  latter avoids letting the checker recover a wider semantic type and erase
-  the authored unknown boundary.
+  real-position type argument contains an `unknown` keyword, or an `any`
+  keyword in a node other than one printed from the resolved type. The latter
+  avoids letting the checker recover a wider semantic type and erase the
+  authored unknown boundary. A node `typeToTypeNodeWithRegistry()` printed from
+  the resolved type (`isPrintedFrom` in `ast/type-building.ts`) holds an `any`
+  only where the type does, so the type path reads it, including the names it
+  spells that the emitting module imports
+  (`test/printed-type-node-schema.test.ts`).
 - synthetic union handling preserves `undefined` members (for example
   `string | undefined` retains an explicit `undefined` branch in generated
   schema).

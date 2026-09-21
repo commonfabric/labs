@@ -9,6 +9,7 @@ import ts from "typescript";
 import {
   getNodeText,
   getTypeFromTypeNodeWithFallback,
+  isPrintedFrom,
   recoverAuthoredPosition,
   visitEachChildWithJsx,
 } from "../ast/mod.ts";
@@ -140,13 +141,18 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
 
         // If Type resolved to 'any' or the synthetic TypeNode intentionally
         // contains unknown, use the synthetic-node generator so the checker
-        // does not recover a wider semantic type from the original source.
+        // does not recover a wider semantic type from the original source. A
+        // node printed from the type holds an `any` only where the type does,
+        // and reads the same from the type; an `unknown` in it still takes the
+        // node path, which keeps a union's other members open.
         let schema: unknown;
         if (
           ((typeArg.pos === -1 &&
             typeArg.end === -1 &&
             (type.flags & ts.TypeFlags.Any)) ||
-            containsAnyOrUnknownTypeNode(typeArg))
+            containsTypeNodeOfKind(typeArg, ts.SyntaxKind.UnknownKeyword) ||
+            (containsTypeNodeOfKind(typeArg, ts.SyntaxKind.AnyKeyword) &&
+              !isPrintedFrom(typeArg, type)))
         ) {
           // Synthetic TypeNode path - use new method that shares context properly
           schema = schemaGenerator.generateSchemaFromSyntheticTypeNode(
@@ -671,14 +677,15 @@ interface ToSchemaNode extends ts.CallExpression {
   typeArguments: ts.NodeArray<ts.TypeNode>;
 }
 
-function containsAnyOrUnknownTypeNode(node: ts.TypeNode): boolean {
+/** Returns `true` for a node that holds a node of `kind` anywhere within it. */
+function containsTypeNodeOfKind(
+  node: ts.TypeNode,
+  kind: ts.SyntaxKind.AnyKeyword | ts.SyntaxKind.UnknownKeyword,
+): boolean {
   let found = false;
   const visit = (current: ts.Node): void => {
     if (found) return;
-    if (
-      current.kind === ts.SyntaxKind.AnyKeyword ||
-      current.kind === ts.SyntaxKind.UnknownKeyword
-    ) {
+    if (current.kind === kind) {
       found = true;
       return;
     }
