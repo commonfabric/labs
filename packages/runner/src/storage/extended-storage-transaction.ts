@@ -43,6 +43,7 @@ import {
   cfcDereferenceTracesEqual,
   type CfcEnforcementMode,
   cfcEnforcementStrictness,
+  type CfcExternalContentObservation,
   type CfcFlowLabelsMode,
   type CfcGrantWriteInput,
   type CfcLabelMetadataObservation,
@@ -533,6 +534,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     consultedGrants: [],
     consultedPolicyManifests: [],
     labelMetadataObservations: [],
+    externalContentObservations: [],
     refusalDetails: [],
   };
 
@@ -2111,6 +2113,19 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     }
   }
 
+  recordCfcExternalContentObservation(
+    observation: CfcExternalContentObservation,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): void {
+    if (!runtimeWritePolicyAuthorized(authorization)) return;
+    this.#noteCfcActivity();
+    this.#cfcState.externalContentObservations.push(deepFreeze(observation));
+    this.markCfcRelevant("external-content-observation");
+    if (this.#cfcState.prepare.status === "prepared") {
+      this.invalidateCfc("external-content-observation-added");
+    }
+  }
+
   recordCfcRefusalDetail(detail: CfcRefusalDetail): void {
     // Deliberately inert: no relevance mark, no digest invalidation, no
     // prepare-state change. A detail DESCRIBES a decision another line of
@@ -2437,6 +2452,13 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
         ? {
           labelMetadataObservations: [
             ...this.#cfcState.labelMetadataObservations,
+          ],
+        }
+        : {}),
+      ...(this.#cfcState.externalContentObservations.length > 0
+        ? {
+          externalContentObservations: [
+            ...this.#cfcState.externalContentObservations,
           ],
         }
         : {}),
@@ -4116,6 +4138,16 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     observation: CfcLabelMetadataObservation,
   ): void {
     this.#wrapped.recordCfcLabelMetadataObservation(observation);
+  }
+
+  recordCfcExternalContentObservation(
+    observation: CfcExternalContentObservation,
+    authorization?: RuntimeWritePolicyAuthorization,
+  ): void {
+    this.#wrapped.recordCfcExternalContentObservation(
+      observation,
+      authorization,
+    );
   }
 
   recordCfcRefusalDetail(detail: CfcRefusalDetail): void {

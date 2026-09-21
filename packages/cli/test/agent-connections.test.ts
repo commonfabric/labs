@@ -7,9 +7,11 @@ import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import {
+  getPatternEnvironment,
   resolveEntryIdentity,
   Runtime,
   runtimePresets,
+  setPatternEnvironment,
 } from "@commonfabric/runner";
 import {
   agentQueueIndexCell,
@@ -19,6 +21,7 @@ import {
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { startAgentRunner } from "../commands/agent.ts";
+import { openAgentStorageHost } from "../lib/agent-connections.ts";
 import { createHarnessAgentRunExecutor } from "../lib/agent-run-harness.ts";
 import { loadIdentity } from "../lib/identity.ts";
 
@@ -29,8 +32,8 @@ const HOME_SOURCE = `
 import { handler, pattern, Writable, type PerUser } from "commonfabric";
 type Runner = { host: string; tools: string[]; registeredAt: string; lastClaimAt?: string };
 type Entry = { run: PerUser<unknown>; host: string };
-const register = handler<{ runner: Runner }, { runner: Writable<Runner | undefined> }>(
-  ({ runner }, state) => state.runner.set(runner),
+const register = handler<{ runner?: Runner }, { runner: Writable<Runner | undefined> }>(
+  (event = {}, state) => state.runner.set(event.runner),
 );
 export default pattern(() => {
   const entries = new Writable<Entry[]>([]).for("entries");
@@ -179,11 +182,39 @@ describe("agent-connections", () => {
       expect(ended.modelTurns).toBe(1);
       await queue.pull();
       expect(queue.get().agentRunner?.lastClaimAt).toEqual(expect.any(String));
+      await runner.stop();
+      runner = undefined;
+      await queue.pull();
+      expect(queue.get().agentRunner).toBeUndefined();
     } finally {
       await runner?.stop();
       await home.dispose();
       await remote.dispose();
       await homeServer.close();
+      await recordServer.close();
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("keeps the home pattern environment when opening a record host", async () => {
+    const directory = await Deno.makeTempDir({ prefix: "agent-connections-" });
+    const identityPath = join(directory, "identity.key");
+    await Deno.writeFile(identityPath, await Identity.generatePkcs8());
+    const recordServer = StandaloneMemoryServer.start();
+    const originalEnvironment = getPatternEnvironment();
+    const homeUrl = new URL("https://home.example.test");
+    setPatternEnvironment({ apiUrl: homeUrl });
+    let storageHost: Runtime | undefined;
+    try {
+      storageHost = await openAgentStorageHost(
+        identityPath,
+        recordServer.url.origin,
+      );
+
+      expect(getPatternEnvironment().apiUrl).toEqual(homeUrl);
+    } finally {
+      await storageHost?.dispose();
+      setPatternEnvironment(originalEnvironment);
       await recordServer.close();
       await Deno.remove(directory, { recursive: true });
     }

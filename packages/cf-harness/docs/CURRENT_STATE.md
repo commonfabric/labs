@@ -309,9 +309,12 @@ The current package provides:
   to a document minted under the label the tool reported — and a handle the run
   does not hold fails the write before any document is written. Inline
   model-authored text carries the join the writing transaction derives from
-  reading every observed cell; the write is attributed to the `agent` builtin,
-  so the result carries `LlmDerived`; the run's observation ceiling is declared
-  as the result's store policy, so a join that does not fit is refused by the
+  reading every observed cell and cited referent document. An uncited referent
+  passes the same runtime admission in an isolated aborted transaction, then
+  contributes to the result through an opaque CONTENT-observation receipt
+  without becoming durable. The write is attributed to the `agent` builtin, so
+  the result carries `LlmDerived`; the run's observation ceiling is declared as
+  the result's store policy, so a join that does not fit is refused by the
   runner's commit boundary and surfaces as a typed `cfc_commit_refused` failure
   whose message names no label. A handle at a position whose schema declares a
   `maxConfidentiality` the referent's label exceeds is sealed rather than

@@ -153,14 +153,17 @@ readiness.
   session. Its bounded authority is the session's (AH-TOOL-7): every handle the
   result names must be one the run's table holds, a cell handle becomes a link
   and never a copy, a non-cell referent becomes a document under the label its
-  tool reported, the cells the run observed are read through the writing
-  transaction so the runner derives the inline text's label, the write is
-  attributed to the `agent` builtin so the result carries the runtime-minted
-  `LlmDerived` family, and the run's observation ceiling is declared as the
-  result document's store policy so the runner's commit boundary — not the
-  writer — decides whether the derived join fits. A refusal reaches the caller
-  as a typed failure carrying the refusal code and the boundary's structured
-  detail, with no label atom in its message.
+  tool reported when the result cites it, and an uncited referent passes the
+  same write admission in an isolated aborted transaction and contributes
+  through an opaque runtime CONTENT-observation receipt. The cells the run
+  observed and the cited referents are read through the writing transaction so
+  the runner derives the inline text's label without making uncited content
+  durable. The write is attributed to the `agent` builtin so the result carries
+  the runtime-minted `LlmDerived` family, and the run's observation ceiling is
+  declared as the result document's store policy so the runner's commit boundary
+  — not the writer — decides whether the derived join fits. A refusal reaches
+  the caller as a typed failure carrying the refusal code and the boundary's
+  structured detail, with no label atom in its message.
 - Network: explicit in configuration but still provisional. Sandboxed `bash`
   applies a direct-`curl` destination guard; `web_fetch` and web child profiles
   have their own bounded request policies.
@@ -386,12 +389,12 @@ placeholders resolve only at the SQLite query boundary.
     tool call's input label, the prompt slot's influence joined with the run's
     accumulated model-context label — and that assumed label is what is measured
     against the run's ceiling, recorded as the observation, and available to
-    stamp on a minted document. The pinned loom emits no `ifc` on any retrieval
-    payload, so this is the path every real row takes. The assumption can
-    under-label a row: what it holds is decided by its store, not by who asked.
-    A row whose `ifc` is present and unreadable is still refused, and loom's own
-    facet filtering still runs first on the host. The rule is
-    `labelForUnlabeledLoomRow()` in `src/tools/loom-retrieval.ts`; see
+    stamp on a document when the result cites the row. The pinned loom emits no
+    `ifc` on any retrieval payload, so this is the path every real row takes.
+    The assumption can under-label a row: what it holds is decided by its store,
+    not by who asked. A row whose `ifc` is present and unreadable is still
+    refused, and loom's own facet filtering still runs first on the host. The
+    rule is `labelForUnlabeledLoomRow()` in `src/tools/loom-retrieval.ts`; see
     [Read-only Loom retrieval](LOOM_RETRIEVAL.md). Owner: `cf-harness` and loom.
     Retirement: loom returns a label per row and the function reads it.
 

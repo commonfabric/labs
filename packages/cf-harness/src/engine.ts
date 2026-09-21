@@ -843,7 +843,8 @@ export class CfHarnessEngine {
           skillsShAcquisitionClientFactory,
         );
     this.#taskText = options.taskText;
-    this.#structuredResult = options.lineage === undefined
+    this.#structuredResult = options.lineage === undefined &&
+        options.runState?.lineage === undefined
       ? options.structuredResult
       : undefined;
     this.#inputCells = options.inputCells ?? [];

@@ -370,6 +370,7 @@ describe("writeAgentResult()", () => {
     });
 
     expect(written.sealedPaths).toEqual([["source"], ["row"]]);
+    expect(written.mintedDocuments).toEqual([]);
     expect(isSealedOpaqueLinkObject(
       await (async () => {
         const cell = runtime.getCellFromLink(written.link);

@@ -32,7 +32,9 @@ import {
   ADDRESS_HANDLE_TOKEN_PREFIX,
   HANDLE_TOKEN_PATTERN,
   type HarnessHandleEntry,
+  type HarnessHandleReferent,
   type HarnessHandleTable,
+  REFERENT_TOKEN_PATTERN,
 } from "./contracts/handle-table.ts";
 import type { HarnessFetch } from "./contracts/http-fetch.ts";
 import type { HarnessImageAttachment } from "./contracts/image.ts";
@@ -158,6 +160,7 @@ import {
   mintAddressHandle,
   resolveHandleRef,
   resolveHandleToken,
+  resolveReferentToken,
   swapLinksForTokens,
   swapTokensForRefs,
 } from "./handle-table.ts";
@@ -1067,33 +1070,44 @@ const subagentProfileConfigForRun = (
  * minting looks up by `addressKey`, so a child minting a handle for a seeded
  * address returns the parent's token.
  */
-const seedSubagentHandleTable = (
+export const seedSubagentHandleTable = (
   parentTable: HarnessHandleTable | undefined,
   childRunId: string,
   input: DelegateTaskToolInput,
   declaredTokens: readonly string[] = [],
 ): HarnessHandleTable | undefined => {
-  if (parentTable === undefined || parentTable.entries.length === 0) {
+  if (parentTable === undefined) {
     return undefined;
   }
   const seeded = new Map<string, HarnessHandleEntry>();
+  const seededReferents = new Map<string, HarnessHandleReferent>();
   const namedTokens = [input.goal, input.context ?? ""].flatMap((text) =>
-    [...text.matchAll(new RegExp(HANDLE_TOKEN_PATTERN))].map((match) =>
-      match[0]
-    )
+    [
+      ...text.matchAll(new RegExp(HANDLE_TOKEN_PATTERN)),
+      ...text.matchAll(new RegExp(REFERENT_TOKEN_PATTERN)),
+    ].map((match) => match[0])
   );
   for (const token of [...namedTokens, ...declaredTokens]) {
     const entry = resolveHandleToken(parentTable, token);
     if (entry !== undefined && entry.capability === undefined) {
       seeded.set(entry.token, entry);
     }
+    const referent = resolveReferentToken(parentTable, token);
+    if (referent !== undefined) seededReferents.set(referent.token, referent);
   }
-  if (seeded.size === 0) {
+  if (seeded.size === 0 && seededReferents.size === 0) {
     return undefined;
   }
   return {
     ...createHarnessHandleTable(childRunId),
     entries: [...seeded.values()].map((entry) => ({ ...entry })),
+    ...(seededReferents.size > 0
+      ? {
+        referents: [...seededReferents.values()].map((referent) => ({
+          ...referent,
+        })),
+      }
+      : {}),
   };
 };
 

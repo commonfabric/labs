@@ -9,6 +9,7 @@ import { renderCellReference } from "@commonfabric/runner/shared";
 import {
   type AgentInspectionDeps,
   cancelAgentRun,
+  readAgentRun,
   readAgentRuns,
   selectAgentRun,
 } from "../lib/agent-inspection.ts";
@@ -161,11 +162,75 @@ describe("agent-inspection", () => {
     expect(run.cancelRequestedAt).toBe("2026-09-20T12:00:00.000Z");
   });
 
+  it("reads an exact record without opening an unrelated unavailable host", async () => {
+    const { queued } = await seed();
+    const address = renderCellReference(queued.getAsNormalizedFullLink());
+    const homeRuntime = runtimes.get(HOME_HOST)!;
+    await homeRuntime.editWithRetry((tx) => {
+      homeRuntime.getCell(home, "home-pattern", undefined, tx)
+        .key("agentQueue").key("entries").key(0).key("host").set("not a url");
+    });
+    deps.openHost = () => Promise.reject(new Error("stale toolshed"));
+
+    const run = await readAgentRun(config, address, deps);
+
+    expect(run.id).toBe(queued.getAsNormalizedFullLink().id);
+    expect(run.host).toBe(HOME_HOST);
+  });
+
+  it("cancels an exact record without opening an unrelated unavailable host", async () => {
+    const { queued } = await seed();
+    deps.openHost = () => Promise.reject(new Error("stale toolshed"));
+
+    const run = await cancelAgentRun(
+      config,
+      queued.getAsNormalizedFullLink().id,
+      deps,
+    );
+
+    expect(run.cancelRequestedAt).toBe("2026-09-20T12:00:00.000Z");
+  });
+
   it("leaves a terminal record unchanged when cancellation is requested", async () => {
     await seed();
     const run = await cancelAgentRun(config, "hash-completed", deps);
 
     expect(run.state).toBe("completed");
+    expect(run.cancelRequestedAt).toBeUndefined();
+  });
+
+  it("returns terminal metadata written before the cancellation transaction", async () => {
+    const { queued } = await seed();
+    const runtime = runtimes.get(HOME_HOST)!;
+    const edit = runtime.editWithRetry.bind(runtime);
+    let advanced = false;
+    runtime.editWithRetry = async (action) => {
+      if (!advanced) {
+        advanced = true;
+        await edit((tx) => {
+          queued.withTx(tx).key("state").set("failed");
+          queued.withTx(tx).key("outcome").set("failed");
+          queued.withTx(tx).key("errorCode").set("PROVIDER_FAILURE");
+          queued.withTx(tx).key("finishedAt").set("2026-09-20T11:59:00Z");
+          queued.withTx(tx).key("modelTurns").set(3);
+        });
+      }
+      return edit(action);
+    };
+
+    const run = await cancelAgentRun(
+      config,
+      queued.getAsNormalizedFullLink().id,
+      deps,
+    );
+
+    expect(run).toMatchObject({
+      state: "failed",
+      outcome: "failed",
+      errorCode: "PROVIDER_FAILURE",
+      finishedAt: "2026-09-20T11:59:00Z",
+      modelTurns: 3,
+    });
     expect(run.cancelRequestedAt).toBeUndefined();
   });
 

@@ -197,7 +197,9 @@ describe("cf wish headless read (resolveWish)", () => {
 
   it("preserves an `asCell` reference whose target is absent on this toolshed", async () => {
     const home = userIdentity.did();
-    const target = runtime.getCell(home, "run-on-another-toolshed");
+    const remoteSpace =
+      (await Identity.fromPassphrase("cf-wish-test-remote-run-space")).did();
+    const target = runtime.getCell(remoteSpace, "run-on-another-toolshed");
     await runtime.editWithRetry((tx) => {
       const homePattern = runtime.getCell(home, "queue-home", undefined, tx);
       homePattern.set({ agentQueue: { run: target } });
@@ -210,8 +212,10 @@ describe("cf wish headless read (resolveWish)", () => {
     });
 
     expect(isCell((result as { run: unknown }).run)).toBe(true);
-    expect((result as { run: Cell<unknown> }).run.getAsNormalizedFullLink().id)
-      .toBe(target.getAsNormalizedFullLink().id);
+    const link = (result as { run: Cell<unknown> }).run
+      .getAsNormalizedFullLink();
+    expect(link.id).toBe(target.getAsNormalizedFullLink().id);
+    expect(link.space).toBe(remoteSpace);
   });
 
   it("projectWishValue strips stream handles but keeps profile data (CT-1844)", () => {

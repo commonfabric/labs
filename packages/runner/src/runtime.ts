@@ -1,4 +1,8 @@
-import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
+import {
+  cloneIfNecessary,
+  fabricFromConvertibleJsValue,
+  type FabricValue,
+} from "@commonfabric/data-model";
 import {
   getModernCellRepConfig,
   resetModernCellRepConfig,
@@ -71,6 +75,7 @@ import {
   type CfcTriggerReadGating,
   type CfcTrustConfig,
   type CfcTrustConfigInput,
+  type CfcTxState,
   type CfcWriteFloorMode,
   DEFAULT_SINK_MAX_CONFIDENTIALITY,
   linkCfcLabelView,
@@ -91,9 +96,12 @@ import {
   RuntimeOwnedStores,
 } from "./cfc/runtime-owned-stores.ts";
 import {
+  type CfcExternalContentObservation,
   type RuntimeWritePolicyAuthorization,
+  runtimeWritePolicyAuthorization,
   runtimeWritePolicyAuthorized,
 } from "./cfc/types.ts";
+import { collectConsumedLabel, deriveFlowJoin } from "./cfc/prepare.ts";
 import { createRef, EntityId } from "./create-ref.ts";
 import { waveRunContextOf } from "./executor/wave.ts";
 import type { ConsoleMethod } from "./harness/console.ts";
@@ -1010,6 +1018,91 @@ function cellAsLink(value: object | ((...args: never[]) => unknown)): unknown {
   return isCell(value) ? value.toSigilLinkOrNull() : value;
 }
 
+type ExternalObservationReceiptPayload = {
+  runtime: object;
+  sourceTx: IExtendedStorageTransaction;
+  targetTx: IExtendedStorageTransaction;
+  space: MemorySpace;
+  producer: string;
+  trustSnapshot: TrustSnapshot | undefined;
+  trustConfig: CfcTxState["trustConfig"];
+  policySnapshot: { readonly digest: string } | undefined;
+  moduleDelegations: CfcTxState["moduleDelegations"];
+  posture: readonly unknown[];
+  observation: CfcExternalContentObservation;
+  consumed: boolean;
+};
+
+const externalObservationReceipts = new WeakMap<
+  object,
+  ExternalObservationReceiptPayload
+>();
+
+const externalObservationPosture = (
+  state: Readonly<CfcTxState>,
+): readonly unknown[] => [
+  state.enforcementMode,
+  state.flowLabelsMode,
+  state.writeFloorMode,
+  state.triggerReadGating,
+  state.decomposedEnvelopes,
+  state.contentAddressedLabels,
+  state.policyEvaluationMode,
+  state.labelMetadataProtectionMode,
+  state.declaredMonotonicityMode,
+];
+
+const moduleDelegationsEqual = (
+  left: CfcTxState["moduleDelegations"],
+  right: CfcTxState["moduleDelegations"],
+): boolean => {
+  if (left.size !== right.size) {
+    return false;
+  }
+  for (const [space, leftModules] of left) {
+    const rightModules = right.get(space);
+    if (rightModules === undefined || leftModules.size !== rightModules.size) {
+      return false;
+    }
+    for (const [moduleIdentity, delegated] of leftModules) {
+      if (!deepEqual(delegated, rightModules.get(moduleIdentity))) {
+        return false;
+      }
+    }
+  }
+  return true;
+};
+
+const copyModuleDelegations = (
+  source: CfcTxState["moduleDelegations"],
+): CfcTxState["moduleDelegations"] => {
+  const copy = new Map<
+    MemorySpace,
+    ReadonlyMap<string, readonly string[]>
+  >();
+  for (const [space, modules] of source) {
+    copy.set(
+      space,
+      new Map(
+        [...modules].map(([identity, predecessors]) => [
+          identity,
+          [...predecessors],
+        ]),
+      ),
+    );
+  }
+  return copy;
+};
+
+const externalObservationRefusal = (
+  message: string,
+  state?: Readonly<CfcTxState>,
+): Error =>
+  Object.assign(new Error(message), {
+    name: "CfcCommitRefusalError",
+    refusals: [...(state?.refusalDetails ?? [])],
+  });
+
 /**
  * Main Runtime class that orchestrates all services in the runner package.
  *
@@ -1033,6 +1126,7 @@ function cellAsLink(value: object | ((...args: never[]) => unknown)): unknown {
 export class Runtime {
   #tearingDownWrites = false;
   readonly #writeTeardown = new AbortController();
+  readonly #transactions = new WeakSet<IExtendedStorageTransaction>();
 
   readonly id: string;
   readonly scheduler: Scheduler;
@@ -2461,6 +2555,7 @@ export class Runtime {
       this.#transactionSealDestination ?? this.#speculationDestination(),
     );
     wrapped.configureRuntimeOwnedStores(this.#runtimeOwnedStores);
+    this.#transactions.add(wrapped);
     return wrapped;
   }
 
@@ -3327,6 +3422,263 @@ export class Runtime {
    */
   prepareTxForCommit(tx: IExtendedStorageTransaction): void {
     tx.prepareForCommit();
+  }
+
+  /**
+   * Admits one host-observed value through the ordinary CFC write boundary
+   * without committing the staged document. The returned object is opaque:
+   * its evidence lives only in this module's WeakMap and is usable once by a
+   * matching transaction on this runtime.
+   */
+  async prepareExternalContentObservation(options: {
+    targetTx: IExtendedStorageTransaction;
+    space: MemorySpace;
+    cause: unknown;
+    schema: JSONSchema;
+    value: unknown;
+    producer: string;
+  }): Promise<object> {
+    const targetState = options.targetTx.getCfcState();
+    if (
+      !this.#transactions.has(options.targetTx) ||
+      options.targetTx.status().status !== "ready" ||
+      targetState.implementationIdentity?.kind !== "builtin" ||
+      targetState.implementationIdentity.builtinId !== options.producer
+    ) {
+      throw externalObservationRefusal(
+        "external content observation target does not match this runtime and producer",
+        targetState,
+      );
+    }
+    const tx = this.edit();
+    const cell = this.getCell<unknown>(
+      options.space,
+      options.cause,
+      options.schema,
+      tx,
+    );
+    try {
+      await cell.sync();
+      cell.set(options.value);
+      this.prepareTxForCommit(tx);
+      const preparedState = tx.getCfcState();
+      if (preparedState.prepare.status !== "prepared") {
+        throw externalObservationRefusal(
+          "CFC refused the external content observation",
+          preparedState,
+        );
+      }
+      if (
+        preparedState.consultedGrants.length > 0 ||
+        preparedState.consultedPolicyManifests.length > 0
+      ) {
+        throw externalObservationRefusal(
+          "external content observation admission depends on mutable policy evidence",
+          preparedState,
+        );
+      }
+      const policySnapshot = preparedState.policySnapshot === undefined
+        ? undefined
+        : { digest: preparedState.policySnapshot.digest };
+      if (
+        !deepEqual(targetState.trustSnapshot, preparedState.trustSnapshot) ||
+        !deepEqual(targetState.trustConfig, preparedState.trustConfig) ||
+        !deepEqual(
+          targetState.policySnapshot === undefined
+            ? undefined
+            : { digest: targetState.policySnapshot.digest },
+          policySnapshot,
+        ) ||
+        !moduleDelegationsEqual(
+          targetState.moduleDelegations,
+          preparedState.moduleDelegations,
+        ) ||
+        !deepEqual(
+          externalObservationPosture(targetState),
+          externalObservationPosture(preparedState),
+        )
+      ) {
+        throw externalObservationRefusal(
+          "external content observation admission context changed",
+          preparedState,
+        );
+      }
+      const evidence = {
+        trustSnapshot: preparedState.trustSnapshot === undefined
+          ? undefined
+          : { ...preparedState.trustSnapshot },
+        trustConfig: preparedState.trustConfig,
+        policySnapshot,
+        moduleDelegations: copyModuleDelegations(
+          preparedState.moduleDelegations,
+        ),
+        posture: [...externalObservationPosture(preparedState)],
+      };
+
+      // This read runs only after the staged write passed preparation. It
+      // traverses the complete value closure, then the ordinary derivation
+      // and egress collectors compute the receipt's two canonical views.
+      cell.get({ traverseCells: true });
+      tx.prepareCfc();
+      const finalPreparedState = tx.getCfcState();
+      if (finalPreparedState.prepare.status !== "prepared") {
+        throw externalObservationRefusal(
+          "CFC refused the traversed external content observation",
+          finalPreparedState,
+        );
+      }
+      if (
+        finalPreparedState.consultedGrants.length > 0 ||
+        finalPreparedState.consultedPolicyManifests.length > 0
+      ) {
+        throw externalObservationRefusal(
+          "external content observation traversal depends on mutable policy evidence",
+          finalPreparedState,
+        );
+      }
+      if (
+        !deepEqual(
+          finalPreparedState.trustSnapshot,
+          evidence.trustSnapshot,
+        ) ||
+        !deepEqual(finalPreparedState.trustConfig, evidence.trustConfig) ||
+        !deepEqual(
+          finalPreparedState.policySnapshot === undefined
+            ? undefined
+            : { digest: finalPreparedState.policySnapshot.digest },
+          evidence.policySnapshot,
+        ) ||
+        !moduleDelegationsEqual(
+          finalPreparedState.moduleDelegations,
+          evidence.moduleDelegations,
+        ) ||
+        !deepEqual(
+          externalObservationPosture(finalPreparedState),
+          evidence.posture,
+        )
+      ) {
+        throw externalObservationRefusal(
+          "external content observation context changed during traversal",
+          finalPreparedState,
+        );
+      }
+      const flow = deriveFlowJoin(tx, { collectLabeledSpaces: true });
+      const consumed = collectConsumedLabel(tx);
+      const source = cell.getAsNormalizedFullLink();
+      const observation = cloneIfNecessary({
+        source: {
+          space: source.space,
+          id: source.id,
+          scope: source.scope,
+          path: source.path,
+        },
+        flow: {
+          confidentiality: [...flow.confidentiality],
+          integrity: [...flow.integrity],
+        },
+        consumed: {
+          confidentiality: [...consumed.confidentiality],
+          integrity: [...consumed.integrity],
+        },
+        labeledSpaces: [...(flow.labeledSpaces ?? [])],
+        sources: consumed.sources.map((entry) => ({
+          atom: entry.atom,
+          read: entry.read,
+          labelPath: entry.labelPath,
+        })),
+      } as FabricValue) as unknown as CfcExternalContentObservation;
+      const receipt = Object.freeze({});
+      externalObservationReceipts.set(receipt, {
+        runtime: this,
+        sourceTx: tx,
+        targetTx: options.targetTx,
+        space: options.space,
+        producer: options.producer,
+        ...evidence,
+        observation,
+        consumed: false,
+      });
+      return receipt;
+    } finally {
+      if (tx.status().status === "ready") {
+        tx.abort("external content observation recorded");
+      }
+    }
+  }
+
+  /** Records a receipt from {@link prepareExternalContentObservation}. */
+  recordExternalContentObservation(
+    tx: IExtendedStorageTransaction,
+    receipt: object,
+    options: { space: MemorySpace; producer: string },
+  ): void {
+    const payload = externalObservationReceipts.get(receipt);
+    const state = tx.getCfcState();
+    const mismatches = [
+      ["missing", payload === undefined],
+      ["consumed", payload?.consumed === true],
+      ["runtime", payload !== undefined && payload.runtime !== this],
+      ["target", payload !== undefined && payload.targetTx !== tx],
+      ["target-owner", !this.#transactions.has(tx)],
+      ["source-open", payload?.sourceTx.status().status === "ready"],
+      ["space", payload !== undefined && payload.space !== options.space],
+      [
+        "producer",
+        payload !== undefined && payload.producer !== options.producer,
+      ],
+      ["target-closed", tx.status().status !== "ready"],
+      [
+        "trust",
+        payload !== undefined &&
+        !deepEqual(state.trustSnapshot, payload.trustSnapshot),
+      ],
+      [
+        "trust-config",
+        payload !== undefined &&
+        !deepEqual(state.trustConfig, payload.trustConfig),
+      ],
+      [
+        "policy",
+        payload !== undefined && !deepEqual(
+          state.policySnapshot === undefined
+            ? undefined
+            : { digest: state.policySnapshot.digest },
+          payload.policySnapshot,
+        ),
+      ],
+      [
+        "delegations",
+        payload !== undefined &&
+        !moduleDelegationsEqual(
+          state.moduleDelegations,
+          payload.moduleDelegations,
+        ),
+      ],
+      [
+        "posture",
+        payload !== undefined &&
+        !deepEqual(externalObservationPosture(state), payload.posture),
+      ],
+      ["identity-kind", state.implementationIdentity?.kind !== "builtin"],
+      [
+        "identity-producer",
+        state.implementationIdentity?.kind === "builtin" &&
+        state.implementationIdentity.builtinId !== options.producer,
+      ],
+    ].filter(([, mismatch]) => mismatch).map(([name]) => name);
+    if (payload === undefined || mismatches.length > 0) {
+      throw externalObservationRefusal(
+        `external content observation receipt does not match this result write (${
+          mismatches.join(", ")
+        })`,
+        state,
+      );
+    }
+    tx.recordCfcExternalContentObservation(
+      payload.observation,
+      runtimeWritePolicyAuthorization,
+    );
+    payload.consumed = true;
   }
 
   /**

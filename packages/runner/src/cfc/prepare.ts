@@ -2755,6 +2755,26 @@ const deriveFlowJoinImpl = (
     labeledSpaces?.add(observation.target.space);
     atoms.push(...observation.confidentiality);
   }
+  for (
+    const observation of tx.getCfcState().externalContentObservations ?? []
+  ) {
+    if (
+      labeledSpaces !== undefined &&
+      ((observation.flow.confidentiality?.length ?? 0) > 0 ||
+        (observation.flow.integrity?.length ?? 0) > 0)
+    ) {
+      for (const space of observation.labeledSpaces) labeledSpaces.add(space);
+    }
+    atoms.push(...(observation.flow.confidentiality ?? []));
+    const hereditary = (observation.flow.integrity ?? []).filter((atom) =>
+      atomPropagationClass(atom) === "hereditary"
+    );
+    hereditaryMeet = hereditaryMeet === undefined
+      ? [...hereditary]
+      : hereditaryMeet.filter((kept) =>
+        hereditary.some((atom) => deepEqual(atom, kept))
+      );
+  }
   const confidentiality = uniqueCfcAtoms(atoms);
   const integrity: CfcAtom[] = [...(hereditaryMeet ?? [])];
   // Derivation provenance (§8.9.3 TransformedBy, staged: identity binding
@@ -4389,6 +4409,24 @@ const verifyInputRequirements = (
         label: { confidentiality: [...observation.confidentiality] },
       });
     }
+    for (
+      const observation of tx.getCfcState().externalContentObservations ?? []
+    ) {
+      const gateLabel: IFCLabel = {
+        confidentiality: observation.flow.confidentiality,
+        integrity: observation.consumed.integrity,
+      };
+      if (!hasLabelValues(gateLabel)) continue;
+      gatedReads.push({
+        ...observation.source,
+        id: observation.source.id as URI,
+        path: canonicalizeLogicalPath(observation.source.path),
+        type: "application/json",
+        meta: {},
+        journalIndex: -Infinity,
+        label: gateLabel,
+      });
+    }
     return gatedReads;
   };
   let gatedReadsMemo: ReturnType<typeof buildGatedReads> | undefined;
@@ -5919,6 +5957,21 @@ const collectConsumedLabelImpl = (
     atoms.push(...observation.confidentiality);
     for (const atom of observation.confidentiality) {
       noteSource(atom, observation.target, observation.target.path);
+    }
+  }
+  for (
+    const observation of tx.getCfcState().externalContentObservations ?? []
+  ) {
+    atoms.push(...(observation.consumed.confidentiality ?? []));
+    integrityAtoms.push(...(observation.consumed.integrity ?? []));
+    for (const source of observation.sources) {
+      noteSource(source.atom, source.read, source.labelPath);
+      for (const reference of modulePolicyReferencesIn(source.atom)) {
+        const key = modulePolicyArtifactKey(reference);
+        const spaces = modulePolicySpaces.get(key) ?? new Set<MemorySpace>();
+        spaces.add(source.read.space);
+        modulePolicySpaces.set(key, spaces);
+      }
     }
   }
   // Structural dedup (deep-equal) — the same dedup the rest of CFC uses.
