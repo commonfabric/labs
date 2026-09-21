@@ -57,6 +57,7 @@ import {
   toDirtyKey,
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import {
   type AdmittedCommitNotice,
@@ -5279,6 +5280,7 @@ export class SpaceServer implements TransactionSealDestination {
         // client's `space === runtime.userIdentityDID` is WRONG here —
         // a serving runtime's userIdentityDID is the SERVICE DID.
         isHomeSpace: owner === space,
+        genesisRoot: readGenesisRoot(engine),
         stampCreationTx: (tx) => {
           runtime.stampServerRun(tx, {
             actionId: `space-root-ensure/${space}`,

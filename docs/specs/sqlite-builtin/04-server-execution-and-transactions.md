@@ -72,7 +72,8 @@ needs a full SQL parser:
   cannot get SQLite to enumerate accessed objects for us. Instead the guard
   rejects: any **schema-qualified** reference (`other.table`), `ATTACH`/`DETACH`/
   `PRAGMA`, and **multiple statements**; `sqliteQuery` additionally requires a
-  single `SELECT`/read-only CTE. Because we never rewrite identifiers, this is a
+  single `SELECT`/read-only CTE. Function calls such as `replace()` do not make
+  a read-only CTE a write. Because we never rewrite identifiers, this is a
   tokenizer-level check, not full resolution. (A future hardening option: bind
   `sqlite3_set_authorizer` ourselves via Deno FFI against the `unsafeHandle`
   pointer — defense-in-depth, not required for v1.)

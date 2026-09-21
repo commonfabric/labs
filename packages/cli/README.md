@@ -258,6 +258,11 @@ shows by the name the space's index confirmed for it, and by its handle where no
 name was confirmed. `pwd` is the complete address — every level, the piece by
 handle, the scope written even when it is the base — which is what to copy.
 
+A `pieces` listing uses the registered target's full reference when its space,
+scope, or path differs from the current place. A target in another space keeps
+that address in the listing; `cd` refuses it because a shuttle connection serves
+one space. It does not substitute the current space for the target's space.
+
 `cd` reads before it moves: a slug resolves to the piece it names, a handle is
 looked up in the space's identifier index, and a path that is not there is
 refused with the keys that are. A scope on its own is read the same way — the
@@ -284,27 +289,27 @@ piece segment selects the piece's arguments cell, which `get` reads and `cd` and
 would read as anything else behind the `.` head — `./..`, `./-x` — and `pwd`
 writes the place as `//<space>/<piece>@<scope>/…`.
 
-| Verb                          | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cd <ref>`                    | Moves the place, once the fabric says it is there. Takes relative references — `.` for where you stand, a run of `..` climbing back the way you came, `.@scope` for the scope, and a literal path after them — and `-`, `/`, rooted and complete references, slugs, `%n` rows, and `#name` entry points.                                                                                                                                                                                                                          |
-| `ls [<ref>]`                  | Lists what stands at a place, defaulting to where you stand: a space root's facets, the slugs the index records, the space's pieces, or the keys under a cell. The operand is `get`'s, less the `#argument` member, and listing a target renumbers the rows, so `cd %n` reaches what it just showed. Rows are numbered, a row that is one of the piece's callables says so, a piece shows the name it carries beside the handle that reaches it, and one screenful is written. `--limit <rows>` overrides the height.             |
-| `pwd`                         | The complete address of the place, both dimensions.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `get [<ref>]`                 | Reads the value at a cell, defaulting to where you stand. `#argument` on a head or a piece segment reads the piece's arguments cell, as in `get .#argument/title` or `get /slugs/board#argument/title`. Takes `cf cell get`'s read options — `--filter`, `--select`, `--schema`, `--json` — and writes one screenful of JSON, or the whole value under `--json`.                                                                                                                                                                  |
-| `set <ref> <value>`           | Writes a value at a cell, which copies rather than links. The value is JSON, and a bare word is the string it spells. `-` is refused, standard input being the keyboard.                                                                                                                                                                                                                                                                                                                                                          |
-| `edit [<ref>]`                | Opens a cell's value in `$EDITOR` and writes back what you save. A value JSON cannot carry is refused before the editor opens, and text that will not parse is refused with the file it is still in.                                                                                                                                                                                                                                                                                                                              |
-| `link <ref> <ref>`            | Writes a reference at the second cell naming the first, `ln -s`'s order. The one spelling that makes a cell read another cell.                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `call <ref> <name> [input…]`  | Invokes a piece's verb. The verb name opens the callable's own section, so its schema-derived flags follow bare and `--` closes it. A callable handle off `verbs` carries the name already, as in `call %4`.                                                                                                                                                                                                                                                                                                                      |
-| `verbs [<ref>]`               | Lists a piece's callables, numbering each so `call %n` invokes it. `--all` shows the rows the marks hide.                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| `describe [<ref>]`            | The page `cf piece describe` writes: what the piece is, what it holds, and what it takes. `--all` as above.                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `wish <#name>`                | Resolves a named entry point, exactly as `cf wish` does.                                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
-| `watch [<ref>]`               | Arms a watch on a cell and opens the value view onto it. `q` closes the view and leaves the watch armed; an armed watch writes one line above the prompt per settled change. A cell already watched is refused. The view scrolls with `j`/`k` and the arrows and `g`/`G`, finds text with `/` and `n`/`N`, opens the watched cell in `$EDITOR` with `e`, and runs any shuttle line with `:` — the line runs where a line typed at the prompt runs, and what it produced joins the transcript when the view gives the screen back. |
-| `watches`                     | Lists the watches this run has armed, numbering each so `unwatch %n` disarms one.                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `unwatch <handle>`            | Disarms the watch a `watches` row numbered. The row carries the cell its watch is armed on, so it names the watch it showed.                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `more`                        | Writes the next page of a listing or a value that did not fit, a listing continuing under the numbers it already gave its rows.                                                                                                                                                                                                                                                                                                                                                                                                   |
-| `xpwd`                        | The external working location, whole — the one working position outside the fabric.                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `xcd <path>`                  | Moves the external working location, and writes where it landed. The operand is read on that plane already, so `xcd ../foo` and `xcd /tmp` stay on the plane it stands on. A whole schemed path names its own plane, which may be the one it stands on (`xcd file:~/data`) or another (`xcd https://example.test/a/b/`). A scheme is legal only on an absolute complete path.                                                                                                                                                     |
-| `where [<dimension> <value>]` | With no operand, the whole ambient record: the connection, the place `pwd` prints, the external location `xpwd` prints, and what this run is watching. With a dimension and a value, it sets the light ones — `where scope @session` moves the scope as `cd .@session` does, and `where external file:/tmp` moves the external location as `xcd` does. The api endpoint, the identity and the space are fixed at launch, and restarting is what switches them.                                                                    |
-| `help [<verb>]`               | Lists the verbs, or writes one verb's page. `<verb> --help` writes the same page.                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| Verb                          | What it does                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cd <ref>`                    | Moves the place, once the fabric says it is there. Takes relative references — `.` for where you stand, a run of `..` climbing back the way you came, `.@scope` for the scope, and a literal path after them — and `-`, `/`, rooted and complete references, slugs, `%n` rows, and `#name` entry points.                                                                                                                                                                                                                                                        |
+| `ls [<ref>]`                  | Lists what stands at a place, defaulting to where you stand: a space root's facets, the slugs the index records, the space's pieces, or the keys under a cell. The operand is `get`'s, less the `#argument` member, and listing a target renumbers the rows, so `%n` selects what it just showed; `cd %n` moves only within the current space. Rows are numbered, a row that is one of the piece's callables says so, a piece shows the name it carries beside the handle that reaches it, and one screenful is written. `--limit <rows>` overrides the height. |
+| `pwd`                         | The complete address of the place, both dimensions.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `get [<ref>]`                 | Reads the value at a cell, defaulting to where you stand. `#argument` on a head or a piece segment reads the piece's arguments cell, as in `get .#argument/title` or `get /slugs/board#argument/title`. Takes `cf cell get`'s read options — `--filter`, `--select`, `--schema`, `--json` — and writes one screenful of JSON, or the whole value under `--json`.                                                                                                                                                                                                |
+| `set <ref> <value>`           | Writes a value at a cell, which copies rather than links. The value is JSON, and a bare word is the string it spells. `-` is refused, standard input being the keyboard.                                                                                                                                                                                                                                                                                                                                                                                        |
+| `edit [<ref>]`                | Opens a cell's value in `$EDITOR` and writes back what you save. A value JSON cannot carry is refused before the editor opens, and text that will not parse is refused with the file it is still in.                                                                                                                                                                                                                                                                                                                                                            |
+| `link <ref> <ref>`            | Writes a reference at the second cell naming the first, `ln -s`'s order. The one spelling that makes a cell read another cell.                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `call <ref> <name> [input…]`  | Invokes a piece's verb. The verb name opens the callable's own section, so its schema-derived flags follow bare and `--` closes it. A callable handle off `verbs` carries the name already, as in `call %4`.                                                                                                                                                                                                                                                                                                                                                    |
+| `verbs [<ref>]`               | Lists a piece's callables, numbering each so `call %n` invokes it. `--all` shows the rows the marks hide.                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| `describe [<ref>]`            | The page `cf piece describe` writes: what the piece is, what it holds, and what it takes. `--all` as above.                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `wish <#name>`                | Resolves a named entry point, exactly as `cf wish` does.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| `watch [<ref>]`               | Arms a watch on a cell and opens the value view onto it. `q` closes the view and leaves the watch armed; an armed watch writes one line above the prompt per settled change. A cell already watched is refused. The view scrolls with `j`/`k` and the arrows and `g`/`G`, finds text with `/` and `n`/`N`, opens the watched cell in `$EDITOR` with `e`, and runs any shuttle line with `:` — the line runs where a line typed at the prompt runs, and what it produced joins the transcript when the view gives the screen back.                               |
+| `watches`                     | Lists the watches this run has armed, numbering each so `unwatch %n` disarms one.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `unwatch <handle>`            | Disarms the watch a `watches` row numbered. The row carries the cell its watch is armed on, so it names the watch it showed.                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `more`                        | Writes the next page of a listing or a value that did not fit, a listing continuing under the numbers it already gave its rows.                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| `xpwd`                        | The external working location, whole — the one working position outside the fabric.                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `xcd <path>`                  | Moves the external working location, and writes where it landed. The operand is read on that plane already, so `xcd ../foo` and `xcd /tmp` stay on the plane it stands on. A whole schemed path names its own plane, which may be the one it stands on (`xcd file:~/data`) or another (`xcd https://example.test/a/b/`). A scheme is legal only on an absolute complete path.                                                                                                                                                                                   |
+| `where [<dimension> <value>]` | With no operand, the whole ambient record: the connection, the place `pwd` prints, the external location `xpwd` prints, and what this run is watching. With a dimension and a value, it sets the light ones — `where scope @session` moves the scope as `cd .@session` does, and `where external file:/tmp` moves the external location as `xcd` does. The api endpoint, the identity and the space are fixed at launch, and restarting is what switches them.                                                                                                  |
+| `help [<verb>]`               | Lists the verbs, or writes one verb's page. `<verb> --help` writes the same page.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 
 `watch` is the live half. It arms a **watch** — a subscription on one cell that
 outlives the view that opened it — and opens the value view onto that cell: the
@@ -334,12 +339,14 @@ rather than once per value on the way there, and nothing waits on a clock to
 decide that. `watches` numbers what is armed and `where` names it; `unwatch %n`
 disarms one.
 
-A listing numbers its rows, and `%n` names a row until the next listing replaces
-the numbering — `more` continues the current one rather than starting another.
-`cd %3` and `get %1/title` act on what a listing showed, and `call %4` invokes a
-callable row without the receiver or the name being written again: a row carries
-its kind, and the place the listing was read at is the receiver. A row nothing
-stands at, a callable among them, is a row `cd` refuses and `call` invokes.
+Foreign piece rows retain their complete targets when selected; `cd` refuses to
+move into a foreign space. A listing numbers its rows, and `%n` names a row
+until the next listing replaces the numbering — `more` continues the current one
+rather than starting another. `cd %3` and `get %1/title` act on what a listing
+showed, and `call %4` invokes a callable row without the receiver or the name
+being written again: a row carries its kind, and the place the listing was read
+at is the receiver. A row nothing stands at, a callable among them, is a row
+`cd` refuses and `call` invokes.
 
 Reaching into a piece starts it, so what a read serves is what a running pattern
 holds rather than what was last committed. Every verb that touches a piece
@@ -796,25 +803,29 @@ pattern-lifecycle route, signed with the identity the command connects as; the
 space's serving runtime compiles it, creates the piece, and answers with the
 receipt the command prints. Where the deployment enforces ACLs, the identity
 must hold WRITE or OWNER on the space; a deployment with enforcement off admits
-any signed caller, as its memory server does. The registry entry and the slug
-travel with the creation, so a taken name refuses it before anything is created,
-and the space root is the serving loop's to ensure rather than this command's.
-What stays in this process after the receipt is what opening a piece does
-anyway: the start, which `--no-start` skips; `--no-start` also asks the serving
-loop not to derive the piece until something demands it. The receipt returns
-once the piece is durable; the serving loop derives it in the cycle after, so a
-reader that needs the derived value pulls it. Against any other deployment, and
-under `cf test`, the command performs every step itself, as before.
-`cf piece setsrc` requests the same way against a serving deployment: it
-resolves and pins the program, sends it with the piece's id, and prints the
-receipt of the setup transaction the serving runtime committed — directly to the
-store, since a source update publishes module update authority that requires a
-transaction committing to storage itself. What stays in this process is the
-refresh a client-side update runs after its commit: the command starts the piece
-it holds and reports that outcome beside the receipt, exiting non-zero when the
-refresh fails over a durable commit. A piece addressed at a scope keeps the
-client-side path. `cf piece setsrc --check` performs every step in this process
-on every deployment. The contract, including the refusals and their codes, is
+any signed caller, as its memory server does. Setup, slug, and creation receipt
+commit together, so a taken name refuses before anything is created.
+Registration then invokes the default pattern's `addPiece` handler and waits for
+its durable consequence and registry readback. A failure names the created piece
+and a retry key; repeat `cf piece new` with `--request-key <key>` to resume that
+creation. The space root is the serving loop's to ensure rather than this
+command's. What stays in this process after the receipt is what opening a piece
+does anyway: the start, which `--no-start` skips; `--no-start` also asks the
+serving loop not to derive the piece until something demands it. The receipt
+returns once the piece is durable and registered, including with `--no-start`;
+the serving loop derives it on demand, so a reader that needs the derived value
+pulls it. Against any other deployment, and under `cf test`, the command
+performs every step itself, as before. `cf piece setsrc` requests the same way
+against a serving deployment: it resolves and pins the program, sends it with
+the piece's id, and prints the receipt of the setup transaction the serving
+runtime committed — directly to the store, since a source update publishes
+module update authority that requires a transaction committing to storage
+itself. What stays in this process is the refresh a client-side update runs
+after its commit: the command starts the piece it holds and reports that outcome
+beside the receipt, exiting non-zero when the refresh fails over a durable
+commit. A piece addressed at a scope keeps the client-side path.
+`cf piece setsrc --check` performs every step in this process on every
+deployment. The contract, including the refusals and their codes, is
 [`server-pattern-lifecycle.md`](../../docs/features/server-pattern-lifecycle.md).
 
 ## Piece discovery
@@ -953,6 +964,13 @@ naming the piece it just created so an operator can name it another way. Its
 `--force` takes the name and is accepted only alongside `--slug`, which is the
 only thing it applies to.
 
+`cf piece ls` and `cf piece search` return a `reference` alongside the legacy
+`id`. This canonical cell reference preserves the registered target's space,
+scope, document, and path, and can be used as a CLI cell address. The human
+table includes it in the `REFERENCE` column. Use `reference` to distinguish
+targets with the same document ID in different spaces or scopes. Listing retains
+the reference even when the target cannot be read.
+
 `cf piece search` also starts from the registry. It searches readable input and
 result data, but returns registered pieces only. `cf piece map` likewise shows
 connections among registered pieces rather than walking the complete stored
@@ -975,11 +993,13 @@ and scalar values. Canonically equivalent text matches, and a match cannot stop
 partway through one character's multi-letter fold. Readable nested cell values
 are included when they belong to the piece being searched. A cell owned by
 another piece is searched only with that owner, not with every piece that links
-to it. Data owned by a piece absent from the piece registry is not attributed to
-its referrers. A cell with no piece ownership metadata remains searchable
-through each piece that links to it. Opaque, write-only, comparable, stream, and
-SQLite cell handles are not read. Piece IDs, names, and pattern metadata are
-returned for context, but they do not count as searchable data.
+to it. Ownership compares the complete space, scope, and document identity;
+equal document IDs in different spaces or scopes remain different owners. Data
+owned by a piece absent from the piece registry is not attributed to its
+referrers. A cell with no piece ownership metadata remains searchable through
+each piece that links to it. Opaque, write-only, comparable, stream, and SQLite
+cell handles are not read. Piece IDs, names, and pattern metadata are returned
+for context, but they do not count as searchable data.
 
 ```bash
 cf piece search --space team-space "invoice 1042"
@@ -1303,8 +1323,10 @@ cf cell get --cell ID items \
 A path read first resolves the piece's canonical result and metadata, then pulls
 the selected path. It does not first synchronize the producer's entire result
 schema. Reading the root still requests the whole result. `--step` also starts
-the piece, so its execution can demand inputs beyond the selected output.
-Missing-path diagnostics can require a broader root read.
+the piece and waits for asynchronous work, including session-scoped store
+queries and their reactive updates, to settle before reading. Its execution can
+demand inputs beyond the selected output. Missing-path diagnostics can require a
+broader root read.
 
 `cf piece call` writes them **past the `--` that closes the callable's
 section**. The callable name opens that section, so everything between the two
@@ -2282,3 +2304,48 @@ the wrong set is invisible to a unit test and invisible at the prompt, because
 failure here is silent by design. The script also carries `gap` assertions for
 slots that answer nothing today, so one starting to answer fails loudly rather
 than passing quietly.
+
+## Space invitations
+
+`cf space invite` uses generic invitation service version 1. All commands take
+`--api-url`, `--identity`, and an explicit space DID through `--space`, or the
+corresponding `CF_API_URL`, `CF_IDENTITY`, and `CF_SPACE` variables. They return
+JSON and require no existing memory session to redeem.
+
+- `cf space invite create --access READ --ttl 3600 --max-uses 2` creates an
+  invitation. Access is READ or WRITE, TTL is 1–2,592,000 seconds, and max uses
+  is 1–1,000 (default 1). Output includes the bearer code; `--shell <origin>`
+  also produces a join URL whose code is in the fragment.
+- `cf space invite redeem <invite-id> --code-file <path>` reads the code from a
+  file; `--code-file -` reads stdin. The signing identity receives the grant.
+- `cf space invite list` lists active metadata without codes or verifiers.
+- `cf space invite revoke <invite-id>` ends admission without removing grants.
+- `cf space invite receipts [invite-id]` lists unique invitation/DID pairs.
+
+Creation saves its credentials before sending HTTP. With
+`--request-file <path>`, the command requires a private parent directory (0700)
+and exclusively creates a private file (0600), or loads an existing private
+regular file. Existing files are never overwritten; symlinks, malformed data,
+and mismatched host, space, signing identity, access, TTL, or max uses are
+refused before sending. Retry with the same creation flags and `--request-file`
+to reuse the exact invitation after a lost response or CLI restart. `--shell`
+only changes the output link and may differ on a retry. Retained requests are
+read through one verified open file descriptor. The CLI refuses reuse when it
+cannot verify the opened file's identity.
+
+Without `--request-file`, each creation saves a new file under
+`$XDG_STATE_HOME/commonfabric/space-invites`, defaulting to
+`$HOME/.local/state/commonfabric/space-invites`; the directory is private
+(0700). The absolute recovery path is printed to stderr before sending and
+returned as `requestFile` in successful JSON output. The file contains the
+bearer code and remains local until the caller removes it. Keep it private and
+retain it while a creation outcome is uncertain. Saving and syncing the file
+precedes HTTP; this supports process restart recovery, without promising
+recovery from filesystem or power failure. Errors never print the file contents.
+
+Only explicit owners can create, list, revoke, or list receipts. One distinct
+DID uses one slot in each invitation; a same-DID retry uses none. Copying the
+same identity to another client preserves its DID. A receipt with null current
+access means access was removed; retrying cannot restore it. See
+[the service contract](../toolshed/README.md#space-invitations) for the SDK,
+proof, deployment, and storage rules.

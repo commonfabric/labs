@@ -100,7 +100,7 @@ const deriveCfcLabelViewForAddress = (
  * rather than copied — every consumer merges, clones or rebases it into
  * something new, none writes to it.
  */
-const cfcLabelViewForAddress = (
+export const cfcLabelViewForAddress = (
   tx: IExtendedStorageTransaction,
   address: CfcAddress,
 ): CfcLabelView | undefined => {

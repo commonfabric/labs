@@ -1049,7 +1049,16 @@ export type CommitPrecondition =
     valueHash: string | null;
   };
 
+/** A generic root reserved atomically with a fresh space's ACL. */
+export type GenesisRoot = {
+  source: string;
+  sourceRoots?: string[];
+  cause: string;
+  argument?: Record<string, FabricValue>;
+};
+
 export type ClientCommit = {
+  genesisRoot?: GenesisRoot;
   localSeq: number;
   reads: {
     confirmed: ConfirmedRead[];
@@ -1085,6 +1094,7 @@ export type SessionOpenResult = {
 };
 
 export type MemoryProtocolFlags = {
+  genesisRoot?: boolean;
   modernCellRep: boolean;
 
   /**
@@ -1195,6 +1205,7 @@ export type MemoryProtocolFlags = {
  * Wire-format flags object.
  */
 export type WireMemoryProtocolFlags = {
+  genesisRoot?: boolean;
   modernCellRep?: boolean;
 
   /** Expression result identity contract required for session admission. */
@@ -1241,6 +1252,8 @@ export type SessionOpenAuthMetadata = {
 };
 
 export type SessionDescriptor = {
+  /** Assert the immutable custom-root reservation when mounting or resuming. */
+  genesisRoot?: GenesisRoot;
   sessionId?: SessionId;
   seenSeq?: number;
   sessionToken?: SessionToken;
@@ -2103,6 +2116,7 @@ export function resetOwnWriteEchoConfig(): void {
 }
 
 export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
+  genesisRoot: true,
   modernCellRep: getModernCellRepConfig(),
   stableExpressionResultIds: true,
   commitPreconditions: getCommitPreconditionsConfig(),
@@ -2158,6 +2172,10 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const genesisRoot = value.genesisRoot;
+  if (genesisRoot !== undefined && typeof genesisRoot !== "boolean") {
+    return null;
+  }
   const stableExpressionResultIds = value.stableExpressionResultIds;
   if (
     stableExpressionResultIds !== undefined &&
@@ -2295,6 +2313,7 @@ export const parseMemoryProtocolFlags = (
 
   return {
     modernCellRep: modernCellRep === true,
+    genesisRoot: value.genesisRoot === true,
     stableExpressionResultIds: stableExpressionResultIds === true,
     commitPreconditions: commitPreconditions === true,
     applyOp: applyOp === true,
@@ -2334,6 +2353,7 @@ export const parseMemoryProtocolFlags = (
 export const wireMemoryProtocolFlags = (
   flags: MemoryProtocolFlags,
 ): WireMemoryProtocolFlags => ({
+  genesisRoot: flags.genesisRoot,
   modernCellRep: flags.modernCellRep,
   stableExpressionResultIds: flags.stableExpressionResultIds,
   commitPreconditions: flags.commitPreconditions,

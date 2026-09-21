@@ -55,6 +55,7 @@ import {
 } from "@commonfabric/memory/v2";
 import { type Frame, UI } from "../src/builder/types.ts";
 import { resolveEntryIdentity } from "../src/index.ts";
+import { parseLink } from "../src/link-utils.ts";
 import { TEST_MEMORY_SERVER_AUTH } from "./memory-v2-test-utils.ts";
 
 // The route the toolshed serves the profile-create surface from, which is what
@@ -2015,6 +2016,154 @@ describe("Phase 5 cross-space serving", () => {
       }
     } finally {
       await manager.close();
+    }
+  });
+
+  it("passes foreign scoped cell handles through served events without reading their targets", async () => {
+    clientManager = SharedServerStorageManager.connectTo(server, {
+      as: aliceSigner,
+    });
+    clientRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: clientManager,
+      experimental: { serverExecution: true },
+    });
+    const compiled = await clientRuntime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+import { action, computed, pattern, type Writable, type Stream } from "commonfabric";
+export default pattern<
+  { links: Writable<Writable<unknown>[]> },
+  { add: Stream<{ piece: Writable<unknown> }>; registry: Writable<unknown>[] }
+>(({ links }) => ({
+  registry: computed(() => links.get().map((piece) => piece)),
+  add: action(({ piece }: { piece: Writable<unknown> }) => {
+    links.push(piece);
+  }),
+}));`,
+      }],
+    }, { space: homeSpace });
+    const argument = clientRuntime.getCell<{ links: unknown[] }>(
+      homeSpace,
+      "foreign-handle-argument",
+    );
+    const result = clientRuntime.getCell<{ add: unknown; registry: unknown[] }>(
+      homeSpace,
+      "foreign-handle-result",
+      compiled.resultSchema,
+    );
+    await Promise.all([argument.sync(), result.sync()]);
+    const seed = clientRuntime.edit();
+    argument.withTx(seed).set({ links: [] });
+    clientRuntime.run(seed, compiled, argument, result);
+    expect((await seed.commit()).error).toBeUndefined();
+    await clientManager.synced();
+    host = newHost();
+
+    const target = clientRuntime.getCell(
+      foreignSpace,
+      "foreign-handle-target",
+      undefined,
+      undefined,
+      "user",
+    ).key("nested");
+    result.key("add").send({ piece: target });
+    await clientManager.synced();
+    const engine = await server.engineForSpace(homeSpace);
+    const entries = (): NonNullable<StreamEventsDocValue["entries"]> =>
+      (engine.database.prepare(
+        "SELECT id FROM head WHERE id LIKE 'of:stream-events:%' AND op != 'delete'",
+      ).all() as { id: string }[]).flatMap(({ id }) =>
+        (readDoc(engine, { id })?.value as StreamEventsDocValue)?.entries ?? []
+      );
+    await awaitAdmitted(
+      server,
+      () =>
+        entries().some((entry) =>
+          entry.consequenced || entry.deliveryDeferral !== undefined
+        ),
+    );
+    expect(entries().map((entry) => entry.deliveryDeferral)).toEqual([
+      undefined,
+    ]);
+    expect(entries().map((entry) => entry.consequenced)).toEqual([true]);
+    expect(entries().map((entry) => entry.status)).toEqual([undefined]);
+    const stored = readDoc(engine, {
+      id: argument.getAsNormalizedFullLink().id,
+    })?.value as { links: unknown[] };
+    expect(stored.links).toHaveLength(1);
+    const { space, scope, id, path } = target.getAsNormalizedFullLink();
+    expect(parseLink(stored.links[0])).toMatchObject({
+      space,
+      scope,
+      id,
+      path,
+    });
+    result.key("add").send({ piece: target });
+    await clientManager.synced();
+    await awaitAdmitted(
+      server,
+      () =>
+        entries().length === 2 &&
+        entries().every((entry) =>
+          entry.consequenced || entry.deliveryDeferral !== undefined
+        ),
+    );
+    expect(entries().map((entry) => entry.consequenced)).toEqual([true, true]);
+    expect(entries().map((entry) => entry.deliveryDeferral)).toEqual([
+      undefined,
+      undefined,
+    ]);
+    const repeated = readDoc(engine, {
+      id: argument.getAsNormalizedFullLink().id,
+    })?.value as { links: unknown[] };
+    expect(repeated.links).toHaveLength(2);
+    for (const link of repeated.links) {
+      expect(parseLink(link)).toMatchObject({ space, scope, id, path });
+    }
+    const registry = await result.key("registry").asSchema({
+      type: "array",
+      items: { type: "unknown", asCell: ["cell"] },
+    }).pull();
+    expect(registry).toHaveLength(2);
+    for (const link of registry) {
+      expect(parseLink(link)).toMatchObject({
+        space,
+        scope,
+        id,
+        path,
+      });
+    }
+    const third = clientRuntime.getCell(homeSpace, "later-local-reference");
+    result.key("add").send({ piece: third });
+    await clientManager.synced();
+    await awaitAdmitted(
+      server,
+      () =>
+        entries().length === 3 &&
+        entries().every((entry) => entry.consequenced),
+    );
+    await servingRuntime!.idle();
+    const updatedRegistry = await result.key("registry").asSchema({
+      type: "array",
+      items: { type: "unknown", asCell: ["cell"] },
+    }).pull();
+    expect(updatedRegistry).toHaveLength(3);
+    const servingManager = SharedServerStorageManager.connectTo(server, {
+      as: serviceSigner,
+      servingHomeSpace: homeSpace,
+    });
+    try {
+      const denied = await servingManager.open(foreignSpace).sync(
+        target.getAsNormalizedFullLink().id,
+        { path: [], schema: false },
+        "user",
+      );
+      expect(denied.error?.message).toContain("foreign scoped read refused");
+    } finally {
+      await servingManager.close();
     }
   });
 });

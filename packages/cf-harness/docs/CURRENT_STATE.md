@@ -2,7 +2,7 @@
 
 Status: current implementation reference\
 Last verified: 2026-09-21\
-Revision: `a830c91858+inspection-review`
+Revision: `88a36fe0d3+resolve-piece`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -138,8 +138,10 @@ The current package provides:
   artifacts record the research ids that shaped them. `query_docs` is accepted
   only as a legacy CLI or persisted-policy alias and is normalized without
   rewriting old transcript or run-state evidence;
-- schema-validated, sanitized child returns with raw child evidence retained
-  outside the ordinary parent return channel;
+- caller and profile return-schema definitions checked before child creation,
+  with bounded argument errors for malformed contracts and unresolved
+  references; valid child results remain schema-validated and sanitized, with
+  raw evidence retained outside the ordinary parent return channel;
 - image inputs and structured top-level batch results;
 - a skills registry over `--skills-root`, defaulting for a run out of a labs
   checkout to that checkout's own `skills/` tree, with the resolved tree and its
@@ -208,9 +210,14 @@ The current package provides:
   released evidence, absence within an enumerated granted scope, and unknown
   reads; it stops for input rather than repeating author delegation. Shared
   target-selection guidance asks for an unnamed, unattached piece without a
-  registry read, preserves established conversation targets, and permits at most
-  one registry lookup for a name the user supplied. Only a unique released match
-  allows work to proceed;
+  registry read and preserves established conversation targets. The parent
+  resolves a user-supplied slug with `resolve_piece` before author delegation,
+  using the input-cell path's exact-address resolver and space restriction. Only
+  an opaque handle returns; source remains child-only. An unheld slug or a
+  readable target that is not a usable piece returns recoverable `not-found`. A
+  failed read returns `unavailable` and does not establish absence. A display
+  name without a slug permits at most one registry lookup; only a unique
+  released match allows work to proceed;
 - a session-local address handle table: deterministic `cfh:a:` tokens minted per
   run for cell addresses, recorded in `run-state.json`, and carried across
   resume; the prompt loop swaps addresses to tokens in model-bound tool output

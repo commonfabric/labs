@@ -622,6 +622,7 @@ Source Origin: ${pieceData.patternRef?.source.origin ?? "<unknown>"}
 export function renderPieceSummaries(
   pieces: Array<{
     id: string;
+    reference: string;
     name?: string;
     patternRef?: PiecePatternRef;
     error?: string;
@@ -632,6 +633,7 @@ export function renderPieceSummaries(
     render(
       pieces.map((piece) => ({
         id: piece.id,
+        reference: piece.reference,
         name: piece.name ?? null,
         patternRef: piece.patternRef ?? null,
       })),
@@ -641,11 +643,12 @@ export function renderPieceSummaries(
   }
 
   const rows = [
-    ["ID", "NAME", "PATTERN"],
+    ["ID", "NAME", "PATTERN", "REFERENCE"],
     ...pieces.map((piece) => [
       piece.id,
       piece.error ? `<error: ${piece.error}>` : (piece.name ?? "<unnamed>"),
       piece.error ? "" : formatPatternRef(piece.patternRef),
+      piece.reference,
     ]),
   ];
   if (rows.length > 1) render(Table.from(rows).toString());
@@ -2394,6 +2397,10 @@ export const piece = targetOptions(
     `Create a piece and take "project-notes" from whatever it names now.`,
   )
   .arguments("<main:string>")
+  .option(
+    "--request-key <key:string>",
+    "Reuse a serving deployment's creation request after an uncertain result.",
+  )
   .option("--no-start", "Only set up the piece without starting it")
   .option(
     "--main-export <export:string>",
@@ -4887,6 +4894,9 @@ export async function newPieceFromCommand(
       start: options.start,
       slug: options.slug,
       force: !!options.force,
+      ...(options.requestKey === undefined
+        ? {}
+        : { requestKey: options.requestKey }),
     },
   );
   render(pieceId);

@@ -358,10 +358,6 @@ describe("selection", () => {
         }, "entry"),
       ],
       [
-        "an independence flag that is not one",
-        withField("independent", "yes", "entry"),
-      ],
-      [
         "a last run that is not a day",
         withField("lastRun", 7, "entry"),
       ],
@@ -598,7 +594,6 @@ describe("selection", () => {
           }],
         }],
       });
-      manifest.entries[0]!.independent = true;
       manifest.entries[0]!.lastRun = "2026-08-20";
       manifest.entries[0]!.inputs.lastCatch = "2026-08-20";
       expect(parseManifest(serializeManifest(manifest))).toEqual(manifest);

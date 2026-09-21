@@ -37,8 +37,8 @@ is read as permanent — the safe default for an authorization decision.
 
 - A **permanent** authorization denial reopening a session terminates just that
   session with the real error, the same way a `session/revoked` does: its
-  outstanding commits and caught-up waiters reject with it, and its next watch or
-  transact rethrows it. This holds for a denial anywhere in the reopen — the
+  outstanding commits and caught-up waiters reject with it, and its next watch
+  or transact rethrows it. This holds for a denial anywhere in the reopen — the
   `session.open` itself or the watch re-establishment a fresh (non-resumed)
   reopen issues. Sessions for other spaces on the same client keep running: a
   denial on one space is not a client-wide failure.
@@ -48,16 +48,30 @@ is read as permanent — the safe default for an authorization decision.
   hello) terminates a session whose consumer installed a holdings provider, the
   same per-session way: the declaration is what makes skipping the older
   delivery paths safe, so restoring without it would silently reintroduce the
-  elision those paths permit (04-protocol.md §4.1.1). A session with no
-  provider restores on the declaration-less paths as ever.
+  elision those paths permit (04-protocol.md §4.1.1). A session with no provider
+  restores on the declaration-less paths as ever.
 - A **permanent protocol-flag mismatch at `hello`** — the peers disagree on a
   data-model wire contract, so no session can open at all — stops the whole
   reconnect loop and is remembered, so every request on that
   fundamentally-incompatible transport fails fast with the real error.
 
-The reconnect loop therefore has no unbounded retry-on-anything path: a permanent
-failure ends it (per session for an authorization denial, client-wide for a
-handshake mismatch), and only recoverable and transport-level conditions retry.
+The reconnect loop therefore has no unbounded retry-on-anything path: a
+permanent failure ends it (per session for an authorization denial, client-wide
+for a handshake mismatch), and only recoverable and transport-level conditions
+retry.
+
+`SpaceSession.subscribeAccessLoss` also delivers an authoritative
+`AuthorizationError` immediately when an established session loses access. An
+`unauthorized` revocation carries that error. A `taken-over` revocation closes
+with `SessionRevokedError` and does not emit access loss. Normal close,
+disconnect, protocol failure, and a recoverable challenge race do not emit it
+either. A late subscriber receives the retained authorization verdict until the
+session is replaced successfully.
+
+`StorageManager.subscribeSpaceAccessChange` observes both a new authoritative
+denial and its clearance after a successful authorized reopen. Renderers use
+this notification to restore retained cells after an explicit regrant and
+session replacement. `subscribeSpaceAccessLoss` remains loss-only.
 
 ## Runner storage: record it per space, keep the barrier silent
 
@@ -83,6 +97,20 @@ changing what the sync barrier does:
   deliberately, so the denial is scoped to the space the caller asked for and
   never leaks onto an unrelated cross-space read.
 
+The storage provider exposes `subscribeSpaceAccessLoss` and `spaceAccessError`
+for consumers of already-rendered cells. An authoritative session loss updates
+the affected space immediately, without waiting for another document watch. An
+explicit successful session replacement after a new grant clears the old
+verdict. The runtime client forwards `spaceaccesslost` with the affected space;
+it does not send the server's diagnostic error text to the UI.
+
+The worker renderer subscribes at cell boundaries. Revoking a foreign target
+removes that target's content and event handlers while retaining the authorized
+Loom root and sibling panels. Revoking the root removes its rendered content.
+Subscription teardown also cancels pending render callbacks so they cannot
+restore a removed subtree. Transient transport errors preserve the mounted
+content and do not masquerade as revoked authority.
+
 ## CLI: surface the denial for the space it was asked to reach
 
 The CLI reads `storageManager.authorizationError(space)` for the one space it
@@ -102,9 +130,9 @@ verdict first:
   space, so a denied cross-space profile load stays the expected "no profile
   yet" absent read.
 
-The `newPiece` 60-second bound is unrelated and remains. That hang is a scheduler
-`idle()` park in `getResult(piece).pull()` waiting for a pattern to quiesce — a
-different mechanism this signal does not cover.
+The `newPiece` 60-second bound is unrelated and remains. That hang is a
+scheduler `idle()` park in `getResult(piece).pull()` waiting for a pattern to
+quiesce — a different mechanism this signal does not cover.
 
 ## Connecting a controller: one check for every client that opens a space
 
@@ -135,7 +163,7 @@ Two properties follow from terminating rather than looping:
   backend that completes the handshake but then never answers the authenticated
   sync (and never closes the transport) leaves `synced()` waiting with no event
   to terminate it — the same liveness gap the builtins and the scheduler share,
-  not specific to authorization. A backend that is simply down is caught earlier:
-  the CLI's `healthCheck()` probe fails first. A wall-clock bound here would again
-  fail a legitimately slow but healthy sync, so the liveness signal belongs in
-  the transport layer.
+  not specific to authorization. A backend that is simply down is caught
+  earlier: the CLI's `healthCheck()` probe fails first. A wall-clock bound here
+  would again fail a legitimately slow but healthy sync, so the liveness signal
+  belongs in the transport layer.
