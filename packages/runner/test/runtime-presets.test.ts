@@ -906,7 +906,7 @@ describe("runtimePresets conformance", () => {
       expect(postureOutputs.remoteClient.cfcWriteFloor).toBe("enforce");
     });
 
-    it("ceilings every network-fetch sink public-only and no llm sink", () => {
+    it("ceilings every network-fetch sink and the agent sink public-only, and no llm sink", () => {
       expect(MAX_ENFORCEMENT_SINK_CEILINGS).toEqual({
         fetchBinary: [],
         fetchText: [],
@@ -914,6 +914,7 @@ describe("runtimePresets conformance", () => {
         fetchJsonUnchecked: [],
         fetchProgram: [],
         streamData: [],
+        agent: [],
       });
     });
 

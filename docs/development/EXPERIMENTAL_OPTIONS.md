@@ -21,7 +21,7 @@ in the same change.
 flags](#appendix-a-removed-and-never-shipped-flags) rather than deleting the
 > record, so the history stays discoverable.
 
-**Last reviewed:** 2026-09-15. Each flag's section carries the date its status
+**Last reviewed:** 2026-09-18. Each flag's section carries the date its status
 was last checked against the code.
 
 ## Summary table
@@ -38,6 +38,7 @@ was last checked against the code.
 | [`viewScopedReplication` / `webViewScopedReplication`](#viewscopedreplication--webviewscopedreplication) | `EXPERIMENTAL_VIEW_SCOPED_REPLICATION` / `EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION`, or `RuntimeOptions.experimental` | global off; web inherits global | Bernhard Seefeld (2026-09-09) | validate view selection and guarded previews, then graduate per client class | experimental, off by default |
 | [`viewScopedReplicationV1`](#viewscopedreplicationv1) | Memory hello capability | available when server execution is on | Bernhard Seefeld (2026-09-09) | retain as protocol negotiation until older clients and servers retire | optional capability |
 | [`serverExecution`](#serverexecution) | `EXPERIMENTAL_SERVER_EXECUTION` env, or `RuntimeOptions.experimental` | **off** (`SERVER_EXECUTION_DEFAULT_ENABLED = false`; explicit `true` selects the other arm) | Bernhard Seefeld (#5339, server-execution v2 plan Phase 1 stage A; Phase 7 flip-ready #5849) | soak on main at the ON default, then delete the flag and OFF path | Serving stack and OW28 scoped compilation have direct coverage; Phase-7 gate dispositions govern a renewed rollout; the section's dated entries carry each flip; stable `default`/`opposite` CI roles keep both postures guarded and make a default flip data-only |
+| [`agentBuiltin`](#agentbuiltin) | `EXPERIMENTAL_AGENT_BUILTIN` env, or `RuntimeOptions.experimental` | off | Bernhard Seefeld (agent requests stage 3) | flip on once the runner and the queue pieces exist, then delete the flag | implemented, off by default |
 | [`cfcEnforcementMode`](#cfcenforcementmode)                                 | `RuntimeOptions.cfcEnforcementMode` (`CF_CFC_MODE` in the cf-harness / fuse)                                                                    | `enforce-strict`                                                                     | Bernhard Seefeld (#3263)                              | the ladder stays; the default is at its top rung                                                                                                                                                                                  | implemented, on by default at the strictest rung                                |
 | [`cfcFlowLabels`](#cfcflowlabels)                                           | `RuntimeOptions.cfcFlowLabels`                                                                                                                  | `persist`                                                                            | Bernhard Seefeld (#4011)                              | move toward `persist`                                                                                                                                                                                                             | implemented, on by default at `persist`                                         |
 | [`cfcWriteFloor`](#cfcwritefloor)                                           | `RuntimeOptions.cfcWriteFloor`                                                                                                                  | `enforce`                                                                            | Bernhard Seefeld (#4479)                              | move toward `enforce`                                                                                                                                                                                                             | implemented, on by default at `enforce`                                         |
@@ -683,6 +684,35 @@ holds the measurements and the conditions for revisiting.
   runtime option and its authority entry, the ambient config module, the
   rollback branch in `combineSchemaForLink` and its unit tests, and the
   combine-mode bit in the link-hop selector memo key.
+
+### `agentBuiltin`
+
+- **Toggle via.** `EXPERIMENTAL_AGENT_BUILTIN` environment variable (through
+  the canonical env registry) or `RuntimeOptions.experimental.agentBuiltin`.
+  Server-authoritative in `EXPERIMENTAL_FLAG_AUTHORITY`: under server
+  execution the server runs the builtin and creates the record, so a client
+  on the other value would stage requests the deployment never picks up, or
+  refuse ones it would.
+- **Added by.** Bernhard Seefeld, agent requests stage 3
+  ([`docs/plans/agent-requests-implementation.md`](../plans/agent-requests-implementation.md)).
+- **Purpose.** Gates the `agent` builtin
+  ([`docs/common/capabilities/agent.md`](../common/capabilities/agent.md)):
+  a pattern's request for an agent run, staged as a sink request under the
+  `agent` sink and handed to a runner through an `AgentRun` record. Off, the
+  builtin is registered — a pattern naming it compiles — and every request
+  settles with `pending: false` and an error naming this flag; nothing is
+  staged and no record is written.
+- **Current default and planned end state.** Off by default. The flag flips
+  on once a runner process and the home-space queue pieces exist to act on a
+  record; until then a request would queue with nothing to claim it. After
+  the flip, delete the flag and the refusal branch in
+  `packages/runner/src/builtins/agent.ts`.
+- **Status on 2026-09-18.** Implemented behind the flag; the builtin's
+  staging, memo, abandonment, tool check, and record derivation are covered
+  by `packages/runner/test/agent-builtin.test.ts`, and its sink governance by
+  `packages/runner/test/agent-sink-governance.test.ts`.
+- **Path to removal.** Flip the default on; remove the env mapping, the
+  runtime option and its authority entry, and the refusal branch.
 
 ## Category 2: Contextual Flow Control enforcement rollout dials
 

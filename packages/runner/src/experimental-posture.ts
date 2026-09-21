@@ -35,6 +35,7 @@ export type EnvReader = (name: string) => string | undefined;
  */
 export const EXPERIMENTAL_ENV_VARS = {
   modernCellRep: "EXPERIMENTAL_MODERN_CELL_REP",
+  agentBuiltin: "EXPERIMENTAL_AGENT_BUILTIN",
   // Content-addressed schemas (Phases 1 and 2) are default-on; env-reachable
   // so a process can opt out with an explicit "false" while the flag exists.
   contentAddressedSchemas: "EXPERIMENTAL_CONTENT_ADDRESSED_SCHEMAS",
@@ -124,6 +125,7 @@ export const EXPERIMENTAL_FLAG_AUTHORITY = {
   // Link serialization: the two encodings are a hard mismatch, which the
   // memory handshake already refuses to connect across.
   modernCellRep: "server",
+  agentBuiltin: "server",
   // An emission gate whose rollout is fleet-wide and one-way: a deployment
   // turns it on only once every client of it reads references, and an
   // explicit `false` is how it rolls back. A client still emitting after that

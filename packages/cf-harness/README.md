@@ -114,6 +114,9 @@ What works today:
   - override per run with `--sandbox-image` or `CF_HARNESS_SANDBOX_IMAGE`
 - durable Loom collections through an explicitly configured host transport; see
   [Durable Loom authoring](docs/LOOM_AUTHORING.md);
+- read-only Loom retrieval through a separately configured host transport, with
+  every row measured against the run's observation ceiling; see
+  [Read-only Loom retrieval](docs/LOOM_RETRIEVAL.md);
 - built-in tools:
   - `bash`
   - `browser` (structured host browser control for the browser subagent profile
@@ -155,6 +158,11 @@ What works today:
   - `loom_compose`, `loom_inspect`, and `loom_authoring_context` (present only
     with `--loom-authoring-config`; collections and verified commit receipts,
     separate from Pattern Instance deployment)
+  - `loom_search`, `loom_page_discover`, `loom_page_inspect`, `loom_page_read`,
+    `loom_people`, `loom_calendar_list`, `loom_context`, and `loom_profile`
+    (present only with `--loom-retrieval-config`; read-only, each row measured
+    against the run's observation ceiling; a row loom returns without a label is
+    given the query's label, and one whose label is malformed is withheld)
   - `research` (present when the run resolves a documentation corpus or pattern
     index; performs bounded, iterative Common Fabric research over exact docs,
     skills, published pattern source and dependencies, and safe handle shapes,

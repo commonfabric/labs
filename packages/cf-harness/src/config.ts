@@ -3,6 +3,10 @@ import {
   validateLoomAuthoringConfig,
 } from "./loom-authoring.ts";
 import {
+  type HarnessLoomRetrievalConfig,
+  validateLoomRetrievalConfig,
+} from "./loom-retrieval.ts";
+import {
   type CfcConfClause,
   type CfcEnforcementMode,
   cfcEnforcementStrictness,
@@ -246,6 +250,9 @@ interface HarnessCommonConfig {
   /** Explicit host command backing; never inferred from a model input. */
   loomAuthoring?: HarnessLoomAuthoringConfig;
 
+  /** Explicit host retrieval backing; never inferred from a model input. */
+  loomRetrieval?: HarnessLoomRetrievalConfig;
+
   patternIndex?: HarnessPatternIndexConfig;
   skillsSh?: HarnessSkillsShConfig;
   sandbox?: DockerRunscSandboxConfig;
@@ -321,6 +328,9 @@ export interface ResolveHarnessConfigOptions {
     | ResolvedHarnessFabricSessionConfig;
   /** Explicit host command backing; never inferred from a model input. */
   loomAuthoring?: HarnessLoomAuthoringConfig;
+
+  /** Explicit host retrieval backing; never inferred from a model input. */
+  loomRetrieval?: HarnessLoomRetrievalConfig;
 
   patternIndex?: HarnessPatternIndexConfig;
   skillsSh?: HarnessSkillsShConfig;
@@ -687,6 +697,9 @@ export const resolveHarnessConfig = (
   if (options.loomAuthoring !== undefined) {
     validateLoomAuthoringConfig(options.loomAuthoring);
   }
+  if (options.loomRetrieval !== undefined) {
+    validateLoomRetrievalConfig(options.loomRetrieval);
+  }
   const modelProvider = options.modelProvider ?? "openai-compatible-gateway";
   if (
     options.credentialOwner !== undefined &&
@@ -785,6 +798,9 @@ export const resolveHarnessConfig = (
     ...(fabricSession !== undefined ? { fabricSession } : {}),
     ...(options.loomAuthoring !== undefined
       ? { loomAuthoring: structuredClone(options.loomAuthoring) }
+      : {}),
+    ...(options.loomRetrieval !== undefined
+      ? { loomRetrieval: structuredClone(options.loomRetrieval) }
       : {}),
     ...(options.patternIndex !== undefined
       ? { patternIndex: options.patternIndex }
