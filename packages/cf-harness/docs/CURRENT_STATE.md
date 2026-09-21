@@ -1,8 +1,8 @@
 # cf-harness Current State
 
 Status: current implementation reference\
-Last verified: 2026-09-18\
-Revision: `c89aef10a+interactive-checkpoint-review`
+Last verified: 2026-09-21\
+Revision: `a830c91858+inspection-review`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -488,9 +488,9 @@ The current package provides:
   budget of 24 rather than the default subagent cap of 8, since each
   compile-error iteration costs a turn, and it carries a return contract — a
   discriminated union of
-  `{ ok: true, resultRef, describes, hashtags?, verificationRef? }` and
-  `{ ok: false, code, detail?, verificationRef? }` — which is the profile's own
-  rather than a default: a `pattern-author` delegation that declares a
+  `{ ok: true, resultRef, describes, hashtags?, verificationRef?, verification?: "not-checked" }`
+  and `{ ok: false, code, detail?, verificationRef? }` — which is the profile's
+  own rather than a default: a `pattern-author` delegation that declares a
   `returnSchema` of its own is refused, naming the field, because a channel this
   narrow cannot be left caller-writable. A failure and a success are different
   shapes, and only the success branch carries a piece result reference; there is
@@ -501,10 +501,18 @@ The current package provides:
 - revision verification guidance uses `read_piece_source.inputRef` for the
   piece's bound arguments and ordinary `run_pattern` for an old/new rule check
   over one bounded sample. The child's separate `verificationRef` carries no
-  values into the parent; comparison fields use the existing release path. Zero
-  effect, an empty sample, or unavailable evidence calls for a question instead
-  of a completed revision. Styling without a computed-surface observation is
-  explicitly reported as not checked. This is guidance, not a host proof of
+  values into the parent; a minimal reader preserves readiness, comparison
+  counts, and pending/error fields through the existing release path. Pending
+  evidence is reread once through the same reference, never interpreted as
+  settled-empty data. Query failures remain failures; policy refusals are not
+  retried. A released, ready comparison with zero effect or an empty sample
+  calls for a question. Unavailable inspection allows a requested create or
+  revision to be applied: a successful receipt returns the piece with the fixed
+  `verification: "not-checked"` marker. The piece's visible summary and the
+  final text state the inspection limitation, describe only the build or change,
+  and point to the piece without claiming unseen results or asking for a
+  nonexistent release permission. Styling without a computed-surface observation
+  is explicitly reported as not checked. This is guidance, not a host proof of
   arbitrary rule semantics.
 
 Run the capability probe instead of copying this list into adapters:

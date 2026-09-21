@@ -193,6 +193,34 @@ describe("interactive chat session context", () => {
     expect(seen[0].map((message) => message.content)).toContain(
       REVISION_VERIFICATION_GUIDANCE,
     );
+    const context = seen[0].map((message) => message.content).join("\n");
+    expect(context).toContain(
+      "For both creation and revision, distinguish applying source from inspecting its result.",
+    );
+    expect(context).toContain(
+      "Unavailable verification alone is not a failure branch or a reason to leave a revision unapplied.",
+    );
+    expect(context).toContain(
+      "The piece must include a visible summary line saying its result could not be inspected.",
+    );
+    expect(context).toContain(
+      "It must not assert unseen rows, counts, matches, unread status, or relevance scores.",
+    );
+    expect(context).toContain(
+      "Its resultSchema must expose pending, error, ready, sampleSize, beforeCount, afterCount, and changedCount.",
+    );
+    expect(context).toContain(
+      "never default a missing pending or error field, missing readiness to true, or missing counts to zero",
+    );
+    expect(context).toContain(
+      "Reread the same verificationRef once through that reader before interpreting its counts; do not author a replacement probe.",
+    );
+    expect(context).toContain(
+      "A policy refusal is final for that read and does not call for a reread.",
+    );
+    expect(context).not.toContain(
+      "A zero changedCount, empty sample, or unavailable verification is not completion",
+    );
     expect(seen[0].at(-1)?.content).toBe(
       "Stop treating alert emails as bills.",
     );
