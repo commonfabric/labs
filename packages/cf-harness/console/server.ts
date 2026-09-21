@@ -268,9 +268,9 @@ const CONSOLE_CREDENTIAL_OWNER = {
  * `includeSource`, which is why a pattern's source cannot arrive at the page
  * whatever the page sends.
  *
- * The console's one write to the index is `/api/index/feedback`, which takes a
- * pattern id and a verdict and composes the event itself. Widening this
- * allowlist is not how a second write is added.
+ * Index writes have dedicated routes: `/api/index/feedback` composes a vote,
+ * and `/api/index/retract` submits an owner retraction. Each composes its own
+ * request under the console's signer; neither widens this read allowlist.
  */
 const INDEX_FUNCTIONS = [
   "searchPatterns",
@@ -1384,6 +1384,9 @@ export class ConsoleServer {
     if (request.method === "POST" && url.pathname === "/api/index/feedback") {
       return await this.#indexFeedback(request);
     }
+    if (request.method === "POST" && url.pathname === "/api/index/retract") {
+      return await this.#indexRetract(request);
+    }
     if (request.method === "POST" && url.pathname === "/api/cancel") {
       return await this.#cancel(request);
     }
@@ -1792,10 +1795,7 @@ export class ConsoleServer {
    * the `record_feedback` tool records through, so the two surfaces cannot
    * come to vote differently.
    *
-   * Separate from `#indexCall` rather than another name in its allowlist.
-   * That route is reads, composed from what a caller asked for; this one is
-   * the console's only write to the index, and keeping it a route of its own
-   * is what leaves the allowlist meaning what it says.
+   * This dedicated write route leaves `#indexCall`'s allowlist read-only.
    */
   async #indexFeedback(request: Request): Promise<Response> {
     const factory = this.#patternIndexClientFactory;
@@ -1834,6 +1834,60 @@ export class ConsoleServer {
         : Response.json({ error: recorded.message }, { status: 502 });
     } catch (error) {
       return this.#indexFailure(error, "index feedback");
+    }
+  }
+
+  /**
+   * Retracts one owned generation through the index's existing authorization
+   * and successor checks. Identity and timestamps come from the signed call
+   * and index receipt, while the caller supplies only the two ids and reason.
+   */
+  async #indexRetract(request: Request): Promise<Response> {
+    const factory = this.#patternIndexClientFactory;
+    if (factory === undefined) {
+      return Response.json({ error: NO_PATTERN_INDEX }, { status: 503 });
+    }
+    let parsed: unknown;
+    try {
+      parsed = await request.json();
+    } catch {
+      return Response.json({ error: "request body is not JSON" }, {
+        status: 400,
+      });
+    }
+    const { patternId, successorPatternId, reason } =
+      (isObjectOrArray(parsed) ? parsed : {}) as {
+        patternId?: unknown;
+        successorPatternId?: unknown;
+        reason?: unknown;
+      };
+    if (typeof patternId !== "string" || patternId.trim() === "") {
+      return Response.json({ error: "patternId is required" }, { status: 400 });
+    }
+    if (
+      typeof successorPatternId !== "string" || successorPatternId.trim() === ""
+    ) {
+      return Response.json({
+        error:
+          "successorPatternId is required: retraction needs an existing same-owner direct successor; standalone deletion is not supported",
+      }, {
+        status: 400,
+      });
+    }
+    if (typeof reason !== "string" || reason.trim() === "") {
+      return Response.json({ error: "reason is required" }, { status: 400 });
+    }
+    try {
+      const client = await factory();
+      return Response.json(
+        await client.retractPattern({
+          patternId,
+          successorPatternId,
+          reason,
+        }),
+      );
+    } catch (error) {
+      return this.#indexFailure(error, "index retraction");
     }
   }
 

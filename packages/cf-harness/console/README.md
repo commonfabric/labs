@@ -244,6 +244,7 @@ one.
 | `GET`  | `/api/runs/<runId>/...`      | Run detail, flow, graph, artifacts, and tool outputs                                    |
 | `POST` | `/api/index/call`            | One allowlisted pattern-index read                                                      |
 | `POST` | `/api/index/feedback`        | Records one up or down vote on a pattern in the index                                   |
+| `POST` | `/api/index/retract`         | Retracts an owned generation in favor of its direct successor                           |
 | `GET`  | `/live/<sessionId>`          | The live pane for one session; takes `?turn=<turnId>` and `?piecesBase=<url-prefix>`    |
 
 Health returns `ok`, `fabricApiUrl`, and `fabricSession`. The last field is
@@ -885,8 +886,9 @@ through the CLI.
 
 The route sits under `/api/`, so it is behind the same `Host` gate as the rest.
 
-Voting is the console's one write to the index, and it has a route of its own
-rather than a name in that allowlist: `POST /api/index/feedback`, below.
+Voting and owner retraction have dedicated write routes:
+`POST /api/index/feedback` and `POST /api/index/retract`, below. Neither is
+reachable through the read allowlist.
 
 Three panes:
 
@@ -970,6 +972,46 @@ contract is:
 Until the service supplies `eventAuthors`, the inspector shows the aggregate
 counts as author unavailable. The client contract and display support do not
 establish that a cloud deployment implements them.
+
+## Retracting an owned generation
+
+`POST /api/index/retract` retires a pattern in favor of an existing same-owner
+direct successor. It does not delete a standalone entry: a successor is
+required, including for a non-discoverable probe. The request names both index
+identities and a nonempty reason:
+
+```json
+{
+  "patternId": "<recorded pattern identity>",
+  "successorPatternId": "<direct successor identity>",
+  "reason": "Superseded by the corrected reader"
+}
+```
+
+For a harness-authored pattern, use `patternPublication.patternId` from its
+`run_pattern` output, available through
+`GET /api/runs/<runId>/tool-outputs/<filename>.json`. The publishing attempt can
+belong to a child run. Use that recorded index identity, not the piece id, slug,
+or a hash reconstructed from source. A `queued` receipt establishes the intended
+identity, not publication success; the index can still return 404.
+
+The server composes only those three fields and signs with its configured Fabric
+identity. The index verifies ownership; a caller cannot supply another owner or
+elevate the signer through request fields. The successor must directly name the
+retired pattern in `priorPatternId` and must not itself be retracted. The index
+removes the retired generation from search and list results while retaining
+source and events; exact-ID reads and existing imports continue to work.
+
+HTTP 200 carries the index receipt: `patternId`, `status: "retracted"`,
+`successorPatternId`, `retractionReason`, `retractedBy`, `retractedAt`,
+`discoverable: false`, and `changed`. An identical repeat returns
+`changed: false` with the original timestamp. The route returns 400 for missing
+fields or malformed JSON and 503 without an index configuration. It preserves
+the index's 4xx status: 403 for a non-owner, 404 for a missing generation, 400
+for an unrelated successor, and 409 for a conflicting retraction. Upstream or
+host failures return 502. Error responses retain stable messages without
+exposing index response bodies or host details. The console's ordinary Host and
+JSON-content-type gates apply.
 
 ## How the configuration reaches the run
 

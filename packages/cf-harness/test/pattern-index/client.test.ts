@@ -465,6 +465,47 @@ describe("PatternIndexClient", () => {
     });
   });
 
+  it("signs a retraction as its configured identity and sends only its declared fields", async () => {
+    const request = {
+      patternId: "A".repeat(43),
+      successorPatternId: "B".repeat(43),
+      reason: "Superseded by the corrected reader",
+      ownerDid: "did:key:zOther",
+      retractedBy: "did:key:zOther",
+      admin: true,
+    };
+    const receipt = {
+      patternId: request.patternId,
+      status: "retracted",
+      successorPatternId: request.successorPatternId,
+      retractionReason: request.reason,
+      retractedBy: signer.did(),
+      retractedAt: "2026-09-21T00:00:00.000Z",
+      discoverable: false,
+      changed: true,
+    };
+    const { client, requests } = createClient([jsonResponse(receipt)]);
+
+    expect(await client.retractPattern(request)).toEqual(receipt);
+    expect(requests).toHaveLength(1);
+    const sent = requests[0];
+    expect(sent.url).toBe("https://index.test/api/retractPattern");
+    expect(sent.method).toBe("POST");
+    expect(JSON.parse(sent.body)).toEqual({
+      patternId: request.patternId,
+      successorPatternId: request.successorPatternId,
+      reason: request.reason,
+    });
+    const verified = await verifyFirstPartyHttpRequest({
+      request: new Request(sent.url, {
+        method: sent.method,
+        headers: sent.headers,
+        body: sent.body,
+      }),
+    });
+    expect(verified.userDid).toBe(signer.did());
+  });
+
   it("posts a publication with its program and declared shapes", async () => {
     const { client, requests } = createClient([
       jsonResponse({ patternId: "pat-2", created: true }),

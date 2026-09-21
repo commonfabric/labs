@@ -1,9 +1,10 @@
 /**
  * The typed client for the deployed pattern index: a small JSON-over-HTTP
  * surface for searching published patterns, reading one back, recording what
- * a run did with it, and publishing a new one. Pattern calls are POSTs to
- * `{baseUrl}/{function}` signed with the CF1 first-party scheme. Public health
- * and enrollment observations use GET; enrollment names the same principal.
+ * a run did with it, publishing a new one, and retracting an owned generation.
+ * Pattern calls are POSTs to `{baseUrl}/{function}` signed with the CF1
+ * first-party scheme. Public health and enrollment observations use GET;
+ * enrollment names the same principal.
  *
  * Everything here runs on the trusted host side. A pattern's source reaches
  * this module, the `run_pattern` compile path, and the private research loop.
@@ -209,6 +210,25 @@ export interface PatternIndexRecordEventRequest {
 
 export interface PatternIndexRecordEventResponse {
   ok: boolean;
+}
+
+/** An owner's request to retire a generation in favor of its direct successor. */
+export interface PatternIndexRetractRequest {
+  patternId: string;
+  successorPatternId: string;
+  reason: string;
+}
+
+/** The index's durable retirement receipt; source and events remain readable. */
+export interface PatternIndexRetractResponse {
+  patternId: string;
+  status: "retracted";
+  successorPatternId: string;
+  retractionReason: string;
+  retractedBy: string;
+  retractedAt: string;
+  discoverable: false;
+  changed: boolean;
 }
 
 export interface PatternIndexPublishRequest {
@@ -491,6 +511,17 @@ export class PatternIndexClient {
       eventType: request.eventType,
       did: this.did,
       ...(request.note !== undefined ? { note: request.note } : {}),
+    });
+  }
+
+  /** Retracts a generation as this client's signer; the index checks ownership. */
+  retractPattern(
+    request: PatternIndexRetractRequest,
+  ): Promise<PatternIndexRetractResponse> {
+    return this.#call<PatternIndexRetractResponse>("retractPattern", {
+      patternId: request.patternId,
+      successorPatternId: request.successorPatternId,
+      reason: request.reason,
     });
   }
 
