@@ -3,6 +3,10 @@ import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { ensureDir } from "@std/fs";
 import { dirname, fromFileUrl, toFileUrl } from "@std/path";
+
+import { SqliteError } from "@db/sqlite";
+import { pino } from "pino";
+
 import { Identity } from "@commonfabric/identity";
 import { hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
@@ -20,7 +24,7 @@ import {
 } from "@commonfabric/runner/space-invites";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 import { createSpaceInviteRouter } from "@/routes/space-invites/router.ts";
-import { createTestApp } from "@/lib/create-app.ts";
+import { createRouter, createTestApp } from "@/lib/create-app.ts";
 
 async function fixture(publicHost?: string, captureErrors = true) {
   const directory = await Deno.makeTempDir();
@@ -88,7 +92,19 @@ async function fixture(publicHost?: string, captureErrors = true) {
         return c.json({ code: "service-error" }, 500);
       });
     }
-    const app = captureErrors ? router : createTestApp(router);
+    const diagnostics: Record<string, unknown>[] = [];
+    const logger = pino({ level: "error" }, {
+      write(message) {
+        diagnostics.push(JSON.parse(message));
+      },
+    });
+    const mounted = createRouter();
+    mounted.use("*", async (c, next) => {
+      c.set("logger", logger);
+      await next();
+    });
+    mounted.route("/", router);
+    const app = captureErrors ? router : createTestApp(mounted);
     const http = Deno.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -170,6 +186,7 @@ async function fixture(publicHost?: string, captureErrors = true) {
       guest,
       server,
       errors,
+      diagnostics,
       host,
       client,
       raw,
@@ -244,6 +261,51 @@ describe("space-invites", () => {
         "application/json",
       );
       expect(await response.json()).toEqual({ code: "service-error" });
+      expect(f.diagnostics).toHaveLength(1);
+      expect(f.diagnostics[0]).toMatchObject({
+        failureKind: "Error",
+        operation: "list",
+        msg: "Space invitation service failed",
+      });
+      expect(JSON.stringify(f.diagnostics)).not.toContain("private storage");
+      expect(JSON.stringify(f.diagnostics)).not.toContain(f.directory);
+    } finally {
+      await f.close();
+    }
+  });
+  it("classifies service failures without logging their private name, cause, or body", async () => {
+    const f = await fixture(undefined, false);
+    try {
+      const credentials = createInviteCredentials();
+      const privateValue = credentials.code;
+      const error = new Error(privateValue, { cause: { code: privateValue } });
+      error.name = privateValue;
+      const failures = [
+        error,
+        new TypeError(privateValue),
+        new SqliteError(1, privateValue),
+        privateValue,
+      ];
+      using _failure = stub(f.server, "invite", () => {
+        throw failures.shift();
+      });
+      for (
+        const failureKind of ["unknown", "TypeError", "SqliteError", "unknown"]
+      ) {
+        const response = await f.raw("redeem", credentials);
+        expect(response.status).toBe(500);
+        expect(await response.json()).toEqual({ code: "service-error" });
+        expect(f.diagnostics.at(-1)).toMatchObject({
+          failureKind,
+          operation: "redeem",
+          msg: "Space invitation service failed",
+        });
+      }
+      expect(f.diagnostics).toHaveLength(4);
+      expect(JSON.stringify(f.diagnostics)).not.toContain(privateValue);
+      expect(JSON.stringify(f.diagnostics)).not.toContain(credentials.inviteId);
+      expect(f.diagnostics.every((row) => !("err" in row) && !("cause" in row)))
+        .toBe(true);
     } finally {
       await f.close();
     }
