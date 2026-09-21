@@ -177,6 +177,13 @@ export function prepareGeneratedCellIdentity(
   return copy;
 }
 
+/** The exact accepted reference and format carried by a prepared instance. */
+export function getPreparedGeneratedCellIdentity(
+  pattern: Pattern,
+): GeneratedCellIdentity | null | undefined {
+  return generatedIdentityByPattern.get(pattern);
+}
+
 /** The effective hash cause, using only the instance's prepared context. */
 export function generatedInternalCellCause(
   descriptor: DerivedInternalCellDescriptor,

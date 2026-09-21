@@ -181,6 +181,7 @@ import {
   getArtifactEntryRef,
   getPatternProgram,
   getPatternSourcePath,
+  getPreparedGeneratedCellIdentity,
   isTrustedBuilderArtifact,
   parseGeneratedCellIdentity,
   prepareGeneratedCellIdentity,
@@ -2688,7 +2689,9 @@ export class Runner {
     const pattern = isModule(resolvedPatternOrModule)
       ? this.#moduleToPattern(resolvedPatternOrModule)
       : resolvedPatternOrModule;
-    const entryRef = this.#entryRefForPattern(pattern);
+    const entryRef = patternOrModule === undefined && previousIdentityRef
+      ? previousIdentityRef
+      : this.#entryRefForPattern(pattern);
 
     return { pattern, entryRef, resolvedPatternOrModule };
   }
@@ -2706,7 +2709,10 @@ export class Runner {
   #entryRefForPattern(
     pattern: Pattern,
   ): { identity: string; symbol: string } {
-    const real = this.#runtime.patternManager.getArtifactEntryRef(pattern);
+    const prepared = getPreparedGeneratedCellIdentity(pattern);
+    const real = prepared
+      ? { identity: prepared.identity, symbol: prepared.symbol }
+      : this.#runtime.patternManager.getArtifactEntryRef(pattern);
     if (real) {
       // Artifact refs are process-global metadata on the pattern object, while
       // the addressable artifact index is runtime-local. Re-associate a pattern
@@ -3040,10 +3046,11 @@ export class Runner {
     tx: IExtendedStorageTransaction,
     pattern: Pattern,
     resultCell: Cell<unknown>,
+    entryRef = this.#entryRefForPattern(pattern),
   ): { pattern: Pattern; selection: GeneratedCellIdentity | null } {
     const selection = this.#generatedIdentitySelection(
       tx,
-      this.#entryRefForPattern(pattern),
+      entryRef,
       resultCell,
     );
     return {
@@ -3097,12 +3104,15 @@ export class Runner {
         descriptor,
         tx,
       );
-      const manifestMatch = existingManifest.findIndex((existingDescriptor) =>
-        deepEqual(existingDescriptor.partialCause, descriptor.partialCause) &&
-        existingDescriptor.kind === descriptor.kind &&
-        parseLink(existingDescriptor.link, resultCell)?.id ===
-          derivedCell.getAsNormalizedFullLink().id
-      );
+      const manifestMatch = existingManifest.findIndex((existingDescriptor) => {
+        const link = parseLink(existingDescriptor.link, resultCell);
+        return deepEqual(
+          existingDescriptor.partialCause,
+          descriptor.partialCause,
+        ) &&
+          existingDescriptor.kind === descriptor.kind && link !== undefined &&
+          areNormalizedLinksSame(link, derivedCell.getAsNormalizedFullLink());
+      });
       // Re-emit the manifest link and backlink from the current descriptor on
       // every setup. A compatible setsrc may narrow an internal schema while
       // retaining the same partial cause; preserving the old manifest entry
@@ -3176,7 +3186,7 @@ export class Runner {
     preparedIdentity?: GeneratedCellIdentity | null,
   ): void {
     const prepared = preparedIdentity === undefined
-      ? this.#prepareGeneratedPattern(tx, pattern, resultCell)
+      ? this.#prepareGeneratedPattern(tx, pattern, resultCell, entryRef)
       : { pattern, selection: preparedIdentity };
     pattern = prepared.pattern;
     resultCell.withTx(tx).setMetaRaw(
@@ -3538,6 +3548,7 @@ export class Runner {
       tx,
       resolvedPattern.pattern,
       resultCell,
+      entryRef,
     );
     // The reuse arms below write the argument without reaching
     // `#applySetupState`, which names these stores for every other setup
@@ -3950,12 +3961,15 @@ export class Runner {
     if (!Array.isArray(stored)) return false;
     const manifest = stored as InternalCellDescriptor[];
     return descriptors.every((descriptor) =>
-      manifest.some((entry) =>
-        deepEqual(entry.partialCause, descriptor.partialCause) &&
-        entry.kind === descriptor.kind &&
-        parseLink(entry.link, resultCell)?.id ===
-          getDerivedInternalCellLink(resultCell, descriptor).id
-      )
+      manifest.some((entry) => {
+        const link = parseLink(entry.link, resultCell);
+        return deepEqual(entry.partialCause, descriptor.partialCause) &&
+          entry.kind === descriptor.kind && link !== undefined &&
+          areNormalizedLinksSame(
+            link,
+            getDerivedInternalCellLink(resultCell, descriptor),
+          );
+      })
     );
   }
 
@@ -4154,7 +4168,10 @@ export class Runner {
           throw new RetryImmediately("Loading the selected program");
         });
       }
-      cancel.ensure(tx, live);
+      cancel.ensure(
+        tx,
+        this.#prepareGeneratedPattern(tx, live, resultCell, selected).pattern,
+      );
     };
     Object.assign(coordinator, {
       implementationHash: "cf:runner/program-selection",
@@ -4683,6 +4700,7 @@ export class Runner {
           this.#runtime.readTx(),
           this.#resolveToPattern(loaded as Pattern),
           resultCell,
+          newRef,
         ).pattern;
         // Whoever moved the pointer may have staged the incoming pattern in
         // the same transaction, which is how a transition makes staging and
@@ -4721,45 +4739,9 @@ export class Runner {
           runningRef = newRef;
           runningPattern = pattern;
         };
-        if (!this.#runtime.sealDestinationInstalled) {
-          // The OFF arm (and ON-arm client speculation): setup commits to
-          // the store and the swap proceeds synchronously.
-          try {
-            this.#applySetupState(
-              setupTx,
-              pattern,
-              newRef,
-              {
-                sameStoredSetup: false,
-                restageStoredArgument: true,
-                storedSetupMatches: false,
-              },
-              undefined,
-              resultCell,
-            );
-            this.#runtime.prepareTxForCommit(setupTx);
-            setupTx.commit();
-          } catch (error) {
-            logger.error(
-              "pattern-swap-setup-error",
-              `Setup for swapped-in pattern ${newRef.identity}#${newRef.symbol} failed`,
-              error,
-            );
-            return;
-          }
-          finishSwap();
-          return;
-        }
-        // ON-arm serving: the setup seals into the wave, and the wave
-        // can still WITHDRAW it at the commit step (a conflict drop, a
-        // lease-lost abort) AFTER commit() resolved — so the running
-        // graph is replaced only once the setup is DURABLY accepted
-        // (waveSettlementOf). On withdrawal the OLD graph stays: v2
-        // running against withdrawn setup would read internal cells that
-        // setup never materialized, while old-graph-plus-new-pointer is a
-        // coherent not-yet-swapped state a later pointer write (or
-        // reactivation) repairs.
-        void (async () => {
+        // Replace the graph only after setup is accepted. Serving commits can
+        // be withdrawn by their enclosing wave after their first verdict.
+        const setupWork = (async () => {
           try {
             this.#applySetupState(
               setupTx,
@@ -4778,7 +4760,7 @@ export class Runner {
             if (committed.error !== undefined) {
               logger.error(
                 "pattern-swap-setup-error",
-                `Setup for swapped-in pattern ${newRef.identity}#${newRef.symbol} was refused at the seal`,
+                `Setup for swapped-in pattern ${newRef.identity}#${newRef.symbol} was refused at commit`,
                 committed.error,
               );
               return;
@@ -4811,7 +4793,17 @@ export class Runner {
           if (!active || startLifecycleEpoch !== this.#lifecycleEpoch) return;
           if (currentPatternKey !== patternIdentityKey(newRef)) return;
           finishSwap();
-        })();
+        })().catch((error) => {
+          logger.error(
+            "pattern-swap-setup-error",
+            `Setup for swapped-in pattern ${newRef.identity}#${newRef.symbol} failed`,
+            error,
+          );
+        });
+        this.#pendingWatcherPatternLoads.add(setupWork);
+        setupWork.finally(() =>
+          this.#pendingWatcherPatternLoads.delete(setupWork)
+        );
       };
       // The session-swap half of the watcher (see `#sessionPatternSwaps`):
       // exactly the sinkMeta arm's semantics, driven directly with a live
@@ -4840,11 +4832,18 @@ export class Runner {
         newKey: string,
       ): void => {
         // In-memory fast path: the module is usually live this session.
-        const live = this.#runtime.patternManager.artifactFromIdentitySync(
-          newRef.identity,
-          newRef.symbol,
-        ) as Pattern | undefined;
-        if (live) {
+        const loadedLive = this.#runtime.patternManager
+          .artifactFromIdentitySync(
+            newRef.identity,
+            newRef.symbol,
+          ) as Pattern | undefined;
+        if (loadedLive) {
+          const live = this.#prepareGeneratedPattern(
+            resultCell.tx ?? this.#runtime.readTx(),
+            this.#resolveToPattern(loadedLive),
+            resultCell,
+            newRef,
+          ).pattern;
           // A pointer moved here, by this runtime or by a transition it
           // took part in, has what the incoming pattern reads in place
           // and swaps at once, in the state the pointer moved in. One
@@ -5040,7 +5039,13 @@ export class Runner {
             });
             // Loaded from the store, so what it reads may be absent here
             // too; named before the swap as on the live path.
-            return this.#syncCellsForRunningPattern(resultCell, loaded).then(
+            const prepared = this.#prepareGeneratedPattern(
+              resultCell.tx ?? this.#runtime.readTx(),
+              this.#resolveToPattern(loaded),
+              resultCell,
+              newRef,
+            ).pattern;
+            return this.#syncCellsForRunningPattern(resultCell, prepared).then(
               () => {
                 if (
                   !active || startLifecycleEpoch !== this.#lifecycleEpoch ||
@@ -5239,9 +5244,7 @@ export class Runner {
         // would write a pointer no fresh runtime can load. The VALUE is kept
         // regardless: the roll-forward's keyless arm converges through its
         // derivation chain to a module-addressed producer when one exists.
-        const givenRef = this.#runtime.patternManager.getArtifactEntryRef(
-          givenPattern,
-        );
+        const givenRef = this.#entryRefForPattern(givenPattern);
         runningRef = givenRef !== undefined &&
             !PatternManager.isKeylessPatternIdentity(givenRef.identity)
           ? givenRef
@@ -5296,7 +5299,12 @@ export class Runner {
 
     // Sync path - instantiate immediately
     currentPatternKey = patternIdentityKey(initialRef);
-    const initialPattern = this.#resolveToPattern(initialResolved);
+    const initialPattern = this.#prepareGeneratedPattern(
+      resultCell.tx ?? this.#runtime.readTx(),
+      this.#resolveToPattern(initialResolved),
+      resultCell,
+      initialRef,
+    ).pattern;
     instantiateInitialPattern(initialPattern, initialRef, tx);
     runningRef = initialRef;
     runningPattern = initialPattern;
@@ -5402,7 +5410,7 @@ export class Runner {
             { ...node, module },
             resultCell.withTx(tx),
             addAttemptCancel,
-            this.#prepareGeneratedPattern(tx, pattern, resultCell).pattern,
+            this.#prepareGeneratedPattern(tx, pattern, resultCell, ref).pattern,
             {
               ...this.#schedulerRehydrationOptions(resultCell),
               viewNodeId: viewNodeId(
@@ -5657,7 +5665,12 @@ export class Runner {
         });
     }
 
-    const resolvedPattern = this.#resolveToPattern(pattern);
+    const resolvedPattern = this.#prepareGeneratedPattern(
+      rootCell.tx ?? this.#runtime.readTx(),
+      this.#resolveToPattern(pattern),
+      rootCell,
+      identityRef,
+    ).pattern;
 
     // Fast path for pieces prepared in the current runtime via setup()/run() or
     // explicitly restarted after stop(). Those writes are already present
@@ -6109,11 +6122,9 @@ export class Runner {
   /**
    * Whether a swap of `resultCell` to `pattern` would read a document this
    * replica lacks: the argument document `argumentLink` names, which the
-   * swap's setup reads whole, or an owned cell the stored manifest lists —
-   * one a setup somewhere has materialized — that is absent here. A cell the
-   * manifest does not list is one the swap's setup seeds itself, and a link
-   * target the argument holds is read reactively once the piece runs, so
-   * neither holds the swap.
+   * swap's setup reads whole, or an incoming owned cell with no local basis.
+   * An incoming namespace can retain documents outside the current manifest;
+   * only confirmed absence permits setup to seed them as new.
    */
   #swapReadsAbsent(
     pattern: Pattern,
@@ -6128,22 +6139,26 @@ export class Runner {
     const manifest = convertibleJsFromFabricValue(
       cell.getMetaRaw("internal", { meta: ignoreReadForScheduling }),
     );
-    if (!Array.isArray(manifest)) return false;
     const listed = new Set<string>();
-    for (const entry of manifest) {
+    for (const entry of Array.isArray(manifest) ? manifest : []) {
       const link = isObjectOrArray(entry)
         ? parseLink((entry as { link?: unknown }).link, resultCell)
         : undefined;
       if (link !== undefined) listed.add(link.id);
     }
-    if (listed.size === 0) return false;
     const owned: Cell<any>[] = [];
     if (
       !this.#collectResumeOwnedCells(pattern, cell, owned, new Set(), readTx)
     ) return true;
     return owned.some((ownedCell) => {
       const link = ownedCell.getAsNormalizedFullLink();
-      return listed.has(link.id) && !present(link);
+      const covered = this.#runtime.storageManager.open(link.space).replica
+        .hasLocalDocumentCoverage?.(
+          link.id,
+          link.scope,
+          readTx.tx.scopeKeyIdentity,
+        );
+      return !covered || (listed.has(link.id) && !present(link));
     });
   }
 
@@ -8892,9 +8907,9 @@ export class Runner {
   }
 
   /**
-   * TESTS ONLY: settle in-flight watcher pattern loads AND any pointer
-   * roll-forward commits they spawn; loops because a roll-forward is
-   * created inside its load chain. The deterministic synchronization point
+   * TESTS ONLY: settle in-flight watcher pattern loads, setup acceptance,
+   * and pointer roll-forward commits; loops because these chains spawn
+   * follow-up work. The deterministic synchronization point
    * under the frozen-clock preload, where wall-clock polling cannot observe
    * this work. Never called from dispose() — a held load would hang
    * teardown.

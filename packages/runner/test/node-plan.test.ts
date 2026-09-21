@@ -81,11 +81,16 @@ describe("Runner node plans", () => {
     expect(running.key("value").get()).toBe(10);
 
     const tx = runtime.edit();
+    const selection = parseGeneratedCellIdentity(
+      resultCell.withTx(tx).getMetaRaw("generatedCellIdentity"),
+    );
+    expect(selection).toBeDefined();
+    if (selection === undefined) {
+      throw new Error("Missing generated cell identity");
+    }
     const instance = prepareGeneratedCellIdentity(
       compiled,
-      parseGeneratedCellIdentity(
-        resultCell.withTx(tx).getMetaRaw("generatedCellIdentity"),
-      )!,
+      selection,
     );
     const plans: NodePlan[] = [];
     try {

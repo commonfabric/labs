@@ -29,7 +29,8 @@ legacy artifact. This also retains the evidence needed by recovery paths that
 commit a pointer change before materialization. Aborted setup leaves the
 accepted namespace and data unchanged.
 
-The manifest matches the derived address as well as partial cause and kind.
+The manifest matches the complete derived address, including scope, as well as
+partial cause and kind.
 Generated defaults are initialized at the new address; intentionally named
 state survives. Reapplying an artifact that previously ran in version 1 revisits
 that artifact's namespace, including its retained writable state. Identity is
@@ -49,6 +50,10 @@ serialization, traversal, and binding copies. Shared artifact descriptors and
 nested pattern descriptors are not modified. Central address minting reads
 only this prepared context, never partially loaded storage metadata.
 
+Preparation uses the accepted entry reference being loaded. The same live
+artifact can be registered through several re-exports; the first registered
+reference is provenance and does not override the piece's accepted reference.
+
 Static child identities use the same effective output cause as their value
 binding, suppressing only the computed URI kind. A generated parent output
 therefore rotates its child anchor and the child's named descendants. Explicit
@@ -62,6 +67,12 @@ cannot silently select legacy addressing. Serving graphs shared across user or
 session instances distinguish both artifact and addressing format. Ownership,
 authorization preflight, setup, execution, and view-only binding use the same
 selected addresses.
+
+Pointer-driven restoration loads retained cells from the incoming namespace
+even when its artifact is already live and the current manifest names a
+different version. The running graph changes only after setup commits
+successfully and any enclosing serving wave accepts it. A refused setup leaves
+the previous graph active.
 
 ## Deployment
 

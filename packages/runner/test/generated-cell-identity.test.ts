@@ -115,4 +115,28 @@ describe("generated-cell-identity", () => {
       prepareGeneratedCellIdentity({ ...root }, { version: 1, ...real })
     ).toThrow("trusted");
   });
+
+  it("preserves the selected namespace when copying an individual descriptor", () => {
+    const root = artifact();
+    const prepared = prepareGeneratedCellIdentity(root, {
+      version: 1,
+      identity: "descriptor-artifact",
+      symbol: "default",
+    });
+    const descriptor = prepared.derivedInternalCells![0];
+    const copy = { ...descriptor };
+    expect(generatedInternalCellCause(copy)).toEqual({ $generated: 0 });
+
+    noteDerivedCopy(copy, descriptor);
+    const copiedCause = generatedInternalCellCause(copy);
+    expect(copiedCause).toEqual(generatedInternalCellCause(descriptor));
+    expect(copiedCause).not.toEqual({ $generated: 0 });
+
+    const legacy = prepareGeneratedCellIdentity(prepared, null);
+    const legacyDescriptor = legacy.derivedInternalCells![0];
+    const legacyCopy = { ...legacyDescriptor };
+    noteDerivedCopy(legacyCopy, legacyDescriptor);
+    expect(generatedInternalCellCause(legacyCopy)).toEqual({ $generated: 0 });
+    expect(generatedInternalCellCause(copy)).toEqual(copiedCause);
+  });
 });

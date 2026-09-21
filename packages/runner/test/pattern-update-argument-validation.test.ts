@@ -466,6 +466,8 @@ describe("pattern update validates the stored argument", () => {
       symbol: v2Ref.symbol,
     }, rawMetaWriteAuthorization);
     await tx2.commit();
+    // Let incoming-cell loading and the refused setup finish before repair.
+    await rt.runner.idlePointerMaintenance();
     await rt.idle();
     await cell.pull();
     expect(
@@ -558,6 +560,8 @@ describe("pattern update validates the stored argument", () => {
       symbol: v2Ref.symbol,
     }, rawMetaWriteAuthorization);
     await tx2.commit();
+    // Let incoming-cell loading and the refused setup finish before repair.
+    await rt.runner.idlePointerMaintenance();
     await rt.idle();
     await cell.pull();
     expect(
@@ -754,6 +758,8 @@ describe("pattern update validates the stored argument", () => {
       symbol: v2Ref.symbol,
     }, rawMetaWriteAuthorization);
     await tx2.commit();
+    // Let incoming-cell loading and the refused setup finish before repair.
+    await rt.runner.idlePointerMaintenance();
     await rt.idle();
     await cell.pull();
     expect((cell.getAsQueryResult() as { tag: string }).tag).toBe("v1");
