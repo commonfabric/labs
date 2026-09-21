@@ -1,4 +1,7 @@
 import { assert, assertAlmostEquals, assertLessOrEqual } from "@std/assert";
+import { expect } from "@std/expect";
+import { CFButton } from "../cf-button/index.ts";
+import { CFInput } from "../cf-input/index.ts";
 import "./index.ts";
 
 type UpdatingModal = HTMLElement & {
@@ -238,6 +241,182 @@ Deno.test("dialog preserves a custom maximum height", async () => {
       0.5,
     );
     assertContained(VARIANTS[0], mounted);
+  } finally {
+    mounted.fixture.remove();
+  }
+});
+
+/** Creates the shadow boundary used by an embedded pattern renderer. */
+async function mountKeyboardModal() {
+  const fixture = document.createElement("div");
+  const root = fixture.attachShadow({ mode: "open" });
+  const opener = document.createElement("cf-input") as CFInput;
+  const modal = document.createElement("cf-modal") as UpdatingModal;
+  modal.preventScroll = false;
+  modal.style.setProperty("--cf-modal-animation-duration", "0ms");
+  const heading = document.createElement("span");
+  heading.slot = "header";
+  heading.textContent = "Your name";
+  const field = document.createElement("cf-input") as CFInput;
+  const done = document.createElement("cf-button") as CFButton;
+  expect(opener).toBeInstanceOf(CFInput);
+  expect(field).toBeInstanceOf(CFInput);
+  expect(done).toBeInstanceOf(CFButton);
+  done.slot = "footer";
+  done.textContent = "Done";
+  modal.append(heading, field, done);
+  root.append(opener, modal);
+  document.body.append(fixture);
+  await Promise.all([
+    opener.updateComplete,
+    modal.updateComplete,
+    field.updateComplete,
+    done.updateComplete,
+  ]);
+  modal.addEventListener("cf-modal-close", () => {
+    modal.open = false;
+  });
+  return { fixture, root, opener, modal, field, done };
+}
+
+/** Dispatches the composed keyboard event that reaches a modal's focus trap. */
+function tabFrom(
+  element: HTMLElement | SVGElement,
+  shiftKey = false,
+): KeyboardEvent {
+  element.focus();
+  const event = new KeyboardEvent("keydown", {
+    key: "Tab",
+    shiftKey,
+    bubbles: true,
+    composed: true,
+    cancelable: true,
+  });
+  element.dispatchEvent(event);
+  return event;
+}
+
+Deno.test("dialog wraps focus inside a renderer shadow root", async () => {
+  const mounted = await mountKeyboardModal();
+  try {
+    mounted.modal.open = true;
+    await settleLayout(mounted.modal);
+    const close = requiredElement(mounted.modal.shadowRoot!, ".close-button");
+    expect(tabFrom(mounted.done).defaultPrevented).toBe(true);
+    expect(mounted.modal.shadowRoot!.activeElement).toBe(close);
+    expect(tabFrom(close, true).defaultPrevented).toBe(true);
+    expect(mounted.root.activeElement).toBe(mounted.done);
+  } finally {
+    mounted.fixture.remove();
+  }
+});
+
+Deno.test("dialog restores the original control inside nested shadow roots", async () => {
+  const mounted = await mountKeyboardModal();
+  try {
+    mounted.opener.focus();
+    const input = requiredElement(mounted.opener.shadowRoot!, "input");
+    expect(mounted.opener.shadowRoot!.activeElement).toBe(input);
+    mounted.modal.open = true;
+    await settleLayout(mounted.modal);
+    const close = requiredElement(mounted.modal.shadowRoot!, ".close-button");
+    close.focus();
+    expect(mounted.modal.shadowRoot!.activeElement).toBe(close);
+    close.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "Escape",
+        bubbles: true,
+        composed: true,
+        cancelable: true,
+      }),
+    );
+    await mounted.modal.updateComplete;
+    expect(mounted.modal.open).toBe(false);
+    expect(mounted.root.activeElement).toBe(mounted.opener);
+    expect(mounted.opener.shadowRoot!.activeElement).toBe(input);
+  } finally {
+    mounted.fixture.remove();
+  }
+});
+
+Deno.test("dialog follows slotted shadow controls and excludes unavailable tab stops", async () => {
+  const mounted = await mountKeyboardModal();
+  try {
+    mounted.done.remove();
+    const nested = document.createElement("div");
+    nested.slot = "footer";
+    const shadow = nested.attachShadow({ mode: "open" });
+    shadow.innerHTML = `
+      <input aria-label="Last field">
+      <button disabled>Disabled</button>
+      <button tabindex="-1">Programmatic focus only</button>
+      <button hidden>Hidden</button>
+      <div inert><button>Inert</button></div>
+      <div style="visibility: hidden"><button>Invisible</button></div>
+    `;
+    mounted.modal.append(nested);
+    mounted.modal.open = true;
+    await settleLayout(mounted.modal);
+    const close = requiredElement(mounted.modal.shadowRoot!, ".close-button");
+    const last = requiredElement(shadow, "input");
+    expect(tabFrom(close, true).defaultPrevented).toBe(true);
+    expect(shadow.activeElement).toBe(last);
+    expect(tabFrom(last).defaultPrevented).toBe(true);
+    expect(mounted.modal.shadowRoot!.activeElement).toBe(close);
+  } finally {
+    mounted.fixture.remove();
+  }
+});
+
+/** Builds a natively tabbable SVG link with visible geometry. */
+function svgLink() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("width", "100");
+  svg.setAttribute("height", "30");
+  const link = document.createElementNS("http://www.w3.org/2000/svg", "a");
+  link.setAttribute("href", "#profile");
+  const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  text.setAttribute("y", "20");
+  text.textContent = "Profile";
+  link.append(text);
+  svg.append(link);
+  return { svg, link };
+}
+
+Deno.test("dialog wraps focus from a slotted SVG link", async () => {
+  const mounted = await mountKeyboardModal();
+  try {
+    mounted.done.remove();
+    const { svg, link } = svgLink();
+    svg.slot = "footer";
+    mounted.modal.append(svg);
+    mounted.modal.open = true;
+    await settleLayout(mounted.modal);
+    const close = requiredElement(mounted.modal.shadowRoot!, ".close-button");
+    expect(tabFrom(close, true).defaultPrevented).toBe(true);
+    expect(mounted.root.activeElement).toBe(link);
+    expect(tabFrom(link).defaultPrevented).toBe(true);
+    expect(mounted.modal.shadowRoot!.activeElement).toBe(close);
+  } finally {
+    mounted.fixture.remove();
+  }
+});
+
+Deno.test("dialog restores focus to an SVG opener inside a shadow root", async () => {
+  const mounted = await mountKeyboardModal();
+  try {
+    const { svg, link } = svgLink();
+    mounted.root.prepend(svg);
+    link.focus();
+    expect(mounted.root.activeElement).toBe(link);
+    mounted.modal.open = true;
+    await settleLayout(mounted.modal);
+    const close = requiredElement(mounted.modal.shadowRoot!, ".close-button");
+    close.focus();
+    expect(mounted.modal.shadowRoot!.activeElement).toBe(close);
+    mounted.modal.open = false;
+    await mounted.modal.updateComplete;
+    expect(mounted.root.activeElement).toBe(link);
   } finally {
     mounted.fixture.remove();
   }
