@@ -2358,7 +2358,7 @@ export function analyzeFunctionCapabilities(
         if (
           receiverExpr &&
           (methodName === "filter" || methodName === "sort" ||
-            methodName === "toSorted")
+            methodName === "toSorted" || methodName === "slice")
         ) {
           return resolveBinding(receiverExpr);
         }
@@ -2458,7 +2458,7 @@ export function analyzeFunctionCapabilities(
         if (
           receiverExpr &&
           (methodName === "filter" || methodName === "sort" ||
-            methodName === "toSorted")
+            methodName === "toSorted" || methodName === "slice")
         ) {
           return resolveArrayElementBinding(receiverExpr);
         }

@@ -1660,7 +1660,10 @@ adjustments:
 - reads inside an inline array-method callback count as reads of the enclosing
   builder's parameter: the element parameter is bound to the receiver's item
   path, so `table.find((row) => equals(self, row.topic))` records
-  `table[].topic` and, through the capture, `self`. The left operand of a `??`
+  `table[].topic` and, through the capture, `self`. That binding survives
+  `slice()`, both in a receiver chain and through a local holding the sliced
+  array, so a later callback retains the fields it reads without retaining
+  unread item fields. The left operand of a `??`
   / `||` fallback resolves to a single source ref, which reaches a root through
   a member/call spine and consumes nothing else; an operand whose spine passes
   through a call is therefore walked as well, covering that call's callback and
