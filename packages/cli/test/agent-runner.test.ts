@@ -1058,6 +1058,57 @@ describe("agent runner", () => {
     expect(ended.attempts).toBe(1);
   });
 
+  it("preserves a subscription failure when registration cleanup also fails", async () => {
+    const subscriptionFailure = new Error("queue subscription failed");
+    const queue = {
+      key: () => queue,
+      asSchema: () => queue,
+      sync: () => Promise.resolve(),
+      sink: () => {
+        throw subscriptionFailure;
+      },
+    };
+
+    for (
+      const cleanupFailure of [new Error("cleanup error"), "cleanup string"]
+    ) {
+      const registrations: unknown[] = [];
+      const reports: string[] = [];
+      const runner = new AgentRunner({
+        homeSpace: home,
+        homeHost: CLOUD,
+        runnerHost: LOCAL,
+        runnerId: `${home}#cleanup-failure`,
+        tools: [],
+        maxConcurrent: 1,
+        leaseMs: LEASE_MS,
+        runtimeForHost: () =>
+          Promise.resolve({ getCell: () => queue } as unknown as Runtime),
+        registerRunner: (entry) => {
+          registrations.push(entry);
+          return entry === undefined
+            ? Promise.reject(cleanupFailure)
+            : Promise.resolve();
+        },
+        execute: () => Promise.resolve({ outcome: "cancelled" }),
+        report: (message) => reports.push(message),
+        now: () => clock,
+      });
+
+      await expect(runner.start()).rejects.toBe(subscriptionFailure);
+      expect(registrations).toHaveLength(2);
+      expect(registrations[0]).not.toBeUndefined();
+      expect(registrations[1]).toBeUndefined();
+      expect(reports).toContain(
+        `agent runner: could not clear a failed registration: ${
+          cleanupFailure instanceof Error
+            ? cleanupFailure.message
+            : cleanupFailure
+        }`,
+      );
+    }
+  });
+
   describe("with the harness executor over a scripted prompt loop", () => {
     let workRoot: string;
 
@@ -1424,6 +1475,30 @@ describe("agent runner", () => {
       );
 
       const ended = await waitForState(result, "failed");
+      expect(ended.errorCode).toBe("PROVIDER_FAILURE");
+      expect(ended.result).toBeUndefined();
+    });
+
+    it("fails before invoking the provider when the stale result path cannot be removed", async () => {
+      const result = await submit();
+      const record = recordOf(result).get()!;
+      const staleResult = join(
+        workRoot,
+        record.requestHash,
+        "workspace",
+        "agent-result.json",
+      );
+      await Deno.mkdir(staleResult, { recursive: true });
+      await Deno.writeTextFile(join(staleResult, "kept"), "not removable");
+      let invoked = false;
+      await startHarnessRunner(() => {
+        invoked = true;
+        return Promise.resolve(loopResult("run-stale-result-directory"));
+      });
+
+      const ended = await waitForState(result, "failed");
+
+      expect(invoked).toBe(false);
       expect(ended.errorCode).toBe("PROVIDER_FAILURE");
       expect(ended.result).toBeUndefined();
     });
