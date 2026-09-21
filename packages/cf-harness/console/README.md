@@ -968,13 +968,21 @@ null or absent viewer says the identity was not recorded in the receipt. When
 there is no source row, the launcher reads the handle's `viewer` object. It
 reads no connection configuration or authentication file.
 
+Repeated source or handle receipts must agree on each metadata field. A count
+disagreement leaves the count unknown; an account disagreement is described as
+conflicting receipts, distinct from an unrecorded or explicitly unknown
+identity. An observation disagreement reports `conflicting-receipts` rather than
+choosing one timestamp. Fields the receipts agree on remain available.
+
 The source row's `newest_observed_at` is when Loom observed the newest record,
 not the content's timestamp or the receipt's `written_at`. When no observation
 time is available, `newest_observed_at_reason` distinguishes `no-rows` (an empty
 store) from an unavailable measurement such as `no-observed-at-column`,
 `row-count-unsupported`, `query-failed`, or `not-linked`. Receipts without these
-additive fields describe the observation time as unknown. This metadata survives
-launcher serialization, grant minting, and session restoration.
+additive fields describe the observation time as unknown. Timestamps require an
+ISO8601 date and time with an explicit zone and are displayed in UTC. This
+metadata survives launcher serialization, grant minting, and session
+restoration.
 
 What a grant does not do is decide anything a reference does not already decide.
 It discloses a token and a harness-authored sentence; the address stays

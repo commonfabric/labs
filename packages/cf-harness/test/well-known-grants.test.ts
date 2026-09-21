@@ -73,6 +73,7 @@ describe("well-known-grants", () => {
     const specs = [{
       name: "gmail-work",
       cfcClasses: ["message", "call"],
+      observation: { newestAt: "2026-09-20T20:00:00+10:00" },
       ref: MAIL_REF,
       source: MAIL_GRANT.source,
     }, {
@@ -107,6 +108,7 @@ describe("well-known-grants", () => {
     const message = wellKnownGrantsContextMessage(restored);
     expect(message).toContain("gmail-work (message, call)");
     expect(message).toContain("`message`, `call` CFC labels");
+    expect(message).toContain("Newest observed at: 2026-09-20T10:00:00.000Z");
     expect(message).toContain("gmail-work / calendar (calendar)");
     expect(message).toContain("loom.calendar (calendar)");
     expect(message).not.toContain(MAIL_REF);

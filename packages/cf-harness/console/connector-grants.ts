@@ -18,6 +18,7 @@
  */
 
 import { renderCellReference } from "@commonfabric/runner/shared";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import { parseHandleRef } from "../src/handle-table.ts";
@@ -26,6 +27,7 @@ import { HARNESS_WELL_KNOWN_GRANT_NAMES } from "../src/contracts/well-known-gran
 import {
   checkConnectorGrantSpec,
   connectorGrantName,
+  isConnectorObservationTimestamp,
 } from "../src/well-known-grants.ts";
 
 /** The CFC atom type whose `class` names what a column holds. */
@@ -126,9 +128,21 @@ type ConnectorReceiptMetadata = Pick<
   "rowCount" | "viewer" | "observation"
 >;
 
-/**
- * Reads source metadata by store identity; conflicting physical counts are unknown.
- */
+/** Keeps agreed metadata and marks disagreements without choosing one receipt. */
+const mergeReceiptMetadata = (
+  target: ConnectorReceiptMetadata,
+  candidate: ConnectorReceiptMetadata,
+): void => {
+  if (target.rowCount !== candidate.rowCount) delete target.rowCount;
+  if (!deepEqual(target.viewer, candidate.viewer)) {
+    target.viewer = { identity: "conflicting" };
+  }
+  if (!deepEqual(target.observation, candidate.observation)) {
+    target.observation = { newestAt: null, reason: "conflicting-receipts" };
+  }
+};
+
+/** Reads source metadata by store identity, retaining agreement across repeats. */
 const sourceReceiptMetadata = (
   rows: unknown,
 ): Map<string, ConnectorReceiptMetadata> => {
@@ -149,18 +163,19 @@ const sourceReceiptMetadata = (
       ? count
       : undefined;
     const key = handleKey(piece, connection, companion ?? "");
-    const previous = receipts.get(key);
-    if (previous !== undefined) {
-      if (previous.rowCount !== rowCount) delete previous.rowCount;
-      continue;
-    }
     const viewer = receiptViewer(source?.viewer);
     const observation = receiptObservation(source);
-    receipts.set(key, {
+    const metadata = {
       ...(rowCount === undefined ? {} : { rowCount }),
       ...(viewer === undefined ? {} : { viewer }),
       ...(observation === undefined ? {} : { observation }),
-    });
+    };
+    const previous = receipts.get(key);
+    if (previous === undefined) {
+      receipts.set(key, metadata);
+    } else {
+      mergeReceiptMetadata(previous, metadata);
+    }
   }
   return receipts;
 };
@@ -205,7 +220,7 @@ const receiptObservation = (
   receipt: Record<string, unknown> | undefined,
 ): HarnessConnectorGrantSpec["observation"] => {
   const newestAt = asNonEmptyString(receipt?.newest_observed_at);
-  if (newestAt !== undefined && Number.isFinite(Date.parse(newestAt))) {
+  if (isConnectorObservationTimestamp(newestAt)) {
     return { newestAt: new Date(newestAt).toISOString() };
   }
   if (receipt?.newest_observed_at != null) return undefined;
@@ -297,7 +312,7 @@ export const resolveConnectorGrants = (
   if (document === undefined) {
     throw new Error(
       `\`${records.handlesJsonPath}\` does not hold a JSON object; loom ` +
-        `writes {schema_version, written_at, space, handles}`,
+        `writes {schema_version, written_at, space, handles, sources}`,
     );
   }
   const handles = document.handles;
@@ -455,8 +470,8 @@ export const resolveConnectorGrants = (
         entry.cfcClasses!.every((value) => first.cfcClasses!.includes(value))
       )
     ) {
-      if (!entries.every((entry) => entry.rowCount === first.rowCount)) {
-        delete first.rowCount;
+      for (const entry of entries.slice(1)) {
+        mergeReceiptMetadata(first, entry);
       }
       grants.push(first);
     } else {

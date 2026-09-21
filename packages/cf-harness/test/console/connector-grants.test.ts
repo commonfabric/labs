@@ -624,6 +624,141 @@ describe("connector-grants", () => {
       expect(result.grants[0]!.rowCount).toBeUndefined();
     });
 
+    it("retains only agreed metadata across repeated sources and handles in either order", async () => {
+      const account = { kind: "account", source_id: "account-a", email: null };
+      const observation = "2026-09-20T10:00:00.000Z";
+      for (const secondPiece of [MAIL_PIECE.name, "resources"]) {
+        const first = {
+          ...sourceReceipt(MAIL_PIECE.name, "gmail-work", 19),
+          viewer: account,
+          newest_observed_at: observation,
+        };
+        for (const changed of ["none", "viewer", "observation", "rowCount"]) {
+          const second = {
+            ...first,
+            piece: secondPiece,
+            viewer: changed === "viewer"
+              ? { ...account, source_id: "account-b" }
+              : account,
+            newest_observed_at: changed === "observation"
+              ? "2026-07-12T08:00:00.000Z"
+              : observation,
+            row_count: changed === "rowCount" ? 20 : 19,
+          };
+          for (
+            const rows of [[first, second, first], [second, first, second]]
+          ) {
+            const result = resolveConnectorGrants(records({
+              handlesJson: handlesJson(
+                rows.map((row) => handle(row.piece, "gmail-work", MAIL_REF)),
+                rows,
+              ),
+              piecesJson: piecesJson([
+                MAIL_PIECE,
+                { ...MAIL_PIECE, name: "resources" },
+              ]),
+            }));
+            expect(result.unnamed).toEqual([]);
+            expect(result.grants).toHaveLength(1);
+            expect(result.grants[0]!.rowCount).toBe(
+              changed === "rowCount" ? undefined : 19,
+            );
+            expect(result.grants[0]!.viewer).toEqual(
+              changed === "viewer"
+                ? { identity: "conflicting" }
+                : { identity: "account", sourceId: "account-a", email: null },
+            );
+            expect(result.grants[0]!.observation).toEqual(
+              changed === "observation"
+                ? { newestAt: null, reason: "conflicting-receipts" }
+                : { newestAt: observation },
+            );
+            const { grants } = await mintWellKnownGrants(
+              undefined,
+              "repeated-receipt",
+              parseConnectorGrants(JSON.stringify(result.grants)),
+            );
+            const message = wellKnownGrantsContextMessage(
+              JSON.parse(JSON.stringify(grants)),
+            );
+            expect(message).toContain(
+              changed === "viewer"
+                ? "Account identity: conflicting injection receipts."
+                : 'Account identity: "account-a"; no email address.',
+            );
+            expect(message).toContain(
+              changed === "observation"
+                ? 'Newest observed at: unknown ("conflicting-receipts")'
+                : `Newest observed at: ${observation}`,
+            );
+          }
+        }
+      }
+    });
+
+    it("ignores malformed source identities without losing the matching store's count", () => {
+      const receipt = sourceReceipt(MAIL_PIECE.name, "gmail-work", 19);
+      const malformed = { ...receipt, row_count: 77 };
+      const result = resolveConnectorGrants(records({
+        handlesJson: handlesJson([
+          handle(MAIL_PIECE.name, "gmail-work", MAIL_REF),
+        ], [
+          null,
+          { ...malformed, piece: undefined },
+          { ...malformed, connection_id: undefined },
+          { ...malformed, companion_key: "" },
+          receipt,
+        ]),
+      }));
+      expect(result.unnamed).toEqual([]);
+      expect(result.grants).toHaveLength(1);
+      expect(result.grants[0]!.rowCount).toBe(19);
+    });
+
+    it("describes no account even when the receipt omits its reason", async () => {
+      const result = resolveConnectorGrants(records({
+        handlesJson: handlesJson([{
+          ...handle(MAIL_PIECE.name, "gmail-work", MAIL_REF),
+          viewer: { kind: "none" },
+        }]),
+      }));
+      expect(result.unnamed).toEqual([]);
+      expect(result.grants).toHaveLength(1);
+      const { grants } = await mintWellKnownGrants(
+        undefined,
+        "no-account-reason",
+        result.grants,
+      );
+      expect(wellKnownGrantsContextMessage(grants)).toContain(
+        'Account identity: no account ("reason not reported").',
+      );
+    });
+
+    it("keeps malformed receipt timestamps unavailable without withholding the handle", () => {
+      for (
+        const newestAt of [
+          "",
+          "0",
+          "September 20, 2026",
+          "2026-13-20T10:00:00Z",
+          "2026-09-20T10:00:00",
+        ]
+      ) {
+        const result = resolveConnectorGrants(records({
+          handlesJson: handlesJson([
+            handle(MAIL_PIECE.name, "gmail-work", MAIL_REF),
+          ], [{
+            ...sourceReceipt(MAIL_PIECE.name, "gmail-work", 19),
+            newest_observed_at: newestAt,
+          }]),
+        }));
+        expect(result.unnamed).toEqual([]);
+        expect(result.grants).toHaveLength(1);
+        expect(result.grants[0]!.rowCount).toBe(19);
+        expect(result.grants[0]!.observation).toBeUndefined();
+      }
+    });
+
     it("describes an opaque account and an empty store without calling them unknown", async () => {
       const result = resolveConnectorGrants(records({
         handlesJson: handlesJson([
@@ -875,7 +1010,9 @@ describe("connector-grants", () => {
 
     it("throws for a receipt that parses to something other than an object", () => {
       expect(() => resolveConnectorGrants(records({ handlesJson: "[1,2]" })))
-        .toThrow("does not hold a JSON object");
+        .toThrow(
+          "does not hold a JSON object; loom writes {schema_version, written_at, space, handles, sources}",
+        );
     });
 
     it("throws for a receipt whose `handles` is not an array", () => {
@@ -1089,6 +1226,7 @@ describe("connector-grants", () => {
         },
         { identity: "none" },
         { identity: "unknown", reason: 42 },
+        { identity: "conflicting", reason: "arbitrary" },
       ]
     ) {
       it(`rejects malformed persisted viewers ${JSON.stringify(viewer)}`, () => {
@@ -1105,9 +1243,25 @@ describe("connector-grants", () => {
     }
 
     for (
-      const observation of [null, {}, { newestAt: "not-a-date" }, {
-        newestAt: null,
-      }, { newestAt: "2026-09-20T10:00:00Z", reason: "no-rows" }]
+      const observation of [
+        null,
+        {},
+        { newestAt: "not-a-date" },
+        {
+          newestAt: "0",
+        },
+        { newestAt: "September 20, 2026" },
+        {
+          newestAt: "2026-09-20T10:00:00",
+        },
+        {
+          newestAt: "2026-13-20T10:00:00Z",
+        },
+        {
+          newestAt: null,
+        },
+        { newestAt: "2026-09-20T10:00:00Z", reason: "no-rows" },
+      ]
     ) {
       it(`rejects malformed persisted observations ${JSON.stringify(observation)}`, () => {
         expect(() =>

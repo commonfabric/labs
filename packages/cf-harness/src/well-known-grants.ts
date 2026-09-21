@@ -56,6 +56,15 @@ const COMPANION_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const isDescriptionText = (value: unknown): value is string =>
   typeof value === "string" && value.trim() !== "";
 
+/** Whether a receipt observation is an ISO8601 timestamp with an explicit zone. */
+export const isConnectorObservationTimestamp = (
+  value: unknown,
+): value is string =>
+  typeof value === "string" &&
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
+    .test(value) &&
+  Number.isFinite(Date.parse(value));
+
 /** The Loom store identity, independent of which piece exposes it. */
 export const connectorGrantName = (
   source: HarnessConnectorGrantSource,
@@ -87,6 +96,9 @@ const connectorViewerDescription = (
   }
   if (viewer.identity === "none") {
     return `no account (${JSON.stringify(viewer.reason)})`;
+  }
+  if (viewer.identity === "conflicting") {
+    return "conflicting injection receipts";
   }
   if (viewer.identity === "unknown") {
     return viewer.reason === undefined
@@ -121,7 +133,9 @@ const connectorObservationDescription = (
   if (observation === undefined) {
     return "unknown (not reported by the injection receipt)";
   }
-  if (observation.newestAt !== null) return observation.newestAt;
+  if (observation.newestAt !== null) {
+    return new Date(observation.newestAt).toISOString();
+  }
   return observation.reason === "no-rows"
     ? "none (empty store)"
     : `unknown (${JSON.stringify(observation.reason)})`;
@@ -214,7 +228,8 @@ export const checkConnectorGrantSpec = (
     viewer !== undefined &&
     (!isObjectNotArray(viewer) ||
       (viewer.identity !== "account" && viewer.identity !== "none" &&
-        viewer.identity !== "unknown") ||
+        viewer.identity !== "unknown" && viewer.identity !== "conflicting") ||
+      (viewer.identity === "conflicting" && viewer.reason !== undefined) ||
       (viewer.reason !== undefined && !isDescriptionText(viewer.reason)) ||
       (viewer.identity === "account"
         ? (viewer.sourceId !== undefined &&
@@ -224,7 +239,7 @@ export const checkConnectorGrantSpec = (
         : viewer.identity === "none" && !isDescriptionText(viewer.reason)))
   ) {
     throw new Error(
-      "connector viewer must record account, none, or unknown with nonempty string metadata",
+      "connector viewer must record account, none, unknown, or conflicting with nonempty string metadata",
     );
   }
   const observation = spec.observation;
@@ -233,8 +248,7 @@ export const checkConnectorGrantSpec = (
     (!isObjectNotArray(observation) ||
       (observation.newestAt === null
         ? !isDescriptionText(observation.reason)
-        : !isDescriptionText(observation.newestAt) ||
-          !Number.isFinite(Date.parse(observation.newestAt)) ||
+        : !isConnectorObservationTimestamp(observation.newestAt) ||
           observation.reason !== undefined))
   ) {
     throw new Error(

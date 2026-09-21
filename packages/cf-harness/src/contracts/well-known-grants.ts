@@ -86,6 +86,13 @@ export interface HarnessConnectorGrantSpec {
 
       /** Receipt reason for the unavailable identity. */
       reason?: string;
+    }
+    | {
+      /** Repeated receipts disagree about this store's identity. */
+      identity: "conflicting";
+
+      /** The disagreement itself explains the unavailable identity. */
+      reason?: never;
     };
 
   /** Newest record observation, distinct from content time; absent if unknown. */
