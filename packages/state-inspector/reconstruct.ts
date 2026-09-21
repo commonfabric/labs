@@ -47,6 +47,12 @@ export interface ReconstructOptions extends EntityAddress {
  * `EntityRef`. A legacy result document holds a sigil link to its process cell
  * there, and the inspector reads such documents, so `source` is any
  * `FabricValue` here.
+ *
+ * The members are written out because `Omit<StoredDocument, "source">` does
+ * not keep them: on a type that has a string index signature, `Omit` drops
+ * every named key and leaves the index signature. `reconstructOutcome()`
+ * returns one of memory's documents as one of these, so a change to memory's
+ * type that stops it being assignable to this one stops this file compiling.
  */
 export type EntityDocument = {
   value?: FabricValue;
