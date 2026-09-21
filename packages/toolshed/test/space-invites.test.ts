@@ -20,6 +20,7 @@ import {
 } from "@commonfabric/runner/space-invites";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 import { createSpaceInviteRouter } from "@/routes/space-invites/router.ts";
+import { createTestApp } from "@/lib/create-app.ts";
 
 async function fixture(publicHost?: string, captureErrors = true) {
   const directory = await Deno.makeTempDir();
@@ -87,11 +88,12 @@ async function fixture(publicHost?: string, captureErrors = true) {
         return c.json({ code: "service-error" }, 500);
       });
     }
+    const app = captureErrors ? router : createTestApp(router);
     const http = Deno.serve({
       hostname: "127.0.0.1",
       port: 0,
       onListen: () => {},
-    }, (req) => router.fetch(req));
+    }, (req) => app.fetch(req));
     closeHttp = () => http.shutdown();
     const host = `http://127.0.0.1:${http.addr.port}`;
     const client = (signer: Identity) =>
