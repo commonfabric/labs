@@ -20,6 +20,11 @@ const runtime = new Runtime({
 
 ## Profile warming
 
+The preload lives in `runtime-client`, where the authenticated browser worker
+owns the session and can pair startup with disposal. Keeping it there makes
+Home warming a browser-session optimization; the shared runner supplies
+request-time readiness for browser, server, and CLI callers.
+
 The authenticated browser worker starts a read-only subscription to
 `Home.defaultPattern.profiles` during initialization. Its schema reads only
 `name`, `avatar`, and `initialNameApplied` from each profile. Roster changes warm
