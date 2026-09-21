@@ -135,8 +135,10 @@ The current package provides:
   artifacts record the research ids that shaped them. `query_docs` is accepted
   only as a legacy CLI or persisted-policy alias and is normalized without
   rewriting old transcript or run-state evidence;
-- schema-validated, sanitized child returns with raw child evidence retained
-  outside the ordinary parent return channel;
+- caller and profile return-schema definitions checked before child creation,
+  with bounded argument errors for malformed contracts and unresolved
+  references; valid child results remain schema-validated and sanitized, with
+  raw evidence retained outside the ordinary parent return channel;
 - image inputs and structured top-level batch results;
 - a skills registry over `--skills-root`, defaulting for a run out of a labs
   checkout to that checkout's own `skills/` tree, with the resolved tree and its

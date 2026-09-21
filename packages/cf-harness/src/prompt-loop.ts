@@ -940,18 +940,6 @@ const parseDelegateTaskInput = (
       },
     };
   }
-  let parsedReturnSchema: ReturnType<typeof parseSubagentReturnSchema>;
-  try {
-    parsedReturnSchema = parseSubagentReturnSchema(input.returnSchema);
-  } catch {
-    return {
-      invalid: {
-        field: "returnSchema",
-        expected:
-          "a JSON Schema object, a boolean, or a string holding one of those as JSON",
-      },
-    };
-  }
   const profileConfig = getHarnessSubagentProfileConfig(profile);
   // A profile that holds authority over its return contract is refused a
   // caller schema rather than quietly given one, because the two differ: the
@@ -974,7 +962,22 @@ const parseDelegateTaskInput = (
   // A profile that declares a return contract applies it to a delegation
   // that declares none, so the child's return is a shape the parent can test
   // rather than prose a failure and a success both fit.
-  const returnSchema = parsedReturnSchema?.schema ?? profileConfig.returnSchema;
+  let returnSchema: DelegateTaskToolInput["returnSchema"];
+  try {
+    returnSchema = parseSubagentReturnSchema(
+      input.returnSchema === undefined
+        ? profileConfig.returnSchema
+        : input.returnSchema,
+    )?.schema;
+  } catch {
+    return {
+      invalid: {
+        field: "returnSchema",
+        expected:
+          "a valid JSON Schema object or boolean (optionally encoded as JSON); schema-valued keywords contain schemas and `required` contains unique strings",
+      },
+    };
+  }
   return {
     input: {
       goal: input.goal,
