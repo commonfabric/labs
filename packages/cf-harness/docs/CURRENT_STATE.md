@@ -2,7 +2,7 @@
 
 Status: current implementation reference\
 Last verified: 2026-09-22\
-Revision: `4e3d5274b4+console-retraction`
+Revision: `1fb678d2ab+research-reuse`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -140,9 +140,13 @@ The current package provides:
   transfer reads only selected current bindings; its inherited CFC context
   retains the full parent influence even when no kit is selected. Kits and
   confirmed records persist through delegation, while local authored-source
-  artifacts record the research ids that shaped them. `query_docs` is accepted
-  only as a legacy CLI or persisted-policy alias and is normalized without
-  rewriting old transcript or run-state evidence;
+  artifacts record the research ids that shaped them. Before new source
+  compiles, `run_pattern` requires an import or a one-line
+  `reuseReasons[patternId]` explanation for every selected pattern in retained
+  context, including incomplete kits; leads remain advisory. The check
+  establishes a dependency or explanation, not its semantic adequacy.
+  `query_docs` is accepted only as a legacy CLI or persisted-policy alias and is
+  normalized without rewriting old transcript or run-state evidence;
 - caller and profile return-schema definitions checked before child creation,
   with bounded argument errors for malformed contracts and unresolved
   references; valid child results remain schema-validated and sanitized, with

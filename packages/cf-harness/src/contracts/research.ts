@@ -302,7 +302,7 @@ interface HarnessResearchFindings {
   /** Current external handles successfully described in this call. */
   inputs: readonly HarnessResearchInputBinding[];
 
-  /** Selected records that passed host inspection. */
+  /** Host-inspected records selected as reusable parts of the goal. */
   patterns: readonly HarnessResearchPatternRecord[];
 
   /** Claims supported by exact current reads. */

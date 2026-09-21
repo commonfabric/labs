@@ -39,6 +39,7 @@ import {
 } from "../src/contracts/subagent.ts";
 import type { HarnessHandleTable } from "../src/contracts/handle-table.ts";
 import { createPatternSkillsFixture } from "./support/pattern-skills-fixture.ts";
+import { REUSE_RESEARCH_RUNS } from "./fixtures/research-reuse.ts";
 import {
   chatViewOfRequest,
   responsesBodyFromChatFixture,
@@ -1377,6 +1378,56 @@ describe("prompt-loop cross-agent address handles", () => {
     expect(childSystemPrompt).not.toContain(
       "Never return a computed(), lift, or other derived wrapper",
     );
+  });
+
+  it("requires the delegated rehearsal author to import its selected mailbox or explain the omission", async () => {
+    const requestBodies: unknown[] = [];
+    let fabricOpens = 0;
+    const loop = new CfHarnessPromptLoop({
+      apiKey: "test-key",
+      engine: new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        runId: "rehearsal-reuse-child",
+        model: "gpt-5.4",
+        taskText: REUSE_RESEARCH_RUNS[0].kit.task,
+        inheritedResearchRuns: REUSE_RESEARCH_RUNS,
+        fabricSessionFactory: () => {
+          fabricOpens += 1;
+          return Promise.reject(new Error("unexpected Fabric access"));
+        },
+      }),
+      allowedSubagentProfiles: ["pattern-author"],
+      fetchFn: scriptedFetch([
+        delegateCallTurn("delegate-work-summary", {
+          goal: REUSE_RESEARCH_RUNS[0].kit.task,
+          profile: "pattern-author",
+        }),
+        runPatternCallTurn("rewrite-mailbox", {
+          sourceText: "export default {};",
+        }),
+        finalTurn(JSON.stringify({ ok: false, code: "unsupported-request" })),
+        finalTurn("Parent received the author decision."),
+      ], requestBodies),
+    });
+    await loop.runPrompt({
+      prompt: REUSE_RESEARCH_RUNS[0].kit.task,
+      promptSlotBinding: directPromptSlotBinding,
+    });
+    const childMessages = chatViewOfRequest(requestBodies[1]).messages;
+    expect(childMessages.map((message) => message.content).join("\n"))
+      .toContain(
+        "import as cf:pattern:<id>, or supply reuseReasons[<id>] as one nonblank line",
+      );
+    const childReply = chatViewOfRequest(requestBodies[2]).messages.findLast(
+      (message) => message.role === "tool",
+    );
+    expect(JSON.parse(childReply!.content ?? "{}")).toMatchObject({
+      status: "error",
+      message: expect.stringContaining(
+        "cf:pattern:-xx1hxtvAbY7AL6FeYuQWuEzbC0nOpUOHgXseIac2_w",
+      ),
+    });
+    expect(fabricOpens).toBe(0);
   });
 
   it("tells a pattern author with an inherited kit to research only unresolved items", async () => {

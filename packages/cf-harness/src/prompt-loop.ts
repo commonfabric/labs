@@ -175,6 +175,7 @@ import { OpenAICompatibleGatewayModelClient } from "./model/openai-compatible-ga
 import { sumHarnessModelUsage } from "./model/usage.ts";
 import { collapseSupersededRunPatternDiagnostics } from "./run-pattern-diagnostic-collapse.ts";
 import { collapseSupersededRunPatternSources } from "./run-pattern-source-collapse.ts";
+import { RESEARCH_REUSE_GUIDANCE } from "./research/reuse.ts";
 import {
   type HarnessOpeningResearch,
   isTerminalHarnessRunStatus,
@@ -1633,6 +1634,9 @@ const RESEARCH_KITS_CHILD_CONTEXT = (
   [
     "Common Fabric research findings established by the parent:",
     "Use the orientation and follow-up findings to achieve the user goal. Inspected patterns and cited examples can be used directly; leads remain unverified. Honor missing items and ask useful follow-up questions when needed.",
+    ...(runs.some((run) => run.kit.patterns.length > 0)
+      ? [RESEARCH_REUSE_GUIDANCE]
+      : []),
     JSON.stringify(
       runs.map((run) => {
         const { kit } = projectHarnessResearchKitForModel(run.kit);

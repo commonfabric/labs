@@ -4,16 +4,28 @@ import { describe, it } from "@std/testing/bdd";
 import { createToolOutputId } from "../../src/contracts/tool-result.ts";
 import {
   isResearchToolSuccessOutput,
+  researchKitGuidance,
   researchTool,
 } from "../../src/tools/research.ts";
 import type { HarnessToolContext } from "../../src/tools/types.ts";
 import type { HarnessResearchRequest } from "../../src/research/runner.ts";
+import { REUSE_RESEARCH_RUNS } from "../fixtures/research-reuse.ts";
 import {
   createHarnessHandleTable,
   mintAddressHandle,
 } from "../../src/handle-table.ts";
 
 describe("research", () => {
+  describe("researchKitGuidance()", () => {
+    it("tells the author how to account for the incomplete kit's selected mailbox", () => {
+      const guidance = researchKitGuidance(REUSE_RESEARCH_RUNS[0].kit);
+      expect(guidance).toContain(
+        "import as cf:pattern:<id>, or supply reuseReasons[<id>] as one nonblank line",
+      );
+      expect(guidance).toContain("This also applies to an incomplete kit.");
+    });
+  });
+
   describe("isResearchToolSuccessOutput()", () => {
     it("returns false for values that are not result objects", () => {
       for (const output of [null, undefined, "ok", 1, []]) {

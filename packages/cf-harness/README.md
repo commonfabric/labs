@@ -1732,6 +1732,19 @@ bindings, and historical bindings transfer nothing. The parent's full CFC
 context carries forward even when selection omits a result. Pattern authors
 start from these findings and ask only unresolved questions.
 
+Before compiling new `run_pattern.sourceText`, the host checks selections from
+the retained orientation and two answers. Each `kit.patterns` entry must have a
+Fabric pattern import in the source or a nonblank, one-line reason under
+`reuseReasons[patternId]` explaining why it does not fit this call. This applies
+to parent and child authors, incomplete kits, and retained findings with
+historical bindings. An unrelated atom, an existing result passed by reference,
+or a verification reader can state that narrower scope. Unverified leads and
+unselected inspected records create no requirement; direct `patternId` execution
+is unchanged. The compiler import reader excludes comments and quoted examples.
+The check establishes an import or explanation, not meaningful invocation or the
+explanation's correctness. Reasons remain in the tool-call record when old
+source attempts are collapsed.
+
 Locally authored source artifacts record the research run ids that shaped them.
 The pattern-index publication API has no research-association field, so this
 provenance remains local.
