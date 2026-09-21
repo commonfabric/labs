@@ -214,7 +214,7 @@ describe("agent builtin", () => {
     entries.set([]);
     agentQueueIndexCell(runtime, space, tx).key("entries").set(entries);
     const logger = getLogger("normalizeAndDiff");
-    const warningsBefore = logger.counts.warn;
+    const warningsBefore = logger.countsByKey.diff?.warn ?? 0;
     const result = runAgentPattern("agent-stored-queue-scope");
     await tx.commit();
 
@@ -228,7 +228,7 @@ describe("agent builtin", () => {
     const indexed = index.key("entries").key(0).key("run").resolveAsCell();
     expect(indexed.getAsNormalizedFullLink().scope).toBe("user");
     expect(indexed.equals(record)).toBe(true);
-    expect(logger.counts.warn).toBe(warningsBefore);
+    expect(logger.countsByKey.diff?.warn ?? 0).toBe(warningsBefore);
   });
 
   it("appends one `{run, host}` entry to the requester's home index", async () => {
@@ -794,6 +794,7 @@ describe("agent builtin", () => {
       agentQueueIndexCell(runtime, space, tx).key("agentRunner").set({
         host: "https://fabric.example",
         tools: ["loom_search"],
+        registrationId: "runner-1",
         registeredAt: "2026-09-18T00:00:00.000Z",
       });
       const result = runAgentPattern("agent-tool-refused", {

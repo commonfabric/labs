@@ -134,6 +134,14 @@ describe("referent handles", () => {
           { ...table.referents![0], token: "cfh:a:22222" },
           { ...table.referents![0], kind: "cell" },
           { ...table.referents![0], label: "public" },
+          {
+            ...table.referents![0],
+            label: { confidentiality: "private" },
+          },
+          {
+            ...table.referents![0],
+            label: { integrity: [{ name: "no type" }] },
+          },
           { ...table.referents![0], labelSource: "guess" },
           { ...table.referents![0], source: "" },
         ]
@@ -152,6 +160,15 @@ describe("referent handles", () => {
           referents: [table.referents![0], table.referents![0]],
         })
       ).toThrow(`duplicate token \`${token}\``);
+      expect(() =>
+        assertValidHarnessHandleTable({
+          ...table,
+          referents: [
+            table.referents![0],
+            { ...table.referents![0], token: "cfh:v:33333" },
+          ],
+        })
+      ).toThrow("duplicate referent identity");
     });
   });
 

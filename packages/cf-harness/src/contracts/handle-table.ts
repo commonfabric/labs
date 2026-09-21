@@ -15,9 +15,9 @@ import type { HarnessSkillAcquisition } from "./skill.ts";
 export const HARNESS_HANDLE_TABLE_TYPE = "cf-harness.handle-table";
 
 /**
- * Referent category of a handle. Only cell addresses are representable; the
- * token grammar reserves a distinct `cfh:v:` prefix so a value kind can be
- * added without re-reading existing tokens.
+ * Referent category of an address-table entry. Non-cell document referents
+ * live in {@link HarnessHandleTable.referents} under the distinct `cfh:v:`
+ * token prefix rather than widening this address-only entry shape.
  */
 export type HarnessHandleKind = "address";
 

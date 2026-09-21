@@ -30,10 +30,14 @@ const HOME_PATH = "/api/patterns/system/home.tsx";
 /** A home pattern with the queue and its real registration handler. */
 const HOME_SOURCE = `
 import { handler, pattern, Writable, type PerUser } from "commonfabric";
-type Runner = { host: string; tools: string[]; registeredAt: string; lastClaimAt?: string };
+type Runner = { host: string; tools: string[]; registrationId?: string; registeredAt: string; lastClaimAt?: string };
 type Entry = { run: PerUser<unknown>; host: string };
-const register = handler<{ runner?: Runner }, { runner: Writable<Runner | undefined> }>(
-  (event = {}, state) => state.runner.set(event.runner),
+type RegisterEvent = { runner?: Runner; expectedRegistrationId?: string };
+const register = handler<RegisterEvent, { runner: Writable<Runner | undefined> }>(
+  (event = {}, state) => {
+    if (event.runner === undefined && event.expectedRegistrationId !== undefined && state.runner.get()?.registrationId !== event.expectedRegistrationId) return;
+    state.runner.set(event.runner);
+  },
 );
 export default pattern(() => {
   const entries = new Writable<Entry[]>([]).for("entries");
@@ -84,6 +88,7 @@ describe("agent-connections", () => {
         identityKeyPath: identityPath,
         requester: identity.did(),
         workRoot: directory,
+        allowedTools: ["describe_handle"],
         report: (message) => messages.push(message),
         harnessDeps: {
           env: {
@@ -175,9 +180,12 @@ describe("agent-connections", () => {
         (value) => value?.outcome !== undefined,
         { stuckLabel: "default deployed runner completes the remote record" },
       );
-      expect({ state: ended.state, messages }).toMatchObject({
-        state: "completed",
-      });
+      expect(ended.state).toBe("completed");
+      expect(
+        messages.some((message) =>
+          /agent runner: (?:a run|a queue scan) failed/.test(message)
+        ),
+      ).toBe(false);
       expect(ended.result?.get()).toEqual({ answer: "Solaris" });
       expect(ended.modelTurns).toBe(1);
       await queue.pull();

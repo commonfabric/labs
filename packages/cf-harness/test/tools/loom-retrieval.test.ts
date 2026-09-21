@@ -574,6 +574,11 @@ describe("loom-retrieval tools", () => {
             confidentiality: [{ anyOf: [OWNER, { type: WORK, name: "w" }] }],
           }),
           hit("m-6", { confidentiality: [OWNER], integrity: "not-a-list" }),
+          hit("m-7", {
+            confidentiality: [OWNER],
+            integrity: [{ name: "no type" }],
+          }),
+          hit("m-8", { confidentiality: [OWNER], integrity: [17] }),
         ]),
       });
       const output = ok(
@@ -586,12 +591,14 @@ describe("loom-retrieval tools", () => {
         "withheld",
         "admitted",
         "withheld",
+        "withheld",
+        "withheld",
       ]);
       expect(
         output.entries.filter((entry) => entry.status === "withheld").map((
           entry,
         ) => entry.status === "withheld" && entry.reasonCode),
-      ).toEqual(Array(5).fill("cfc_label_read_failed"));
+      ).toEqual(Array(7).fill("cfc_label_read_failed"));
     });
 
     it("marks the observation truncated when the result bounded anything", async () => {

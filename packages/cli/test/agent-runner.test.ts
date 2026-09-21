@@ -16,6 +16,7 @@ import { join } from "@std/path";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type { HarnessPromptLoopResult } from "@commonfabric/cf-harness/prompt-loop";
+import { hashStringOf } from "@commonfabric/data-model";
 import {
   createHarnessHandleTable,
   mintAddressHandle,
@@ -29,7 +30,7 @@ import {
   type AgentRunRecord,
   AgentRunRecordSchema,
 } from "@commonfabric/runner/agent-run";
-import { renderCellReference } from "@commonfabric/runner/shared";
+import { addressKey, renderCellReference } from "@commonfabric/runner/shared";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
@@ -207,10 +208,15 @@ describe("agent runner", () => {
       runtimeForHost: (host) => Promise.resolve(own[host]),
       // The queue under test is seeded data with no owner-protected writer,
       // so the registration is written straight into it.
-      registerRunner: async (entry) => {
+      registerRunner: async (entry, expectedRegistrationId) => {
         await own[CLOUD].editWithRetry((tx) => {
-          agentQueueIndexCell(own[CLOUD], home, tx).key("agentRunner")
-            .set(entry);
+          const registered = agentQueueIndexCell(own[CLOUD], home, tx)
+            .key("agentRunner");
+          if (
+            entry === undefined && expectedRegistrationId !== undefined &&
+            registered.get()?.registrationId !== expectedRegistrationId
+          ) return;
+          registered.set(entry);
         });
       },
       execute,
@@ -593,6 +599,42 @@ describe("agent runner", () => {
     expect(recovered.errorCode).toBe("RUNNER_LOST");
   });
 
+  it("expires and retries an active run whose executor becomes silent", async () => {
+    const firstAborted = defer<void>();
+    const wakeScheduled = defer<void>();
+    let wake: (() => void) | undefined;
+    let executions = 0;
+    await startRunner((run) => {
+      executions += 1;
+      if (executions > 1) {
+        return Promise.resolve({ outcome: "refused" });
+      }
+      run.signal.addEventListener("abort", () => firstAborted.resolve(), {
+        once: true,
+      });
+      return new Promise<AgentRunExecution>(() => {});
+    }, {
+      scheduleAt: (at, scheduled) => {
+        if (at.toISOString() === "2026-09-18T12:01:00.000Z") {
+          wake = scheduled;
+          wakeScheduled.resolve();
+        }
+        return () => {};
+      },
+    });
+    const result = await submit();
+    await waitForState(result, "running");
+    await wakeScheduled.promise;
+
+    clock = new Date("2026-09-18T12:01:00.000Z");
+    wake!();
+
+    await firstAborted.promise;
+    const ended = await waitForState(result, "refused");
+    expect(ended.attempts).toBe(2);
+    expect(executions).toBe(2);
+  });
+
   it("stops following a record removed from the queue", async () => {
     const result = await submit();
     await patternSide.editWithRetry((tx) => {
@@ -633,12 +675,20 @@ describe("agent runner", () => {
 
   it("renews the lease when the run reports a durable write", async () => {
     const renewed = defer<void>();
+    const wakeScheduled = defer<void>();
     const held = defer<AgentRunExecution>();
     await startRunner(async (run) => {
       clock = new Date("2026-09-18T12:10:00.000Z");
       await run.renewLease();
       renewed.resolve();
       return held.promise;
+    }, {
+      scheduleAt: (at) => {
+        if (at.toISOString() === "2026-09-18T12:11:00.000Z") {
+          wakeScheduled.resolve();
+        }
+        return () => {};
+      },
     });
     const result = await submit();
     await renewed.promise;
@@ -648,6 +698,7 @@ describe("agent runner", () => {
       recordOf(result),
       (value) => value?.claim?.leaseUntil === "2026-09-18T12:11:00.000Z",
     );
+    await wakeScheduled.promise;
     expect(record.state).toBe("running");
 
     held.resolve({ outcome: "refused" });
@@ -972,6 +1023,7 @@ describe("agent runner", () => {
     expect(registered).toEqual({
       host: LOCAL,
       tools: ["loom_search"],
+      registrationId: expect.any(String),
       registeredAt: "2026-09-18T12:00:00.000Z",
     });
 
@@ -988,6 +1040,7 @@ describe("agent runner", () => {
     expect(refreshed).toEqual({
       host: LOCAL,
       tools: ["loom_search"],
+      registrationId: expect.any(String),
       registeredAt: "2026-09-18T12:00:00.000Z",
       lastClaimAt: "2026-09-18T12:05:00.000Z",
     });
@@ -1000,6 +1053,36 @@ describe("agent runner", () => {
       (value) => value === undefined,
     );
     expect(cleared).toBeUndefined();
+  });
+
+  it("does not let a stopped runner clear its replacement's registration", async () => {
+    const first = await startRunner(() =>
+      Promise.resolve({ outcome: "refused" })
+    );
+    const firstRegistration = agentQueueIndexCell(patternSide, home)
+      .key("agentRunner").get();
+    const second = await startRunner(() =>
+      Promise.resolve({ outcome: "refused" })
+    );
+    const secondRegistration = await waitForCellValue<
+      { registrationId?: string }
+    >(
+      patternSide,
+      agentQueueIndexCell(patternSide, home).key("agentRunner"),
+      (value) =>
+        value?.registrationId !== undefined &&
+        value.registrationId !== firstRegistration?.registrationId,
+    );
+
+    await first.stop();
+    runners.splice(runners.indexOf(first), 1);
+
+    expect(
+      agentQueueIndexCell(patternSide, home).key("agentRunner").get()
+        ?.registrationId,
+    ).toBe(secondRegistration.registrationId);
+    await second.stop();
+    runners.splice(runners.indexOf(second), 1);
   });
 
   it("finds a record on another toolshed through its `{run, host}` entry", async () => {
@@ -1058,6 +1141,122 @@ describe("agent runner", () => {
     expect(ended.attempts).toBe(1);
   });
 
+  it("preserves a subscription failure when registration cleanup also fails", async () => {
+    const subscriptionFailure = new Error("queue subscription failed");
+    const queue = {
+      key: () => queue,
+      asSchema: () => queue,
+      sync: () => Promise.resolve(),
+      sink: () => {
+        throw subscriptionFailure;
+      },
+    };
+
+    for (
+      const cleanupFailure of [new Error("cleanup error"), "cleanup string"]
+    ) {
+      const registrations: unknown[] = [];
+      const reports: string[] = [];
+      const runner = new AgentRunner({
+        homeSpace: home,
+        homeHost: CLOUD,
+        runnerHost: LOCAL,
+        runnerId: `${home}#cleanup-failure`,
+        tools: [],
+        maxConcurrent: 1,
+        leaseMs: LEASE_MS,
+        runtimeForHost: () =>
+          Promise.resolve({ getCell: () => queue } as unknown as Runtime),
+        registerRunner: (entry) => {
+          registrations.push(entry);
+          return entry === undefined
+            ? Promise.reject(cleanupFailure)
+            : Promise.resolve();
+        },
+        execute: () => Promise.resolve({ outcome: "cancelled" }),
+        report: (message) => reports.push(message),
+        now: () => clock,
+      });
+
+      await expect(runner.start()).rejects.toBe(subscriptionFailure);
+      expect(registrations).toHaveLength(2);
+      expect(registrations[0]).not.toBeUndefined();
+      expect(registrations[1]).toBeUndefined();
+      expect(reports).toContain(
+        `agent runner: could not clear a failed registration: ${
+          cleanupFailure instanceof Error
+            ? cleanupFailure.message
+            : cleanupFailure
+        }`,
+      );
+    }
+  });
+
+  it("follows a queue entry again when its serving host changes", async () => {
+    const localSide = connect(LOCAL);
+    const id = "moved-host-request";
+    const cloudRecord = patternSide.getCell(
+      home,
+      id,
+      AgentRunRecordSchema,
+    ) as unknown as Cell<AgentRunRecord>;
+    const localRecord = localSide.getCell(
+      home,
+      id,
+      AgentRunRecordSchema,
+    ) as unknown as Cell<AgentRunRecord>;
+    const seed = async (
+      runtime: Runtime,
+      record: Cell<AgentRunRecord>,
+      tools: AgentRunRecord["tools"],
+    ) => {
+      await runtime.editWithRetry((tx) => {
+        const self = runtime.getCell(home, `${id}-request`, undefined, tx);
+        record.withTx(tx).set({
+          requestHash: id,
+          request: self,
+          piece: self,
+          space: self,
+          task: "a request whose serving host moves",
+          inputs: {},
+          resultSchema: RESULT_SCHEMA,
+          ...(tools === undefined ? {} : { tools }),
+          submittedAt: clock.toISOString(),
+          state: "queued",
+          stateSince: clock.toISOString(),
+        });
+      });
+    };
+    await seed(patternSide, cloudRecord, ["loom_profile"]);
+    await seed(localSide, localRecord, undefined);
+    await patternSide.editWithRetry((tx) => {
+      agentQueueIndexCell(patternSide, home, tx).key("entries").set([{
+        run: cloudRecord,
+        host: CLOUD,
+      }]);
+    });
+    const runner = await startRunner(() =>
+      Promise.resolve({ outcome: "refused" })
+    );
+    await runner.idle();
+    expect(cloudRecord.get()?.state).toBe("queued");
+
+    await patternSide.editWithRetry((tx) => {
+      agentQueueIndexCell(patternSide, home, tx).key("entries").set([{
+        run: cloudRecord,
+        host: LOCAL,
+      }]);
+    });
+
+    const ended = await waitForCellValue<AgentRunRecord>(
+      localSide,
+      localRecord,
+      (value) => value?.state === "refused",
+    );
+    expect(ended.attempts).toBe(1);
+    expect(cloudRecord.get()?.state).toBe("queued");
+  });
+
   describe("with the harness executor over a scripted prompt loop", () => {
     let workRoot: string;
 
@@ -1112,11 +1311,13 @@ describe("agent runner", () => {
         model?: string;
         allowedTools?: readonly string[];
         observationCeiling?: unknown;
-      } = {};
+        workspaces: string[];
+      } = { workspaces: [] };
       const execute = createHarnessAgentRunExecutor({
         identityKeyPath: join(workRoot, "unused.key"),
         requester: home,
         workRoot,
+        allowedTools: ["describe_handle"],
         report: options.report ??
           ((m) => Deno.env.get("AGENT_TEST_DEBUG") && console.log(m)),
         ...(options.omitHarnessArgs ? {} : { model: "scripted" }),
@@ -1129,6 +1330,10 @@ describe("agent runner", () => {
           createPromptLoop: (options) => ({
             runPrompt: (prompt) => {
               seen = {
+                workspaces: [
+                  ...seen.workspaces,
+                  options.workspaceHostPath!,
+                ],
                 slotRole: prompt.promptSlotBinding?.role,
                 model: options.model,
                 argv: options.inputCells,
@@ -1262,6 +1467,20 @@ describe("agent runner", () => {
       );
 
       expect(record.state).toBe("completed");
+      expect(seen().allowedTools).toEqual(["describe_handle", "submit_result"]);
+    });
+
+    it("uses the runner's allowlist when the request omits `tools`", async () => {
+      const seen = await startHarnessRunner(async ({ resultPath }) => {
+        await Deno.writeTextFile(
+          resultPath,
+          JSON.stringify({ answer: "Hyperion" }),
+        );
+        return loopResult("run-default-tools");
+      });
+      const result = await submit();
+
+      await waitForState(result, "completed");
       expect(seen().allowedTools).toEqual(["describe_handle", "submit_result"]);
     });
 
@@ -1412,8 +1631,14 @@ describe("agent runner", () => {
 
     it("does not reuse a result file left by an earlier attempt", async () => {
       const result = await submit();
-      const record = recordOf(result).get()!;
-      const workspace = join(workRoot, record.requestHash, "workspace");
+      const workspace = join(
+        workRoot,
+        hashStringOf([
+          CLOUD,
+          addressKey(recordOf(result).getAsNormalizedFullLink()),
+        ]),
+        "workspace",
+      );
       await Deno.mkdir(workspace, { recursive: true });
       await Deno.writeTextFile(
         join(workspace, "agent-result.json"),
@@ -1426,6 +1651,56 @@ describe("agent runner", () => {
       const ended = await waitForState(result, "failed");
       expect(ended.errorCode).toBe("PROVIDER_FAILURE");
       expect(ended.result).toBeUndefined();
+    });
+
+    it("fails before invoking the provider when the stale result path cannot be removed", async () => {
+      const result = await submit();
+      const staleResult = join(
+        workRoot,
+        hashStringOf([
+          CLOUD,
+          addressKey(recordOf(result).getAsNormalizedFullLink()),
+        ]),
+        "workspace",
+        "agent-result.json",
+      );
+      await Deno.mkdir(staleResult, { recursive: true });
+      await Deno.writeTextFile(join(staleResult, "kept"), "not removable");
+      let invoked = false;
+      await startHarnessRunner(() => {
+        invoked = true;
+        return Promise.resolve(loopResult("run-stale-result-directory"));
+      });
+
+      const ended = await waitForState(result, "failed");
+
+      expect(invoked).toBe(false);
+      expect(ended.errorCode).toBe("PROVIDER_FAILURE");
+      expect(ended.result).toBeUndefined();
+    });
+
+    it("uses distinct workspaces for distinct records with one request hash", async () => {
+      const first = await submit({ task: "the same task" });
+      const second = await submit({ task: "the same task" });
+      const requestHash = recordOf(first).get()!.requestHash;
+      await patternSide.editWithRetry((tx) => {
+        recordOf(second).withTx(tx).key("requestHash").set(requestHash);
+      });
+      const seen = await startHarnessRunner(async ({ resultPath }) => {
+        await Deno.writeTextFile(
+          resultPath,
+          JSON.stringify({ answer: "Hyperion" }),
+        );
+        return loopResult(`run-workspace-${crypto.randomUUID()}`);
+      });
+
+      await waitForState(first, "completed");
+      await waitForState(second, "completed");
+
+      expect(recordOf(first).get()?.requestHash).toBe(
+        recordOf(second).get()?.requestHash,
+      );
+      expect(new Set(seen().workspaces).size).toBe(2);
     });
 
     it("fails when the validated result file disappears before the writer reads it", async () => {

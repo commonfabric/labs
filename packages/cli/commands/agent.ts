@@ -1,6 +1,7 @@
 import { Command, EnumType, ValidationError } from "@cliffy/command";
 import { join } from "@std/path";
 
+import { LOOM_RETRIEVAL_TOOL_IDS } from "@commonfabric/cf-harness/contracts/tool-descriptor";
 import type { Cell, Runtime } from "@commonfabric/runner";
 import {
   AGENT_RUN_STATES,
@@ -39,16 +40,7 @@ import { absPath } from "../lib/utils.ts";
 // either toolshed connects to this process.
 
 /** The Loom retrieval tools a runner offers when it has a Loom configuration. */
-const LOOM_TOOLS = [
-  "loom_search",
-  "loom_page_discover",
-  "loom_page_inspect",
-  "loom_page_read",
-  "loom_people",
-  "loom_calendar_list",
-  "loom_context",
-  "loom_profile",
-];
+const LOOM_TOOLS = [...LOOM_RETRIEVAL_TOOL_IDS];
 
 /** The harness tools every runner offers. */
 const BASE_TOOLS = ["describe_handle", "web_fetch"];
@@ -74,9 +66,20 @@ export function resolveRunnerTools(
   options: Pick<AgentRunnerCommandOptions, "tools" | "loomRetrievalConfig">,
 ): string[] {
   if (options.tools !== undefined) {
-    return options.tools.split(",").map((tool) => tool.trim()).filter((tool) =>
-      tool !== ""
+    const tools = options.tools.split(",").map((tool) => tool.trim()).filter((
+      tool,
+    ) => tool !== "");
+    const unbacked = tools.find((tool) =>
+      (LOOM_RETRIEVAL_TOOL_IDS as ReadonlySet<string>).has(tool)
     );
+    if (unbacked !== undefined && options.loomRetrievalConfig === undefined) {
+      throw new ValidationError(
+        `Tool \`${unbacked}\` requires "--loom-retrieval-config" or ` +
+          "CF_HARNESS_LOOM_RETRIEVAL_CONFIG.",
+        { exitCode: 1 },
+      );
+    }
+    return tools;
   }
   return options.loomRetrievalConfig !== undefined
     ? [...LOOM_TOOLS, ...BASE_TOOLS]
@@ -124,7 +127,14 @@ function originOf(flag: string, value: string): string {
       exitCode: 1,
     });
   }
-  return new URL(normalizeApiUrl(value)).origin;
+  const url = new URL(normalizeApiUrl(value));
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    throw new ValidationError(
+      `"${flag}" must use the \`http:\` or \`https:\` scheme: ${value}`,
+      { exitCode: 1 },
+    );
+  }
+  return url.origin;
 }
 
 /**
@@ -267,15 +277,21 @@ export async function startAgentRunner(
   };
 
   // The send settles when the handling's commit does.
-  const registerRunner = (entry: AgentRunnerEntry | undefined): Promise<void> =>
+  const registerRunner = (
+    entry: AgentRunnerEntry | undefined,
+    expectedRegistrationId?: string,
+  ): Promise<void> =>
     new Promise<void>((resolve, reject) =>
       homePattern.key("agentQueue").key("setAgentRunner")
-        .send(entry === undefined ? {} : { runner: entry }, (tx) => {
-          const status = tx.status();
-          if (status.status === "error") {
-            reject(new Error(status.error.message, { cause: status.error }));
-          } else resolve();
-        })
+        .send(
+          entry === undefined ? { expectedRegistrationId } : { runner: entry },
+          (tx) => {
+            const status = tx.status();
+            if (status.status === "error") {
+              reject(new Error(status.error.message, { cause: status.error }));
+            } else resolve();
+          },
+        )
     );
   let runner: AgentRunner | undefined;
   try {
@@ -303,6 +319,7 @@ export async function startAgentRunner(
         identityKeyPath: identityPath,
         requester: home,
         workRoot: config.workRoot,
+        allowedTools: config.tools,
         ...(config.loomRetrievalConfigPath !== undefined
           ? { loomRetrievalConfigPath: config.loomRetrievalConfigPath }
           : {}),

@@ -1607,9 +1607,17 @@ export class CfHarnessEngine {
     value: unknown,
   ): Promise<{ replaced: boolean }> {
     const { path } = this.#structuredResult!;
+    let replaced = this.#structuredResultRecorded;
+    if (!replaced) {
+      try {
+        await Deno.stat(path);
+        replaced = true;
+      } catch (error) {
+        if (!(error instanceof Deno.errors.NotFound)) throw error;
+      }
+    }
     await Deno.mkdir(dirname(path), { recursive: true });
     await Deno.writeTextFile(path, `${JSON.stringify(value, null, 2)}\n`);
-    const replaced = this.#structuredResultRecorded;
     this.#structuredResultRecorded = true;
     return { replaced };
   }

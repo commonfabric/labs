@@ -11,6 +11,7 @@ import type { AgentRun } from "./agent-run.tsx";
 const RUNNER = {
   host: "https://local.example",
   tools: ["loom_search"],
+  registrationId: "runner-1",
   registeredAt: "2026-09-18T00:00:00.000Z",
 };
 
@@ -29,15 +30,15 @@ const QUEUED: AgentRun = {
 
 export default pattern(() => {
   const queue = AgentQueue({});
-  const record = new Writable<AgentRun>(QUEUED);
+  const record = new Writable.perUser<AgentRun>(QUEUED);
 
-  const running = new Writable<AgentRun>({
+  const running = new Writable.perUser<AgentRun>({
     ...QUEUED,
     requestHash: "hash-2",
     task: "find authors",
     state: "running",
   });
-  const finished = new Writable<AgentRun>({
+  const finished = new Writable.perUser<AgentRun>({
     ...QUEUED,
     requestHash: "hash-3",
     task: "find books",
@@ -88,7 +89,7 @@ export default pattern(() => {
   const assert_entry_links_the_record = assert(() =>
     queue.entries.get().length === 3 &&
     queue.entries.get()[0].host === "https://cloud.example" &&
-    queue.entries.get()[0].run.state === "queued"
+    queue.entries.get()[0].run.get()?.state === "queued"
   );
 
   const assert_rendered_record = assert(() =>
@@ -138,8 +139,20 @@ export default pattern(() => {
   );
 
   const action_clear_runner = action(() => {
-    queue.setAgentRunner.send({});
+    queue.setAgentRunner.send({ expectedRegistrationId: "runner-2" });
   });
+
+  const action_replace_runner = action(() => {
+    queue.setAgentRunner.send({
+      runner: { ...RUNNER, registrationId: "runner-2" },
+    });
+  });
+  const action_stale_clear = action(() => {
+    queue.setAgentRunner.send({ expectedRegistrationId: "runner-1" });
+  });
+  const assert_replacement_survives_stale_clear = assert(() =>
+    queue.agentRunner?.registrationId === "runner-2"
+  );
 
   return {
     [TESTS]: [
@@ -157,6 +170,9 @@ export default pattern(() => {
       { assertion: assert_three_record_views },
       { action: action_cancel_running },
       { assertion: assert_only_running_cancelled },
+      { action: action_replace_runner },
+      { action: action_stale_clear },
+      { assertion: assert_replacement_survives_stale_clear },
       { action: action_clear_runner },
       { assertion: assert_starts_with_no_runner },
       { assertion: assert_no_runner_notice },

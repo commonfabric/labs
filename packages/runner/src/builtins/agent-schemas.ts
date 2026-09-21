@@ -247,6 +247,7 @@ export const AgentQueueIndexSchema = internSchema(
         properties: {
           host: { type: "string" },
           tools: { type: "array", items: { type: "string" } },
+          registrationId: { type: "string" },
           registeredAt: { type: "string" },
           lastClaimAt: { type: "string" },
         },
