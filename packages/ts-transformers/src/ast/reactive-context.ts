@@ -93,7 +93,7 @@ function getMarkedSyntheticCallbackContext(
       // lift, before an enclosing collection callback's pattern boundary.
       const position = getCallArgumentPosition(current);
       if (
-        position && classifyArrayMethodCall(position.call) &&
+        position?.index === 0 && classifyArrayMethodCall(position.call) &&
         isConsumedByTerminalChainCall(position.call)
       ) {
         return { kind: "compute", owner: "unknown", inJsxExpression };
