@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/data-model";
@@ -147,6 +148,30 @@ describe("protected initialization", () => {
       value: [],
     });
     cell.set({ guarded: [] });
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
+  });
+
+  it("does not infer absence from an undefined previous value without a presence flag", async () => {
+    await seed({ guarded: undefined });
+    const tx = runtime.edit();
+    const cell = runtime.getCell(signer.did(), "argument", schema, tx);
+    tx.recordCfcWritePolicyInput({
+      kind: "initialization",
+      mode: "default",
+      target: { ...cell.getAsNormalizedFullLink(), path: ["guarded"] },
+      value: [],
+    }, runtimeWritePolicyAuthorization);
+    cell.key("guarded").set([]);
+    const details = tx.getWriteDetailsForTarget!.bind(tx);
+    using _details = stub(
+      tx,
+      "getWriteDetailsForTarget",
+      (target: Parameters<typeof details>[0]) =>
+        [...details(target)].map(({ previousPresent: _present, ...detail }) =>
+          detail
+        ),
+    );
     runtime.prepareTxForCommit(tx);
     expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
   });
