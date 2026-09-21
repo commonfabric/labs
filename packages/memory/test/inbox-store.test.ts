@@ -2,6 +2,7 @@ import { Database } from "@db/sqlite";
 import { fromFileUrl, toFileUrl } from "@std/path";
 import { Server } from "../v2/server.ts";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { InboxStore } from "../inbox-store.ts";
@@ -169,6 +170,37 @@ describe("InboxStore", () => {
       expect(() => Deno.statSync(`${directory}/missing.sqlite`)).toThrow();
       expect(() => Deno.statSync(`${directory}/dangling.sqlite.write.lock`))
         .toThrow();
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+  it("propagates filesystem failures before opening or creating database files", async () => {
+    const directory = await Deno.makeTempDir();
+    const path = `${directory}/blocked.sqlite`;
+    const denied = new Deno.errors.PermissionDenied(
+      "database directory denied",
+    );
+    try {
+      const realPath = Deno.realPathSync;
+      const resolve = stub(Deno, "realPathSync", (target) => {
+        if (target === path) throw denied;
+        return realPath(target);
+      });
+      try {
+        expect(() => new InboxStore(path)).toThrow("database directory denied");
+      } finally {
+        resolve.restore();
+      }
+      // Filesystem errors must not be interpreted as a missing database.
+      const inspect = stub(Deno, "lstatSync", () => {
+        throw denied;
+      });
+      try {
+        expect(() => new InboxStore(path)).toThrow("database directory denied");
+      } finally {
+        inspect.restore();
+      }
+      expect([...Deno.readDirSync(directory)]).toEqual([]);
     } finally {
       await Deno.remove(directory, { recursive: true });
     }
