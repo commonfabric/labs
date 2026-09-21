@@ -916,10 +916,10 @@ configure is configurable here under the same name, and the two surfaces cannot
 drift apart over what a session is.
 
 The tools a session offers are derived from what it can back rather than listed
-here: the default surface plus `run_pattern` and `assign_slug` for a fabric
-session, `search_patterns` and `record_feedback` for an index, `search_skills`
-for a registry, and `acquire_skill` for a run holding both. A tool whose backing
-is absent is not offered, rather than offered and failing.
+here: the default surface plus `run_pattern`, `assign_slug`, and `resolve_piece`
+for a fabric session, `search_patterns` and `record_feedback` for an index,
+`search_skills` for a registry, and `acquire_skill` for a run holding both. A
+tool whose backing is absent is not offered, rather than offered and failing.
 
 Each turn is its own run, so what that run holds is established per turn and
 announced in the messages it opens with: the skills registry scanned from the

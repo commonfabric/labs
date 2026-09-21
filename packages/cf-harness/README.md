@@ -449,16 +449,26 @@ their failure-return contract and cannot call `finish_task`.
 For a request about an existing piece, the parent first uses an explicit
 attachment, a user-supplied reference, or an unambiguous target established in
 the conversation. With none of those and no piece name from the user, it asks
-which piece to use with zero registry reads. A user-supplied name permits at
-most one registry read across the parent and its children, proceeding only on
-exactly one released match. An ambiguous, missing, or unreadable match leads to
-a question, without candidate inspection, retrying discovery through another
-delegation, or replacement authoring. The one lookup must return the match count
-and usable reference or requested data together; a lost reference or missing
-requested value is a reason to ask for an attachment, not to reread the registry
-or infer a value from the piece name. This is shared model guidance, not a
-runtime quota, and does not limit an explicit request to list or analyze the
-space.
+which piece to use with zero registry reads. A user-supplied slug is resolved
+with the parent tool `resolve_piece` before author delegation or any registry
+read. It accepts a bare slug in the session's space or `pattern:<space>/<slug>`
+and uses the same exact-address resolver as input-cell attachments. It returns
+only a handle, so a display name differing from the slug does not affect
+resolution and source remains on the child-only read/revise path. Foreign spaces
+are refused; an unheld slug returns an actionable error without failing the run.
+An unavailable lookup does not establish absence. The same path serves a fresh
+request and a follow-up answering which piece the user meant.
+
+A display name without a slug permits at most one registry read across the
+parent and its children, proceeding only on exactly one released match. An
+ambiguous, missing, or unreadable match leads to a question, without candidate
+inspection, retrying discovery through another delegation, or replacement
+authoring. The one lookup must return the match count and usable reference or
+requested data together; a lost reference or missing requested value is a reason
+to ask for an attachment, not to reread the registry or infer a value from the
+piece name. This is shared model guidance, not a runtime quota, and does not
+limit an explicit request to list or analyze the space. A failed exact-slug
+lookup does not fall back to authoring a name matcher or crawling the registry.
 
 Private research receives the same explicit input-cell names and tokens as the
 parent, separately from the general handle inventory. Registry and connector

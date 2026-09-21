@@ -4864,7 +4864,8 @@ export class CfHarnessPromptLoop {
       };
     }
     const taskOutcome = toolId === "finish_task" &&
-        isObjectNotArray(result.output) && result.output.status === "ok"
+        isObjectNotArray(result.output) && result.output.status === "ok" &&
+        "taskOutcome" in result.output
       ? readHarnessTaskOutcome(result.output.taskOutcome)
       : undefined;
     return {
