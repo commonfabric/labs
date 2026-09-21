@@ -294,19 +294,21 @@ const Home = pattern(
                       </cf-button>
                     </cf-hstack>
                   ))}
-                  {computed(() => spaces.get().length === 0)
-                    ? (
-                      <p
-                        style={{
-                          color: "#888",
-                          fontStyle: "italic",
-                          textAlign: "center",
-                        }}
-                      >
-                        No spaces yet. Add one below.
-                      </p>
-                    )
-                    : null}
+                  {computed(() =>
+                    spaces.get().length === 0
+                      ? (
+                        <p
+                          style={{
+                            color: "#888",
+                            fontStyle: "italic",
+                            textAlign: "center",
+                          }}
+                        >
+                          No spaces yet. Add one below.
+                        </p>
+                      )
+                      : null
+                  )}
                 </cf-vstack>
 
                 <hr

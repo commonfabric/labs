@@ -5,7 +5,7 @@ import {
   hasText,
   propsOf,
 } from "../test/vnode-helpers.ts";
-import AgentQueue from "./agent-queue.tsx";
+import AgentQueue, { withAgentQueueRunLinkSchema } from "./agent-queue.tsx";
 import type { AgentRun } from "./agent-run.tsx";
 
 const RUNNER = {
@@ -53,6 +53,26 @@ export default pattern(() => {
   const assert_starts_with_no_runner = assert(() =>
     queue.agentRunner === undefined
   );
+
+  const assert_rejects_boolean_output_schema = assert(() => {
+    try {
+      withAgentQueueRunLinkSchema(true);
+      return false;
+    } catch (error) {
+      return error instanceof Error &&
+        error.message === "Agent queue output schema must be an object";
+    }
+  });
+  const assert_requires_queue_entry_definition = assert(() => {
+    try {
+      withAgentQueueRunLinkSchema({ type: "object" });
+      return false;
+    } catch (error) {
+      return error instanceof Error &&
+        error.message ===
+          "Agent queue output schema must define AgentQueueEntry";
+    }
+  });
 
   const assert_no_runner_notice = assert(() =>
     hasText(queue[UI], "No runner is registered.")
@@ -158,6 +178,8 @@ export default pattern(() => {
     [TESTS]: [
       { assertion: assert_starts_with_no_entries },
       { assertion: assert_starts_with_no_runner },
+      { assertion: assert_rejects_boolean_output_schema },
+      { assertion: assert_requires_queue_entry_definition },
       { assertion: assert_no_runner_notice },
       { action: action_register_runner },
       { assertion: assert_runner_registered },
