@@ -32,14 +32,15 @@
  * event-append admission"), so every cross-session consequence silently
  * never happens (first observed on the first CI run of the ON pattern
  * lanes, 2026-08-21). So when the environment resolves the ON posture
- * (the canonical env mapping, else the first-party default) and no
- * explicit `apiUrl` was passed, the harness targets the integration
- * environment's toolshed (`env.API_URL`) — the real ON topology, serving
- * loop included — instead of self-hosting. The OFF arm is byte-identical
- * to before: flag unset or false keeps the in-process standalone server.
+ * (the first session's explicit override, then the canonical env mapping,
+ * then the first-party default) and no explicit `apiUrl` was passed, the
+ * harness targets the integration environment's toolshed (`env.API_URL`) —
+ * the real ON topology, serving loop included — instead of self-hosting.
+ * An explicitly OFF first session keeps the in-process standalone server.
  */
 
 import { fromFileUrl } from "@std/path/from-file-url";
+import { join } from "@std/path/join";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import {
@@ -50,7 +51,16 @@ import { env } from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
-import { experimentalOptionsFromEnv } from "@commonfabric/runner";
+import {
+  experimentalOptionsFromEnv,
+  type PatternCoverageData,
+  writePatternCoverageLcov,
+} from "@commonfabric/runner";
+import {
+  patternCoverageCollector,
+  patternCoverageDir,
+  PATTERNS_ROOT,
+} from "@commonfabric/integration/pattern-coverage";
 import type { CfcWriteFloorMode } from "@commonfabric/runner/cfc";
 import { PatternsRoute } from "@commonfabric/runner/patterns-route.deno";
 import {
@@ -61,10 +71,23 @@ import {
   type WorkerResponse,
 } from "./multi-runtime-ipc.ts";
 
+import type { initializePiecesController } from "./pieces-controller.ts";
+
+/** Host CFC settings carried into each independent test runtime. */
+export type MultiRuntimeCfcOptions = Pick<
+  Parameters<typeof initializePiecesController>[0],
+  | "cfcEnforcementMode"
+  | "cfcFlowLabels"
+  | "cfcReadMaxConfidentiality"
+  | "experimental"
+>;
+
 export type { TrustedUiDescriptor };
 export type { CommitRejection, RuntimeDiagnosticsSnapshot };
 
 export interface MultiRuntimeSessionSpec {
+  /** Explicit host policy for this session and, for the first session, creation. */
+  cfc?: MultiRuntimeCfcOptions;
   /** Label used in error messages and as the identity passphrase seed. */
   label: string;
 
@@ -94,6 +117,8 @@ export interface MultiRuntimeSessionSpec {
 }
 
 export interface MultiRuntimeHarnessOptions {
+  /** Result paths to keep active, instead of eagerly observing private siblings. */
+  watchPaths?: readonly (readonly (string | number)[])[];
   /** Path to the pattern entry file (e.g. `<dir>/main.tsx`). */
   programPath: string;
 
@@ -168,6 +193,9 @@ function systemPatternsRoute(): PatternsRoute {
     fromFileUrl(new URL("..", import.meta.url)),
   );
 }
+
+const coverageFile =
+  `multi-runtime-${Deno.pid}-${crypto.randomUUID()}.pattern-coverage.lcov`;
 
 class WorkerClient {
   #worker: Worker;
@@ -248,6 +276,21 @@ class WorkerClient {
       });
       this.#worker.postMessage(request);
     });
+  }
+
+  /** Collects this realm before releasing its runtime and instrumented graph. */
+  async dispose(): Promise<void> {
+    const collector = patternCoverageCollector();
+    const directory = patternCoverageDir();
+    if (collector && directory) {
+      const data = await this.call("patternCoverage");
+      if (data) collector.ingest(data as unknown as PatternCoverageData);
+      await writePatternCoverageLcov(collector, join(directory, coverageFile), {
+        root: PATTERNS_ROOT,
+        testName: "multi-runtime integration",
+      });
+    }
+    await this.call("dispose");
   }
 
   terminate(): void {
@@ -486,7 +529,7 @@ export class MultiRuntimeSession {
 
   async disposeSession(): Promise<void> {
     try {
-      await this.#client.call("dispose");
+      await this.#client.dispose();
     } finally {
       this.#client.terminate();
     }
@@ -524,9 +567,13 @@ export class MultiRuntimeHarness {
     // server does not have — see the header's POSTURE block. Resolve the
     // posture exactly like a deployed entry point (canonical env mapping,
     // else the first-party default) and pick the backend accordingly.
-    const serverExecutionOn =
+    const firstSession = options.sessions[0];
+    const explicitServerExecution = typeof firstSession === "string"
+      ? undefined
+      : firstSession.cfc?.experimental?.serverExecution;
+    const serverExecutionOn = explicitServerExecution ??
       experimentalOptionsFromEnv(Deno.env.get).serverExecution ??
-        SERVER_EXECUTION_DEFAULT_ENABLED;
+      SERVER_EXECUTION_DEFAULT_ENABLED;
     const targetUrl = options.apiUrl ??
       (serverExecutionOn ? new URL(env.API_URL) : undefined);
     const server = targetUrl ? undefined : StandaloneMemoryServer.start({
@@ -554,6 +601,8 @@ export class MultiRuntimeHarness {
           apiUrl: normalized.apiUrl?.href ?? apiUrl,
           diagnostics: options.diagnostics === true,
           recordRejections: options.recordRejections === true,
+          cfc: normalized.cfc as FabricValue,
+          watchPaths: options.watchPaths as FabricValue,
           ...(normalized.wsDelayMs !== undefined
             ? { wsDelayMs: normalized.wsDelayMs }
             : {}),
@@ -575,6 +624,10 @@ export class MultiRuntimeHarness {
         spaceName,
         apiUrl,
         diagnostics: options.diagnostics === true,
+        watchPaths: options.watchPaths as FabricValue,
+        cfc: typeof options.sessions[0] === "string"
+          ? undefined
+          : options.sessions[0].cfc as FabricValue,
         ...(options.cfcWriteFloor !== undefined
           ? { cfcWriteFloor: options.cfcWriteFloor }
           : {}),
@@ -585,7 +638,7 @@ export class MultiRuntimeHarness {
         dataFilePaths: options.dataFilePaths,
         input: options.input,
       }) as { pieceId: string };
-      await bootstrap.call("dispose");
+      await bootstrap.dispose();
       bootstrap.terminate();
       bootstrap = undefined;
 

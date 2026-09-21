@@ -15,7 +15,7 @@
  * succeeded on a retry, would pass a value-only assertion and fail here.
  */
 
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertRejects } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, Signer, URI } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
@@ -690,6 +690,89 @@ Deno.test("ACLManager returns the committed ACL when an owner removes themself",
       [bob.did()]: "OWNER",
     });
     assertEquals(await ctx.readStoredAcl(), committed);
+  } finally {
+    await ctx.dispose();
+  }
+});
+
+Deno.test("ACLManager monotonic grants preserve stronger concurrent access", async () => {
+  const harness = await withGenesisedSpace("monotonic-grant");
+  try {
+    const guest = (await Identity.fromPassphrase("monotonic-guest")).did();
+    await harness.acl.remove("*");
+    const external = "did:web:principal.example";
+    await harness.acl.grant(external, "READ");
+    assertEquals(
+      (await harness.readStoredAcl() as Record<string, string>)[external],
+      "READ",
+    );
+    await harness.acl.set(external, "WRITE");
+    await harness.acl.grant(external, "READ");
+    assertEquals(
+      (await harness.readStoredAcl() as Record<string, string>)[external],
+      "WRITE",
+    );
+    await harness.acl.set("*", "WRITE");
+    await harness.acl.grant(guest, "READ");
+    assertEquals((await harness.acl.get())?.[guest], "WRITE");
+    await harness.acl.remove("*");
+
+    await harness.acl.set(guest, "OWNER");
+    await harness.acl.grant(guest, "READ");
+    assertEquals((await harness.acl.get())?.[guest], "OWNER");
+    await harness.acl.remove(guest);
+    const other = await harness.openSecondClient();
+    await Promise.all([
+      harness.acl.grant(guest, "WRITE"),
+      other.grant(guest, "READ"),
+    ]);
+    assertEquals(
+      (await harness.readStoredAcl() as Record<string, string>)[guest],
+      "WRITE",
+    );
+    await other.grant(guest, "READ");
+    assertEquals(
+      (await harness.readStoredAcl() as Record<string, string>)[guest],
+      "WRITE",
+    );
+  } finally {
+    await harness.dispose();
+  }
+});
+
+Deno.test("ACLManager grants refuse wildcard or unsupported authority without writing", async () => {
+  const ctx = await withGenesisedSpace("monotonic-grant-invalid");
+  try {
+    const marker = ctx.factory.mark();
+    const before = await ctx.readStoredAcl();
+    await assertRejects(
+      () => ctx.acl.grant("*" as Parameters<ACLManager["grant"]>[0], "READ"),
+      Error,
+      "READ or WRITE",
+    );
+    await assertRejects(
+      () => ctx.acl.grant(ctx.user.did(), "OWNER" as "READ"),
+      Error,
+      "READ or WRITE",
+    );
+    assertEquals(ctx.factory.since(marker), []);
+    assertEquals(await ctx.readStoredAcl(), before);
+  } finally {
+    await ctx.dispose();
+  }
+});
+
+Deno.test("ACLManager grants cannot initialize a missing ACL", async () => {
+  const ctx = await withUnGenesisedSpace("monotonic-grant-no-acl");
+  try {
+    const marker = ctx.factory.mark();
+    await assertRejects(
+      () => ctx.acl.grant(ctx.space, "READ"),
+      Error,
+      "No ACL initialized",
+    );
+    assertEquals(ctx.factory.since(marker), []);
+    assertEquals(await ctx.readStoredAcl(), undefined);
   } finally {
     await ctx.dispose();
   }

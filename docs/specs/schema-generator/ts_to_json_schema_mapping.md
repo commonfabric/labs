@@ -26,8 +26,9 @@ Authoritative implementation sources:
 If this document conflicts with code or passing tests, code/tests win.
 
 Package exports (`deno.jsonc`): `.` → `src/index.ts` (no `mod.ts`), plus
-five subpaths — `./cell-brand`, `./wrapper-names`, `./property-optionality`,
-`./property-name`, `./numeric-expression`.
+seven subpaths — `./cell-brand`, `./default-brand`, `./wrapper-names`,
+`./property-optionality`, `./property-name`, `./numeric-expression`,
+`./type-node`.
 `src/index.ts` exports the `SchemaGenerator` class, the
 `SchemaGenerationOptions`, `SchemaGenerationDiagnostic`, and
 `WriterSourceIdentity` types, and re-exports `MutableJSONSchemaObj`.
@@ -43,10 +44,13 @@ consumer package is `@commonfabric/ts-transformers`, along two axes:
    this package reads only the bare `WeakMap`s, not `CrossStageState`).
 2. **Wrapper-vocabulary oracle** — ts-transformers imports the subpaths
    directly: `cell-brand` (call-root-support, cell-type, opaque-get-validation,
-   helper-owned-expression), `wrapper-names` (cast-validation, type-shrinking,
-   call-kind), `property-name` (reactive-keys, type-shrinking),
-   `property-optionality` (`ast/utils.ts`). The `src/typescript/` tables are
-   load-bearing for the whole transformer pipeline, not just schema output.
+   helper-owned-expression), `default-brand` (type-shrinking), `wrapper-names`
+   (cast-validation, type-shrinking, call-kind), `property-name`
+   (reactive-keys, type-shrinking), `property-optionality` (`ast/utils.ts`),
+   `type-node` (type-building, type-shrinking, schema-injection,
+   cast-validation, pattern-context-validation, capability-analysis). The
+   `src/typescript/` tables are load-bearing for the whole transformer
+   pipeline, not just schema output.
 
 Instance state: `AnonymousType_N` naming lives on the `SchemaGenerator`
 instance (`anonymousNames` WeakMap + counter, `src/schema-generator.ts`)
@@ -101,6 +105,15 @@ authored or imported shadow of the name keeps the general path; then a
 scope-based name-resolution fallback for unbindable synthetic references via
 `checker.getSymbolsInScope` — plus a `Date`-by-name special case), keyword
 types, and a final resolve-else-`true` fallback.
+
+A `true` from that fallback is a guess rather than a reading, and is recorded
+as one (`uninterpretedTypeNodes`). A wrapper holding a resolved type recovers
+the value from it; a guess nothing recovers reaches the generation root, which
+reports it as the `schema-type:unread` warning (`unread-type-diagnostics.ts`),
+one per schema, naming each unread type once. An authored `any`, or a name
+declared as `any`, is a reading, not a guess, and is not reported; nor is a
+guess inside an intersection that accepts nothing, which leaves nothing of it in
+the schema.
 
 An intersection node is settled the way the checker settles the type, each
 constituent read through its reference, and what remains is merged as
@@ -737,6 +750,20 @@ scopes.`; tested, scope-wrappers.test.ts). With a cell boundary
 both survive: `PerUser<Cell<PerSession<string>>>` → `{ asCell: [{ kind:
 "cell", scope: "user" }], scope: "session", type: "string" }` (fixture
 `scoped-wrappers`).
+
+The payload is read from the node when a node names the wrapper, so that
+structure only the node carries reaches the schema. The wrapper type's own
+first type argument supplies the payload instead in two cases, and only where
+the type is itself a scope wrapper. One is a payload whose node degrades to
+`any`, as every node the printer wrote from a type does: its names resolve to
+nothing at the position it is emitted into, and a node-driven schema would
+accept anything there. The other is a payload read only in part, of which the
+printer produces the same two members §6 names — `import("./mod.ts").T` for a
+name the emitting module does not import, and the
+`T & { readonly [DEFAULT_MARKER]: V }` arm of an expanded `Default`, which
+carries the default. Both cost whatever narrowing the node carried: the schema
+is then that of the whole declared value. Tested: scope-wrappers.test.ts, and
+end-to-end in ts-transformers `aliased-binding-declared-type.test.ts`.
 
 A scope wrapper **as a union member throws** (`A scope wrapper cannot be a
 member of a union.`; tested, scope-wrappers.test.ts). The runtime reads a

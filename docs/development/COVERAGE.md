@@ -927,6 +927,16 @@ script separately checks the expected artifact names
 coverage files. A manual run without the environment variable uses the GitHub API
 download path instead.
 
+The names the script checks come from the run's artifact listing, which is read
+through the GitHub API. When GitHub's rate limit refuses that listing, the
+subdirectories of `COVERAGE_ARTIFACTS_DIR` name the artifacts instead, so the run
+still measures its coverage; the files it measures are the downloaded ones
+either way. The compile cache states are not among the downloads, so such a run
+has none recorded, as when their artifacts are missing. A pull request's run
+without the environment variable has nothing to fall back on, and fails as it
+does for any other failure to read its own coverage, with the limit named in its
+log.
+
 ### Measuring a before/after locally
 
 The gate reports a group total rather than a per-line diff, so localizing a rise
@@ -987,8 +997,8 @@ compile fingerprint: `tasks/compile-cache-state.ts` mirrors the `cc-*` key globs
 against the commit whose cache it would have restored — the pull request's own
 changed files, or the previous `main` run for a push. A family with no recorded
 state is filled cold when those paths changed. Recorded states are ground truth
-and always win. The rate-limit skip path writes the same stamped artifact, so a
-run cut short still tells later runs whether it was cold.
+and always win. A run a rate limit ends early writes the same stamped artifact
+before it stops, so it still tells later runs whether it was cold.
 
 Neither source is complete. Fingerprint inference cannot see non-fingerprint
 cold causes (cache eviction, cache-service outages), and a run whose cache-state
@@ -1136,6 +1146,11 @@ listing that is not current, whose remedy is a re-run that costs about a minute.
 What makes the pass safe to keep is that it is no longer a quiet one — the run
 reports through the same four places above, so a pull request that was never
 gated does not read as one that was.
+
+A limit reached before the comparison, on the listing of the run's own
+artifacts, does not stop the run measuring what it downloaded (see "Ratchet
+baselines and accepting debt"). The comparison then reads the API again, and a
+limit still in force there ends the run as above, naming the groups it measured.
 
 The table header in the job's log is the quick check. `excl` beside a group the
 pull request changed means that group was not compared, and a header reading

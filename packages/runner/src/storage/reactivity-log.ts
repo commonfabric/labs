@@ -138,7 +138,8 @@ export const mergeableOpRead: Metadata = {
 /**
  * Marks the reads the write machinery makes of the region it is about to
  * write: the stream-marker probe that chooses between an event send and a
- * stored write, and the diff's read of each destination path. Each answer
+ * stored write, the diff's read of each destination path, and the append's
+ * destination snapshot that supplies storage positions. Each answer
  * decides how and whether to write, never what is written, and where a
  * stored link sends the write somewhere else the walk reads that slot again
  * without this marker. CFC flow-label derivation excludes these from the
@@ -436,7 +437,9 @@ const schedulerDependencyReadMarker: unique symbol = Symbol(
  * dependencies so the reactivity log covers them for subscriptions, but
  * they are scheduling machinery, not handler consumption (§8.10.1:
  * dependency-discovery reads must not count as consumed inputs). Flow-label
- * derivation excludes them; the action body's own reads carry the taint.
+ * derivation and the runtime read ceiling exclude them; their materialized
+ * values never enter the handler. The action body's own reads enforce its
+ * ceiling and carry the taint.
  */
 export const schedulerDependencyRead: Metadata = {
   [schedulerDependencyReadMarker]: true,

@@ -79,6 +79,9 @@ a line for each new document to the index below.
 
 ## Talking to the outside world
 
+- [`did-inboxes.md`](did-inboxes.md) — authenticated private delivery and durable
+  receipts
+
 - [`fetch-request-deadlines.md`](fetch-request-deadlines.md) — why the fetch
   builtins keep a wall-clock bound, what that bound actually measures, and what
   to check before changing when a request starts

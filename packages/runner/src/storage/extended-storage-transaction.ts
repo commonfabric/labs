@@ -633,7 +633,8 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   #runtimeOwnedStores: RuntimeOwnedStores | undefined;
 
   /**
-   * Per-transaction cache of `Cell.get()` results, keyed by stable cell view.
+   * Per-transaction cache of `Cell.get()` results, keyed by stable cell view
+   * and ambient read metadata. A hit never crosses read classifications.
    * Replaced wholesale on any write (see `#invalidateReadResultCache()`), so a
    * hit is only ever served when nothing has been written since the cached
    * read. This is a `Map` rather than a `WeakMap`, but the transaction owns it
@@ -1659,6 +1660,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // boundary would hand a materialized read's value to a current one, or the
     // reverse.
     if (this.#readEpoch !== undefined) return undefined;
+    // Cell traversals, like link-resolution memos, must stay within their
+    // ambient read classification; a scheduler probe cannot authorize a get.
+    variant = `${
+      this.#snapshotMemoKey(undefined, this.#ambientReadMeta)
+    }|${variant}`;
     const cached = this.#readResultCache.get(key)?.get(variant);
     if (cached === undefined) {
       this.#readResultCacheMisses++;
@@ -1674,6 +1680,9 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     value: unknown,
   ): void {
     if (this.#readEpoch !== undefined) return;
+    variant = `${
+      this.#snapshotMemoKey(undefined, this.#ambientReadMeta)
+    }|${variant}`;
     let byVariant = this.#readResultCache.get(key);
     if (byVariant === undefined) {
       byVariant = new Map();

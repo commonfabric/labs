@@ -111,6 +111,7 @@ import {
 import {
   excludeReadFromConflict,
   ignoreReadForScheduling,
+  linkResolutionProbe,
 } from "./storage/reactivity-log.ts";
 import { resolve } from "./storage/transaction/attestation.ts";
 import {
@@ -1374,6 +1375,8 @@ export type PointerCycleTracker = CompoundCycleTracker<
 >;
 
 export type TraversalContext = {
+  /** Probe terminal payload only while constructing a held cell reference. */
+  referenceOnly?: boolean;
   tracker: PointerCycleTracker;
   schemaTracker: MapSet<string, SchemaPathSelector>;
 
@@ -2590,7 +2593,15 @@ function followPointer(
   // for scheduling. We'll have to tag it later.
   // We use a nonRecursive read, since we may not need everything at the target.
   if (readStatsActive) recordLinkResolution(tx);
-  const { ok: valueEntry, error } = tx.read(target, READ_NON_RECURSIVE);
+  const { ok: valueEntry, error } = tx.read(
+    target,
+    context.referenceOnly
+      ? {
+        ...READ_NON_RECURSIVE,
+        meta: { ...READ_NON_RECURSIVE.meta, ...linkResolutionProbe },
+      }
+      : READ_NON_RECURSIVE,
+  );
 
   if (error !== undefined) {
     // If we had an unexpected error, or didn't find the doc at all, return.
@@ -5295,9 +5306,16 @@ export class SchemaObjectTraverser<V extends FabricValue>
       return { ok: null };
     }
 
-    const [redirDoc, redirSelector] = this.getDocAtPath(
+    this.getDocAtPathCalls++;
+    // Only the terminal target payload is a handle-construction probe.
+    // getAtPath checks every intermediate pointer before following its choice.
+    const [redirDoc, redirSelector] = getAtPath(
+      this.tx,
       doc,
       [],
+      !this.traverseCells && SchemaObjectTraverser.hasAsCell(schema)
+        ? { ...this.context, referenceOnly: true }
+        : this.context,
       selector,
       "writeRedirect",
     );

@@ -374,8 +374,12 @@ capability-bearing positions: a cell-like wrapper takes the capability the
 body's usage earns (writable where it writes, read-only where it reads,
 comparable where it only compares, OPAQUE where it never touches the
 position), and an identity-only comparison of a plain-declared position adds
-the comparable marker the runtime materializes it through. A named reference
-whose subtree holds no cell-like position passes through untouched; one
+the comparable marker the runtime materializes it through. A reference to a
+type alias that takes no type parameters is walked as the node the alias
+names, so a cell declared through an alias takes its capability the way the
+wrapper the alias names does; an alias met again inside its own expansion — a
+recursive event type — stays the reference it is. A named reference whose
+subtree holds no cell-like position passes through untouched; one
 expands only when a capability inside it must change, and a self-referential
 type ends that expansion at the cycle with the node kept as authored — the
 accepted residual, since a literal cannot spell its own recursion. Observed
@@ -403,25 +407,41 @@ receiver's complete stored shape, including when the result passes through a
 helper. Optional member reads retain the receiver without imposing a full-shape
 read.
 
-A cell reached through a type alias — `type ProfileCell = Writable<...>` —
-gives the transformer no authored node for its value, so the value type is
-printed inside the inferred capability wrapper. Schema generation can read
-some prints only from the type behind them: `import("./mod.ts").T` for a name
-the emitting module does not import, and the brand arm of an expanded
-`Default`. A skipped computed brand marks the node-driven schema as incomplete
-even when the remaining union and intersection members can be read, so the
-resolved value supplies the default metadata.
-Where the cell is a property, schema generation reads the value from the
-property's resolved type; where the cell is the whole argument there is no
-such type, so the printed node is registered in `typeRegistry` with the value
-type it was printed from. An aliased cell therefore emits the value schema the
-same wrapper emits written inline, under every inferred capability, for a
-generic alias, and for an alias imported from another module. One shape
-differs: `T | Default<V>` where `V` is an object type assignable to `T`.
-Inline, the authored `Default` node shows that `T` already covers `V`, and the
-schema is `T` with the default. Through an alias the resolved union keeps `V`
-as a member of its own, and the schema is `anyOf: [T, V]` with the default.
-`aliased-cell-value-schema.test.ts` pins these.
+A cell's value type is read from the node its author wrote. The wrapper is
+found through parentheses and through references to type aliases that take no
+type parameters (`getAuthoredCellValueTypeNode`, which reads with
+`readAuthoredTypeNode` from `@commonfabric/schema-generator/type-node`), in
+every position a cell is declared: a builder's argument and a property of it,
+a handler's state and event and a property of each, and a closure's capture.
+A cell declared as `type ProfileCell = Writable<...>`, or as
+`(Writable<...>)`, therefore emits the value schema the same wrapper emits
+written in place, under every inferred capability and for an alias imported
+from another module, and a `Default` the value type does not admit fails
+compilation the same way. A reference is a cell wrapper where its name
+resolves, through its import binding, to a cell wrapper `commonfabric`
+declares (`namesCellWrapper`), under whatever name it was imported as:
+`import { Cell as Writable }` and `import { Writable as MyCell }` are cells,
+and a type of the author's own named `Writable`, written in place or reached
+through an alias, is that type and not a cell. A node the transformer builds,
+which the checker cannot resolve, is read by its spelling.
+
+A cell reached through a generic alias — `type MyCell<T> = Writable<...>` —
+has no authored node for its value, since the node the alias names is written
+in the alias's own type parameters, so the value type is printed inside the
+inferred capability wrapper. Schema generation can read some prints only from
+the type behind them: `import("./mod.ts").T` for a name the emitting module
+does not import, and the brand arm of an expanded `Default`. A skipped
+computed brand marks the node-driven schema as incomplete even when the
+remaining union and intersection members can be read, so the resolved value
+supplies the default metadata. Where the cell is a property, schema generation
+reads the value from the property's resolved type; where the cell is the whole
+argument there is no such type, so the printed node is registered in
+`typeRegistry` with the value type it was printed from. The print keeps a
+default's value as a member of its own: `T | Default<V>`, with `V` an object
+type `T` covers, emits `anyOf: [T, V]` with the default, where the same wrapper
+written in place emits `T` with the default.
+`aliased-cell-value-schema.test.ts` and `parenthesized-cell-type.test.ts` pin
+these.
 
 The type-driven shrink also guards its descent on (type, requested-paths): a
 pair already on the path falls back to the named type reference — no
@@ -989,6 +1009,16 @@ report these through the same collector (deduplicated via §2.2's
   schema use.
   Repeated reports for that source range collapse to one. See §7 of the
   schema-generator mapping spec and `test/default-empty-record-schema.test.ts`.
+- **Warning** `schema-type:unread` (`schema-generator.ts`,
+  `unread-type-diagnostics.ts`) — a schema accepts any value in place of a type
+  node-based analysis could not read and no wrapper recovered from a resolved
+  type, such as a name the emitting module does not resolve or an
+  `import("…")` type it does not resolve; the node-based analyzer's section of
+  the schema-generator mapping spec states what it reads. One warning per
+  generated schema names each such type once; compilation continues. It points
+  to the local schema use, since the unread node is a print with no source
+  position, and like the default warning collapses to one per source range. See the node-based analyzer's fallback in
+  the schema-generator mapping spec and `test/unread-type-diagnostic.test.ts`.
 - **Error** `pattern-context:receiver-method-call`
   (`pattern-body-reactive-root-lowering.ts:162`) — the pattern-body
   reactive-root seam could not admit a receiver-method call on a tracked
@@ -1279,6 +1309,68 @@ Input-bound expression wrappers also capture enclosing function locals used
 inside nested callbacks. Parameters and locals declared within the wrapped
 expression stay inside it, including when the wrapper belongs to a reactive
 collection callback. Module bindings remain lexical references.
+
+A capture's type is inferred from its expression, with literal types widened.
+One case reads the declaration instead. Inside a pattern body, a binding
+destructured from the callback parameter has its `Default` and scope wrappers
+(`PerSpace`, `PerUser`, `PerSession`, `PerAny`) stripped from its type. A
+binding whose declared property type carries one — as the type itself, as a
+member of a union or an intersection, or as the argument of `Writable` — is
+therefore emitted from the type node its author wrote
+(`getPreservedTypeForBindingElement`, `src/ast/type-building.ts`). A wrapper's
+name counts only where it resolves to the declaration `commonfabric` exports: a
+type of the author's own named `Default` is an ordinary type, and its binding is
+typed by inference. At any of those positions, a reference to a non-generic type
+alias whose type carries a wrapper is replaced by the type the alias names, so
+`type Draft = Writable<string | Default<"">>` captures with the schema of the
+wrapper written in place, including when the alias is imported from another
+module. A reference to an alias that carries no wrapper stays a reference, which
+schema generation emits under the alias's name. A reference to a generic alias
+also stays as written, and when nothing else in the declared type carries a
+wrapper the capture is typed by inference.
+
+A property of a generic input is declared in terms of the input's type
+parameters. The pattern builder's type argument supplies the caller's arguments,
+before callback normalization strips defaults and scopes; inherited properties
+and nested or renamed destructuring follow that type. A parameter that sits in a
+union, an intersection, parentheses, or a wrapper is replaced by a node printed
+from its argument, which gives the schema of the concrete type written in place.
+That holds where the printed argument reads the same wherever it is emitted:
+keywords, literals, type literals, and a name without type arguments that names
+the argument's own type where the binding is declared. The printer writes a bare
+name without asking what it resolves to there, so the name is checked against
+the symbols the argument's type mentions. Every other generic binding — a
+parameter inside another type expression such as `Box<T>`, `T[K]`, or `T[]`, or
+an argument that prints as a reference with type arguments, as `import("…").T`,
+as `typeof x`, or as a name that is out of scope there or names another type —
+is emitted as its instantiated declared type. That keeps the wrapper and the
+complete value type, and keeps a default's value as a member of the union:
+`anyOf: [T, V]` with the default, where the concrete type written in place emits
+`T` with the default. The pattern body's view of such a binding is not used,
+because stripping `Default<{}>` from `T | {}` lets the union reduce to `{}`.
+When the builder's type argument cannot be found, as when
+`pattern<Input<number>>` is bound to a name before it is called, the only
+instantiated type on hand is the pattern body's view, and the binding is emitted
+with its concrete value type and without its default.
+
+A union of two instantiations of one generic input gives a type parameter two
+arguments. No node stands for both, so such a parameter is not substituted and
+the binding takes its instantiated declared type, which holds every branch.
+
+Pattern result inference reads returned input bindings through the same
+function when a returned binding carries a scope wrapper. Scope detection reads
+both the emitted node and the recovered declaration: the printer can emit
+`unknown` for a scoped generic array, while its declaration still names the
+scope the result must retain. A node printed from a type is registered with that
+type rather than with the type at the expression, which is the pattern body's
+view: the names a printed node spells
+resolve to nothing where it is emitted, so schema generation reads it by the
+type behind it. An authored node keeps the view's type, and so keeps being
+emitted in place rather than under the name of whatever alias the declared
+type carries.
+
+`aliased-binding-declared-type.test.ts` and
+`ast/getPreservedBindingTypeNode.test.ts` pin these.
 
 ### 9.2 Handler strategy
 
@@ -1715,6 +1807,20 @@ adjustments:
 - node-driven shrinking can still shrink the inner type of cell-like wrappers
   when `.get()` contributes an empty path but coexists with more specific
   non-empty paths
+- a node the type-driven shrink builds keeps the scope wrapper and the default
+  of the type it stands for, at every level it retains. A scope wrapper the
+  type's alias names wraps the shrunk value as `__cfHelpers.PerUser<...>` (or
+  the wrapper of the same name), and a default the type carries in its
+  `Default` brand wraps it as `__cfHelpers.Default<shrunk, V>`, with `V`
+  printed from the brand's payload. Branded members that disagree on the value
+  restore no default, and a scope the type carries only as its brand, with no
+  alias left to name it, is not restored. Neither is a scope wrapper around a
+  cell: schema generation reads the wrapper by the scoped type it is registered
+  with, which would undo the capability narrowing of the cell inside it. A restored `Default` does not count
+  toward the preference for the node-driven candidate, which applies where only
+  that candidate holds an authored `Default` (`getScopeWrapper` and
+  `restoreDefault` in `transformers/type-shrinking.ts`;
+  `test/shrunk-capture-wrappers.test.ts`)
 - tuple types and numeric-indexed object types are not rewritten to
   array-with-unknown-items during this optimization
 - after shrinking, `validateShrinkCoverage` checks that all requested property
@@ -2054,6 +2160,15 @@ for `WriteAuthorizedBy` trusted bindings; ordinary transformed patterns do not
 carry a repeated source-metadata helper implementation.
 
 ## 12. Schema Generation
+
+Cell constructors whose authored type arguments include a `typeof` value binding
+retain those arguments when their result is lowered into a lift. Recovery follows
+`.for()` and unannotated `const` aliases, and also preserves the declaration in
+an inferred object-literal pattern result. This keeps `WriteAuthorizedBy` tied to
+the named writer instead of an inferred structural function type. Explicit
+variable annotations remain authoritative; mutable aliases are not followed.
+Pattern-local object value aliases retain their definitions in each generated
+schema. `protected-cell-policy.test.ts` pins both generated schemas.
 
 `SchemaGeneratorTransformer` replaces `toSchema<T>(options?)` calls with JSON
 schema literals.

@@ -12,12 +12,19 @@ import { Identity } from "@commonfabric/identity";
 import { decode } from "@commonfabric/utils/encoding";
 
 import {
+  profile,
   type ProfileCommandDeps,
   profileCreateAction,
+  profileRepairNameProtectionAction,
   profileShowAction,
 } from "../commands/profile.ts";
 import type { CreatedProfile, ProfileCreateConfig } from "../lib/profile.ts";
+import {
+  profileNameProtection,
+  type ProfileNameProtectionConfig,
+} from "../lib/profile-name-protection.ts";
 import type { WishReadConfig, WishReadResult } from "../lib/wish.ts";
+import { withEnv } from "./utils.ts";
 
 const CREATED: CreatedProfile = {
   name: "Ada Lovelace",
@@ -65,7 +72,9 @@ async function captureStdout(fn: () => Promise<void>): Promise<string> {
   return captured;
 }
 
-async function makeTempKeyFile(): Promise<{ path: string; did: string }> {
+async function makeTempKeyFile(): Promise<
+  { path: string; did: `did:${string}` }
+> {
   const path = await Deno.makeTempFile({ suffix: ".key" });
   const pkcs8 = await Identity.generatePkcs8();
   await Deno.writeFile(path, pkcs8);
@@ -74,6 +83,29 @@ async function makeTempKeyFile(): Promise<{ path: string; did: string }> {
 }
 
 describe("cf profile command actions", () => {
+  it("routes parsed subcommands through their action validation", async () => {
+    await withEnv(
+      "CF_IDENTITY",
+      undefined,
+      () =>
+        withEnv("CF_API_URL", undefined, async () => {
+          const command = profile.reset().throwErrors();
+          await expect(command.parse(["create", " "])).rejects.toThrow(
+            "A profile needs a name",
+          );
+          await expect(command.parse(["show"])).rejects.toThrow(
+            'Missing required option: "--identity"',
+          );
+          await expect(command.parse([
+            "repair-name-protection",
+            "--cell",
+            "/profile",
+            "--apply",
+          ])).rejects.toThrow("--apply and --expect");
+        }),
+    );
+  });
+
   describe("profileCreateAction()", () => {
     it("creates against the identity's home space and prints the address", async () => {
       const key = await makeTempKeyFile();
@@ -193,6 +225,99 @@ describe("cf profile command actions", () => {
       } finally {
         await Deno.remove(key.path);
       }
+    });
+  });
+  describe("profileRepairNameProtectionAction()", () => {
+    it("inspects by default and forwards only an explicitly accepted receipt", async () => {
+      const key = await makeTempKeyFile();
+      const requests: ProfileNameProtectionConfig[] = [];
+      const result = {
+        status: "repairable" as const,
+        inspection: "receipt",
+        owner: key.did,
+        name: "Saved name",
+        profile: {
+          space: key.did,
+          id: "of:profile" as const,
+          scope: "space" as const,
+          path: [],
+        },
+        positions: [],
+      };
+      const run = (config: ProfileNameProtectionConfig) => {
+        requests.push(config);
+        return Promise.resolve(result);
+      };
+      try {
+        const options = {
+          apiUrl: "http://127.0.0.1:8000",
+          identity: key.path,
+          cell: "//did:key:zProfileSpace/of:profile",
+        };
+        expect(
+          JSON.parse(
+            await captureStdout(() =>
+              profileRepairNameProtectionAction(options, run)
+            ),
+          ),
+        ).toEqual(result);
+        await captureStdout(() =>
+          profileRepairNameProtectionAction({
+            ...options,
+            apply: true,
+            expect: "receipt",
+          }, run)
+        );
+        expect(requests.map((request) => request.expectedInspection)).toEqual([
+          undefined,
+          "receipt",
+        ]);
+        expect(requests.map((request) => request.cell)).toEqual([
+          options.cell,
+          options.cell,
+        ]);
+      } finally {
+        await Deno.remove(key.path);
+      }
+    });
+
+    it("requires apply and the inspection receipt together before opening an identity", async () => {
+      for (const flags of [{ apply: true }, { expect: "receipt" }]) {
+        await expect(
+          profileRepairNameProtectionAction({
+            cell: "/profile",
+            identity: "/unread.key",
+            ...flags,
+          }),
+        ).rejects.toThrow("--apply and --expect");
+      }
+    });
+
+    it("refuses ambiguous targets before connecting", async () => {
+      let connected = false;
+      const load = () => {
+        connected = true;
+        throw new Error("unexpected connection");
+      };
+      for (
+        const cell of [
+          "/profile",
+          "//home/profile",
+          "//did:key:zProfileSpace/profile",
+          "//did:key:zProfileSpace/of:fid1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/name",
+          "//did:key:zProfileSpace/of:fid1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa@user",
+        ]
+      ) {
+        await expect(
+          profileNameProtection({
+            cell,
+            apiUrl: "http://127.0.0.1:8000",
+            identity: "/unread.key",
+            space: "home",
+          }, load),
+        ).rejects.toThrow("full profile cell address");
+      }
+      expect(connected).toBe(false);
     });
   });
 });

@@ -746,37 +746,96 @@ async function entityCandidates(
   if (namesRemote(line)) return NOTHING;
   const token = line.positionals[0];
   if (!token) return NOTHING;
-  const { listEntityModels, listScopes, openSpace, resolveSpace } =
-    await import("@commonfabric/state-inspector");
+  const {
+    DEFAULT_SCAN_LIMIT,
+    listEntityModels,
+    openSpace,
+    resolveSpace,
+    scopesOfRows,
+    visibleEntityRowsByScope,
+  } = await import("@commonfabric/state-inspector");
   const space = openSpace(await resolveSpace(token));
   try {
     const view = entityListingView(line);
-    const scopes = view.allScopes
-      ? listScopes(space, { branch: view.branch }).map((scope) => scope.raw)
-      : [view.scope];
     // No limit of its own: the set is what `cf inspect entities` would list
     // with no `--limit`, so a completed id is one that command names too. The
     // listing reports its own extent, and a capped one is still every
     // candidate this slot can honestly offer.
+    if (!view.allScopes) {
+      return values(shapeEntityCandidates(
+        listEntityModels(space, { branch: view.branch, scope: view.scope })
+          .entities,
+      ));
+    }
+    // Every scope at once, from one unscoped row pass: a query filtered on a
+    // scope cannot seek and walks the whole branch, so one per scope is the
+    // cost of the listing rather than a part of it.
     //
-    // `listScopes` sorts the space scope first, so an entity written in more
-    // than one scope keeps the label its space-scope value reconstructs to.
+    // The pass already holds every id, and an id is what the slot takes, so
+    // every entity whose id matches what is typed is offered. What the scan
+    // cap bounds is reconstruction, which only labels a candidate: it is spent
+    // across scopes in order, and an entity past it is offered unlabeled. A
+    // cap spent per scope would reconstruct the whole space on a store of many
+    // scopes; one that bounded the ids would hide every per-user and
+    // per-session entity behind a large space scope — the entities this
+    // command exists to show.
+    //
+    // Scopes sort with the space scope first, and a row already offered from
+    // an earlier scope is dropped before it is reconstructed, so an entity
+    // written in more than one scope keeps the label its space-scope value
+    // reconstructs to.
+    const typed = typedValue(line);
+    const rowsByScope = visibleEntityRowsByScope(space, {
+      branch: view.branch,
+    });
     const seen = new Set<string>();
     const entities: EntityListingLike[] = [];
-    for (const scope of scopes) {
-      for (
-        const entity of listEntityModels(space, { branch: view.branch, scope })
-          .entities
-      ) {
-        if (seen.has(entity.id)) continue;
-        seen.add(entity.id);
-        entities.push(entity);
+    let reconstructed = 0;
+    for (const scope of scopesOfRows(rowsByScope)) {
+      const rows = (rowsByScope.get(scope.raw) ?? []).filter((row) =>
+        row.id.startsWith(typed) && !seen.has(row.id)
+      );
+      if (rows.length === 0) continue;
+      for (const row of rows) seen.add(row.id);
+      const budget = DEFAULT_SCAN_LIMIT - reconstructed;
+      const labeled = new Set<string>();
+      if (budget > 0) {
+        for (
+          const entity of listEntityModels(space, {
+            branch: view.branch,
+            scope: scope.raw,
+            limit: budget,
+            rows,
+          }).entities
+        ) {
+          labeled.add(entity.id);
+          entities.push(entity);
+        }
+        reconstructed += labeled.size;
+      }
+      for (const row of rows) {
+        if (!labeled.has(row.id)) entities.push({ id: row.id });
       }
     }
     return values(shapeEntityCandidates(entities));
   } finally {
     space.close();
   }
+}
+
+/**
+ * What the line has typed of the value itself: the word under the cursor,
+ * less the `--name=` it carries when an option's value is written inline.
+ */
+function typedValue(line: CompletionLine): string {
+  const slot = line.slot;
+  const inline = slot && (slot.kind === "option-value" ||
+      slot.kind === "global-option-value")
+    ? slot.inlinePrefix
+    : undefined;
+  return inline && line.word.startsWith(inline)
+    ? line.word.slice(inline.length)
+    : line.word;
 }
 
 /**

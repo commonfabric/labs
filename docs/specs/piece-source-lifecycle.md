@@ -324,6 +324,32 @@ runs; a cross-space child's closure replicates after its run, so it may carry
 the origin ahead of the revision, and is followed from a baseline the first
 adoption records.
 
+Once a cross-space child carries an origin or source revision history,
+reinstantiating its parent resumes the child's stored pattern and arguments.
+The parent's imported module does not replace an independently adopted revision
+or an owner edit, including an edit that cleared the origin. A space-scoped
+child resumes after the parent transaction commits, with the parent's demand
+root and ownership of that particular start; scoped serving children resume
+through their per-actor program coordinator. Children without an independent
+source lifecycle continue to bind the parent's module and inputs.
+
+**Independent input ownership** begins with that recorded origin or revision
+history, even before the child adopts another release. The parent supplies the
+initial bindings; subsequent parent releases do not replace them. Stored links
+remain reactive to their existing targets, but replacing a parent-internal cell
+does not retarget the child's link to the new cell. A parent author must preserve
+those targets or coordinate an owner-authorized input update on the child, such
+as `cf piece apply`, against the child's retained input contract. That
+explicit input update is the rebinding mechanism; restarting or updating the
+parent alone leaves the child's inputs intact. Source adoption likewise keeps
+the stored inputs, including owner overrides.
+
+In-space children are the reference behavior for future input rebinding. Each
+parent run re-supplies their inputs and replaces the stored argument; value edits
+survive because those inputs link into the parent's cells. Any automatic rebinding
+policy, with or without owner-edit preservation, must be introduced for in-space
+children first, and tracked cross-space children must then match it.
+
 In this document, **wishing code into being** means a product authoring
 affordance that asks an LLM to write pattern source. It is distinct from the
 runtime `wish()` builtin. The builtin discovers and connects to existing
@@ -699,16 +725,23 @@ membership in an enum containing both `false` and `true`. This permits argument
 widening from `boolean` to `boolean | "auto"` and the reverse result narrowing.
 Source enums containing several JSON value types are partitioned by type,
 including beside a type list or within nested `anyOf` branches, with sibling
-constraints and branch metadata retained. Each partition must satisfy a target
-alternative. Target enums remain whole, and an enum containing a value outside
-the JSON type vocabulary, such as a `FabricPrimitive`, remains subject to the
-conservative object proof. During
-pattern evolution, a branch stays whole if partitioning would change the
-effective default it supplies, including defaults inherited from a child branch
-or a reference. Link proofs compare target defaults only, so source defaults do
-not limit partitioning there. These rules permit adding an option to a nullable
-literal argument while still refusing to remove an admitted option or widen a
-result contract.
+constraints and branch metadata retained. A source `type` list is partitioned
+into one branch per named type in those same places, so a union written as a
+type list proves like the same union written as `anyOf` branches. Two kinds of
+node keep a list whole: one that also carries an `anyOf`, whose list stays
+beside the base of its own alternatives, and one still carrying a `$ref`. A
+reference resolves with the node's keywords laid over the referenced schema, so
+the list overrides a referenced `type`, and a partition that dropped `type`
+would let the referenced one return and cover fewer values than the list
+admitted. Each partition must satisfy a target alternative. Target
+enums remain whole, and an enum containing a value outside the JSON type
+vocabulary, such as a `FabricPrimitive`, remains subject to the conservative
+object proof. During pattern evolution, a branch stays whole if partitioning
+would change the effective default it supplies, including defaults inherited
+from a child branch or a reference. Link proofs compare target defaults only,
+so source defaults do not limit partitioning there. These rules permit adding
+an option to a nullable literal argument while still refusing to remove an
+admitted option or widen a result contract.
 
 When a source alternative contains a nested `anyOf` with only descriptive
 annotations other than `$comment` beside it, its children may each satisfy a
@@ -1481,7 +1514,7 @@ the actual retained argument is rejected without offering confirmation.
 | Wish an existing piece to change and detach it | **Partial** | `PieceController.setPattern` now clears the active origin and appends a guarded direct-edit revision. When a detached, history-free, programmatically constructed predecessor has no retained source, the edit records its displaced executable identity outside restorable history and begins the source log with the new exact source. A piece with recorded history still rejects the edit when its current source is unavailable. It also rejects incompatible pattern or retained-input schemas unless `dangerouslyAllowIncompatibleSchema` is supplied; because those proofs are all the loaded previous pattern feeds, the same override lets the edit proceed when the current pattern cannot be loaded — recovering both the history-free stranded predecessor above and a piece whose current pattern no longer loads while its source remains retained. The command line exposes that override without a first-class warning flow, and there is no general LLM-backed edit affordance. |
 | Revert to source previously used by the same piece | **Partial** | The source history indexes prior pattern identities, retains their source-document closures, and exposes each retained version through **view source**. **Use this version** restores the selected program, clears the active origin, and appends a revert revision after compatibility checks. A complete authored-program manifest, runtime fingerprint, unreachable-file guarantee, and cross-runtime rebuild path remain required. |
 | See whether a piece is actually following its origin | **Partial** | Reconciliation records its last outcome, time, offered identity, and reason as durable state on the piece, and any accepted transition clears that record because the piece has left the state it describes. The source panel reads it and distinguishes up-to-date, unknown, could-not-reach, refused, detached, and an origin nothing can follow; a state that has not established what the origin holds offers to ask it now, which records its outcome and writes no revision when the origin offers what the piece runs, and a refusal over a contract mismatch also offers to take the source without the comparison. Distinguishing runtime rebuilds from authored source changes, and saying whether a revert can reuse a historical executable identity, remain required. |
-| Point a piece at an origin it has never followed | **Partial** | The source panel asks for a `system:` ref or fabric URL in a dialog raised over it, and `PieceController.changeSource({ kind: "repoint" })` classifies what is entered, refuses one carrying credentials, refuses a piece that names itself, resolves it, and applies its source with a repoint revision. The dialog answers what it asked: a failure is reported in it with the URL still in the field, an incompatible candidate is named there and its submit becomes the override, and dismissing the dialog discards both rather than leaving them on the panel. The piece is left as it was in either case. A detached piece gains an origin the same way. The stored export selector remains required. |
+| Point a piece at an origin it has never followed | **Partial** | The source panel asks for a `system:` ref or fabric URL in a dialog raised over it, and `PieceController.changeSource({ kind: "repoint" })` classifies what is entered, refuses one carrying credentials, refuses a piece that names itself, resolves it, and applies its source with a repoint revision. The dialog answers what it asked: a failure is reported in it with the URL still in the field, an incompatible candidate is named there and its submit becomes the override, and dismissing the dialog discards both rather than leaving them on the panel. The piece is left as it was in either case. A detached piece gains an origin the same way, and so does one whose current pattern cannot be loaded: the candidate cannot be compared with what the piece ran, which is reported as the incompatibility, and the override adopts the origin's source, recording the displaced identity where the space retains no source for it. A piece with recorded history whose current source is unavailable is still refused, and so is a candidate the stored argument does not satisfy. The stored export selector remains required. |
 | Repoint to a `system:` ref, mutable fabric entity URL, or immutable fabric URL previously used | **Partial** | **Follow this source again** resolves a selected historical origin now, applies its current source, retains the origin, and appends a repoint revision. Cross-space fabric origins read their verified source closure from the source space and compile it into the destination. An incompatibility confirmation applies the exact candidate that produced the warning. Fabric origin creation outside the clone flow, full normalization and policy enforcement, origin-chain guards, and running subscriptions remain required. |
 | Record every previous source and origin | **Partial** | `pieceSourceHistory` is an append-only list guarded by its last revision identifier, current pattern, and active origin. Each entry records the pattern, origin, operation, selected historical revision, and a link that retains a source-document closure verified in the same transaction. Direct Piece API creation records its detached initial source, including when the program was fetched from a URL. Recovery from an unavailable legacy source records its displaced executable identity outside restorable history rather than inventing a broken revision. Other creation paths, complete authored-program manifests, runtime fingerprints, program digests, causes, and origin revision identifiers remain required. |
 
@@ -1547,8 +1580,10 @@ The implementation evidence for this table is concentrated in:
   because the checks are all the loaded previous pattern feeds, the override
   also lets the edit proceed when that pattern cannot be loaded.
   It now detaches and appends source history. The history actions present a
-  mismatch as a warning before an explicit override. The command-line and
-  general edit flows still need the same warning interaction.
+  mismatch as a warning before an explicit override, and a current pattern
+  that cannot be loaded is such a mismatch: the candidate cannot be compared
+  with it, so the action adopts the candidate only under the override. The
+  command-line and general edit flows still need the same warning interaction.
 - The atomic source-transition helper compares the revision head, current
   pattern, and active origin. It therefore protects origin-only transitions
   whose source identity stays unchanged.

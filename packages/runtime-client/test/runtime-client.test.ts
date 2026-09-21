@@ -43,6 +43,63 @@ describe("RuntimeClient", () => {
     });
   });
 
+  describe("createPiece", () => {
+    it("preserves the host's cause and home address across repeated creation requests", async () => {
+      const space = "did:key:z6Mk-client-create-home" as CellRef["space"];
+      const ref: CellRef = {
+        id: "of:fid1:header",
+        space,
+        scope: "space",
+        path: [],
+      };
+      const requests: unknown[] = [];
+      const conn = {
+        on: () => {},
+        request: (message: unknown) => {
+          requests.push(message);
+          return Promise.resolve({ piece: { cell: ref } });
+        },
+      } as unknown as never;
+      const client = new (RuntimeClient as unknown as {
+        new (conn: never, options: unknown): RuntimeClient;
+      })(conn, undefined);
+      const input = "export default pattern(() => ({}));";
+      const options = {
+        cause: "host:participant-header:v1",
+        argument: {},
+        run: true,
+      };
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const piece = await client.createPiece(input, space, options);
+        expect(piece.cell().ref()).toEqual(ref);
+      }
+      expect(requests).toEqual(Array.from({ length: 2 }, () => ({
+        type: RequestType.PieceCreate,
+        space,
+        source: {
+          program: {
+            main: "/main.tsx",
+            files: [{ name: "/main.tsx", contents: input }],
+          },
+        },
+        cause: options.cause,
+        argument: {},
+        run: true,
+      })));
+      await client.createPiece(
+        new URL("https://fabric.example/header.tsx"),
+        space,
+      );
+      expect(requests[2]).toEqual({
+        type: RequestType.PieceCreate,
+        space,
+        source: { url: "https://fabric.example/header.tsx" },
+        argument: undefined,
+        run: undefined,
+      });
+    });
+  });
+
   describe("signal", () => {
     it("exposes the connection's lifetime signal", () => {
       const signal = new AbortController().signal;

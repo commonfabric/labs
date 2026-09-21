@@ -131,3 +131,9 @@ export {
   type ServedSetSourceRequest,
   servedUploadPattern,
 } from "./served-lifecycle.ts";
+
+export {
+  inspectProfileNameProtection,
+  type ProfileNameProtectionInspection,
+  repairProfileNameProtection,
+} from "./profile-name-protection.ts";

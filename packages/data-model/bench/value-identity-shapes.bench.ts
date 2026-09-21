@@ -20,13 +20,13 @@
  *       --allow-env --no-check bench/value-identity-shapes.bench.ts
  */
 
-import { deepFreeze, hashOf, isDeepFrozen } from "@";
+import { deepFreeze, type FabricPlainObject, hashOf, isDeepFrozen } from "@";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 // Doc-shaped test data, mirroring the default-app integration:
 // a note doc (~30 nodes) and a home-list doc holding N note entries.
 
-function makeNoteDoc(i: number): Record<string, unknown> {
+function makeNoteDoc(i: number): FabricPlainObject {
   return {
     title: `📝 New Note #${i.toString(36).padStart(6, "0")}`,
     content: `Note body ${i} — `.repeat(8),
@@ -41,7 +41,7 @@ function makeNoteDoc(i: number): Record<string, unknown> {
   };
 }
 
-function makeHomeDoc(noteCount: number): Record<string, unknown> {
+function makeHomeDoc(noteCount: number): FabricPlainObject {
   return {
     spaceName: "bench-space",
     activeTab: "spaces",

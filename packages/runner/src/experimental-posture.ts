@@ -184,21 +184,17 @@ export const ADOPT_SERVER_FLAGS_ENV = "CF_ADOPT_SERVER_FLAGS";
  * the posture keeps its built-in defaults, which is what it did before the
  * server published anything at all.
  *
- * The one asymmetry is `readerSchemaPrecedence`: a pre-flag document shape —
- * a posture record without the field, or a meta document with no
- * `experimental` field at all — reads as the legacy declared `false`, since
- * such a server necessarily runs the strict combine (the in-function comment
- * draws the full line, `experimental: null` included).
+ * An older server's silence on `readerSchemaPrecedence` or `agentBuiltin`
+ * reads as the legacy declared `false`. An explicit `experimental: null`
+ * means the server has no Runtime yet and does not declare either posture.
  */
 export function parseServerExperimentalOptions(
   declared: unknown,
 ): ExperimentalOptions {
-  // Field presence decides the legacy arm. A server that published a
-  // posture RECORD but declares no readerSchemaPrecedence in it predates
-  // the flag and necessarily runs the strict combine: that absence adopts
-  // as the legacy `false` until the compatibility window closes. A meta
-  // document with NO experimental field at all — handed in as `undefined`
-  // — is the same pre-flag document shape and takes the legacy arm too.
+  // Field presence decides the legacy arm. A posture record silent on
+  // readerSchemaPrecedence or agentBuiltin uses the corresponding old
+  // default, `false`. A meta document with no experimental field at all —
+  // handed in as `undefined` — takes those legacy arms too.
   // An explicit `experimental: null` is different: toolshed publishes
   // null until a Runtime exists, so the server is not pre-flag, it just
   // has no posture yet — that adopts nothing, as does a malformed
@@ -206,9 +202,14 @@ export function parseServerExperimentalOptions(
   // this at all and keeps its built-in defaults.
   if (declared === null || Array.isArray(declared)) return {};
   if (typeof declared !== "object") {
-    return declared === undefined ? { readerSchemaPrecedence: false } : {};
+    return declared === undefined
+      ? { readerSchemaPrecedence: false, agentBuiltin: false }
+      : {};
   }
-  const opts: ExperimentalOptions = { readerSchemaPrecedence: false };
+  const opts: ExperimentalOptions = {
+    readerSchemaPrecedence: false,
+    agentBuiltin: false,
+  };
   for (const key of Object.keys(EXPERIMENTAL_FLAG_AUTHORITY)) {
     const value = (declared as Record<string, unknown>)[key];
     if (value === undefined) continue;
@@ -234,10 +235,9 @@ export function parseServerExperimentalOptions(
  * 2. otherwise a `"server"` flag takes the published value;
  * 3. otherwise the flag stays unset and the built-in default governs, which
  *    is exactly what an unreachable server or a `"client"` flag leaves
- *    behind. An OLD server is not that case for `readerSchemaPrecedence`:
- *    {@link parseServerExperimentalOptions} reads a pre-flag posture's
- *    silence on it as the legacy declared `false`, so rule 2 adopts it as a
- *    published value.
+ *    behind. An older server is not that case for `readerSchemaPrecedence`
+ *    or `agentBuiltin`: {@link parseServerExperimentalOptions} reads its
+ *    silence on either as the legacy declared `false`.
  */
 export function adoptServerExperimentalOptions(
   server: ExperimentalOptions,
@@ -302,8 +302,8 @@ export interface DeployedClientExperimentalParams {
  * the server is genuinely down, and failing here first would only obscure
  * that. A server that ANSWERS with a pre-flag document — a meta document
  * without an `experimental` field, or a posture record silent on
- * `readerSchemaPrecedence` — is different: it necessarily runs the strict
- * combine, so that flag adopts as the legacy declared `false`
+ * `readerSchemaPrecedence` or `agentBuiltin` — is different: those flags
+ * adopt their legacy declared `false`
  * ({@link parseServerExperimentalOptions}). For every other flag, absence of
  * a declaration is not a declaration.
  *

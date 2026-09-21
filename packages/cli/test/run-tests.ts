@@ -49,6 +49,7 @@ const SERIAL_TESTS = [
   "test/completion-output.test.ts",
   "test/completion-providers.test.ts",
   "test/fuse.test.ts",
+  "test/ingest-command.test.ts",
   "test/inspect-remote.test.ts",
   "test/json-command.test.ts",
   "test/log-level.test.ts",

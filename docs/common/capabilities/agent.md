@@ -5,10 +5,10 @@ through tools, and answer in a shape the pattern declares — as the pattern's
 user. It is a reactive node like `generateObject`, never a promise: call it in
 the pattern body and read `pending` / `error` / `result` reactively.
 
-The builtin is behind the `agentBuiltin` experimental flag, which is **off by
+The builtin is behind the `agentBuiltin` experimental flag, which is **on by
 default**; see
 [`EXPERIMENTAL_OPTIONS.md`](../../development/EXPERIMENTAL_OPTIONS.md#agentbuiltin).
-On a runtime without the flag, every request settles with `pending: false`
+With the flag set to `false`, every request settles with `pending: false`
 and an `error` naming the flag.
 
 ## Calling it

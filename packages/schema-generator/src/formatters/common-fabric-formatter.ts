@@ -202,6 +202,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         resolvedScopeWrapper.node,
         context,
         resolvedScopeWrapper.scope,
+        type,
       );
     }
 
@@ -558,11 +559,25 @@ export class CommonFabricFormatter implements TypeFormatter {
     typeRefNode: ts.TypeReferenceNode,
     context: GenerationContext,
     scope: SchemaScope,
+    type: ts.Type | undefined,
   ): MutableJSONSchema {
     const innerTypeNode = typeRefNode.typeArguments?.[0];
     if (!innerTypeNode) {
       throw new Error(`Scoped wrapper requires type argument`);
     }
+
+    // The payload carried by the wrapper's own type. A node the printer wrote
+    // from a type has no scope to resolve against, so the checker reads it as
+    // `any`, and a node-driven schema would then admit anything.
+    const typeWithAlias = type as TypeWithInternals | undefined;
+    const resolvedInner =
+      scopeForWrapperName(typeWithAlias?.aliasSymbol?.name) !== undefined
+        ? typeWithAlias?.aliasTypeArguments?.[0]
+        : undefined;
+    const usableResolvedInner = resolvedInner &&
+        !this.#isUnusableInnerType(resolvedInner)
+      ? resolvedInner
+      : undefined;
 
     let innerType: ts.Type;
     try {
@@ -572,11 +587,31 @@ export class CommonFabricFormatter implements TypeFormatter {
       innerType = context.typeChecker.getAnyType();
     }
 
-    const innerSchema = this.#schemaGenerator.formatChildType(
+    const uninterpreted: ts.TypeNode[] = [];
+    let innerSchema = this.#schemaGenerator.formatChildType(
       innerType,
-      context,
+      { ...context, uninterpretedTypeNodes: uninterpreted },
       innerTypeNode,
     );
+
+    // A payload node that node analysis had to guess at loses what it could
+    // not read. A node printed from a type is guessed at whole, since the
+    // names it spells resolve to nothing here; one read in part loses only
+    // what that part carried, and the `T & { [DEFAULT_MARKER]: V }` arm of an
+    // expanded `Default` carries the default. The wrapper's own payload
+    // supplies the value schema instead, at the cost of any narrowing the
+    // node carried.
+    if (uninterpreted.length > 0) {
+      if (usableResolvedInner) {
+        innerSchema = this.#schemaGenerator.formatChildType(
+          usableResolvedInner,
+          context,
+          undefined,
+        );
+      } else {
+        context.uninterpretedTypeNodes?.push(...uninterpreted);
+      }
+    }
 
     return this.#applyScopeWrapperSemantics(innerSchema, scope);
   }

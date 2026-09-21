@@ -42,7 +42,7 @@ export type SchemaHints = WeakMap<ts.Node, SchemaHint>;
 /** A recoverable schema-generation problem at its authored node, if known. */
 export interface SchemaGenerationDiagnostic {
   readonly severity: "warning";
-  readonly type: "schema-default:unresolved";
+  readonly type: "schema-default:unresolved" | "schema-type:unread";
   readonly message: string;
   readonly node?: ts.Node;
 }

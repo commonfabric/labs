@@ -31,6 +31,7 @@
     "ws": "npm:ws@^8.21.3"
   },
   "exports": {
+    "./inbox": "./src/inbox.ts",
     "./space-invites": "./src/space-invites.ts",
     ".": "./src/index.ts",
     "./jsx-runtime": "./src/jsx-runtime.ts",
@@ -57,6 +58,8 @@
     "./patterns-route.deno": "./src/harness/patterns-route.deno.ts",
     "./toolshed-http-auth": "./src/toolshed-http-auth.ts",
     "./cfc": "./src/cfc/mod.ts",
+    "./cfc/share-snapshot": "./src/cfc/share-snapshot.ts",
+    "./cfc/owner-adoption": "./src/cfc/owner-adoption.ts",
     "./cfc/clause": "./src/cfc/clause.ts",
     "./cfc/label-view-core": "./src/cfc/label-view-core.ts",
     "./executor/host": "./src/executor/host.ts",

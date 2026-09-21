@@ -455,9 +455,23 @@ be un-counted), where the mode is rejected outright.
 cell payload reads as well as SQLite results. An ordinary cell read measures
 its stored label, including descendants of an object, and withholds a value
 outside the ceiling. Absent is the owner view; an empty list is refused at
-construction. Concrete clauses are required for ordinary cells: database-owner
-and current-principal placeholders have a binding only at the SQLite query
-boundary and do not admit a concrete label on an unrelated persisted cell.
+construction. Observation ceilings for ordinary cells require concrete clauses.
+Database-owner and current-principal placeholders in a ceiling bind only at the
+SQLite query boundary; they do not admit a concrete label on an unrelated
+persisted cell. This differs from a fresh store's `User(CurrentPrincipal)`
+confidentiality declaration, which binds to its creator during commit.
+
+Constructing an `asCell` handle may probe the terminal target's shape without
+reading its protected payload. Every intermediate redirect remains a pointer
+observation and must fit the reader's ceiling before its target is followed.
+Reading through the returned handle performs the ordinary payload check.
+
+Scheduler dependency seeding carries `schedulerDependencyRead`: it records
+subscription edges without delivering the materialized values to an action.
+Those probes do not require the action's read ceiling. The action's own reads
+remain gated, including reads of a value already examined during preflight.
+Cell traversal caches are partitioned by ambient read metadata so a cached
+scheduling probe cannot supply an ordinary payload read.
 
 A **session-scoped** query result (`PerSession<>`, `.asScope("session")`,
 `scope: "session"`, or a session-scoped db) meets the runtime ceiling with the

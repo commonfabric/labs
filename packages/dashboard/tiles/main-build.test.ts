@@ -11,6 +11,7 @@ import {
 import { LOOM_REPO, REPO } from "../config.ts";
 import type { Ctx, Run } from "../types.ts";
 import { labsCi, loomCi } from "./main-build.ts";
+import { byUrl, withGithubAttempt } from "../test/github-attempts.ts";
 
 function ctx(runs: Run[]): Ctx {
   return {
@@ -44,31 +45,12 @@ function run(over: Partial<Run>): Run {
 // Runs arrive newest-first, and the tile ages the streak off Date.now().
 const ago = (mins: number) => new Date(Date.now() - mins * 60_000).toISOString();
 
-async function withGithubAttempt(
-  response: Run | Error | ((url: string) => Run | Error),
-  body: (urls: string[]) => Promise<void>,
-): Promise<void> {
-  const urls: string[] = [];
-  const realFetch = globalThis.fetch;
-  const realToken = Deno.env.get("GH_TOKEN");
-  Deno.env.set("GH_TOKEN", "test-token");
-  globalThis.fetch = ((input: string | URL | Request) => {
-    const url = input instanceof Request ? input.url : String(input);
-    urls.push(url);
-    const attempt = typeof response === "function"
-      ? response(url)
-      : response;
-    return attempt instanceof Error
-      ? Promise.reject(attempt)
-      : Promise.resolve(Response.json(attempt));
-  }) as typeof fetch;
-  try {
-    await body(urls);
-  } finally {
-    globalThis.fetch = realFetch;
-    if (realToken === undefined) Deno.env.delete("GH_TOKEN");
-    else Deno.env.set("GH_TOKEN", realToken);
-  }
+function attemptUrl(repo: string, id: number, attempt: number): string {
+  return `https://api.github.com/repos/${repo}/actions/runs/${id}/attempts/${attempt}`;
+}
+
+function jobsUrl(repo: string, id: number, attempt: number): string {
+  return `${attemptUrl(repo, id, attempt)}/jobs?per_page=1`;
 }
 
 Deno.test("labs and loom ci: an active rerun retains its last completed failure", async () => {
@@ -572,6 +554,273 @@ Deno.test("labs ci streak: in-flight runs neither start nor break a streak", asy
   // The unfinished run is not a verdict, so the last completed green still stands.
   assertEquals(v.status, "good");
   assertEquals(v.sub, "green for 1h 10m");
+});
+
+Deno.test("labs and loom ci streak: cancelled runs that never started neither set the verdict nor break a streak", async () => {
+  const cases = [
+    { tile: labsCi, repo: REPO },
+    { tile: loomCi, repo: LOOM_REPO },
+  ];
+  for (const { tile, repo } of cases) {
+    const newerCancelled = run({
+      conclusion: "cancelled",
+      run_started_at: ago(10),
+    });
+    const innerCancelled = run({
+      conclusion: "cancelled",
+      run_started_at: ago(50),
+    });
+    const runs = [
+      run({ status: "in_progress", conclusion: null, run_started_at: ago(5) }),
+      newerCancelled,
+      run({ conclusion: "success", run_started_at: ago(30) }),
+      innerCancelled,
+      run({ conclusion: "success", run_started_at: ago(70) }),
+      run({ conclusion: "failure", run_started_at: ago(200) }),
+    ];
+    const jobs = [newerCancelled, innerCancelled].map((cancelled) =>
+      jobsUrl(repo, cancelled.id, 1)
+    );
+
+    await withGithubAttempt(
+      byUrl(jobs.map((url) => [url, { total_count: 0 }])),
+      async (urls) => {
+        const v = await tile.collect(ctx(runs));
+        assertEquals(v.status, "good");
+        assertEquals(v.value, "passing");
+        assertEquals(v.sub, "green for 1h 10m");
+        assertStringIncludes(v.extra ?? "", "next build running");
+        assertEquals(urls, jobs);
+      },
+    );
+  }
+});
+
+Deno.test("labs and loom ci: a cancelled run that ran jobs is the verdict and ends a green streak", async () => {
+  const cases = [
+    { tile: labsCi, repo: REPO },
+    { tile: loomCi, repo: LOOM_REPO },
+  ];
+  for (const { tile, repo } of cases) {
+    const timedOut = run({ conclusion: "cancelled", run_started_at: ago(10) });
+    const stopped = run({ conclusion: "cancelled", run_started_at: ago(50) });
+
+    await withGithubAttempt(
+      byUrl([
+        [jobsUrl(repo, timedOut.id, 1), { total_count: 38 }],
+        [jobsUrl(repo, stopped.id, 1), { total_count: 38 }],
+      ]),
+      async () => {
+        const verdict = await tile.collect(ctx([
+          timedOut,
+          run({ conclusion: "success", run_started_at: ago(30) }),
+        ]));
+        assertEquals(verdict.status, "bad");
+        assertEquals(verdict.value, "cancelled");
+        assertEquals(verdict.sub, "cancelled for 10m");
+
+        const streak = await tile.collect(ctx([
+          run({ conclusion: "success", run_started_at: ago(20) }),
+          stopped,
+          run({ conclusion: "success", run_started_at: ago(90) }),
+        ]));
+        assertEquals(streak.status, "good");
+        assertEquals(streak.sub, "green for 20m");
+      },
+    );
+  }
+});
+
+Deno.test("labs ci streak: between failures, a cancelled run that never started does not end the red streak", async () => {
+  const cancelled = run({ conclusion: "cancelled", run_started_at: ago(20) });
+  const runs = [
+    run({ conclusion: "failure", run_started_at: ago(10) }),
+    cancelled,
+    run({ conclusion: "failure", run_started_at: ago(40) }),
+    run({ conclusion: "success", run_started_at: ago(100) }),
+  ];
+
+  await withGithubAttempt({ total_count: 0 }, async (urls) => {
+    const v = await labsCi.collect(ctx(runs));
+    assertEquals(v.status, "bad");
+    assertEquals(v.value, "failure");
+    assertEquals(v.sub, "failure for 40m");
+    assertEquals(urls, [jobsUrl(REPO, cancelled.id, 1)]);
+  });
+});
+
+Deno.test("labs ci: a cancelled rerun that never started yields to its prior completed attempt", async () => {
+  const id = 70;
+  const cancelledRerun = run({
+    id,
+    conclusion: "cancelled",
+    run_attempt: 2,
+    head_sha: "latest",
+    run_started_at: ago(5),
+  });
+  const firstAttempt = run({
+    id,
+    conclusion: "success",
+    run_attempt: 1,
+    head_sha: "latest",
+    run_started_at: ago(30),
+  });
+  const olderFailure = run({
+    id: 170,
+    conclusion: "failure",
+    head_sha: "older",
+    run_started_at: ago(90),
+  });
+
+  await withGithubAttempt(
+    byUrl([
+      [jobsUrl(REPO, id, 2), { total_count: 0 }],
+      [attemptUrl(REPO, id, 1), firstAttempt],
+    ]),
+    async (urls) => {
+      const view = await labsCi.collect(ctx([cancelledRerun, olderFailure]));
+      assertEquals(view.status, "good");
+      assertEquals(view.value, "passing");
+      assertEquals(view.sub, "green for 30m");
+      assertEquals(urls, [jobsUrl(REPO, id, 2), attemptUrl(REPO, id, 1)]);
+    },
+  );
+});
+
+Deno.test("labs ci: a cancelled rerun that ran jobs is the verdict over its prior attempt", async () => {
+  const id = 71;
+  const cancelledRerun = run({
+    id,
+    conclusion: "cancelled",
+    run_attempt: 2,
+    head_sha: "latest",
+    run_started_at: ago(5),
+  });
+  const firstAttempt = run({
+    id,
+    conclusion: "success",
+    run_attempt: 1,
+    head_sha: "latest",
+    run_started_at: ago(30),
+  });
+  const olderSuccess = run({
+    id: 171,
+    conclusion: "success",
+    head_sha: "older",
+    run_started_at: ago(90),
+  });
+
+  await withGithubAttempt(
+    byUrl([
+      [jobsUrl(REPO, id, 2), { total_count: 12 }],
+      [attemptUrl(REPO, id, 1), firstAttempt],
+    ]),
+    async (urls) => {
+      const view = await labsCi.collect(ctx([cancelledRerun, olderSuccess]));
+      assertEquals(view.status, "bad");
+      assertEquals(view.value, "cancelled");
+      assertEquals(view.sub, "cancelled for 5m");
+      assertEquals(urls, [jobsUrl(REPO, id, 2), attemptUrl(REPO, id, 1)]);
+    },
+  );
+});
+
+Deno.test("labs ci: an unreadable attempt after only cancelled runs that never started rejects the collection", async () => {
+  const id = 72;
+  const cancelledRerun = run({
+    id,
+    conclusion: "cancelled",
+    run_attempt: 2,
+    head_sha: "latest",
+    run_started_at: ago(5),
+  });
+  const olderSuccess = run({
+    id: 172,
+    conclusion: "success",
+    head_sha: "older",
+    run_started_at: ago(90),
+  });
+
+  await withGithubAttempt(
+    byUrl([
+      [jobsUrl(REPO, id, 2), { total_count: 0 }],
+      [attemptUrl(REPO, id, 1), new Error("attempt endpoint unavailable")],
+    ]),
+    async (urls) => {
+      await assertRejects(
+        () => labsCi.collect(ctx([cancelledRerun, olderSuccess])),
+        Error,
+        "attempt endpoint unavailable",
+      );
+      assertEquals(urls, [jobsUrl(REPO, id, 2), attemptUrl(REPO, id, 1)]);
+    },
+  );
+});
+
+Deno.test("labs ci: an unreadable job count rejects a collection with no verdict yet, and otherwise ends the streak", async () => {
+  const unavailable = new Error("job listing unavailable");
+  const newestCancelled = run({
+    conclusion: "cancelled",
+    run_started_at: ago(5),
+  });
+  await withGithubAttempt(unavailable, async (urls) => {
+    await assertRejects(
+      () =>
+        labsCi.collect(ctx([
+          newestCancelled,
+          run({ conclusion: "success", run_started_at: ago(30) }),
+        ])),
+      Error,
+      "job listing unavailable",
+    );
+    assertEquals(urls, [jobsUrl(REPO, newestCancelled.id, 1)]);
+  });
+
+  const olderCancelled = run({
+    conclusion: "cancelled",
+    run_started_at: ago(20),
+  });
+  await withGithubAttempt(unavailable, async (urls) => {
+    const view = await labsCi.collect(ctx([
+      run({ conclusion: "success", run_started_at: ago(5) }),
+      olderCancelled,
+      run({ conclusion: "success", run_started_at: ago(90) }),
+    ]));
+    assertEquals(view.status, "good");
+    assertEquals(view.sub, "green for 5m");
+    assertEquals(urls, [jobsUrl(REPO, olderCancelled.id, 1)]);
+  });
+});
+
+Deno.test("labs ci: the job count of a cancelled attempt is requested once, and no other attempt's is", async () => {
+  const neverStarted = run({
+    conclusion: "cancelled",
+    run_started_at: ago(10),
+  });
+  const stopped = run({ conclusion: "cancelled", run_started_at: ago(40) });
+  const runs = [
+    run({ conclusion: "success", run_started_at: ago(5) }),
+    neverStarted,
+    run({ conclusion: "success", run_started_at: ago(20) }),
+    stopped,
+    run({ conclusion: "failure", run_started_at: ago(60) }),
+  ];
+  const jobs = [
+    jobsUrl(REPO, neverStarted.id, 1),
+    jobsUrl(REPO, stopped.id, 1),
+  ];
+
+  await withGithubAttempt(
+    byUrl([[jobs[0], { total_count: 0 }], [jobs[1], { total_count: 3 }]]),
+    async (urls) => {
+      for (let collection = 0; collection < 2; collection++) {
+        const view = await labsCi.collect(ctx(runs));
+        assertEquals(view.status, "good");
+        assertEquals(view.sub, "green for 20m");
+      }
+      assertEquals(urls, jobs);
+    },
+  );
 });
 
 Deno.test("labs ci: no completed runs -> unknown, and no streak claimed", async () => {

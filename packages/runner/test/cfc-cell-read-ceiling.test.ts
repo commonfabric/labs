@@ -10,8 +10,12 @@ import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
   dereferenceResolutionProbe,
+  isLinkResolutionProbe,
+  isReadIgnoredForCommit,
+  isReadIgnoredForScheduling,
   linkResolutionProbe,
   machineryRead,
+  schedulerDependencyRead,
 } from "../src/storage/reactivity-log.ts";
 
 import {
@@ -98,6 +102,46 @@ describe("cfc-cell-read-ceiling", () => {
     expect((await tx.commit()).error).toBeUndefined();
     return link;
   };
+
+  it("refuses a private intermediate redirect while constructing a held destination", async () => {
+    const create = writer.edit();
+    const target = writer.getCell<string[]>(
+      signer.did(),
+      "intermediate-public-target",
+      { type: "array", items: { type: "string" } },
+      create,
+    );
+    target.set(["public target selected by private pointer"]);
+    const privatePointer = writer.getCell(
+      signer.did(),
+      "intermediate-private-pointer",
+      { ifc: { confidentiality: [B], observes: "followRef" } },
+      create,
+    );
+    privatePointer.set(target.getAsWriteRedirectLink());
+    expect((await create.commit()).error).toBeUndefined();
+    const reader = readerFor([A]);
+    const pointer = reader.getCellFromLink(
+      privatePointer.getAsNormalizedFullLink(),
+    );
+    await pointer.sync();
+    const args = reader.getImmutableCell(signer.did(), {
+      destination: pointer.getAsWriteRedirectLink(),
+    });
+    expect(() =>
+      args.asSchema({
+        type: "object",
+        properties: {
+          destination: {
+            type: "array",
+            asCell: ["cell"],
+            items: { type: "string" },
+          },
+        },
+        required: ["destination"],
+      }).get()
+    ).toThrow(/read ceiling/);
+  });
 
   it("withholds a stored cell outside the runtime ceiling on value and raw reads", async () => {
     const link = await seed([B]);
@@ -216,6 +260,79 @@ describe("cfc-cell-read-ceiling", () => {
       ).not.toThrow();
     } finally {
       readTx.abort();
+    }
+  });
+
+  it("seeds scheduler dependencies without granting later reads of their content", async () => {
+    const link = await seed([B]);
+    const reader = readerFor([A]);
+    const cell = reader.getCellFromLink(link);
+    await cell.sync();
+    const tx = reader.edit();
+    const inTransaction = cell.withTx(tx);
+    try {
+      expect(() =>
+        tx.runWithAmbientReadMeta(schedulerDependencyRead, () => {
+          inTransaction.get();
+        })
+      ).not.toThrow();
+      expect(() => inTransaction.get()).toThrow(/read ceiling/);
+      expect(() => inTransaction.getRaw()).toThrow(/read ceiling/);
+      expect(() => inTransaction.key("secret").get()).toThrow(/read ceiling/);
+      expect(() => cell.get()).toThrow(/read ceiling/);
+    } finally {
+      tx.abort();
+    }
+  });
+
+  it("constructs a held array destination without reading its private payload", async () => {
+    const create = writer.edit();
+    const inbox = writer.getCell<string[]>(signer.did(), "held array inbox", {
+      type: "array",
+      items: { type: "string" },
+      ifc: { confidentiality: [B] },
+    }, create);
+    inbox.set(["withheld content"]);
+    expect((await create.commit()).error).toBeUndefined();
+    const link = inbox.getAsNormalizedFullLink();
+    const reader = readerFor([A]);
+    const destination = reader.getCellFromLink<string[]>(link);
+    await destination.sync();
+    const argumentsCell = reader.getImmutableCell(signer.did(), {
+      destination: destination.getAsWriteRedirectLink(),
+    });
+    const argumentView = argumentsCell.asSchema<
+      { destination: typeof destination }
+    >({
+      type: "object",
+      properties: {
+        destination: {
+          type: "array",
+          asCell: ["cell"],
+          items: { type: "string" },
+        },
+      },
+      required: ["destination"],
+    });
+    const reading = reader.edit();
+    try {
+      const held = argumentView.withTx(reading).get().destination;
+      const probes = [...reading.getReadActivities!()].filter((read) =>
+        read.id === link.id && isLinkResolutionProbe(read.meta)
+      );
+      expect(probes.length).toBeGreaterThan(0);
+      for (const probe of probes) {
+        expect(isReadIgnoredForScheduling(probe.meta)).toBe(false);
+        expect(isReadIgnoredForCommit(probe.meta)).toBe(false);
+      }
+      expect(() => argumentView.get({ traverseCells: true })).toThrow(
+        /read ceiling/,
+      );
+      expect(held.getAsNormalizedFullLink().id).toBe(link.id);
+      expect(() => held.get()).toThrow(/read ceiling/);
+      expect(() => held.key(0).get()).toThrow(/read ceiling/);
+    } finally {
+      reading.abort();
     }
   });
 

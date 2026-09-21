@@ -22,7 +22,7 @@ that case is a per-write question, which SC-23 left transaction-global.
 
 ## The class
 
-Two reads on the way to one `Cell.set()` carry `writeDestinationRead`
+The write machinery reads below carry `writeDestinationRead`
 ([`reactivity-log.ts`](../../packages/runner/src/storage/reactivity-log.ts)),
 and `deriveFlowJoin()` in
 [`prepare.ts`](../../packages/runner/src/cfc/prepare.ts) drops a read
@@ -49,6 +49,18 @@ made to decide whether to add a listener is an ordinary observation and joins.
 value a caller handed to `set()` against what is stored at the destination and
 emits a change for each path where the two differ. The read it makes of the
 destination to do that carries the marker.
+
+**The array append snapshot.** `Cell.push()` reads the destination array to
+build its tail-relative append. The snapshot carries `writeDestinationRead`
+and `mergeableOpRead`: its existing entries stay at the same destination, and
+only caller-supplied entries are appended. The method returns no value, so
+neither existing content nor the array's length reaches the caller. This lets
+a writer append a scalar or a held cell reference to an owner-confidential
+array without observing its membership. The destination's write policy still
+applies, and explicit source reads still contribute their labels. Object
+anchoring's ancestry reads retain their ordinary classification. Value-dependent
+operations such as `addUnique()` still observe the destination and require its
+read ceiling.
 
 **The SQLite publication comparison.** A query snapshots its raw destination
 record before staging a request and compares that snapshot with the destination

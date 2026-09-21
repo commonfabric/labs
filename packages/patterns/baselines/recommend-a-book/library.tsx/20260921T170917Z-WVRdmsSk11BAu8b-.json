@@ -1,0 +1,322 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "recommend-a-book/library.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Book": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "author"
+        ],
+        "type": "object"
+      },
+      "InvitationOutput": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "$UI": {
+            "$ref": "https://commonfabric.org/schemas/vnode.json",
+            "scope": "user"
+          },
+          "clearSelection": {
+            "asCell": [
+              "stream",
+              "opaque"
+            ]
+          },
+          "library": {
+            "$ref": "#/$defs/PublishedLibrary"
+          },
+          "originator": {
+            "$ref": "#/$defs/OriginatorIdentity"
+          },
+          "originatorProfile": {
+            "$ref": "#/$defs/Profile"
+          },
+          "publish": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "library": {
+                "$ref": "#/$defs/LibrarySeed"
+              }
+            },
+            "required": [
+              "library"
+            ],
+            "type": "object"
+          },
+          "publishReviewed": {
+            "asCell": [
+              "stream",
+              "opaque"
+            ]
+          },
+          "received": {
+            "items": {
+              "$ref": "#/$defs/Book"
+            },
+            "type": "array"
+          },
+          "recommended": {
+            "items": {
+              "$ref": "#/$defs/Book"
+            },
+            "type": "array"
+          },
+          "review": {
+            "$ref": "#/$defs/SelectedBooks",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "reviewedLibrary": {
+            "$ref": "#/$defs/LibrarySlot"
+          },
+          "selected": {
+            "$ref": "#/$defs/SelectedBooks"
+          }
+        },
+        "required": [
+          "originator",
+          "originatorProfile",
+          "library",
+          "publish",
+          "reviewedLibrary",
+          "publishReviewed",
+          "received",
+          "recommended",
+          "selected",
+          "review",
+          "clearSelection",
+          "$NAME",
+          "$UI"
+        ],
+        "type": "object"
+      },
+      "LibrarySeed": {
+        "properties": {
+          "books": {
+            "items": {
+              "$ref": "#/$defs/Book"
+            },
+            "type": "array"
+          },
+          "favoriteAuthors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "books",
+          "favoriteAuthors"
+        ],
+        "type": "object"
+      },
+      "LibrarySlot": {
+        "properties": {
+          "value": {
+            "$ref": "#/$defs/LibrarySeed"
+          }
+        },
+        "type": "object"
+      },
+      "OriginatorIdentity": {
+        "additionalProperties": false,
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "represents-principal",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "ownerPrincipal": {
+            "__ctCurrentPrincipal": true
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/recommend-a-book/privacy.tsx",
+              "moduleIdentity": "hLoTrbk-qMI5a8E69krkjRk_l84fMhjdK4mGnhlKJ_8",
+              "path": [
+                "retainOriginator"
+              ]
+            }
+          }
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "Profile": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PublishedLibrary": {
+        "$ref": "#/$defs/LibrarySlot",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "represents-principal",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "ownerPrincipal": {
+            "__ctCurrentPrincipal": true
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/recommend-a-book/main.tsx",
+              "moduleIdentity": "LDoDNosLTpIruQISc0H-rzAjoOx1tgrx3Lw3vjoaJuE",
+              "path": [
+                "publishLibrary"
+              ]
+            }
+          }
+        }
+      },
+      "SelectedBooks": {
+        "properties": {
+          "books": {
+            "items": {
+              "$ref": "#/$defs/Book"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "books"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "The shelf combines agent suggestions with the reader's own additions.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addAuthor": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "addBook": {
+        "$ref": "#/$defs/Book",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "addedAuthors": {
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "addedBooks": {
+        "items": {
+          "$ref": "#/$defs/Book"
+        },
+        "type": "array"
+      },
+      "createInvitation": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "invitations": {
+        "items": {
+          "$ref": "#/$defs/InvitationOutput"
+        },
+        "type": "array"
+      },
+      "reading": {
+        "$ref": "#/$defs/LibrarySeed",
+        "scope": "user"
+      },
+      "seeding": {
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "requestHash": {
+            "type": "string"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "type": "undefined"
+              },
+              {
+                "$ref": "#/$defs/LibrarySeed"
+              }
+            ]
+          },
+          "run": {
+            "additionalProperties": true,
+            "properties": {},
+            "type": "object"
+          }
+        },
+        "required": [
+          "pending"
+        ],
+        "scope": "user",
+        "type": "object"
+      }
+    },
+    "required": [
+      "reading",
+      "seeding",
+      "addedBooks",
+      "addedAuthors",
+      "invitations",
+      "createInvitation",
+      "addBook",
+      "addAuthor",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

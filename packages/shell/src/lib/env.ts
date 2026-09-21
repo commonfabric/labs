@@ -9,6 +9,7 @@ declare global {
   var $PRESENCE_URL: string | undefined;
   var $COMMIT_SHA: string | undefined;
   var $EXPERIMENTAL_MODERN_CELL_REP: string | undefined;
+  var $EXPERIMENTAL_AGENT_BUILTIN: string | undefined;
   var $EXPERIMENTAL_COMPUTED_CELL_IDS: string | undefined;
   var $EXPERIMENTAL_SERVER_EXECUTION: string | undefined;
   var $EXPERIMENTAL_VIEW_SCOPED_REPLICATION: string | undefined;
@@ -30,6 +31,10 @@ const COMMIT_SHA_DEFINE = typeof $COMMIT_SHA === "string"
 const EXPERIMENTAL_MODERN_CELL_REP_DEFINE =
   typeof $EXPERIMENTAL_MODERN_CELL_REP === "string"
     ? $EXPERIMENTAL_MODERN_CELL_REP
+    : undefined;
+const EXPERIMENTAL_AGENT_BUILTIN_DEFINE =
+  typeof $EXPERIMENTAL_AGENT_BUILTIN === "string"
+    ? $EXPERIMENTAL_AGENT_BUILTIN
     : undefined;
 const EXPERIMENTAL_COMPUTED_CELL_IDS_DEFINE =
   typeof $EXPERIMENTAL_COMPUTED_CELL_IDS === "string"
@@ -78,6 +83,7 @@ function flagValue(flag: string | undefined): boolean | undefined {
 /** Build-time experimental flags, injected via felt.config.ts defines. */
 export const EXPERIMENTAL = {
   modernCellRep: flagValue(EXPERIMENTAL_MODERN_CELL_REP_DEFINE),
+  agentBuiltin: flagValue(EXPERIMENTAL_AGENT_BUILTIN_DEFINE),
   computedCellIds: flagValue(EXPERIMENTAL_COMPUTED_CELL_IDS_DEFINE),
   viewScopedReplication: flagValue(
     typeof $EXPERIMENTAL_VIEW_SCOPED_REPLICATION === "string"

@@ -11,6 +11,18 @@
  * what the protocol module is for.
  */
 
+import { cfcAtom } from "@commonfabric/api/cfc";
+import {
+  agentQueueIndexCell,
+  AgentRunRecordSchema,
+} from "@commonfabric/runner/agent-run";
+import { patternCoverageCollector } from "@commonfabric/integration/pattern-coverage";
+import {
+  debugVDOMSchema,
+  rendererVDOMSchema,
+} from "@commonfabric/runner/schemas";
+import type { MultiRuntimeCfcOptions } from "./multi-runtime-harness.ts";
+
 import {
   type FabricValue,
   isValidFabricValue,
@@ -24,17 +36,24 @@ import type { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
 import type { Cell } from "@commonfabric/runner";
 import {
   convertCellsToLinks,
+  isCell,
   markUiInputBlindWriteTx,
+  parseLink,
   type RuntimeTelemetry,
   type RuntimeTelemetryEvent,
   setBlindStructuralTarget,
   unmarkUiInputBlindWriteTx,
 } from "@commonfabric/runner";
 import {
+  cfcLabelViewForCell,
   type CfcWriteFloorMode,
   markRendererTrustedEvent,
 } from "@commonfabric/runner/cfc";
 import { Identity } from "@commonfabric/identity";
+import {
+  commitSnapshotShare,
+  prepareSnapshotShare,
+} from "@commonfabric/runner/cfc/share-snapshot";
 import {
   initializePiecesController,
   type PieceController,
@@ -50,11 +69,14 @@ import {
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { getLoggerCountsBreakdown } from "@commonfabric/utils/logger";
 import { isObjectNotArray } from "@commonfabric/utils/types";
+import { authenticatedOwnerFromLabel } from "../../ui/src/v2/components/cf-owner-view/owner-predicate.ts";
 
 let cc: PiecesController | undefined;
 let piece: PieceController | undefined;
 let resultSchema: unknown;
 let resultSinkCancel: (() => void) | undefined;
+let boundedReads = false;
+let watchPaths: readonly (readonly (string | number)[])[] = [[]];
 
 /**
  * Every commit this runtime had refused since the last `clearRejections`,
@@ -119,8 +141,16 @@ async function attachPiece(next: PieceController): Promise<void> {
   resultSchema = (await next.getPattern() as { resultSchema?: unknown })
     .resultSchema;
   resultSinkCancel?.();
-  // Keep the result graph subscribed so server pushes reach this runtime.
-  resultSinkCancel = result().sink(() => {});
+  // Keep only the paths the test observes active. A real UI does not read
+  // private sibling outputs merely because they belong to the same piece.
+  const cancels = watchPaths.map((path) => {
+    let cell = result();
+    for (const segment of path) cell = cell.key(segment);
+    return cell.sink(() => {});
+  });
+  resultSinkCancel = () => {
+    for (const cancel of cancels) cancel();
+  };
 }
 
 // Test-only network shaping: wrap this realm's WebSocket so every frame (both
@@ -237,6 +267,62 @@ async function maybeAttachOtelBridge(identity: Identity): Promise<void> {
   runtime.scheduler.setEventPreflightTelemetryEnabled(true);
 }
 
+/** Finds a rendered native component without inspecting unrelated props. */
+async function elementProps(
+  value: unknown,
+  tag: string,
+): Promise<Cell<unknown> | Record<string, unknown> | undefined> {
+  if (isCell(value)) {
+    await value.pull();
+    return elementProps(value.get(), tag);
+  }
+  if (Array.isArray(value)) {
+    for (const child of value) {
+      const found = await elementProps(child, tag);
+      if (found) return found;
+    }
+  }
+  if (value === null || typeof value !== "object") return undefined;
+  const node = value as Record<string, unknown>;
+  if ("$UI" in node) return elementProps(node.$UI, tag);
+  const name = isCell(node.name) ? node.name.get() : node.name;
+  if (name === tag) {
+    return isCell(node.props)
+      ? node.props
+      : node.props as Record<string, unknown>;
+  }
+  return elementProps(node.children, tag);
+}
+
+/** Resolves the cell a native component receives through a renderer binding. */
+function componentBinding(
+  props: Cell<unknown> | Record<string, unknown> | undefined,
+  name: string,
+): unknown {
+  if (!isCell(props)) return props?.[name];
+  const prop = props.key(name).asSchema(true);
+  if (name.startsWith("on")) return prop.resolveAsCell();
+  const raw = props.getRawUntyped({ frozen: false }) as Record<string, unknown>;
+  const link = parseLink(raw[name], props.getAsNormalizedFullLink());
+  return link?.id && link.space
+    ? props.runtime.getCellFromLink(link)
+    : prop.resolveAsCell();
+}
+
+/** The trusted host gesture used after the test confirms the exact preview. */
+function shareClick() {
+  const event = {
+    type: "click",
+    provenance: {
+      origin: "dom",
+      trusted: true,
+      ui: { pattern: "ShareSnapshot" },
+    },
+  };
+  markRendererTrustedEvent(event);
+  return event;
+}
+
 const handlers: Record<
   string,
   (args: Record<string, unknown>) => Promise<FabricValue>
@@ -250,16 +336,23 @@ const handlers: Record<
       recordRejections,
       wsDelayMs,
       cfcWriteFloor,
+      cfc,
+      watchPaths: requestedWatchPaths,
     },
   ) {
     const identity = await Identity.fromKeyPair(
       keyPair as FabricKeyPair,
     );
     if (typeof wsDelayMs === "number") installWsDelay(wsDelayMs);
+    boundedReads =
+      (cfc as MultiRuntimeCfcOptions | undefined)?.cfcReadMaxConfidentiality !==
+        undefined;
+    if (Array.isArray(requestedWatchPaths)) watchPaths = requestedWatchPaths;
     cc = await initializePiecesController({
       apiUrl: new URL(apiUrl as string),
       identity,
       space: spaceName as string,
+      ...(cfc as MultiRuntimeCfcOptions | undefined),
       ...(cfcWriteFloor !== undefined
         ? { cfcWriteFloor: cfcWriteFloor as CfcWriteFloorMode }
         : {}),
@@ -413,6 +506,195 @@ const handlers: Record<
     };
   },
 
+  /** Supplies the reader's test home queue without changing profile selections. */
+  async seedAgentQueue() {
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    const home = runtime.getHomeSpaceCell(tx);
+    const defaultPattern = runtime.getCell(
+      home.space,
+      "multi-runtime-profile-home",
+      undefined,
+      tx,
+    );
+    defaultPattern.key("agentQueue").set({ entries: [] });
+    home.asSchema<{ defaultPattern: Cell<unknown> }>({ type: "object" })
+      .key("defaultPattern").set(defaultPattern);
+    const { error } = await tx.commit();
+    if (error) throw error;
+    await idle();
+    return true;
+  },
+
+  /** Reads queued requests in this authenticated reader's own test home. */
+  async agentQueue() {
+    const runtime = controller().runtime;
+    const home = runtime.getHomeSpaceCell();
+    const queue = agentQueueIndexCell(runtime, home.space);
+    await queue.pull();
+    const entries = await Promise.all(
+      (queue.get()?.entries ?? []).map(async (entry) => {
+        const run = entry.run.asSchema(AgentRunRecordSchema);
+        await run.pull();
+        const record = run.get();
+        return {
+          state: record.state,
+          inputs: Object.fromEntries(
+            Object.entries(record.inputs).map(([name, cell]) => {
+              const link = cell.resolveAsCell().getAsNormalizedFullLink();
+              return [name, {
+                id: link.id,
+                space: link.space,
+                path: link.path,
+                scope: link.scope,
+              }];
+            }),
+          ),
+        };
+      }),
+    );
+    return { principal: home.space, entries };
+  },
+
+  /** Publishes the owner's explicitly reviewed test shelf to this invitation. */
+  async publishLibrary({ value }) {
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    const source = runtime.getCell(currentPiece().getCell().space, {
+      testLibrary: crypto.randomUUID(),
+    }, {
+      ifc: { confidentiality: [cfcAtom.user(runtime.userIdentityDID)] },
+    }, tx);
+    source.set(value);
+    const { error } = await tx.commit();
+    if (error) throw error;
+    const prepared = prepareSnapshotShare(source.withTx(undefined), {
+      space: result().key("originator"),
+    });
+    const shared = await commitSnapshotShare(prepared.consent, shareClick());
+    result().key("publish").send({ library: shared });
+    await idle();
+    return { value: prepared.value, audience: prepared.audience };
+  },
+
+  /** Sends through the first rendered matching element's event binding. */
+  async sendRenderedEvent({ tag, event }) {
+    const view = result().key("$UI").asSchema(rendererVDOMSchema);
+    const props = await elementProps(view, tag as string);
+    const target = isCell(props)
+      ? props.key(event as string).resolveAsCell()
+      : props?.[event as string];
+    if (!isCell(target)) throw new Error("Rendered event binding is absent");
+    target.send({});
+    await idle();
+    return true;
+  },
+
+  /** Mirrors a reviewed, renderer-trusted snapshot confirmation in this host. */
+  async shareSnapshot() {
+    const view = result().key("$UI").asSchema(rendererVDOMSchema);
+    await view.pull();
+    const props = await elementProps(view, "cf-share-snapshot");
+    const source = componentBinding(props, "$source");
+    const audience = componentBinding(props, "$recipient");
+    const recommended = componentBinding(props, "$recommended");
+    const received = componentBinding(props, "$received");
+    const eventBinding = componentBinding(props, "oncf-shared");
+    const onShared = isCell(eventBinding)
+      ? eventBinding.resolveAsCell()
+      : eventBinding;
+    if (
+      !isCell(source) || !isCell(audience) || !isCell(recommended) ||
+      !isCell(received) ||
+      !isCell(onShared)
+    ) {
+      throw new Error(
+        `The native sharing surface requires held source, recipient, append targets, and completion bindings: ${
+          JSON.stringify({
+            found: props !== undefined,
+            source: isCell(source),
+            audience: isCell(audience),
+            recommended: isCell(recommended),
+            received: isCell(received),
+            completion: isCell(onShared),
+          })
+        }`,
+      );
+    }
+    const prepared = prepareSnapshotShare(source, { user: audience }, {
+      recommended,
+      received,
+    });
+    const event = shareClick();
+    const shared = await commitSnapshotShare(prepared.consent, event);
+    onShared.send({});
+    await idle();
+    return {
+      value: prepared.value,
+      audience: prepared.audience,
+      link: shared.getAsNormalizedFullLink(),
+    };
+  },
+
+  /** Tries the removed authored acceptance path with an unreviewed draft. */
+  async spoofShareSnapshot() {
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    result().key("sharedSelection").withTx(tx).set({
+      value: result().key("selected"),
+    });
+    runtime.prepareTxForCommit(tx);
+    const written = await tx.commit();
+    if (written.error) throw written.error;
+    await idle();
+    const sent = await runtime.editWithRetry((eventTx) => {
+      result().key("acceptShared").withTx(eventTx).send({});
+    });
+    if (sent.error) throw sent.error;
+    await idle();
+    return true;
+  },
+
+  /** Tries a raw inbox append using an unreleased private draft book. */
+  async spoofRawInbox() {
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    result().key("received").withTx(tx).push(
+      result().key("selected").key("books", 0),
+    );
+    runtime.prepareTxForCommit(tx);
+    const written = await tx.commit();
+    if (written.error) throw written.error;
+    await idle();
+    return true;
+  },
+
+  /** Mirrors the native owner's attested presentation check in this worker. */
+  async syncOwnerView() {
+    const view = result().key("$UI").asSchema(rendererVDOMSchema);
+    await view.pull();
+    const props = await elementProps(view, "cf-owner-view");
+    const originator = componentBinding(props, "$originator");
+    const ownerResult = componentBinding(props, "$result");
+    if (!isCell(originator) || !isCell(ownerResult)) {
+      throw new Error(
+        "The native owner view needs held origin and result bindings",
+      );
+    }
+    const isOwner = authenticatedOwnerFromLabel(
+      cfcLabelViewForCell(originator),
+      controller().runtime.userIdentityDID,
+    );
+    const { error } = await controller().runtime.commitUiCellWrite(
+      ownerResult,
+      isOwner,
+      { blind: true },
+    );
+    if (error) throw error;
+    await idle();
+    return isOwner;
+  },
+
   /**
    * Read the value of the cell reached from the piece result by `path`,
    * through the result schema.
@@ -431,11 +713,13 @@ const handlers: Record<
    */
   async read({ path }) {
     const target = result();
-    await target.pull();
+    if (!boundedReads) await target.pull();
     let cell = target;
     for (const segment of (path ?? []) as (string | number)[]) {
       cell = cell.key(segment as never);
     }
+    if (boundedReads) cell.get();
+    if (boundedReads) await cell.pull();
     return convertCellsToLinks(cell.get(), { doNotConvertCellResults: true });
   },
 
@@ -447,12 +731,67 @@ const handlers: Record<
    */
   async readRaw({ path }) {
     const target = result();
-    await target.pull();
+    if (!boundedReads) await target.pull();
     let cell = target;
     for (const segment of (path ?? []) as (string | number)[]) {
       cell = cell.key(segment as never);
     }
+    if (boundedReads) cell.get();
+    if (boundedReads) await cell.pull();
     return cell.resolveAsCell().getRaw();
+  },
+
+  /** Selects the held profile as this test reader's home profile. */
+  async selectProfile({ path }) {
+    let profile = result();
+    for (const segment of path as (string | number)[]) {
+      profile = profile.key(segment);
+    }
+    profile = profile.resolveAsCell();
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    const home = runtime.getHomeSpaceCell(tx);
+    const defaultPattern = runtime.getCell(
+      home.space,
+      "multi-runtime-profile-home",
+      undefined,
+      tx,
+    );
+    defaultPattern.key("profiles").set([profile]);
+    defaultPattern.key("defaultProfile").set(profile);
+    home.asSchema<{ defaultPattern: Cell<unknown> }>({ type: "object" })
+      .key("defaultPattern").set(defaultPattern);
+    const { error } = await tx.commit();
+    if (error) throw error;
+    await idle();
+    return {};
+  },
+
+  /** Reads visible VNode children, following the reader's reactive cell views. */
+  async viewText({ path }) {
+    let cell = result();
+    for (const segment of (path ?? ["$UI"]) as (string | number)[]) {
+      cell = cell.key(segment);
+    }
+    cell = cell.asSchema(debugVDOMSchema);
+    await cell.pull();
+    const text = async (value: unknown): Promise<string> => {
+      if (isCell(value)) {
+        await value.pull();
+        return text(value.get());
+      }
+      if (Array.isArray(value)) {
+        return (await Promise.all(value.map(text))).join(" ");
+      }
+      if (value !== null && typeof value === "object") {
+        if ("$UI" in value) return text(value.$UI);
+        if ("children" in value) return text(value.children);
+      }
+      return typeof value === "string" || typeof value === "number"
+        ? String(value)
+        : "";
+    };
+    return text(cell.get());
   },
 
   /**
@@ -487,11 +826,12 @@ const handlers: Record<
    */
   async link({ path }) {
     const target = result();
-    await target.pull();
+    if (!boundedReads) await target.pull();
     let cell = target;
     for (const segment of (path ?? []) as (string | number)[]) {
       cell = cell.key(segment as never);
     }
+    if (boundedReads) await cell.sync();
     const resolved = cell.resolveAsCell();
     const link = resolved.getAsNormalizedFullLink();
     return {
@@ -525,6 +865,15 @@ const handlers: Record<
       value: res.ok?.value,
       error: res.error?.message,
     };
+  },
+
+  /** Reads an explicit held address with the same stored-label gate as any Cell. */
+  async readAddress({ link }) {
+    const cell = controller().runtime.getCellFromLink(link as never);
+    await cell.sync();
+    return convertCellsToLinks(
+      cell.asSchema({ ifc: { confidentiality: [] } }).get(),
+    );
   },
 
   async idle() {
@@ -642,6 +991,12 @@ const handlers: Record<
     return counts;
   },
 
+  patternCoverage() {
+    return Promise.resolve(
+      patternCoverageCollector()?.toData() as unknown as FabricValue,
+    );
+  },
+
   async dispose() {
     resultSinkCancel?.();
     resultSinkCancel = undefined;
@@ -662,7 +1017,10 @@ self.onmessage = (event: MessageEvent<WorkerRequest>) => {
     respond({
       id,
       error: error instanceof Error
-        ? `${error.message}\n${error.stack ?? ""}`
+        ? `${cmd}: ${error.message}\n${
+          (globalThis as { getStackString?: (error: Error) => string })
+            .getStackString?.(error) ?? error.stack ?? ""
+        }`
         : String(error),
     });
 
