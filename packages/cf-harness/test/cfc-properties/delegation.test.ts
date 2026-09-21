@@ -188,7 +188,11 @@ const runDelegationEpisode = async (
             : `cf get ${bound.token}`,
         }),
         assistantText("Child done."),
-        assistantText("Parent done."),
+        assistantToolCall("call-finish", "finish_task", {
+          outcome: "gave-up",
+          message:
+            "I could not inspect the data because the observation was refused.",
+        }),
       ]),
     });
 
@@ -197,6 +201,7 @@ const runDelegationEpisode = async (
       promptSlotBinding: directPromptSlotBinding,
     });
     await engine.persistRunState();
+    expect(result.taskOutcome?.outcome).toBe("gave-up");
 
     const dispatched = sandbox.shellRequests.find((request) =>
       request.command.includes("cf get ")

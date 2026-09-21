@@ -485,6 +485,12 @@ attribution is unchanged. Live streams and replayed durable events have the same
 shape, so a caller can open `result.pieces[0].url` without parsing assistant
 prose. Pollers read the same object from `GET /api/turns/<turnId>/result`.
 
+A completed Fabric task produces a named UI piece. A text answer is rendered by
+a small pattern and named through `assign_slug`; a data-only computation is not
+the user-facing result. Revising an existing piece can confirm its existing
+slug. A plain-text completion without a successful naming receipt is returned to
+the model for correction within its current turn budget.
+
 The parent calls `finish_task` alone to ask a question or explain why it cannot
 proceed. This uses the ordinary tool policy and artifact path, then ends the
 turn without another model request. The live pane shows the sentence as "waiting

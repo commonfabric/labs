@@ -338,7 +338,27 @@ describe("prompt-loop cross-agent address handles", () => {
             inputs: { src: token },
           }),
           finalTurn("Child done."),
-          finalTurn("Parent done."),
+          {
+            choices: [{
+              index: 0,
+              message: {
+                role: "assistant",
+                content: "",
+                tool_calls: [{
+                  id: "call-finish",
+                  type: "function",
+                  function: {
+                    name: "finish_task",
+                    arguments: JSON.stringify({
+                      outcome: "gave-up",
+                      message:
+                        "The source cannot be inspected under this session's access limits.",
+                    }),
+                  },
+                }],
+              },
+            }],
+          },
         ];
         const engine = new CfHarnessEngine({
           sandboxRuntime: new FakeSandboxRuntime(),
@@ -372,10 +392,11 @@ describe("prompt-loop cross-agent address handles", () => {
             );
           },
         });
-        await loop.runPrompt({
+        const result = await loop.runPrompt({
           prompt: "Delegate the inspection.",
           promptSlotBinding: directPromptSlotBinding,
         });
+        expect(result.taskOutcome?.outcome).toBe("gave-up");
         const childMessages = chatViewOfRequest(requestBodies[2]).messages;
         const toolReply = childMessages.findLast((message) =>
           message.role === "tool"

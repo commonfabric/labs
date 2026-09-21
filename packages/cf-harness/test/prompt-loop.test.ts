@@ -4136,8 +4136,8 @@ Deno.test("CfHarnessPromptLoop withholds the pattern-index tools from the patter
 
 /**
  * A scripted loop that delegates once and then finishes: the child answers
- * its profile's own return contract, and the parent says it is done. The
- * request bodies are collected, so `requestBodies[1]` is the child's.
+ * its profile's own return contract, and the parent reports the missing piece.
+ * The request bodies are collected, so `requestBodies[1]` is the child's.
  */
 const delegateThenFinishFetch = (
   requestBodies: unknown[],
@@ -4168,7 +4168,21 @@ const delegateThenFinishFetch = (
         describes: "Counts things.",
       }),
     })
-    : assistant({ content: "Parent done." });
+    : assistant({
+      content: "",
+      tool_calls: [{
+        id: "call-finish",
+        type: "function",
+        function: {
+          name: "finish_task",
+          arguments: JSON.stringify({
+            outcome: "gave-up",
+            message:
+              "No running counter was created, so there is no piece to open.",
+          }),
+        },
+      }],
+    });
   return Promise.resolve(
     new Response(JSON.stringify(responsesBodyFromChatFixture(payload)), {
       status: 200,
@@ -4232,7 +4246,21 @@ Deno.test("CfHarnessPromptLoop delegates in a run configured with a pattern inde
               hashtags: ["counter"],
             }),
           })
-          : assistant({ content: "Parent done." });
+          : assistant({
+            content: "",
+            tool_calls: [{
+              id: "call-finish",
+              type: "function",
+              function: {
+                name: "finish_task",
+                arguments: JSON.stringify({
+                  outcome: "gave-up",
+                  message:
+                    "No running counter was created, so there is no piece to open.",
+                }),
+              },
+            }],
+          });
         return Promise.resolve(
           new Response(JSON.stringify(responsesBodyFromChatFixture(payload)), {
             status: 200,
@@ -4250,6 +4278,7 @@ Deno.test("CfHarnessPromptLoop delegates in a run configured with a pattern inde
   // The delegation reached a child rather than failing the run: a child given
   // an index and no session is a configuration the config layer refuses.
   assertEquals(result.runState.status, "completed");
+  expect(result.taskOutcome?.outcome).toBe("gave-up");
   assertEquals(result.runState.subagentRuns?.length, 1);
   assertEquals(
     result.runState.subagentRuns?.[0]?.manifest.allowedToolIds.includes(

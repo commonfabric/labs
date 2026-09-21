@@ -173,6 +173,7 @@ import type {
 } from "./model/client.ts";
 import { OpenAICompatibleGatewayModelClient } from "./model/openai-compatible-gateway.ts";
 import { sumHarnessModelUsage } from "./model/usage.ts";
+import { PIECE_OUTPUT_GUIDANCE } from "./piece-output.ts";
 import { collapseSupersededRunPatternDiagnostics } from "./run-pattern-diagnostic-collapse.ts";
 import { collapseSupersededRunPatternSources } from "./run-pattern-source-collapse.ts";
 import { RESEARCH_REUSE_GUIDANCE } from "./research/reuse.ts";
@@ -250,6 +251,13 @@ export interface CreateHarnessPromptLoopOptions
 
   /** Reserves the last root model turn for a partial answer without tools. */
   finalizeOnTurnLimit?: boolean;
+
+  /**
+   * Requires a factory-only library parent to name a UI piece before completing.
+   * Configured or recorded Fabric sessions always require it.
+   * Children retain their profile's return contract.
+   */
+  requirePieceOutput?: true;
 
   allowedToolIds?: readonly BuiltinToolId[];
   allowedSubagentProfiles?: readonly HarnessSubagentProfile[];
@@ -2927,6 +2935,7 @@ export class CfHarnessPromptLoop {
   readonly #gatewayClient?: OpenAICompatibleGatewayClient;
   readonly #maxModelTurns: number;
   readonly #finalizeOnTurnLimit: boolean;
+  readonly #requirePieceOutput: boolean;
   readonly #allowedToolIds: ReadonlySet<BuiltinToolId>;
   readonly #nativeModelToolIds: readonly HarnessNativeModelToolId[];
   readonly #parentToolAllowanceMode: HarnessParentToolAllowance;
@@ -3026,6 +3035,10 @@ export class CfHarnessPromptLoop {
     // through, so it is where the rule is enforced rather than restated; a
     // run with a lineage is a subagent, and only a subagent may hold them.
     const isSubagent = this.engine.getRunState().lineage !== undefined;
+    this.#requirePieceOutput = !isSubagent &&
+      (options.requirePieceOutput === true ||
+        this.engine.config.fabricSession !== undefined ||
+        this.engine.getRunState().fabricSessionCfc !== undefined);
     this.#allowedToolIds = new Set(
       requestedToolIds.filter((toolId) =>
         !withheld.has(toolId) &&
@@ -3584,9 +3597,22 @@ export class CfHarnessPromptLoop {
     // Keep audit history intact while excluding this loop's own control messages
     // from session replay. Identity preserves user quotations and host-only
     // omission annotations; content matching or deep cloning would lose either.
-    const budgetNotices = new Set<HarnessTranscriptMessage>();
+    const turnNotices = new Set<HarnessTranscriptMessage>();
     const resumableTranscript = () =>
-      transcript.filter((message) => !budgetNotices.has(message));
+      transcript.filter((message) => !turnNotices.has(message));
+    if (this.#requirePieceOutput) {
+      const guidance: HarnessTranscriptMessage = {
+        role: "user",
+        content: PIECE_OUTPUT_GUIDANCE,
+      };
+      // Each root task gets its own contract, immediately before its input.
+      // The durable audit keeps it; a later task supplies its own copy.
+      const taskIndex = transcript.findLastIndex((entry) =>
+        entry.role === "user"
+      );
+      transcript.splice(taskIndex < 0 ? 0 : taskIndex, 0, guidance);
+      turnNotices.add(guidance);
+    }
     // The attachment first, so a search this run also made — which carries
     // the ranking evidence a by-id read has none of — refines it.
     this.#seedAttachedPatternRecords(initialRunState.patternRefs ?? []);
@@ -3776,7 +3802,7 @@ export class CfHarnessPromptLoop {
               ? "Host turn budget: provide your final response now. Tools are unavailable. Summarize verified findings with source citations, explicitly identify unread material and uncertainty, and do not claim exhaustive coverage. This notice applies only to this user turn; subsequent user requests have a fresh budget."
               : "Host turn budget: two root turns remain after this call, with the last reserved for your final response. Prioritize essential source reads and prepare verified findings and remaining gaps. This notice applies only to this user turn; subsequent user requests have a fresh budget.",
           };
-          budgetNotices.add(budgetMessage);
+          turnNotices.add(budgetMessage);
           transcript.push(budgetMessage);
           await this.engine.persistTranscript(transcript);
           await options.onTranscriptEvent?.({
@@ -3861,6 +3887,31 @@ export class CfHarnessPromptLoop {
               "provider-unavailable",
               "The model returned an empty assistant response with no tool calls",
             );
+          }
+          if (
+            !finalizing && this.#requirePieceOutput &&
+            (this.engine.getRunState().assignedPieces?.length ?? 0) === 0
+          ) {
+            const correction: HarnessTranscriptMessage = {
+              role: "user",
+              content:
+                "Host completion check: this run has no successful assign_slug receipt. " +
+                PIECE_OUTPUT_GUIDANCE,
+            };
+            turnNotices.add(correction);
+            transcript.push(correction);
+            await this.engine.persistTranscript(transcript);
+            reportTimeline.push(transcriptTimelineEntry(
+              correction,
+              transcript.length - 1,
+              this.engine.getRunState().updatedAt,
+              modelTurns,
+            ));
+            await options.onTranscriptEvent?.({
+              message: correction,
+              transcript,
+            });
+            continue;
           }
           finalAssistantText = assistantMessage.content;
           if (finalizing) {
