@@ -33,6 +33,7 @@ import {
   FabricUnavailable,
   UNAVAILABLE_PENDING,
 } from "@/fabric-primitives";
+import { float64BytesOfForTestingOnly } from "@/for-testing-only.ts";
 import * as nodeCrypto from "@node/crypto";
 
 /**
@@ -152,30 +153,6 @@ describe("value-hash", () => {
           0x00,
         ]);
         expect(hashBytesOf(NaN)).toEqual(expected);
-      });
-
-      it("hashes non-canonical `NaN` bit patterns to the canonical `NaN`", () => {
-        // Each `NaN` is hashed as an array element, not at the top level.
-        // `hashOf()` caches the hash of a top-level primitive in a `Map`, and a
-        // `Map` treats every `NaN` as the same key, so the second of two
-        // top-level `NaN`s is a cache hit that never reaches the hasher. An
-        // array that is not frozen is hashed afresh each time.
-        //
-        // The container is an array and not a plain object because V8
-        // canonicalizes a `NaN` stored as an object property, and keeps the
-        // bits of one stored as an array element.
-
-        // A quiet `NaN` with a nonzero payload.
-        const nonCanonicalBits = 0x7ff8000000000001n;
-        const view = new DataView(new ArrayBuffer(8));
-        view.setBigUint64(0, nonCanonicalBits, false);
-        const subject: [number] = [view.getFloat64(0, false)];
-
-        // The premise: the element the hasher reads still has the payload.
-        view.setFloat64(0, subject[0], false);
-        expect(view.getBigUint64(0, false)).toBe(nonCanonicalBits);
-
-        expect(hex(hashBytesOf(subject))).toBe(hex(hashBytesOf([NaN])));
       });
 
       it("produces `TAG_NUMBER` + IEEE 754 `+Infinity` bit pattern for `Infinity`", () => {
@@ -1547,6 +1524,52 @@ describe("value-hash", () => {
       expect(() => hashOf(value)).toThrow(
         "Cannot hash unique (uninterned) symbol",
       );
+    });
+  });
+
+  describe("float64BytesOf()", () => {
+    // The function returns one buffer for every number other than `NaN`, and
+    // writes into it on each call. So a case reads a result, as hex, before it
+    // makes another call.
+
+    it("returns the big-endian IEEE 754 bytes of a number", () => {
+      expect(hex(float64BytesOfForTestingOnly(1))).toBe("3ff0000000000000");
+      expect(hex(float64BytesOfForTestingOnly(-2.5))).toBe("c004000000000000");
+    });
+
+    it("returns different bytes for `-0` and `+0`", () => {
+      expect(hex(float64BytesOfForTestingOnly(-0))).toBe("8000000000000000");
+      expect(hex(float64BytesOfForTestingOnly(0))).toBe("0000000000000000");
+    });
+
+    it("returns the canonical quiet-`NaN` bytes for `NaN`", () => {
+      expect(hex(float64BytesOfForTestingOnly(NaN))).toBe("7ff8000000000000");
+    });
+
+    it("returns an array for `NaN` which is not the one it returns for other numbers", () => {
+      // This is the case that shows a `NaN`'s bytes are not read from the
+      // value. The engine decides which bits a `NaN` has by the time it gets
+      // here, so a case about the bytes of some particular `NaN` passes or
+      // fails by engine. Which array comes back does not vary that way.
+
+      const forNumber = float64BytesOfForTestingOnly(1);
+      const forNaN = float64BytesOfForTestingOnly(NaN);
+
+      expect(forNaN).not.toBe(forNumber);
+      expect(float64BytesOfForTestingOnly(2)).toBe(forNumber);
+    });
+
+    it("returns the canonical quiet-`NaN` bytes for a `NaN` that has a payload", () => {
+      // Where the engine canonicalizes the `NaN` before the call, this case
+      // repeats the one for a plain `NaN`. Where the payload reaches the
+      // function, this case fails if the function reads the bytes from the
+      // value.
+
+      const view = new DataView(new ArrayBuffer(8));
+      view.setBigUint64(0, 0x7ff8000000000001n, false);
+
+      expect(hex(float64BytesOfForTestingOnly(view.getFloat64(0, false))))
+        .toBe("7ff8000000000000");
     });
   });
 });
