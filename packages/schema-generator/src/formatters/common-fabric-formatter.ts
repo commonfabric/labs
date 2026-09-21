@@ -117,6 +117,57 @@ const applyScopeToAsCellEntry = (
 };
 
 /**
+ * Whether `declaration` is a CFC alias, or an alias whose whole body references
+ * one through a chain of such aliases, each followed at most once.
+ */
+const reachesCfcAlias = (
+  declaration: ts.TypeAliasDeclaration,
+  checker: ts.TypeChecker,
+  visited: ReadonlySet<string>,
+): boolean => {
+  if (CFC_ALIAS_NAMES.has(declaration.name.text)) return true;
+  const aliased = declaration.type;
+  if (
+    !ts.isTypeReferenceNode(aliased) || !ts.isIdentifier(aliased.typeName) ||
+    visited.has(aliased.typeName.text)
+  ) {
+    return false;
+  }
+  const symbol = checker.getSymbolAtLocation(aliased.typeName);
+  const target = symbol &&
+    resolveAliasedSymbol(symbol, checker).declarations?.find(
+      ts.isTypeAliasDeclaration,
+    );
+  return target !== undefined &&
+    reachesCfcAlias(
+      target,
+      checker,
+      new Set([...visited, declaration.name.text]),
+    );
+};
+
+/**
+ * Whether this formatter lowers `reference`, to the generic `symbol`, from the
+ * reference's own type arguments: a scope wrapper, whose payload it reads from
+ * the reference's argument, or an alias that is not itself a CFC alias and
+ * whose whole body references one, directly or through further such aliases,
+ * named with every argument, which it substitutes down that chain.
+ */
+export function lowersFromReferenceArguments(
+  reference: ts.TypeReferenceNode,
+  symbol: ts.Symbol,
+  checker: ts.TypeChecker,
+): boolean {
+  if (resolveScopeWrapperNode(reference)) return true;
+  const declaration = symbol.declarations?.find(ts.isTypeAliasDeclaration);
+  return declaration !== undefined &&
+    (reference.typeArguments?.length ?? 0) >=
+      (declaration.typeParameters?.length ?? 0) &&
+    !CFC_ALIAS_NAMES.has(declaration.name.text) &&
+    reachesCfcAlias(declaration, checker, new Set([declaration.name.text]));
+}
+
+/**
  * Formatter for Common Fabric-specific types (Cell<T>, Stream<T>, Reactive<T>, Default<T,V>)
  *
  * TypeScript handles alias resolution automatically and we don't need to

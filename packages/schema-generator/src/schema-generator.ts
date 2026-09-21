@@ -15,7 +15,10 @@ import { attachUiContract, getUiContractHint } from "./ui-contract.ts";
 import { PrimitiveFormatter } from "./formatters/primitive-formatter.ts";
 import { ObjectFormatter } from "./formatters/object-formatter.ts";
 import { ArrayFormatter } from "./formatters/array-formatter.ts";
-import { CommonFabricFormatter } from "./formatters/common-fabric-formatter.ts";
+import {
+  CommonFabricFormatter,
+  lowersFromReferenceArguments,
+} from "./formatters/common-fabric-formatter.ts";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import { UnionFormatter } from "./formatters/union-formatter.ts";
 import { IntersectionFormatter } from "./formatters/intersection-formatter.ts";
@@ -877,37 +880,14 @@ function unionOfSchemas(
     : unionFoldedFrom(folded, kept, unique.length, context);
 }
 
-/** The checker's type for each keyword a type node can be. */
-const KEYWORD_TYPES: Partial<
-  Record<ts.SyntaxKind, (checker: ts.TypeChecker) => ts.Type>
-> = {
-  [ts.SyntaxKind.StringKeyword]: (checker) => checker.getStringType(),
-  [ts.SyntaxKind.NumberKeyword]: (checker) => checker.getNumberType(),
-  [ts.SyntaxKind.BooleanKeyword]: (checker) => checker.getBooleanType(),
-  [ts.SyntaxKind.BigIntKeyword]: (checker) => checker.getBigIntType(),
-  [ts.SyntaxKind.SymbolKeyword]: (checker) => checker.getESSymbolType(),
-  [ts.SyntaxKind.UndefinedKeyword]: (checker) => checker.getUndefinedType(),
-  [ts.SyntaxKind.VoidKeyword]: (checker) => checker.getVoidType(),
-  [ts.SyntaxKind.NeverKeyword]: (checker) => checker.getNeverType(),
-  [ts.SyntaxKind.UnknownKeyword]: (checker) => checker.getUnknownType(),
-  [ts.SyntaxKind.AnyKeyword]: (checker) => checker.getAnyType(),
-};
-
-/** The type parameters `symbol`'s declaration introduces, in order. */
-function typeParametersOf(
-  symbol: ts.Symbol,
-): readonly ts.TypeParameterDeclaration[] {
-  for (const declaration of symbol.declarations ?? []) {
-    if (
-      (ts.isInterfaceDeclaration(declaration) ||
-        ts.isTypeAliasDeclaration(declaration) ||
-        ts.isClassDeclaration(declaration)) &&
-      declaration.typeParameters
-    ) {
-      return declaration.typeParameters;
-    }
-  }
-  return [];
+/** Whether `symbol`'s declaration introduces type parameters. */
+function declaresTypeParameters(symbol: ts.Symbol): boolean {
+  return symbol.declarations?.some((declaration) =>
+    (ts.isInterfaceDeclaration(declaration) ||
+      ts.isTypeAliasDeclaration(declaration) ||
+      ts.isClassDeclaration(declaration)) &&
+    declaration.typeParameters !== undefined
+  ) ?? false;
 }
 
 /**
@@ -2282,10 +2262,10 @@ export class SchemaGenerator {
   /**
    * The declared type a reference's name denotes as seen from the reference's
    * scope, which holds what the module declares, exported or not, and what it
-   * imports. A generic declaration is read from the declaration, its type
-   * parameters unbound. Returns `undefined` for a qualified name, for a name
-   * that resolves to nothing the checker can type, and for a reference that
-   * supplies a parameter with a default some other argument.
+   * imports. Returns `undefined` for a qualified name, for a name that
+   * resolves to nothing the checker can type, and for a generic declared
+   * outside the default library, unless `CommonFabricFormatter` lowers the
+   * reference from its own arguments.
    */
   #resolveTypeReferenceFromScope(
     typeNode: ts.TypeReferenceNode,
@@ -2303,12 +2283,20 @@ export class SchemaGenerator {
     );
     if (!symbol) return undefined;
 
-    // An unbound parameter formats as its constraint, which every argument
-    // satisfies, and failing that as its default, which an argument is free
-    // to contradict: `Contact<string>` of `Contact<T = number>` would read
-    // `number` and refuse the strings the author declared. Such a reference
-    // is left unread, for the caller to treat as the guess it would be.
-    if (this.#overridesParameterDefault(typeNode, symbol, checker, context)) {
+    // A generic declaration's declared type leaves its parameters unbound, and
+    // no reading of an unbound parameter stands in for the argument a
+    // reference supplies: its constraint drops the members an argument adds,
+    // its default is free to contradict one, and an operator over it (`keyof
+    // T`, `T["name"]`) has no schema at all. Such a reference is left unread,
+    // for the caller to treat as the guess it would be, unless
+    // `CommonFabricFormatter` lowers the reference from its own arguments.
+    if (
+      declaresTypeParameters(symbol) &&
+      !symbol.declarations?.some((declaration) =>
+        isDefaultLibrarySourceFile(declaration.getSourceFile(), context)
+      ) &&
+      !lowersFromReferenceArguments(typeNode, symbol, checker)
+    ) {
       return undefined;
     }
 
@@ -2317,66 +2305,6 @@ export class SchemaGenerator {
       return undefined;
     }
     return declared;
-  }
-
-  /**
-   * Helper for `#resolveTypeReferenceFromScope()`: whether `reference`
-   * supplies, for a parameter with a default, an argument other than that
-   * default. An argument this analysis cannot read counts as another.
-   */
-  #overridesParameterDefault(
-    reference: ts.TypeReferenceNode,
-    symbol: ts.Symbol,
-    checker: ts.TypeChecker,
-    context: GenerationContext,
-  ): boolean {
-    const args = reference.typeArguments ?? [];
-    return typeParametersOf(symbol).some((parameter, index) => {
-      const argument = args[index];
-      if (!parameter.default || !argument) return false;
-      return this.#readTypeOfNode(argument, checker, context) !==
-        checker.getTypeFromTypeNode(parameter.default);
-    });
-  }
-
-  /**
-   * The type `node` denotes where it can be read without a guess: its
-   * registered type, a keyword or literal, or its name resolved from scope.
-   * The checker reads none of these from a synthetic node, which is what
-   * this is asked about.
-   */
-  #readTypeOfNode(
-    node: ts.TypeNode,
-    checker: ts.TypeChecker,
-    context: GenerationContext,
-  ): ts.Type | undefined {
-    const registered = context.typeRegistry?.get(node);
-    if (registered && !(registered.flags & ts.TypeFlags.Any)) {
-      return registered;
-    }
-    if (ts.isTypeReferenceNode(node)) {
-      return this.#resolveTypeReferenceFromScope(node, checker, context);
-    }
-    if (ts.isLiteralTypeNode(node)) {
-      const { literal } = node;
-      if (ts.isStringLiteral(literal)) {
-        return checker.getStringLiteralType(literal.text);
-      }
-      if (ts.isNumericLiteral(literal)) {
-        return checker.getNumberLiteralType(Number(literal.text));
-      }
-      if (literal.kind === ts.SyntaxKind.TrueKeyword) {
-        return checker.getTrueType();
-      }
-      if (literal.kind === ts.SyntaxKind.FalseKeyword) {
-        return checker.getFalseType();
-      }
-      if (literal.kind === ts.SyntaxKind.NullKeyword) {
-        return checker.getNullType();
-      }
-      return undefined;
-    }
-    return KEYWORD_TYPES[node.kind]?.(checker);
   }
 
   /**

@@ -91,63 +91,100 @@ describe("captured-cell-value-schema", () => {
       asCell: ["readonly"],
     });
   });
-  describe("a generic type whose parameter declares a default", () => {
-    // `Contact<string>` of `Contact<T = number>`: a schema read from the
-    // declaration would describe `name` as a number and refuse the strings
-    // the author declared.
 
-    const GENERIC = "interface Contact<T = number> { name: T }";
+  describe("a generic type", () => {
+    // Read from its declaration, a generic describes its parameters unbound:
+    // `Contact<{ label: string; extra: number }>` of `Contact<T extends {
+    // label: string }>` would describe `name` by the constraint and drop
+    // `extra` from every read.
+
     const unread = { asCell: ["readonly"] };
-    const readAsDefault = {
-      type: "object",
-      properties: { name: { type: "number" } },
-      required: ["name"],
-      asCell: ["readonly"],
-    };
+    const CONSTRAINED = "interface Contact<T extends { label: string }> " +
+      "{ name: T }";
+    const WIDER = "Contact<{ label: string; extra: number }>";
 
-    it("emits no value schema where an argument replaces the default of a type the module declares with `export`", async () => {
+    it("emits no value schema for an argument wider than the constraint of a type the module declares with `export`", async () => {
       const schema = await capturedContactSchema({
         "/test.tsx":
           `import { computed, pattern, Writable } from "commonfabric";
-          export ${GENERIC}
-          ${readContact("Contact<string>")}`,
+          export ${CONSTRAINED}
+          ${readContact(WIDER)}`,
       });
 
       expect(schema).toEqual(unread);
     });
 
-    it("emits no value schema where an argument replaces the default of a type the module imports", async () => {
+    it("emits no value schema for an argument wider than the constraint of a type the module imports", async () => {
       const schema = await capturedContactSchema({
-        "/types.ts": `export ${GENERIC}`,
+        "/types.ts": `export ${CONSTRAINED}`,
         "/test.tsx":
           `import { computed, pattern, Writable } from "commonfabric";
           import type { Contact } from "./types.ts";
+          ${readContact(WIDER)}`,
+      });
+
+      expect(schema).toEqual(unread);
+    });
+
+    it("emits no value schema for an argument wider than the constraint of a type the module declares", async () => {
+      const schema = await capturedContactSchema({
+        "/test.tsx":
+          `import { computed, pattern, Writable } from "commonfabric";
+          ${CONSTRAINED}
+          ${readContact(WIDER)}`,
+      });
+
+      expect(schema).toEqual(unread);
+    });
+
+    it("emits no value schema for a type reading its parameter through `keyof`", async () => {
+      const schema = await capturedContactSchema({
+        "/test.tsx":
+          `import { computed, pattern, Writable } from "commonfabric";
+          export interface Contact<T> { name: keyof T }
+          ${readContact("Contact<{ foo: string }>")}`,
+      });
+
+      expect(schema).toEqual(unread);
+    });
+
+    it("emits no value schema for a type reading its parameter through an indexed access", async () => {
+      const schema = await capturedContactSchema({
+        "/test.tsx":
+          `import { computed, pattern, Writable } from "commonfabric";
+          export interface Contact<T extends { name: string }> {
+            name: T["name"];
+          }
+          ${readContact('Contact<{ name: "Ada" }>')}`,
+      });
+
+      expect(schema).toEqual(unread);
+    });
+
+    it("emits no value schema for an argument replacing the default of a type the module declares with `export`", async () => {
+      const schema = await capturedContactSchema({
+        "/test.tsx":
+          `import { computed, pattern, Writable } from "commonfabric";
+          export interface Contact<T = number> { name: T }
           ${readContact("Contact<string>")}`,
       });
 
       expect(schema).toEqual(unread);
     });
 
-    it("emits no value schema where an argument replaces the default of a type the module declares", async () => {
+    it("emits the labels of an alias the CFC lowering fills from the argument", async () => {
       const schema = await capturedContactSchema({
         "/test.tsx":
-          `import { computed, pattern, Writable } from "commonfabric";
-          ${GENERIC}
-          ${readContact("Contact<string>")}`,
+          `import { computed, Confidential, pattern, Writable } from "commonfabric";
+          ${CONTACT}
+          export type Secret<T> = Confidential<T, readonly ["owner"]>;
+          ${readContact("Secret<Contact>")}`,
       });
 
-      expect(schema).toEqual(unread);
-    });
-
-    it("emits the default's value schema for a type the module declares with `export`, written without arguments", async () => {
-      const schema = await capturedContactSchema({
-        "/test.tsx":
-          `import { computed, pattern, Writable } from "commonfabric";
-          export ${GENERIC}
-          ${readContact("Contact")}`,
+      expect(schema).toEqual({
+        ...stored,
+        ifc: { confidentiality: ["owner"] },
       });
-
-      expect(schema).toEqual(readAsDefault);
     });
   });
 });

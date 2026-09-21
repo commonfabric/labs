@@ -101,12 +101,16 @@ authored or imported shadow of the name keeps the general path; then the
 general path, which resolves the name the same way — bound through the node,
 else lexically from the module's scope, an import followed to what it
 imports — and formats the declared type, so a name the module declares,
-exported or not, or imports is read. A generic declaration is read with its
-parameters unbound, each formatting as its constraint, else its default, else
-accepting anything; a constraint admits every argument, but a default does not,
-so a reference supplying an argument other than a parameter's default is left
-unread rather than read as that default (`Contact<string>` of
-`Contact<T = number>` would otherwise refuse strings) — plus a `Date`-by-name
+exported or not, or imports is read. A generic declared outside the default
+library is left unread: its declared type leaves the parameters unbound, and no
+reading of an unbound parameter stands in for the argument a reference supplies
+— the constraint drops the members an argument adds, the default is free to
+contradict one, and an operator over the parameter (`keyof T`, `T["name"]`) has
+no schema at all. The exceptions are the references `CommonFabricFormatter`
+lowers from their own arguments: a scope wrapper, whose payload it reads from
+the reference's argument, and an alias that is not itself a CFC alias and whose
+whole body references one, directly or through further such aliases, named with
+every argument, which it substitutes down the chain — plus a `Date`-by-name
 special case), keyword types, and a final resolve-else-`true` fallback.
 
 An intersection node is settled the way the checker settles the type, each
