@@ -10,6 +10,9 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
+- [Personalized book recommendations](personalized-book-recommendations.md)
+  adds a personal shelf and visitor invitation, with reader authorization and
+  the complete private-delivery flow as deployment prerequisites.
 - [Security and privacy roadmap](security-privacy-roadmap.md) gives an overview
   of current trust boundaries and the path from runtime security to operator
   exclusion, with remaining work and technical references in an appendix.

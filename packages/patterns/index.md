@@ -117,7 +117,9 @@ that exercises it; the library is the reference, the board is a demo),
 `contacts/`, `cozy-poll/`, `examples/`, `experimental/` (explicitly unhardened
 explorations), `file-share/` (a minimal file-sharing example: bytes go to the
 blob store, cells hold descriptors), `habit-tracker/`, `lobby/`, `lunch-poll/`,
-`profile-group-chat/`, `project-list/`, `router/`, `scoped-group-chat/`,
+`profile-group-chat/`, `project-list/`,
+[`recommend-a-book/`](recommend-a-book/README.md) (personal reading shelf and
+private visitor recommendations), `router/`, `scoped-group-chat/`,
 `scoped-user-directory/`, `scrabble/`, `shared-profile-demo/`,
 `shared-profile-roster/`, `suggestable/`, `weekly-calendar/`.
 
