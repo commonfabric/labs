@@ -987,8 +987,8 @@ compile fingerprint: `tasks/compile-cache-state.ts` mirrors the `cc-*` key globs
 against the commit whose cache it would have restored — the pull request's own
 changed files, or the previous `main` run for a push. A family with no recorded
 state is filled cold when those paths changed. Recorded states are ground truth
-and always win. The rate-limit skip path writes the same stamped artifact, so a
-run cut short still tells later runs whether it was cold.
+and always win. A run a rate limit ends early writes the same stamped artifact
+before it stops, so it still tells later runs whether it was cold.
 
 Neither source is complete. Fingerprint inference cannot see non-fingerprint
 cold causes (cache eviction, cache-service outages), and a run whose cache-state

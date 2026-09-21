@@ -1286,8 +1286,8 @@ Deno.test("guardRateLimit writes the stamped artifact and throws on rate limits"
     );
     const file = JSON.parse(await Deno.readTextFile(PERF_METRICS_FILE));
     assertEquals(file.metrics[0].name, "job: Check");
-    // The skip path carries the compile cache stamp, so a later run reading
-    // this artifact still sees that this run was cold.
+    // A run the rate limit ends still carries the compile cache stamp, so a
+    // later run reading this artifact still sees that this run was cold.
     assertEquals(file.compileCacheStates, { "pattern-unit": "cold" });
   });
 });
