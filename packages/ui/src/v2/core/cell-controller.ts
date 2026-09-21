@@ -130,15 +130,11 @@ export class CellController<T> implements ReactiveController {
   private _lastKnownValue: { value: T | undefined } | undefined;
 
   /**
-   * Whether live delivery has made the bound handle's cache current. A rebind
-   * preserves the display over its initial cache. A reconciliation read also
-   * supplies its own display snapshot: `sync()` can decline to cache its
-   * result when another handle updated the shared operation queue.
+   * The particular cache a rebind or read snapshot overrides. Any publication
+   * or worker confirmation on that handle expires the override, including an
+   * equal-value delivery that does not call subscribers.
    */
-  private _boundCacheCurrent = false;
-
-  /** Counts live deliveries to the bound view, excluding initial echoes. */
-  #deliveryGeneration = 0;
+  #maskedCache: { cell: CellHandle<T>; version: number } | undefined;
 
   /** True only while subscribe() runs its synchronous initial callback. */
   private _subscribeEcho = false;
@@ -187,12 +183,17 @@ export class CellController<T> implements ReactiveController {
       const samePersistentCell = this._currentValue instanceof CellHandle &&
         value instanceof CellHandle &&
         sameCellDoc(this._currentValue.ref(), value.ref());
+      if (samePersistentCell && !this._localEdit && !this.#isCacheMasked()) {
+        this._lastKnownValue = {
+          value: this.defaultGetValue(this._currentValue!),
+        };
+      }
+      this.#reconciliation = undefined;
       if (!samePersistentCell) {
         this._bindEpoch++;
         this._localEdit = undefined;
-        this.#reconciliation = undefined;
         this._lastKnownValue = undefined;
-        this._boundCacheCurrent = false;
+        this.#maskedCache = undefined;
       }
       this._cleanupCellSubscription();
       // Only apply the component's schema when the CellHandle doesn't already
@@ -208,8 +209,11 @@ export class CellController<T> implements ReactiveController {
       } else {
         this._currentValue = value;
       }
+      if (samePersistentCell && this._lastKnownValue !== undefined) {
+        this.#maskCurrentCache(this.getCell()!);
+      }
       this._setupCellSubscription();
-      this.#reconcileCommittedEdit();
+      this.#reconcileBoundValue();
     }
   }
 
@@ -226,8 +230,7 @@ export class CellController<T> implements ReactiveController {
       return undefined as T;
     }
     if (
-      !this._boundCacheCurrent &&
-      isCellHandle(this._currentValue) &&
+      this.#isCacheMasked() &&
       this._lastKnownValue !== undefined
     ) {
       return this.options.getValue(this._lastKnownValue.value as T);
@@ -249,6 +252,7 @@ export class CellController<T> implements ReactiveController {
       // handles) cannot repaint over it while the write is pending.
       this._localEdit = { value: newValue, writing: false, committed: false };
       this.#reconciliation = undefined;
+      this.#maskedCache = undefined;
       this._lastKnownValue = { value: newValue };
     }
 
@@ -312,6 +316,7 @@ export class CellController<T> implements ReactiveController {
     // authoritative again.
     this._localEdit = undefined;
     this.#reconciliation = undefined;
+    this.#maskedCache = undefined;
   }
 
   /**
@@ -344,6 +349,7 @@ export class CellController<T> implements ReactiveController {
 
   hostConnected(): void {
     this._setupCellSubscription();
+    this.#reconcileBoundValue();
   }
 
   hostDisconnected(): void {
@@ -379,7 +385,7 @@ export class CellController<T> implements ReactiveController {
         () => {
           if (epoch !== this._bindEpoch || this._localEdit !== edit) return;
           if (edit) edit.committed = true;
-          this.#reconcileCommittedEdit();
+          this.#reconcileBoundValue();
         },
         (error) => {
           if (!value.runtime().signal.aborted) {
@@ -390,6 +396,7 @@ export class CellController<T> implements ReactiveController {
           ) return;
           this._localEdit = undefined;
           this.#reconciliation = undefined;
+          this.#maskedCache = undefined;
           this._lastKnownValue = {
             value: this.defaultGetValue(this._currentValue!),
           };
@@ -407,17 +414,35 @@ export class CellController<T> implements ReactiveController {
     }
   }
 
+  #maskCurrentCache(cell: CellHandle<T>): void {
+    this.#maskedCache = { cell, version: cell.getCacheVersion() };
+  }
+
+  #isCacheMasked(): boolean {
+    const mask = this.#maskedCache;
+    if (
+      mask && mask.cell === this._currentValue &&
+      mask.version === mask.cell.getCacheVersion()
+    ) return true;
+    this.#maskedCache = undefined;
+    return false;
+  }
+
   /**
-   * Reads after commit so a handler edit delivered before the acknowledgment
-   * can supersede the input without needing another subscription delivery.
-   * A rebind starts its own read; only that handle and edit may reconcile.
+   * Reads after commit or an idle same-cell rebind. Only the current binding
+   * and edit may reconcile. Cache revisions include equal worker deliveries,
+   * which can confirm a rebound cache without notifying subscribers.
    */
-  #reconcileCommittedEdit(): void {
+  #reconcileBoundValue(): void {
     const edit = this._localEdit;
-    const cell = this._currentValue;
-    if (!edit?.committed || !isCellHandle(cell)) return;
+    const cell = this.getCell();
+    if (
+      !cell || this.#reconciliation ||
+      (edit ? !edit.committed : !this.#isCacheMasked())
+    ) return;
     const reconciliation = this.#reconciliation = {};
-    const deliveryGeneration = this.#deliveryGeneration;
+    const cacheVersion = cell.getCacheVersion();
+    const oldValue = this.getValue();
     const finish = (snapshot: Readonly<T> | undefined) => {
       if (
         this.#reconciliation !== reconciliation || this._localEdit !== edit ||
@@ -425,31 +450,33 @@ export class CellController<T> implements ReactiveController {
       ) return;
       this._localEdit = undefined;
       this.#reconciliation = undefined;
-      this._boundCacheCurrent = false;
-      this._lastKnownValue = {
-        value: this.#deliveryGeneration === deliveryGeneration
-          ? snapshot as T | undefined
-          : this.defaultGetValue(cell as CellHandle<T>),
-      };
+      const cached = this.defaultGetValue(cell);
+      const value = cell.getCacheVersion() === cacheVersion
+        ? snapshot as T | undefined
+        : cached;
+      this._lastKnownValue = { value };
+      // A shared-queue update on another handle can prevent `sync()` from
+      // caching its result here. Preserve that read only over this cache.
+      if (!deepValueEqual(value, cached)) this.#maskCurrentCache(cell);
+      else this.#maskedCache = undefined;
       const restored = this.getValue();
-      if (!deepValueEqual(restored, edit.value)) {
-        this.options.onChange(restored as T, edit.value);
+      if (!deepValueEqual(restored, oldValue)) {
+        this.options.onChange(restored as T, oldValue as T);
       }
       if (this.options.triggerUpdate) this.host.requestUpdate();
     };
-    void (cell as CellHandle<T>).sync().then(finish, (error) => {
+    void cell.sync().then(finish, (error) => {
       if (!cell.runtime().signal.aborted) {
         console.error("[CellController] Reconciliation failed:", error);
       }
       // A failed read must not pin an optimistic display indefinitely.
-      finish(this.defaultGetValue(cell as CellHandle<T>));
+      finish(this.defaultGetValue(cell));
     });
   }
 
   private _setupCellSubscription(): void {
     if (isCellHandle(this._currentValue)) {
       let previousValue: T | undefined;
-      this._boundCacheCurrent = false;
       this._subscribeEcho = true;
       try {
         this._cellUnsubscribe = this._currentValue.subscribe((newValue) => {
@@ -457,8 +484,7 @@ export class CellController<T> implements ReactiveController {
           // This ensures components like cf-select can update their DOM state
           const typedNewValue = newValue as T | undefined;
           if (!this._subscribeEcho) {
-            this._boundCacheCurrent = true;
-            this.#deliveryGeneration++;
+            this.#maskedCache = undefined;
           }
           const suppressed = this._classifyDelivery(typedNewValue);
           // `Object.is`, not `!==`: an unchanged `NaN` must not re-announce,
@@ -490,11 +516,11 @@ export class CellController<T> implements ReactiveController {
    * repaint nor be announced over the user's pending edit.
    */
   private _classifyDelivery(value: T | undefined): boolean {
-    if (this._subscribeEcho && this._lastKnownValue !== undefined) {
+    if (this._subscribeEcho && this.#isCacheMasked()) {
       return true;
     }
     if (this._localEdit === undefined) {
-      if (value !== undefined || this._boundCacheCurrent) {
+      if (value !== undefined || !this._subscribeEcho) {
         this._lastKnownValue = { value };
       }
       return false;

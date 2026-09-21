@@ -36,12 +36,16 @@ component implementation.
 `CellHandle.setForUI()` to observe their commit outcomes. Input dispatch stays
 responsive while persistence is pending. Subscription echoes, including a value
 equal to the edit, cannot release that edit before commit. After commit, the
-controller reads the current bound view and reconciles with that value or a live
-delivery received during the read. This also picks up a handler clear that
-arrived before the acknowledgment, without waiting for another delivery. The
-read adds one worker round trip per completed edit that is still current.
-Rebinding during reconciliation starts a read of the new view. Initial cached
-echoes on replacement handles cannot overwrite the last displayed value.
+controller reads the current bound view and reconciles with that value or a
+cache publication or worker confirmation received during the read. This also
+picks up a handler clear that arrived before the acknowledgment, without waiting
+for another delivery. The read adds one worker round trip per completed edit
+that is still current. A same-cell rebind also reads the new view when the
+control is idle. Until that read or a worker confirmation, the replacement
+handle's initial cache cannot overwrite the last displayed value. Protection is
+tied to that particular handle cache revision, so a later `sync()`, publication,
+or equal-value worker delivery expires it. First bindings and ordinary
+reconnects read the handle's current cache directly.
 
 Write refusal is logged and releases the affected edit, notifying the component
 to render the bound value. Completion of an older write does not release a newer
