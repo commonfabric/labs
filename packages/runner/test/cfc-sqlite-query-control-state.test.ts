@@ -136,7 +136,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     db: SqliteDbRef,
     sql: string,
     params?: SqliteParamsWire,
-    at: string = space,
+    at: typeof space = space,
   ): Promise<void> => {
     const tx = runtime.edit();
     tx.recordSqliteWrite!(at, { op: "sqlite", db, sql, params });
@@ -148,7 +148,7 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
    * wrong parameter — an empty string, or the other container's key — cannot
    * produce the rows a case expects.
    */
-  const seedMessages = async (db: SqliteDbRef, at: string = space) => {
+  const seedMessages = async (db: SqliteDbRef, at: typeof space = space) => {
     await seed(
       db,
       "INSERT INTO messages (container_id, body) VALUES (?, ?), (?, ?), (?, ?)",
