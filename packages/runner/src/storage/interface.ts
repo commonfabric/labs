@@ -62,6 +62,7 @@ import type {
   CfcDecomposedEnvelopes,
   CfcDereferenceTrace,
   CfcEnforcementMode,
+  CfcExternalContentObservation,
   CfcFlowLabelsMode,
   CfcGrantWriteInput,
   CfcLabelMetadataObservation,
@@ -2256,6 +2257,12 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    */
   recordCfcLabelMetadataObservation(
     observation: CfcLabelMetadataObservation,
+  ): void;
+
+  /** Records one runtime-authorized external CONTENT observation. */
+  recordCfcExternalContentObservation(
+    observation: CfcExternalContentObservation,
+    authorization?: RuntimeWritePolicyAuthorization,
   ): void;
 
   /**

@@ -41,6 +41,9 @@ export const AGENT_TOOL_NAMES = [
 /** One of {@link AGENT_TOOL_NAMES}. */
 export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number];
 
+/** The model-facing name of one input cell. */
+export const AGENT_INPUT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
 /**
  * The states an `AgentRun` record passes through, from creation to one of
  * the four terminal states.
@@ -211,12 +214,13 @@ export const AgentRunRecordSchema = internSchema(
 );
 
 /**
- * The per-user index in the home space: one `{run, host}` entry per record
+ * The per-user index in the home space: one `{run, host, address}` entry per record
  * the user has submitted, across spaces and hosts, and the `agentRunner`
  * entry the user's runner writes when it starts and refreshes on every
  * claim. `host` is the origin of the toolshed serving the record's space,
  * carried beside the link because a link resolves a space and not the host
- * that serves it. The `agentRunner` entry is public on purpose: it holds no
+ * that serves it. `address` lets the home pattern resolve the link through
+ * that host before reading or writing it. The `agentRunner` entry is public on purpose: it holds no
  * secret, and it exists so a request naming a tool the runner does not offer
  * can fail before it is staged, and so a consumer can say "no runner is
  * registered" rather than showing a request that queues forever.
@@ -232,6 +236,7 @@ export const AgentQueueIndexSchema = internSchema(
           properties: {
             run: { asCell: ["cell"], scope: "user" },
             host: { type: "string" },
+            address: { type: "string" },
           },
           required: ["run", "host"],
         },

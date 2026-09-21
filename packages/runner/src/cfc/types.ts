@@ -689,6 +689,29 @@ export type PreparedDigestInput = {
   // discipline as writePolicyInputs. Absent when none were recorded, so
   // pre-Stage-2 digests are unchanged; canonicalized address-sorted.
   readonly labelMetadataObservations?: readonly CfcLabelMetadataObservation[];
+
+  /** Host-observed content admitted through an opaque runtime receipt. */
+  readonly externalContentObservations?:
+    readonly CfcExternalContentObservation[];
+};
+
+/**
+ * A content observation made outside durable Fabric storage and admitted by
+ * the runtime through a prepared, aborted write transaction. Both labels are
+ * canonical runtime products: `flow` carries the effective content label whose
+ * hereditary integrity the final flow fold meets, while `consumed` carries the
+ * egress guard pool.
+ */
+export type CfcExternalContentObservation = {
+  readonly source: CfcAddress;
+  readonly flow: IFCLabel;
+  readonly consumed: IFCLabel;
+  readonly labeledSpaces: readonly MemorySpace[];
+  readonly sources: readonly {
+    readonly atom: unknown;
+    readonly read: CfcAddress;
+    readonly labelPath: readonly string[];
+  }[];
 };
 
 /** A synchronous release refusal before the effect starts any work. */
@@ -984,6 +1007,10 @@ export type CfcTxState = {
   // PreparedDigestInput. Only labeled observations are recorded (empty =
   // public = nothing to derive, gate, or bind).
   labelMetadataObservations: CfcLabelMetadataObservation[];
+  // Host-only observations admitted through an opaque runtime receipt. These
+  // are CONTENT inputs: they participate in flow derivation, read-side gates,
+  // egress, and the prepared digest exactly like durable content reads.
+  externalContentObservations: CfcExternalContentObservation[];
   // Structured descriptions of the refusals this transaction's gates
   // recorded (`cfc/refusal-detail.ts`): which boundary refused, which atoms
   // it refused, and which reads carried them. Recorded in every enforcement

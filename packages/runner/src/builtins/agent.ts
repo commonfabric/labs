@@ -23,6 +23,7 @@ import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import { INVALID_INPUT, REFUSED } from "../agent-error-codes.ts";
 import type { JSONSchema } from "../builder/types.ts";
 import { type Cell, isCell } from "../cell.ts";
+import { renderCellReference } from "../cell-reference.ts";
 import type { CfcConfClause } from "../cfc/clause.ts";
 import { atomsOutsideCeiling } from "../cfc/observation.ts";
 import { collectConsumedLabel } from "../cfc/prepare.ts";
@@ -39,6 +40,7 @@ import { type Runtime, spaceCellSchema } from "../runtime.ts";
 import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
+  AGENT_INPUT_NAME_PATTERN,
   AGENT_RUN_TERMINAL_STATES,
   AgentParamsSchema,
   AgentQueueIndexSchema,
@@ -91,7 +93,7 @@ type InputLinkSnapshot = {
 
 /** The home-space agent queue as the runtime reads it. */
 export type AgentQueueIndex = {
-  entries?: { run: Cell<unknown>; host: string }[];
+  entries?: { run: Cell<unknown>; host: string; address?: string }[];
   agentRunner?: {
     host: string;
     tools: string[];
@@ -101,7 +103,7 @@ export type AgentQueueIndex = {
 };
 
 /**
- * The agent queue of `homeSpace`'s owner: the `{run, host}` entries of every
+ * The agent queue of `homeSpace`'s owner: the `{run, host, address}` entries of every
  * record they submitted, and their `agentRunner` entry. It is the
  * `agentQueue` field of the home default pattern
  * (`packages/patterns/system/home.tsx`), the same cell
@@ -326,6 +328,17 @@ export function agent(
       return;
     }
 
+    const invalidInputName = Object.keys(rawInputs ?? {}).find((name) =>
+      !AGENT_INPUT_NAME_PATTERN.test(name)
+    );
+    if (invalidInputName !== undefined) {
+      settleWithoutRun(
+        fields,
+        `${INVALID_INPUT}: agent input name must match ${AGENT_INPUT_NAME_PATTERN}, got \`${invalidInputName}\``,
+        undefined,
+      );
+      return;
+    }
     const inputHandles = resolveInputHandles(rawInputs);
 
     const requestSnapshot = createFrozenRequestSnapshot({
@@ -543,8 +556,12 @@ export function agent(
         // canonical contract declares that each run resolves per user.
         const entry = entries.elementById(recordId).asSchema(
           AgentQueueIndexSchema.properties.entries.items,
-        ) as Cell<{ run: Cell<unknown>; host: string }>;
-        entry.set({ run: record, host });
+        ) as Cell<{ run: Cell<unknown>; host: string; address?: string }>;
+        entry.set({
+          run: record,
+          host,
+          address: renderCellReference(record.getAsNormalizedFullLink()),
+        });
         entries.addUnique(entry);
       });
       if (indexed.error) {

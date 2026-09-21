@@ -61,6 +61,25 @@ describe("referent handles", () => {
       expect(other.token).not.toBe(first.token);
       expect(other.table.referents?.length).toBe(2);
     });
+
+    it("uses canonical value identity for bigint and object key order", async () => {
+      const first = await mintReferentHandle(
+        createHarnessHandleTable("run-canonical-referents"),
+        {
+          ...ROW,
+          value: { count: 2n, nested: { first: 1, second: 2 } },
+          label: {},
+        },
+      );
+      const reordered = await mintReferentHandle(first.table, {
+        ...ROW,
+        value: { nested: { second: 2, first: 1 }, count: 2n },
+        label: {},
+      });
+
+      expect(reordered.token).toBe(first.token);
+      expect(reordered.table.referents).toHaveLength(1);
+    });
   });
 
   describe("mintReferentHandle() under a token collision", () => {
@@ -150,6 +169,23 @@ describe("referent handles", () => {
   });
 
   describe("describe_handle", () => {
+    it("declares the referent metadata it returns", () => {
+      const schema = describeHandleTool.descriptor.outputSchema as {
+        properties?: Record<string, unknown>;
+      };
+
+      expect(schema.properties?.referent).toEqual({
+        type: "object",
+        properties: {
+          kind: { type: "string" },
+          source: { type: "string" },
+          labelSource: { type: "string" },
+        },
+        required: ["kind", "source", "labelSource"],
+        additionalProperties: false,
+      });
+    });
+
     it("reports a referent's source, label atom types, and label source, and never its content", async () => {
       const { table, token } = await mintReferentHandle(
         createHarnessHandleTable("run-referents"),

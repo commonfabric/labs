@@ -12,8 +12,8 @@ import { createHarnessAgentRunExecutor } from "../lib/agent-run-harness.ts";
 import {
   type AgentRunInspection,
   cancelAgentRun,
+  readAgentRun,
   readAgentRuns,
-  selectAgentRun,
 } from "../lib/agent-inspection.ts";
 import { render } from "../lib/render.ts";
 
@@ -51,7 +51,7 @@ const LOOM_TOOLS = [
 ];
 
 /** The harness tools every runner offers. */
-const BASE_TOOLS = ["describe_handle", "web_fetch", "research"];
+const BASE_TOOLS = ["describe_handle", "web_fetch"];
 
 /** How long a claim's lease reaches past the run's last durable write. */
 const DEFAULT_LEASE_SECONDS = 300;
@@ -97,7 +97,7 @@ export interface AgentRunnerCommandConfig {
   leaseMs: number;
   workRoot: string;
   loomRetrievalConfigPath?: string;
-  harnessArgs?: string[];
+  model?: string;
 }
 
 /** What the command reaches outside itself through. */
@@ -189,9 +189,7 @@ export async function resolveAgentRunnerConfig(
     ...(options.loomRetrievalConfig !== undefined
       ? { loomRetrievalConfigPath: absPath(options.loomRetrievalConfig) }
       : {}),
-    ...(options.model !== undefined
-      ? { harnessArgs: ["--model", options.model] }
-      : {}),
+    ...(options.model !== undefined ? { model: options.model } : {}),
   };
 }
 
@@ -268,54 +266,77 @@ export async function startAgentRunner(
     return runtime;
   };
 
-  const queue = agentQueueIndexCell(homeRuntime, homeSpace);
-  await queue.sync();
-  if (queue.get() === undefined) {
-    await disposeAll();
-    throw new Error(
-      "The home space holds no agent queue: its home pattern predates the " +
-        "`agentQueue` field. Open the home space in the shell once so the " +
-        "pattern updates, then start the runner again.",
-    );
-  }
   // The send settles when the handling's commit does.
-  const registerRunner = (entry: AgentRunnerEntry): Promise<void> =>
-    new Promise<void>((resolve) =>
+  const registerRunner = (entry: AgentRunnerEntry | undefined): Promise<void> =>
+    new Promise<void>((resolve, reject) =>
       homePattern.key("agentQueue").key("setAgentRunner")
-        .send({ runner: entry }, () => resolve())
+        .send(entry === undefined ? {} : { runner: entry }, (tx) => {
+          const status = tx.status();
+          if (status.status === "error") {
+            reject(new Error(status.error.message, { cause: status.error }));
+          } else resolve();
+        })
     );
+  let runner: AgentRunner | undefined;
+  try {
+    const queue = agentQueueIndexCell(homeRuntime, homeSpace);
+    await queue.sync();
+    if (queue.get() === undefined) {
+      throw new Error(
+        "The home space holds no agent queue: its home pattern predates the " +
+          "`agentQueue` field. Open the home space in the shell once so the " +
+          "pattern updates, then start the runner again.",
+      );
+    }
 
-  const runner = new AgentRunner({
-    homeSpace,
-    homeHost,
-    runnerHost: config.runnerHost,
-    runnerId: `${home}#${crypto.randomUUID()}`,
-    tools: config.tools,
-    maxConcurrent: config.maxConcurrent,
-    leaseMs: config.leaseMs,
-    runtimeForHost,
-    registerRunner,
-    execute: execute ?? createHarnessAgentRunExecutor({
-      identityKeyPath: identityPath,
-      requester: home,
-      workRoot: config.workRoot,
-      ...(config.loomRetrievalConfigPath !== undefined
-        ? { loomRetrievalConfigPath: config.loomRetrievalConfigPath }
-        : {}),
-      ...(config.harnessArgs !== undefined
-        ? { harnessArgs: config.harnessArgs }
-        : {}),
+    runner = new AgentRunner({
+      homeSpace,
+      homeHost,
+      runnerHost: config.runnerHost,
+      runnerId: `${home}#${crypto.randomUUID()}`,
+      tools: config.tools,
+      maxConcurrent: config.maxConcurrent,
+      leaseMs: config.leaseMs,
+      runtimeForHost,
+      registerRunner,
+      execute: execute ?? createHarnessAgentRunExecutor({
+        identityKeyPath: identityPath,
+        requester: home,
+        workRoot: config.workRoot,
+        ...(config.loomRetrievalConfigPath !== undefined
+          ? { loomRetrievalConfigPath: config.loomRetrievalConfigPath }
+          : {}),
+        ...(config.model !== undefined ? { model: config.model } : {}),
+        report,
+      }),
       report,
-    }),
-    report,
-  });
-  await runner.start();
-  return {
-    stop: async () => {
-      await runner.stop();
+    });
+    await runner.start();
+    return {
+      stop: async () => {
+        try {
+          await runner!.stop();
+        } finally {
+          await disposeAll();
+        }
+      },
+    };
+  } catch (error) {
+    try {
+      await runner?.stop();
+    } catch (cleanupError) {
+      report(
+        `agent runner: startup cleanup failed: ${
+          cleanupError instanceof Error
+            ? cleanupError.message
+            : String(cleanupError)
+        }`,
+      );
+    } finally {
       await disposeAll();
-    },
-  };
+    }
+    throw error;
+  }
 }
 
 /** Resolves on the process's first SIGINT or SIGTERM. */
@@ -384,12 +405,14 @@ CF_HARNESS_HOME.`,
 /** Effects used by the one-shot agent inspection commands. */
 export interface AgentInspectionCommandDeps {
   read: typeof readAgentRuns;
+  readOne: typeof readAgentRun;
   cancel: typeof cancelAgentRun;
   render: typeof render;
 }
 
 const defaultInspectionDeps: AgentInspectionCommandDeps = {
   read: readAgentRuns,
+  readOne: readAgentRun,
   cancel: cancelAgentRun,
   render,
 };
@@ -409,6 +432,8 @@ export function formatAgentRun(run: AgentRunInspection): string {
       ["Outcome", run.outcome],
       ["Error", run.errorCode],
       ["Cancellation requested", run.cancelRequestedAt],
+      ["Started", run.startedAt],
+      ["Finished", run.finishedAt],
       ["Model turns", run.modelTurns],
       ["Tool calls", run.toolCalls],
       ["Usage coverage", run.usageCoverage],
@@ -463,7 +488,9 @@ export async function agentInspectionAction(
         ? runs
         : runs.length === 0
         ? "No agent runs."
-        : runs.map((run) => `${run.id}  ${run.state}  ${run.task}`).join("\n"),
+        : runs.map((run) =>
+          `${run.id}  ${run.state}  ${run.task}  ${run.host}  ${run.address}`
+        ).join("\n"),
       { json: options.json },
     );
     return;
@@ -473,7 +500,7 @@ export async function agentInspectionAction(
   }
   const run = kind === "cancel"
     ? await deps.cancel(config, identifier)
-    : selectAgentRun(await deps.read(config), identifier);
+    : await deps.readOne(config, identifier);
   deps.render(options.json ? run : formatAgentRun(run), { json: options.json });
 }
 
@@ -538,6 +565,11 @@ export const createAgentCommand = (
     .option(
       "--local-api-url <url:string>",
       "URL of the toolshed this runner sits beside. Defaults to --api-url.",
+    )
+    .env(
+      "CF_HARNESS_LOOM_RETRIEVAL_CONFIG=<path:string>",
+      "Host-owned JSON file backing the read-only Loom tools.",
+      { prefix: "CF_HARNESS_" },
     )
     .option(
       "--loom-retrieval-config <path:string>",

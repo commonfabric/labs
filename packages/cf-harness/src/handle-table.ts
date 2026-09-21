@@ -8,6 +8,7 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import { hashStringOf } from "@commonfabric/data-model";
 import { sha256 } from "@commonfabric/content-hash";
 import {
   ENTITY_URI_SCHEMES,
@@ -285,7 +286,7 @@ export const mintReferentHandle = async (
 ): Promise<{ table: HarnessHandleTable; token: string }> => {
   const hasher = options.hasher ?? sha256Hasher;
   const referents = table.referents ?? [];
-  const key = JSON.stringify([
+  const key = hashStringOf([
     "referent",
     referent.source,
     referent.value,
@@ -293,7 +294,7 @@ export const mintReferentHandle = async (
     referent.labelSource,
   ]);
   const existing = referents.find((held) =>
-    JSON.stringify([
+    hashStringOf([
       "referent",
       held.source,
       held.value,

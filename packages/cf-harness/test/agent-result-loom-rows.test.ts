@@ -39,6 +39,7 @@ const signer = await Identity.fromPassphrase("agent result loom rows");
 
 const WORK = "https://cfc.test/atom/facet/work";
 const HOME = "https://cfc.test/atom/facet/home";
+const LOOM_VERIFIED = "https://cfc.test/atom/integrity/loom-verified";
 
 const RESULT_SCHEMA = {
   type: "object",
@@ -79,7 +80,11 @@ const searchPayload = JSON.stringify({
   query: "donuts",
   filters: {},
   hits: [
-    { sourceRef: "m1", title: "Donut order", ifc: { confidentiality: [WORK] } },
+    {
+      sourceRef: "m1",
+      title: "Donut order",
+      ifc: { confidentiality: [WORK], integrity: [LOOM_VERIFIED] },
+    },
     {
       sourceRef: "m2",
       title: "Donut recipe",
@@ -221,6 +226,16 @@ describe("agent result over Loom rows", () => {
     );
   };
 
+  const integrityOf = async (
+    link: NormalizedFullLink,
+  ): Promise<unknown[]> => {
+    const cell = runtime.getCellFromLink(link);
+    await cell.sync();
+    return (cfcLabelViewForCell(cell)?.entries ?? []).flatMap((entry) =>
+      entry.label.integrity ?? []
+    );
+  };
+
   it("links a referenced hit to a minted document carrying the row's label", async () => {
     const { handleTable, write } = await run(([order]) => ({
       summary: "The order is in the first mail.",
@@ -241,6 +256,10 @@ describe("agent result over Loom rows", () => {
     await source.sync();
     expect(source.get()).toMatchObject({ title: "Donut order" });
     expect(await confidentialityOf(sourceLink)).toEqual([WORK]);
+    expect(await integrityOf(sourceLink)).toContain(LOOM_VERIFIED);
+    expect(written.mintedDocuments.map(({ token }) => token)).toEqual([
+      handleTable.referents![0].token,
+    ]);
   });
 
   it("links nothing for a hit the result does not name, and still joins its label", async () => {
@@ -251,12 +270,12 @@ describe("agent result over Loom rows", () => {
     const result = runtime.getCellFromLink(written.link);
     await result.sync();
     expect(result.get()).toEqual({ summary: "Nothing to cite." });
-    // Both rows entered model context, so the inline text carries both
-    // labels: each observed row is minted and read, named or not.
+    // Both rows entered model context, so the inline text carries both labels
+    // through external observation receipts even though neither is cited.
     expect(written.joinLabel.confidentiality).toEqual(
       expect.arrayContaining([WORK, HOME]),
     );
-    expect(written.mintedDocuments.length).toBe(2);
+    expect(written.mintedDocuments.length).toBe(0);
   });
 
   it("fails the write for a referent token the run does not hold", async () => {

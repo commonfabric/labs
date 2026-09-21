@@ -1053,8 +1053,13 @@ Deno.test("CfHarnessEngine rejects direct subagent resume but permits new child 
       parentRunId: lineage.parentRunId,
       parentToolCallId: lineage.parentToolCallId,
     },
+    structuredResult: {
+      path: "/tmp/result.json",
+      schema: { type: "object" },
+    },
   });
   assertEquals(resumedChild.getRunState().runId, resumedState.runId);
+  assertEquals(resumedChild.structuredResultAvailable, false);
 
   const newChild = new CfHarnessEngine({
     sandboxRuntime: new FakeSandboxRuntime(),

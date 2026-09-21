@@ -15,12 +15,16 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { join, normalize } from "@std/path/posix";
 import { CfHarnessEngine } from "../src/engine.ts";
 import { createFileSystemHarnessArtifactStore } from "../src/artifacts.ts";
-import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
+import {
+  CfHarnessPromptLoop,
+  seedSubagentHandleTable,
+} from "../src/prompt-loop.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "../src/revision-verification.ts";
 import { CAPABILITY_PROBE_SENTINEL } from "../src/diagnostics.ts";
 import {
   createHarnessHandleTable,
   mintAddressHandle,
+  mintReferentHandle,
 } from "../src/handle-table.ts";
 import { HANDLE_TOKEN_PATTERN } from "../src/contracts/handle-table.ts";
 import type { HarnessResearchRunSummary } from "../src/contracts/research.ts";
@@ -261,6 +265,32 @@ const grantResolvingSession = () =>
   }) as any;
 
 describe("prompt-loop cross-agent address handles", () => {
+  it("delegates explicitly named referents and withholds unnamed ones", async () => {
+    const runId = "run-subagent-referent-handles";
+    const first = await mintReferentHandle(createHarnessHandleTable(runId), {
+      source: "loom_search",
+      value: { title: "Shared" },
+      label: {},
+      labelSource: "query",
+    });
+    const second = await mintReferentHandle(first.table, {
+      source: "loom_search",
+      value: { title: "Withheld" },
+      label: {},
+      labelSource: "query",
+    });
+
+    const child = seedSubagentHandleTable(
+      second.table,
+      `${runId}.subagent.1`,
+      { goal: `Describe ${first.token}.`, profile: "pattern-author" },
+    );
+
+    expect(child?.referents?.map((entry) => entry.token)).toEqual([
+      first.token,
+    ]);
+  });
+
   it("resolves a token named in the delegate_task goal against the child's own table", async () => {
     const runId = "run-subagent-handles-seeded";
     const table = await parentTableOf(runId, [URI_A]);

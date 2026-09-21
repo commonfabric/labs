@@ -13,7 +13,7 @@ export async function openAgentStorageHost(
   identityPath: string,
   origin: string,
 ): Promise<Runtime> {
-  return new Runtime(runtimePresets.remoteClient({
+  const options = runtimePresets.remoteClient({
     apiUrl: new URL(origin),
     storageManager: StorageManager.open({
       as: await loadIdentity(identityPath),
@@ -23,5 +23,6 @@ export async function openAgentStorageHost(
       apiUrl: new URL(origin),
       env: Deno.env.get,
     }),
-  }));
+  });
+  return new Runtime({ ...options, patternEnvironment: undefined });
 }
