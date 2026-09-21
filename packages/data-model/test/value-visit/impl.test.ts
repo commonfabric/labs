@@ -2,8 +2,8 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
-  type BaselineVisitorMethodResult,
   DefaultValueVisitor,
+  type MainVisitResult,
   makeVisitValueFunction,
   type VisitResult,
   visitValue,
@@ -37,7 +37,7 @@ describe("value-visit/impl", () => {
         }
       }
 
-      const result: BaselineVisitorMethodResult<number> = visitValue(
+      const result: MainVisitResult<number> = visitValue(
         ["x", 7, 8],
         new FirstNumber(),
       );
