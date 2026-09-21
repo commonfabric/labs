@@ -442,12 +442,14 @@ The current package provides:
   exits, so a reporting failure never bears on the tool result and a write is
   never cut off in flight. It adds the `record_feedback` tool, which votes a
   pattern up or down with an optional note, so the index learns which of the
-  patterns it holds were worth offering. And it closes the loop the other way:
-  source the model authored and ran successfully with a non-empty `description`
-  and a durable content-addressed identity is queued under that identity,
-  carrying the `description` and `hashtags` the call named, the run's own task
-  as the request the pattern answers, the compiled argument and result schemas,
-  and the published patterns the source imports. The tool's
+  patterns it holds were worth offering. Event payloads carry the signing
+  client's DID as author; a run sharing the console's key also shares its DID,
+  so author attribution alone does not certify human review. And it closes the
+  loop the other way: source the model authored and ran successfully with a
+  non-empty `description` and a durable content-addressed identity is queued
+  under that identity, carrying the `description` and `hashtags` the call named,
+  the run's own task as the request the pattern answers, the compiled argument
+  and result schemas, and the published patterns the source imports. The tool's
   `patternPublication.status` is `queued`: the index has not confirmed
   publication at tool return. `patternPublication.patternId` retains the exact
   identity queued by that `run_pattern` attempt. The `assign_slug` artifact's

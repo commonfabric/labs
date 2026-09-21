@@ -434,9 +434,35 @@ describe("PatternIndexClient", () => {
     expect(JSON.parse(requests[0].body)).toEqual({
       patternId: "pat-1",
       eventType: "run_succeeded",
+      did: signer.did(),
       note: "ran in the harness",
     });
     expect(response.ok).toBe(true);
+  });
+
+  it("binds the event author to its signer despite a supplied DID", async () => {
+    const { client, requests } = createClient([jsonResponse({ ok: true })]);
+    const input = {
+      patternId: "pat-1",
+      eventType: "thumbs_up" as const,
+      did: "did:key:zImpersonated",
+    };
+    await client.recordEvent(input);
+
+    const request = requests[0];
+    const verified = await verifyFirstPartyHttpRequest({
+      request: new Request(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body: request.body,
+      }),
+    });
+    expect(verified.userDid).toBe(signer.did());
+    expect(JSON.parse(request.body)).toEqual({
+      patternId: "pat-1",
+      eventType: "thumbs_up",
+      did: signer.did(),
+    });
   });
 
   it("posts a publication with its program and declared shapes", async () => {

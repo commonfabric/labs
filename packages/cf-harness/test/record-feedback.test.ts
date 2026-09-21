@@ -116,7 +116,11 @@ describe("record-feedback", () => {
     expect(output.verdict).toBe("up");
     expect(index.calls).toEqual([{
       fn: "recordEvent",
-      body: { patternId: "pat-expenses", eventType: "thumbs_up" },
+      body: {
+        patternId: "pat-expenses",
+        eventType: "thumbs_up",
+        did: signer.did(),
+      },
     }]);
   });
 
@@ -136,6 +140,7 @@ describe("record-feedback", () => {
     expect(index.calls[0].body).toEqual({
       patternId: "pat-expenses",
       eventType: "thumbs_down",
+      did: signer.did(),
       note: "totalled the wrong column",
     });
   });

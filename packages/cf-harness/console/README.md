@@ -190,7 +190,9 @@ names:
 A pattern a session authors and runs is recorded against the index unless
 publishing is turned off, and is offered to search only when discoverability is
 asked for — which is for deliberate corpus seeding, since discoverability is
-otherwise earned from later evidence.
+otherwise earned from later evidence. The
+[seeding guidance](../README.md#seeding-the-pattern-index) distinguishes raw
+connector readers from pieces built and evaluated with a person.
 
 `--host-mount name=<name>,source=<host path>,target=<sandbox path>[,mode=readonly|writable]`
 takes the same spec the CLI takes, and is repeatable. It is how a reference tree
@@ -862,11 +864,14 @@ forwarded, so nothing extra survives the crossing. `searchPatterns` uses the
 shared client's
 [successor resolution](../README.md#pattern-generations-in-search); the listing
 and exact-ID reads retain their individual generation records. Event badges
-count only that generation's own events. When the index supplies inherited
-evidence, the score separately identifies its inherited portion, predecessor,
-and publication cutoff. `getPattern` is called without `includeSource`: this
-surface shows metadata, schemas, dependencies and events, and a pattern's source
-is read through the CLI.
+count only that generation's own events, split by author DID when the index
+supplies `eventAuthors`. Each DID can be copied in full. Counts with no known
+author show **author unavailable**; the caller's bounded event stream cannot
+attribute the whole index's totals. When the index supplies inherited evidence,
+the score separately identifies its inherited portion, predecessor, and
+publication cutoff. `getPattern` is called without `includeSource`: this surface
+shows metadata, schemas, dependencies and events, and a pattern's source is read
+through the CLI.
 
 The route sits under `/api/`, so it is behind the same `Host` gate as the rest.
 
@@ -876,15 +881,15 @@ rather than a name in that allowlist: `POST /api/index/feedback`, below.
 Three panes:
 
 - **Patterns** — everything the index holds, by score. A row carries the pattern
-  id, its description and hashtags, a badge per event type counted against it,
-  the weighted score those counts produce, and when it was created; the weights
+  id, its description and hashtags, badges per event type and known author, the
+  weighted score those counts produce, and when it was created; the weights
   themselves are printed beside the heading. Opening a row reads that pattern's
   argument and result schemas, its dependencies, and the events you recorded
   against it. Every identifier is a button that copies the whole of itself.
 - **Your events** — your own event stream, newest first, with a box that filters
   on any field. The index answers each signer with their own events and nobody
-  else's; the shared reading of what everyone did is the score in the table
-  above.
+  else's; the shared counts and their available author breakdowns are in the
+  table above. Individual notes stay in the author's own stream.
 - **Search** — the query the runtime's `search_patterns` would make, run by
   hand. Tags, free text and a limit compose a request, and the request is shown
   beside the results, because what the pane is for is how the index answers
@@ -902,10 +907,10 @@ a pattern id and a verdict and nothing else:
 ```
 
 An `up` is recorded as a `thumbs_up` and a `down` as a `thumbs_down`, through
-the same verdict mapping the `record_feedback` tool records through, so a vote
-cast here and a vote cast by a run are the same event. The server signs it with
-its fabric identity, so the index attributes the vote to the operator's own
-principal — the one it answers `recordedBy` with:
+the same verdict mapping the `record_feedback` tool records through. The index
+client adds the author as `did` from its signing identity: the console's DID for
+this route, and the run's DID for the harness tool. Neither the browser nor the
+model chooses that field. The server returns the author as `recordedBy`:
 
 ```json
 {
@@ -914,6 +919,11 @@ principal — the one it answers `recordedBy` with:
   "recordedBy": "did:key:z…"
 }
 ```
+
+The console and the runs it launches use the same configured Fabric keyfile.
+Their author DIDs therefore match. A DID identifies the key that recorded a
+vote; it does not certify that a human chose the verdict. Distinguishing those
+actors requires distinct held identities, not a caller-supplied human flag.
 
 The index ranks on these votes, so a pattern that keeps disappointing stops
 being offered first and one that keeps working is offered sooner. That is why
@@ -927,6 +937,29 @@ and the index's own status when the index faulted the call. Nothing is recorded
 in any of those cases. Like the read route, it is under `/api/` and behind the
 same `Host` gate, and takes one bare request with no cookie and no preceding
 one.
+
+### Index service contract for authors
+
+The cloud function implementation is outside this checkout. Its matching
+contract is:
+
+- `recordEvent` accepts `{ patternId, eventType, did, note? }`. It verifies
+  `did` against the authenticated CF1 signer and rejects a mismatch. It stores
+  that authenticated DID on the event. Older clients omitting `did` can be
+  attributed from the signer; an unverified body field is never authority.
+- `listEvents` retains its caller-scoped stream and existing `did` field.
+- `listPatterns` may return `eventAuthors` on each pattern, shaped as
+  `{ "thumbs_up": { "did:key:z…": 2 } }`: event type to author DID to count.
+  These are counts on that exact generation, excluding inherited evidence, and
+  each type's author counts sum to at most its `events` total. This makes author
+  counts public alongside the totals, without exposing event notes. Historical
+  events with a stored authenticated DID can contribute; events without one stay
+  unattributed. Neither the pattern owner nor its source is evidence of who
+  voted.
+
+Until the service supplies `eventAuthors`, the inspector shows the aggregate
+counts as author unavailable. The client contract and display support do not
+establish that a cloud deployment implements them.
 
 ## How the configuration reaches the run
 

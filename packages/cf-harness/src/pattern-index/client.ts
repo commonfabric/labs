@@ -135,6 +135,12 @@ export interface PatternIndexListedPattern {
   /** Event type to how many times it was recorded against this pattern. */
   events: Readonly<Record<string, number>>;
 
+  /**
+   * Event type to author DID to count, for this generation's own events.
+   * Absent on indexes that return totals without author attribution.
+   */
+  eventAuthors?: Readonly<Record<string, Readonly<Record<string, number>>>>;
+
   score: number;
 
   /** Combined evidence, absent on index deployments without inheritance. */
@@ -161,7 +167,10 @@ export interface PatternIndexListEventsRequest {
 /** One recorded event of the calling identity's own stream. */
 export interface PatternIndexEvent {
   patternId: string;
+
+  /** Author DID established by the request's authenticated signer. */
   did: string;
+
   eventType: string;
 
   /** `null` for an event the index holds no timestamp for. */
@@ -187,9 +196,14 @@ export type PatternIndexEventType =
   | "thumbs_up"
   | "thumbs_down";
 
+/** Signed event payload; the client supplies the author from its identity. */
 export interface PatternIndexRecordEventRequest {
   patternId: string;
   eventType: PatternIndexEventType;
+
+  /** Author DID, which the index must verify against the CF1 signer. */
+  did: string;
+
   note?: string;
 }
 
@@ -445,8 +459,8 @@ export class PatternIndexClient {
 
   /**
    * Every pattern the index holds, scored, for an operator reading the index
-   * as a whole. The aggregate is public — a count and a weight per pattern —
-   * so this says what is indexed and how it ranks without naming who did what.
+   * as a whole. Counts, weights and available author counts are public;
+   * individual event notes remain in the caller's own event stream.
    */
   listPatterns(): Promise<PatternIndexListPatternsResponse> {
     return this.#call<PatternIndexListPatternsResponse>("listPatterns", {});
@@ -468,12 +482,14 @@ export class PatternIndexClient {
     });
   }
 
+  /** Records an event authored by this client's authenticated identity. */
   recordEvent(
-    request: PatternIndexRecordEventRequest,
+    request: Omit<PatternIndexRecordEventRequest, "did">,
   ): Promise<PatternIndexRecordEventResponse> {
     return this.#call<PatternIndexRecordEventResponse>("recordEvent", {
       patternId: request.patternId,
       eventType: request.eventType,
+      did: this.did,
       ...(request.note !== undefined ? { note: request.note } : {}),
     });
   }

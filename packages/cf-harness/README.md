@@ -191,7 +191,8 @@ What works today:
   failing the pattern run. Saved tool results remain a record of what was known
   at tool return. Accepted entries stay out of search until evidence earns
   discoverability. Curated seeding may opt in with
-  `CF_HARNESS_PATTERN_INDEX_PUBLISH_DISCOVERABLE=1`
+  `CF_HARNESS_PATTERN_INDEX_PUBLISH_DISCOVERABLE=1`; see
+  [Seeding the pattern index](#seeding-the-pattern-index) for what to seed
 - targeted exact-string edits plus whole-file replace/create and append writes
 - initial and in-run image attachments for model vision-capable flows
 - bounded public HTTP(S) fetches through `web_fetch`, with redirect validation,
@@ -1424,6 +1425,42 @@ channels of one conceptual kind: an id names hashed information stored
 somewhere, attached metadata accompanies it, and trusted-side code resolves it.
 They deliberately remain separate until experience supplies a concrete reason to
 unify them.
+
+### Seeding the pattern index
+
+The corpus has two kinds of entry, with different purposes and evidence:
+
+| Entry                 | What to build                                                                                                                                                                                                                            | How to seed and evaluate it                                                                                                                                                                                                                           |
+| --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Raw composable reader | One deliberately plain reader per connector store, described by the table and columns it reads. Return reusable rows, readiness and errors; keep the reader independent of a particular person's question. These readers fill the index. | Verify the table and column contract against the connected store, check a settled read, and publish the reusable source with an accurate description and hashtags. Use the curated primitive seeder for readers under `packages/patterns/primitives`. |
+| Human-facing piece    | Start from a question a person actually has. Ben guides the question and the useful result; compose indexed readers where they fit.                                                                                                      | Build through a guided harness run, open the resulting piece, verify its settled output answers that question, and have a human rate the published pattern. A model's own vote is not human review.                                                   |
+
+Run the primitive seeder from `packages/cf-harness` with the Fabric and index
+settings configured. `deno task seed-pattern-index --dry-run --only <name>`
+compiles the selected primitive and prints its identity and metadata without
+publishing. Removing `--dry-run` publishes it and records its generations in
+`scripts/seeded-pattern-generations.json`. Format source before seeding: the
+entry identity depends on its bytes. Compilation and publication establish
+neither a successful live connector read nor a useful answer for a person.
+
+For a guided piece, pass `run_pattern` a description of the actual question it
+answers. Ordinary publication requests a record; curated runs may request
+immediate discoverability with
+`CF_HARNESS_PATTERN_INDEX_PUBLISH_DISCOVERABLE=1`. Neither setting supplies
+human approval. A pending read, withheld values, an empty preview, or a
+successful compile alone does not establish that the answer is correct. Inspect
+the live piece after its reads settle, including its error state and a baseline
+count when a predicate returns no rows, before rating it.
+
+Keep automated run evidence and human evaluation distinct in the seeding record.
+Feedback carries the DID the caller actually holds; see the console's
+[voting contract](console/README.md#voting-on-a-pattern), including the limit
+when a console and its runs share a keyfile. A batch of generated pages and
+model-cast thumbs-up votes is not a corpus of human-reviewed pieces.
+
+This distinction is seeding guidance, not a new publish field. The index's
+schema-derived `part`/`app` kind describes the argument shape; it does not
+establish either an entry's intended audience or who evaluated it.
 
 ### Pattern generations in search
 

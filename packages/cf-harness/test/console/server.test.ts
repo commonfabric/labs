@@ -2150,6 +2150,7 @@ describe("console/server", () => {
       const response = await vote(indexed, {
         patternId: "ss-2w4nQ8",
         verdict: "up",
+        did: "did:key:zImpersonated",
       });
 
       expect(response.status).toBe(200);
@@ -2164,6 +2165,7 @@ describe("console/server", () => {
       expect(JSON.parse(indexed.requests[0].body)).toEqual({
         patternId: "ss-2w4nQ8",
         eventType: "thumbs_up",
+        did: signer.did(),
       });
     });
 
@@ -2180,6 +2182,7 @@ describe("console/server", () => {
       expect(JSON.parse(indexed.requests[0].body)).toEqual({
         patternId: "ss-2w4nQ8",
         eventType: "thumbs_down",
+        did: signer.did(),
       });
     });
 
