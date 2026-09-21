@@ -10,7 +10,10 @@ import {
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
-import { readPieceSourceState } from "../../src/ops/piece-origin.ts";
+import {
+  readPieceSourceMetadata,
+  readPieceSourceState,
+} from "../../src/ops/piece-origin.ts";
 
 const signer = await Identity.fromPassphrase("piece source unloadable pattern");
 
@@ -93,14 +96,11 @@ describe("piece-controller", () => {
      * A stopped piece whose pattern pointer names an identity this space
      * cannot load, with no source history and no recorded origin: the state of
      * a piece minted before source history existed and then stranded by a
-     * retired bundle. `keepHistory` leaves the recorded history in place, which
-     * is the state the transition baseline refuses.
+     * retired bundle.
      */
-    async function strandedPiece(
-      options: { input?: Record<string, unknown>; keepHistory?: boolean } = {},
-    ) {
+    async function strandedPiece() {
       const piece = await pieces.create(versionProgram("v1"), {
-        input: options.input ?? {},
+        input: {},
       });
       await runtime.idle();
       await pieces.stopPiece(piece.getCell());
@@ -110,7 +110,6 @@ describe("piece-controller", () => {
           identity: RETIRED_BUNDLE_IDENTITY,
           symbol: "default",
         }, rawMetaWriteAuthorization);
-        if (options.keepHistory) return;
         cell.setMetaRaw(
           "pieceSourceHistory",
           undefined,
@@ -238,30 +237,92 @@ describe("piece-controller", () => {
       // the piece could not run the source at all.
 
       served = versionProgram("entered-v1", "number");
-      const piece = await strandedPiece({ input: { seed: "not a number" } });
+      const piece = await strandedPiece();
+      const action = { kind: "repoint" as const, url: ORIGIN };
+      const reviewed = await piece.changeSource(action);
+      expect(reviewed.status).toBe("incompatible");
+      if (reviewed.status !== "incompatible") return;
+      expect(reviewed.prepared.review?.issues.argument).toBeUndefined();
+      const before = readPieceSourceMetadata(runtime, piece.getCell());
+
+      const argument = pieces.getArgument(piece.getCell());
+      const { error } = await runtime.editWithRetry((tx) => {
+        argument.withTx(tx).set({ seed: "not a number" });
+      });
+      expect(error?.message).toBeUndefined();
 
       await expect(
-        piece.changeSource({ kind: "repoint", url: ORIGIN }),
+        piece.changeSource(action),
       ).rejects.toThrow("seed");
-      expect(getPatternIdentityRef(piece.getCell())?.identity).toBe(
-        RETIRED_BUNDLE_IDENTITY,
-      );
+      expect(readPieceSourceMetadata(runtime, piece.getCell())).toEqual(before);
+
+      await expect(
+        piece.changeSource(action, { confirmedChange: reviewed.prepared }),
+      ).rejects.toThrow("seed");
+      expect(readPieceSourceMetadata(runtime, piece.getCell())).toEqual(before);
+      expect(argument.getRaw()).toEqual({ seed: "not a number" });
     });
 
     it("throws under confirmation when recorded history cannot restore the current source", async () => {
-      // A piece that recorded how it got its pattern is entitled to a
-      // restorable current source before that source is replaced, so the
-      // transition baseline refuses whatever the confirmation says.
+      // A piece with recorded history needs a restorable current source.
+      // Confirmation must preserve that guarantee when the retained source
+      // becomes unreadable after review.
 
-      const piece = await strandedPiece({ keepHistory: true });
+      const piece = await pieces.create(versionProgram("v1"), { input: {} });
+      await runtime.idle();
+      await pieces.stopPiece(piece.getCell());
+      const before = readPieceSourceMetadata(runtime, piece.getCell());
+      const previousRef = getPatternIdentityRef(piece.getCell());
+      expect(previousRef).toBeDefined();
+      if (previousRef === undefined) return;
+      expect(before.history).toHaveLength(1);
+
+      const manager = runtime.patternManager;
+      const load = manager.loadPatternByIdentity.bind(manager);
+      manager.loadPatternByIdentity = (...args: Parameters<typeof load>) =>
+        args[0] === previousRef.identity
+          ? Promise.resolve(undefined)
+          : load(...args);
       const action = { kind: "repoint" as const, url: ORIGIN };
+      try {
+        const reviewed = await piece.changeSource(action);
+        expect(reviewed.status).toBe("incompatible");
+        if (reviewed.status !== "incompatible") return;
+        expect(reviewed.prepared.baseline.kind).toBe("retain");
 
-      await expect(piece.changeSource(action)).rejects.toThrow(
-        "the piece's current source is not available",
-      );
-      expect(getPatternIdentityRef(piece.getCell())?.identity).toBe(
-        RETIRED_BUNDLE_IDENTITY,
-      );
+        // The review saw a restorable source. Corrupt its retained document
+        // while leaving the piece's identity, history, and origin unchanged.
+        const { error } = await runtime.editWithRetry((tx) => {
+          runtime.getCell(
+            piece.getCell().space,
+            `pattern:${previousRef.identity}`,
+            undefined,
+            tx,
+          ).set({ corrupt: true });
+        });
+        expect(error?.message).toBeUndefined();
+        expect(readPieceSourceMetadata(runtime, piece.getCell())).toEqual(
+          before,
+        );
+
+        await expect(piece.changeSource(action)).rejects.toThrow(
+          "the piece's current source is not available",
+        );
+        expect(readPieceSourceMetadata(runtime, piece.getCell())).toEqual(
+          before,
+        );
+
+        await expect(
+          piece.changeSource(action, { confirmedChange: reviewed.prepared }),
+        ).rejects.toThrow(
+          "cannot authorize source update without verified source closures",
+        );
+        expect(readPieceSourceMetadata(runtime, piece.getCell())).toEqual(
+          before,
+        );
+      } finally {
+        manager.loadPatternByIdentity = load;
+      }
     });
   });
 });
