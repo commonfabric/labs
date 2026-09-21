@@ -329,6 +329,28 @@ export class CFRender extends BaseElement {
     }
   }
 
+  /** Exposes the render container, generation, and render entry for focused tests. */
+  get accessForTestingOnly(): {
+    containerRef: Ref<HTMLDivElement>;
+    readonly renderGeneration: number;
+    renderCell(): Promise<void>;
+  } {
+    // deno-lint-ignore no-this-alias
+    const outerThis = this;
+    return {
+      get containerRef() {
+        return outerThis._containerRef;
+      },
+      set containerRef(value) {
+        outerThis._containerRef = value;
+      },
+      get renderGeneration() {
+        return outerThis._renderGeneration;
+      },
+      renderCell: () => this._renderCell(),
+    };
+  }
+
   protected override render() {
     // Chip is inline and resolves to a lightweight default fast — a full-size
     // spinner would reserve the wrong space, so skip it for chip.

@@ -1,3 +1,8 @@
+/**
+ * Native DOM lifecycle regressions for moving and reconnecting rendered pieces.
+ * Worker messages are controlled while Lit and the DOM renderer run unchanged.
+ */
+
 import { expect } from "@std/expect";
 import {
   $conn,
@@ -14,7 +19,7 @@ import {
 // The entrypoint registers cf-render in the browser.
 import { CFRender } from "./index.ts";
 
-/** The worker boundary is controlled; Lit and the DOM renderer run unchanged. */
+/** Creates a fixture with controlled worker messages and real DOM rendering. */
 function fixture(linked = false) {
   const cell = createMockCellHandle<Record<string, unknown>>({});
   const runtime = cell.runtime();
@@ -170,6 +175,7 @@ function fixture(linked = false) {
   };
 }
 
+/** Reads the notes value currently installed by the DOM renderer. */
 function notes(element: CFRender): string | undefined {
   return element.shadowRoot?.querySelector("textarea")?.value;
 }

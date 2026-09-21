@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import type { PropertyValues } from "lit";
 
 import { $conn, type CellHandle } from "@commonfabric/runtime-client";
 import { defer } from "@commonfabric/utils/defer";
@@ -105,12 +106,10 @@ describe("CFRender render concurrency", () => {
       return Promise.resolve(cell);
     };
     element.cell = cell;
-    const internals = element as unknown as {
-      _containerRef: { value?: HTMLDivElement };
-      _renderCell(): Promise<void>;
+    element.accessForTestingOnly.containerRef = {
+      value: {} as HTMLDivElement,
     };
-    internals._containerRef = { value: {} as HTMLDivElement };
-    await internals._renderCell();
+    await element.accessForTestingOnly.renderCell();
     expect(resolutions).toBe(0);
   });
 
@@ -1155,40 +1154,39 @@ describe("CFRender tile navigation", () => {
 
 describe("CFRender disconnectedCallback", () => {
   it("rerenders once after reconnecting with an equal queued cell update", async () => {
-    const element = new CFRender();
+    class LifecycleRender extends CFRender {
+      /** Runs the update hook without requiring Lit's DOM pipeline. */
+      flushUpdated(changes: PropertyValues): void {
+        super.updated(changes);
+      }
+
+      protected override createRenderRoot(): HTMLElement | DocumentFragment {
+        return { adoptedStyleSheets: [] } as unknown as DocumentFragment;
+      }
+
+      protected override performUpdate(): void {}
+    }
+    const element = new LifecycleRender();
     const cell = createMockCellHandle<unknown>({ name: "stable" });
     let connected = true;
-    let renders = 0;
-    const lifecycle = element as unknown as {
-      updated(changes: Map<string, unknown>): void;
-      _renderCell(): Promise<void>;
-      createRenderRoot(): unknown;
-      performUpdate(): void;
-    };
     Object.defineProperty(element, "isConnected", { get: () => connected });
-    lifecycle.createRenderRoot = () => ({ adoptedStyleSheets: [] });
-    lifecycle.performUpdate = () => {};
-    lifecycle._renderCell = () => {
-      renders++;
-      return Promise.resolve();
-    };
     element.hasUpdated = true;
     element.cell = cell;
-    lifecycle.updated(new Map([["cell", undefined]]));
-    expect(renders).toBe(1);
+    element.flushUpdated(new Map([["cell", undefined]]));
+    expect(element.accessForTestingOnly.renderGeneration).toBe(1);
 
     connected = false;
     element.disconnectedCallback();
     const equal = await cell.resolveAsCell();
     element.cell = equal;
-    lifecycle.updated(new Map([["cell", cell]]));
-    expect(renders).toBe(1);
+    element.flushUpdated(new Map([["cell", cell]]));
+    expect(element.accessForTestingOnly.renderGeneration).toBe(2);
     connected = true;
     element.connectedCallback();
-    lifecycle.updated(new Map([["cell", cell]]));
-    expect(renders).toBe(2);
-    lifecycle.updated(new Map());
-    expect(renders).toBe(2);
+    element.flushUpdated(new Map([["cell", cell]]));
+    expect(element.accessForTestingOnly.renderGeneration).toBe(3);
+    element.flushUpdated(new Map());
+    expect(element.accessForTestingOnly.renderGeneration).toBe(3);
     element.disconnectedCallback();
   });
 
