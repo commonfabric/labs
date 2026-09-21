@@ -1150,7 +1150,9 @@ const SCOPE_WRAPPER_NAMES: ReadonlySet<string> = new Set([
  * Helper for `buildShrunkTypeNodeFromType()`, which returns the name of the
  * `commonfabric` scope wrapper `type` instantiates, with the type it scopes,
  * or `undefined` for any other type. A type of the author's own that shares a
- * wrapper's name is not one.
+ * wrapper's name is not one, and neither is a scope wrapper around a cell: the
+ * wrapper is read by the scoped type it is registered with, which would undo
+ * the capability narrowing applied to the cell node inside it.
  */
 function getScopeWrapper(
   type: ts.Type,
@@ -1159,6 +1161,7 @@ function getScopeWrapper(
   const symbol = type.aliasSymbol;
   const scoped = type.aliasTypeArguments?.[0];
   return symbol && scoped && SCOPE_WRAPPER_NAMES.has(symbol.name) &&
+      !isCellLikeType(scoped, checker) &&
       resolvesToCommonFabricSymbol(symbol, checker, symbol.name)
     ? { name: symbol.name, scoped }
     : undefined;

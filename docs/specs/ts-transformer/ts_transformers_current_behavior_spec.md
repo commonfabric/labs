@@ -1784,7 +1784,9 @@ adjustments:
   `Default` brand wraps it as `__cfHelpers.Default<shrunk, V>`, with `V`
   printed from the brand's payload. Branded members that disagree on the value
   restore no default, and a scope the type carries only as its brand, with no
-  alias left to name it, is not restored. A restored `Default` does not count
+  alias left to name it, is not restored. Neither is a scope wrapper around a
+  cell: schema generation reads the wrapper by the scoped type it is registered
+  with, which would undo the capability narrowing of the cell inside it. A restored `Default` does not count
   toward the preference for the node-driven candidate, which applies where only
   that candidate holds an authored `Default` (`getScopeWrapper` and
   `restoreDefault` in `transformers/type-shrinking.ts`;

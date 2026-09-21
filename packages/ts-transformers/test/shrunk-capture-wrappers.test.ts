@@ -133,6 +133,26 @@ export default pattern<Input>(({ roster }) => ({
     });
   });
 
+  describe("a capture of a scoped cell", () => {
+    it("keeps the readonly narrowing and unread elements of a cell read for its length", async () => {
+      const capture = await captureOf(`
+interface Input { c: PerUser<Writable<Box<number>[]>>; }
+export default pattern<Input>(({ c }) => ({
+  count: computed(() => c.get().length),
+}));`);
+      const { items, asCell } = capture.c as {
+        items: unknown;
+        asCell: (string | { kind: string })[];
+      };
+
+      expect(items).toEqual({ type: "unknown" });
+      expect(
+        asCell.map((entry) => typeof entry === "string" ? entry : entry.kind),
+      )
+        .toEqual(["readonly"]);
+    });
+  });
+
   describe("a capture whose authored type keeps a default", () => {
     it("keeps the capability of a cell captured beside it", async () => {
       const capture = await captureOf(`
