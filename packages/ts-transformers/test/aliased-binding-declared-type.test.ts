@@ -1,6 +1,8 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import type { WrapperSpelling } from "@commonfabric/schema-generator/wrapper-names";
+
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callSchemas, parseModule, patternSchemas } from "./transformed-ast.ts";
 import { transformFiles, transformSource } from "./utils.ts";
@@ -68,6 +70,43 @@ const CELL_VALUES: [title: string, type: string, capture: unknown][] = [
     { $ref: "#/$defs/Stored", default: {}, asCell: ["readonly"] },
   ],
 ];
+
+/**
+ * The wrapper spellings these tests declare inputs with that `IMPORTS` lacks.
+ */
+const CELL_SPELLING_IMPORTS =
+  `import { Cell, ComparableCell, OpaqueCell, type Reactive, ReadonlyCell, Stream, WriteonlyCell } from "commonfabric";
+`;
+
+// How a `computed()` reads the input `c` declared with each wrapper spelling,
+// and the `asCell` of what it captures, or `undefined` where it captures the
+// value. A spelling no input is declared with has no entry.
+const SPELLING_READINGS = {
+  Cell: { reads: "c.get()", capturedAs: ["readonly"] },
+  Writable: { reads: "c.get()", capturedAs: ["readonly"] },
+  ReadonlyCell: { reads: "c", capturedAs: ["readonly"] },
+  WriteonlyCell: { reads: `c.set("")`, capturedAs: ["writeonly"] },
+  ComparableCell: { reads: "c.equals(c)", capturedAs: ["readonly"] },
+  Stream: { reads: `c.send("")`, capturedAs: ["stream"] },
+  OpaqueCell: { reads: "c", capturedAs: undefined },
+  Reactive: { reads: "c", capturedAs: undefined },
+  SqliteDb: undefined,
+  CellTypeConstructor: undefined,
+  ScopedCellTypeConstructor: undefined,
+} satisfies Record<
+  WrapperSpelling,
+  { reads: string; capturedAs: string[] | undefined } | undefined
+>;
+
+/**
+ * A pattern whose `computed()` reads the input `c`, a `spelling` of a string
+ * with a default, through `reads`.
+ */
+function spellingReading(spelling: string, reads: string): string {
+  return `${CELL_SPELLING_IMPORTS}export default pattern<{ c: ${spelling}<string | Default<"">> }>(({ c }) => ({
+  s: computed(() => JSON.stringify(${reads})),
+}));`;
+}
 
 describe("aliased binding declared type", () => {
   describe("a binding declared by a generic input", () => {
@@ -578,6 +617,106 @@ ${computedReading("StoredCell")}`,
         },
       });
     });
+  });
+
+  describe("a capture of a cell written in place under each spelling", () => {
+    // A capture keeps the default and scope written in the value of a cell it
+    // captures as a cell, whichever spelling declares the cell. `Writable` is
+    // another name for `Cell`, so a cell declared either way captures alike.
+
+    for (const [title, type, capture] of CELL_VALUES) {
+      it(`emits the schema of a \`Writable\` for a \`Cell\` of ${title}`, async () => {
+        const [writable] = await schemasOf(
+          computedReading(`Writable<${type}>`),
+          "lift",
+        );
+        const [cell] = await schemasOf(
+          CELL_SPELLING_IMPORTS + computedReading(`Cell<${type}>`),
+          "lift",
+        );
+
+        expect((cell!.properties as Record<string, unknown>).c)
+          .toEqual(capture);
+        expect(cell).toEqual(writable);
+      });
+    }
+
+    it("emits the scope and default of a `Cell` of a `PerUser` value", async () => {
+      const [writable] = await schemasOf(
+        computedReading(`Writable<PerUser<string | Default<"">>>`),
+        "lift",
+      );
+      const [cell] = await schemasOf(
+        CELL_SPELLING_IMPORTS +
+          computedReading(`Cell<PerUser<string | Default<"">>>`),
+        "lift",
+      );
+
+      expect((cell!.properties as Record<string, unknown>).c).toEqual({
+        type: "string",
+        default: "",
+        scope: "user",
+        asCell: ["readonly"],
+      });
+      expect(cell).toEqual(writable);
+    });
+
+    it("emits the default of a `Cell` in an `action()`", async () => {
+      const [, state] = await schemasOf(
+        `${CELL_SPELLING_IMPORTS}export default pattern<{ c: Cell<string | Default<"">> }>(({ c }) => ({
+  log: action(() => { console.log(c.get()); }),
+}));`,
+        "handler",
+      );
+
+      expect((state!.properties as Record<string, unknown>).c)
+        .toEqual({ type: "string", default: "", asCell: ["readonly"] });
+    });
+
+    it("emits the concrete type and default of a `Cell` declared by a generic input", async () => {
+      const [capture] = await schemasOf(
+        `${CELL_SPELLING_IMPORTS}type Blank = string | Default<"">;
+interface Input<T> { c: Cell<T | Blank>; }
+export default pattern<Input<number>>(({ c }) => ({
+  s: computed(() => JSON.stringify(c.get())),
+}));`,
+        "lift",
+      );
+
+      expect((capture!.properties as Record<string, unknown>).c).toEqual({
+        type: ["number", "string"],
+        default: "",
+        asCell: ["readonly"],
+      });
+    });
+
+    for (const [spelling, reading] of Object.entries(SPELLING_READINGS)) {
+      if (!reading) continue;
+      if (reading.capturedAs) {
+        it(`emits the default of an input declared with \`${spelling}\` in a \`computed()\` capture`, async () => {
+          const [capture] = await schemasOf(
+            spellingReading(spelling, reading.reads),
+            "lift",
+          );
+
+          expect((capture!.properties as Record<string, unknown>).c).toEqual({
+            type: "string",
+            default: "",
+            asCell: reading.capturedAs,
+          });
+        });
+      } else {
+        it(`captures the value of an input declared with \`${spelling}\` in a \`computed()\``, async () => {
+          const [capture] = await schemasOf(
+            spellingReading(spelling, reading.reads),
+            "lift",
+          );
+
+          expect((capture!.properties as Record<string, Schema>).c)
+            .not.toHaveProperty("asCell");
+        });
+      }
+    }
   });
 
   describe("a capture of a value declared through an alias", () => {
