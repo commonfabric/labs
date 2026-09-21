@@ -69,6 +69,7 @@ import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
+import { recordNewProtectedDefaults } from "./cfc/default-initialization.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
 import type { EntityKind } from "./entity-kind.ts";
@@ -3222,6 +3223,7 @@ export class Runner {
         meta: ignoreReadForScheduling,
       }) as T | undefined;
 
+      const previousArgumentSchema = argumentLink.schema;
       const nextArgumentCell = previousArgumentCell.asSchema(
         pattern.argumentSchema,
       );
@@ -3254,6 +3256,17 @@ export class Runner {
           defaults as Partial<T>,
           pattern.argumentSchema,
         );
+
+        if (this.#runtime.patternManager.getArtifactEntryRef(pattern)) {
+          recordNewProtectedDefaults(
+            tx,
+            argumentLink,
+            previousArgumentSchema,
+            pattern.argumentSchema,
+            defaults,
+            nextArgument,
+          );
+        }
 
         // Stage the exact Fabric-layer representation before validating it.
         // The untyped materialization inside resolves ordinary sigil links

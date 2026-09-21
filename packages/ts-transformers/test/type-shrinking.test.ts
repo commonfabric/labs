@@ -1,5 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import type { CapabilityParamSummary } from "../src/core/mod.ts";
@@ -10,6 +11,7 @@ import {
   isCellLikeTypeNode,
   isSqliteTypeNode,
   isStreamTypeNode,
+  overlayContractCapabilities,
   preservedWrapperFor,
   printTypeNode,
   wrapTypeNodeWithCapability,
@@ -220,6 +222,30 @@ function createParamSummary(
     ...summary,
   };
 }
+
+describe("overlayContractCapabilities()", () => {
+  it("returns a reference to an alias whose type holds no cell as written", () => {
+    const { sourceFile, checker } = createProgram(`
+      type Profile = { name: string };
+      type Event = { x: Profile };
+    `);
+    const alias = findTypeAlias(sourceFile, "Event");
+
+    const result = overlayContractCapabilities(
+      alias.type,
+      checker.getTypeAtLocation(alias.type),
+      createParamSummary({
+        capability: "readonly",
+        readPaths: [["x", "name"]],
+      }),
+      checker,
+      ts.factory,
+      sourceFile,
+    );
+
+    expect(result).toBe(alias.type);
+  });
+});
 
 Deno.test("applyShrinkAndWrap preserves tuple roots for length-only synthetic shrinking", () => {
   const { sourceFile, checker } = createProgram(`
@@ -1133,10 +1159,13 @@ Deno.test("wrapTypeNodeWithCapability emits the expected cell wrappers", () => {
 });
 
 Deno.test("applyShrinkAndWrap preserves a parenthesized capture while narrowing cell capability", () => {
-  const { sourceFile, checker } = createProgram(`
-    interface Cell<T> { get(): T; }
-    type Input = ({ value: Cell<{ count: number }>; other: string });
-  `);
+  const { sourceFile, checker } = createProgramWithFiles({
+    "/commonfabric.d.ts": "export interface Cell<T> { get(): T; }",
+    "/test.ts": `
+      import type { Cell } from "commonfabric";
+      type Input = ({ value: Cell<{ count: number }>; other: string });
+    `,
+  });
   const alias = findTypeAlias(sourceFile, "Input");
   const result = applyShrinkAndWrap(
     createParamSummary({ wildcard: true, readPaths: [["value"]] }),

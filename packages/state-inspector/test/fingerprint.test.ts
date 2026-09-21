@@ -12,7 +12,12 @@ import { assert, assertEquals, assertThrows } from "@std/assert";
 import { Database } from "@db/sqlite";
 
 import { openSpace, type SpaceDb } from "../db.ts";
-import { listEntityModels } from "../model.ts";
+import {
+  listEntityModels,
+  visibleEntityRows,
+  visibleEntityRowsByScope,
+} from "../model.ts";
+import { listScopes, scopesOfRows } from "../scopes.ts";
 import {
   contentFingerprint,
   diffFingerprints,
@@ -434,4 +439,141 @@ Deno.test("enumerates a store past the spread-argument ceiling", () => {
   } finally {
     Deno.removeSync(dir, { recursive: true });
   }
+});
+
+/**
+ * A space spread across several scopes, built for the cases below: entities
+ * with differing revision counts so the per-scope sort has something to order,
+ * a tombstone so the records view is exercised, and one id written in two
+ * scopes so a scope's rows cannot be borrowed from another's.
+ */
+function withScopedSpace(run: (space: SpaceDb) => void): void {
+  const dir = Deno.makeTempDirSync({ prefix: "fingerprint-scopes-" });
+  try {
+    const path = `${dir}/space.sqlite`;
+    seed(path);
+    const db = new Database(path);
+    const commit = db.prepare(
+      `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution)
+       VALUES (?, ?, ?, '{}', '{}')`,
+    );
+    const rev = db.prepare(
+      `INSERT INTO revision (id, scope_key, seq, op_index, op, data, commit_seq)
+       VALUES (?, ?, ?, 0, ?, ?, ?)`,
+    );
+    let seq = 100;
+    const write = (id: string, scope: string, op = "set") => {
+      const s = ++seq;
+      commit.run(s, SESSION, s);
+      rev.run(id, scope, s, op, op === "delete" ? null : '{"value":1}', s);
+    };
+    const scopes = [
+      "user:did%3Akey%3Aa",
+      "user:did%3Akey%3Ab",
+      "session:did%3Akey%3Aa:1",
+      "session:did%3Akey%3Aa:2",
+    ];
+    for (const [i, scope] of scopes.entries()) {
+      // `of:busy` gets more revisions in each successive scope, so the sort by
+      // revisions puts it at a different position per scope.
+      for (let n = 0; n <= i; n++) write("of:busy", scope);
+      write(`of:only-${i}`, scope);
+      write("of:shared", scope);
+    }
+    write("of:gone", scopes[0]);
+    write("of:gone", scopes[0], "delete");
+    db.close();
+    const space = openSpace(path);
+    try {
+      run(space);
+    } finally {
+      space.close();
+    }
+  } finally {
+    Deno.removeSync(dir, { recursive: true });
+  }
+}
+
+/**
+ * The grouped pass is interchangeable with the per-scope query, scope by scope.
+ *
+ * `allEntities` now fetches every scope's rows in one pass and hands each scope
+ * its share, rather than letting each `listEntityModels` call fetch its own.
+ * That is only a pure speedup if the share is EXACTLY what the per-scope query
+ * would have returned — same rows, same order, tombstones kept — because model
+ * building is deterministic given its rows, and the fingerprint's exclusions
+ * turn on the `kind` it produces. So this pins the equality, not just the count.
+ */
+Deno.test("one pass yields each scope's rows exactly as the per-scope query does", () => {
+  withScopedSpace((space) => {
+    const grouped = visibleEntityRowsByScope(space, { branch: "" });
+    const scopes = listScopes(space, { branch: "" }).map((s) => s.raw);
+    assertEquals([...grouped.keys()].sort(), [...scopes].sort());
+    for (const scope of scopes) {
+      assertEquals(
+        grouped.get(scope),
+        visibleEntityRows(space, { branch: "", scope, includeDeleted: true }),
+        `scope ${scope}`,
+      );
+    }
+    // The tombstone is kept: the records view models it as `deleted`.
+    assert(
+      grouped.get("user:did%3Akey%3Aa")?.some((r) => r.id === "of:gone"),
+      "tombstoned entity present",
+    );
+  });
+});
+
+/**
+ * Enumerating a space costs one pass however many scopes it holds.
+ *
+ * The per-scope row query filters on `scope_key` with no `id`, and the revision
+ * index leads with `id`, so SQLite cannot seek to a scope and walks the branch's
+ * whole revision set to find a few rows. The fingerprint used to issue it once
+ * per scope, twice over (its manifest pass and its own), so the cost grew with
+ * scopes times revisions — on the Estuary Topics store, 13,571 scopes, about
+ * two and a half hours per fingerprint, which put `cf space clone` and
+ * `cf space verify` out of reach and with them the rehearsal procedure.
+ *
+ * The count is the property, not a timing: a threshold would pass on a fast
+ * machine and prove nothing there. Before the fix this is 2 x the number of
+ * scopes; after it, the scoped query is never issued at all. Queries are
+ * counted where they are issued rather than where they are prepared, since a
+ * space prepares each statement once and reuses it.
+ */
+Deno.test("the fingerprint enumerates rows in one unscoped pass", () => {
+  // A row query filtered on one scope cannot seek (the index leads with `id`),
+  // so each walks the whole branch; the walk issues none, and derives its
+  // scopes from the same pass rather than enumerating a second time.
+  withScopedSpace((space) => {
+    const all = space.all.bind(space);
+    let scoped = 0;
+    let unscoped = 0;
+    space.all = ((sql: string, ...params) => {
+      if (/GROUP BY scope_key, id/.test(sql)) {
+        if (/scope_key = \?/.test(sql)) scoped++;
+        else unscoped++;
+      }
+      return all(sql, ...params);
+    }) as typeof space.all;
+    const scopeCount = listScopes(space, { branch: "" }).length;
+    assert(scopeCount >= 5, `fixture spans several scopes (${scopeCount})`);
+    unscoped = 0;
+    generatedInternalCellIds(space);
+    assertEquals({ scoped, unscoped }, { scoped: 0, unscoped: 1 });
+    // The fingerprint excludes generated cells and hashes the rest from the
+    // same walk, rather than walking once for each.
+    unscoped = 0;
+    contentFingerprint(space);
+    assertEquals({ scoped, unscoped }, { scoped: 0, unscoped: 1 });
+  });
+});
+
+Deno.test("scopes of grouped rows are the scopes listScopes reports", () => {
+  withScopedSpace((space) => {
+    assertEquals(
+      scopesOfRows(visibleEntityRowsByScope(space, { branch: "" })),
+      listScopes(space, { branch: "" }),
+    );
+  });
 });

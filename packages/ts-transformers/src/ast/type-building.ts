@@ -1,10 +1,18 @@
 import ts from "typescript";
+import {
+  readAuthoredTypeNodeOnce,
+  unwrapTypeParentheses,
+} from "@commonfabric/schema-generator/type-node";
 import { resolvesToCommonFabricSymbol } from "../core/common-fabric-symbols.ts";
 import type { TransformationContext } from "../core/mod.ts";
 import type { CaptureTreeNode } from "../utils/capture-tree.ts";
 import { createPropertyName } from "../utils/identifiers.ts";
 import { getCallArgumentPosition } from "./call-arguments.ts";
-import { detectDirectBuilderCall } from "./call-kind.ts";
+import {
+  detectDirectBuilderCall,
+  detectNewExpressionKind,
+} from "./call-kind.ts";
+import { unwrapExpression } from "../utils/expression.ts";
 import {
   ensureTypeNodeRegistered,
   inferWidenedTypeFromExpression,
@@ -437,6 +445,12 @@ export function expressionToTypeNode(
   expr: ts.Expression,
   context: TransformationContext,
 ): ts.TypeNode {
+  const authoredCell = getAuthoredCellTypeNode(
+    expr,
+    context.checker,
+    context.state.typeRegistry,
+  );
+  if (authoredCell) return authoredCell;
   const symbol = ts.isIdentifier(expr)
     ? context.checker.getSymbolAtLocation(expr)
     : undefined;
@@ -464,6 +478,79 @@ export function expressionToTypeNode(
     context,
     context.state.typeRegistry,
   );
+}
+
+/**
+ * Preserve a cell constructor's authored type arguments through identity-
+ * preserving bindings. Printing its inferred type expands `typeof handler`
+ * into a structural function type, which cannot name a CFC writer.
+ */
+export function getAuthoredCellTypeNode(
+  expression: ts.Expression,
+  checker: ts.TypeChecker,
+  typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  seen = new Set<ts.Node>(),
+): ts.TypeNode | undefined {
+  const node = unwrapExpression(
+    ts.getOriginalNode(expression, ts.isExpression),
+  );
+  if (seen.has(node)) return undefined;
+  seen.add(node);
+  if (ts.isIdentifier(node)) {
+    const symbol = checker.getSymbolAtLocation(node);
+    let declaration = symbol?.valueDeclaration;
+    if (declaration && ts.isShorthandPropertyAssignment(declaration)) {
+      declaration = checker.getShorthandAssignmentValueSymbol(declaration)
+        ?.valueDeclaration;
+    }
+    if (declaration && ts.isVariableDeclaration(declaration)) {
+      if (
+        declaration.type || !ts.isVariableDeclarationList(declaration.parent) ||
+        !(declaration.parent.flags & ts.NodeFlags.Const)
+      ) return undefined;
+      if (declaration.initializer) {
+        return getAuthoredCellTypeNode(
+          declaration.initializer,
+          checker,
+          typeRegistry,
+          seen,
+        );
+      }
+    }
+  }
+  if (
+    ts.isCallExpression(node) &&
+    ts.isPropertyAccessExpression(node.expression) &&
+    node.expression.name.text === "for"
+  ) {
+    return getAuthoredCellTypeNode(
+      node.expression.expression,
+      checker,
+      typeRegistry,
+      seen,
+    );
+  }
+  if (
+    !ts.isNewExpression(node) || !node.typeArguments?.some(containsTypeQuery)
+  ) return undefined;
+  const kind = detectNewExpressionKind(node, checker);
+  if (!kind) return undefined;
+  const typeNode = ts.factory.createTypeReferenceNode(
+    ts.factory.createQualifiedName(
+      ts.factory.createIdentifier("__cfHelpers"),
+      kind.factoryName,
+    ),
+    node.typeArguments,
+  );
+  const type = checker.getTypeAtLocation(node);
+  typeRegistry?.set(typeNode, type);
+  return typeNode;
+}
+
+/** Whether the authored syntax names a value binding instead of just its shape. */
+export function containsTypeQuery(node: ts.Node): boolean {
+  return ts.isTypeQueryNode(node) ||
+    ts.forEachChild(node, containsTypeQuery) === true;
 }
 
 export function getDeclaredTypeNodeForBindingElement(
@@ -961,7 +1048,7 @@ function resolveTypeAliasReferences(
       : typeNode;
   }
 
-  const aliased = getAliasedTypeNode(typeNode, checker);
+  const aliased = readAuthoredTypeNodeOnce(typeNode, checker);
   // An alias already being resolved names itself; its reference stays.
   if (!aliased || resolving.has(aliased)) {
     return typeNode;
@@ -974,29 +1061,6 @@ function resolveTypeAliasReferences(
   return shouldPreserveBindingDeclaredTypeNode(named, checker)
     ? named
     : typeNode;
-}
-
-/**
- * Helper for `resolveTypeAliasReferences()`, which returns the type node a
- * reference to a non-generic type alias names, or `undefined` for a reference
- * to anything else.
- */
-function getAliasedTypeNode(
-  reference: ts.TypeReferenceNode,
-  checker: ts.TypeChecker,
-): ts.TypeNode | undefined {
-  const name = ts.isIdentifier(reference.typeName)
-    ? reference.typeName
-    : reference.typeName.right;
-  let symbol = checker.getSymbolAtLocation(name);
-  // An imported alias resolves to its import binding first.
-  if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
-    symbol = checker.getAliasedSymbol(symbol);
-  }
-  const declaration = symbol?.declarations?.find(ts.isTypeAliasDeclaration);
-  return declaration && !declaration.typeParameters?.length
-    ? declaration.type
-    : undefined;
 }
 
 /**
@@ -1045,7 +1109,7 @@ export function shouldPreserveBindingDeclaredTypeNode(
   typeNode: ts.TypeNode,
   checker?: ts.TypeChecker,
 ): boolean {
-  const unwrapped = unwrapParenthesizedTypeNode(typeNode);
+  const unwrapped = unwrapTypeParentheses(typeNode);
   const carries = (node: ts.TypeNode) =>
     shouldPreserveBindingDeclaredTypeNode(node, checker);
 
@@ -1061,14 +1125,6 @@ export function shouldPreserveBindingDeclaredTypeNode(
   }
 
   return false;
-}
-
-function unwrapParenthesizedTypeNode(typeNode: ts.TypeNode): ts.TypeNode {
-  let current = typeNode;
-  while (ts.isParenthesizedTypeNode(current)) {
-    current = current.type;
-  }
-  return current;
 }
 
 /**

@@ -60,6 +60,7 @@ const SENT = {
   spaceName: "reach",
   spaceIdentity: spaceSigner.keyPair,
   experimental: {
+    agentBuiltin: false,
     webViewScopedReplication: true,
     contentAddressedSchemas: false,
   },
@@ -137,10 +138,12 @@ const REACH = {
     // Read back as a pair, so the case turns on the record arriving with its
     // contents rather than on one key of it.
     reads: (o) => ({
+      agentBuiltin: o.runtime.experimental.agentBuiltin,
       webViewScopedReplication: o.runtime.experimental.webViewScopedReplication,
       contentAddressedSchemas: o.runtime.experimental.contentAddressedSchemas,
     }),
     expected: {
+      agentBuiltin: false,
       webViewScopedReplication: true,
       contentAddressedSchemas: false,
     },

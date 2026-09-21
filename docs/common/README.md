@@ -86,7 +86,7 @@ on the Common Fabric runtime.
 ### capabilities/ — built-in effects
 
 - [capabilities/llm.md](capabilities/llm.md) — `generateText` / `generateObject`; reactive results, no `await`
-- [capabilities/agent.md](capabilities/agent.md) — `agent()`; a request for an agent run over cells passed by reference, followed through its record (behind the `agentBuiltin` flag, off by default)
+- [capabilities/agent.md](capabilities/agent.md) — `agent()`; a request for an agent run over cells passed by reference, followed through its record (behind the `agentBuiltin` flag, on by default)
 - [capabilities/fetch.md](capabilities/fetch.md) — `fetchJson` / `fetchText` / `fetchJsonUnchecked` / `fetchBinary`; reactive results, no `await`
 - [capabilities/files.md](capabilities/files.md) — uploading files with `cf-file-input`, what a pattern keeps from the upload, downloading by link, and the blob store's limits
 - [capabilities/sqlite.md](capabilities/sqlite.md) — reading a `SqliteDb` a pattern was given as an input: `db.query`, one statement per database, bounding a query's rows, session-scoped results under a read ceiling

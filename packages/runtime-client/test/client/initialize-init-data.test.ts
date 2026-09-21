@@ -110,7 +110,7 @@ describe("initialize-init-data", () => {
         spaceIdentity,
         spaceDid: identity.did(),
         spaceName: "forwarding-space",
-        experimental: { modernCellRep: true },
+        experimental: { modernCellRep: true, agentBuiltin: false },
         cfcEnforcementMode: "enforce-strict",
         cfcFlowLabels: "persist",
         cfcReadMaxConfidentiality: ["did:key:zOwner"],

@@ -49,7 +49,6 @@ import {
 } from "./cfc/metadata.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
-  CFC_STRUCTURAL_PROVENANCE_SEED_MATERIALIZATION,
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
   type CfcAddress,
   runtimeWritePolicyAuthorization,
@@ -80,6 +79,7 @@ import {
   allowMutableTransactionRead,
   markReadAsAttemptedWrite,
 } from "./scheduler.ts";
+import { schemaHasIfc } from "./schema-ifc.ts";
 import { resolveSchema, resolveSchemaForValue } from "./schema.ts";
 import { isCellScope, scopeRank } from "./scope.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
@@ -89,6 +89,7 @@ import type {
 } from "./storage/interface.ts";
 import {
   ignoreReadForScheduling,
+  internalVerifierRead,
   linkResolutionProbe,
   writeDestinationRead,
 } from "./storage/reactivity-log.ts";
@@ -1200,6 +1201,7 @@ export function normalizeAndDiff(
     // re-derivations serialize the same cell again but find the doc present
     // and leave user edits alone.
     const cellSchema = newValue.schema;
+    let initializedSeed = false;
     const seedDefault = isObjectOrArray(cellSchema)
       ? cellSchema.default
       : undefined;
@@ -1251,51 +1253,77 @@ export function normalizeAndDiff(
         );
       }
       if (absent) {
-        try {
-          tx.writeValueOrThrow(
-            seedTarget,
-            fabricFromConvertibleJsValue(seedDefault),
-          );
-          // The marker is what authorizes the write above past an
-          // owner-protected schema's `writeAuthorizedBy` (cfc/prepare.ts
-          // requires marker AND doc-creation; both are checked at commit,
-          // so in-tx ordering is immaterial there). Record it only AFTER
-          // the write succeeds: a thrown write must not leave a stray
-          // marker that could authorize an unrelated same-doc write later
-          // in this transaction. It is recorded only here, by the runtime,
-          // never from arbitrary cell.set calls.
-          tx.recordCfcWritePolicyInput({
-            kind: "structural-provenance",
-            target: {
-              space: seedTarget.space,
-              id: seedTarget.id,
-              scope: seedTarget.scope,
-              path: [],
-            },
-            claim: CFC_STRUCTURAL_PROVENANCE_SEED_MATERIALIZATION,
-            sources: [{
-              space: seedTarget.space,
-              id: seedTarget.id,
-              scope: seedTarget.scope,
-              path: [],
-            }],
-          });
-          // Deliberately NOT memoized here: if this tx aborts, the doc stays
-          // absent and the next serialization must seed again. Once the
-          // write commits, the next check finds the doc present and settles.
-        } catch (error) {
-          // Fail open: a seed-materialization failure must not abort the
-          // serialization that references the cell — the link (with its
-          // schema default) still gets written below.
-          diffLogger.warn(
-            "diff",
-            () => [
-              `[BRANCH_CELL] seed materialization failed for`,
-              seedTarget.id,
-              error,
-            ],
-          );
-        }
+        recordRelevantSchemaWritePolicyInput(tx, seedTarget, cellSchema);
+        tx.writeValueOrThrow(
+          seedTarget,
+          fabricFromConvertibleJsValue(seedDefault),
+        );
+        // Only the exact seed written into an absent slot is initialization.
+        // The private mark prevents a caller from manufacturing this authority
+        // through the public transaction interface.
+        tx.recordCfcWritePolicyInput({
+          kind: "initialization",
+          mode: "seed",
+          target: {
+            space: seedTarget.space,
+            id: seedTarget.id,
+            scope: seedTarget.scope,
+            path: [],
+          },
+          value: fabricFromConvertibleJsValue(seedDefault),
+        }, runtimeWritePolicyAuthorization);
+        initializedSeed = true;
+        // Deliberately NOT memoized here: if this tx aborts, the doc stays
+        // absent and the next serialization must seed again. Once the
+        // write commits, the next check finds the doc present and settles.
+      }
+    }
+    const streamHandle = newValue instanceof CellImpl &&
+      newValue.kind === "stream";
+    // A rerun can return the same protected cell with a different, unused
+    // default. Record the unchanged root reference for CFC to verify alongside
+    // its final protection. Materialization runs first so an existing reference
+    // cannot hide an absent backing document.
+    if (
+      options?.schemaRole === "output" && !streamHandle &&
+      link.path.length === 0 &&
+      seedTarget !== undefined && seedTarget.path.length === 0 &&
+      !initializedSeed && schemaHasIfc(cellSchema) &&
+      !cfcLabelViewHasValues(carriedCfcLabelView)
+    ) {
+      const probeOptions = {
+        meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+      };
+      const currentReference = tx.readValueOrThrow(link, probeOptions);
+      if (
+        isPrimitiveCellLink(currentReference) &&
+        !isWriteRedirectLink(currentReference) &&
+        scopeInitialization(currentReference) === undefined &&
+        areNormalizedLinksSame(parseLink(currentReference, link), seedTarget) &&
+        tx.readValueOrThrow(seedTarget, probeOptions) !== undefined
+      ) {
+        // Preserve this attempt: preparation must refuse changed policy or any
+        // additional write attempt, even when the reference bytes stay equal.
+        tx.readValueOrThrow(link, {
+          ...options,
+          meta: {
+            ...options?.meta,
+            ...markReadAsAttemptedWrite,
+            ...writeDestinationRead,
+          },
+        });
+        tx.recordCfcWritePolicyInput({
+          kind: "preserved-output",
+          target: {
+            space: link.space,
+            id: link.id,
+            scope: link.scope,
+            path: [],
+          },
+          value: currentReference,
+        }, runtimeWritePolicyAuthorization);
+        tx.retainPendingWriteElision?.(toMemorySpaceAddress(link));
+        return [];
       }
     }
     // A stream handle's own schema is the event schema it accepts. The link
@@ -1304,8 +1332,6 @@ export function normalizeAndDiff(
     // The handle's kind decides, with nothing read: a read of the target here
     // would join its label into this write.
     const cellLink = newValue.getAsNormalizedFullLink();
-    const streamHandle = newValue instanceof CellImpl &&
-      newValue.kind === "stream";
     newValue = attachCfcLabelViewToSigilLink(
       createSigilLinkFromParsedLink(
         streamHandle
@@ -1318,6 +1344,19 @@ export function normalizeAndDiff(
       ),
       carriedCfcLabelView,
     );
+    if (initializedSeed && !streamHandle) {
+      tx.recordCfcWritePolicyInput({
+        kind: "initialization",
+        mode: "projection",
+        target: {
+          space: link.space,
+          id: link.id,
+          scope: link.scope,
+          path: [...link.path],
+        },
+        value: newValue as FabricValue,
+      }, runtimeWritePolicyAuthorization);
+    }
   }
 
   // Check for links that are data: URIs and inline them, by calling

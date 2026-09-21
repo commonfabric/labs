@@ -348,9 +348,9 @@ bundles, which is quicker than a restart.
 
 ## Agent Runner (Optional)
 
-`cf agent runner` runs the agent requests a pattern makes with `agent()`. It is
-only needed when testing that builtin, which also needs the `agentBuiltin`
-experimental flag on
+`cf agent runner` runs the agent requests a pattern makes with `agent()`. The
+builtin is enabled by default through the `agentBuiltin` experimental flag;
+requests stay queued until a runner claims them
 ([`EXPERIMENTAL_OPTIONS.md`](EXPERIMENTAL_OPTIONS.md)).
 
 The runner holds one user's identity, so it takes the identity whose requests
@@ -359,7 +359,7 @@ it should run, and the toolshed serving that identity's home space. Against
 
 ```bash
 # Shown for illustration only.
-EXPERIMENTAL_AGENT_BUILTIN=true ./scripts/start-local-dev.sh --port-offset=100
+./scripts/start-local-dev.sh --port-offset=100
 
 deno task cf agent runner \
   --identity ./my.key \

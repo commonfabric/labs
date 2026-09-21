@@ -103,6 +103,10 @@ export const NO_CANDIDATES = new Map<string, string>([
  * under `<command path>:<long name>`.
  */
 export const NO_OPTION_CANDIDATES = new Map<string, string>([
+  [
+    "profile repair-name-protection:expect",
+    "the receipt from the owner-reviewed inspection",
+  ],
   ["piece new:request-key", "an opaque caller retry key"],
   ["space invite create:ttl", "an admission lifetime in seconds"],
   ["space invite create:max-uses", "a distinct identity count"],

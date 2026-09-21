@@ -164,6 +164,7 @@ export {
 } from "./link-resolution.ts";
 export {
   areLinksSame,
+  getDerivedInternalCellLink,
   getMetaLink,
   isCellLink as isLink,
   isWriteRedirectLink,
