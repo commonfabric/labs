@@ -213,7 +213,7 @@ describe("agent book recommendations", () => {
           leaseMs: 300_000,
           workRoot: join(evidence, "runs"),
           loomRetrievalConfigPath: configPath,
-          harnessArgs: ["--model", model],
+          model,
         }, console.log);
         runtime = new Runtime(
           runtimePresets.remoteClient({
