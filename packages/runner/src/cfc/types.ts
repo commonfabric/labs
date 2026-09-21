@@ -575,11 +575,15 @@ export type WritePolicyInput =
     readonly owner: string;
   }
   | {
-    /** Authority is carried by the runtime's private mark, never this record alone. */
+    /**
+     * Authority is carried by the runtime's private mark, never this record
+     * alone. A `"reference"` initialization stages a link to a cell that exists
+     * already and none of what the cell holds, so its `value` is that link.
+     */
     readonly kind: "initialization";
     readonly target: CfcAddress;
     readonly value: FabricValue;
-    readonly mode: "seed" | "default" | "projection";
+    readonly mode: "seed" | "default" | "projection" | "reference";
   }
   | {
     readonly kind: "schema";

@@ -1063,7 +1063,11 @@ const writeIsPatternSetupInitialization = (
   );
 };
 
-/** A runtime initialization covers one absent slot and its exact final value. */
+/**
+ * A runtime initialization covers one absent slot and its exact final value;
+ * a reference initialization also covers a slot that holds that link already
+ * and receives no write.
+ */
 const writeIsRuntimeInitialization = (
   tx: IExtendedStorageTransaction,
   target: {
@@ -1080,6 +1084,33 @@ const writeIsRuntimeInitialization = (
     concretePathHasPrefix(path, input.target.path)
   );
   if (input?.kind !== "initialization") return false;
+  // A reference initialization covers a link to a cell and nothing the cell
+  // holds, so a recorded value that is anything else receives no permission.
+  if (
+    input.mode === "reference" &&
+    (!isPrimitiveCellLink(input.value) || isWriteRedirectLink(input.value))
+  ) return false;
+  const addressPath = ["value", ...input.target.path];
+  const details = tx.getWriteDetailsForTarget?.(target) ??
+    tx.getWriteDetails?.(target.space) ?? [];
+  const covering = [...details].filter((detail) =>
+    detail.address.id === target.id &&
+    normalizeCellScope(detail.address.scope) === target.scope &&
+    concretePathHasPrefix(addressPath, detail.address.path.map(String))
+  );
+  const finalValueIsRecorded = () =>
+    valueEqual(
+      tx.readValueOrThrow({ ...target, path: [...input.target.path] }, {
+        meta: INTERNAL_VERIFIER_META,
+      }),
+      input.value,
+    );
+  // A reference staged over the link the slot holds already lands no write
+  // there: the slot keeps its link, so nothing is repointed and no policy
+  // stored on it is disturbed.
+  if (input.mode === "reference" && covering.length === 0) {
+    return finalValueIsRecorded();
+  }
   const stored = loadStoredCfcEnvelope(tx, target);
   if (stored.status === "unreadable") return false;
   if (
@@ -1090,14 +1121,6 @@ const writeIsRuntimeInitialization = (
       entry.schema.ifc?.writeAuthorizedBy !== undefined
     )
   ) return false;
-  const addressPath = ["value", ...input.target.path];
-  const details = tx.getWriteDetailsForTarget?.(target) ??
-    tx.getWriteDetails?.(target.space) ?? [];
-  const covering = [...details].filter((detail) =>
-    detail.address.id === target.id &&
-    normalizeCellScope(detail.address.scope) === target.scope &&
-    concretePathHasPrefix(addressPath, detail.address.path.map(String))
-  );
   // Overlapping write paths can capture different intermediate states. Every
   // covering snapshot must agree on absence; the deepest alone is insufficient.
   const absent = covering.length > 0 && covering.every((detail) => {
@@ -1114,12 +1137,7 @@ const writeIsRuntimeInitialization = (
     }
     return false;
   });
-  return absent && valueEqual(
-    tx.readValueOrThrow({ ...target, path: [...input.target.path] }, {
-      meta: INTERNAL_VERIFIER_META,
-    }),
-    input.value,
-  );
+  return absent && finalValueIsRecorded();
 };
 
 /** A single runtime output attempt may preserve an existing root reference. */
@@ -4842,6 +4860,11 @@ const verifyTrustedEventRequirements = (
     if (
       writeInstallsInitialSchemaDefault(tx, target, entry.path, entry.schema)
     ) {
+      continue;
+    }
+    // A UI contract gates who may write the value, as `writeAuthorizedBy`
+    // does, so a runtime initialization satisfies it on the same terms.
+    if (writeIsRuntimeInitialization(tx, target, entry.path)) {
       continue;
     }
     const matched = tx.getCfcState().writePolicyInputs.some((input) =>
