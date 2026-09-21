@@ -207,6 +207,14 @@ followed piece. The runtime records the canonical URL and retained initial
 source in one creation transaction. Calling it with a source string or
 `Program` creates a detached piece when that source can be retained.
 
+For a persistent host UI piece, pass a stable `cause` in the options to
+`RuntimeClient.createPiece(source, space, options)` or
+`RuntimeInternals.createPiece(space, source, options)`. The cause derives the
+piece's identity within that space, so repeated calls address the same piece
+across reloads. Each call reapplies setup using the supplied source and inputs;
+it is not a lookup that leaves an existing piece untouched. Omitting `cause`
+allocates a new identity. Use a distinct cause for each independent host piece.
+
 `updatePieceSource()` returns a one-use `confirmationToken` with an
 incompatibility warning. Passing that token back confirms only the reported
 pattern-contract or durable linked-producer warning. The token is valid only
