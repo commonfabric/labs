@@ -118,8 +118,8 @@ the library is the reference, the board is a demo), `contacts/`, `cozy-poll/`,
 (a minimal file-sharing example: bytes go to the blob store, cells hold
 descriptors), `habit-tracker/`, `lobby/`, `lunch-poll/`, `profile-group-chat/`,
 `project-list/`, `router/`, `scoped-group-chat/`, `scoped-user-directory/`,
-`scrabble/`, `shared-profile-demo/`, `shared-profile-roster/`, `suggestable/`,
-`weekly-calendar/`.
+`scrabble/`, `shared-profile-demo/`, `shared-profile-roster/`,
+`sprint-organizer/`, `suggestable/`, `weekly-calendar/`.
 
 Connector-owned patterns live with their connector families: the
 [agent debug view](../connectors/agents/debug-view/README.md) and
@@ -690,6 +690,73 @@ interface CalendarOutput {
   todayDate: string;
   addEvent: Stream<{ title: string; date: string; time: string }>;
   removeEvent: Stream<{ event: EventPiece }>;
+}
+```
+
+## `sprint-organizer/main.tsx`
+
+A shared plan for a short team push: projects, the work items under each, and
+who is on what. Each item has one lead, any number of helpers, a status, and a
+flag marking the lead as a proposal. A second view shows each person's load and
+the items nobody leads. The plan is space-scoped, so everyone edits one copy;
+the view, the person filter and the unowned-only filter are session-scoped, so
+each viewer filters for themselves. Item ids are minted per project and a cut
+item keeps its number.
+
+**Keywords:** planning, assignments, multi-user, PerSpace, PerSession, filters
+
+### Input Schema
+
+```ts
+interface WorkItem {
+  id: string;
+  project: string;
+  component: string;
+  lead: string | Default<"">;
+  withPeople: string[] | Default<[]>;
+  tentative: boolean | Default<false>;
+  status: ItemStatus | Default<"todo">;
+  source: string | Default<"">;
+  notes: string | Default<"">;
+}
+
+interface Project {
+  prefix: string;
+  title: string;
+  intent: string | Default<"">;
+}
+
+interface SprintOrganizerInput {
+  title?: PerSpace<Writable<string | Default<"Sprint organizer">>>;
+  window?: PerSpace<Writable<string | Default<"">>>;
+  people?: PerSpace<Writable<string[] | Default<[]>>>;
+  projects?: PerSpace<Writable<Project[] | Default<[]>>>;
+  items?: PerSpace<Writable<WorkItem[] | Default<[]>>>;
+}
+```
+
+### Output Schema
+
+```ts
+interface SprintOrganizerOutput {
+  title: string;
+  window: string;
+  people: string[];
+  projects: Project[];
+  items: WorkItem[];
+  load: PersonLoad[];
+  unownedIds: string[];
+  liveCount: number;
+  ownedCount: number;
+  summary: string;
+  addPerson: Stream<{ name: string }>;
+  addProject: Stream<{ prefix: string; title: string; intent?: string }>;
+  addItem: Stream<{ project: string; component: string }>;
+  assign: Stream<{ id: string; lead: string; tentative?: boolean }>;
+  setWith: Stream<{ id: string; withPeople: string[] }>;
+  dropHelper: Stream<{ id: string; name: string }>;
+  setStatus: Stream<{ id: string; status: ItemStatus }>;
+  importAll: Stream<OrganizerSnapshot>;
 }
 ```
 
