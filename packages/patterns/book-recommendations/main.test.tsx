@@ -11,6 +11,22 @@ export default pattern(() => {
     title: "The Dispossessed",
     author: "Ursula K. Le Guin",
   });
+  const secondBook = new Writable<Book>({
+    title: "Parable of the Sower",
+    author: "Octavia E. Butler",
+  });
+  const thirdBook = new Writable<Book>({
+    title: "The Fifth Season",
+    author: "N. K. Jemisin",
+  });
+  const fourthBook = new Writable<Book>({
+    title: "A Psalm for the Wild-Built",
+    author: "Becky Chambers",
+  });
+  const fifthBook = new Writable<Book>({
+    title: "Babel",
+    author: "R. F. Kuang",
+  });
   const shelf = BookRecommendations({});
   const seed_reader = action(() => {
     shelf.finishedBooks.push(book);
@@ -41,10 +57,10 @@ export default pattern(() => {
         sources: [book],
         picks: [
           { book, why: "An imaginative society." },
-          { book, why: "A different perspective." },
-          { book, why: "Thoughtful worldbuilding." },
-          { book, why: "A compelling journey." },
-          { book, why: "A favorite author." },
+          { book: secondBook, why: "A different perspective." },
+          { book: thirdBook, why: "Thoughtful worldbuilding." },
+          { book: fourthBook, why: "A compelling journey." },
+          { book: fifthBook, why: "A favorite author." },
         ],
       },
       run: {
@@ -56,6 +72,18 @@ export default pattern(() => {
     hasText(view[UI], "The Dispossessed") &&
     hasText(view[UI], "Ursula K. Le Guin") &&
     hasText(view[UI], "An imaginative society.") &&
+    hasText(view[UI], "Parable of the Sower") &&
+    hasText(view[UI], "Octavia E. Butler") &&
+    hasText(view[UI], "A different perspective.") &&
+    hasText(view[UI], "The Fifth Season") &&
+    hasText(view[UI], "N. K. Jemisin") &&
+    hasText(view[UI], "Thoughtful worldbuilding.") &&
+    hasText(view[UI], "A Psalm for the Wild-Built") &&
+    hasText(view[UI], "Becky Chambers") &&
+    hasText(view[UI], "A compelling journey.") &&
+    hasText(view[UI], "Babel") &&
+    hasText(view[UI], "R. F. Kuang") &&
+    hasText(view[UI], "A favorite author.") &&
     hasText(view[UI], "42 tokens") &&
     hasText(view[UI], "Reported cost: $0.010000") &&
     hasText(view[UI], "Estimated cost: $0.020000") &&
@@ -64,6 +92,10 @@ export default pattern(() => {
   const assert_result_links = assert(() =>
     view.state.result?.picks.length === 5 &&
     view.state.result?.picks[0].book.equals(book) === true &&
+    view.state.result?.picks[1].book.equals(secondBook) === true &&
+    view.state.result?.picks[2].book.equals(thirdBook) === true &&
+    view.state.result?.picks[3].book.equals(fourthBook) === true &&
+    view.state.result?.picks[4].book.equals(fifthBook) === true &&
     view.state.result?.sources?.[0].equals(book) === true
   );
   const report_zero = action(() =>

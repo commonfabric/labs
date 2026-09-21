@@ -162,12 +162,22 @@ describe(
       const storageHost = {
         identity,
         storageManager,
-        beforeAssertions: async (runtime: Runtime, result: Cell<unknown>) => {
-          const written = await runtime.editWithRetry((tx) => {
-            result.key("ready").withTx(tx).set(true);
-          });
-          expect(written.error).toBeUndefined();
-        },
+        // Starting the write from `then` makes the test fail if the runner
+        // invokes this hook without awaiting the returned work.
+        beforeAssertions: (runtime: Runtime, result: Cell<unknown>) =>
+          ({
+            then: async (resolve, reject) => {
+              try {
+                const written = await runtime.editWithRetry((tx) => {
+                  result.key("ready").withTx(tx).set(true);
+                });
+                expect(written.error).toBeUndefined();
+                resolve?.();
+              } catch (error) {
+                reject?.(error);
+              }
+            },
+          }) as Promise<void>,
       };
       try {
         const result = await runTestPattern(
