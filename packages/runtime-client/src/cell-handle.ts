@@ -212,12 +212,19 @@ export class CellHandle<T = unknown> {
     const serialized = this.#serializeWrite(value);
     this.#writeGeneration++;
     const { committed } = await this.#enqueueOperation((queue) => {
-      const committed = this.#conn.request<RequestType.CellSet>({
-        type: RequestType.CellSet,
-        cell: this.ref(),
-        value: serialized,
-        awaitCommit: true,
-      });
+      let committed: Promise<void>;
+      try {
+        committed = this.#conn.request<RequestType.CellSet>({
+          type: RequestType.CellSet,
+          cell: this.ref(),
+          value: serialized,
+          awaitCommit: true,
+        });
+      } catch (error) {
+        // Dispatch can throw before returning a promise. The queue still
+        // needs a rejected operation on which to install its cleanup tail.
+        return Promise.reject(error);
+      }
       // A snapshot cached by an earlier queued operation predates this edit.
       queue.hasValue = false;
       // The dispatch promise releases the queue first. Observe a refusal

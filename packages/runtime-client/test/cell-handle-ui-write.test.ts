@@ -82,6 +82,27 @@ describe("CellHandle.setForUI()", () => {
     expect(cell.get()).toBe("initial");
   });
 
+  it("rejects a synchronous dispatch failure and accepts subsequent operations", async () => {
+    const failure = new Error("transport send failed");
+    const values: string[] = [];
+    const runtime = {
+      [$conn]: () => ({
+        request: (request: { type: RequestType; value: string }) => {
+          if (request.value === "refused") throw failure;
+          values.push(request.value);
+          return Promise.resolve();
+        },
+      }),
+    } as unknown as RuntimeClient;
+    const cell = new CellHandle(runtime, ref, "initial");
+    await expect(cell.setForUI("refused")).rejects.toBe(failure);
+    expect(cell.get()).toBe("initial");
+    await cell.setForUI("accepted");
+    await cell.send("submit");
+    expect(values).toHaveLength(2);
+    expect(values[0]).toBe("accepted");
+  });
+
   it("leaves a queued strict operation ahead of the UI dispatch", async () => {
     const strict = Promise.withResolvers<void>();
     const started = Promise.withResolvers<void>();
