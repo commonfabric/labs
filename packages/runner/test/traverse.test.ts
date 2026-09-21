@@ -3905,7 +3905,7 @@ describe("SchemaObjectTraverser unknown type handling", () => {
   it("does not resolve linked properties when property schema is type: unknown", () => {
     // Chain: outer => inner => redir => first -> second -> data
     //
-    // Redirects locate the reference slot; its ordinary target remains unread.
+    // Ordinary links are traversed, but the unknown value omits their content.
 
     const store = new Map<string, Revision<State>>();
     const type = "application/json" as const;
@@ -4035,8 +4035,7 @@ describe("SchemaObjectTraverser unknown type handling", () => {
   it("does not resolve linked properties when property schema is type: unknown and asCell is true", () => {
     // Chain: outer => inner => redir => first -> second -> data
     //
-    // Behavior: All redirect links are followed, toCell() stops at first non-redirect
-    // The data is fully resolved to { test: "foo" } but the cell reference stops at `first`
+    // Redirects locate the reference slot; its ordinary target remains unread.
 
     const store = new Map<string, Revision<State>>();
     const type = "application/json" as const;

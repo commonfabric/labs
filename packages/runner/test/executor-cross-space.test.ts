@@ -2129,7 +2129,7 @@ export default pattern<
     }).pull();
     expect(registry).toHaveLength(2);
     for (const link of registry) {
-      expect(parseLink(JSON.parse(JSON.stringify(link)))).toMatchObject({
+      expect(parseLink(link)).toMatchObject({
         space,
         scope,
         id,

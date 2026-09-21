@@ -161,6 +161,17 @@ attempt. An unknown transport outcome or failed registry read keeps its delivery
 identity. A late uncertain result cannot erase a proven terminal result for the
 same attempt, and a handled receipt cannot be downgraded.
 
+Client-side registration also treats the registry as a read interface. It starts
+the default pattern, demands its registry while invoking `addPiece`, and waits
+for the handler commit, registry readback, and storage persistence. The readback
+checks each complete target address. A handler that commits without registering
+its target refuses completion. Starting the new member is a separate choice;
+`--no-start` still completes registration. With server execution disabled, a
+cold read activates a computed registry's producer. Server-executed registries
+retain passive reads. Local stored writable registries are passive when computed
+IDs distinguish derived exports; disabling computed IDs makes local readers
+conservatively activate the root.
+
 That seat rules out two things the client-side operations do. A transaction the
 runtime seals into a wave cannot mint a durability receipt of its own, so the
 runtime refuses `runSyncedWithCommit` while a seal destination is installed

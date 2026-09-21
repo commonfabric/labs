@@ -638,22 +638,18 @@ export class PiecesController<T = unknown> {
    * This is the discovery root, not a list of every stored piece root. Reads
    * the default pattern's pieceRegistry export.
    *
-   * A listing is a read, and a read does not need the root running. Every
-   * writer of this export — {@link add}, {@link remove}, the root's own
-   * remove handler, and patterns that reach it through `wish()` — persists
-   * what it writes, so the stored value is current at every quiescent
-   * moment, and a listing can be served from it.
+   * Stored writable registries and server-executed registries can be read
+   * without running the root locally. A locally computed registry needs its
+   * root active and its derivation demanded before its value is current.
+   * When computed IDs are disabled, local readers conservatively activate
+   * the root because an untagged export can also be derived.
    *
-   * The root is reconciled before the registry is read, so a listing heals a
-   * stale root without calling `runtime.start()`, the dominant phase of
-   * opening a space whose root reaches a large piece.
-   * Running is kept for the cases that cannot be served from what is stored:
-   * a root that has never exported a registry here, one whose passive open
-   * fails, and `add()`.
+   * Reconcile before reading so a stale root is healed. Starting is also the
+   * fallback when the root has no stored registry or its passive open fails.
    */
   async getPieceRegistry(): Promise<Cell<Cell<unknown>[]>> {
-    // Reconcile without starting so the registry is read from current stored
-    // exports without materializing the root's result graph.
+    // Reconcile without starting so stored exports can be inspected without
+    // materializing the root's result graph.
     let passiveError: unknown;
     let passiveRoot: Cell<NameSchema> | undefined;
     try {
@@ -669,18 +665,26 @@ export class PiecesController<T = unknown> {
       ]);
     }
     if (passiveRoot) {
-      const exported = this.#pieceRegistryExport(passiveRoot);
+      // Registry callers keep a live handle across edits. Canonical-address
+      // inspection must not pin it to the root lookup's read transaction.
+      const exported = this.#pieceRegistryExport(passiveRoot).withTx();
       await this.syncPieces(exported);
       // `pieceListSchema` carries `default: []`, so a root that never
       // exported a registry and a root whose registry is empty read the same
-      // way through the schema. The raw value is what separates them, and
-      // only the first needs the root run.
-      if (exported.getRaw() !== undefined) {
+      // way through the schema. Inspect the raw value before choosing whether
+      // the root needs to supply or refresh its export.
+      const needsLocalDerivation =
+        this.runtime.experimental.serverExecution !== true &&
+        (this.runtime.experimental.computedCellIds === false ||
+          entityKindOfIdString(
+              exported.resolveAsCell().getAsNormalizedFullLink().id,
+            ) === "computed");
+      if (exported.getRaw() !== undefined && !needsLocalDerivation) {
         return exported;
       }
     }
 
-    // The running path supplies a registry when no stored export is available.
+    // The running path supplies missing exports and refreshes local derivations.
     // If both opens fail, retain both causes so the passive failure is not
     // hidden by the fallback.
     let defaultPattern: Cell<NameSchema> | undefined;
@@ -708,8 +712,14 @@ export class PiecesController<T = unknown> {
     }
 
     const pieceRegistry = this.#pieceRegistryExport(defaultPattern);
-    await this.syncPieces(pieceRegistry);
-    return pieceRegistry;
+    const stop = pieceRegistry.sink(() => {});
+    try {
+      await this.syncPieces(pieceRegistry);
+      await this.synced();
+      return pieceRegistry;
+    } finally {
+      stop();
+    }
   }
 
   /** Return the piece registry, not every stored piece root. */
@@ -751,38 +761,64 @@ export class PiecesController<T = unknown> {
       );
     }
 
-    // Send each piece and wait for transaction commit.
-    // The onCommit callback fires both on success AND when retries are
-    // exhausted (scheduler.ts ~line 2089). We check tx.status() to
-    // distinguish the two — otherwise pieces are silently dropped.
-    // Retries are handled by the scheduler internally.
-    for (const piece of newPieces) {
-      await timePiecePhase(
-        "add.send",
-        () =>
-          new Promise<void>((resolve, reject) => {
-            addPieceHandler.send({ piece }, (tx) => {
-              const txStatus = tx.status();
-              if (txStatus.status === "error") {
-                console.error(
-                  "Piece registration failed: addPiece transaction error:",
-                  txStatus.error,
-                );
-                reject(
-                  new Error(
-                    "Piece registration failed: addPiece transaction aborted after retries",
-                  ),
-                );
-              } else {
-                resolve();
-              }
-            });
-          }),
-      );
-    }
+    const registry = this.#pieceRegistryExport(defaultPattern);
+    // A handler's commit updates composition. Keep the derived registry
+    // demanded until its readback and persistence complete as well.
+    const stop = this.runtime.experimental.computedCellIds === false ||
+        entityKindOfIdString(
+            registry.resolveAsCell().getAsNormalizedFullLink().id,
+          ) === "computed"
+      ? registry.sink(() => {})
+      : () => {};
+    try {
+      // Send each piece and wait for transaction commit.
+      // The onCommit callback fires both on success AND when retries are
+      // exhausted (scheduler.ts ~line 2089). We check tx.status() to
+      // distinguish the two — otherwise pieces are silently dropped.
+      // Retries are handled by the scheduler internally.
+      for (const piece of newPieces) {
+        await timePiecePhase(
+          "add.send",
+          () =>
+            new Promise<void>((resolve, reject) => {
+              addPieceHandler.send({ piece }, (tx) => {
+                const txStatus = tx.status();
+                if (txStatus.status === "error") {
+                  console.error(
+                    "Piece registration failed: addPiece transaction error:",
+                    txStatus.error,
+                  );
+                  reject(
+                    new Error(
+                      "Piece registration failed: addPiece transaction aborted after retries",
+                    ),
+                  );
+                } else {
+                  resolve();
+                }
+              });
+            }),
+        );
+      }
 
-    await timePiecePhase("add.runtime.idle", () => this.runtime.idle());
-    await timePiecePhase("add.synced", () => this.synced());
+      await timePiecePhase("add.runtime.idle", () => this.runtime.idle());
+      await timePiecePhase("add.synced", () => this.synced());
+      const registered = await this.syncPieces(registry);
+      await this.synced();
+      for (const piece of newPieces) {
+        if (
+          !registered.some((member) =>
+            member.resolveAsCell().equalLinks(piece.resolveAsCell())
+          )
+        ) {
+          throw new Error(
+            "The addPiece handler committed without registering the piece",
+          );
+        }
+      }
+    } finally {
+      stop();
+    }
   }
 
   /**
