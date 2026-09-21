@@ -344,6 +344,12 @@ explicit input update is the rebinding mechanism; restarting or updating the
 parent alone leaves the child's inputs intact. Source adoption likewise keeps
 the stored inputs, including owner overrides.
 
+In-space children are the reference behavior for future input rebinding. Each
+parent run re-supplies their inputs and replaces the stored argument; value edits
+survive because those inputs link into the parent's cells. Any automatic rebinding
+policy, with or without owner-edit preservation, must be introduced for in-space
+children first, and tracked cross-space children must then match it.
+
 In this document, **wishing code into being** means a product authoring
 affordance that asks an LLM to write pattern source. It is distinct from the
 runtime `wish()` builtin. The builtin discovers and connects to existing
