@@ -211,8 +211,10 @@ For a persistent host UI piece, pass a stable `cause` in the options to
 `RuntimeClient.createPiece(source, space, options)` or
 `RuntimeInternals.createPiece(space, source, options)`. The cause derives the
 piece's identity within that space, so repeated calls address the same piece
-across reloads. Each call reapplies setup using the supplied source and inputs;
-it is not a lookup that leaves an existing piece untouched. Omitting `cause`
+across reloads. Repeated creation requires the same pattern identity; supplying
+a different pattern is rejected, so a stable cause does not perform a source
+upgrade. Each call reapplies setup and inputs to the existing pattern; it is
+not a lookup that leaves an existing piece untouched. Omitting `cause`
 allocates a new identity. Use a distinct cause for each independent host piece.
 
 `updatePieceSource()` returns a one-use `confirmationToken` with an

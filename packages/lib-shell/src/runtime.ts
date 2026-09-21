@@ -517,7 +517,8 @@ export class RuntimeInternals extends EventTarget {
   /**
    * Creates a piece in the given space, `options.argument` being the record of
    * inputs it is created with. `options.cause` derives its identity within
-   * the space: repeated calls reapply setup to the same piece.
+   * the space: repeated calls reapply setup to the same piece and require
+   * the same pattern identity. A different pattern is rejected.
    */
   async createPiece<T>(
     space: DID,

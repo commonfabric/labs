@@ -548,7 +548,8 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * `options.argument` is the piece's input, which is a record: a piece is
    * created with named inputs or with none. `options.cause` derives the
    * piece identity within its space. Reusing a cause reapplies setup to the
-   * same piece; omitting it creates a new identity.
+   * same piece and requires the same pattern identity; a different pattern
+   * is rejected. Omitting the cause creates a new identity.
    */
   async createPiece<T = unknown>(
     input: string | URL | Program,
