@@ -759,9 +759,14 @@ An alias of a scope wrapper emits what the wrapper emits written in place:
 `type Nickname = PerUser<string>` used as `name: Nickname` →
 `{ type: "string", scope: "user" }`, with no `$defs.Nickname`
 (`getNamedTypeKey` refuses a type carrying the brand). A definition is shared
-by every use of the alias while a scope belongs to one slot, and the runtime
-never reads a scope through a `$ref`, so a scope inside `$defs` would be
-inert. The wrapped type comes from the alias declaration's own
+by every use of the alias while a scope belongs to one slot, and whether a
+scope inside `$defs` is read at all depends on the form the schema travels in.
+`ContextualFlowControl.getSchemaScopeCap` follows an external `cid:` reference
+and not a local `#/$defs/…` one, so such a scope is found once the schema has
+been decomposed into content-addressed documents
+(`docs/specs/content-addressed-schemas.md`) and missed while it is inline, the
+form a pattern's own argument schema is written through. On the slot it is
+read in both. The wrapped type comes from the alias declaration's own
 `PerUser<…>` node, which keeps what the checker reduces out of the type — the
 `undefined` of `PerUser<T | undefined>`, a `Default` — and is reached from the
 type's aliasSymbol or from the node the type was written as. A generic alias
@@ -781,8 +786,9 @@ scope (`PerUser<A> & PerSession<B>`). Tested, scope-wrappers.test.ts;
 end-to-end: ts-transformers `aliased-scope-wrapper-schema.test.ts`.
 
 A scoped alias that refers to itself (`type Tree = PerUser<{ kids: Tree[] }>`)
-is the open case: the cycle is broken with an anonymous definition, the scope
-lands inside it, and a scope behind a `$ref` is one the runtime does not read.
+is the open case: the cycle is broken with an anonymous definition and the
+scope lands inside it, behind a local `$ref`, where it is read only in the
+content-addressed form.
 Writing the recursion through a named type keeps the scope on the slot
 (`interface TreeNode { kids: PerUser<TreeNode>[] }` →
 `items: { $ref: "#/$defs/TreeNode", scope: "user" }`).

@@ -452,8 +452,10 @@ export function getNamedTypeKey(
 
   // A type carrying a scope brand names a value type together with the scope
   // of the slot holding it. A definition is shared by every use of the name,
-  // and the write path reads a slot's scope from that slot's own schema, never
-  // through a `$ref`, so the scope has to be emitted where the type is used.
+  // and the write path reads a slot's scope from that slot's own schema: it
+  // follows a content-addressed `cid:` reference but not a local `#/$defs/`
+  // one, so a scope inside a definition is missed while the schema is inline.
+  // Emitted where the type is used, it is read in either form.
   if (hasScopeBrand(type)) {
     return undefined;
   }

@@ -45,9 +45,10 @@ via subpath exports. Entry point is `src/index.ts` (not `mod.ts`).
 - A scope wrapper is recognized by the `SCOPE_BRAND` its type carries
   (`src/typescript/scope-brand.ts`) as well as by name, which is what finds one
   behind a type alias. A branded type is never hoisted: the runtime reads a
-  slot's `scope` from that slot's own schema and not through a `$ref`, so a
-  `scope` inside `$defs` declares nothing. A wrapper that intersects over its
-  argument (a CFC alias, `Default`) carries the inner brand too, and has to
+  slot's `scope` from that slot's own schema, following a content-addressed
+  `cid:` reference but not a local `#/$defs/…` one, so a `scope` inside `$defs`
+  is missed whenever the schema is read inline. A wrapper that intersects over
+  its argument (a CFC alias, `Default`) carries the inner brand too, and has to
   lower before the brand branch in `CommonFabricFormatter.formatType`.
 - JSDoc flows into schemas: first doc → `description`, `#hashtags` → `tags`,
   conflicting docs → `$comment`. Declaration files are excluded.
