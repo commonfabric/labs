@@ -2544,6 +2544,13 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   ): void;
 
   /**
+   * Drops memoized reads of the transaction's current instant. A caller uses
+   * this after an asynchronous load fills a document that an earlier read
+   * could not traverse; reads at an issued epoch retain their fixed snapshot.
+   */
+  resetCurrentReadMemoization(): void;
+
+  /**
    * Optional diagnostics for the transaction-local `Cell.get()` cache.
    *
    * `entries` reports the currently retained cache entries, which drops to zero

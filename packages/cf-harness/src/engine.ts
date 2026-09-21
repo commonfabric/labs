@@ -35,6 +35,7 @@ import {
   mergeCfcLabelViews,
 } from "@commonfabric/runner/cfc";
 import { mergeLabel } from "@commonfabric/runner/cfc/label-view-core";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
@@ -850,9 +851,19 @@ export class CfHarnessEngine {
           skillsShAcquisitionClientFactory,
         );
     this.#taskText = options.taskText;
+    const recordedStructuredResult = options.runState?.structuredResult;
+    if (
+      recordedStructuredResult !== undefined &&
+      options.structuredResult !== undefined &&
+      !deepEqual(recordedStructuredResult, options.structuredResult)
+    ) {
+      throw harnessResumeRefusal(
+        "resumed run structured-result configuration does not match the recorded configuration",
+      );
+    }
     this.#structuredResult = options.lineage === undefined &&
         options.runState?.lineage === undefined
-      ? options.structuredResult
+      ? structuredClone(recordedStructuredResult ?? options.structuredResult)
       : undefined;
     this.#inputCells = options.inputCells ?? [];
     this.#connectorGrants = options.connectorGrants ?? [];
@@ -1100,6 +1111,9 @@ export class CfHarnessEngine {
         credentialOwner: this.config.credentialOwner,
         harnessHomeIdentity: this.config.harnessHomeIdentity,
         artifactRoot: this.artifactStore?.runRoot,
+        ...(this.#structuredResult !== undefined
+          ? { structuredResult: this.#structuredResult }
+          : {}),
         runManifest: this.config.runManifest,
         runManifestPath: this.config.runManifestPath,
         docsCorpus: this.config.docsCorpus,

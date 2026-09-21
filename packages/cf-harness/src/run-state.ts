@@ -1,3 +1,4 @@
+import type { JSONSchema } from "@commonfabric/api";
 import type {
   CfcConfClause,
   CfcEnforcementMode,
@@ -190,6 +191,13 @@ export interface HarnessRunState {
   credentialOwner?: HarnessCredentialOwnerRef;
   harnessHomeIdentity?: string;
   artifactRoot?: string;
+
+  /** Root-run structured-result configuration, retained across resume. */
+  structuredResult?: {
+    schema: JSONSchema;
+    path: string;
+  };
+
   runManifest?: HarnessRunManifest;
   runManifestPath?: string;
   skillRegistry?: HarnessSkillRegistry;
@@ -291,6 +299,10 @@ export interface CreateHarnessRunStateOptions {
   credentialOwner?: HarnessCredentialOwnerRef;
   harnessHomeIdentity?: string;
   artifactRoot?: string;
+  structuredResult?: {
+    schema: JSONSchema;
+    path: string;
+  };
   runManifest?: HarnessRunManifest;
   runManifestPath?: string;
   skillRegistry?: HarnessSkillRegistry;
@@ -382,6 +394,9 @@ export const createHarnessRunState = (
       : {}),
     ...(options.artifactRoot !== undefined
       ? { artifactRoot: options.artifactRoot }
+      : {}),
+    ...(options.structuredResult !== undefined
+      ? { structuredResult: structuredClone(options.structuredResult) }
       : {}),
     ...(options.runManifest !== undefined
       ? { runManifest: options.runManifest }

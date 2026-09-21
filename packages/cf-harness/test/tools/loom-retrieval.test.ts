@@ -582,6 +582,9 @@ describe("loom-retrieval tools", () => {
           hit("m-9", {
             confidentiality: [{ anyOf: [OWNER], unexpected: true }],
           }),
+          hit("m-10", {
+            confidentiality: [{ type: OWNER, anyOf: [] }],
+          }),
         ]),
       });
       const output = ok(
@@ -597,12 +600,13 @@ describe("loom-retrieval tools", () => {
         "withheld",
         "withheld",
         "withheld",
+        "withheld",
       ]);
       expect(
         output.entries.filter((entry) => entry.status === "withheld").map((
           entry,
         ) => entry.status === "withheld" && entry.reasonCode),
-      ).toEqual(Array(8).fill("cfc_label_read_failed"));
+      ).toEqual(Array(9).fill("cfc_label_read_failed"));
     });
 
     it("marks the observation truncated when the result bounded anything", async () => {

@@ -331,9 +331,21 @@ function publishViews(collected: { tile: Tile; view: TileView }[], recoveryIsSet
   broadcast(dashboardUpdate());
 }
 
+// A tile publishes an intermediate view when one part of its data is ready
+// ahead of the rest, and a chart is drawn from the part that takes longest.
+// The view replaces the whole tile, so one that carries no chart keeps the
+// chart already on the tile instead of leaving it bare until the collection
+// finishes. A completed view carries every part and is taken as it stands,
+// so a chart its collection no longer draws leaves the tile.
+function withChartOnTile(previous: TileView | undefined, view: TileView): TileView {
+  if (view.extra !== undefined || previous?.extra === undefined) return view;
+  const { extra, duration, alignChartBottom } = previous;
+  return { ...view, extra, duration, alignChartBottom };
+}
+
 function publishIntermediateView(tile: Tile, view: TileView): void {
   const now = Date.now();
-  views.set(tile.id, view);
+  views.set(tile.id, withChartOnTile(views.get(tile.id), view));
   lastChange = now;
   updateFaviconRedSince(now, false);
   broadcast(dashboardUpdate());
