@@ -1000,6 +1000,13 @@ describe("external content observation", () => {
           ...prepared.input,
           externalContentObservations: undefined,
         })).not.toBe(prepared.digest);
+        expect(preparedDigestFor({
+          ...prepared.input,
+          externalContentObservations: [],
+        })).toBe(preparedDigestFor({
+          ...prepared.input,
+          externalContentObservations: undefined,
+        }));
       }
       freshTx.abort("test complete");
     });

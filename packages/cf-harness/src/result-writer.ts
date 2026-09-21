@@ -930,6 +930,23 @@ export const writeAgentResult = async (
       }
     }
 
+    // Validate and attach every opaque observation before a cited document is
+    // made durable. A refused receipt must not leave a document behind for a
+    // result that never committed.
+    for (const receipt of externalObservationReceipts) {
+      try {
+        runtime.recordExternalContentObservation(tx, receipt, {
+          space,
+          producer: AGENT_RESULT_BUILTIN_ID,
+        });
+      } catch (error) {
+        throw agentResultCommitFailure(
+          error as { name?: string; message?: string; refusals?: unknown },
+          "an external observation for the result",
+        );
+      }
+    }
+
     // A document is minted only for a referent the result names. The transaction
     // reads nothing, so each durable citation carries its own admitted label.
     const minted = new Map<string, Cell<unknown>>();
@@ -974,19 +991,6 @@ export const writeAgentResult = async (
     for (const cell of minted.values()) {
       await cell.sync();
       cell.withTx(tx).get();
-    }
-    for (const receipt of externalObservationReceipts) {
-      try {
-        runtime.recordExternalContentObservation(tx, receipt, {
-          space,
-          producer: AGENT_RESULT_BUILTIN_ID,
-        });
-      } catch (error) {
-        throw agentResultCommitFailure(
-          error as { name?: string; message?: string; refusals?: unknown },
-          "an external observation for the result",
-        );
-      }
     }
     const value = placeReferences(
       options.structuredResult,

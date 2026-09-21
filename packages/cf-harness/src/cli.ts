@@ -2157,6 +2157,7 @@ const appendAdditionalInstructions = (
 const appendStructuredResultInstructions = (
   lines: string[],
   structuredResult: CfHarnessStructuredResultConfig | undefined,
+  allowedToolIds: readonly BuiltinToolId[] | undefined,
 ): void => {
   if (structuredResult === undefined) {
     return;
@@ -2164,8 +2165,12 @@ const appendStructuredResultInstructions = (
   lines.push(
     "",
     "Structured result contract:",
-    "- Before finishing, call submit_result with the whole result as `result`. It validates the value against the configured schema and tells you what to correct.",
-    `- Writing a JSON file at ${structuredResult.sandboxPath} yourself is the other way to the same place, where you hold a tool that can write it.`,
+    ...(allowedToolIds === undefined || allowedToolIds.includes("submit_result")
+      ? [
+        "- Before finishing, call submit_result with the whole result as `result`. It validates the value against the configured schema and tells you what to correct.",
+      ]
+      : []),
+    `- Writing a JSON file at ${structuredResult.sandboxPath} yourself is the other way to the same place when an available tool can write it.`,
     "- The harness validates that file against the configured structured-result schema after the run.",
     "- If the file is missing, invalid JSON, or schema-invalid, the CLI exits nonzero and records the validation failure in the batch result sidecar when configured.",
   );
@@ -2201,6 +2206,7 @@ export const buildCfHarnessOperatorSystemPrompt = (
       | "focusRoot"
       | "systemPrompt"
       | "structuredResult"
+      | "allowedToolIds"
     >
     & {
       fabricMountPath?: string;
@@ -2219,14 +2225,21 @@ export const buildCfHarnessOperatorSystemPrompt = (
     "- Stop once you have enough evidence to answer.",
   ];
   appendHostMountInstructions(lines, config);
-  appendStructuredResultInstructions(lines, config.structuredResult);
+  appendStructuredResultInstructions(
+    lines,
+    config.structuredResult,
+    config.allowedToolIds,
+  );
   appendAdditionalInstructions(lines, config.systemPrompt);
   return lines.join("\n");
 };
 
 export const buildCfHarnessBatchSystemPrompt = (
   config:
-    & Pick<CfHarnessCliConfig, "systemPrompt" | "structuredResult">
+    & Pick<
+      CfHarnessCliConfig,
+      "systemPrompt" | "structuredResult" | "allowedToolIds"
+    >
     & {
       fabricMountPath?: string;
       hostMounts?: readonly CfHarnessHostMountConfig[];
@@ -2240,7 +2253,11 @@ export const buildCfHarnessBatchSystemPrompt = (
     lines.push("");
     appendHostMountInstructions(lines, config);
   }
-  appendStructuredResultInstructions(lines, config.structuredResult);
+  appendStructuredResultInstructions(
+    lines,
+    config.structuredResult,
+    config.allowedToolIds,
+  );
   appendAdditionalInstructions(lines, config.systemPrompt);
   return lines.join("\n");
 };
@@ -2254,6 +2271,7 @@ export const resolveCfHarnessCliSystemPrompt = (
       | "systemPrompt"
       | "outputMode"
       | "structuredResult"
+      | "allowedToolIds"
     >
     & {
       fabricMountPath?: string;
@@ -3196,6 +3214,7 @@ export const runCfHarnessCli = async (
         new CfHarnessPromptLoop(options));
     const writeTextFile = deps.writeTextFile ?? Deno.writeTextFile;
     const readTextFile = deps.readTextFile ?? Deno.readTextFile;
+    let effectiveStructuredResult = parsed.structuredResult;
 
     const startedAt = Date.now();
     let result: HarnessPromptLoopResult;
@@ -3265,6 +3284,23 @@ export const runCfHarnessCli = async (
         throw harnessResumeRefusal(
           `Cannot resume subagent run ${artifacts.runState.runId} as a top-level run; resume root run ${artifacts.runState.lineage.rootRunId} instead.`,
         );
+      }
+      if (
+        effectiveStructuredResult === undefined &&
+        artifacts.runState.structuredResult !== undefined
+      ) {
+        const resolved = resolvePathWithinAllowedHostRoots(
+          createAllowedHostRoots(parsed.workspace, parsed.hostMounts),
+          parsed.workspace,
+          artifacts.runState.structuredResult.path,
+          "recorded structured-result path",
+          { requireWritable: true },
+        );
+        effectiveStructuredResult = {
+          ...artifacts.runState.structuredResult,
+          path: resolved.hostPath,
+          sandboxPath: resolved.sandboxPath,
+        };
       }
       const recordedProvider = artifacts.runState.modelProvider ??
         "openai-compatible-gateway";
@@ -3578,10 +3614,10 @@ export const runCfHarnessCli = async (
       });
     }
     const durationMs = Date.now() - startedAt;
-    const structuredResultValidation = parsed.structuredResult === undefined
+    const structuredResultValidation = effectiveStructuredResult === undefined
       ? undefined
       : await validateCfHarnessStructuredResult({
-        config: parsed.structuredResult,
+        config: effectiveStructuredResult,
         readTextFile,
       });
     if (parsed.resultJsonPath !== undefined) {

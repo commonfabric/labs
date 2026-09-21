@@ -4349,6 +4349,24 @@ Deno.test("resolveCfHarnessCliSystemPrompt bypasses operator guidance in batch m
   );
 });
 
+Deno.test("buildCfHarnessBatchSystemPrompt omits submit_result guidance when the tool is not allowed", () => {
+  const config = {
+    structuredResult: {
+      path: "/tmp/project/result.json",
+      sandboxPath: "/workspace/result.json",
+      schema: { type: "object" } as const,
+    },
+    allowedToolIds: ["write_file"] as const,
+  };
+  const prompt = buildCfHarnessBatchSystemPrompt(config);
+
+  assertEquals(prompt.includes("call submit_result"), false);
+  assertStringIncludes(
+    prompt,
+    "Writing a JSON file at /workspace/result.json",
+  );
+});
+
 Deno.test("resolveCfHarnessCliSystemPrompt honors disabled skill catalog guidance", () => {
   const prompt = resolveCfHarnessCliSystemPrompt({
     workspace: "/tmp/project",
