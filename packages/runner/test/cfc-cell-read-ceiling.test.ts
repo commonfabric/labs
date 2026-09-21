@@ -11,6 +11,7 @@ import { StorageManager } from "../src/storage/cache.deno.ts";
 import {
   dereferenceResolutionProbe,
   linkResolutionProbe,
+  machineryRead,
 } from "../src/storage/reactivity-log.ts";
 
 import {
@@ -69,6 +70,35 @@ describe("cfc-cell-read-ceiling", () => {
     return cell.getAsNormalizedFullLink();
   };
 
+  const seedProtectedReference = async () => {
+    const tx = writer.edit();
+    const cell = writer.getCell(
+      signer.did(),
+      `protected link probe ${crypto.randomUUID()}`,
+      undefined,
+      tx,
+    );
+    const link = cell.getAsNormalizedFullLink();
+    writeSeedEnvelopeDoc(tx, signer.did());
+    seedStoredEnvelope(tx, { ...toMemorySpaceAddress(link), path: [] }, {
+      value: { slot: { "/": { "link@1": { id: "of:target" } } } },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["slot"],
+            label: { confidentiality: [B] },
+            origin: "link",
+          }],
+        },
+      },
+    });
+    expect((await tx.commit()).error).toBeUndefined();
+    return link;
+  };
+
   it("withholds a stored cell outside the runtime ceiling on value and raw reads", async () => {
     const link = await seed([B]);
     const cell = readerFor([A]).getCellFromLink(link);
@@ -95,26 +125,51 @@ describe("cfc-cell-read-ceiling", () => {
   });
 
   it("withholds a standalone probe of a protected link", async () => {
+    const link = await seedProtectedReference();
+
+    const readTx = readerFor([A]).edit();
+    try {
+      const slot = toMemorySpaceAddress({ ...link, path: ["slot"] });
+      expect(() => readTx.read(slot, { meta: linkResolutionProbe })).toThrow(
+        /read ceiling/,
+      );
+    } finally {
+      readTx.abort();
+    }
+  });
+
+  it("withholds an ordinary read that exposes protected reference identity", async () => {
+    const link = await seedProtectedReference();
+    const readTx = readerFor([A]).edit();
+    try {
+      const slot = toMemorySpaceAddress({ ...link, path: ["slot"] });
+      expect(() => readTx.read(slot)).toThrow(/read ceiling/);
+    } finally {
+      readTx.abort();
+    }
+  });
+
+  it("keeps the shallow traversal guard over descendant content labels", async () => {
     const tx = writer.edit();
     const cell = writer.getCell(
       signer.did(),
-      "protected link probe",
+      "shallow shape read",
       undefined,
       tx,
     );
     const link = cell.getAsNormalizedFullLink();
     writeSeedEnvelopeDoc(tx, signer.did());
     seedStoredEnvelope(tx, { ...toMemorySpaceAddress(link), path: [] }, {
-      value: { slot: { "/": { "link@1": { id: "of:target" } } } },
+      value: { secret: "content not loaded by the tracking read" },
       cfc: {
         version: 1,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: {
           version: 1,
           entries: [{
-            path: ["slot"],
+            path: ["secret"],
             label: { confidentiality: [B] },
-            origin: "link",
+            observes: "value",
           }],
         },
       },
@@ -123,10 +178,27 @@ describe("cfc-cell-read-ceiling", () => {
 
     const readTx = readerFor([A]).edit();
     try {
+      expect(() =>
+        readTx.read(toMemorySpaceAddress(link), {
+          nonRecursive: true,
+          trackReadWithoutLoad: true,
+        })
+      ).toThrow(/read ceiling/);
+    } finally {
+      readTx.abort();
+    }
+  });
+
+  it("allows machinery to move a protected reference without observing it", async () => {
+    const link = await seedProtectedReference();
+    const readTx = readerFor([A]).edit();
+    try {
       const slot = toMemorySpaceAddress({ ...link, path: ["slot"] });
-      expect(() => readTx.read(slot, { meta: linkResolutionProbe })).toThrow(
-        /read ceiling/,
-      );
+      expect(() =>
+        readTx.read(slot, {
+          meta: { ...linkResolutionProbe, ...machineryRead },
+        })
+      ).not.toThrow();
     } finally {
       readTx.abort();
     }

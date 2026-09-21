@@ -25,6 +25,7 @@ import {
   isDereferenceResolutionProbe,
   isInternalVerifierRead,
   isLinkResolutionProbe,
+  isMachineryRead,
   isWriteDestinationRead,
 } from "../storage/reactivity-log.ts";
 import type { CfcConfClause } from "./clause.ts";
@@ -145,10 +146,10 @@ export class CfcReadCeilingError extends Error {
 /**
  * Measures a payload read against its runtime ceiling before returning content.
  * Labels come from the stored envelope, including descendants of a raw object
- * read. A link-resolution probe issued inside dereference resolution and a
- * write-destination probe are runtime machinery. A standalone link probe is an
- * observation of the pointer and is measured here; the content read that
- * follows a resolved link is measured at its target.
+ * read. A link-resolution probe issued inside dereference resolution or marked
+ * as runtime wiring, and a write-destination probe, are machinery. A standalone
+ * link probe is an observation of the pointer and is measured here; the content
+ * read that follows a resolved link is measured at its target.
  */
 export function assertCfcReadCeiling(
   tx: IExtendedStorageTransaction,
@@ -162,6 +163,7 @@ export function assertCfcReadCeiling(
     (address.path.length > 0 && address.path[0] !== "value") ||
     isInternalVerifierRead(options?.meta) ||
     isDereferenceResolutionProbe(options?.meta) ||
+    (linkProbe && isMachineryRead(options?.meta)) ||
     isWriteDestinationRead(options?.meta)
   ) return;
   const metadata = readStoredCfcMetadata(tx, address);
