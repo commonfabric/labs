@@ -52,7 +52,7 @@ import type { JSONSchema } from "@commonfabric/api";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 /** What an output says about itself. */
-export type OutputConcernKind = "error-branch" | "no-rows";
+export type OutputConcernKind = "error-branch" | "no-rows" | "pending";
 
 /**
  * The prefix the runtime writes on a SQLite failure of its own — a param it
@@ -88,8 +88,7 @@ const declaredOutputNames = (schema: JSONSchema | undefined): Set<string> => {
  * The output name a read still in flight is exposed under, which `db.query`
  * answers with and every atom passes on. An emptiness read while it is true
  * is the emptiness of a read that has not landed, and says nothing about the
- * data — a query over a served store is in flight for the whole of the run
- * that issued it. A failure read then is still a failure.
+ * data. A failure read then is still a failure.
  */
 const PENDING_KEY = "pending";
 
@@ -100,6 +99,10 @@ const PENDING_KEY = "pending";
  * out through the one field of this report that is free text.
  */
 export const OUTPUT_CONCERN_MESSAGES: Record<OutputConcernKind, string> = {
+  pending:
+    "this read is still pending. The captured counts and rows are not data " +
+    "yet. Read the same piece again under an appropriate result schema; " +
+    "do not author a replacement or present the capture as a completed answer.",
   "error-branch":
     "this output reports a failure and nothing in the result passes it on. " +
     "Read it: expose the failing output under your own result schema, and " +
@@ -149,9 +152,8 @@ const reportsFailure = (key: string, value: unknown): boolean =>
  * empty list a result happens to carry rather than the emptiness of a read.
  * Framework keys (`$NAME`, `$UI`) are not outputs and are left alone.
  *
- * A result reporting itself `pending` has its emptiness passed over, on the
- * terms `PENDING_KEY` states: a read still in flight is empty because it has
- * not landed. Its failures are reported either way.
+ * A result reporting itself `pending` gets a pending concern rather than an
+ * emptiness concern. Its failures are reported either way.
  *
  * An emptiness is read only off a result that REPORTS a read — one declaring an
  * error branch or a pending flag, which is what a pattern reading a query
@@ -175,6 +177,8 @@ export const observedOutputsIn = (
     if (key.startsWith("$") || !declared.has(key)) continue;
     const concern: OutputConcernKind | undefined = reportsFailure(key, member)
       ? "error-branch"
+      : key === PENDING_KEY && member === true
+      ? "pending"
       : reportsARead && !pending && Array.isArray(member) &&
           member.length === 0
       ? "no-rows"

@@ -2,7 +2,7 @@
 
 Status: current implementation reference\
 Last verified: 2026-09-21\
-Revision: `13494844ee+agent-review-fixes`
+Revision: `e4bdd99340+agent-review-fixes`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -350,25 +350,34 @@ The current package provides:
   not evidence of failure; discloses beside a successful result, as
   `outputConcerns`, declared top-level outputs of the patterns the run
   materialized — composed ones included, so a reader whose failure the composing
-  source passed on nowhere is still named — that reports a failure or, on a
-  result declaring a read, holds no rows, naming the output and the pattern
-  under the identity a `cf:pattern:` import addresses while the failure's own
-  text stays in the artifact, and under-reporting rather than over-reporting
-  wherever it cannot read — an output reached through a `$ref` or a combinator,
-  a nested one, an instance the recorder's bounded buffer evicted, and an
-  instance that will not read back are each passed over; returns the result
-  cell's canonical reference plus an optionally schema-sanitized value, and
-  leaves the piece detached (no recorded origin) and out of the space's
-  registered piece list, with run→piece provenance carried by the run's
-  persisted artifacts. `assign_slug` names a piece afterwards, from any handle
-  token referring to one: it validates the slug, fails closed on an availability
-  question the space cannot answer, refuses a slug already naming another piece
-  (one already naming the same piece answers ok), refuses a token that names a
-  position inside a piece, another space, or a document with no pattern
-  identity, and otherwise registers the piece in the space's piece list and
-  points the slug at it, returning the slug and, when composable without a bare
-  fabric identifier, an openable URL. Without the session configuration both
-  tools are absent from the tool surface, for a `default`- or
+  source passed on nowhere is still named — that report a failure, declare a
+  pending read, or hold no rows on a settled result declaring a read. Pending
+  zeros and empty lists are placeholders, not data; the root's returned snapshot
+  is checked even if a later observation has settled. A minimal unnamed reader
+  pattern takes the held result reference as an input to verify the same piece.
+  Concerns name the output and the pattern under the identity a `cf:pattern:`
+  import addresses while the failure's own text stays in the artifact. Reporting
+  is best-effort wherever it cannot read: an output reached through a `$ref` or
+  a combinator, a nested one, an instance the recorder's bounded buffer evicted,
+  and an instance that will not read back are each passed over. `run_pattern`
+  returns the result cell's canonical reference plus an optionally
+  schema-sanitized value, and leaves the piece detached (no recorded origin) and
+  out of the space's registered piece list, with run→piece provenance carried by
+  the run's persisted artifacts. `assign_slug` names a piece afterwards, from
+  any handle token referring to one: it validates the slug, fails closed on an
+  availability question the space cannot answer, refuses a slug already naming
+  another piece (one already naming the same piece answers ok), refuses a token
+  that names a position inside a piece, another space, or a document with no
+  pattern identity, and refuses a declared top-level pending read or an
+  unestablished UI. Otherwise it registers the piece in the space's piece list
+  and points the slug at it, returning the slug and, when composable without a
+  bare fabric identifier, an openable URL. Successful naming records a host-only
+  reference. Completed interactive turns retain those references atomically with
+  history for bare follow-ups, including after restart, and remint them through
+  the existing input-cell path. Explicit attachments, including an empty list,
+  take precedence and clear the retained targets when that turn completes
+  without naming a piece; failed turns leave them unchanged. Without the session
+  configuration both tools are absent from the tool surface, for a `default`- or
   `pattern-author`-profile subagent as much as for the parent — a child shares
   the one session the parent built; `--fabric-cfc-enforcement-mode` (the
   enforcing rungs: `enforce-explicit` or `enforce-strict`) and

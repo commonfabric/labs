@@ -1137,8 +1137,8 @@ no lane can be asked to run is not recorded, so a recording step whose
 identity no suite claims is a defect either way round: the step should
 be registered, or it should not be recording.
 
-The **store half** runs on `main`, after the full run has finished, over
-that run's own records. It fails if any recorded identity is one that no
+The **store half** runs after a run's tests have finished, over that
+run's own records, on a pull request and on `main` alike. It fails if any recorded identity is one that no
 suite's `locate()` claims, or that more than one suite claims. A claim names
 either one item or the suite-level measurement set. The match uses the
 complete identity, including an optional variant. This catches the subtler
@@ -4064,11 +4064,36 @@ exercised on the branch on its own.
       rather than its `.lcov` files: a measured set the lane saw fail is
       marked by a file beside the report, and a glob over one extension
       would drop it and publish the baseline anyway.
-- [ ] The store half of the drift guard runs on `main` in the job that
-      ships the run's records, over those records and against that run's
-      commit. It cannot be a gate inside a lane: a lane's records have not
-      shipped when its gates run, so the half would be reading an earlier
-      build's records and failing on every test this run deleted.
+- [x] The store half of the drift guard runs over the records every job
+      of a run shipped, against that run's commit. It cannot be a gate
+      inside a lane: a lane's records have not shipped when its gates
+      run, so the half would be reading an earlier build's records and
+      failing on every test this run deleted. The
+      `Test Topology Store Check` job waits for every job that ships
+      records and downloads their artifacts. A gathered artifact is a
+      run's records without the context a report opens with, so the
+      commit each is held to is read from the facts its own job wrote
+      beside them, and one that names none stays nameless for the store
+      half to refuse. When one job ships the whole run's records, the job
+      collapses into that one.
+- [x] That job runs on a pull request as well as on the default branch.
+      What this drift is introduced by is a change to a suite, a runner,
+      or a test's name, and that change has a run of its own to fail; the
+      default branch is left catching the pair of changes that were each
+      claimed separately and are not together. Turning it on cost nobody
+      a blocked pull request, the half passing over the runs of both at
+      the time it was wired.
+- [ ] Both post-test checks become steps of the one job that ships the
+      run's records. `Coverage Check` and `Test Topology Store Check` are
+      separate jobs because each reads what every test job produced and
+      there are fifteen of them, so each keeps a list of jobs to wait for
+      and pays a checkout, a Deno setup, an install and a download to read
+      a file. Once one job ships the whole run's records, neither needs a
+      runner of its own, and the two dependency lists go with them. What
+      makes that happen rather than being remembered is the
+      `one-post-test-job` tripwire: it holds that more than one job ships
+      records, so the change that makes one of them do it fails the build
+      and is handed the rest of the work.
 - [x] The full run's treatment of a test too flaky for pull requests.
       The count is placed already: `tasks/test-selection/plan.ts` gives
       every mandatory identity the count `executionsFor` returns for its

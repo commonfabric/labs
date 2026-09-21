@@ -1403,6 +1403,33 @@ describe("console/server", () => {
       ]);
     });
 
+    it("honors an explicit empty input list instead of configured defaults", async () => {
+      const loopOptions: CreateHarnessPromptLoopOptions[] = [];
+      const capturing = new ConsoleServer(
+        await config(),
+        (onEvent) =>
+          new HarnessInteractiveChatService({
+            basePromptLoopOptions: {
+              inputCells: [{ name: "default", ref: `/${CELL_ID}/days` }],
+            },
+            createPromptLoop: (options) => {
+              loopOptions.push(options);
+              return answeringLoop(options);
+            },
+            now: advancingClock(),
+            onEvent,
+          }),
+      );
+      const response = await capturing.handle(jsonRequest("/api/task", {
+        text: "Start without an attached piece",
+        inputCells: [],
+      }));
+      expect(response.status).toBe(200);
+      const started = await response.json();
+      await capturing.service.waitForTurn(started.sessionId, started.turnId);
+      expect(loopOptions.at(-1)?.inputCells).toEqual([]);
+    });
+
     it("answers 400 for an input cell the flag's own grammar refuses", async () => {
       const response = await server.handle(jsonRequest("/api/task", {
         text: "summarize the trip",

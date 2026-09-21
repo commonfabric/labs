@@ -547,6 +547,67 @@ Deno.test("sharded pattern caches follow their shard topology", async () => {
   }
 });
 
+Deno.test("every compile byte cache is keyed on the compiler fingerprint", async () => {
+  // A compile byte cache holds bytes one compiler emitted, and the runtime
+  // stores each of them under `compileCache:<fingerprint>/<identity>`. Keying
+  // the CI entry on that same fingerprint is what makes a restored entry usable
+  // rather than dead weight, and the compile-cache-key action is where the
+  // value comes from. A job that points the compiler at a cache file is the
+  // one that needs it, so that is what this reads rather than a step name.
+  const contents = await workflow("deno.yml");
+  const fingerprint = "${{ steps.compile-cache-key.outputs.fingerprint }}";
+  const resolver = "uses: ./.github/actions/compile-cache-key";
+
+  let entries = 0;
+  for (const jobId of jobIds(contents)) {
+    const job = jobBlock(contents, jobId);
+    const steps = stepBlocks(job);
+    const resolves = steps.some((step) => step.body.includes(resolver));
+    const files = new Set(
+      [...job.matchAll(/CF_COMPILE_CACHE_FILE[:=] ?(.+)$/gm)].map((match) =>
+        match[1].trim().replace(/\s*\\$/, "").replace(/^"|"$/g, "")
+      ),
+    );
+
+    if (files.size === 0) {
+      assert(!resolves, `${jobId} resolves a fingerprint it keys nothing on`);
+      continue;
+    }
+    assert(
+      resolves,
+      `${jobId} uses a compile cache without resolving the fingerprint`,
+    );
+
+    for (const file of files) {
+      let resolved = false;
+      let cached = false;
+      for (const step of steps) {
+        if (step.body.includes(resolver)) resolved = true;
+        if (!step.body.includes(`path: ${file}\n`)) continue;
+        cached = true;
+        assert(
+          resolved,
+          `${jobId} keys ${file} before resolving the fingerprint`,
+        );
+
+        const key = step.body.match(/^ {10}key: (.+)$/m);
+        assert(key, `${jobId} has no key for ${file}`);
+        assertStringIncludes(key[1], fingerprint);
+
+        const restoreKeys = step.body.match(
+          /restore-keys: \|\n((?: {12}.+\n)+)/,
+        );
+        for (const prefix of restoreKeys?.[1].trim().split("\n") ?? []) {
+          assertStringIncludes(prefix, fingerprint);
+        }
+        entries += 1;
+      }
+      assert(cached, `${jobId} caches nothing at ${file}`);
+    }
+  }
+  assert(entries > 0, "no compile byte cache found in deno.yml");
+});
+
 Deno.test("pattern shard selection fails loudly instead of running an empty shard", async () => {
   // `mapfile -t X < <(deno run … select-pattern-integration-files.ts …)`
   // discards the selector's exit status: a selector failure leaves the
@@ -719,6 +780,54 @@ Deno.test("the CFC Property Suite workflow records no tests", async () => {
   const job = jobBlock(suite, "cfc-properties");
   assertStringIncludes(job, "run: deno test -A test/cfc-properties/\n");
   assertStringIncludes(job, "deno task cfc-audit ");
+});
+
+Deno.test("the store half of the drift guard reads every record artifact", async () => {
+  const contents = withoutComments(await workflow("deno.yml"));
+  const job = jobBlock(contents, "test-topology-store-check");
+
+  // An identity is claimed by the suite that would run it, so a record
+  // artifact this job does not see is a surface it cannot hold the topology
+  // to. It therefore waits for every job that ships records, and downloads
+  // them by the prefix the ship step names them under.
+  const shippers = jobIds(contents).filter((jobId) =>
+    jobId !== "test-topology-store-check" &&
+    jobBlock(contents, jobId).includes(
+      "uses: ./.github/actions/test-records-ship",
+    )
+  );
+  // The floor pins the extraction: zero found jobs would mean the search
+  // broke rather than that the workflow stopped shipping records.
+  assert(shippers.length >= 14, `only ${shippers.length} shipping jobs found`);
+  assertEquals(
+    shippers.filter((jobId) => !neededJobIds(job).includes(jobId)),
+    [],
+    "record-shipping jobs the store half does not wait for",
+  );
+  assertStringIncludes(job, "pattern: test-records-*");
+
+  // The records are held to the commit the run checked out, and the
+  // directory is named rather than the files under it, so the guard is
+  // handed the download itself and fails when it holds nothing. The whole
+  // command is compared, because a glob appended to the directory
+  // contains the directory.
+  const command = job.match(/deno task check-test-topology[^\n]*\n[^\n]*/);
+  assert(command, "the job does not run the topology check");
+  assertEquals(
+    command[0].replace(/\s+/g, " ").trim(),
+    'deno task check-test-topology --commit "$GITHUB_SHA" ' +
+      "--records test-records-artifacts",
+  );
+
+  // The guard reads the artifacts of every job in this run, so no lane can be
+  // asked to run it, and `docs/specs/test-records.md` under "Recording" puts
+  // it outside test records: no spool directory, no wrapper, no ship step.
+  assert(!job.includes("CF_TEST_RECORDS_DIR"), "the job spools test records");
+  assert(
+    !job.includes("run-recorded"),
+    "the job wraps its command in run-recorded",
+  );
+  assert(!job.includes("test-records-ship"), "the job ships test records");
 });
 
 Deno.test("One commit publishes one set of release artifacts", async () => {

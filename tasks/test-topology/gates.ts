@@ -127,11 +127,15 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     run: ["task", "check-tripwires"],
     // Probes the weakness each tripwire asserts is still present, and
     // reads the test file carrying the same assertion. A tripwire added
-    // against another package widens this list.
+    // against another package widens this list. The workflow is here
+    // because a tripwire reads the shape of the job matrix, so a change
+    // to it is a change to what that tripwire probes.
     reachedBy: [
+      ".github/workflows/deno.yml",
       "packages/identity/",
       "packages/toolshed/routes/ingest-channels/",
       "tasks/check-tripwires.ts",
+      "tasks/post-test-jobs-tripwire.test.ts",
     ],
   },
   {
