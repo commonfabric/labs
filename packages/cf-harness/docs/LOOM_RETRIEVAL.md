@@ -107,7 +107,9 @@ observation over the result's output channel, through the same accumulation
 `research` and the sandbox tools feed. Withheld rows contribute nothing, since
 nothing of them reached the model. The join is kept on the result artifact under
 `cfc` and is not shown to the model. An admitted row's label is also what a
-result writer stamps on a document it mints for that row.
+result writer stamps on a document when the result cites that row. An uncited
+row contributes through a runtime-issued content-observation receipt and is not
+made durable.
 
 ## Tools
 
@@ -204,8 +206,10 @@ The agent result writer takes these through
 `agentObservedHandlesOfTable(handleTable)`, which returns each general address
 handle as a cell and each referent as a document. A structured result that names
 a row's token gets a document minted from the row under its label and a link to
-it. Every observed row is minted and read by the result transaction whether or
-not the result names it, because its content entered model context and the
-result's inline text has to carry its label; a row the result does not name is
-linked from nowhere. A referent token the run does not hold fails the write as
-`unheld_handle`.
+it. A row the result does not name passes the same runtime write-admission gate
+in an isolated transaction that is aborted, so it leaves no durable document.
+The runtime returns an opaque, transaction-bound observation receipt whose
+canonical confidentiality join and hereditary integrity meet participate as a
+CONTENT input to the result write. The result's inline text therefore carries
+every observed row's label without minting an unreferenced document. A referent
+token the run does not hold fails the write as `unheld_handle`.

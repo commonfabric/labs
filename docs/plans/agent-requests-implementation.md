@@ -103,8 +103,9 @@ tool calls, and a run without the config offers none of the tools.
 
 ## Stage 2 — The result writer in the harness
 
-**Package:** `packages/cf-harness` (host side), one small `packages/runner`
-export. **Depends on:** nothing (stage 1 only supplies more referent kinds).
+**Packages:** `packages/cf-harness` (host side) and the `packages/runner`
+observation-receipt seam. **Depends on:** nothing (stage 1 only supplies more
+referent kinds).
 
 The writer is the harness routine of design §1.3. It runs on the trusted host
 over the fabric session's runtime and is called by the runner of stage 4 after
@@ -128,10 +129,16 @@ a run reaches its structured result. It is not a model tool.
          refused. A cell referent becomes its link. Where the position
          declares `ifc.maxConfidentiality` (met across `allOf`), a referent
          above it is sealed.
-      3. First transaction: a document per non-cell referent, written through
-         a schema declaring the referent's label on every node; no reads.
-      4. Second transaction: read every observed cell and every minted
-         document so `collectConsumedLabel` sees them;
+      3. First committed transaction: a document per non-cell referent the
+         result names, written through a schema declaring the referent's label
+         on every node; no reads. For every unnamed referent, stage the same
+         write in an isolated transaction, require successful CFC preparation,
+         traverse its complete value closure, retain the runtime's opaque
+         content-observation receipt, and abort the transaction.
+      4. Second committed transaction: read every observed cell and every
+         minted document, and consume each runtime-issued observation receipt,
+         so `collectConsumedLabel` sees every model input without making an
+         unnamed referent durable;
          `tx.setCfcImplementationIdentity({ kind: "builtin", builtinId: "agent" })`;
          write the result through the result schema with position ceilings
          stripped, link positions relaxed, `maxConfidentiality` declared as
@@ -146,11 +153,12 @@ a run reaches its structured result. It is not a model tool.
 - [x] Tests, `test/result-writer.test.ts`, on an in-memory runtime with
       fixture cells of two labels and one observed Loom row: one result
       document, three links, targets keep their labels, inline text carries
-      the join of both cell labels, the minted row document carries the row's
-      label, the result carries `LlmDerived`; an unheld handle fails before
-      any write; a handle at a non-`asCell` position still becomes a link; a
-      value above a declared ceiling at an `asCell` position is sealed rather
-      than written.
+      the join of both cell labels, a cited row document carries the row's
+      label, an uncited row leaves no durable document while its label still
+      joins the inline result, and the result carries `LlmDerived`; an unheld
+      handle fails before any write; a handle at a non-`asCell` position still
+      becomes a link; a value above a declared ceiling at an `asCell` position
+      is sealed rather than written.
 - [x] Documents: `packages/cf-harness/docs/IMPLEMENTATION_PROFILE.md` (the
       writer as a trusted host path, AH-TOOL-7),
       `packages/cf-harness/docs/CURRENT_STATE.md`.
@@ -164,11 +172,14 @@ schema it writes through as the result document's store policy; under the
 strict rung a tainted write to a store declaring no policy is refused, and the
 ceiling is the policy design §1.4 says the result fits by construction. The
 runtime measures the derived join against it, so the join stays derived and
-nothing asserts a label. Two transactions are committed rather than one: the
-documents minted for non-cell referents go first, in a transaction that reads
-nothing, so each carries its declared label alone, and the result transaction
-then reads them beside the observed cells so their labels join the inline
-text. Validation uses the sanitizer's validation half only: its string-sealing
+nothing asserts a label. When the result cites non-cell referents, their
+documents are committed first in a transaction that reads nothing, so each
+carries its declared label alone. Each uncited referent
+passes the same runtime admission through an isolated prepared transaction that
+is aborted; the result transaction reads the cited documents beside the
+observed cells and consumes the runtime's opaque CONTENT-observation receipts,
+so every observed label joins the inline text without an uncited document.
+Validation uses the sanitizer's validation half only: its string-sealing
 pass withholds every free string a schema does not enumerate, which is right
 for a value leaving the fabric toward a model and wrong for text a model
 authored on its way into the fabric. A position's declared `maxConfidentiality`
@@ -378,8 +389,10 @@ and a result link, and observes `pending: false` and `result` on the node.
       content, label, and `labelSource`), its entry names the token as
       `handle`, `describe_handle` discloses kind, source, label source, and
       atom types, and `agentObservedHandlesOfTable` hands cells and referents
-      to the writer. The writer mints every observed row, named or not, since
-      the inline text carries its label; only a named row is linked.
+      to the writer. The writer mints only an observed row the result names.
+      An unnamed row passes the same runtime admission in an isolated aborted
+      transaction and contributes to the inline result through an opaque,
+      transaction-bound CONTENT-observation receipt.
 
 *Exit:* the stage-4 runner test suite passes across two test toolsheds, and a
 manual run against `dev-local` with a real harness and a scripted model moves

@@ -298,18 +298,23 @@ goes through, because the runtime applies a position's `maxConfidentiality` to
 the whole transaction's join, which for this transaction is everything the run
 observed.
 
-**Two transactions.** The documents minted for non-cell referents are written
-first, in a transaction that reads nothing, so each carries its declared label
-alone. The result transaction then reads every one of them beside every cell
-the run observed, and writes the result.
+**One or two committed transactions.** When the result cites non-cell
+referents, their documents are written first in a transaction that reads
+nothing, so each carries its declared label alone. Every uncited referent passes the same write
+admission in its own transaction; after successful CFC preparation the runtime
+traverses the complete value closure, issues an opaque observation receipt, and
+aborts that transaction. The result transaction reads every cited document
+beside every cell the run observed, consumes the receipts as CONTENT inputs,
+and writes the result.
 
 **What stays inline is labeled with the join.** Model-authored scalars — the
 rationales, a summary — stay in the result document. Their confidentiality is
 the join of what the model observed, and the writing transaction *derives*
 that join rather than asserting it: before the write, the host reads every
 cell the run observed (it holds their handles) and every document it minted,
-so the transaction's consumed set is the real one and `deriveFlowJoin` stamps
-it. The run's observation ceiling is declared on every node of the schema the
+and consumes a runtime-issued receipt for every uncited external referent, so
+the transaction's consumed set is the real one and `deriveFlowJoin` stamps it.
+The run's observation ceiling is declared on every node of the schema the
 result is written through, as the result document's store policy — and on
 every document a nested object splits into — so the commit boundary measures
 the derived join against the ceiling and refuses a join it does not admit.
@@ -324,9 +329,10 @@ The host is trusted code; this is the same line the llm builtins stand on.
 
 **Cost of this route.** The harness gains one host-side routine — a result
 writer over its fabric session (`packages/cf-harness/src/result-writer.ts`,
-`writeAgentResult`) that resolves handles to links, mints documents for
-non-cell referents, reads observed cells, and writes under the builtin
-identity — and no new model-facing tool. Against the alternative of
+`writeAgentResult`) that resolves handles to links, mints documents for cited
+non-cell referents, admits uncited referents through runtime observation
+receipts, reads observed cells, and writes under the builtin identity — and no
+new model-facing tool. Against the alternative of
 the builtin stamping a label the runner reported, this removes the one trusted
 label input the earlier draft needed and gives per-referent labels for free.
 It is the cheaper design once the harness is writing anyway, and the harness
@@ -797,11 +803,12 @@ without one — is assumption 11.
 
 **Phase 2 — The result writer in the harness.** The host-side routine of
 section 1.3: validate, resolve handles to links, mint labeled documents for
-non-cell referents, touch observed cells, write under the builtin identity,
+cited non-cell referents, admit uncited referents through opaque runtime
+observation receipts, touch observed cells, write under the builtin identity,
 return a link. *Acceptance:* with a scripted model over fixture cells of two
 labels and one Loom hit, the written result is one document carrying the join
-inline and three links whose targets carry their own labels; a handle the run
-does not hold fails the write.
+inline, each cited target carries its own label, an uncited hit leaves no
+durable document, and a handle the run does not hold fails the write.
 
 **Phase 3 — The `agent` builtin.** Sink row and class, governance row, the
 builtin cell deriving `pending`, `result`, `error` from the record, request
@@ -860,8 +867,8 @@ Ruled 2026-09-18 unless marked.
 | # | Decision | Ruling |
 | --- | --- | --- |
 | D1 | Pattern surface | a class-2 builtin `agent` (§1.1 A) |
-| D2 | Result labeling | the harness writes the result: every referenced handle becomes a link, non-cell referents become labeled documents, inline text carries the derived join (§1.3) |
-| D3 | How the join is established | derived by the writing transaction reading the observed cells and the minted referent documents, not asserted by the runner; the run's ceiling is declared as the result's store policy and the runtime measures the derived join against it; no trusted label input |
+| D2 | Result labeling | the harness writes the result: every referenced handle becomes a link, cited non-cell referents become labeled documents, uncited referents leave no durable document, and inline text carries the derived join (§1.3) |
+| D3 | How the join is established | derived by the writing transaction reading the observed cells and cited referent documents and consuming runtime-issued CONTENT-observation receipts for uncited referents, not asserted by the harness; each receipt comes from an isolated row-write transaction that passed runtime preparation and was then aborted; the run's ceiling is declared as the result's store policy and the runtime measures the derived join against it; no caller-supplied trusted label input |
 | D4 | Default observation ceiling | the requester's own view |
 | D5 | `agent` sink ceiling under max enforcement | the first take ships a static empty ceiling with the builtin-side check; the request's observation ceiling as a per-request sink ceiling is later work (ruled 2026-09-18). Built as a static empty ceiling (`agent: { ceiling: [] }`), because the governance registry admits one clause list per sink and the gate reads nothing off the request. The builtin measures its request against the pattern's `maxConfidentiality` before staging. Under the static row a reference to a labeled cell is refused with the task text, since a link position carries its target's label as the pointer's own; the ruled ceiling needs the sink-request policy input to carry the request's ceiling, a registry arm declaring the row per request, and every reader of `SinkMaxConfidentiality` taking that arm (§1.4, gate 1) |
 | D6 | Run identity | the requester's, held by their runner |
