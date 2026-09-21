@@ -1578,6 +1578,36 @@ Cases:
   - if 1 schema arg present: treated as input schema, infer result schema
   - if none: infer both
 
+An input type argument that instantiates a generic declaration, as
+`pattern<Input<number>>` does `interface Input<T>`, emits each property with
+the schema of that property declared with the argument in place: schema
+generation reads the declaration's type nodes with the instantiation's
+arguments (mapping spec §4.1). So `c: T | string | Default<"">` emits
+`{ type: ["number", "string"], default: "" }` and `c: PerUser<T>` with
+`T = string` emits `{ type: "string", scope: "user" }`, as does a generic
+declaration held by a non-generic input, such as `{ c: Counter<number> }`.
+A capture of such a binding carries the same default and scope (§9.1). One
+emitted as its instantiated declared type can still differ in its value schema:
+`anyOf` members where the input has one schema, as for `T | Default<{ value: 0 }>`
+with `T = Box<number>`, and `value: {}` for `PerUser<T>` with `T = Box<string>`,
+whose printed `Box<string>` is read as `Box`'s generic declaration (mapping spec
+§4.1).
+
+An inferred result reads a returned input binding through the pattern body's
+view, where `Default` is stripped from its type, and emits no default for it,
+with a generic input or without one. Two cases differ. A scope wrapper and its
+payload, default included, reach the result through the binding's declared
+type (§9.1). That rebuilt result gives each other returned binding whose
+declared type carries a wrapper its declared node too, read by the view's type:
+a binding whose view is still a union keeps its default there, as
+`number | string | Default<"">` does, and one whose view is not loses it, as
+`number | Default<0>` does. And an input declared on the callback's parameter,
+`pattern(({ c }: Input) => …)`, leaves the body's view with its defaults, so
+the result carries them.
+`test/generic-pattern-input.test.ts` pins the input, the result, and a capture
+of a generic input against the same property declared with its argument in
+place.
+
 When inferring the result schema (0 or 1 type args), CTS requires a
 structurally representable top-level result:
 

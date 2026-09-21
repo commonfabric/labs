@@ -211,8 +211,9 @@ true, in this fixed order (`src/schema-generator.ts`):
 Order matters: CommonFabric before Union (wrapper unions), Native before
 Object (built-ins are object types), Array before Primitive. If no formatter
 matches, generation throws (`src/schema-generator.ts`). Before
-dispatch, `formatType` short-circuits unresolved type parameters
-(constraint → default → `{}`) and conditional types (`{}`).
+dispatch, `formatType` formats a type parameter that an enclosing
+instantiation binds as its argument (§4.1), and short-circuits any other type
+parameter (constraint → default → `{}`) and conditional types (`{}`).
 
 ## 4. Core Type Mappings
 
@@ -235,7 +236,8 @@ by any repo test.
 | `any` | `true`; `any[]` → `items: true` | `primitive-formatter.ts`; `array-formatter.ts` | tests |
 | `unknown` | `{ type: "unknown" }` — non-standard (`api/index.ts`); `unknown[]` → `items: { type: "unknown" }` | `primitive-formatter.ts`; `array-formatter.ts` | array-special-types |
 | TS `object` keyword | `{ type: "object", additionalProperties: true }` | `object-formatter.ts` | probe only |
-| Uninstantiated type parameter | constraint if any, else default, else `{}` | `schema-generator.ts` | untested at generator level; the pipeline substitutes `unknown` nodes before generation (ts-transformers spec §10.5), so `{}` is the *local* behavior |
+| Type parameter an enclosing instantiation binds (§4.1) | its argument's schema, formatted without the parameter's node | `schema-generator.ts`; `typescript/type-arguments.ts` | `test/typescript/type-arguments.test.ts` |
+| Any other type parameter | constraint if any, else default, else `{}` | `schema-generator.ts` | untested at generator level; the pipeline substitutes `unknown` nodes before generation (ts-transformers spec §10.5), so `{}` is the *local* behavior |
 | Conditional type | `{}` | `schema-generator.ts` | untested |
 | `T[]` / `Array<T>` / `ReadonlyArray<T>` / aliases | `{ type: "array", items: <T> }`; node-first element detection, then Reference/typeArguments, then numeric index | `type-utils.ts`; `array-formatter.ts` | fixtures |
 | Tuple (`[string, number]`) | `{ type: "array", items: <merged element union> }` — e.g. `items: { type: ["number","string"] }`. **No `prefixItems`, no length bounds**; positional structure is lost (numeric-index fallback, `type-utils.ts`; grep confirms `prefixItems` appears only in a comment) | `type-utils.ts` | `test/tuple-emission.test.ts` |
@@ -257,6 +259,45 @@ by any repo test.
 Fallback sentinel: a primitive-flagged type matching none of the branches emits
 `{ type: "string", enum: ["unknown"] }` (`primitive-formatter.ts`) — a
 silent, mis-typed sentinel; untested and believed unreachable in practice.
+
+### 4.1 Properties of a generic instantiation
+
+A property is formatted from its instantiated type and from the type node its
+declaration carries (`object-formatter.ts`). For an instantiation of a generic
+declaration, `Input<number>` of `interface Input<T>`, that node is written in
+terms of the declaration's type parameters, and the checker resolves a
+reference to `T` in it to the declaration's own parameter, never to the
+argument. So the object formatter reads its properties together with the
+arguments the instantiation gives each type parameter, which the generation
+context carries as `typeArguments` (`typescript/type-arguments.ts`): those of a
+generic type alias it instantiates, those of a generic interface or class it
+instantiates, and those of each interface or class that declaration inherits
+from, which carry a base's parameters on to the instantiation's arguments. An
+instantiation of the same declaration read inside another binds its parameters
+afresh for everything it holds.
+
+A bound parameter formats as its argument (§3). The union formatter's `Default`
+path reads every node it decides by through the same bindings: the members it
+formats, the `Default`'s value and default types, whether the default is
+covered, and both object-default checks (§7). A member node naming another
+generic declaration, such as `Box<T>`, still denotes `Box<T>` to the checker,
+so it is matched against the union's own instantiated members: with `T` bound
+to `number`, `Box<T> | Default<{ value: 0 }>` finds its default covered by
+`Box<number>`. Each property therefore gets the schema of the property declared
+with the argument in place, under every rule of §7, §8, and §10:
+`T | string | Default<"">` with `T` as `number` emits
+`{ type: ["number", "string"], default: "" }`, `PerUser<T>` with `T` as
+`string` emits `{ type: "string", scope: "user" }`, and an object default that
+the argument does not cover throws exactly as it does written in place. Tested:
+`test/typescript/type-arguments.test.ts`; end-to-end through a pattern's input,
+ts-transformers `test/generic-pattern-input.test.ts`.
+
+Two readings bind nothing. A mapped type over an instantiation, such as
+`Partial<Input<number>>` or `Readonly<Input<number>>`, instantiates the mapped
+type's own parameter, and its properties keep the declaration's nodes, so a `T`
+in them is read as the declaration's own parameter (§4). A synthetic reference
+with type arguments read on the node path (§2), such as a printed
+`Box<number>`, resolves by name to the declared, uninstantiated type.
 
 ## 5. Named-Type Hoisting, `$defs`, And Cycles
 
@@ -984,7 +1025,7 @@ Everything that throws, with source (test-pinned unless noted):
 | Internal invariants: empty union/intersection; CommonFabric claimed-but-unformattable terminal; ArrayFormatter element-info mismatch | `… received empty … type` / `Unexpected Common Fabric type: …` / `… indicates a bug in supportsType logic` | `union-formatter.ts`; `intersection-formatter.ts`; `common-fabric-formatter.ts`; `array-formatter.ts` (all untested) |
 
 Silent degradations: `safe*` wrappers `console.warn` and continue
-(`type-utils.ts`); type parameters / conditionals → `{}` (§4);
+(`type-utils.ts`); unbound type parameters / conditionals → `{}` (§4);
 conditional/type-parameter wrapper-union members skipped
 (`common-fabric-formatter.ts`);
 synthetic node resolution failure → `any` → `true`
@@ -1032,9 +1073,14 @@ synthetic node resolution failure → `any` → `true`
 11. **`plugin.ts` hint-type drift** (§2).
 12. **Untested helper modules** — `typescript/property-name.ts`,
     `property-optionality.ts`, `type-traversal.ts`, `wrapper-names.ts` have no
-    dedicated unit tests (`test/typescript/` holds one cell-brand test);
-    exercised indirectly through ts-transformers suites.
+    dedicated unit tests (`test/typescript/` holds tests for `cell-brand.ts`,
+    `numeric-expression.ts`, and `type-arguments.ts`); exercised indirectly
+    through ts-transformers suites.
 13. **Primitive fallback sentinel** (§15) — silent, mis-typed, untested.
+14. **Two generic readings bind no type arguments** (§4.1): a mapped type over
+    an instantiation (`Readonly<Input<number>>`) and a synthetic reference with
+    type arguments read by name on the node path. Both read the generic
+    declaration's own parameters. Probe only.
 
 ## 17. Test Workflow
 
@@ -1082,6 +1128,7 @@ canonical; update prose from it, not the other way around. Paths relative to
 | --- | --- | --- |
 | Formatter chain + order (§3) | `SchemaGenerator.#formatters` (`src/schema-generator.ts`) | array literal is the order; routing tests in `test/schema-generator.test.ts` |
 | Core keyword mappings (§4) | `PrimitiveFormatter.getSchemaType` (`src/formatters/primitive-formatter.ts`); node table `analyzeTypeNodeStructure` (`src/schema-generator.ts`) | void-type / array-special-types tests |
+| Instantiation bindings (§4.1) | `withTypeArgumentsOf` / `findInstantiation` (`src/typescript/type-arguments.ts`) | `test/typescript/type-arguments.test.ts` |
 | Hoisting exclusion rule (§5.1) | `getNamedTypeKey` (`src/type-utils.ts`) | recursion/shared-type/alias fixtures |
 | Native leaf table + guard (§5.2) | `NATIVE_TYPE_SCHEMAS` / `LIB_DECLARED_NATIVE_TYPES` (`src/formatters/native-type-formatter.ts`) | `test/native-type-parameters.test.ts` |
 | Wrapper spellings + normalization (§6.1) | `WrapperSpelling` / `WRAPPER_SPELLING_TO_KIND` (`src/typescript/wrapper-names.ts`) | compile-time exhaustiveness |
