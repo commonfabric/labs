@@ -2,12 +2,9 @@
  * Types and constants for the visitor engine.
  */
 
-import { type Primitive } from "@commonfabric/utils/types";
-
 import {
   type FabricContainerValueTag,
   type FabricValuePlusTag,
-  type PrimitiveValueTag,
 } from "@/types";
 
 import type {
@@ -15,7 +12,6 @@ import type {
   FabricContainerValuePlus,
   FabricInstancePlus,
   FabricPlainObjectPlus,
-  FabricPrimitive,
   FabricValue,
   FabricValuePlus,
 } from "@/interface.ts";
@@ -73,13 +69,6 @@ export type ReplaceForm<PlusType> = {
 };
 
 /**
- * A `visitSubtype` form. This is returned by visitor methods which cover
- * multiple possible subtype dispatches. By returning this form, a visitor
- * indicates that the engine should in fact do a subtype-based dispatch.
- */
-export type VisitSubtypeForm = { readonly type: "visitSubtype" };
-
-/**
  * Standard instance of `RecurseForm` for recursing over keys and values. This
  * is only meaningful for recursing over mappings.
  *
@@ -110,16 +99,6 @@ export const DO_RECURSE_KEYS: RecurseForm = Object.freeze(
  */
 export const DO_RECURSE_VALUES: RecurseForm = Object.freeze(
   { type: "recurse", doKeys: false, doValues: true } as const,
-);
-
-/**
- * Standard instance of `VisitSubtypeForm`.
- *
- * The `DO_` prefix is intended to make it clear at use sites that it is telling
- * the visitor engine to "do" something.
- */
-export const DO_VISIT_SUBTYPE: VisitSubtypeForm = Object.freeze(
-  { type: "visitSubtype" } as const,
 );
 
 //
@@ -157,21 +136,6 @@ export type LeafVisitorResult<PlusType = never, ResultType = FabricValue> =
   | BaselineVisitResult<ResultType>
   | RecurseForm
   | ReplaceForm<PlusType>;
-
-/**
- * Possible results from a visitor method which covers two or more subtypes of
- * value that the visitor engine can dispatch to. Such a method is also allowed
- * to take a non-dispatch action, and so all of the `LeafVisitorResults` are
- * included as options with this type.
- *
- * See the included result types for details on what they mean.
- */
-export type DispatchingVisitorResult<
-  PlusType = never,
-  ResultType = FabricValue,
-> =
-  | LeafVisitorResult<PlusType, ResultType>
-  | VisitSubtypeForm;
 
 //
 // Visitor interface
@@ -226,55 +190,6 @@ export interface ValueVisitor<PlusType = never, ResultType = FabricValue> {
   ): LeafVisitorResult<PlusType, ResultType>;
 
   /**
-   * Visits the given `FabricArray`.
-   */
-  visitFabricArray(
-    value: FabricArrayPlus<PlusType>,
-  ): LeafVisitorResult<PlusType, ResultType>;
-
-  /**
-   * Visits the given `FabricInstance`.
-   */
-  visitFabricInstance(
-    value: FabricInstancePlus<PlusType>,
-  ): LeafVisitorResult<PlusType, ResultType>;
-
-  /**
-   * Visits the given `FabricPlainObject`.
-   */
-  visitFabricPlainObject(
-    value: FabricPlainObjectPlus<PlusType>,
-  ): LeafVisitorResult<PlusType, ResultType>;
-
-  /**
-   * Visits the given `FabricContainerValue`. If this returns type
-   * `visitSubtype`, then the visitor system will call one of
-   * `visitFabricArray()`, `visitFabricInstance()`, or
-   * `visitFabricPlainObject()`.
-   */
-  visitFabricContainer(
-    value: FabricContainerValuePlus<PlusType>,
-    tag: FabricContainerValueTag,
-  ): DispatchingVisitorResult<PlusType, ResultType>;
-
-  /**
-   * Visits a value determined to be the `PlusType` by virtue of the visitor
-   * engine having called `isPlusType()` on it and gotten a truthy return value.
-   */
-  visitPlusType(
-    value: PlusType,
-  ): LeafVisitorResult<PlusType, ResultType>;
-
-  /**
-   * Visits the given primitive value, which can be either a native JavaScript
-   * primitive or a `FabricPrimitive`.
-   */
-  visitPrimitive(
-    value: Primitive | FabricPrimitive,
-    tag: PrimitiveValueTag,
-  ): LeafVisitorResult<PlusType, ResultType>;
-
-  /**
    * Visits the given arbitrary value. If this returns type `visitSubtype`, then
    * the visitor system will call one of `visitFabricContainer()`,
    * `visitPlusType()`, or `visitPrimitive()`.
@@ -282,7 +197,7 @@ export interface ValueVisitor<PlusType = never, ResultType = FabricValue> {
   visitValue(
     value: FabricValuePlus<PlusType>,
     tag: FabricValuePlusTag | null,
-  ): DispatchingVisitorResult<PlusType, ResultType>;
+  ): LeafVisitorResult<PlusType, ResultType>;
 
   /**
    * Indicates that an array element was just visited. This method is called as

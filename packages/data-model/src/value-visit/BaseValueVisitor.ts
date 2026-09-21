@@ -1,25 +1,19 @@
-import { type Primitive } from "@commonfabric/utils/types";
-
 import {
   type FabricArrayPlus,
   type FabricContainerValuePlus,
   type FabricInstancePlus,
   type FabricPlainObjectPlus,
-  FabricPrimitive,
   type FabricValue,
   type FabricValuePlus,
 } from "@/interface.ts";
 import {
   type FabricContainerValueTag,
   type FabricValuePlusTag,
-  type PrimitiveValueTag,
 } from "@/types";
 import { debugStr } from "@/value-debug";
 
 import {
   type BaselineVisitResult,
-  type DispatchingVisitorResult,
-  DO_VISIT_SUBTYPE,
   type LeafVisitorResult,
   ValueVisitor,
 } from "./interface.ts";
@@ -54,6 +48,20 @@ export abstract class BaseValueVisitor<
   PlusType = never,
   ResultType = FabricValue,
 > implements ValueVisitor<PlusType, ResultType> {
+  //
+  // Subclass contract
+  //
+
+  /** @inheritDoc */
+  abstract visitValue(
+    value: FabricValuePlus<PlusType>,
+    tag: FabricValuePlusTag | null,
+  ): LeafVisitorResult<PlusType, ResultType>;
+
+  //
+  // Instance methods
+  //
+
   /** @inheritDoc */
   isPlusType(_value: unknown): _value is PlusType {
     return false;
@@ -67,58 +75,6 @@ export abstract class BaseValueVisitor<
     _thisDepth: number,
   ): LeafVisitorResult<PlusType, ResultType> {
     this.throwNoCycles(value);
-  }
-
-  /** @inheritDoc */
-  visitFabricArray(
-    _value: FabricArrayPlus<PlusType>,
-  ): LeafVisitorResult<PlusType, ResultType> {
-    this.throwShouldntCall("visitFabricArray");
-  }
-
-  /** @inheritDoc */
-  visitFabricInstance(
-    _value: FabricInstancePlus<PlusType>,
-  ): LeafVisitorResult<PlusType, ResultType> {
-    this.throwShouldntCall("visitFabricInstance");
-  }
-
-  /** @inheritDoc */
-  visitFabricPlainObject(
-    _value: FabricPlainObjectPlus<PlusType>,
-  ): LeafVisitorResult<PlusType, ResultType> {
-    this.throwShouldntCall("visitFabricPlainObject");
-  }
-
-  /** @inheritDoc */
-  visitFabricContainer(
-    _value: FabricContainerValuePlus<PlusType>,
-    _tag: FabricContainerValueTag,
-  ): DispatchingVisitorResult<PlusType, ResultType> {
-    return DO_VISIT_SUBTYPE;
-  }
-
-  /** @inheritDoc */
-  visitPlusType(
-    _value: PlusType,
-  ): LeafVisitorResult<PlusType, ResultType> {
-    this.throwShouldntCall("visitPlusType");
-  }
-
-  /** @inheritDoc */
-  visitPrimitive(
-    _value: Primitive | FabricPrimitive,
-    _tag: PrimitiveValueTag,
-  ): LeafVisitorResult<PlusType, ResultType> {
-    this.throwShouldntCall("visitPrimitive");
-  }
-
-  /** @inheritDoc */
-  visitValue(
-    _value: FabricValuePlus<PlusType>,
-    _tag: FabricValuePlusTag | null,
-  ): DispatchingVisitorResult<PlusType, ResultType> {
-    return DO_VISIT_SUBTYPE;
   }
 
   /** @inheritDoc */
