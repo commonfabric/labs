@@ -71,11 +71,16 @@ Prefer whichever names the smaller surface. A reference that is only compared
 wants `unknown`; one whose title is rendered wants a two-field projection, not
 the piece.
 
-A `Cell<unknown>` handle can name a target in another space. Passing that handle
-through an event or storing it in an array preserves its target space, scope,
-and path without loading the foreign target during dependency preflight. Reading
-through the handle still requires the target's read authority; storing the link
-grants no access to the target space.
+A `Cell<unknown>` handle preserves its target space, scope, and path when passed
+through an event, stored in an array, or returned by a computation. This applies
+to targets in the same space as well as another space. Obtaining the handle reads
+the reference slot and its labels, including any schema cap, without loading the
+target's value or metadata. A user-scoped target therefore does not narrow a
+computation that only carries its space-scoped reference to user scope.
+
+Reading through the handle consumes the target's labels and scope and requires
+the target's read authority. Storing the link grants no access to the target
+space. Write redirects still resolve the slot that holds the reference.
 
 ### A pattern's own screen is not a reference
 

@@ -4852,13 +4852,12 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // const maybeLink = parseLink(item, arrayLink);
       if (isSigilLink(item)) {
         const elementLink = parseLink(item, curDoc.address);
-        // A foreign unknown-valued handle carries an address across an access
-        // boundary. Only a consumer reading through it needs the target.
+        // An unknown-valued handle carries only an address. A consumer
+        // reading through it needs the target.
         if (
           isUnknownCellSchema(curSelector.schema) &&
           !isWriteRedirectLink(item) &&
-          elementLink !== undefined &&
-          elementLink.space !== curDoc.address.space
+          elementLink !== undefined
         ) {
           this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
           const cellLink = getNextCellLink(
@@ -5275,7 +5274,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
     const alreadyTracked = this.traverseCells &&
       this.isLinkedDocumentCovered(doc, selector);
 
-    // Opaque handles preserve their link directly. A foreign unknown-valued
+    // Opaque handles preserve their link directly. An unknown-valued
     // handle also preserves an ordinary link: transferring its address needs
     // no target read authority. Write redirects still resolve the local slot.
     const asCellValues = ContextualFlowControl.getAsCellValues(schema);
@@ -5283,7 +5282,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
     if (
       ContextualFlowControl.getAsCellKind(asCellValues.at(0)) === "opaque" ||
       (isUnknownCellSchema(schema) && !isWriteRedirectLink(doc.value) &&
-        pointerLink !== undefined && pointerLink.space !== doc.address.space)
+        pointerLink !== undefined)
     ) {
       const cellLink = getNextCellLink(this.tx, doc, schema);
       return { ok: this.objectCreator.createObject(cellLink, undefined) };
@@ -5302,6 +5301,17 @@ export class SchemaObjectTraverser<V extends FabricValue>
       selector,
       "writeRedirect",
     );
+    if (
+      isUnknownCellSchema(schema) && isSigilLink(redirDoc.value) &&
+      !isWriteRedirectLink(redirDoc.value)
+    ) {
+      const combinedSchema = combineOptionalSchema(
+        schema,
+        redirSelector?.schema,
+      )!;
+      const cellLink = getNextCellLink(this.tx, redirDoc, combinedSchema);
+      return { ok: this.objectCreator.createObject(cellLink, undefined) };
+    }
     if (redirDoc.value === undefined) {
       // This may be ok, but log it anyhow
       logger.info(
@@ -5800,7 +5810,7 @@ function getNextCellLink(
   // that location, so we effectively follow one more link if available.
   const lastLink = parseLink(doc.value, doc.address);
   if (lastLink !== undefined) {
-    if (lastLink.space !== doc.address.space && isUnknownCellSchema(schema)) {
+    if (isUnknownCellSchema(schema)) {
       // Observing a handle consumes the source pointer's own label even when
       // its target value is unavailable or outside this reader's authority.
       readMaybeLink(tx, getNormalizedLink(doc.address));

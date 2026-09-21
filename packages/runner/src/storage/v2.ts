@@ -3010,11 +3010,10 @@ export class StorageManager implements IStorageManager {
     identity: ScopeKeyIdentity | undefined,
   ): void {
     const space = link.space ?? base.space!;
-    // A foreign handle with no declared value shape transfers only its
+    // A handle with no declared value shape transfers only its
     // address. Loading its target requires a read through that handle.
     if (
-      !hasDataUriScheme(link.id) && space !== base.space &&
-      link.overwrite !== "redirect" &&
+      !hasDataUriScheme(link.id) && link.overwrite !== "redirect" &&
       isUnknownCellSchema(schema)
     ) return;
     const scope = normalizeCellScope(link.scope as CellScope | undefined);

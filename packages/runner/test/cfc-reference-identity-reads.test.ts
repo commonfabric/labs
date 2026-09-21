@@ -219,6 +219,25 @@ describe("cfc-reference-identity-reads", () => {
       pointerEntry(["refs", "0"], "array-reference-secret"),
     ]);
     await seed.commit();
+    const targetSeed = rt.edit();
+    writeSeedEnvelopeDoc(targetSeed, foreign);
+    seedStoredEnvelope(targetSeed, {
+      space: foreign,
+      scope: "user",
+      id: target.id,
+      path: [],
+    }, {
+      value: { nested: "private target" },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [contentEntry(["nested"], "target-secret")],
+        },
+      },
+    });
+    expect((await targetSeed.commit()).ok).toBeDefined();
     const directJoin = await flowJoinOf(rt, "foreign-direct-out", (tx) => {
       const cell = rt.getCellFromLink<
         { ref: Cell<unknown>; refs: Cell<unknown>[] }
@@ -229,8 +248,10 @@ describe("cfc-reference-identity-reads", () => {
       expect(cell.key("ref").get().getAsNormalizedFullLink()).toMatchObject(
         targetAddress,
       );
+      expect(tx.getNarrowestReadScope()).toBe("space");
     });
     expect(directJoin).toContain("reference-secret");
+    expect(directJoin).not.toContain("target-secret");
     const eagerJoin = await flowJoinOf(rt, "foreign-eager-out", (tx) => {
       const cell = rt.getCellFromLink<
         { ref: Cell<unknown>; refs: Cell<unknown>[] }
@@ -243,9 +264,62 @@ describe("cfc-reference-identity-reads", () => {
       expect(value.refs[0].getAsNormalizedFullLink()).toMatchObject(
         targetAddress,
       );
+      expect(tx.getNarrowestReadScope()).toBe("space");
     });
     expect(eagerJoin).toContain("reference-secret");
     expect(eagerJoin).toContain("array-reference-secret");
+    expect(eagerJoin).not.toContain("target-secret");
+    const targetJoin = await flowJoinOf(rt, "foreign-target-out", (tx) => {
+      const cell = rt.getCellFromLink<{ ref: Cell<unknown> }>({
+        ...holder,
+        schema,
+      }).withTx(tx);
+      const handle = cell.key("ref").get();
+      expect(tx.getNarrowestReadScope()).toBe("space");
+      expect(handle.asSchema<string>({ type: "string" }).get()).toBe(
+        "private target",
+      );
+      expect(tx.getNarrowestReadScope()).toBe("user");
+    });
+    expect(targetJoin).toContain("reference-secret");
+    expect(targetJoin).toContain("target-secret");
+    const localTarget = rt.getCell(
+      space,
+      "same-space-user-target",
+      undefined,
+      undefined,
+      "user",
+    );
+    const localSeed = seeding(rt);
+    const localHolder = localSeed.write("same-space-reference-holder", {
+      ref: createSigilLinkFromParsedLink(localTarget.getAsNormalizedFullLink()),
+    });
+    await localSeed.commit();
+    await flowJoinOf(rt, "same-space-reference-out", (tx) => {
+      const cell = rt.getCellFromLink<{ ref: Cell<unknown> }>({
+        ...localHolder,
+        schema,
+      }).withTx(tx);
+      expect(cell.key("ref").get().getAsNormalizedFullLink()).toMatchObject({
+        id: localTarget.getAsNormalizedFullLink().id,
+        space,
+        scope: "user",
+      });
+      expect(tx.getNarrowestReadScope()).toBe("space");
+    });
+    await flowJoinOf(rt, "same-space-eager-reference-out", (tx) => {
+      const cell = rt.getCellFromLink<{ ref: Cell<unknown> }>({
+        ...localHolder,
+        schema,
+      }).withTx(tx);
+      expect(cell.get({ traverseCells: true }).ref.getAsNormalizedFullLink())
+        .toMatchObject({
+          id: localTarget.getAsNormalizedFullLink().id,
+          space,
+          scope: "user",
+        });
+      expect(tx.getNarrowestReadScope()).toBe("space");
+    });
   });
 
   describe("readMaybeLink()", () => {

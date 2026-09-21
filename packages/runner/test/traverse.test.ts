@@ -3905,8 +3905,7 @@ describe("SchemaObjectTraverser unknown type handling", () => {
   it("does not resolve linked properties when property schema is type: unknown", () => {
     // Chain: outer => inner => redir => first -> second -> data
     //
-    // Behavior: All redirect links are followed, toCell() stops at first non-redirect
-    // The data is fully resolved to { test: "foo" } but the cell reference stops at `first`
+    // Redirects locate the reference slot; its ordinary target remains unread.
 
     const store = new Map<string, Revision<State>>();
     const type = "application/json" as const;
@@ -4081,8 +4080,11 @@ describe("SchemaObjectTraverser unknown type handling", () => {
     // redirect-test-redir: holds the actual value
     const redirValue = {
       "/": {
-        [LINK_V1_TAG]: { id: redirectTestFirstUri, path: [] },
-        overwrite: "redirect",
+        [LINK_V1_TAG]: {
+          id: redirectTestFirstUri,
+          path: [],
+          overwrite: "redirect",
+        },
       },
     };
     store.set(`${redirectTestRedirUri}/${type}`, {
@@ -4094,8 +4096,11 @@ describe("SchemaObjectTraverser unknown type handling", () => {
 
     const innerValue = {
       "/": {
-        [LINK_V1_TAG]: { id: redirectTestRedirUri, path: [] },
-        overwrite: "redirect",
+        [LINK_V1_TAG]: {
+          id: redirectTestRedirUri,
+          path: [],
+          overwrite: "redirect",
+        },
       },
     };
     store.set(`${redirectTestInnerUri}/${type}`, {
@@ -4108,8 +4113,11 @@ describe("SchemaObjectTraverser unknown type handling", () => {
     const outerValue = {
       inner: {
         "/": {
-          [LINK_V1_TAG]: { id: redirectTestInnerUri, path: [] },
-          overwrite: "redirect",
+          [LINK_V1_TAG]: {
+            id: redirectTestInnerUri,
+            path: [],
+            overwrite: "redirect",
+          },
         },
       },
     };
@@ -4152,12 +4160,12 @@ describe("SchemaObjectTraverser unknown type handling", () => {
     expect(error).toBeUndefined();
     // linked object is not resolved into content
     expect(result).toEqual({ inner: undefined });
-    // We should have read all the way through to the data object
-    expect(
-      [...manager.getReadDocs()].some((att) =>
-        att.address.id === redirectTestDataUri
-      ),
-    ).toBe(true);
+    const readIds = [...manager.getReadDocs()].map((att) => att.address.id);
+    expect(readIds).toContain(redirectTestInnerUri);
+    expect(readIds).toContain(redirectTestRedirUri);
+    expect(readIds).toContain(redirectTestFirstUri);
+    expect(readIds).not.toContain(redirectTestSecondUri);
+    expect(readIds).not.toContain(redirectTestDataUri);
   });
 
   it("treats inline asCell object properties as opaque when traverseCells=false", () => {

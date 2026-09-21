@@ -2033,11 +2033,12 @@ describe("Phase 5 cross-space serving", () => {
       files: [{
         name: "/main.tsx",
         contents: `
-import { action, pattern, type Writable, type Stream } from "commonfabric";
+import { action, computed, pattern, type Writable, type Stream } from "commonfabric";
 export default pattern<
   { links: Writable<Writable<unknown>[]> },
-  { add: Stream<{ piece: Writable<unknown> }> }
+  { add: Stream<{ piece: Writable<unknown> }>; registry: Writable<unknown>[] }
 >(({ links }) => ({
+  registry: computed(() => links.get().map((piece) => piece)),
   add: action(({ piece }: { piece: Writable<unknown> }) => {
     links.push(piece);
   }),
@@ -2048,7 +2049,7 @@ export default pattern<
       homeSpace,
       "foreign-handle-argument",
     );
-    const result = clientRuntime.getCell<{ add: unknown }>(
+    const result = clientRuntime.getCell<{ add: unknown; registry: unknown[] }>(
       homeSpace,
       "foreign-handle-result",
       compiled.resultSchema,
@@ -2122,6 +2123,34 @@ export default pattern<
     for (const link of repeated.links) {
       expect(parseLink(link)).toMatchObject({ space, scope, id, path });
     }
+    const registry = await result.key("registry").asSchema({
+      type: "array",
+      items: { type: "unknown", asCell: ["cell"] },
+    }).pull();
+    expect(registry).toHaveLength(2);
+    for (const link of registry) {
+      expect(parseLink(JSON.parse(JSON.stringify(link)))).toMatchObject({
+        space,
+        scope,
+        id,
+        path,
+      });
+    }
+    const third = clientRuntime.getCell(homeSpace, "later-local-reference");
+    result.key("add").send({ piece: third });
+    await clientManager.synced();
+    await awaitAdmitted(
+      server,
+      () =>
+        entries().length === 3 &&
+        entries().every((entry) => entry.consequenced),
+    );
+    await servingRuntime!.idle();
+    const updatedRegistry = await result.key("registry").asSchema({
+      type: "array",
+      items: { type: "unknown", asCell: ["cell"] },
+    }).pull();
+    expect(updatedRegistry).toHaveLength(3);
     const servingManager = SharedServerStorageManager.connectTo(server, {
       as: serviceSigner,
       servingHomeSpace: homeSpace,

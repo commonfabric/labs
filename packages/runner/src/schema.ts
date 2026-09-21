@@ -34,6 +34,7 @@ import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { CfcLabelViewRebaser } from "./cfc/label-view-rebaser.ts";
 import {
   type CfcLabelView,
+  cfcLabelViewForAddress,
   cfcLabelViewForDereference,
   cfcLabelViewForDereferenceTraces,
   cloneCfcLabelView,
@@ -1110,14 +1111,13 @@ export function validateAndTransform(
   // We'll use this for the value, and potentially merge the schema
   // This gets me the result of following all the links, so I can get the value
   const valueTraceStart = tx.getCfcState().dereferenceTraces.length;
-  // A foreign unknown-valued handle transfers its address without reading
+  // An unknown-valued handle transfers its address without reading
   // through the target's access boundary. The handle branch below records the
   // link crossing and applies its schema before returning the cell.
   const handleTarget = isUnknownCellSchema(effectiveSchema)
     ? readMaybeLink(tx, link)
     : undefined;
-  const resolvedValueLink = handleTarget !== undefined &&
-      handleTarget.space !== link.space
+  const resolvedValueLink = handleTarget !== undefined
     ? link
     : resolveLink(runtime, tx, link, "value", {
       markIfcCrossings: true,
@@ -1164,11 +1164,13 @@ export function validateAndTransform(
       // (#5230).
       cfcLabelView = mergeCfcLabelViews([
         cfcLabelView,
-        cfcLabelViewForDereference(
-          tx,
-          cfcAddressFromLink(link),
-          cfcAddressFromLink(next),
-        ),
+        isUnknownCellSchema(effectiveSchema)
+          ? cfcLabelViewForAddress(tx, cfcAddressFromLink(link))
+          : cfcLabelViewForDereference(
+            tx,
+            cfcAddressFromLink(link),
+            cfcAddressFromLink(next),
+          ),
       ]);
       // We leave the asCell/asStream in the schema, so that createObject
       // knows to create a cell
