@@ -21,6 +21,12 @@ piece through a minimal unnamed reader, passing its result reference in `inputs`
 and exposing pending, error, and counts in `resultSchema`. Repair observed
 failures; for a settled empty filtered result, compare the unfiltered count.
 
+An unnamed reader still creates a persisted, detached piece; `assign_slug` adds
+it to the registered list. Source-history revisions are storage-retention roots:
+unnamed pieces are not transient and are neither deleted nor garbage-collected.
+See
+[piece execution and retention](../README.md#running-patterns-against-a-fabric-space).
+
 The server binds `127.0.0.1` and asks one thing of a request: that it names this
 server's own host. A hostile name that resolves to `127.0.0.1` would otherwise
 make these routes same-origin to a browser, and that name is visible on the
