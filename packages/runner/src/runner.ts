@@ -292,6 +292,13 @@ type StartAttempt = {
   readonly lifecycleEpoch: number;
   readonly generationsByDoc: Map<string, number>;
   readonly preResolutionStopKeys: Set<string>;
+
+  /** Parent demand and synchronization context for a retained child. */
+  readonly options?: Pick<
+    RunnerRunOptions,
+    "parentPieceRootId" | "awaitSyncBeforeInitialRun"
+  >;
+
   // The result this attempt resolved to, which a link start only learns by
   // following the link.
   targetKey?: `${MemorySpace}/${ScopeKey}/${URI}`;
@@ -5602,6 +5609,7 @@ export class Runner {
       if (!this.#isStartAttemptCurrent(attempt)) return Promise.resolve(false);
       try {
         attempt.installedRegistration = this.#startCore(rootCell, {
+          ...attempt.options,
           givenPattern: resolvedPattern,
         });
       } catch (err) {
@@ -5648,6 +5656,7 @@ export class Runner {
       const startCoreStart = performance.now();
       try {
         attempt.installedRegistration = this.#startCore(rootCell, {
+          ...attempt.options,
           givenPattern: resolvedPattern,
           schedulerRehydration: this.#schedulerRehydrationOptions(
             rootCell,
@@ -5657,6 +5666,7 @@ export class Runner {
             // (e.g. maps reconciling an empty array, then re-running once it
             // streams in).
             true,
+            attempt.options?.parentPieceRootId,
           ),
         });
       } finally {
@@ -6605,8 +6615,10 @@ export class Runner {
   #startFromServedState<T>(
     resultCell: Cell<T>,
     ownership?: DeferredCancelOwnership,
+    options?: StartAttempt["options"],
   ): Promise<boolean> {
     const attempt: StartAttempt = {
+      options,
       lifecycleEpoch: this.#lifecycleEpoch,
       generationsByDoc: new Map(),
       preResolutionStopKeys: new Set(),
@@ -11877,7 +11889,16 @@ export class Runner {
     ]);
 
     const initialize = (instanceTx: IExtendedStorageTransaction) => {
-      if (childResultCell.space !== parentResultCell.space) {
+      const storedChild = childResultCell.withTx(instanceTx);
+      const crossSpace = childResultCell.space !== parentResultCell.space;
+      // An independently managed child owns its code and inputs, including
+      // after an owner detaches it. History keeps that fact after the origin
+      // is cleared; ordinary untracked nested children still bind inputs.
+      const resumeExisting = crossSpace &&
+        getPatternIdentityRef(storedChild) !== undefined &&
+        (getPatternSource(storedChild) !== undefined ||
+          getPieceSourceRevisions(storedChild).length > 0);
+      if (crossSpace && !resumeExisting) {
         // Cross-space child pattern: run it inline in a multi-space transaction
         // (child space committed first) rather than re-instantiating it in a
         // deferred second transaction, which would lose its verified-function
@@ -11916,22 +11937,49 @@ export class Runner {
       // parent's program on each release of the parent, so an origin of its
       // own would be followed twice; a cross-space child outlives the
       // program that made it and is what a release has to reach.
-      const sourceOrigin = childResultCell.space === parentResultCell.space
-        ? undefined
-        : this.#childSystemOrigin(instanceTx, parentResultCell, patternImpl);
-      const childRun = this.#runWithStartOwnership(
-        instanceTx,
-        patternImpl,
-        inputs,
-        childResultCell.withTx(instanceTx),
-        {
-          awaitSyncBeforeInitialRun: defersInitialRunUntilSynced(
-            schedulerRehydration,
-          ),
-          parentPieceRootId: parentResultCell.getAsNormalizedFullLink().id,
-          ...(sourceOrigin === undefined ? {} : { sourceOrigin }),
-        },
-      );
+      const sourceOrigin = crossSpace && !resumeExisting
+        ? this.#childSystemOrigin(instanceTx, parentResultCell, patternImpl)
+        : undefined;
+      const options = {
+        awaitSyncBeforeInitialRun: defersInitialRunUntilSynced(
+          schedulerRehydration,
+        ),
+        parentPieceRootId: parentResultCell.getAsNormalizedFullLink().id,
+      };
+      const childRun: RunResult<unknown> = resumeExisting
+        ? this.#usesScopedPrograms(childResultCell)
+          ? {
+            resultCell: childResultCell,
+            installedCancel: this.#startWithTx(
+              instanceTx,
+              storedChild,
+              undefined,
+              options,
+            ),
+          }
+          : this.#resumeChildAfterCommit(instanceTx, childResultCell, options)
+        : this.#runWithStartOwnership(
+          instanceTx,
+          patternImpl,
+          inputs,
+          storedChild,
+          {
+            ...options,
+            ...(sourceOrigin === undefined ? {} : { sourceOrigin }),
+          },
+        );
+      if (childRun.cancelDeferredStart !== undefined) {
+        // Each actor initializer may own a separate pending start. Register
+        // its exact token so parent teardown cannot stop a replacement run.
+        const cancel = childRun.cancelDeferredStart;
+        addCancel(() => {
+          if (
+            !this.#independentlyStartedResults.has(
+              this.#getDocKey(childResultCell),
+            )
+          ) cancel();
+        });
+      }
 
       if (sendToBindings) {
         sendValueToBinding(
@@ -11958,8 +12006,45 @@ export class Runner {
     addCancel(
       this.#usesScopedPrograms(childResultCell)
         ? this.retainChild(childResultCell)
-        : () => this.releaseChild(childResultCell, childRun.installedCancel),
+        : () => {
+          if (childRun.cancelDeferredStart === undefined) {
+            this.releaseChild(childResultCell, childRun.installedCancel);
+          }
+        },
     );
+  }
+
+  /** Resumes a child from its retained source after its parent's commit. */
+  #resumeChildAfterCommit<T>(
+    tx: IExtendedStorageTransaction,
+    resultCell: Cell<T>,
+    options: StartAttempt["options"],
+  ): RunResult<T> {
+    const ownership = this.#createDeferredStartOwnership(resultCell);
+    tx.addCommitCallback((_committedTx, result) => {
+      if (result.error) {
+        ownership.cancel();
+        return;
+      }
+      if (ownership.isCancelled()) return;
+      const work = this.#startFromServedState(
+        resultCell.withTx(),
+        ownership,
+        options,
+      )
+        .then((started) => {
+          if (!started) ownership.cancel();
+        }).catch((error) => {
+          ownership.cancel();
+          this.#reportPieceStartCommitFailure(
+            `piece-start/${resultCell.sourceURI}`,
+            error,
+          );
+          throw error;
+        });
+      this.#runtime.scheduler.trackBackgroundTask(work);
+    });
+    return { resultCell, cancelDeferredStart: ownership.cancel };
   }
 }
 

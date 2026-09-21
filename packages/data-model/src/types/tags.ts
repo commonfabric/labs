@@ -81,13 +81,41 @@ export const PRIMITIVE_VALUE_TAGS = Object.freeze(
 export type PrimitiveValueTag =
   typeof PRIMITIVE_VALUE_TAGS[keyof typeof PRIMITIVE_VALUE_TAGS];
 
+/** The tags for all recognized container types. */
+export const FABRIC_CONTAINER_VALUE_TAGS = Object.freeze(
+  {
+    Array: "Array",
+    FabricInstance: "FabricInstance",
+    Object: "Object",
+  } as const,
+);
+
+/** Tag for any recognized container type. */
+export type FabricContainerValueTag =
+  typeof FABRIC_CONTAINER_VALUE_TAGS[keyof typeof FABRIC_CONTAINER_VALUE_TAGS];
+
+/** Type predicate for membership in `FabricContainerValueTag`. */
+export function isFabricContainerValueTag(
+  tag: ValueTag | null,
+): tag is FabricContainerValueTag {
+  switch (tag) {
+    case VALUE_TAGS.Array:
+    case VALUE_TAGS.FabricInstance:
+    case VALUE_TAGS.Object: {
+      return true;
+    }
+
+    default: {
+      return false;
+    }
+  }
+}
+
 /** Tags for all values that could possibly be valid `FabricValue`s. */
 export const FABRIC_VALUE_TAGS = Object.freeze(
   {
     ...PRIMITIVE_VALUE_TAGS,
-    Array: "Array",
-    FabricInstance: "FabricInstance",
-    Object: "Object",
+    ...FABRIC_CONTAINER_VALUE_TAGS,
   } as const,
 );
 

@@ -13,7 +13,9 @@ import type {
   FabricValuePlus,
 } from "@/interface.ts";
 import {
+  type FabricContainerValueTag,
   type FabricValuePlusTag,
+  isFabricContainerValueTag,
   type PlusTypePredicate,
   tagOfFabricValueElseNull,
   VALUE_TAGS,
@@ -51,10 +53,7 @@ type VisitSubtypeOfForm<PlusType> = {
  */
 type RecurseOfForm<PlusType> = {
   readonly type: "recurseOf";
-  readonly containerTag:
-    | typeof VALUE_TAGS.Array
-    | typeof VALUE_TAGS.FabricInstance
-    | typeof VALUE_TAGS.Object;
+  readonly containerTag: FabricContainerValueTag;
   readonly container: FabricContainerValuePlus<PlusType>;
   readonly doKeys: boolean;
   readonly doValues: boolean;
@@ -125,7 +124,8 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
   #visitValue(
     value: FabricValuePlus<PlusType>,
   ): BaselineVisitResult<ResultType> {
-    const result = this.#visitResolvingSubtype(value);
+    const tag = this.#tagOfValueElseNull(value);
+    const result = this.#visitResolvingSubtype(value, tag);
 
     switch (result?.type) {
       case "mainResult":
@@ -186,6 +186,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   #visitResolvingSubtype(
     value: FabricValuePlus<PlusType>,
+    tag: FabricValuePlusTag | null,
   ):
     | RecurseOfForm<PlusType>
     | Exclude<
@@ -195,7 +196,10 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
     const vis = this.#visitor;
 
     for (;;) {
-      const resolvedResult = this.#visitResolvingCyclesAndReplacement(value);
+      const resolvedResult = this.#visitResolvingCyclesAndReplacement(
+        value,
+        tag,
+      );
 
       switch (resolvedResult?.type) {
         case "visitSubtype": {
@@ -206,6 +210,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
         case "visitSubtypeOf": {
           // Need dispatch. `value` _has_ been replaced.
           value = resolvedResult.value;
+          tag = this.#tagOfValueElseNull(value);
           break;
         }
 
@@ -215,13 +220,12 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
         }
       }
 
-      const tag = this.#tagOfValueElseNull(value);
       let result: DispatchingVisitorResult<PlusType, ResultType>;
 
       switch (tag) {
         case VALUE_TAGS.Array: {
           const array = value as FabricArrayPlus<PlusType>;
-          result = vis.visitFabricContainer(array);
+          result = vis.visitFabricContainer(array, tag);
           if (result?.type === "visitSubtype") {
             result = vis.visitFabricArray(array);
           }
@@ -230,7 +234,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
 
         case VALUE_TAGS.FabricInstance: {
           const instance = value as FabricInstancePlus<PlusType>;
-          result = vis.visitFabricContainer(instance);
+          result = vis.visitFabricContainer(instance, tag);
           if (result?.type === "visitSubtype") {
             result = vis.visitFabricInstance(instance);
           }
@@ -239,7 +243,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
 
         case VALUE_TAGS.Object: {
           const object = value as FabricPlainObjectPlus<PlusType>;
-          result = vis.visitFabricContainer(object);
+          result = vis.visitFabricContainer(object, tag);
           if (result?.type === "visitSubtype") {
             result = vis.visitFabricPlainObject(object);
           }
@@ -273,6 +277,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
 
         case "replace": {
           value = result.value;
+          tag = this.#tagOfValueElseNull(value);
           break; // ...and continue to iterate.
         }
 
@@ -289,6 +294,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   #visitResolvingCyclesAndReplacement(
     value: FabricValuePlus<PlusType>,
+    tag: FabricValuePlusTag | null,
   ):
     | RecurseOfForm<PlusType>
     | VisitSubtypeOfForm<PlusType>
@@ -300,18 +306,30 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
     const origValue = value;
 
     for (;;) {
-      const cycleAt = this.#stack.indexOf(value);
-      const result = (cycleAt === -1)
-        ? vis.visitValue(value)
-        : vis.visitCycle(value, cycleAt, this.#stack.depth);
+      let result;
+
+      if (isFabricContainerValueTag(tag)) {
+        // We've narrowed on `tag`, but TypeScript can't tell that this
+        // necessarily means that `value` is a container value. Hence this cast,
+        // which is safe by construction.
+        const container = value as FabricContainerValuePlus<PlusType>;
+
+        const cycleAt = this.#stack.indexOf(container);
+        result = (cycleAt === -1)
+          ? vis.visitValue(container, tag)
+          : vis.visitCycle(container, tag, cycleAt, this.#stack.depth);
+      } else {
+        result = vis.visitValue(value, tag);
+      }
 
       switch (result?.type) {
         case "recurse": {
-          return this.#adjustRecurseForm(result, value);
+          return this.#adjustRecurseForm(result, value, tag);
         }
 
         case "replace": {
           value = result.value;
+          tag = this.#tagOfValueElseNull(value);
           break;
         }
 
@@ -509,19 +527,15 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
   #adjustRecurseForm(
     result: RecurseForm,
     finalValue: FabricValuePlus<PlusType>,
-    finalValueTagIfKnown?: FabricValuePlusTag | null,
+    finalValueTag: FabricValuePlusTag | null,
   ): RecurseOfForm<PlusType> {
-    const tag = (finalValueTagIfKnown === undefined)
-      ? this.#tagOfValueElseNull(finalValue)
-      : finalValueTagIfKnown;
-
-    switch (tag) {
+    switch (finalValueTag) {
       case VALUE_TAGS.Array:
       case VALUE_TAGS.FabricInstance:
       case VALUE_TAGS.Object: {
         return {
           type: "recurseOf",
-          containerTag: tag,
+          containerTag: finalValueTag,
           container: finalValue as FabricContainerValuePlus<PlusType>,
           doKeys: result.doKeys,
           doValues: result.doValues,

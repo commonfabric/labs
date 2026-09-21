@@ -35,19 +35,23 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
   type ConvertibleJsValueTag,
+  FABRIC_CONTAINER_VALUE_TAGS,
   FABRIC_VALUE_PLUS_TAGS,
   FABRIC_VALUE_TAGS,
+  type FabricContainerValueTag,
   FabricPrimitive,
   type FabricValue,
   type FabricValuePlus,
   type FabricValuePlusLayer,
   type FabricValuePlusTag,
   type FabricValueTag,
+  isFabricContainerValueTag,
   isValidFabricConvertibleJsObject,
   isValidFabricValueLayer,
   JS_TYPE_VALUE_TAGS,
   type JsTypeValueTag,
   type PlusTypePredicate,
+  type PrimitiveValueTag,
   tagOfConvertibleJsValueElseNull,
   tagOfFabricPrimitive,
   tagOfFabricPrimitiveElseNull,
@@ -298,6 +302,53 @@ describe("tags", () => {
     it("is the `typeOfIncludingNull()` vocabulary, less `object`", () => {
       const _same: Same<JsTypeValueTag | "object", JsTypeTagIncludingNull> =
         true;
+    });
+  });
+
+  describe("FABRIC_CONTAINER_VALUE_TAGS", () => {
+    it("is frozen", () => {
+      expect(Object.isFrozen(FABRIC_CONTAINER_VALUE_TAGS)).toBe(true);
+    });
+
+    it("maps each key to itself", () => {
+      for (const [key, tag] of Object.entries(FABRIC_CONTAINER_VALUE_TAGS)) {
+        expect(tag).toBe(key);
+      }
+    });
+
+    it("holds `Array`, `FabricInstance`, `Object`, and nothing else", () => {
+      expect(new Set(Object.values(FABRIC_CONTAINER_VALUE_TAGS))).toEqual(
+        new Set(["Array", "FabricInstance", "Object"]),
+      );
+    });
+
+    it("is, with the primitive tags, the whole `FabricValue` vocabulary, in the type system", () => {
+      const _same: Same<
+        FabricValueTag,
+        PrimitiveValueTag | FabricContainerValueTag
+      > = true;
+      const _disjoint: Same<
+        Extract<PrimitiveValueTag, FabricContainerValueTag>,
+        never
+      > = true;
+    });
+  });
+
+  describe("isFabricContainerValueTag()", () => {
+    const containerTags = new Set<ValueTag>(
+      Object.values(FABRIC_CONTAINER_VALUE_TAGS),
+    );
+
+    for (const tag of Object.values(VALUE_TAGS)) {
+      const expected = containerTags.has(tag);
+
+      it(`returns \`${expected}\` for the tag \`${tag}\``, () => {
+        expect(isFabricContainerValueTag(tag)).toBe(expected);
+      });
+    }
+
+    it("returns `false` for `null`", () => {
+      expect(isFabricContainerValueTag(null)).toBe(false);
     });
   });
 

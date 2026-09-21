@@ -56,13 +56,11 @@ export function hashEntityValue(
 }
 
 /**
- * Every entity in the space, across EVERY scope.
+ * Enumerates every scope in the space, refusing listings that exceed `cap`.
  *
- * `listEntityModels` defaults to `scope: "space"`, which on a real store
- * silently omits all PerUser/PerSession state (579 of 6,379 entities on the
- * Estuary Topics store). Per-scope state is durable content a migration can
- * damage just as easily, so the fingerprint walks the scopes `listScopes`
- * reports rather than assuming one.
+ * `listEntityModels()` defaults to the shared space scope. Per-user and
+ * per-session state is durable content too, so this walk uses every scope
+ * reported by `listScopes()`.
  */
 function allEntities(
   space: SpaceDb,
@@ -82,7 +80,8 @@ function allEntities(
           `${cap} cap; refusing to fingerprint a truncated enumeration.`,
       );
     }
-    out.push(...listing.entities);
+    // Appending individually avoids V8's argument limit for large scopes.
+    for (const entity of listing.entities) out.push(entity);
   }
   return out;
 }

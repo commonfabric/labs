@@ -909,6 +909,25 @@ components interact:
 This flow happens automatically once set up, allowing developers to focus on
 business logic rather than managing data flow manually.
 
+## Cross-space child source ownership
+
+A cross-space child with a recorded source origin or source revision history
+owns its stored pattern and arguments. Reinstantiating its parent resumes that
+stored state, including owner edits that detached the origin. Untracked nested
+children continue to take their pattern and inputs from the parent.
+
+This independent input ownership starts when the origin or history is recorded.
+A parent release's new literals and bindings do not replace the child's stored
+arguments. Existing links remain reactive to their original targets; moving or
+replacing a parent-internal target does not retarget the child. Preserve those
+targets or explicitly update the child's inputs as its owner, for example with
+`cf piece apply`, using the retained child's input contract.
+
+For a space-scoped child, resume waits for the parent transaction to commit and
+retains the parent demand root across cold loading. Parent teardown cancels only
+the start it owns; a replacement or independently started child keeps running.
+Scoped serving children resume through their per-actor program coordinator.
+
 ## Service Architecture
 
 The Runtime coordinates several core services:

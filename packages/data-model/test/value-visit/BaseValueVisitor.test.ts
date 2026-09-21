@@ -24,7 +24,7 @@ describe("BaseValueVisitor", () => {
 
     describe("visitCycle()", () => {
       it("throws an error naming the value", () => {
-        expect(() => new Base().visitCycle([1], 0, 1)).toThrow(
+        expect(() => new Base().visitCycle([1], "Array", 0, 1)).toThrow(
           /Cannot visit cyclic value: `\[1\]`/,
         );
       });
@@ -32,13 +32,15 @@ describe("BaseValueVisitor", () => {
 
     describe("visitFabricContainer()", () => {
       it("returns `DO_VISIT_SUBTYPE`", () => {
-        expect(new Base().visitFabricContainer([])).toBe(DO_VISIT_SUBTYPE);
+        expect(new Base().visitFabricContainer([], "Array")).toBe(
+          DO_VISIT_SUBTYPE,
+        );
       });
     });
 
     describe("visitValue()", () => {
       it("returns `DO_VISIT_SUBTYPE`", () => {
-        expect(new Base().visitValue(1)).toBe(DO_VISIT_SUBTYPE);
+        expect(new Base().visitValue(1, "number")).toBe(DO_VISIT_SUBTYPE);
       });
     });
 

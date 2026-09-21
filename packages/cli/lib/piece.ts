@@ -2058,6 +2058,13 @@ async function updateOnServer(
   };
 }
 
+/** A follow receipt includes the incompatibility this invocation accepted. */
+export type FollowPieceSourceResult =
+  | Extract<PieceSourceActionResult, { status: "incompatible" }>
+  | (Extract<PieceSourceActionResult, { status: "applied" }> & {
+    acceptedIncompatibility?: string;
+  });
+
 /**
  * Points a piece at `origin` and adopts what that origin currently serves,
  * in one source transition (`repoint`). From then on the piece follows the
@@ -2076,8 +2083,10 @@ async function updateOnServer(
 export async function followPieceSource(
   config: PieceConfig,
   origin: string,
+  options: Pick<SetPiecePatternOptions, "dangerouslyAllowIncompatibleSchema"> =
+    {},
   deps: PieceOperationDependencies = {},
-): Promise<PieceSourceActionResult> {
+): Promise<FollowPieceSourceResult> {
   const pieces = await (deps.loadPieces ?? loadPieces)(config);
   // Against a serving deployment a source transition is the serving
   // runtime's to commit, and the served update verb carries no origin yet;
@@ -2099,7 +2108,22 @@ export async function followPieceSource(
     undefined,
     resolvedConfig.pieceScope,
   );
-  const result = await piece.changeSource({ kind: "repoint", url: origin });
+  const action = { kind: "repoint" as const, url: origin };
+  let result: FollowPieceSourceResult = await piece.changeSource(action);
+  if (
+    result.status === "incompatible" &&
+    options.dangerouslyAllowIncompatibleSchema
+  ) {
+    // Confirm only this review and its pinned candidate. Changed source
+    // state or retained input may require a new review by the caller.
+    const acceptedIncompatibility = result.message;
+    result = await piece.changeSource(action, {
+      confirmedChange: result.prepared,
+    });
+    if (result.status === "applied") {
+      result = { ...result, acceptedIncompatibility };
+    }
+  }
   if (result.status === "applied") noteWroteTo(config.space);
   return result;
 }
