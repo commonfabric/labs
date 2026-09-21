@@ -50,8 +50,8 @@ describe("value-visit/impl", () => {
       // call to type-check, the directive would be reported as unused and
       // the file would fail to compile. The line still runs, and the runtime
       // half is that the engine, told by `isPlusType()` that the value is
-      // outside the domain, hands it to the visitor with the tag `null`, which
-      // `DefaultValueVisitor` answers by throwing.
+      // outside the domain, hands it to the visitor with the tag `null`, on
+      // which `DefaultValueVisitor` throws.
 
       class Strict extends DefaultValueVisitor<never, number> {}
 
