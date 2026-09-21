@@ -29,8 +29,8 @@ const HOME_SOURCE = `
 import { handler, pattern, Writable, type PerUser } from "commonfabric";
 type Runner = { host: string; tools: string[]; registeredAt: string; lastClaimAt?: string };
 type Entry = { run: PerUser<unknown>; host: string };
-const register = handler<{ runner: Runner }, { runner: Writable<Runner | undefined> }>(
-  ({ runner }, state) => state.runner.set(runner),
+const register = handler<{ runner?: Runner }, { runner: Writable<Runner | undefined> }>(
+  (event = {}, state) => state.runner.set(event.runner),
 );
 export default pattern(() => {
   const entries = new Writable<Entry[]>([]).for("entries");
@@ -179,6 +179,10 @@ describe("agent-connections", () => {
       expect(ended.modelTurns).toBe(1);
       await queue.pull();
       expect(queue.get().agentRunner?.lastClaimAt).toEqual(expect.any(String));
+      await runner.stop();
+      runner = undefined;
+      await queue.pull();
+      expect(queue.get().agentRunner).toBeUndefined();
     } finally {
       await runner?.stop();
       await home.dispose();

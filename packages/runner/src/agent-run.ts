@@ -21,6 +21,7 @@ export {
   type AgentRunRecord,
 } from "./builtins/agent.ts";
 export {
+  AGENT_INPUT_NAME_PATTERN,
   AGENT_RUN_STATES,
   AGENT_RUN_TERMINAL_STATES,
   AGENT_TOOL_NAMES,

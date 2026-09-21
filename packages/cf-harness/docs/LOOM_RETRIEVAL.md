@@ -202,10 +202,12 @@ atom types, and never its content.
 
 The agent result writer takes these through
 `agentObservedHandlesOfTable(handleTable)`, which returns each general address
-handle as a cell and each referent as a document. A structured result that names
-a row's token gets a document minted from the row under its label and a link to
-it. Every observed row is minted and read by the result transaction whether or
-not the result names it, because its content entered model context and the
-result's inline text has to carry its label; a row the result does not name is
-linked from nowhere. A referent token the run does not hold fails the write as
-`unheld_handle`.
+handle as a cell and each referent as a document. A structured-result value that
+is exactly a row's token gets a document minted from the row under its label and
+a link to it. Token-shaped property names are checked against the run's held
+referents, but remain property-name text rather than becoming links. Every
+observed row is minted and read by the result transaction whether or not the
+result names it, because its content entered model context and the result's
+inline text has to carry its label; a row the result does not name is linked
+from nowhere. A referent token the run does not hold fails the write as
+`unheld_handle`, including in a property name.
