@@ -68,8 +68,8 @@ export interface HarnessAgentRunExecutorOptions {
   /** The host-owned file backing the read-only Loom tools. */
   loomRetrievalConfigPath?: string;
 
-  /** Further `cf-harness` arguments, such as `--model`. */
-  harnessArgs?: readonly string[];
+  /** Model name passed to `cf-harness`. */
+  model?: string;
 
   /**
    * The harness's own seams. `createPromptLoop` replaces the model loop and
@@ -120,6 +120,11 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
   const workspace = join(runRoot, "workspace");
   await Deno.mkdir(workspace, { recursive: true });
   const resultPath = join(workspace, RESULT_FILE);
+  try {
+    await Deno.remove(resultPath);
+  } catch (error) {
+    if (!(error instanceof Deno.errors.NotFound)) throw error;
+  }
 
   // The record reads as live proxies; the harness and the writer take plain
   // values.
@@ -133,7 +138,7 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
     : cloneIfNecessary(record.maxConfidentiality, { frozen: false });
   const inputs = record.inputs as Record<string, Cell<unknown>>;
   // A request naming no tools runs with the surface its session backs.
-  const tools = record.tools ?? [];
+  const tools = record.tools;
   const argv = [
     "--output-mode",
     "batch",
@@ -168,10 +173,10 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
     ]),
     // A request naming its tools narrows the run to them, and to the tool
     // the run returns its result through.
-    ...(tools.length > 0 ? [...tools, "submit_result"] : []).flatMap((
-      tool,
-    ) => ["--allow-tool", tool]),
-    ...(options.harnessArgs ?? []),
+    ...(tools === undefined ? [] : [...tools, "submit_result"]).flatMap(
+      (tool) => ["--allow-tool", tool],
+    ),
+    ...(options.model !== undefined ? ["--model", options.model] : []),
   ];
 
   // The harness builds its loop through this seam, so wrapping it is how the

@@ -5,8 +5,8 @@
  * A runner holds one user's identity. It registers itself in the queue's
  * `agentRunner` entry, subscribes to the queue's `entries`, and follows each
  * entry to its `AgentRun` record on whichever host serves the record's space.
- * Everything it does is a reaction to a change in the queue or in a record it
- * follows; nothing here runs on a timer. A scan ends cancelled runs, recovers
+ * Queue and record changes wake scans, and a scheduled wake revisits expired
+ * leases or retries a failed scan. A scan ends cancelled runs, recovers
  * records whose lease has passed, and claims the oldest queued records under
  * the concurrency cap. The run itself is the executor's, which
  * `agent-run-harness.ts` backs with `cf-harness`.
@@ -104,12 +104,15 @@ export interface AgentRunnerOptions {
   runtimeForHost: (host: string) => Promise<Runtime>;
 
   /** Writes the `agentRunner` entry through the queue's authorized writer. */
-  registerRunner: (entry: AgentRunnerEntry) => Promise<void>;
+  registerRunner: (entry: AgentRunnerEntry | undefined) => Promise<void>;
 
   /** Runs one claimed record to its outcome. */
   execute: (run: ClaimedAgentRun) => Promise<AgentRunExecution>;
 
   now?: () => Date;
+
+  /** Schedules a wake at `deadline`, returning a function that cancels it. */
+  scheduleAt?: (deadline: Date, wake: () => void) => () => void;
 
   /** Operator-facing progress lines. */
   report?: (message: string) => void;
@@ -147,6 +150,7 @@ export class AgentRunner {
   #stopQueue: (() => void) | undefined;
   #scan: Promise<void> | undefined;
   #scanRequested = false;
+  #cancelScheduledWake: (() => void) | undefined;
   #stopped = false;
 
   constructor(options: AgentRunnerOptions) {
@@ -162,14 +166,31 @@ export class AgentRunner {
     await queue.sync();
     this.#registeredAt = this.#now().toISOString();
     await this.#register();
-    // The subscription's first call is the scan on start; every later call
-    // is an index change.
-    this.#stopQueue = queue.key("entries").sink(() => this.#requestScan());
+    try {
+      // The subscription's first call is the scan on start; every later call
+      // is an index change.
+      this.#stopQueue = queue.key("entries").sink(() => this.#requestScan());
+    } catch (error) {
+      try {
+        await this.#options.registerRunner(undefined);
+      } catch (cleanupError) {
+        this.#options.report?.(
+          `agent runner: could not clear a failed registration: ${
+            cleanupError instanceof Error
+              ? cleanupError.message
+              : String(cleanupError)
+          }`,
+        );
+      }
+      throw error;
+    }
   }
 
   /** Aborts held runs, waits for them to end, and stops following. */
   async stop(): Promise<void> {
     this.#stopped = true;
+    this.#cancelScheduledWake?.();
+    this.#cancelScheduledWake = undefined;
     this.#stopQueue?.();
     // A claim already committing must become active before we abort held runs.
     await this.#scan;
@@ -181,6 +202,10 @@ export class AgentRunner {
       followed.stopFollowing();
     }
     this.#followed.clear();
+    if (this.#registeredAt !== undefined) {
+      await this.#options.registerRunner(undefined);
+      this.#registeredAt = undefined;
+    }
   }
 
   /** Resolves once no scan is pending and no run is held. */
@@ -209,6 +234,22 @@ export class AgentRunner {
     });
   }
 
+  /** Replaces the pending timed wake with one at `deadline`. */
+  #scheduleWake(deadline: Date): void {
+    this.#cancelScheduledWake?.();
+    const scheduleAt = this.#options.scheduleAt ?? ((at, wake) => {
+      const timer = setTimeout(
+        wake,
+        Math.max(0, at.getTime() - this.#now().getTime()),
+      );
+      return () => clearTimeout(timer);
+    });
+    this.#cancelScheduledWake = scheduleAt(deadline, () => {
+      this.#cancelScheduledWake = undefined;
+      this.#requestScan();
+    });
+  }
+
   /**
    * Runs a scan now, or marks one wanted when a scan is in flight, so that
    * scans never overlap and a change arriving mid-scan is not lost.
@@ -229,6 +270,7 @@ export class AgentRunner {
             error instanceof Error ? error.message : String(error)
           }`,
         );
+        this.#scheduleWake(new Date(this.#now().getTime() + 1_000));
       } finally {
         this.#scan = undefined;
       }
@@ -236,37 +278,59 @@ export class AgentRunner {
   }
 
   /** Helper for the scan, which follows every record the queue names. */
-  async #followEntries(): Promise<void> {
+  async #followEntries(): Promise<boolean> {
     const runtime = await this.#options.runtimeForHost(
       this.#options.homeHost,
     );
     const entries = agentQueueIndexCell(runtime, this.#options.homeSpace)
       .key("entries").get() ?? [];
+    const present = new Set(
+      entries.map((entry) => recordKey(entry.run.getAsNormalizedFullLink())),
+    );
+    for (const [key, followed] of this.#followed) {
+      if (present.has(key)) continue;
+      followed.stopFollowing();
+      this.#followed.delete(key);
+    }
+    let failed = false;
     for (const entry of entries) {
       const link = entry.run.getAsNormalizedFullLink();
       const key = recordKey(link);
       if (this.#followed.has(key)) continue;
-      const hostRuntime = await this.#options.runtimeForHost(entry.host);
-      const record = hostRuntime.getCellFromLink(
-        link,
-        AgentRunRecordSchema,
-      ) as unknown as Cell<AgentRunRecord>;
-      await record.sync();
-      this.#followed.set(key, {
-        host: entry.host,
-        runtime: hostRuntime,
-        record,
-        // A record's change — a cancel, another runner's claim — wakes the
-        // runner the way an index change does.
-        stopFollowing: record.sink(() => this.#requestScan()),
-      });
+      try {
+        const hostRuntime = await this.#options.runtimeForHost(entry.host);
+        const record = hostRuntime.getCellFromLink(
+          link,
+          AgentRunRecordSchema,
+        ) as unknown as Cell<AgentRunRecord>;
+        await record.sync();
+        this.#followed.set(key, {
+          host: entry.host,
+          runtime: hostRuntime,
+          record,
+          // A record's change — a cancel, another runner's claim — wakes the
+          // runner the way an index change does.
+          stopFollowing: record.sink(() => this.#requestScan()),
+        });
+      } catch (error) {
+        failed = true;
+        this.#options.report?.(
+          `agent runner: could not follow ${key}: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
+    return failed;
   }
 
   /** One pass over the queue: cancels, recovery, then claims. */
   async #scanOnce(): Promise<void> {
-    await this.#followEntries();
+    this.#cancelScheduledWake?.();
+    this.#cancelScheduledWake = undefined;
+    const followFailed = await this.#followEntries();
     const now = this.#now();
+    let nextWake = followFailed ? new Date(now.getTime() + 1_000) : undefined;
     const queued: { key: string; followed: FollowedRecord; at: string }[] = [];
 
     for (const [key, followed] of this.#followed) {
@@ -297,7 +361,13 @@ export class AgentRunner {
       // construction; any other is live while its lease reaches past now.
       if (active !== undefined) continue;
       const leaseUntil = value.claim?.leaseUntil;
-      if (leaseUntil !== undefined && new Date(leaseUntil) > now) continue;
+      if (leaseUntil !== undefined && new Date(leaseUntil) > now) {
+        const deadline = new Date(leaseUntil);
+        if (nextWake === undefined || deadline < nextWake) {
+          nextWake = deadline;
+        }
+        continue;
+      }
       await this.#recover(followed);
     }
 
@@ -307,6 +377,9 @@ export class AgentRunner {
         this.#stopped || this.#active.size >= this.#options.maxConcurrent
       ) break;
       await this.#claim(candidate.key, candidate.followed);
+    }
+    if (nextWake !== undefined && !this.#stopped) {
+      this.#scheduleWake(nextWake);
     }
   }
 
@@ -488,10 +561,9 @@ export class AgentRunner {
   ): Promise<void> {
     const { record, runtime } = followed;
     // A cancel wins over whatever the aborted run reported on its way out.
-    const execution: AgentRunExecution =
-      abort.signal.aborted && reported.outcome !== "completed"
-        ? { outcome: "cancelled", report: reported.report }
-        : reported;
+    const execution: AgentRunExecution = abort.signal.aborted
+      ? { outcome: "cancelled", report: reported.report }
+      : reported;
     const finishedAt = this.#now().toISOString();
     const report = execution.report ?? {};
     const errorCode = execution.outcome === "failed"

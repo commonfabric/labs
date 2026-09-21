@@ -41,6 +41,9 @@ export const AGENT_TOOL_NAMES = [
 /** One of {@link AGENT_TOOL_NAMES}. */
 export type AgentToolName = (typeof AGENT_TOOL_NAMES)[number];
 
+/** The model-facing name of one input cell. */
+export const AGENT_INPUT_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+
 /**
  * The states an `AgentRun` record passes through, from creation to one of
  * the four terminal states.

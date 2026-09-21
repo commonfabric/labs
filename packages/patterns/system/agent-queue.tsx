@@ -71,7 +71,7 @@ export type SetAgentRunnerEvent = {
 export const setAgentRunner = handler<
   SetAgentRunnerEvent,
   { agentRunner: Writable<AgentRunnerEntry | undefined> }
->((event, state) => {
+>((event = {}, state) => {
   state.agentRunner.set(event.runner);
 });
 

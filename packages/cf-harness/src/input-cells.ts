@@ -25,6 +25,7 @@
  */
 
 import { type MemorySpace, validateSlug } from "@commonfabric/runner";
+import { AGENT_INPUT_NAME_PATTERN } from "@commonfabric/runner/agent-run";
 import {
   createHarnessHandleTable,
   mintAddressHandle,
@@ -47,7 +48,7 @@ export type {
  * hyphens. Connector connection identities have their own name grammar in
  * `well-known-grants.ts`.
  */
-export const HANDLE_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+export const HANDLE_NAME_PATTERN = AGENT_INPUT_NAME_PATTERN;
 
 /** A parsed `--input-cell` argument. */
 export interface ParsedInputCellArgument {

@@ -550,6 +550,87 @@ describe("agent runner", () => {
     expect(recordOf(result).get()?.claim?.runner).toBe("did:key:alive#1");
   });
 
+  it("wakes at a foreign lease deadline and recovers the record", async () => {
+    const result = await submit();
+    await patternSide.editWithRetry((tx) => {
+      const record = recordOf(result).withTx(tx);
+      record.key("state").set("running");
+      record.key("attempts").set(2);
+      record.key("claim").set({
+        runner: "did:key:alive#1",
+        leaseUntil: "2026-09-18T12:30:00.000Z",
+      });
+    });
+    const runnerSide = connect(CLOUD);
+    const runnerRecord = recordOf(result, runnerSide);
+    await runnerRecord.sync();
+    await waitForCellValue<AgentRunRecord>(
+      runnerSide,
+      runnerRecord,
+      (value) =>
+        value?.state === "running" &&
+        value.claim?.leaseUntil === "2026-09-18T12:30:00.000Z",
+    );
+    let wake: (() => void) | undefined;
+    let deadline: Date | undefined;
+    const runner = await startRunner(
+      () => Promise.resolve({ outcome: "refused" }),
+      {
+        scheduleAt: (at, scheduled) => {
+          deadline = at;
+          wake = scheduled;
+          return () => {};
+        },
+        runtimeForHost: () => Promise.resolve(runnerSide),
+      },
+    );
+    await runner.idle();
+    expect(deadline?.toISOString()).toBe("2026-09-18T12:30:00.000Z");
+
+    clock = new Date("2026-09-18T12:30:00.000Z");
+    wake!();
+    const recovered = await waitForState(result, "failed");
+    expect(recovered.errorCode).toBe("RUNNER_LOST");
+  });
+
+  it("stops following a record removed from the queue", async () => {
+    const result = await submit();
+    await patternSide.editWithRetry((tx) => {
+      const record = recordOf(result).withTx(tx);
+      record.key("state").set("running");
+      record.key("attempts").set(2);
+      record.key("claim").set({
+        runner: "did:key:removed#1",
+        leaseUntil: "2026-09-18T12:30:00.000Z",
+      });
+    });
+    let wake: (() => void) | undefined;
+    let executions = 0;
+    const runner = await startRunner(
+      () => {
+        executions++;
+        return Promise.resolve({ outcome: "refused" });
+      },
+      {
+        scheduleAt: (_at, scheduled) => {
+          wake = scheduled;
+          return () => {};
+        },
+      },
+    );
+    await runner.idle();
+    await patternSide.editWithRetry((tx) => {
+      agentQueueIndexCell(patternSide, home, tx).key("entries").set([]);
+    });
+    await runner.idle();
+
+    clock = new Date("2026-09-18T12:30:00.000Z");
+    wake?.();
+    await runner.idle();
+    expect(recordOf(result).get()?.state).toBe("running");
+    expect(executions).toBe(0);
+  });
+
   it("renews the lease when the run reports a durable write", async () => {
     const renewed = defer<void>();
     const held = defer<AgentRunExecution>();
@@ -579,8 +660,8 @@ describe("agent runner", () => {
       started.resolve();
       return new Promise<AgentRunExecution>((resolve) => {
         run.signal.addEventListener("abort", () =>
-          // What an aborted harness run reports on its way out.
-          resolve({ outcome: "failed", errorCode: "PROVIDER_FAILURE" }));
+          // Even a late success cannot outrun cancellation.
+          resolve({ outcome: "completed", result: run.link }));
       });
     });
     const result = await submit();
@@ -786,9 +867,55 @@ describe("agent runner", () => {
     });
     await runners[0].idle();
 
-    expect(reports).toContain(
-      "agent runner: a queue scan failed: no toolshed at https://unknown.example",
+    expect(reports.some((message) =>
+      message.includes("could not follow") &&
+      message.includes("no toolshed at https://unknown.example")
+    )).toBe(true);
+  });
+
+  it("continues past a bad queue entry and runs a later valid one", async () => {
+    await patternSide.editWithRetry((tx) => {
+      agentQueueIndexCell(patternSide, home, tx).key("entries").push({
+        run: patternSide.getCell(home, "bad record"),
+        host: "https://unknown.example",
+      });
+    });
+    const result = await submit();
+    const own = connect(CLOUD);
+    await startRunner(() => Promise.resolve({ outcome: "refused" }), {
+      runtimeForHost: (host) =>
+        host === CLOUD
+          ? Promise.resolve(own)
+          : Promise.reject(new Error(`no toolshed at ${host}`)),
+    });
+
+    await waitForState(result, "refused");
+  });
+
+  it("retries a failed scan through the scheduler without a queue write", async () => {
+    const result = await submit();
+    const own = connect(CLOUD);
+    let calls = 0;
+    let wake: (() => void) | undefined;
+    const runner = await startRunner(
+      () => Promise.resolve({ outcome: "refused" }),
+      {
+        runtimeForHost: () => {
+          calls++;
+          return calls === 2
+            ? Promise.reject(new Error("transient queue read"))
+            : Promise.resolve(own);
+        },
+        scheduleAt: (_at, scheduled) => {
+          wake = scheduled;
+          return () => {};
+        },
+      },
     );
+    await runner.idle();
+    expect(recordOf(result).get()?.state).toBe("queued");
+    wake!();
+    await waitForState(result, "refused");
   });
 
   it("claims the older of two queued records first under a cap of one", async () => {
@@ -814,6 +941,17 @@ describe("agent runner", () => {
     const result = await submit({ tools: ["loom_profile"] });
     const runner = await startRunner(() =>
       Promise.resolve({ outcome: "refused" })
+    );
+    await runner.idle();
+
+    expect(recordOf(result).get()?.state).toBe("queued");
+  });
+
+  it("leaves a research request queued on the default runner surface", async () => {
+    const result = await submit({ tools: ["research"] });
+    const runner = await startRunner(
+      () => Promise.resolve({ outcome: "refused" }),
+      { tools: ["describe_handle", "web_fetch"] },
     );
     await runner.idle();
 
@@ -853,6 +991,15 @@ describe("agent runner", () => {
       registeredAt: "2026-09-18T12:00:00.000Z",
       lastClaimAt: "2026-09-18T12:05:00.000Z",
     });
+
+    await runner.stop();
+    runners.splice(runners.indexOf(runner), 1);
+    const cleared = await waitForCellValue(
+      patternSide,
+      agentQueueIndexCell(patternSide, home).key("agentRunner"),
+      (value) => value === undefined,
+    );
+    expect(cleared).toBeUndefined();
   });
 
   it("finds a record on another toolshed through its `{run, host}` entry", async () => {
@@ -962,6 +1109,7 @@ describe("agent runner", () => {
       let seen: {
         argv?: unknown;
         slotRole?: string;
+        model?: string;
         allowedTools?: readonly string[];
         observationCeiling?: unknown;
       } = {};
@@ -971,12 +1119,7 @@ describe("agent runner", () => {
         workRoot,
         report: options.report ??
           ((m) => Deno.env.get("AGENT_TEST_DEBUG") && console.log(m)),
-        harnessArgs: options.omitHarnessArgs ? undefined : [
-          "--model-provider",
-          "openai-compatible-gateway",
-          "--gateway-auth-mode",
-          "none",
-        ],
+        ...(options.omitHarnessArgs ? {} : { model: "scripted" }),
         harnessDeps: {
           env: {
             CF_HARNESS_MODEL_PROVIDER: "openai-compatible-gateway",
@@ -987,6 +1130,7 @@ describe("agent runner", () => {
             runPrompt: (prompt) => {
               seen = {
                 slotRole: prompt.promptSlotBinding?.role,
+                model: options.model,
                 argv: options.inputCells,
                 allowedTools: options.allowedToolIds,
                 observationCeiling: options.fabricSession
@@ -1044,6 +1188,7 @@ describe("agent runner", () => {
       // The task is a pattern's text, bound as context, and the request's
       // input reached the run as an input cell named as the request names it.
       expect(seen().slotRole).toBe("context");
+      expect(seen().model).toBe("scripted");
       expect(
         (seen().argv as { name: string }[]).map((cell) => cell.name),
       ).toEqual(["finished"]);
@@ -1118,6 +1263,20 @@ describe("agent runner", () => {
 
       expect(record.state).toBe("completed");
       expect(seen().allowedTools).toEqual(["describe_handle", "submit_result"]);
+    });
+
+    it("allows only `submit_result` for an explicitly empty tool list", async () => {
+      const seen = await startHarnessRunner(async ({ resultPath }) => {
+        await Deno.writeTextFile(
+          resultPath,
+          JSON.stringify({ answer: "Hyperion" }),
+        );
+        return loopResult("run-empty-tools");
+      });
+      const result = await submit({ tools: [] });
+
+      await waitForState(result, "completed");
+      expect(seen().allowedTools).toEqual(["submit_result"]);
     });
 
     it("accepts a handle token at an `asCell` position and writes a link there", async () => {
@@ -1249,6 +1408,24 @@ describe("agent runner", () => {
 
       expect(record.errorCode).toBe("PROVIDER_FAILURE");
       expect(record.modelTurns).toBe(3);
+    });
+
+    it("does not reuse a result file left by an earlier attempt", async () => {
+      const result = await submit();
+      const record = recordOf(result).get()!;
+      const workspace = join(workRoot, record.requestHash, "workspace");
+      await Deno.mkdir(workspace, { recursive: true });
+      await Deno.writeTextFile(
+        join(workspace, "agent-result.json"),
+        JSON.stringify({ answer: "stale" }),
+      );
+      await startHarnessRunner(() =>
+        Promise.resolve(loopResult("run-stale-result"))
+      );
+
+      const ended = await waitForState(result, "failed");
+      expect(ended.errorCode).toBe("PROVIDER_FAILURE");
+      expect(ended.result).toBeUndefined();
     });
 
     it("fails when the validated result file disappears before the writer reads it", async () => {

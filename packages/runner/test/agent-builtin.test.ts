@@ -175,6 +175,28 @@ describe("agent builtin", () => {
     expect(raw.outcome).toBeUndefined();
   });
 
+  for (const name of ["", "bad name", ".hidden"]) {
+    it(`rejects the invalid input name ${JSON.stringify(name)} before staging`, async () => {
+      setUp();
+      const result = runAgentPattern(`agent-invalid-input-${name}`, {
+        inputs: { [name]: ["Dune"] },
+      });
+      await tx.commit();
+
+      const settled = await waitForCellValue<AgentResult>(
+        runtime,
+        result,
+        (value) => typeof value?.error === "string",
+      );
+      expect(settled.error).toContain("INVALID_INPUT");
+      expect(settled.pending).toBe(false);
+      expect(result.withTx().key("run").get()).toBeUndefined();
+      expect(agentQueueIndexCell(runtime, space).key("entries").get()).toEqual(
+        [],
+      );
+    });
+  }
+
   it("uses the canonical run scope when the stored queue has an unscoped item schema", async () => {
     setUp();
     const entries = runtime.getCell(space, "stored-agent-entries", {
