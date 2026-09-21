@@ -632,7 +632,7 @@ describe("launch", () => {
       expect(JSON.parse(plan.environment.CF_HARNESS_CONNECTOR_GRANTS!))
         .toEqual([{
           name: "gmail-work",
-          cfcClass: "email",
+          cfcClasses: ["email"],
           ref: MAIL_REF,
           source: {
             connection: "gmail-work",

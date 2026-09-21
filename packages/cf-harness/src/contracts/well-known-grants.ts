@@ -38,12 +38,72 @@ export interface HarnessConnectorGrantSource {
 export interface HarnessConnectorGrantSpec {
   /**
    * Connection identity: `connection` or `connection#companionKey`.
-   * Legacy records without `cfcClass` use their class as the name.
+   * Records without separate class metadata use their class as the name.
    */
   name: string;
 
-  /** Declared column classification; legacy records carry it in `name`. */
+  /** All declared column classifications, in contract order. */
+  cfcClasses?: string[];
+
+  /** Singular classification on persisted grants without `cfcClasses`. */
   cfcClass?: string;
+
+  /**
+   * Physical rows at injection, including metadata and history; absent if unknown.
+   */
+  rowCount?: number;
+
+  /**
+   * Account identity from the receipt; absent when the receipt did not record it.
+   */
+  viewer?:
+    | {
+      /** An authenticated connection. */
+      identity: "account";
+
+      /** Provider's viewer identifier, which may be opaque. */
+      sourceId?: string;
+
+      /** Login address; `null` means this account has no address. */
+      email?: string | null;
+
+      /** Provider's display label for the account. */
+      label?: string;
+
+      /** Why the provider identity is unavailable or withheld, when stated. */
+      reason?: string;
+    }
+    | {
+      /** A source with no account. */
+      identity: "none";
+
+      /** Receipt reason for the absence. */
+      reason: string;
+    }
+    | {
+      /** The receipt could not establish an identity. */
+      identity: "unknown";
+
+      /** Receipt reason for the unavailable identity. */
+      reason?: string;
+    };
+
+  /** Newest record observation, distinct from content time; absent if unknown. */
+  observation?:
+    | {
+      /** ISO8601 time when Loom observed the newest record. */
+      newestAt: string;
+
+      /** Absence reasons accompany only missing timestamps. */
+      reason?: never;
+    }
+    | {
+      /** No observation time was returned. */
+      newestAt: null;
+
+      /** `no-rows` means empty; other reasons mean the time could not be read. */
+      reason: string;
+    };
 
   /** The reference to mint, as an LLM-friendly link string. */
   ref: string;
@@ -73,19 +133,7 @@ export type HarnessWellKnownGrant =
 
     source?: undefined;
   }
-  | {
-    /** The connector grant's connection identity, or legacy class name. */
-    name: string;
-
-    /** Declared column classification; legacy records carry it in `name`. */
-    cfcClass?: string;
-
+  | (HarnessConnectorGrantSpec & {
     /** The token the model holds. */
     token: string;
-
-    /** The canonical reference behind it; never model-facing. */
-    ref: string;
-
-    /** The loom handle the name was read from. */
-    source: HarnessConnectorGrantSource;
-  };
+  });

@@ -7,9 +7,9 @@
  * and what `loom connector handles` prints — says which handles exist and what
  * each one's reference is, but records no label class. `pieces.json` declares
  * each connector piece's `sqlite_sources`, whose table contract carries the
- * per-column `ifc` the daemon seeded, and that is where a handle's CFC class is
+ * per-column `ifc` the daemon seeded, and that is where a handle's CFC classes are
  * written down. They join on piece, connection, and companion key. Connection
- * identity names a grant; its declared CFC class describes what it holds.
+ * identity names a grant; its declared CFC classes describe what it holds.
  *
  * A handle whose class cannot be read is not guessed at and not granted: it is
  * returned as unnamed, with the reason, for the launcher to print. A console
@@ -120,6 +120,99 @@ const handleKey = (
   companion: string,
 ): string => JSON.stringify([piece, connection, companion]);
 
+/** Descriptive metadata published on one source receipt. */
+type ConnectorReceiptMetadata = Pick<
+  HarnessConnectorGrantSpec,
+  "rowCount" | "viewer" | "observation"
+>;
+
+/**
+ * Reads source metadata by store identity; conflicting physical counts are unknown.
+ */
+const sourceReceiptMetadata = (
+  rows: unknown,
+): Map<string, ConnectorReceiptMetadata> => {
+  const receipts = new Map<string, ConnectorReceiptMetadata>();
+  if (!Array.isArray(rows)) return receipts;
+  for (const row of rows) {
+    const source = asRecord(row);
+    const piece = asNonEmptyString(source?.piece);
+    const connection = asNonEmptyString(source?.connection_id);
+    const companion = asNonEmptyString(source?.companion_key);
+    if (
+      piece === undefined || connection === undefined ||
+      (source?.companion_key !== undefined && companion === undefined)
+    ) continue;
+    const count = source?.row_count;
+    const rowCount = source?.state === "linked" &&
+        typeof count === "number" && Number.isSafeInteger(count) && count >= 0
+      ? count
+      : undefined;
+    const key = handleKey(piece, connection, companion ?? "");
+    const previous = receipts.get(key);
+    if (previous !== undefined) {
+      if (previous.rowCount !== rowCount) delete previous.rowCount;
+      continue;
+    }
+    const viewer = receiptViewer(source?.viewer);
+    const observation = receiptObservation(source);
+    receipts.set(key, {
+      ...(rowCount === undefined ? {} : { rowCount }),
+      ...(viewer === undefined ? {} : { viewer }),
+      ...(observation === undefined ? {} : { observation }),
+    });
+  }
+  return receipts;
+};
+
+/** Reads account identity without treating a local source as an unknown account. */
+const receiptViewer = (
+  value: unknown,
+): HarnessConnectorGrantSpec["viewer"] => {
+  const viewer = asRecord(value);
+  const reason = asNonEmptyString(viewer?.absent_reason);
+  if (viewer?.kind === "none") {
+    return {
+      identity: "none",
+      reason: reason ?? "reason not reported",
+    };
+  }
+  if (viewer?.kind === "unknown") {
+    return {
+      identity: "unknown",
+      ...(reason === undefined ? {} : { reason }),
+    };
+  }
+  if (viewer?.kind !== "account") {
+    return undefined;
+  }
+  const sourceId = asNonEmptyString(viewer.source_id);
+  const email = viewer.email === null ? null : asNonEmptyString(viewer.email);
+  const label = asNonEmptyString(viewer.label);
+  return {
+    identity: "account",
+    ...(sourceId === undefined ? {} : { sourceId }),
+    ...(email === undefined ? {} : { email }),
+    ...(label === undefined ? {} : { label }),
+    ...(reason === undefined ? {} : { reason }),
+  };
+};
+
+/**
+ * Reads record observation time and the receipt's reason when none is available.
+ */
+const receiptObservation = (
+  receipt: Record<string, unknown> | undefined,
+): HarnessConnectorGrantSpec["observation"] => {
+  const newestAt = asNonEmptyString(receipt?.newest_observed_at);
+  if (newestAt !== undefined && Number.isFinite(Date.parse(newestAt))) {
+    return { newestAt: new Date(newestAt).toISOString() };
+  }
+  if (receipt?.newest_observed_at != null) return undefined;
+  const reason = asNonEmptyString(receipt?.newest_observed_at_reason);
+  return reason === undefined ? undefined : { newestAt: null, reason };
+};
+
 /**
  * The `sqlite_sources` entries `pieces.json` declares, keyed by
  * {@link handleKey}. The same tuple keys the receipt's entries, so this is the
@@ -221,6 +314,7 @@ export const resolveConnectorGrants = (
   // reference that carries a different one is not this instance's to grant.
   const receiptSpace = asNonEmptyString(document.space);
   const sources = sourcesByHandle(records.piecesJson, records.piecesJsonPath);
+  const receipts = sourceReceiptMetadata(document.sources);
   const grants: HarnessConnectorGrantSpec[] = [];
   const unnamed: UnnamedConnectorHandle[] = [];
   const candidates = new Map<string, HarnessConnectorGrantSpec[]>();
@@ -317,14 +411,6 @@ export const resolveConnectorGrants = (
       );
       continue;
     }
-    if (classes.length > 1) {
-      skip(
-        `its declared table contract carries ${classes.length} CFC classes ` +
-          `(${classes.join(", ")}); this grant requires one declared class`,
-        "Use a connector table contract with one declared CFC class per grant, then restart the console.",
-      );
-      continue;
-    }
     const name = connectorGrantName(grantSource);
     if (RESERVED_GRANT_NAMES.has(name)) {
       skip(
@@ -333,9 +419,17 @@ export const resolveConnectorGrants = (
       );
       continue;
     }
+    const receipt = receipts.get(
+      handleKey(piece, connection, companionKey ?? ""),
+    );
+    const viewer = receipt === undefined
+      ? receiptViewer(handle?.viewer)
+      : receipt.viewer;
     const grant: HarnessConnectorGrantSpec = {
       name,
-      cfcClass: classes[0]!,
+      cfcClasses: classes,
+      ...receipt,
+      ...(viewer === undefined ? {} : { viewer }),
       ref: renderCellReference(link, { space: link.space, scope: "space" }),
       source: grantSource,
     };
@@ -356,9 +450,14 @@ export const resolveConnectorGrants = (
     const first = entries[0]!;
     if (
       entries.every((entry) =>
-        entry.ref === first.ref && entry.cfcClass === first.cfcClass
+        entry.ref === first.ref &&
+        entry.cfcClasses!.length === first.cfcClasses!.length &&
+        entry.cfcClasses!.every((value) => first.cfcClasses!.includes(value))
       )
     ) {
+      if (!entries.every((entry) => entry.rowCount === first.rowCount)) {
+        delete first.rowCount;
+      }
       grants.push(first);
     } else {
       for (const entry of entries) {
@@ -436,7 +535,20 @@ export const parseConnectorGrants = (
     const grant = {
       name,
       ref,
+      ...(record?.cfcClasses === undefined
+        ? {}
+        : { cfcClasses: record.cfcClasses as string[] }),
       ...(cfcClass === undefined ? {} : { cfcClass }),
+      ...(record?.rowCount === undefined
+        ? {}
+        : { rowCount: record.rowCount as number }),
+      ...(record?.viewer === undefined
+        ? {}
+        : { viewer: record.viewer as HarnessConnectorGrantSpec["viewer"] }),
+      ...(record?.observation === undefined ? {} : {
+        observation: record
+          .observation as HarnessConnectorGrantSpec["observation"],
+      }),
       source: {
         connection,
         piece,
