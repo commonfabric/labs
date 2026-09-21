@@ -1,8 +1,8 @@
 # cf-harness Current State
 
 Status: current implementation reference\
-Last verified: 2026-09-21\
-Revision: `7d22be553d`
+Last verified: 2026-09-22\
+Revision: `4e3d5274b4+console-retraction`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -57,6 +57,9 @@ The current package provides:
   Docker and index observations, with deciding records, timestamps, causes, and
   remedies; unknown observations remain distinct from failures, and reading the
   route never waits for a live probe;
+- owner retraction through console `POST /api/index/retract`, signed by the
+  configured identity and requiring an active same-owner direct successor; the
+  generic index proxy stays read-only and standalone deletion is unsupported;
 - durable Loom composition, exact inspection, and bounded receipt recovery over
   an explicitly configured host command transport; current-turn console results
   include verified authored Loom receipts and the submitted origin. See
