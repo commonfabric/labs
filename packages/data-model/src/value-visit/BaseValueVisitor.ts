@@ -6,10 +6,7 @@ import {
   type FabricValue,
   type FabricValuePlus,
 } from "@/interface.ts";
-import {
-  type FabricContainerValueTag,
-  type FabricValuePlusTag,
-} from "@/types";
+import { type FabricContainerValueTag, type FabricValuePlusTag } from "@/types";
 import { debugStr } from "@/value-debug";
 
 import {

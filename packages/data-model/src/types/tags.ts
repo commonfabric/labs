@@ -52,8 +52,9 @@ export const JS_PRIMITIVE_TYPE_VALUE_TAGS = Object.freeze(
 );
 
 /** One of the JS primitive type tag strings. */
-export type JsPrimitiveTypeValueTag =
-  typeof JS_PRIMITIVE_TYPE_VALUE_TAGS[keyof typeof JS_PRIMITIVE_TYPE_VALUE_TAGS];
+export type JsPrimitiveTypeValueTag = typeof JS_PRIMITIVE_TYPE_VALUE_TAGS[
+  keyof typeof JS_PRIMITIVE_TYPE_VALUE_TAGS
+];
 
 /**
  * The tags of all JS types other than `object`, plus `null`: the vocabulary of
