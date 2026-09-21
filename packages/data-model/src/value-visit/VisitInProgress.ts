@@ -277,6 +277,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
 
         case "replace": {
           value = result.value;
+          tag = this.#tagOfValueElseNull(value);
           break; // ...and continue to iterate.
         }
 
