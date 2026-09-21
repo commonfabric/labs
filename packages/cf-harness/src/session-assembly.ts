@@ -363,15 +363,15 @@ export interface EstablishHarnessSessionContextOptions {
 /**
  * Brings up everything a run holds before its first model turn, and returns
  * the context messages announcing it: the skill registry and any preloaded
- * skills, the well-known grants of the session's space, and the operator's
- * input cells and the guidance for selecting a piece target.
+ * skills, the well-known grants of the session's space, host-supplied input
+ * cells, and the guidance for selecting a piece target.
  *
  * The three differ in how they fail, and deliberately. A missing skills root
  * simply yields no messages. Grants are best-effort: a session that will not
  * connect is reported and the run continues, because a grant is an
- * entitlement the run did not ask for. Input cells are explicit operator
- * configuration, so one that cannot be minted fails the run rather than
- * starting it without what the operator attached.
+ * entitlement the run did not ask for. Input cells name task targets, whether
+ * attached by the operator or retained by the session, so one that cannot be
+ * minted fails the run rather than starting it without that target.
  *
  * This is the first thing the run's driver does, so it takes the run
  * (`running`) before anything else and, when a step throws, fails it as

@@ -1702,7 +1702,9 @@ export class ConsoleServer {
         text,
         ...(typeof body.loomId === "string" ? { loomId: body.loomId } : {}),
       },
-      ...(inputCells.length > 0 ? { inputCells } : {}),
+      ...(body.inputCells !== undefined && body.inputCells !== null
+        ? { inputCells }
+        : {}),
       ...(patternRefs.length > 0 ? { patternRefs } : {}),
     });
     if (!turn.ok) {

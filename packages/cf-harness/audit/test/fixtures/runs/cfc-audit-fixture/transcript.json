@@ -1,7 +1,7 @@
 [
   {
     "role": "user",
-    "content": "Input cells for this run, named by the operator:\n- cfh:a:jvhdg — the operator's notes"
+    "content": "Input cells for this run:\n- cfh:a:jvhdg — the operator's notes"
   },
   {
     "role": "user",

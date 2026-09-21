@@ -1173,10 +1173,11 @@ queues it again when its `attempts` is 1 and ends it `failed` as `RUNNER_LOST`
 when its `attempts` is 2. If `cancelRequestedAt` is set, recovery ends the
 expired record as `cancelled` instead. A live lease stays with its runner.
 
-Agent commands use a full connection for the home deployment. Other hosts named
-by queue entries are read and written through storage-only runtimes that leave
-the process's deployment settings alone. The runner and inspection commands
-share this connection path.
+Agent commands use a full connection for the home deployment. For queued
+records, the runner opens and reuses one storage-only runtime for each distinct
+record host without changing the process's deployment settings. The runner and
+inspection commands share this connection path. The runner is the one command
+that the next section's rule does not bound to a single deployment.
 
 ## One deployment per process
 

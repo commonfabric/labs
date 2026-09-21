@@ -1212,19 +1212,30 @@ describe("publish() over a day that has been compacted", () => {
     expect(read).toContain(local);
   });
 
-  it("ends the run when a shard of its rollup will not read", async () => {
+  /**
+   * A day whose rollup is several shards, the last of which will not
+   * read, over a store that also holds that day's raw objects. The
+   * shards carry a run the raw objects do not, and name a file the raw
+   * objects do not, so anything the fold kept from the shards that did
+   * read shows up in what was published.
+   */
+  function withBrokenRollup() {
     const shards = Array.from(
       { length: SHARD_CHUNK + 1 },
       (_, index) =>
         `labs/test-records/aggregated/v1/${DAY}/shard-${index}.ndjson`,
     );
-    const objects = Object.fromEntries(shards.map((shard) => [
-      shard,
-      object("c3", "fail", "2026-08-20T03:00:00.000Z"),
-    ]));
-    const { store, created } = fakeStore(objects, {
-      [DAY]: shards,
-    });
+    const objects: Record<string, string> = { ...seed() };
+    for (const shard of shards) {
+      objects[shard] = object(
+        "c3",
+        "pass",
+        "2026-08-20T03:00:00.000Z",
+        "main",
+        UNIT,
+      );
+    }
+    const { store, created } = fakeStore(objects, { [DAY]: shards });
     const broken: StoreAccess = {
       ...store,
       read: (name) =>
@@ -1232,6 +1243,16 @@ describe("publish() over a day that has been compacted", () => {
           ? Promise.reject(new Error("that shard is gone"))
           : store.read(name),
     };
+    return { objects, broken, created };
+  }
+
+  it("reads a day from its raw objects when a shard will not read", async () => {
+    // Ending the run would end every later one the same way: the store
+    // holds create and nothing else, so the shard stays where it is and
+    // the day is never recorded as folded. A rollup is a read
+    // optimization and the day's raw objects are all still there, so the
+    // day is read the long way instead.
+    const { objects, broken, created } = withBrokenRollup();
     expect(
       await publish(
         ["--bootstrap", "--days", "1"],
@@ -1241,8 +1262,43 @@ describe("publish() over a day that has been compacted", () => {
         noBaselines,
       ),
     )
-      .toBe(1);
-    expect(created.size).toBe(0);
+      .toBe(0);
+    const stateName = [...created.keys()].find((name) =>
+      name.includes("/state/")
+    )!;
+    const state = parseAggregate(await gunzipToText(created.get(stateName)!));
+    const raw = [CI(DAY, "1"), CI(DAY, "2")];
+    expect(state?.folded).toEqual(raw);
+    // Left open rather than settled, so later runs read it the same way
+    // rather than taking a rollup nothing read as accounted for.
+    expect(state?.compacted).toEqual([]);
+    // What the shards that did read carried reaches neither the scores
+    // nor the files the next run seeds its surfaces from.
+    const whole = new Fold(
+      emptyAggregate("2026-08-20"),
+      new AliasResolver([]),
+      "2026-08-20",
+    );
+    whole.add(raw.map((name) => reportFromText(name, objects[name]!)));
+    expect(state?.states).toEqual(whole.finish().aggregate.states);
+    expect(state?.files).toEqual({});
+  });
+
+  it("says which day it read the long way", async () => {
+    const { broken } = withBrokenRollup();
+    const said = await saying(
+      () =>
+        publish(
+          ["--bootstrap", "--days", "1"],
+          broken,
+          NOW,
+          suites,
+          noBaselines,
+        ),
+      "warn",
+    );
+    expect(said).toContain("that shard is gone");
+    expect(said).toContain(`reading ${DAY} from its raw objects instead`);
   });
 
   for (

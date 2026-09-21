@@ -502,12 +502,28 @@ describe("writeAgentResult()", () => {
   });
 
   it("aborts a referenced document mint when its commit fails", async () => {
-    const edit = runtime.edit.bind(runtime);
-    let edits = 0;
-    runtime.edit = ((...args: Parameters<Runtime["edit"]>) => {
-      const tx = edit(...args);
-      edits++;
-      if (edits === 2) {
+    const resultCause = "result-mint-commit-failed";
+    const mintCause = agentResultReferentCause(
+      resultCause,
+      ROW_TOKEN,
+    );
+    const getCell = runtime.getCell.bind(runtime);
+    let mintTargeted = false;
+    runtime.getCell = ((...args: Parameters<Runtime["getCell"]>) => {
+      const cell = getCell(...args);
+      const cause = args[1] as {
+        type?: unknown;
+        result?: unknown;
+        token?: unknown;
+      } | null;
+      const tx = args[3];
+      if (
+        cause !== null && typeof cause === "object" &&
+        cause.type === "cf-harness.agent-result-referent" &&
+        cause.result === resultCause && cause.token === ROW_TOKEN &&
+        tx !== undefined
+      ) {
+        mintTargeted = true;
         tx.commit = (() =>
           Promise.resolve({
             error: {
@@ -516,8 +532,8 @@ describe("writeAgentResult()", () => {
             },
           })) as typeof tx.commit;
       }
-      return tx;
-    }) as Runtime["edit"];
+      return cell;
+    }) as Runtime["getCell"];
     try {
       const failure = await writeAgentResult({
         session,
@@ -531,19 +547,18 @@ describe("writeAgentResult()", () => {
         structuredResult: { source: ROW_TOKEN },
         observedHandles: [rowReferent()],
         maxConfidentiality: [LOOM_ROW],
-        cause: "result-mint-commit-failed",
+        cause: resultCause,
       }).then(() => undefined, (error: unknown) => error);
 
+      expect(mintTargeted).toBe(true);
       expect(failure).toBeInstanceOf(AgentResultWriteError);
       const writeError = failure as AgentResultWriteError;
       expect(writeError.code).toBe("commit_failed");
       expect(writeError.rawCauseMessage).toBe("synthetic mint failure");
-      expect(documentExists("result-mint-commit-failed")).toBe(false);
-      expect(documentExists(
-        agentResultReferentCause("result-mint-commit-failed", ROW_TOKEN),
-      )).toBe(false);
+      expect(documentExists(resultCause)).toBe(false);
+      expect(documentExists(mintCause)).toBe(false);
     } finally {
-      runtime.edit = edit as Runtime["edit"];
+      runtime.getCell = getCell as Runtime["getCell"];
     }
   });
 

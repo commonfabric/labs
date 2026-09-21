@@ -5,6 +5,7 @@ import {
   buildObjectBody,
   type RunContext,
   type StoredReport,
+  type StoredReportGroup,
   testIdentityKey,
   type TestRecord,
 } from "@commonfabric/test-support/records";
@@ -1703,6 +1704,148 @@ describe("a batch whose reports interleave in time", () => {
     expect(backwards).toEqual(forwards);
     expect(shuffled).toEqual(forwards);
     expect(forwards.mainCatches).toBe(2);
+  });
+});
+
+describe("a read that fails part way", () => {
+  /** A read that hands over what it has and then fails. */
+  async function* breaking(reports: readonly StoredReport[]) {
+    for (const report of reports) yield report;
+    throw new Error("that shard is gone");
+  }
+
+  const fresh = () =>
+    new Fold(emptyAggregate("2026-08-20"), NO_ALIASES, "2026-08-20");
+
+  it("leaves the fold holding nothing of what did arrive", async () => {
+    // Nothing can replace a shard that will not read, so the day is read
+    // from its raw objects instead — and that is only open to a caller
+    // whose fold took nothing from the shards that did read.
+    const fold = fresh();
+    await expect(
+      fold.addUnordered(breaking([
+        stored(CI_NAME, context(), [record({ file: UNIT })]),
+      ])),
+    ).rejects.toThrow();
+    expect(fold.knows(CI_NAME)).toBe(false);
+    expect(fold.declined).toBe(0);
+    // Which is the whole of what the caller asks before reading those
+    // records another way.
+    expect(fold.intact).toBe(true);
+    const after = fold.finish();
+    expect(after.observations).toBe(0);
+    expect(after.aggregate).toEqual(fresh().finish().aggregate);
+    expect(after.surfaces.size).toBe(0);
+  });
+
+  it("folds the day afterwards as though nothing had been read", async () => {
+    // What the fold ends up with must not depend on how far the read
+    // that failed got, or the part it kept would be counted twice.
+    const reports = [
+      stored(CI_NAME, context(), [record({ durationMs: 40 })]),
+      stored(
+        `${CI_NAME}2`,
+        context({ commit: "c2", startedAt: "2026-08-20T01:00:00.000Z" }),
+        [record({ durationMs: 900 })],
+      ),
+    ];
+    const recovered = fresh();
+    await expect(recovered.addUnordered(breaking(reports))).rejects.toThrow();
+    recovered.add(reports);
+    const whole = fresh();
+    whole.add(reports);
+    expect(recovered.intact).toBe(true);
+    expect(recovered.finish().aggregate).toEqual(whole.finish().aggregate);
+  });
+
+  it("says an ordered read is not intact from its first report", () => {
+    // `add` folds as it reads, so anything it throws is thrown with part
+    // of the batch already counted. A fold that said otherwise would
+    // offer those records to be read a second time.
+    const fold = fresh();
+    const gone: StoredReport = {
+      objectName: CI_NAME,
+      context: undefined,
+      records: [],
+      get reports(): StoredReportGroup[] {
+        throw new Error("that object is gone");
+      },
+    };
+    expect(() => fold.add([gone])).toThrow();
+    expect(fold.intact).toBe(false);
+  });
+});
+
+describe("a batch read one shard at a time", () => {
+  /** Everything one object gives a fold beyond the records in it. */
+  const corpus = () => [
+    stored(CI_NAME, context(), [
+      record({ durationMs: 40 }),
+      record({
+        test: { k: "gate", s: "ci", n: "ci-lane batch runner-unit" },
+        durationMs: 30_000,
+      }),
+      record({
+        test: { k: "gate", s: "ci", n: "ci-lane ran batch runner-unit" },
+        durationMs: 10_000,
+      }),
+      record({
+        test: { k: "gate", s: "ci", n: "ci-lane units batch runner-unit" },
+        durationMs: 4,
+      }),
+    ]),
+    stored(
+      `${CI_NAME}2`,
+      context({ commit: "c2", startedAt: "2026-08-20T01:00:00.000Z" }),
+      [record({ durationMs: 900, file: UNIT })],
+    ),
+    stored(`${CI_NAME}3`, placeless(), [
+      record({
+        test: { k: "gate", s: "ci", n: "ci-lane setup fuse" },
+        durationMs: 14_800,
+      }),
+    ]),
+  ];
+
+  const fresh = () =>
+    new Fold(emptyAggregate("2026-08-20"), NO_ALIASES, "2026-08-20");
+
+  it("gives a fold what reading it in order gives", async () => {
+    // A shard read gives what it reads to the batch and merges the batch
+    // in once the last report has arrived, so each of the five things a
+    // read gives — the surfaces it names, the lane measurements it
+    // carries, the durations it sampled, the objects it came from, and
+    // the measurements it declined — has to come out where reading the
+    // same objects in order puts it.
+    const ordered = fresh();
+    ordered.add(corpus());
+    const shards = fresh();
+    await shards.addUnordered(replaying(corpus()));
+    const aggregate = shards.finish().aggregate;
+    // Named one at a time as well, so that none of the five is compared
+    // empty against empty.
+    expect(aggregate.lanes?.length).toBe(1);
+    expect(shards.declined).toBe(1);
+    expect(aggregate.folded.length).toBe(3);
+    expect(Object.keys(aggregate.files)).toEqual([KEY]);
+    expect(aggregate.states[KEY]?.costByDay["2026-08-20"]?.count).toBe(2);
+    expect(aggregate).toEqual(ordered.finish().aggregate);
+  });
+
+  it("does not let a shard with no file replace one that had it", async () => {
+    // The rule holds across the merge as it holds inside one batch: a
+    // file names something a runner can be pointed at, and an identity's
+    // own name does not.
+    const fold = fresh();
+    fold.add([stored(CI_NAME, context(), [record({ file: UNIT })])]);
+    await fold.addUnordered(replaying([
+      stored(
+        `${CI_NAME}2`,
+        context({ commit: "c2", startedAt: "2026-08-20T01:00:00.000Z" }),
+        [record()],
+      ),
+    ]));
+    expect(fold.finish().aggregate.files).toEqual({ [KEY]: UNIT });
   });
 });
 

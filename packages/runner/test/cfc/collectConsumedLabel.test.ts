@@ -57,7 +57,7 @@ function observation(
 }
 
 describe("collectConsumedLabel()", () => {
-  it("attributes external module-policy evidence to its observed space", () => {
+  it("attributes external module-policy evidence to its source read space", () => {
     const modulePolicy = {
       type: CFC_ATOM_TYPE.Policy,
       policyRefKind: "module" as const,
@@ -66,7 +66,7 @@ describe("collectConsumedLabel()", () => {
       policyDigest: "sha256:test",
     };
     const observed = {
-      source: address,
+      source: { ...address, space: "did:key:observation" },
       flow: { confidentiality: [], integrity: [] },
       consumed: {
         confidentiality: [modulePolicy],

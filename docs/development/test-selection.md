@@ -448,10 +448,39 @@ run without the file. The file is what leaves room for the corpus to grow
 into.
 
 The temporary file is removed when the day finishes or the read fails.
-A shard that cannot be read ends the publisher run without writing a
-manifest or aggregate. The previous manifest stays newest. Completed
-days are recorded, so no later run over a wide window folds their raw
-objects on top and doubles every catch in them.
+A day whose shards will not read is read from its raw objects instead,
+which is how a day with no rollup at all is read, and the run says which
+day it read that way and what stopped the rollup. The fold takes nothing
+from the shards that did read, so no part of the day is counted twice,
+and the day is left open rather than recorded, so later runs read it the
+same way. Completed days are recorded, so no later run over a wide window
+folds their raw objects on top and doubles every catch in them.
+
+Falling back rather than ending the run is what keeps a shard from
+stopping the publisher for good. The store holds create and nothing else,
+so a shard that will not read stays where it is, and a run that ended
+there would leave the day unrecorded for the next run to end on in the
+same place.
+
+Reading a day the long way costs more than the one run it happens on.
+Every object of that day goes into the aggregate's list of folded
+objects, where the rollup path would have written one receipt, and that
+list is carried in every state object written from then on. The day is
+also folded after the rollup days that follow it, because every rollup
+day is read before the raw pass begins. The rules that decide whether a
+failure is a catch look a day or two either side of it, and the fold has
+by then aged its cross-batch context past the day being folded, so that
+evidence is not in view. Every local submission of every day is folded
+after every rollup day for the same reason. The day's own records are all
+there and none of them is counted twice; what the day loses is some of
+the evidence that would have classified them.
+
+What the fallback rests on is that the shards that did read reached the
+batch and nothing else. Replaying the spooled observations is a read of
+the temporary file, and a failure there drives the fold, so part of the
+day is already counted when it is raised. Reading that day again by any
+route would count that part twice, and the run refuses there rather than
+falling back.
 
 A rollup is a derived cache of one closed day rather than the full-fidelity
 record of that day, so

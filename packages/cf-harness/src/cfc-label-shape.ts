@@ -17,7 +17,8 @@ export const isCfcClauseShape = (
   value: unknown,
 ): value is CfcConfClause =>
   isCfcAtomShape(value) ||
-  (isObjectNotArray(value) && Array.isArray(value.anyOf) &&
+  (isObjectNotArray(value) && Object.keys(value).length === 1 &&
+    Array.isArray(value.anyOf) &&
     value.anyOf.length > 0 && value.anyOf.every(isCfcAtomShape));
 
 /** Whether a decoded value is a label whose clauses and atoms are readable. */

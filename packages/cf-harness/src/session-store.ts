@@ -7,6 +7,7 @@ import type {
   HarnessChatTurnRecord,
 } from "./contracts/interactive-chat.ts";
 import type { HarnessTranscriptMessage } from "./contracts/transcript.ts";
+import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
 
 /** Bounded prior findings plus the full label influence of retained history. */
 export interface HarnessChatResearchContext {
@@ -26,6 +27,9 @@ export interface HarnessChatSessionSnapshot {
 
   /** Host-owned research context, committed with resumable model history. */
   researchContext?: HarnessChatResearchContext;
+
+  /** Pieces named by the latest completed turn that assigned any slugs. */
+  assignedPieces?: readonly HarnessAssignedPiece[];
 }
 
 export interface HarnessChatEventListOptions {

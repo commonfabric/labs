@@ -1,4 +1,6 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { CrossStageState, TransformationContext } from "../../src/core/mod.ts";
@@ -453,6 +455,45 @@ Deno.test(
     assertEquals(info.owner, "array-method");
   },
 );
+
+describe("terminal array callback context", () => {
+  for (const method of ["map", "filter"]) {
+    it(`keeps a function-valued ${method} thisArg outside the callback boundary`, () => {
+      const { sourceFile, checker, context } = createProgramAndContext(`
+        [1].map((outer) => [outer].${method}(
+          (inner) => inner,
+          (function thisValue() { return outer; }),
+        ).slice(0, 1));
+      `);
+      const outer = findFirstNode(sourceFile, ts.isArrowFunction);
+      context.markAsArrayMethodCallback(outer);
+      const call = findFirstNode(
+        sourceFile,
+        (node): node is ts.CallExpression =>
+          ts.isCallExpression(node) && node.arguments.length === 2 &&
+          ts.isArrowFunction(node.arguments[0]!),
+      );
+      const callback = call.arguments[0]!;
+      if (!ts.isArrowFunction(callback)) {
+        throw new Error("Expected the array method callback");
+      }
+      const thisValue = findFirstNode(sourceFile, ts.isFunctionExpression);
+
+      expect(classifyReactiveContext(callback.body, checker, context)).toEqual({
+        kind: "compute",
+        owner: "unknown",
+        inJsxExpression: false,
+      });
+      expect(classifyReactiveContext(thisValue.body, checker, context)).toEqual(
+        {
+          kind: "pattern",
+          owner: "array-method",
+          inJsxExpression: false,
+        },
+      );
+    });
+  }
+});
 
 Deno.test(
   "Callback support policy: event handlers stay outside the generic safe-wrapper callback bucket",
