@@ -3564,6 +3564,48 @@ describe("piece schema compatibility", () => {
       });
     }
 
+    it("keeps a type list beside an unresolved reference whole", () => {
+      // The reference resolves with the branch's keywords laid over the
+      // referenced schema, so the list overrides the referenced `string`: the
+      // source admits every value. Splitting it would drop `type` from the
+      // untyped branch and let `string` return, proving only strings and
+      // objects against a target that rejects the rest.
+      const branch: JSONSchema = {
+        $ref: "#/$defs/value",
+        type: ["object", "unknown"],
+      };
+      const target: JSONSchema = {
+        anyOf: [{ type: "object" }, { type: "string" }],
+      };
+      for (
+        const source of [
+          { $defs: { value: { type: "string" } }, anyOf: [branch] },
+          {
+            $defs: { value: { type: "string" } },
+            anyOf: [{ anyOf: [branch] }],
+          },
+        ] satisfies JSONSchema[]
+      ) {
+        for (const value of [42, false, null]) {
+          expect(validateSchemaValue(source, value, source)).toBeUndefined();
+          expect(validateSchemaValue(target, value, target)).toBeDefined();
+        }
+        expect(() => assertSchemaSubset(source, target)).toThrow();
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(source, true),
+            pattern(target, true),
+          )
+        ).toThrow(/argument:/);
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(true, target),
+            pattern(true, source),
+          )
+        ).toThrow(/result:/);
+      }
+    });
+
     it("re-spells a generated scalar branch without breaking the contract", () => {
       // `JsonValue` as the generator emits it: a scalar `type` list as one
       // branch of the union (`agent-sessions-debug/main.tsx`).

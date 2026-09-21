@@ -1728,8 +1728,9 @@ function schemaMayProduceType(
  * Source enums expand by type through {@link ownEnumPartitions} and
  * {@link sourceEnumAlternatives}, including beside a `type` list or inside
  * `anyOf`. A `type` list expands through {@link ownTypePartitions}, at this
- * node and inside a source branch alike, so a union written as a list and the
- * same union written as branches prove alike wherever either is spelled.
+ * node and inside a source branch alike, so a union written as a list proves
+ * like the same union written as branches; that helper and
+ * {@link sourceEnumAlternatives} name the nodes whose list stays whole.
  * Branch partitions stay beside their base in the conjunction, so
  * their node-level keywords are compared at the branch boundary. Target enums
  * stay whole so an alternative listing values of several types can fit the
@@ -1829,10 +1830,16 @@ function ownEnumPartitions(schema: SchemaObject): SchemaObject[] {
  * proves the list. {@link schemaAlternatives} applies this at the node for
  * either side; {@link sourceEnumAlternatives} applies it inside a source
  * branch, where a target's list instead stays whole with its branch.
+ *
+ * A node still carrying a `$ref` stays whole too. The reference resolves with
+ * this node's keywords laid over the referenced schema, so this node's list
+ * overrides a referenced `type`. The untyped partition below drops `type`,
+ * which would let the referenced one return and cover fewer values than the
+ * list admitted.
  */
 function ownTypePartitions(schema: SchemaObject): SchemaObject[] {
   const types = schema.type;
-  if (!Array.isArray(types)) return [schema];
+  if (!Array.isArray(types) || schema.$ref !== undefined) return [schema];
   if (!types.includes("object")) {
     return types.map((type) => ({ ...schema, type }));
   }
