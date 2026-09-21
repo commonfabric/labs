@@ -3,6 +3,7 @@ import {
   type MergeableOpMethodKind,
 } from "@commonfabric/api";
 import { type CellBrand } from "@commonfabric/schema-generator/cell-brand";
+import { resolvesToCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
 import ts from "typescript";
 
@@ -18,7 +19,6 @@ import {
   type CapabilityParamSummary,
   type FunctionCapabilitySummary,
   type ReactiveCapability,
-  resolvesToCommonFabricSymbol,
   type UnreadableCellArgument,
 } from "../core/mod.ts";
 import { isBrandedCellType } from "../transformers/cell-type.ts";

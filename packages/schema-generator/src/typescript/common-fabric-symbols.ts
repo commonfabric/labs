@@ -1,3 +1,12 @@
+/**
+ * Decides whether a declaration, a symbol, or a type node is Common Fabric's
+ * own — declared by the `commonfabric` API — or something of the author's
+ * that shares its name. A wrapper's name means the wrapper only in the first
+ * case, so both the transformer and the schema generator ask this before
+ * treating a name such as `Writable` or `Default` as what `commonfabric`
+ * declares.
+ */
+
 import ts from "typescript";
 
 const COMMONFABRIC_DECLARATION = "commonfabric.d.ts";

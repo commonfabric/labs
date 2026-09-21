@@ -17,7 +17,7 @@ import {
   isCommonFabricModuleName,
   isCommonFabricSymbol,
   symbolDeclaresCommonFabricDefault,
-} from "../../src/core/common-fabric-symbols.ts";
+} from "../../src/typescript/common-fabric-symbols.ts";
 
 //
 // Test infrastructure
@@ -268,6 +268,30 @@ describe("isCommonFabricSymbol", () => {
 });
 
 describe("symbolDeclaresCommonFabricDefault", () => {
+  it("returns `false` for a mapped-type property, which has no declarations", () => {
+    const { program, checker } = createProgram({
+      "/test.ts": `
+        declare const r: { [K in "x"]: number };
+        export const y = r;
+      `,
+    });
+    const sf = program.getSourceFile("/test.ts")!;
+    const declaration = findFirstNode(
+      sf,
+      (node): node is ts.VariableDeclaration =>
+        ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) &&
+        node.name.text === "y",
+    );
+    const property = checker.getPropertyOfType(
+      checker.getTypeAtLocation(declaration!.name),
+      "x",
+    );
+
+    assert(property !== undefined);
+    assertEquals(property.getDeclarations(), undefined);
+    assertFalse(symbolDeclaresCommonFabricDefault(property, checker));
+  });
+
   describe("user-defined Default type (should return false)", () => {
     it("returns false when the property type references a user-defined Default alias in the same file", () => {
       // Default is declared in /test.ts — NOT in commonfabric.d.ts.

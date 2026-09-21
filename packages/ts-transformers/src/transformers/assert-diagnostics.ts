@@ -1,8 +1,8 @@
 import ts from "typescript";
 
+import { resolvesToCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { HelpersOnlyTransformer } from "../core/transformers.ts";
 import type { TransformationContext } from "../core/mod.ts";
-import { resolvesToCommonFabricSymbol } from "../core/common-fabric-symbols.ts";
 import { getNodeText, preserveSourceMapRange } from "../ast/utils.ts";
 import {
   ASSERT_CAPTURE_HELPER_NAME,

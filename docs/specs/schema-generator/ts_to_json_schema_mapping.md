@@ -26,9 +26,9 @@ Authoritative implementation sources:
 If this document conflicts with code or passing tests, code/tests win.
 
 Package exports (`deno.jsonc`): `.` → `src/index.ts` (no `mod.ts`), plus
-seven subpaths — `./cell-brand`, `./default-brand`, `./wrapper-names`,
-`./property-optionality`, `./property-name`, `./numeric-expression`,
-`./type-node`.
+eight subpaths — `./cell-brand`, `./common-fabric-symbols`, `./default-brand`,
+`./wrapper-names`, `./property-optionality`, `./property-name`,
+`./numeric-expression`, `./type-node`.
 `src/index.ts` exports the `SchemaGenerator` class, the
 `SchemaGenerationOptions`, `SchemaGenerationDiagnostic`, and
 `WriterSourceIdentity` types, and re-exports `MutableJSONSchemaObj`.
@@ -48,7 +48,9 @@ consumer package is `@commonfabric/ts-transformers`, along two axes:
    (cast-validation, type-shrinking, call-kind), `property-name`
    (reactive-keys, type-shrinking), `property-optionality` (`ast/utils.ts`),
    `type-node` (type-building, type-shrinking, schema-injection,
-   cast-validation, pattern-context-validation, capability-analysis). The
+   cast-validation, pattern-context-validation, capability-analysis),
+   `common-fabric-symbols` (type-building, type-shrinking, capability-analysis,
+   cast-validation, assert-diagnostics, call-kind, dataflow). The
    `src/typescript/` tables are load-bearing for the whole transformer
    pipeline, not just schema output.
 
