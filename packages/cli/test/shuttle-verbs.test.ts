@@ -2141,7 +2141,10 @@ describe("verbs", () => {
           ...READS_NOTHING.listing,
           listPieces: () => {
             listed++;
-            return Promise.resolve([{ id: HANDLE }]);
+            return Promise.resolve([{
+              id: HANDLE,
+              reference: `//${SPACE}/${HANDLE}`,
+            }]);
           },
         },
       });

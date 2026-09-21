@@ -7,7 +7,9 @@
  * same string for nearly every row and differ wherever a name's own characters
  * are readings — a key called `..`, one holding the separator — which is a
  * question about the place rather than about the listing, so
- * `operandForChild` answers it and this module asks.
+ * `operandForChild` answers it and this module asks. Registered pieces outside
+ * the current space, scope, or document root carry their complete reference
+ * instead; selection preserves it, while `cd` refuses foreign spaces.
  *
  * A row also carries what it is. The kind is recorded as the row is made
  * rather than worked out again by whoever reads it, which is what lets a
@@ -30,7 +32,8 @@
  * that seam lists.
  */
 
-import { isStreamValue } from "@commonfabric/runner";
+import { idStringForEntityAddress, isStreamValue } from "@commonfabric/runner";
+import { renderCellReference } from "@commonfabric/runner/shared";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { keysOf } from "../cell-listing.ts";
@@ -103,7 +106,8 @@ export interface ListingRow {
    * The operand `cd` takes to reach it, as `cd` reads it, and absent where
    * `operandForChild` offers none. Absent is the narrower claim it makes:
    * that no spelling `operandForChild` tries names the row, not that nothing
-   * reaches it.
+   * reaches it. A registered piece outside the current space, scope, or
+   * document root supplies its complete reference as the operand instead.
    *
    * It is the decoded operand rather than the quoted token a line writes it
    * as. A row is read back by two consumers that want different forms — a
@@ -339,9 +343,10 @@ export function handleFor(number: number): string {
  * compile here instead of silently taking the other one's read.
  *
  * A piece stands as its id and carries the name it holds beside it, where
- * `listPieces` read one. The id is what the row is called in the facet and
- * what `cd` takes back to it; the name is what the piece calls itself, and
- * costs nothing to show, that read having already fetched it.
+ * `listPieces` read one. An id alone is the operand only when its complete
+ * reference names the local document at the current scope. Otherwise the
+ * registered reference is the operand, preserving a foreign space, scope,
+ * or path instead of resolving that id against the listing's space.
  */
 async function listFacet(
   config: SpaceConfig,
@@ -368,12 +373,21 @@ async function listFacet(
         loadPieces,
       });
       return {
-        rows: pieces.map((row) =>
-          rowFor(place, row.id, "piece", {
+        rows: pieces.map((row) => {
+          const entry = rowFor(place, row.id, "piece", {
             ownName: row.name,
             error: row.error,
-          })
-        ),
+          });
+          const localReference = renderCellReference({
+            space: place.position.space,
+            id: idStringForEntityAddress(row.id),
+            scope: place.scope,
+            path: [],
+          });
+          return row.reference === localReference
+            ? entry
+            : { ...entry, operand: row.reference };
+        }),
       };
     }
   }

@@ -36,6 +36,7 @@
 //   home-ness from the ACL (self-owned = home) and passes it in.
 
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
+import type { GenesisRoot } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/utils/logger";
 
 import type { Cell } from "./cell.ts";
@@ -151,7 +152,7 @@ export type SpaceRootCreationHooks = {
 export async function createSpaceRootIfAbsent(
   runtime: Runtime,
   space: MemorySpace,
-  config: { source: string; cause: string },
+  config: GenesisRoot,
   hooks: SpaceRootCreationHooks = {},
 ): Promise<{ createdByThisCall: boolean; error?: CommitError }> {
   const timePhase = hooks.timePhase ?? runPhase;
@@ -165,6 +166,11 @@ export async function createSpaceRootIfAbsent(
         hooks.fetch === undefined
           ? new HttpProgramResolver(patternUrl.href)
           : new HttpProgramResolver(patternUrl.href, hooks.fetch),
+        {
+          sourceRoots: config.sourceRoots?.map((source) =>
+            patternSourceUrl(source, runtime.apiUrl).pathname
+          ),
+        },
       ),
   );
   const pattern = await timePhase(
@@ -209,7 +215,7 @@ export async function createSpaceRootIfAbsent(
           tx,
         );
         // Run pattern setup within the same transaction.
-        runtime.run(tx, pattern, {}, pieceCell);
+        runtime.run(tx, pattern, config.argument ?? {}, pieceCell);
         // Stamp the provenance the piece tracks for updates (the source it
         // was born from) — same transaction, one extra meta write.
         setPatternSource(pieceCell, tx, config.source);
@@ -265,7 +271,10 @@ export type EnsureSpaceRootResult = {
  * transaction's OCC invariant converges the remaining client-vs-server
  * race whichever side wins.
  *
- * A persisted root is resolved and left alone. Following its origin is the
+ * A persisted root is resolved and left alone when its address matches any
+ * supplied genesis reservation; a different address is a conflict. The memory
+ * session separately authenticates the complete immutable creation intent.
+ * Following its origin is the
  * ordinary piece reconciliation, which belongs to the user who opens the
  * piece, not to a tenure that opens nothing.
  *
@@ -282,13 +291,26 @@ export async function ensureSpaceRootPattern(
   space: MemorySpace,
   options: {
     isHomeSpace: boolean;
+    genesisRoot?: GenesisRoot;
     stampCreationTx?: (tx: IExtendedStorageTransaction) => void;
   },
 ): Promise<EnsureSpaceRootResult> {
   const existing = await resolveSpaceRootPattern(runtime, space);
-  if (existing !== undefined) return { outcome: "resolved-existing" };
+  if (existing !== undefined) {
+    if (
+      options.genesisRoot &&
+      !existing.equals(
+        runtime.getCell(space, options.genesisRoot.cause, nameSchema),
+      )
+    ) {
+      throw new Error(
+        "Default pattern conflicts with the genesis root reservation",
+      );
+    }
+    return { outcome: "resolved-existing" };
+  }
 
-  if (!options.isHomeSpace) {
+  if (!options.isHomeSpace && options.genesisRoot === undefined) {
     // The custom `defaultAppUrl` interim (design §3, open question 3 —
     // UNRULED): a configured custom root source lives in the OWNER's
     // home space, and reading it server-side is the unruled owner-scoped
@@ -306,7 +328,7 @@ export async function ensureSpaceRootPattern(
   const created = await createSpaceRootIfAbsent(
     runtime,
     space,
-    spaceRootPatternConfig(options.isHomeSpace),
+    options.genesisRoot ?? spaceRootPatternConfig(options.isHomeSpace),
     {
       ...(options.stampCreationTx !== undefined
         ? { stampCreationTx: options.stampCreationTx }

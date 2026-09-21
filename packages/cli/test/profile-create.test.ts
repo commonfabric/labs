@@ -210,6 +210,34 @@ describe("createProfile()", () => {
       .toEqual([ada.space, alan.space].sort());
     const picked = await createdByThisCall(candidates, "Alan Turing");
     expect(picked?.[0]).toBe(alan.space);
+    expect(picked?.[1].getAsNormalizedFullLink().id).toBe(alan.id);
+    expect(picked?.[1].getAsNormalizedFullLink().path).toEqual([]);
+    const redirectRuntime = picked![1].runtime;
+    const redirectTx = redirectRuntime.edit();
+    const slot = redirectRuntime.getCell<unknown>(
+      signer.did(),
+      "profile-redirect",
+      undefined,
+      redirectTx,
+    );
+    slot.set(picked![1]);
+    expect((await redirectTx.commit()).error).toBeUndefined();
+    for (
+      const redirectedCandidates of [
+        [[signer.did(), slot.withTx()]] as [string, Cell<unknown>][],
+        [[signer.did(), slot.withTx()], candidates[0]] as [
+          string,
+          Cell<unknown>,
+        ][],
+      ]
+    ) {
+      const resolved = await createdByThisCall(
+        redirectedCandidates,
+        "Alan Turing",
+      );
+      expect(resolved?.[0]).toBe(alan.space);
+      expect(resolved?.[1].getAsNormalizedFullLink().id).toBe(alan.id);
+    }
     const twoAdas = await createProfile(CONFIG, { loadPieces });
     const tie = candidates.filter(([space]) => space !== alan.space).concat([[
       twoAdas.space,

@@ -238,7 +238,7 @@ leaves `pending` non-empty.
 follows the entry to the piece — `resolveSlugReference` in
 `packages/runner/src/slug-resolution.ts` looks the segment up with
 `map.key(member)` and never reads the Topic — so
-`deno task cf cell get /@<space>/top/<n> title` answers as soon as the key is
+`deno task cf cell get //<space>/top/<n> title` answers as soon as the key is
 there, whatever the Topic stores. The number is usable as an address before the
 Topic can show it.
 
@@ -275,7 +275,7 @@ deno task cf cell get --cell "$TOPIC2" shortName --input
 # -> (absent, for a Topic that has not stored one)
 
 # and the number addresses the Topic anyway
-deno task cf cell get /@<space>/top/2 title
+deno task cf cell get //<space>/top/2 title
 ```
 
 So the worst case is bounded: a number allocated, reachable, and permanently
@@ -301,7 +301,7 @@ it.
 | board `names` map               | which Topics the namespace has numbered, and what each number is — never whether the Topic stores it | the same                          |
 | Topic's `shortName` input       | the number that Topic stores                                                                         | the same                          |
 | `recordName` on one Topic       | `wrote` says whether it had to write                                                                 | the same                          |
-| `/@<space>/top/<n>`             | resolves to the Topic                                                                                | the same                          |
+| `//<space>/top/<n>`             | resolves to the Topic                                                                                | the same                          |
 
 So while numbers are hidden, **the board's index answers nothing about storage**
 — it is the read to skip, not the survey — and there is no board-wide read of

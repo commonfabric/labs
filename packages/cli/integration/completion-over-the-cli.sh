@@ -533,6 +533,9 @@ check "1" "$(complete_at "cf piece link $LINE_ARGS $BOARD/revision ${BOARD%?????
 # The id half offers what the listing holds — registered pieces — while the key
 # half reads whichever id was typed. So the child, which the listing does not
 # name, still completes its own keys once its address is pasted in.
+check "1" "$(complete_at "cf piece link $CONN_ARGS //$SPACE_DID/of:$BOARD@space/settings/den" |
+  grep -Fc "//$SPACE_DID/of:$BOARD@space/settings/density")" \
+  "a full reference retains its space, scope, and parent path while completing keys"
 check "1" "$(complete_at "cf piece link $LINE_ARGS $BOARD/revision $ITEM_ID/rec" |
   grep -c "^$ITEM_ID/recorded\$")" \
   "and a pasted child address completes its keys, which the listing cannot name"

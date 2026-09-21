@@ -1,4 +1,9 @@
 import { assertNotDID, DID, isDID } from "@commonfabric/identity/did";
+import type { CellScope } from "@commonfabric/api";
+import {
+  parseCellReference,
+  renderCellReference,
+} from "@commonfabric/runner/shared";
 import { asSpaceSegment } from "@commonfabric/runner/fabric-url";
 import { isSlugAddress, isValidSlug } from "@commonfabric/runner/slugs";
 
@@ -10,6 +15,10 @@ const EMBED_PATH_PREFIX = ".embed";
 
 export type PieceViewRef = {
   pieceId?: string;
+  /** The concrete document instance; omitted means the space scope. */
+  pieceScope?: CellScope;
+  /** Pointer keys of a nested view in the selected result document. */
+  piecePath?: string[];
   pieceSlug?: string;
 
   /**
@@ -105,7 +114,8 @@ export function isAppBuiltInView(view: unknown): view is AppBuiltInView {
 export function isAppView(view: unknown): view is AppView {
   if (!view || typeof view !== "object") return false;
   if ("builtin" in view) {
-    return isAppBuiltInView(view.builtin) && !("mode" in view);
+    return isAppBuiltInView(view.builtin) && !("mode" in view) &&
+      hasValidPieceQualifiers(view);
   }
   if (!isAppViewModeRef(view)) return false;
   if (!isPieceViewRef(view)) return false;
@@ -148,6 +158,7 @@ function isAppViewModeRef(view: object): view is AppViewModeRef {
  * refused by them rather than resolved through them.
  */
 function isPieceViewRef(view: object): view is PieceViewRef {
+  if (!hasValidPieceQualifiers(view)) return false;
   if ("pieceId" in view && "pieceSlug" in view) return false;
   const member = "pieceMember" in view ? view.pieceMember : undefined;
   const slug = "pieceSlug" in view ? view.pieceSlug : undefined;
@@ -159,6 +170,24 @@ function isPieceViewRef(view: object): view is PieceViewRef {
     (extraPath === undefined ||
       (typeof extraPath === "string" && !!extraPath && member !== undefined &&
         isKeptAsWrittenInPath(extraPath)));
+}
+
+/** Scope and pointer qualifiers require an ID in the document namespace. */
+function hasValidPieceQualifiers(view: object): boolean {
+  if (!("pieceScope" in view) && !("piecePath" in view)) return true;
+  if (
+    "builtin" in view || "pieceSlug" in view || !("pieceId" in view) ||
+    typeof view.pieceId !== "string" || !view.pieceId ||
+    isSlugAddress(view.pieceId)
+  ) return false;
+  if (
+    "pieceScope" in view &&
+    (typeof view.pieceScope !== "string" ||
+      !["space", "user", "session"].includes(view.pieceScope))
+  ) return false;
+  return !("piecePath" in view) ||
+    (Array.isArray(view.piecePath) &&
+      view.piecePath.every((key) => typeof key === "string"));
 }
 
 /**
@@ -181,18 +210,30 @@ function isKeptAsWrittenInPath(path: string): boolean {
 /**
  * Whether two views address the same thing. Two views are equal when they hold
  * the same fields with the same values, whatever order the route or control
- * that built them wrote those fields in. Every value a view holds is a string,
- * so the values compare by their contents. A field holding `undefined` counts
- * as absent, which is what a URL or a history entry keeps of one.
+ * that built them wrote those fields in. Pointer keys compare by their contents.
+ * A field holding `undefined`, the default space scope, and an empty pointer
+ * path count as absent, which is how their URL addresses are written.
  */
 export function isAppViewEqual(a: AppView, b: AppView): boolean {
   if (a === b) return true;
   const held = (view: AppView) =>
-    new Map(Object.entries(view).filter(([, value]) => value !== undefined));
+    new Map(
+      Object.entries(view).filter(([name, value]) =>
+        value !== undefined &&
+        !(name === "pieceScope" && value === "space") &&
+        !(name === "piecePath" && Array.isArray(value) && value.length === 0)
+      ),
+    );
   const fields = held(a);
   const other = held(b);
   return fields.size === other.size &&
-    [...fields].every(([name, value]) => other.get(name) === value);
+    [...fields].every(([name, value]) => {
+      const target = other.get(name);
+      return Array.isArray(value)
+        ? Array.isArray(target) && value.length === target.length &&
+          value.every((key, index) => key === target[index])
+        : target === value;
+    });
 }
 
 export function isEmbeddedView(view: AppView): boolean {
@@ -220,6 +261,9 @@ export function isViewingDefaultPatternView(view: AppView): boolean {
 }
 
 export function appViewToUrlPath(view: AppView): `/${string}` {
+  if (!hasValidPieceQualifiers(view)) {
+    throw new Error("Invalid piece reference");
+  }
   const prefix = isEmbeddedView(view) ? `/${EMBED_PATH_PREFIX}` : "";
   if ("builtin" in view) {
     switch (view.builtin) {
@@ -241,7 +285,8 @@ export function appViewToUrlPath(view: AppView): `/${string}` {
 /**
  * The segments a view's piece reference adds after its space, empty for a
  * view naming no piece. A member follows the slug it belongs to; an id
- * carries none, a member being a collection's name for one of its own. The
+ * carries pointer keys in a query value so URL normalization cannot change
+ * their identity. A member is a collection's name for one of its own. The
  * segments past a member follow it as they were written, so a page refused by
  * them keeps the address that named them.
  */
@@ -258,7 +303,17 @@ function pieceUrlSegments(view: PieceViewRef): string {
       ? `/${pieceSlug}/${pieceMember}/${pieceExtraPath}`
       : `/${pieceSlug}/${pieceMember}`;
   }
-  return pieceId ? `/${pieceId}` : "";
+  if (!pieceId) return "";
+  const reference = renderCellReference({
+    id: pieceId,
+    path: [],
+    scope: view.pieceScope ?? "space",
+  }, { scope: "space" });
+  return view.piecePath?.length
+    ? `${reference}?${new URLSearchParams({
+      cellPath: JSON.stringify(view.piecePath),
+    })}`
+    : reference;
 }
 
 export function urlToAppView(url: URL): AppView {
@@ -281,7 +336,35 @@ export function urlToAppView(url: URL): AppView {
   const first = segments[0] === undefined
     ? undefined
     : asSpaceSegment(segments[0]) ?? segments[0];
-  const pieceId = segments[1];
+  let pieceId = segments[1];
+  let scopeRef: Pick<PieceViewRef, "pieceScope" | "piecePath"> = {};
+  if (pieceId?.includes(":")) {
+    const reference = parseCellReference(`/${segments.slice(1).join("/")}`);
+    if (reference.member === "argument" || reference.pin !== undefined) {
+      throw new Error("A piece view must name the current result document");
+    }
+    pieceId = reference.id;
+    if (reference.scope && reference.scope !== "space") {
+      scopeRef = { pieceScope: reference.scope };
+    }
+    if (reference.path.length > 0) scopeRef.piecePath = reference.path;
+  }
+  if (url.searchParams.has("cellPath")) {
+    let path: unknown;
+    try {
+      path = JSON.parse(url.searchParams.get("cellPath")!);
+    } catch {
+      throw new Error("Invalid cell path");
+    }
+    if (
+      !pieceId?.includes(":") || scopeRef.piecePath !== undefined ||
+      url.searchParams.getAll("cellPath").length !== 1 ||
+      !Array.isArray(path) || !path.every((key) => typeof key === "string")
+    ) {
+      throw new Error("Invalid cell path");
+    }
+    if (path.length > 0) scopeRef.piecePath = path;
+  }
   const modeRef: AppViewModeRef = mode ? { mode } : {};
   // The segment after a slug selects a member of the collection it names.
   // Reading it apart from resolving it is what keeps this pure: whether the
@@ -318,7 +401,7 @@ export function urlToAppView(url: URL): AppView {
         ...modeRef,
         ...openRef,
       }
-      : { spaceDid: first, pieceId, ...modeRef, ...openRef };
+      : { spaceDid: first, pieceId, ...scopeRef, ...modeRef, ...openRef };
   } else {
     if (!pieceId) return { spaceName: first, ...modeRef, ...openRef };
     return isSlugAddress(pieceId)
@@ -329,6 +412,6 @@ export function urlToAppView(url: URL): AppView {
         ...modeRef,
         ...openRef,
       }
-      : { spaceName: first, pieceId, ...modeRef, ...openRef };
+      : { spaceName: first, pieceId, ...scopeRef, ...modeRef, ...openRef };
   }
 }

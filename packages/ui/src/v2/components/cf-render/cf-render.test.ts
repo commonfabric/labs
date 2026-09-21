@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import type { CellHandle } from "@commonfabric/runtime-client";
+import { $conn, type CellHandle } from "@commonfabric/runtime-client";
 import { defer } from "@commonfabric/utils/defer";
 
 import { providePieceBoundary } from "../../../../../html/src/main/space-context.ts";
@@ -177,6 +177,71 @@ describe("CFRender render concurrency", () => {
         'Error rendering content: <img src="x" onerror="alert(1)">',
       );
     } finally {
+      mockDocument.restore();
+    }
+  });
+
+  it("shows an unavailable state when a linked target cannot be read", async () => {
+    const element = new CFRender();
+    element.cell = createMockCellHandle({}) as CellHandle;
+    const container = { textContent: "" };
+    const internals = element as unknown as {
+      _containerRef: { value: HTMLDivElement };
+      _watchLinkTarget(): Promise<undefined>;
+      _renderCell(): Promise<void>;
+      _hasRendered: boolean;
+    };
+    internals._containerRef = { value: container as HTMLDivElement };
+    internals._watchLinkTarget = () => Promise.resolve(undefined);
+    await internals._renderCell();
+    expect(container.textContent).toBe(
+      "This piece is unavailable or you do not have access.",
+    );
+    expect(internals._hasRendered).toBe(true);
+  });
+
+  it("shows asynchronous mount refusals inside the panel", async () => {
+    const mockDocument = installMockDocument();
+    const element = new CFRender();
+    const cell = createMockCellHandle({});
+    const refusal = new Error("AuthorizationError: lacks READ");
+    Object.assign(cell.runtime(), { signal: new AbortController().signal });
+    Object.assign(cell.runtime()[$conn](), {
+      onDispose: () => () => {},
+      signal: new AbortController().signal,
+      attachVDom: () => ({
+        onBatch() {},
+        offBatch() {},
+        detach() {},
+        mount: () => Promise.reject(refusal),
+        dispose: () => Promise.resolve(),
+        unmount: () => Promise.resolve(),
+      }),
+    });
+    const container = createMockElement("div");
+    const internals = element as unknown as {
+      _containerRef: { value: HTMLDivElement };
+      _renderCell(): Promise<void>;
+      _handleRenderError(error: unknown): void;
+    };
+    internals._containerRef = {
+      value: container as unknown as HTMLDivElement,
+    };
+    const rendered = defer<void>();
+    const handleError = internals._handleRenderError.bind(element);
+    internals._handleRenderError = (error) => {
+      captureConsoleError(() => handleError(error));
+      rendered.resolve();
+    };
+    element.cell = cell;
+    try {
+      await internals._renderCell();
+      await rendered.promise;
+      expect(container.children.map((child) => child.textContent)).toEqual([
+        "Error rendering content: AuthorizationError: lacks READ",
+      ]);
+    } finally {
+      element.disconnectedCallback();
       mockDocument.restore();
     }
   });
@@ -980,6 +1045,44 @@ describe("CFRender tile navigation", () => {
     }) as CellHandle;
     return element;
   }
+
+  it("keeps the linked piece scope in tile navigation", () => {
+    const element = navigatingElement();
+    element.cell = createMockCellHandle({}, {
+      id: "of:fid1:same" as never,
+      space: "did:key:foreign" as never,
+      scope: "session",
+    }) as CellHandle;
+    const seen = captureNavigation("cf-navigate", () => {
+      (element as unknown as { _navigateToPiece(e: MouseEvent): void })
+        ._navigateToPiece(tileClick());
+    });
+    expect(seen).toEqual([{
+      spaceDid: "did:key:foreign",
+      pieceId: "of:fid1:same",
+      pieceScope: "session",
+    }]);
+  });
+
+  it("keeps the linked cell path in tile navigation", () => {
+    const element = navigatingElement();
+    element.cell = createMockCellHandle({}, {
+      id: "of:fid1:same" as never,
+      space: "did:key:foreign" as never,
+      scope: "session",
+      path: ["view", "a/b"],
+    }) as CellHandle;
+    const seen = captureNavigation("cf-navigate", () => {
+      (element as unknown as { _navigateToPiece(e: MouseEvent): void })
+        ._navigateToPiece(tileClick());
+    });
+    expect(seen).toEqual([{
+      spaceDid: "did:key:foreign",
+      pieceId: "of:fid1:same",
+      pieceScope: "session",
+      piecePath: ["view", "a/b"],
+    }]);
+  });
 
   it("navigates to the piece a clicked tile renders", () => {
     const element = navigatingElement();

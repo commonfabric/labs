@@ -18,6 +18,7 @@ import { researchTool } from "./research.ts";
 import { readFileTool } from "./read-file.ts";
 import { readSkillResourceTool } from "./read-skill-resource.ts";
 import { recordFeedbackTool } from "./record-feedback.ts";
+import { resolvePieceTool } from "./resolve-piece.ts";
 import { runPatternTool } from "./run-pattern.ts";
 import { runSkillScriptTool } from "./run-skill-script.ts";
 import { searchPatternsTool } from "./search-patterns.ts";
@@ -43,6 +44,7 @@ export const BUILTIN_TOOLS = [
   readPieceSourceTool,
   revisePieceTool,
   assignSlugTool,
+  resolvePieceTool,
   describeHandleTool,
   finishTaskTool,
   searchPatternsTool,

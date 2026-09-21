@@ -258,6 +258,45 @@ describe("prompt-loop invalid tool calls", () => {
         arguments: { goal: "Inspect", returnSchema: "{" },
         field: "returnSchema",
       },
+      {
+        name: "malformed-nested-return-schema",
+        arguments: {
+          goal: "Inspect",
+          returnSchema: {
+            properties: {
+              "private-schema-name": { required: "private-value" },
+            },
+          },
+        },
+        field: "returnSchema",
+      },
+      {
+        name: "required-in-properties",
+        arguments: {
+          goal: "Inspect",
+          returnSchema: { properties: { required: ["status"] } },
+        },
+        field: "returnSchema",
+      },
+      {
+        name: "missing-local-definition",
+        arguments: {
+          goal: "Inspect",
+          returnSchema: { $ref: "#/$defs/Missing" },
+        },
+        field: "returnSchema",
+      },
+      {
+        name: "non-schema-reference-target",
+        arguments: {
+          goal: "Inspect",
+          returnSchema: {
+            $defs: { status: { type: "string" } },
+            $ref: "#/$defs/status/type",
+          },
+        },
+        field: "returnSchema",
+      },
     ];
 
     for (const testCase of cases) {
@@ -289,6 +328,9 @@ describe("prompt-loop invalid tool calls", () => {
       const rejection = rejectedToolCall(result.transcript);
       expect(rejection.reason).toEqual("invalid-argument");
       expect(rejection.field).toEqual(testCase.field);
+      expect(JSON.stringify(rejection)).not.toContain("private-schema-name");
+      expect(JSON.stringify(rejection)).not.toContain("private-value");
+      expect(requestCount.value).toBe(2);
       expect(result.runState.status).toEqual("completed");
       expect(result.runState.subagentRuns).toBeUndefined();
       expect(result.runState.toolOutputs).toEqual([]);
