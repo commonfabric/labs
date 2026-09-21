@@ -339,6 +339,15 @@ export interface ExperimentalOptions {
    */
   serverExecution?: boolean | undefined;
 
+  /**
+   * The `agent` builtin (`docs/common/capabilities/agent.md`): a pattern's
+   * request for an agent run, staged as a sink request and handed to a
+   * runner through an `AgentRun` record. Off, the builtin settles every
+   * request with an error naming this flag and stages nothing. Defaults to
+   * off.
+   */
+  agentBuiltin?: boolean | undefined;
+
   /** Global default for server-selected view replication. Defaults to off. */
   viewScopedReplication?: boolean | undefined;
 

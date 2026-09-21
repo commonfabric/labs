@@ -58,6 +58,7 @@ export const EXPERIMENTAL_ENV_VARS = {
   serverExecution: "EXPERIMENTAL_SERVER_EXECUTION",
   viewScopedReplication: "EXPERIMENTAL_VIEW_SCOPED_REPLICATION",
   webViewScopedReplication: "EXPERIMENTAL_WEB_VIEW_SCOPED_REPLICATION",
+  agentBuiltin: "EXPERIMENTAL_AGENT_BUILTIN",
 } as const satisfies Record<keyof ExperimentalOptions, string | null>;
 
 /**
@@ -146,6 +147,7 @@ export const EXPERIMENTAL_FLAG_AUTHORITY = {
   // Defaults are published fleet-wide; each session negotiates the mode.
   viewScopedReplication: "server",
   webViewScopedReplication: "server",
+  agentBuiltin: "server",
   // The server's traversal decides what a subscription loads, tracks, and
   // ships; a client resolving hops under the other combine rule expects
   // documents the server did not send (or ignores ones it did). The arms

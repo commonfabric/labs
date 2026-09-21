@@ -140,6 +140,7 @@ import {
 import { CFC_POLICY_MANIFEST_ID_PREFIX } from "./policy.ts";
 import { createTxCfcModulePolicyResolver } from "./policy-resolver.ts";
 import { cfcSchemaEntries } from "./schema-label-view.ts";
+import { sinkClassOf } from "./sink-inventory.ts";
 import {
   type CfcSchemaMergeIssue,
   cfcSchemaMergeIssue,
@@ -6149,12 +6150,11 @@ const verifySinkRequestCeilings = (
     let verdict = true;
     if (mode !== "off") {
       // Boundary context for this release site (spec §8.10.5 / §15.4): the
-      // sink name plus its class. Every sink in the initial inventory is a
-      // NETWORK egress (fetch*/stream/llm*/generate*); the display class
-      // arrives with H3b's render-ceiling work.
+      // sink name plus its class, read off the sink inventory so a rule
+      // scoped to one class fires at that class's sinks and no other.
       const boundary = [
         cfcAtom.boundaryContext("sink", sink),
-        cfcAtom.boundaryContext("sinkClass", "network"),
+        cfcAtom.boundaryContext("sinkClass", sinkClassOf(sink)),
       ];
       // The sink egress gate is a consuming site for single-use grants
       // (design §2.2) under the enforce dial — the rewritten label decides

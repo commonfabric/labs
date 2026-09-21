@@ -1,4 +1,5 @@
 import type {
+  CfcConfClause,
   CfcEnforcementMode,
   CfcLabelView,
   IFCLabel,
@@ -34,6 +35,7 @@ import type { SkillsShSearchClient } from "../skills-sh/search-client.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { ToolOutputId } from "../contracts/tool-result.ts";
 import type { HarnessLoomAuthoringConfig } from "../loom-authoring.ts";
+import type { HarnessLoomRetrievalConfig } from "../loom-retrieval.ts";
 import type { ProcessRunner } from "../sandbox/process-runner.ts";
 import type { SandboxRuntime } from "../sandbox/types.ts";
 
@@ -116,6 +118,13 @@ export interface HarnessToolContext {
   /** Existing CFC label on a research task and its accumulated model context. */
   researchTaskCfcLabel?: IFCLabel;
 
+  /**
+   * The label of this tool call's input: the prompt slot's influence joined
+   * with everything the run's model context has observed, which is what a
+   * model-authored argument can carry. Absent when neither carries a label.
+   */
+  toolInputCfcLabel?: IFCLabel;
+
   /** Pattern attachments resolved by the host before the first model turn. */
   patternRefs?: readonly HarnessPatternRef[];
 
@@ -197,6 +206,18 @@ export interface HarnessToolContext {
 
   /** Host-owned Loom command routing, absent when the run has no grant. */
   loomAuthoring?: HarnessLoomAuthoringConfig;
+
+  /** Host-owned Loom retrieval routing, absent when the run has no grant. */
+  loomRetrieval?: HarnessLoomRetrievalConfig;
+
+  /**
+   * The run's observation ceiling: the fabric session's read ceiling, met
+   * with the run manifest's where one names any. A tool that admits values
+   * from outside the fabric — Loom rows — measures their labels against it
+   * before they enter model context. Absent is no ceiling, which admits
+   * every readable label.
+   */
+  cfcReadMaxConfidentiality?: readonly CfcConfClause[];
   currentDir: string;
   workspaceHostPath?: string;
   resolvePath(path: string): string;

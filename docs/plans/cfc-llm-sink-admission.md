@@ -129,11 +129,12 @@ and sink classes) govern the shapes below.
 - [ ] Flip the four llm rows in `MAX_ENFORCEMENT_SINK_GOVERNANCE` from
   `ungatedSink(...)` to a ceiling (public-only baseline, `[]`), retiring
   their `SINK_UNGATED_RATIONALES` rows.
-- [ ] An llm sink class. Every initial-inventory sink today mints
-  `sinkClass:"network"`, so a rule scoped there would fire at the fetch sinks
-  too. The four llm sinks need a class of their own, declared beside the
-  inventory (`packages/runner/src/cfc/sink-inventory.ts`) rather than
-  hardcoded at the gate; fetch and stream stay `network`.
+- [ ] An llm sink class. The gate reads each sink's class off the
+  `SINK_CLASSES` table beside the inventory
+  (`packages/runner/src/cfc/sink-inventory.ts`, `sinkClassOf`), which the
+  `agent` sink minted its own class through; the four llm sinks still class
+  `network`, so a rule scoped there would fire at the fetch sinks too. Give
+  them a class of their own in that table; fetch and stream stay `network`.
 - [ ] Admission rules in the standard profile scoped to that class, carrying
   the stage-1 authority, shaped for transaction-wide boundary evaluation the
   way the display rules are (source-bound and kind-bound; the

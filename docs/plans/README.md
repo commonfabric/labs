@@ -10,6 +10,21 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
+- [Agent requests from a pattern, and the queue that runs them](agent-requests-and-work-queue.md)
+  proposes an `agent` builtin in the effectful class beside `llm` — inputs
+  passed as handles, an observation ceiling defaulting to the requester's own
+  view, a structured result labeled with the run's join and carrying links
+  back to its sources — with read-only Loom retrieval tools in `cf-harness`,
+  and a per-user queue of `AgentRun` records stored as cells in the requesting
+  space and indexed from the home space, each carrying the harness's usage and
+  cost evidence when it finishes. The harness writes the result itself, and a
+  per-user runner on the Loom host pulls work from the cloud home space.
+  Carries the rulings and the assumptions the first take rests on.
+- [Agent requests — implementation plan](agent-requests-implementation.md)
+  sequences that design as seven stages with the files, tests, gates, and
+  exit criteria of each: Loom retrieval tools, the harness result writer, the
+  `agent` builtin, records and runner, inspection, the book-recommendation
+  demonstration, and the ceiling deviations to retire.
 - [Security and privacy roadmap](security-privacy-roadmap.md) gives an overview
   of current trust boundaries and the path from runtime security to operator
   exclusion, with remaining work and technical references in an appendix.

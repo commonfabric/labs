@@ -2297,6 +2297,59 @@ export interface BuiltInGenerateTextState {
   groundingSources?: readonly BuiltInLLMGroundingSource[];
 }
 
+/**
+ * The request an `agent()` node submits: a task, the cells it may read, and
+ * the schema its answer takes. A runner the requester registered executes it
+ * as the requester; the builtin's cell follows the run's record.
+ */
+export interface BuiltInAgentParams {
+  /**
+   * What the run is for, as context rather than a command. Labeled data
+   * interpolated into this text becomes a value the request carries and the
+   * sink gate measures; pass the cell through `inputs` instead.
+   */
+  task: string;
+
+  /**
+   * The cells the run may read, by the names the model sees them under. Each
+   * reaches the request as a link, never as its value, so an entry has to be
+   * a cell.
+   */
+  inputs: Record<string, AnyCell<any> | AnyBrandedCell<any> | OpaqueCell<any>>;
+
+  /** The schema the run's structured result is validated against. */
+  resultSchema: JSONSchema;
+
+  /**
+   * Confidentiality clauses bounding what the run may observe. Absent, the
+   * run observes what the requester may see; declared, it can only tighten.
+   */
+  maxConfidentiality?: readonly JSONValue[];
+
+  /**
+   * Names of the tools the run may use, from the set the deployment
+   * publishes. A name the requester's registered runner does not offer fails
+   * the request before it is staged.
+   */
+  tools?: readonly string[];
+}
+
+/**
+ * What an `agent()` node holds. `result` is a link to the document the run's
+ * harness wrote; `run` is a link to the run's record, which a pattern reads
+ * for progress, outcome, and usage; `host` is the origin of the toolshed
+ * serving the record's space, carried beside `run` because a link resolves a
+ * space and not the host that serves it.
+ */
+export interface BuiltInAgentState<T> {
+  pending: boolean;
+  result?: T;
+  error?: string;
+  requestHash?: string;
+  run?: Record<string, any>;
+  host?: string;
+}
+
 export interface BuiltInCompileAndRunParams<T> {
   files: Array<{ name: string; contents: string }>;
   main: string;
@@ -2766,6 +2819,10 @@ export type GenerateObjectFunction = <T = any>(
 export type GenerateTextFunction = (
   params: FactoryInput<BuiltInGenerateTextParams>,
 ) => Reactive<BuiltInGenerateTextState>;
+
+export type AgentFunction = <T = any>(
+  params: FactoryInput<BuiltInAgentParams>,
+) => Reactive<BuiltInAgentState<T>>;
 
 export type FetchOptions = {
   body?: JSONValue;
@@ -3596,6 +3653,7 @@ export declare const llm: LLMFunction;
 export declare const llmDialog: LLMDialogFunction;
 export declare const generateObject: GenerateObjectFunction;
 export declare const generateText: GenerateTextFunction;
+export declare const agent: AgentFunction;
 export declare const cellFromUrl: CellFromUrlFunction;
 export declare const fetchBinary: FetchBinaryFunction;
 export declare const fetchText: FetchTextFunction;
