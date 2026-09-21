@@ -296,7 +296,23 @@ function installWaiter(
     },
     deepText(root) {
       const parts: string[] = [];
-      const visit = (node: ParentNode) => {
+      const visited = new WeakSet<ParentNode>();
+      const scanned = new WeakSet<ParentNode>();
+
+      /** Discovers shadow roots once across overlapping light and slot paths. */
+      const scan = (node: ParentNode): void => {
+        if (scanned.has(node)) return;
+        scanned.add(node);
+        for (const child of node.children) {
+          if (child.shadowRoot) visit(child.shadowRoot);
+          scan(child);
+        }
+      };
+
+      /** Collects visible root and slotted text once per node. */
+      const visit = (node: ParentNode): void => {
+        if (visited.has(node)) return;
+        visited.add(node);
         if (node instanceof HTMLElement) {
           const style = globalThis.getComputedStyle(node);
           const hidden = node instanceof HTMLStyleElement ||
@@ -319,9 +335,7 @@ function installWaiter(
             if (child instanceof HTMLElement) visit(child);
           }
         }
-        for (const el of node.querySelectorAll("*")) {
-          if (el.shadowRoot) visit(el.shadowRoot);
-        }
+        scan(node);
       };
       visit(root);
       return parts.join(" ");
