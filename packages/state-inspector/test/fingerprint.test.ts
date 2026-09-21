@@ -539,7 +539,7 @@ Deno.test("one pass yields each scope's rows exactly as the per-scope query does
  * machine and prove nothing there. Before the fix this is 2 x the number of
  * scopes; after it, the scoped query is never prepared at all.
  */
-Deno.test("the entity walk enumerates rows in one unscoped pass", () => {
+Deno.test("the fingerprint enumerates rows in one unscoped pass", () => {
   // A row query filtered on one scope cannot seek (the index leads with `id`),
   // so each walks the whole branch; the walk issues none, and derives its
   // scopes from the same pass rather than enumerating a second time.
@@ -558,6 +558,11 @@ Deno.test("the entity walk enumerates rows in one unscoped pass", () => {
     assert(scopeCount >= 5, `fixture spans several scopes (${scopeCount})`);
     unscoped = 0;
     generatedInternalCellIds(space);
+    assertEquals({ scoped, unscoped }, { scoped: 0, unscoped: 1 });
+    // The fingerprint excludes generated cells and hashes the rest from the
+    // same walk, rather than walking once for each.
+    unscoped = 0;
+    contentFingerprint(space);
     assertEquals({ scoped, unscoped }, { scoped: 0, unscoped: 1 });
   });
 });

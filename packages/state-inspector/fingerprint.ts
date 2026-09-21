@@ -214,20 +214,32 @@ export function generatedInternalCellIds(
   space: SpaceDb,
   options: { branch?: string; enumerationCap?: number } = {},
 ): { generated: Set<string>; named: Set<string> } {
+  const branch = options.branch ?? "";
+  return generatedIdsAmong(
+    space,
+    allEntities(space, branch, options.enumerationCap),
+    branch,
+  );
+}
+
+/**
+ * {@link generatedInternalCellIds} over models a caller already enumerated, so
+ * a caller that walks every entity for its own reasons does not build every
+ * model a second time to learn which ones are generated.
+ */
+function generatedIdsAmong(
+  space: SpaceDb,
+  models: Iterable<EntityModel>,
+  branch: string,
+): { generated: Set<string>; named: Set<string> } {
   const generated = new Set<string>();
   const named = new Set<string>();
-  for (
-    const model of allEntities(
-      space,
-      options.branch ?? "",
-      options.enumerationCap,
-    )
-  ) {
+  for (const model of models) {
     if (model.kind !== "piece") continue;
     const doc = reconstructDocument(space, {
       id: model.id,
       scope: model.scope,
-      branch: options.branch ?? "",
+      branch,
     });
     const internal = (doc as Record<string, unknown> | undefined)?.internal;
     if (!Array.isArray(internal)) continue;
@@ -268,12 +280,12 @@ export function contentFingerprint(
   options: FingerprintOptions = {},
 ): FingerprintReport {
   const branch = options.branch ?? "";
+  // One walk serves both the generated-cell exclusion and the hashing: every
+  // model is built once, which is most of what a fingerprint costs.
+  const models = allEntities(space, branch, options.enumerationCap);
   const { generated, named } = options.includeGenerated
     ? { generated: new Set<string>(), named: new Set<string>() }
-    : generatedInternalCellIds(space, {
-      branch,
-      enumerationCap: options.enumerationCap,
-    });
+    : generatedIdsAmong(space, models, branch);
 
   const ambiguous = [...generated].filter((id) => named.has(id)).sort(
     utf8Compare,
@@ -282,7 +294,7 @@ export function contentFingerprint(
   const unhashable: { id: string; reason: string }[] = [];
   const excludedGeneratedAddresses: ScopedEntity[] = [];
 
-  for (const model of allEntities(space, branch, options.enumerationCap)) {
+  for (const model of models) {
     if (generated.has(model.id)) {
       excludedGeneratedAddresses.push({ id: model.id, scope: model.scope });
       continue;
