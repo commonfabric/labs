@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 
 import { stageOwnerPolicyAdoption } from "../src/cfc/owner-adoption.ts";
@@ -8,6 +9,7 @@ import { loadStoredCfcEnvelope } from "../src/cfc/prepare.ts";
 import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
+import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 
 const owner = await Identity.fromPassphrase("owner-adoption-owner");
@@ -18,8 +20,11 @@ const schema = {
     name: {
       type: "string",
       ifc: {
-        ownerPrincipal: owner.did(),
-        addIntegrity: [{ kind: "represents-principal", subject: owner.did() }],
+        ownerPrincipal: { __ctCurrentPrincipal: true },
+        addIntegrity: [{
+          kind: "represents-principal",
+          subject: { __ctCurrentPrincipal: true },
+        }],
         writeAuthorizedBy: {
           __ctWriterIdentityOf: { file: "/profile.tsx", path: ["setName"] },
         },
@@ -74,6 +79,53 @@ describe("explicit owner policy adoption", () => {
       "writeAuthorizedBy",
     );
     expect(runtime.getCell(owner.did(), "legacy").get()).toBe("Saved name");
+  });
+
+  it("refuses a principal change after staging", async () => {
+    const tx = runtime.edit();
+    const source = runtime.getCell(owner.did(), "profile", undefined, tx).key(
+      "name",
+    ).getAsNormalizedFullLink();
+    const target = runtime.getCell(owner.did(), "legacy", undefined, tx)
+      .getAsNormalizedFullLink();
+    stageOwnerPolicyAdoption(tx, source, target, "Saved name");
+    tx.setCfcTrustSnapshot({
+      id: "changed-principal",
+      actingPrincipal: other.did(),
+    });
+    runtime.prepareTxForCommit(tx);
+    const result = await tx.commit();
+    expect(result.error?.message).toContain("writeAuthorizedBy");
+    const read = runtime.edit();
+    expect(loadStoredCfcEnvelope(read, target).status).toBe("none");
+    expect(read.readValueOrThrow(target)).toBe("Saved name");
+    read.abort();
+  });
+
+  it("refuses protection installed after staging", async () => {
+    const tx = runtime.edit();
+    const source = runtime.getCell(owner.did(), "profile", undefined, tx).key(
+      "name",
+    ).getAsNormalizedFullLink();
+    const target = runtime.getCell(owner.did(), "legacy", undefined, tx)
+      .getAsNormalizedFullLink();
+    stageOwnerPolicyAdoption(tx, source, target, "Saved name");
+    const storedSchema = { type: "string" } as const;
+    const schemaHash = internSchemaAsTaggedHashString(storedSchema);
+    registerSchemaDocument(schemaHash, storedSchema);
+    seedStoredEnvelope(tx, { ...target, path: ["cfc"] }, {
+      version: 1,
+      schemaHash,
+      labelMap: { version: 1, entries: [] },
+    });
+    expect(loadStoredCfcEnvelope(tx, target).status).toBe("loaded");
+    runtime.prepareTxForCommit(tx);
+    const result = await tx.commit();
+    expect(result.error?.message).toContain("writeAuthorizedBy");
+    const read = runtime.edit();
+    expect(loadStoredCfcEnvelope(read, target).status).toBe("none");
+    expect(read.readValueOrThrow(target)).toBe("Saved name");
+    read.abort();
   });
 
   it("rejects an adoption claim submitted through the public transaction API", async () => {

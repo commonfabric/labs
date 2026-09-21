@@ -1,6 +1,7 @@
 /**
- * `cf profile`: create, locate, or inspect and repair a person's profile. The create path is the CLI equivalent of
- * the shell's create form; `lib/profile.ts` says why a command may stand in
+ * `cf profile`: create, locate, or inspect and repair a person's profile.
+ * The create path is the CLI equivalent of the shell's create form;
+ * `lib/profile.ts` says why a command may stand in
  * for that gesture.
  */
 

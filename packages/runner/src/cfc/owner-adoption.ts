@@ -89,7 +89,10 @@ export function readOwnerFieldPolicy(
 /**
  * Explicitly accepts an unchanged value under an existing owner's field policy.
  * This host-only repair seam is not part of the pattern builder namespace.
- * The caller verifies the supported layout and the owner's inspection receipt.
+ * The caller must verify in this transaction that `target` is a supported
+ * backing cell reached from `source`, and validate the owner's inspection
+ * receipt against that layout. This function checks the policy and value;
+ * it does not establish the link between the two addresses.
  */
 export function stageOwnerPolicyAdoption(
   tx: IExtendedStorageTransaction,
