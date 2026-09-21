@@ -15,6 +15,13 @@ without embedded credentials are accepted. An always-visible browser link
 remains available when embedding is blocked. Neither surface receives a Fabric
 bridge or identity.
 
+Panel bodies are stateless computed views inside the Loom. A READ viewer can
+render URL and document content without a publisher first opening the UI or
+initializing a separate panel-view pattern. Linked pieces retain their own
+execution and access requirements: Loom renders an initialized target under the
+viewer's authority and does not initialize arbitrary nested patterns on its
+behalf.
+
 A published document stores `{source, notes}`. `source` is the allowlisted
 `PublishedSource` page excerpt or person card. The producer refreshes only that
 key. `notes` is collaborative text and remains intact when source data changes;
