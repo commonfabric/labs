@@ -17,6 +17,7 @@
 // applier would get subtly wrong. `applyPatch` is offline-safe (pure value ops;
 // no live runtime/cell). See packages/memory/v2/patch.ts.
 
+import type { FabricValue } from "@commonfabric/data-model";
 import { applyPatchToDocument } from "@commonfabric/memory/v2/patch";
 import {
   decodeStoredDocumentPayload,
@@ -40,7 +41,18 @@ export interface ReconstructOptions extends EntityAddress {
   atSeq?: number;
 }
 
-export type EntityDocument = StoredDocument;
+/**
+ * A stored document as the inspector reads one. It is memory's
+ * `EntityDocument` except for `source`, which memory declares as an
+ * `EntityRef`. A legacy result document holds a sigil link to its process cell
+ * there, and the inspector reads such documents, so `source` is any
+ * `FabricValue` here.
+ */
+export type EntityDocument = {
+  value?: FabricValue;
+  source?: FabricValue;
+  [key: string]: FabricValue;
+};
 
 export interface PathSelection {
   /** Whether every segment selected an own property. */
