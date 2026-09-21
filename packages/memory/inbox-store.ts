@@ -49,9 +49,22 @@ export class InboxStore {
 
   /** Opens durable storage, or an isolated in-memory database for a test server. */
   constructor(path: string) {
-    this.#database = new Database(path);
-    this.#database.exec(
-      `PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;
+    // SQLite journal-mode upgrades cannot always wait on busy_timeout. Serialize
+    // connection initialization on a separate lock file, including the first open.
+    const initialization = path === ":memory:"
+      ? undefined
+      : Deno.openSync(`${path}.initialize.lock`, {
+        read: true,
+        write: true,
+        create: true,
+        mode: 0o600,
+      });
+    let database: Database | undefined;
+    try {
+      initialization?.lockSync(true);
+      database = new Database(path);
+      database.exec(
+        `PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
       CREATE TABLE IF NOT EXISTS inbox_recipients (recipient TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS inbox_messages (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT, recipient TEXT NOT NULL, sender TEXT NOT NULL,
@@ -59,7 +72,14 @@ export class InboxStore {
         UNIQUE(recipient,sender,operation));
       CREATE INDEX IF NOT EXISTS inbox_pending ON inbox_messages(recipient,sequence) WHERE payload IS NOT NULL;
       CREATE INDEX IF NOT EXISTS inbox_sender ON inbox_messages(recipient,sender) WHERE payload IS NOT NULL;`,
-    );
+      );
+      this.#database = database;
+    } catch (error) {
+      database?.close();
+      throw error;
+    } finally {
+      initialization?.close();
+    }
   }
 
   /** Explicitly opts the authenticated recipient into delivery. */

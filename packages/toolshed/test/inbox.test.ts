@@ -15,9 +15,12 @@ function terminate(child: Deno.ChildProcess) {
   }
 }
 
-async function startInboxProcess(directory: string) {
+async function startInboxProcess(
+  directory: string,
+  initialize?: () => Promise<void>,
+) {
   const root = fromFileUrl(new URL("../../../", import.meta.url));
-  const lock = `${directory}/deno.lock`;
+  const lock = `${directory}/deno-${crypto.randomUUID()}.lock`;
   await Deno.copyFile(`${root}/deno.lock`, lock);
   const child = new Deno.Command(Deno.execPath(), {
     cwd: root,
@@ -28,7 +31,9 @@ async function startInboxProcess(directory: string) {
       "-A",
       fromFileUrl(new URL("./fixtures/inbox-server.ts", import.meta.url)),
       `${directory}/inbox.sqlite`,
+      ...(initialize ? ["--initialize-barrier"] : []),
     ],
+    stdin: "piped",
     stdout: "piped",
     stderr: "piped",
   }).spawn();
@@ -45,13 +50,28 @@ async function startInboxProcess(directory: string) {
     await diagnostics;
   };
   try {
-    let line = "";
-    while (!line.includes("\n")) {
-      const chunk = await lines.read();
-      if (chunk.done) throw new Error("Inbox child exited before readiness");
-      line += chunk.value;
+    let buffered = "";
+    const readLine = async () => {
+      while (!buffered.includes("\n")) {
+        const chunk = await lines.read();
+        if (chunk.done) throw new Error("Inbox child exited before readiness");
+        buffered += chunk.value;
+      }
+      const end = buffered.indexOf("\n");
+      const line = buffered.slice(0, end);
+      buffered = buffered.slice(end + 1);
+      return JSON.parse(line);
+    };
+    if (initialize) {
+      expect((await readLine()).initializing).toBe(true);
+      await initialize();
+      const writer = child.stdin.getWriter();
+      await writer.write(new Uint8Array([1]));
+      await writer.close();
+    } else {
+      await child.stdin.close();
     }
-    const { port } = JSON.parse(line.split("\n")[0]);
+    const { port } = await readLine();
     return { host: `http://127.0.0.1:${port}`, close };
   } catch (error) {
     await close();
@@ -92,6 +112,119 @@ async function fixture() {
 }
 
 describe("inbox HTTP and SDK", () => {
+  it("returns safe refusals for malformed bodies, invalid targets, and full inboxes", async () => {
+    const owner = await Identity.fromPassphrase("router-validation");
+    const store = new InboxStore(":memory:");
+    const router = createInboxRouter({ store: () => Promise.resolve(store) });
+    const post = async (operation: string, body: string) => {
+      const url = new URL(`/api/inbox/${operation}`, "http://localhost:8000");
+      const headers = await signFirstPartyHttpRequest({
+        url,
+        method: "POST",
+        body,
+        signer: owner,
+      });
+      return router.fetch(new Request(url, { method: "POST", headers, body }));
+    };
+    try {
+      for (
+        const [operation, body, status, code] of [
+          ["enable", "{invalid-json", 400, "invalid-request"],
+          [
+            "send",
+            JSON.stringify({
+              recipientDid: owner.did(),
+              operationId: "oversize",
+              payload: "x".repeat(20001),
+            }),
+            413,
+            "invalid-request",
+          ],
+          [
+            "status",
+            JSON.stringify({ recipientDid: "not-a-did" }),
+            400,
+            "invalid-request",
+          ],
+          [
+            "send",
+            JSON.stringify({
+              recipientDid: owner.did(),
+              operationId: "payload",
+              payload: "x".repeat(16384),
+            }),
+            400,
+            "invalid-payload",
+          ],
+        ] as const
+      ) {
+        const response = await post(operation, body);
+        expect(response.status).toBe(status);
+        expect(await response.json()).toEqual({ code });
+      }
+      expect(store.status(owner.did()).enabled).toBe(false);
+      store.enable(owner.did());
+      for (let i = 0; i < 100; i++) {
+        store.send(owner.did(), {
+          recipientDid: owner.did(),
+          operationId: `message-${i}`,
+          payload: null,
+        });
+      }
+      const full = await post(
+        "send",
+        JSON.stringify({
+          recipientDid: owner.did(),
+          operationId: "overflow",
+          payload: null,
+        }),
+      );
+      expect(full.status).toBe(429);
+      expect(await full.json()).toEqual({ code: "inbox-full" });
+      const acknowledged = await post(
+        "acknowledge",
+        JSON.stringify({ senderDid: owner.did(), operationId: "message-0" }),
+      );
+      expect(acknowledged.status).toBe(200);
+      expect(await acknowledged.json()).toEqual({ acknowledged: true });
+      const accepted = await post(
+        "send",
+        JSON.stringify({
+          recipientDid: owner.did(),
+          operationId: "overflow",
+          payload: null,
+        }),
+      );
+      expect(accepted.status).toBe(200);
+      expect((await accepted.json()).operationId).toBe("overflow");
+    } finally {
+      store.close();
+    }
+  });
+  it("returns a generic service error without exposing storage failure details", async () => {
+    const signer = await Identity.fromPassphrase("router-storage-failure");
+    let calls = 0;
+    const router = createInboxRouter({
+      store: () => {
+        calls++;
+        throw new Error("private storage path and message content");
+      },
+    });
+    const url = new URL("http://localhost:8000/api/inbox/list");
+    const body = "{}";
+    const headers = await signFirstPartyHttpRequest({
+      url,
+      method: "POST",
+      body,
+      signer,
+    });
+    const response = await router.fetch(
+      new Request(url, { method: "POST", headers, body }),
+    );
+    expect(calls).toBe(1);
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ code: "service-error" });
+  });
   it("authenticates the sender, isolates recipient reads, and retains receipts after reopening", async () => {
     const f = await fixture();
     try {
@@ -312,6 +445,46 @@ describe("inbox HTTP and SDK", () => {
       }
       expect((await owner.list()).messages.length).toBe(10);
     } finally {
+      for (const process of processes) await process.close();
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+  it("initializes one fresh database from simultaneous independent service processes", async () => {
+    const directory = await Deno.makeTempDir();
+    const processes: Array<Awaited<ReturnType<typeof startInboxProcess>>> = [];
+    const released = Promise.withResolvers<void>();
+    let waiting = 0;
+    const initialize = async () => {
+      if (++waiting === 2) released.resolve();
+      await released.promise;
+    };
+    try {
+      const started = await Promise.allSettled([0, 1].map(async () => {
+        try {
+          const process = await startInboxProcess(directory, initialize);
+          processes.push(process);
+        } catch (error) {
+          released.resolve();
+          throw error;
+        }
+      }));
+      expect(started.every((result) => result.status === "fulfilled")).toBe(
+        true,
+      );
+      const recipient = await Identity.fromPassphrase("simultaneous-startup");
+      const clients = processes.map(({ host }) =>
+        new InboxClient({ host, signer: recipient })
+      );
+      await clients[0].enable();
+      expect((await clients[1].status(recipient.did())).enabled).toBe(true);
+      const receipt = await clients[1].send({
+        recipientDid: recipient.did(),
+        operationId: "startup",
+        payload: "durable",
+      });
+      expect((await clients[0].list()).messages[0].receipt).toEqual(receipt);
+    } finally {
+      released.resolve();
       for (const process of processes) await process.close();
       await Deno.remove(directory, { recursive: true });
     }

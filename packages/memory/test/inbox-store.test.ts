@@ -5,8 +5,165 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { InboxStore } from "../inbox-store.ts";
+import type { InboxPayload } from "../inbox.ts";
 
 describe("InboxStore", () => {
+  it("refuses invalid identities and operation keys without committing deliveries", async () => {
+    const recipient = (await Identity.fromPassphrase("validation-recipient"))
+      .did();
+    const store = new InboxStore(":memory:");
+    try {
+      expect(() => store.enable("not-a-did")).toThrow("invalid-request");
+      store.enable(recipient);
+      for (const operationId of ["", "bad key", "x".repeat(129)]) {
+        expect(() =>
+          store.send(recipient, {
+            recipientDid: recipient,
+            operationId,
+            payload: null,
+          })
+        ).toThrow("invalid-request");
+      }
+      expect(() =>
+        store.send("not-a-did", {
+          recipientDid: recipient,
+          operationId: "valid",
+          payload: null,
+        })
+      ).toThrow("invalid-request");
+      expect(() =>
+        store.send(recipient, {
+          recipientDid: "not-a-did",
+          operationId: "valid",
+          payload: null,
+        })
+      ).toThrow("invalid-request");
+      expect(store.list(recipient).messages).toEqual([]);
+      expect(
+        store.send(recipient, {
+          recipientDid: recipient,
+          operationId: "valid",
+          payload: null,
+        }).operationId,
+      ).toBe("valid");
+    } finally {
+      store.close();
+    }
+  });
+  it("refuses invalid pagination without changing pending messages", async () => {
+    const recipient = (await Identity.fromPassphrase("pagination-validation"))
+      .did();
+    const store = new InboxStore(":memory:");
+    try {
+      store.enable(recipient);
+      const receipt = store.send(recipient, {
+        recipientDid: recipient,
+        operationId: "pending",
+        payload: null,
+      });
+      for (const limit of [0, -1, 101, 1.5, NaN]) {
+        expect(() => store.list(recipient, { limit })).toThrow(
+          "invalid-request",
+        );
+      }
+      for (
+        const cursor of ["", "-1", "1.5", "9007199254740992", "0".repeat(17)]
+      ) {
+        expect(() => store.list(recipient, { cursor })).toThrow(
+          "invalid-request",
+        );
+      }
+      expect(store.list(recipient)).toEqual({
+        messages: [{ receipt, payload: null }],
+        nextCursor: null,
+      });
+    } finally {
+      store.close();
+    }
+  });
+  it("refuses deep and non-JSON payloads before reserving an operation", async () => {
+    const recipient = (await Identity.fromPassphrase("payload-validation"))
+      .did();
+    const store = new InboxStore(":memory:");
+    let nested: InboxPayload = null;
+    for (let depth = 0; depth < 65; depth++) nested = [nested];
+    const inherited = Object.setPrototypeOf({ value: "own" }, {
+      inherited: true,
+    });
+    try {
+      store.enable(recipient);
+      for (const payload of [nested, inherited, { [Symbol("hidden")]: true }]) {
+        expect(() =>
+          store.send(recipient, {
+            recipientDid: recipient,
+            operationId: "same-operation",
+            payload,
+          })
+        ).toThrow("invalid-payload");
+        expect(store.list(recipient).messages).toEqual([]);
+      }
+      const receipt = store.send(recipient, {
+        recipientDid: recipient,
+        operationId: "same-operation",
+        payload: { valid: true },
+      });
+      expect(
+        store.get(recipient, {
+          senderDid: recipient,
+          operationId: "same-operation",
+        }).message,
+      ).toEqual({ receipt, payload: { valid: true } });
+    } finally {
+      store.close();
+    }
+  });
+  it("releases initialization ownership after a database failure", async () => {
+    const directory = await Deno.makeTempDir();
+    const path = `${directory}/inbox.sqlite`;
+    try {
+      await Deno.writeTextFile(path, "not a SQLite database");
+      expect(() => new InboxStore(path)).toThrow();
+      const lock = await Deno.open(`${path}.initialize.lock`, {
+        read: true,
+        write: true,
+      });
+      try {
+        expect(lock.tryLockSync(true)).toBe(true);
+      } finally {
+        lock.close();
+      }
+      await Deno.remove(path);
+      const reopened = new InboxStore(path);
+      try {
+        const recipient = (await Identity.fromPassphrase("repaired-store"))
+          .did();
+        expect(reopened.enable(recipient).enabled).toBe(true);
+      } finally {
+        reopened.close();
+      }
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+  it("isolates nonpersistent server inboxes and closes their cached handles", async () => {
+    const recipient = (await Identity.fromPassphrase("ephemeral-server")).did();
+    const options = {
+      authorizeSessionOpen: () => undefined,
+      sessionOpenAuth: { audience: recipient },
+    };
+    const first = new Server(options), second = new Server(options);
+    try {
+      const store = await first.inboxStore();
+      expect(await first.inboxStore()).toBe(store);
+      store.enable(recipient);
+      expect((await second.inboxStore()).status(recipient).enabled).toBe(false);
+      await first.close();
+      expect(() => store.status(recipient)).toThrow();
+    } finally {
+      await first.close();
+      await second.close();
+    }
+  });
   it("enables only the explicit recipient and retains readiness after reopening", async () => {
     const recipient = (await Identity.fromPassphrase("inbox-recipient")).did();
     const other = (await Identity.fromPassphrase("inbox-other")).did();

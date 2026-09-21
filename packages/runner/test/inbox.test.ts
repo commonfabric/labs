@@ -85,4 +85,106 @@ describe("InboxClient", () => {
     }
     expect(calls).toBe(0);
   });
+  it("refuses malformed private-read and opt-in responses without treating them as success", async () => {
+    const signer = await Identity.fromPassphrase("sdk-response-validation");
+    const other = (await Identity.fromPassphrase("sdk-response-other")).did();
+    const host = "https://inbox.example";
+    const clientFor = (value: unknown) =>
+      new InboxClient({
+        host,
+        signer,
+        fetch: () => Promise.resolve(Response.json(value)),
+      });
+    for (
+      const value of [null, [], { recipientDid: other, enabled: true }, {
+        recipientDid: signer.did(),
+        enabled: false,
+      }]
+    ) {
+      await expect(clientFor(value).enable()).rejects.toThrow(
+        "invalid-response",
+      );
+    }
+    for (
+      const value of [{ recipientDid: other, enabled: true }, {
+        recipientDid: signer.did(),
+        enabled: "true",
+      }]
+    ) {
+      await expect(clientFor(value).status(signer.did())).rejects.toThrow(
+        "invalid-response",
+      );
+    }
+    for (
+      const value of [{ messages: {}, nextCursor: null }, {
+        messages: [],
+        nextCursor: 1,
+      }]
+    ) {
+      await expect(clientFor(value).list()).rejects.toThrow("invalid-response");
+    }
+    await expect(
+      clientFor({ acknowledged: "true" }).acknowledge({
+        senderDid: other,
+        operationId: "selected",
+      }),
+    ).rejects.toThrow("invalid-response");
+    const invalidJSON = new InboxClient({
+      host,
+      signer,
+      fetch: () => Promise.resolve(new Response("not JSON")),
+    });
+    await expect(invalidJSON.list()).rejects.toThrow("invalid-response");
+  });
+  it("rejects poisoned message pages and a selected message bound to another delivery", async () => {
+    const signer = await Identity.fromPassphrase("sdk-message-validation");
+    const senderDid = (await Identity.fromPassphrase("sdk-message-sender"))
+      .did();
+    const other = (await Identity.fromPassphrase("sdk-message-other")).did();
+    const payload = { text: "private" };
+    const receipt = {
+      recipientDid: signer.did(),
+      senderDid,
+      operationId: "selected",
+      payloadHash: hashStringOf(payload),
+      receivedAt: Date.now(),
+    };
+    const clientFor = (value: unknown) =>
+      new InboxClient({
+        host: "https://inbox.example",
+        signer,
+        fetch: () => Promise.resolve(Response.json(value)),
+      });
+    for (
+      const poisoned of [null, { receipt: null, payload }, {
+        receipt,
+        payload: "changed",
+      }, {
+        receipt: { ...receipt, payloadHash: hashStringOf("x".repeat(16384)) },
+        payload: "x".repeat(16384),
+      }]
+    ) {
+      await expect(clientFor({ messages: [poisoned], nextCursor: null }).list())
+        .rejects.toThrow("invalid-response");
+    }
+    for (
+      const changed of [{ senderDid: other }, { operationId: "different" }]
+    ) {
+      await expect(
+        clientFor({ message: { receipt: { ...receipt, ...changed }, payload } })
+          .get({ senderDid, operationId: "selected" }),
+      ).rejects.toThrow("invalid-response");
+    }
+    const knownRefusal = new InboxClient({
+      host: "https://inbox.example",
+      signer,
+      fetch: () =>
+        Promise.resolve(
+          Response.json({ code: "rate-limited", error: "private text" }, {
+            status: 429,
+          }),
+        ),
+    });
+    await expect(knownRefusal.list()).rejects.toThrow("rate-limited");
+  });
 });

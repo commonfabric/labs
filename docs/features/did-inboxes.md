@@ -73,7 +73,10 @@ The serving memory instance owns a separate SQLite inbox database under its
 store directory. SQLite transactions atomically check duplicate identity and
 capacity before inserting, including across independent connections. WAL and
 full synchronization make an acknowledged delivery durable across process
-termination. Shutdown closes the inbox connection. Backups must include this
+termination. Concurrent opens serialize schema and journal initialization through
+a retained advisory lock file beside the database; closing its descriptor releases
+the lock, and the file remains so every opener locks the same inode. Shutdown
+closes the inbox connection. Backups must include this
 service-private database and its WAL consistently; ordinary space exports do
 not contain inbox messages.
 
