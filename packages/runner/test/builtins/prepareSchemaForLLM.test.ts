@@ -13,10 +13,9 @@ describe("prepareSchemaForLLM()", () => {
       properties: { subject: { type: "string" } },
       required: ["subject"],
     } as const;
+    const before = JSON.stringify(schema);
 
-    expect(JSON.stringify(prepareSchemaForLLM(schema))).toBe(
-      JSON.stringify(schema),
-    );
+    expect(JSON.stringify(prepareSchemaForLLM(schema))).toBe(before);
   });
 
   it("preserves a closed schema byte-for-byte at the root and inside objects and arrays", () => {
@@ -73,10 +72,20 @@ describe("prepareSchemaForLLM()", () => {
     expect(prepareSchemaForLLM(schema)).toEqual({
       type: "object",
       properties: {
-        entry: schema.$defs.Entry,
+        entry: {
+          type: "object",
+          properties: { text: { type: "string" } },
+          required: ["text"],
+          additionalProperties: false,
+        },
         byName: {
           type: "object",
-          additionalProperties: schema.$defs.Entry,
+          additionalProperties: {
+            type: "object",
+            properties: { text: { type: "string" } },
+            required: ["text"],
+            additionalProperties: false,
+          },
         },
       },
       required: ["entry", "byName"],

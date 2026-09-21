@@ -269,7 +269,17 @@ describe("LLM pattern smoke tests", () => {
     expect(observedSchema).toEqual({
       type: "object",
       additionalProperties: false,
-      properties: { messages: { type: "array", items: entrySchema } },
+      properties: {
+        messages: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            properties: { subject: { type: "string" } },
+            required: ["subject"],
+          },
+        },
+      },
       required: ["messages"],
     });
     expect(result.key("result").get()).toEqual(object);
