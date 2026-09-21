@@ -131,12 +131,15 @@ describe("in-process-attributes", () => {
         }
       }
     } finally {
-      render?.cancel();
-      await runtime.dispose();
       if (elementDescriptor) {
         Object.defineProperty(globalThis, "Element", elementDescriptor);
       } else {
         Reflect.deleteProperty(globalThis, "Element");
+      }
+      try {
+        render?.cancel();
+      } finally {
+        await runtime.dispose();
       }
     }
   });

@@ -20,7 +20,7 @@ import {
 import { CFRender } from "./index.ts";
 
 /** Creates a fixture with controlled worker messages and real DOM rendering. */
-function fixture(linked = false) {
+function fixture(linked = false, firstMountReply?: Promise<void>) {
   const cell = createMockCellHandle<Record<string, unknown>>({});
   const runtime = cell.runtime();
   const connection = runtime[$conn]();
@@ -28,6 +28,7 @@ function fixture(linked = false) {
   const disposals = new Set<() => void>();
   const mounted = new Map<number, (batch: VDomBatchNotification) => void>();
   const firstMount = Promise.withResolvers<void>();
+  let lateBatch: (() => void) | undefined;
   let nextMount = Promise.withResolvers<void>();
   let nextUnmount = Promise.withResolvers<void>();
   let resolutions = 0;
@@ -97,6 +98,26 @@ function fixture(linked = false) {
           throw new Error("The renderer must subscribe before mounting");
         }
         mounted.set(mountId, listener);
+        const first = mountedCells.length === 1;
+        if (first) {
+          const receive = listener;
+          lateBatch = () =>
+            receive({
+              type: NotificationType.VDomBatch,
+              mountId,
+              batchId: 2,
+              ops: [
+                { op: "create-element", nodeId: 2, tagName: "textarea" },
+                {
+                  op: "set-prop",
+                  nodeId: 2,
+                  key: "value",
+                  value: "Stale notes",
+                },
+                { op: "insert-child", parentId: 0, childId: 2, beforeId: null },
+              ],
+            });
+        }
         listener({
           type: NotificationType.VDomBatch,
           mountId,
@@ -111,7 +132,9 @@ function fixture(linked = false) {
         firstMount.resolve();
         nextMount.resolve();
         nextMount = Promise.withResolvers<void>();
-        return Promise.resolve({ rootId: 1 });
+        return first && firstMountReply
+          ? firstMountReply.then(() => ({ rootId: 1 }))
+          : Promise.resolve({ rootId: 1 });
       },
       unmount: (mountId) => {
         mounted.delete(mountId);
@@ -137,6 +160,7 @@ function fixture(linked = false) {
     first,
     card,
     ready: firstMount.promise,
+    lateBatch: () => lateBatch?.(),
     get subscriptions() {
       return subscriptions;
     },
@@ -364,6 +388,26 @@ Deno.test("cf-render does not remount an attached element when a disposed runtim
     expect(notes(view.element)).toBeUndefined();
   } finally {
     gate.resolve();
+    view.close();
+  }
+});
+
+Deno.test("cf-render rejects late batches from a pending mount after reconnection", async () => {
+  const reply = Promise.withResolvers<void>();
+  const view = fixture(false, reply.promise);
+  try {
+    await view.ready;
+    await view.element.updateComplete;
+    const remounted = view.nextMount();
+    view.container.insertBefore(view.card, view.first);
+    await remounted;
+    view.lateBatch();
+    const editors = view.element.shadowRoot!.querySelectorAll("textarea");
+    expect([...editors].map((editor) => editor.value)).toEqual(["Saved notes"]);
+    view.update("Current notes");
+    expect(notes(view.element)).toBe("Current notes");
+  } finally {
+    reply.resolve();
     view.close();
   }
 });

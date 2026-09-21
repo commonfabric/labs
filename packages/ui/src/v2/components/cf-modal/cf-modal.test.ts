@@ -7,6 +7,7 @@ import { CFModal } from "./index.ts";
 
 /** Supplies only the DOM observations consumed by the focus policy. */
 class FocusNode extends EventTarget {
+  localName = "div";
   children: FocusNode[] = [];
   shadowRoot: {
     children: FocusNode[];
@@ -207,6 +208,24 @@ describe("CFModal", () => {
       expectFocus(first);
       expect(view.key([first, view.dialog], true).defaultPrevented).toBe(true);
       expectFocus(first, last);
+    });
+
+    it("wraps through enabled controls within a disabled fieldset", () => {
+      const first = view.control(new HtmlNode());
+      const enabled = view.control(new HtmlNode());
+      const disabled = view.control(new HtmlNode());
+      disabled.disabled = true;
+      const fieldset = new HtmlNode();
+      fieldset.localName = "fieldset";
+      fieldset.attributes.add("disabled");
+      fieldset.children = [enabled, disabled];
+      view.dialog.children = [first, fieldset];
+      view.setOpen(true);
+
+      expect(view.key([first, view.dialog], true).defaultPrevented).toBe(true);
+      expectFocus(enabled);
+      expect(view.key([enabled, fieldset]).defaultPrevented).toBe(true);
+      expectFocus(enabled, first);
     });
 
     for (const connected of [true, false]) {

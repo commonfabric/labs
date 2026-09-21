@@ -421,3 +421,61 @@ Deno.test("dialog restores focus to an SVG opener inside a shadow root", async (
     mounted.fixture.remove();
   }
 });
+
+for (const outsideLink of [false, true]) {
+  Deno.test(
+    outsideLink
+      ? "dialog includes native links outside a disabled fieldset legend"
+      : "dialog includes the enabled first legend of a disabled fieldset",
+    async () => {
+      const mounted = await mountKeyboardModal();
+      try {
+        mounted.done.remove();
+        const fieldset = document.createElement("fieldset");
+        fieldset.slot = "footer";
+        fieldset.disabled = true;
+        fieldset.innerHTML = `
+          <legend>
+            <button id="legend-enabled">Enable settings</button>
+            <button id="legend-disabled" disabled>Disabled legend action</button>
+          </legend>
+          <input id="body-disabled" aria-label="Disabled settings">
+          <legend><button id="later-disabled">Later legend</button></legend>
+        `;
+        const anchor = document.createElement("a");
+        anchor.href = "#settings-help";
+        anchor.textContent = "Settings help";
+        if (outsideLink) fieldset.append(anchor);
+        mounted.modal.append(fieldset);
+        mounted.modal.open = true;
+        await settleLayout(mounted.modal);
+        const close = requiredElement(
+          mounted.modal.shadowRoot!,
+          ".close-button",
+        );
+        const enabled = requiredElement(fieldset, "#legend-enabled");
+        expect(enabled.matches(":disabled")).toBe(false);
+        enabled.focus();
+        expect(mounted.root.activeElement).toBe(enabled);
+        const last = outsideLink ? anchor : enabled;
+        expect(last.matches(":disabled")).toBe(false);
+        last.focus();
+        expect(mounted.root.activeElement).toBe(last);
+        for (
+          const id of ["legend-disabled", "body-disabled", "later-disabled"]
+        ) {
+          const disabled = requiredElement(fieldset, `#${id}`);
+          expect(disabled.matches(":disabled")).toBe(true);
+          disabled.focus();
+          expect(mounted.root.activeElement).toBe(last);
+        }
+        expect(tabFrom(close, true).defaultPrevented).toBe(true);
+        expect(mounted.root.activeElement).toBe(last);
+        expect(tabFrom(last).defaultPrevented).toBe(true);
+        expect(mounted.modal.shadowRoot!.activeElement).toBe(close);
+      } finally {
+        mounted.fixture.remove();
+      }
+    },
+  );
+}

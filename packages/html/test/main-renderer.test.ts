@@ -5,6 +5,7 @@ import {
   CellHandle,
   type CellRef,
   type RuntimeClient,
+  type VNode,
 } from "@commonfabric/runtime-client";
 import { MockDoc } from "../src/mock-doc.ts";
 import { VDomRenderer } from "../src/main/renderer.ts";
@@ -427,6 +428,83 @@ describe("main-renderer", () => {
   });
 
   describe("render()", () => {
+    it("cancels local rendering before pending mount and unmount replies", async () => {
+      const connection = new MockConnection();
+      const mount = Promise.withResolvers<{ rootId: number | null }>();
+      const unmount = Promise.withResolvers<void>();
+      let mountId = 0;
+      connection.mountVDom = (id) => {
+        mountId = id;
+        return mount.promise;
+      };
+      connection.unmountVDom = (id) => {
+        connection.unmountCalls.push(id);
+        return unmount.promise;
+      };
+      const mock = new MockDoc(
+        '<!DOCTYPE html><html><body><div id="root"></div></body></html>',
+      );
+      const container = mock.document.getElementById("root")!;
+      const cancel = render(
+        container as unknown as HTMLElement,
+        workerCellHandle(connection, "of:pending-mount") as CellHandle<VNode>,
+        { document: mock.document },
+      );
+      let cancelReplacement: (() => void) | undefined;
+      const batch = {
+        mountId,
+        batchId: 1,
+        rootId: 1,
+        ops: [
+          { op: "create-element", nodeId: 1, tagName: "textarea" },
+          { op: "insert-child", parentId: 0, childId: 1, beforeId: null },
+        ],
+      };
+      try {
+        connection.emit("vdombatch", batch);
+        expect(container.children.length).toBe(1);
+        cancel();
+        expect(connection.unmountCalls).toEqual([mountId]);
+        expect(container.children.length).toBe(0);
+        connection.emit("vdombatch", { ...batch, batchId: 2 });
+        expect(container.children.length).toBe(0);
+        expect(getActiveRenders().has(container as unknown as HTMLElement))
+          .toBe(false);
+        let replacementId = 0;
+        connection.mountVDom = (id) => {
+          replacementId = id;
+          return Promise.resolve({ rootId: 1 });
+        };
+        cancelReplacement = render(
+          container as unknown as HTMLElement,
+          workerCellHandle(connection, "of:replacement") as CellHandle<VNode>,
+          { document: mock.document },
+        );
+        connection.emit("vdombatch", { ...batch, mountId: replacementId });
+        const replacement = container.firstChild;
+        expect(replacement).not.toBeNull();
+        mount.resolve({ rootId: 1 });
+        unmount.resolve();
+        await Promise.all([mount.promise, unmount.promise]);
+        connection.emit("vdombatch", { ...batch, batchId: 3 });
+        expect(container.children.length).toBe(1);
+        expect(container.firstChild).toBe(replacement);
+        connection.emit("vdombatch", {
+          mountId: replacementId,
+          batchId: 2,
+          ops: [{ op: "set-prop", nodeId: 1, key: "value", value: "Current" }],
+        });
+        expect((replacement as HTMLTextAreaElement).value).toBe("Current");
+      } finally {
+        cancel();
+        cancelReplacement?.();
+        mount.resolve({ rootId: 1 });
+        unmount.resolve();
+        await Promise.all([mount.promise, unmount.promise]);
+        connection.abort();
+      }
+    });
+
     it("drives worker rendering and tears down via the connection", async () => {
       const connection = new MockConnection();
       const mock = new MockDoc(

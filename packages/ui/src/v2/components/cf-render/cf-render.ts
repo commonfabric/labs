@@ -304,7 +304,7 @@ export class CFRender extends BaseElement {
    */
   private _renderGeneration = 0;
 
-  private _needsReconnectRender = false;
+  #needsReconnectRender = false;
 
   /**
    * The root piece cell after resolving the (possibly link) `cell`. Reset
@@ -379,9 +379,9 @@ export class CFRender extends BaseElement {
     const cellChanged = changedProperties.has("cell");
     const variantChanged = changedProperties.has("variant");
 
-    if (cellChanged || variantChanged || this._needsReconnectRender) {
-      let shouldRerender = this._needsReconnectRender;
-      this._needsReconnectRender = false;
+    if (cellChanged || variantChanged || this.#needsReconnectRender) {
+      let shouldRerender = this.#needsReconnectRender;
+      this.#needsReconnectRender = false;
 
       if (cellChanged) {
         const oldCell = changedProperties.get("cell") as CellHandle | undefined;
@@ -821,7 +821,7 @@ export class CFRender extends BaseElement {
     this.removeEventListener("contextmenu", this._onContextMenu);
     super.disconnectedCallback();
     this._renderGeneration++;
-    this._needsReconnectRender = true;
+    this.#needsReconnectRender = true;
     this._cleanupLinkTargetSubscription();
     this._resolvedCell = undefined;
     this._hasRendered = false;

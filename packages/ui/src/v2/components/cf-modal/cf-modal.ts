@@ -395,7 +395,9 @@ export class CFModal extends BaseElement {
         if (
           (element instanceof HTMLElement &&
             (element.hidden || element.inert)) ||
-          element.hasAttribute("disabled") ||
+          // Fieldsets retain enabled legend controls and non-form tab stops.
+          (element.hasAttribute("disabled") &&
+            element.localName !== "fieldset") ||
           style.display === "none"
         ) return;
         if (
