@@ -992,12 +992,12 @@ report these through the same collector (deduplicated via §2.2's
 - **Warning** `schema-type:unread` (`schema-generator.ts`,
   `unread-type-diagnostics.ts`) — a schema accepts any value in place of a type
   node-based analysis could not read and no wrapper recovered from a resolved
-  type: a name the emitting module neither declares nor imports, an
-  `import("…")` type it does not resolve, or a generic reference whose argument
-  replaces a default. One warning per generated schema names each such type
-  once; compilation continues. It points to the local schema use, since the
-  unread node is a print with no source position, and like the default warning
-  collapses to one per source range. See the node-based analyzer's fallback in
+  type, such as a name the emitting module does not resolve or an
+  `import("…")` type it does not resolve; the node-based analyzer's section of
+  the schema-generator mapping spec states what it reads. One warning per
+  generated schema names each such type once; compilation continues. It points
+  to the local schema use, since the unread node is a print with no source
+  position, and like the default warning collapses to one per source range. See the node-based analyzer's fallback in
   the schema-generator mapping spec and `test/unread-type-diagnostic.test.ts`.
 - **Error** `pattern-context:receiver-method-call`
   (`pattern-body-reactive-root-lowering.ts:162`) — the pattern-body

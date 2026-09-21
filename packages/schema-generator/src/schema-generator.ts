@@ -1681,12 +1681,18 @@ export class SchemaGenerator {
     // way IntersectionFormatter merges one (`intersectionOf`), each
     // constituent read through its reference.
     if (ts.isIntersectionTypeNode(typeNode)) {
-      return intersectionOf(
+      const unread = context.uninterpretedTypeNodes;
+      const unreadBefore = unread?.length ?? 0;
+      const schema = intersectionOf(
         typeNode.types.map((member) =>
           this.#analyzeChildNode(member, checker, context)
         ),
         context,
       );
+      // An intersection accepting nothing does so whatever a constituent
+      // accepts, so a constituent's guess leaves nothing in its schema.
+      if (schema === false) unread?.splice(unreadBefore);
+      return schema;
     }
 
     // Handle ArrayTypeNode (e.g., number[], string[])
@@ -1764,6 +1770,8 @@ export class SchemaGenerator {
         checker,
         context,
       );
+      // A name declared as `any` reads as `any` does, accepting any value.
+      if (resolved === checker.getAnyType()) return true;
       if (resolved) {
         return this.formatChildType(resolved, context, typeNode);
       }
@@ -2266,12 +2274,16 @@ export class SchemaGenerator {
       return undefined;
     }
     const typeName = typeNode.typeName.text;
+    // A declared type that is the checker's intrinsic `any` was declared as
+    // `any`; any other type flagged `Any` stands for a name it could not type.
+    const typed = (declared: ts.Type | undefined) =>
+      declared !== undefined &&
+      (!(declared.flags & ts.TypeFlags.Any) ||
+        declared === checker.getAnyType());
     const symbolAtNode = checker.getSymbolAtLocation(typeNode.typeName);
     if (symbolAtNode) {
       const declared = checker.getDeclaredTypeOfSymbol(symbolAtNode);
-      if (declared && !(declared.flags & ts.TypeFlags.Any)) {
-        return declared;
-      }
+      if (typed(declared)) return declared;
     }
 
     const scopeNode = this.#scopeSourceFile(typeNode, checker, context);
@@ -2284,10 +2296,7 @@ export class SchemaGenerator {
     const symbol = candidates.find((candidate) => candidate.name === typeName);
     if (!symbol) return undefined;
     const declared = checker.getDeclaredTypeOfSymbol(symbol);
-    if (!declared || (declared.flags & ts.TypeFlags.Any)) {
-      return undefined;
-    }
-    return declared;
+    return typed(declared) ? declared : undefined;
   }
 
   /**

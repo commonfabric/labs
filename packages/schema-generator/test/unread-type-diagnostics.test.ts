@@ -14,13 +14,15 @@ const f = ts.factory;
 const unresolvable = (name: string) =>
   f.createTypeReferenceNode(f.createIdentifier(name));
 
-/** The warnings generating a schema for the synthetic `node` reports. */
+/**
+ * The warnings generating a schema for the synthetic `node` reports, its names
+ * resolved in a module holding `source`.
+ */
 async function warningsFor(
   node: ts.TypeNode,
+  source = "type Dummy = unknown;",
 ): Promise<SchemaGenerationDiagnostic[]> {
-  const { checker, sourceFile } = await createTestProgram(
-    "type Dummy = unknown;",
-  );
+  const { checker, sourceFile } = await createTestProgram(source);
   const warnings: SchemaGenerationDiagnostic[] = [];
   new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
     node,
@@ -82,6 +84,17 @@ describe("unread-type-diagnostics", () => {
       expect(warnings[0]!.message).not.toContain("`F`");
     });
 
+    it("counts types whose printed text differs only past what the message shows", async () => {
+      const long = "Long".repeat(25);
+      const warnings = await warningsFor(
+        f.createUnionTypeNode(
+          ["A", "B", "C", "D", "E", `${long}1`, `${long}2`].map(unresolvable),
+        ),
+      );
+
+      expect(warnings[0]!.message).toContain("`E` and 2 more.");
+    });
+
     it("logs the warning where the caller supplies no callback", async () => {
       // Captured at the logger, which is where the message is decided, rather
       // than at the console, which also answers to the logger's level.
@@ -137,6 +150,52 @@ describe("unread-type-diagnostics", () => {
       );
 
       expect(warnings).toEqual([]);
+    });
+
+    it("reports nothing for a name declared as `any`", async () => {
+      const warnings = await warningsFor(
+        unresolvable("Deliberate"),
+        "export {};\ntype Deliberate = any;",
+      );
+
+      expect(warnings).toEqual([]);
+    });
+
+    it("reports a name whose declaration the checker cannot type", async () => {
+      const warnings = await warningsFor(
+        unresolvable("Broken"),
+        "export {};\n// @ts-ignore: the name is missing on purpose\n" +
+          "type Broken = Missing;",
+      );
+
+      expect(warnings.map((warning) => warning.message)).toEqual([
+        expect.stringContaining("`Broken`"),
+      ]);
+    });
+
+    it("reports nothing for an intersection that accepts nothing", async () => {
+      // Beside `never`, what the unread constituent accepts is moot.
+      const warnings = await warningsFor(
+        f.createIntersectionTypeNode([
+          unresolvable("Moot"),
+          f.createKeywordTypeNode(ts.SyntaxKind.NeverKeyword),
+        ]),
+      );
+
+      expect(warnings).toEqual([]);
+    });
+
+    it("reports an unread constituent of an intersection that accepts values", async () => {
+      const warnings = await warningsFor(
+        f.createIntersectionTypeNode([
+          unresolvable("Kept"),
+          f.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+        ]),
+      );
+
+      expect(warnings.map((warning) => warning.message)).toEqual([
+        expect.stringContaining("`Kept`"),
+      ]);
     });
 
     it("reports nothing where a wrapper recovers the value from its resolved type", async () => {

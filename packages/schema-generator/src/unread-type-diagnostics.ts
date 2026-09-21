@@ -31,18 +31,23 @@ export function reportUnreadTypes(
 ): void {
   const printer = ts.createPrinter({ removeComments: true });
   const blank = ts.createSourceFile("unread.ts", "", ts.ScriptTarget.Latest);
-  const names = [
-    ...new Set(unread.map((typeNode) => {
-      const text = printer.printNode(ts.EmitHint.Unspecified, typeNode, blank)
-        .replace(/\s+/g, " ");
-      return text.length > TYPE_TEXT_LIMIT
-        ? `${text.slice(0, TYPE_TEXT_LIMIT)}…`
-        : text;
-    })),
+  const texts = [
+    ...new Set(
+      unread.map((typeNode) =>
+        printer.printNode(ts.EmitHint.Unspecified, typeNode, blank)
+          .replace(/\s+/g, " ")
+      ),
+    ),
   ];
-  const named = names.slice(0, NAMED_LIMIT).map(backtickQuote).join(", ");
-  const rest = names.length > NAMED_LIMIT
-    ? ` and ${names.length - NAMED_LIMIT} more`
+  const named = texts.slice(0, NAMED_LIMIT).map((text) =>
+    backtickQuote(
+      text.length > TYPE_TEXT_LIMIT
+        ? `${text.slice(0, TYPE_TEXT_LIMIT)}…`
+        : text,
+    )
+  ).join(", ");
+  const rest = texts.length > NAMED_LIMIT
+    ? ` and ${texts.length - NAMED_LIMIT} more`
     : "";
 
   const diagnostic: SchemaGenerationDiagnostic = {
