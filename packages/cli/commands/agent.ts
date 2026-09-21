@@ -12,8 +12,8 @@ import { createHarnessAgentRunExecutor } from "../lib/agent-run-harness.ts";
 import {
   type AgentRunInspection,
   cancelAgentRun,
+  readAgentRun,
   readAgentRuns,
-  selectAgentRun,
 } from "../lib/agent-inspection.ts";
 import { render } from "../lib/render.ts";
 
@@ -384,12 +384,14 @@ CF_HARNESS_HOME.`,
 /** Effects used by the one-shot agent inspection commands. */
 export interface AgentInspectionCommandDeps {
   read: typeof readAgentRuns;
+  readOne: typeof readAgentRun;
   cancel: typeof cancelAgentRun;
   render: typeof render;
 }
 
 const defaultInspectionDeps: AgentInspectionCommandDeps = {
   read: readAgentRuns,
+  readOne: readAgentRun,
   cancel: cancelAgentRun,
   render,
 };
@@ -409,6 +411,8 @@ export function formatAgentRun(run: AgentRunInspection): string {
       ["Outcome", run.outcome],
       ["Error", run.errorCode],
       ["Cancellation requested", run.cancelRequestedAt],
+      ["Started", run.startedAt],
+      ["Finished", run.finishedAt],
       ["Model turns", run.modelTurns],
       ["Tool calls", run.toolCalls],
       ["Usage coverage", run.usageCoverage],
@@ -463,7 +467,9 @@ export async function agentInspectionAction(
         ? runs
         : runs.length === 0
         ? "No agent runs."
-        : runs.map((run) => `${run.id}  ${run.state}  ${run.task}`).join("\n"),
+        : runs.map((run) =>
+          `${run.id}  ${run.state}  ${run.task}  ${run.host}  ${run.address}`
+        ).join("\n"),
       { json: options.json },
     );
     return;
@@ -473,7 +479,7 @@ export async function agentInspectionAction(
   }
   const run = kind === "cancel"
     ? await deps.cancel(config, identifier)
-    : selectAgentRun(await deps.read(config), identifier);
+    : await deps.readOne(config, identifier);
   deps.render(options.json ? run : formatAgentRun(run), { json: options.json });
 }
 

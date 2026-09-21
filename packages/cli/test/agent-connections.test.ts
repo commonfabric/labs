@@ -7,9 +7,11 @@ import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import {
+  getPatternEnvironment,
   resolveEntryIdentity,
   Runtime,
   runtimePresets,
+  setPatternEnvironment,
 } from "@commonfabric/runner";
 import {
   agentQueueIndexCell,
@@ -19,6 +21,7 @@ import {
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { startAgentRunner } from "../commands/agent.ts";
+import { openAgentStorageHost } from "../lib/agent-connections.ts";
 import { createHarnessAgentRunExecutor } from "../lib/agent-run-harness.ts";
 import { loadIdentity } from "../lib/identity.ts";
 
@@ -184,6 +187,30 @@ describe("agent-connections", () => {
       await home.dispose();
       await remote.dispose();
       await homeServer.close();
+      await recordServer.close();
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("keeps the home pattern environment when opening a record host", async () => {
+    const directory = await Deno.makeTempDir({ prefix: "agent-connections-" });
+    const identityPath = join(directory, "identity.key");
+    await Deno.writeFile(identityPath, await Identity.generatePkcs8());
+    const recordServer = StandaloneMemoryServer.start();
+    const originalEnvironment = getPatternEnvironment();
+    const homeUrl = new URL("https://home.example.test");
+    setPatternEnvironment({ apiUrl: homeUrl });
+    let storageHost: Runtime | undefined;
+    try {
+      storageHost = await openAgentStorageHost(
+        identityPath,
+        recordServer.url.origin,
+      );
+
+      expect(getPatternEnvironment().apiUrl).toEqual(homeUrl);
+    } finally {
+      await storageHost?.dispose();
+      setPatternEnvironment(originalEnvironment);
       await recordServer.close();
       await Deno.remove(directory, { recursive: true });
     }

@@ -63,6 +63,38 @@ export interface AgentRunInspection {
   result?: string;
 }
 
+/** Builds one public inspection without following the run's result payload. */
+function inspectionOf(
+  location: Pick<AgentRunInspection, "id" | "address" | "host" | "space">,
+  value: AgentRunRecord,
+): AgentRunInspection {
+  return {
+    ...location,
+    requestHash: value.requestHash,
+    task: value.task,
+    state: value.state,
+    submittedAt: value.submittedAt,
+    stateSince: value.stateSince,
+    attempts: value.attempts,
+    claim: value.claim && cloneIfNecessary(value.claim, { frozen: false }),
+    cancelRequestedAt: value.cancelRequestedAt,
+    outcome: value.outcome,
+    errorCode: value.errorCode,
+    startedAt: value.startedAt,
+    finishedAt: value.finishedAt,
+    modelTurns: value.modelTurns,
+    toolCalls: value.toolCalls,
+    usage: value.usage &&
+      cloneIfNecessary(value.usage as FabricValue, {
+        frozen: false,
+      }) as AgentRunRecord["usage"],
+    usageCoverage: value.usageCoverage,
+    runRef: value.runRef,
+    result: value.result &&
+      renderCellReference(value.result.getAsNormalizedFullLink()),
+  };
+}
+
 /** Selects one exact record id, request hash, or canonical address. */
 export function selectAgentRun(
   runs: readonly AgentRunInspection[],
@@ -83,11 +115,12 @@ export function selectAgentRun(
   return matches[0];
 }
 
-/** Reads all available records, or requests cancellation of one exact match. */
+/** Reads all available records, one selected record, or requests cancellation. */
 async function inspect(
   config: AgentInspectionConfig,
   deps: AgentInspectionDeps,
-  cancel?: string,
+  identifier?: string,
+  cancel = false,
 ): Promise<AgentRunInspection[]> {
   const home = (await deps.loadIdentity(config.identity)).did();
   const homeHost = new URL(config.apiUrl).origin;
@@ -115,19 +148,38 @@ async function inspect(
     });
     if (wish.error) throw new Error(wish.error);
     const queue = wish.result as AgentQueueIndex | null;
+    const queued = (queue?.entries ?? []).map((entry) => {
+      const link = entry.run.getAsNormalizedFullLink();
+      return {
+        link,
+        address: renderCellReference(link),
+        host: entry.host,
+      };
+    }).filter((entry, index, entries) =>
+      entries.findIndex((candidate) =>
+        candidate.host === entry.host && candidate.address === entry.address
+      ) === index
+    );
+    const exact = identifier === undefined
+      ? []
+      : queued.filter((entry) =>
+        entry.link.id === identifier || entry.address === identifier
+      );
+    if (exact.length > 1) {
+      throw new Error(
+        `Ambiguous agent run ${identifier}; use its exact address.`,
+      );
+    }
+    const selectedEntries = exact.length === 1 ? exact : queued;
     const runs: AgentRunInspection[] = [];
     const cells = new Map<
       string,
       { runtime: Runtime; record: ReturnType<Runtime["getCell"]> }
     >();
-    const seen = new Set<string>();
-    for (const entry of queue?.entries ?? []) {
-      const link = entry.run.getAsNormalizedFullLink();
-      const address = renderCellReference(link);
+    for (const entry of selectedEntries) {
+      const { link, address } = entry;
       const host = new URL(entry.host).origin;
       const key = `${host}/${address}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
       const hostRuntime = await connect(host);
       const record = hostRuntime.getCellFromLink(link, AgentRunRecordSchema);
       await record.sync();
@@ -135,38 +187,17 @@ async function inspect(
       if (!value) {
         throw new Error(`Agent run ${address} is unavailable on ${host}.`);
       }
-      runs.push({
+      runs.push(inspectionOf({
         id: link.id,
         address,
         host,
         space: link.space,
-        requestHash: value.requestHash,
-        task: value.task,
-        state: value.state,
-        submittedAt: value.submittedAt,
-        stateSince: value.stateSince,
-        attempts: value.attempts,
-        claim: value.claim && cloneIfNecessary(value.claim, { frozen: false }),
-        cancelRequestedAt: value.cancelRequestedAt,
-        outcome: value.outcome,
-        errorCode: value.errorCode,
-        startedAt: value.startedAt,
-        finishedAt: value.finishedAt,
-        modelTurns: value.modelTurns,
-        toolCalls: value.toolCalls,
-        usage: value.usage &&
-          cloneIfNecessary(value.usage as FabricValue, {
-            frozen: false,
-          }) as AgentRunRecord["usage"],
-        usageCoverage: value.usageCoverage,
-        runRef: value.runRef,
-        result: value.result &&
-          renderCellReference(value.result.getAsNormalizedFullLink()),
-      });
+      }, value));
       cells.set(key, { runtime: hostRuntime, record });
     }
-    if (cancel !== undefined) {
-      const selected = selectAgentRun(runs, cancel);
+    if (identifier !== undefined) {
+      const selected = selectAgentRun(runs, identifier);
+      if (!cancel) return [selected];
       const held = cells.get(`${selected.host}/${selected.address}`)!;
       const committed = await held.runtime.editWithRetry((tx) => {
         const record = held.record.withTx(tx);
@@ -176,11 +207,13 @@ async function inspect(
         record.key("cancelRequestedAt").set(deps.now().toISOString());
       });
       if (committed.error) throw committed.error;
-      const current = held.record.get() as AgentRunRecord;
-      selected.state = current.state;
-      selected.outcome = current.outcome;
-      selected.cancelRequestedAt = current.cancelRequestedAt;
-      return [selected];
+      const current = held.record.get() as AgentRunRecord | undefined;
+      if (!current) {
+        throw new Error(
+          `Agent run ${selected.address} is unavailable on ${selected.host}.`,
+        );
+      }
+      return [inspectionOf(selected, current)];
     }
     return runs;
   } finally {
@@ -198,11 +231,20 @@ export function readAgentRuns(
   return inspect(config, deps);
 }
 
+/** Reads one record by id, canonical address, or request hash. */
+export async function readAgentRun(
+  config: AgentInspectionConfig,
+  identifier: string,
+  deps: AgentInspectionDeps = defaultDeps,
+): Promise<AgentRunInspection> {
+  return (await inspect(config, deps, identifier))[0];
+}
+
 /** Writes `cancelRequestedAt` once for a nonterminal run, returning its metadata. */
 export async function cancelAgentRun(
   config: AgentInspectionConfig,
   identifier: string,
   deps: AgentInspectionDeps = defaultDeps,
 ): Promise<AgentRunInspection> {
-  return (await inspect(config, deps, identifier))[0];
+  return (await inspect(config, deps, identifier, true))[0];
 }

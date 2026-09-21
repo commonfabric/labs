@@ -12,6 +12,7 @@
  * `packages/runner/src/builtins/agent-schemas.ts`.
  */
 import {
+  cellFromUrl,
   type Cfc,
   computed,
   type CurrentPrincipal,
@@ -37,6 +38,7 @@ import AgentRunView, { type AgentRunRecord } from "./agent-run.tsx";
 export type AgentQueueEntry = {
   run: AgentRunRecord;
   host: string;
+  address?: string;
 };
 
 /**
@@ -115,14 +117,33 @@ export default pattern<Record<string, never>, AgentQueueOutput>((_) => {
             )
             : null}
           {empty ? <p>No agent runs yet.</p> : null}
-          {entries.map((entry) => (
-            <cf-card data-agent-run={entry.run.requestHash}>
-              <cf-vstack gap="2">
-                {AgentRunView({ run: entry.run, nowMs: now.result })}
-                <small>{entry.host}</small>
-              </cf-vstack>
-            </cf-card>
-          ))}
+          {entries.map((entry) => {
+            const resolved = cellFromUrl<AgentRunRecord>({
+              url: entry.address ?? "",
+              spaceHost: entry.host,
+              writable: true,
+            });
+            const requestHash = computed(() =>
+              entry.address === undefined
+                ? entry.run.requestHash
+                : resolved.cell?.get()?.requestHash ?? ""
+            );
+            return (
+              <cf-card data-agent-run={requestHash}>
+                <cf-vstack gap="2">
+                  {entry.address === undefined
+                    ? AgentRunView({ run: entry.run, nowMs: now.result })
+                    : resolved.cell
+                    ? AgentRunView({
+                      run: resolved.cell,
+                      nowMs: now.result,
+                    })
+                    : <span>Run unavailable</span>}
+                  <small>{entry.host}</small>
+                </cf-vstack>
+              </cf-card>
+            );
+          })}
         </cf-vstack>
       </cf-theme>
     ),

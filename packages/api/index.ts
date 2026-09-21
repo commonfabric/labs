@@ -2918,23 +2918,37 @@ export type FetchJsonUncheckedFunction = (
  * Resolves with no `cell` when the URL addresses no cell — most URLs are web
  * pages, and being told no is an answer rather than a failure. `hosts` names
  * the hosts whose page URLs address cells; a page URL from anywhere else is a
- * link to a web page.
+ * link to a web page. `spaceHost` supplies the toolshed origin for a URL that
+ * explicitly names a space, so a cross-toolshed cell resolves there.
  */
-export type CellFromUrlFunction = (
-  params: FactoryInput<{
-    url: string;
-    hosts?: string[];
-  }>,
-) => Reactive<{
-  pending: boolean;
+export type CellFromUrlFunction = {
+  /** Resolves a writable handle; storage authorization still governs writes. */
+  <T = unknown>(
+    params: FactoryInput<{
+      url: string;
+      hosts?: string[];
+      spaceHost?: string;
+      writable: true;
+    }>,
+  ): Reactive<{ pending: boolean; cell?: Writable<T> }>;
 
-  /**
-   * The cell the URL named, once resolved, and absent when it named none. Its
-   * value is unconstrained: a URL addresses any cell, and resolution neither
-   * requires a piece nor supplies one's `[NAME]`.
-   */
-  cell?: ReadonlyCell<unknown>;
-}>;
+  (
+    params: FactoryInput<{
+      url: string;
+      hosts?: string[];
+      spaceHost?: string;
+    }>,
+  ): Reactive<{
+    pending: boolean;
+
+    /**
+     * The cell the URL named, once resolved, and absent when it named none. Its
+     * value is unconstrained: a URL addresses any cell, and resolution neither
+     * requires a piece nor supplies one's `[NAME]`.
+     */
+    cell?: ReadonlyCell<unknown>;
+  }>;
+};
 
 export type FetchProgramFunction = (
   params: FactoryInput<{ url: string }>,

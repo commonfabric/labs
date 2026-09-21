@@ -8,7 +8,7 @@ on its own, and is testable without a model provider. Checkboxes are ticked
 as work lands; when the last stage of the first take (stage 6) lands, both
 documents are archived to `docs/history/plans/`.
 
-**Status:** stages 1 through 4 built; the checkboxes track the rest. Written
+**Status:** stages 1 through 5 built; the checkboxes track the rest. Written
 2026-09-18 against `37b1acd3dd`.
 
 ## Ground rules for every stage
@@ -282,7 +282,8 @@ and a result link, and observes `pending: false` and `result` on the node.
       The check runs with client runtimes; the same check under a serving
       runtime is not built.
 - [x] Home index — `packages/patterns/system/agent-queue.tsx`: a piece holding
-      `entries: { run: link, host: string }[]` and the `agentRunner` entry
+      `entries: { run: link, host: string, address?: string }[]` and the
+      `agentRunner` entry
       `{ host, tools, registeredAt, lastClaimAt }` owner-protected the way
       `ProfileInboxPointer` is on `profile-home.tsx`, written through the
       piece's `setAgentRunner` stream; held by `home.tsx` in an `agentQueue`
