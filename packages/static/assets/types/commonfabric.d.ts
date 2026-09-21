@@ -3723,7 +3723,8 @@ export type FetchJsonUncheckedFunction = (
  * Resolves with no `cell` when the URL addresses no cell — most URLs are web
  * pages, and being told no is an answer rather than a failure. `hosts` names
  * the hosts whose page URLs address cells; a page URL from anywhere else is a
- * link to a web page.
+ * link to a web page. `spaceHost` supplies the toolshed origin for a URL that
+ * explicitly names a space, so a cross-toolshed cell resolves there.
  */
 export type CellFromUrlFunction = {
   /** Resolves a writable handle; storage authorization still governs writes. */
