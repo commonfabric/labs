@@ -27,6 +27,7 @@ import { debugStr } from "@/value-debug";
 import { BaseValueVisitor } from "./BaseValueVisitor.ts";
 import {
   type BaselineVisitResult,
+  DO_RECURSE_VALUES,
   type LeafVisitorResult,
 } from "./interface.ts";
 
@@ -48,7 +49,7 @@ import {
  * methods, but rather as an indicator that without being subclassed it doesn't
  * actually do anything useful.
  */
-export abstract class CategorizedValueVisitor<
+export abstract class DefaultValueVisitor<
   PlusType = never,
   ResultType = FabricValue,
 > extends BaseValueVisitor<PlusType, ResultType> {
@@ -230,13 +231,20 @@ export abstract class CategorizedValueVisitor<
   }
 
   /**
-   * Visits a container value. If not overridden, this calls `visitAnyValue()`.
+   * Visits a container value. If not overridden, this returns a `recurse`
+   * result (`DO_RECURSE_VALUES`), thereby requesting value recursion of the
+   * engine.
+   *
+   * **Note:** This implementation intentionally does _not_ default to calling
+   * `visitAnyValue()`, because it is expected that most useful visitors will in
+   * fact want to recurse into containers. Subclasses that don't want this can
+   * of course just override this implementation.
    */
   visitFabricContainerValue(
     value: FabricValuePlus<PlusType>,
     tag: FabricContainerValueTag,
   ): LeafVisitorResult<PlusType, ResultType> {
-    return this.visitAnyValue(value, tag);
+    return DO_RECURSE_VALUES;
   }
 
   /**
