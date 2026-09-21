@@ -38,8 +38,16 @@ export function createSpaceInviteRouter(
   options: { server: Server; now?: () => number; host?: string },
 ) {
   const router = createRouter();
-  router.onError((_error, c) => {
-    c.get("logger")?.error("Space invitation service failed");
+  const failures = new WeakMap<Error, {
+    failureKind: string;
+    operation: string;
+  }>();
+  router.onError((error, c) => {
+    c.get("logger")?.error(
+      failures.get(error) ??
+        { failureKind: "unknown", operation: "middleware" },
+      "Space invitation service failed",
+    );
     return c.json({ code: "service-error" }, 500);
   });
   const now = options.now ?? Date.now;
@@ -187,9 +195,17 @@ export function createSpaceInviteRouter(
               : 409,
           );
         }
-        // The invitation error boundary records failures without private storage
-        // diagnostics, invitation credentials, or request bodies.
-        throw new Error("Space invitation service failed");
+        // Error names can contain request data. Only known classifications
+        // cross into diagnostics; the original error is not retained.
+        const name = error instanceof Error ? error.name : "";
+        const failureKind =
+          ["SqliteError", "TypeError", "RangeError", "SyntaxError", "Error"]
+              .includes(name)
+            ? name
+            : "unknown";
+        const sanitized = new Error("Space invitation service failed");
+        failures.set(sanitized, { failureKind, operation });
+        throw sanitized;
       }
     });
   }
