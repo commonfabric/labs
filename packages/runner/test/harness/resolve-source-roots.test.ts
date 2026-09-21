@@ -33,7 +33,6 @@ describe("resolve-source-roots", () => {
       ]);
     } finally {
       await runtime.dispose();
-      await storageManager.close();
     }
   });
 });

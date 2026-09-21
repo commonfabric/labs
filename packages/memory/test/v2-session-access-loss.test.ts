@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import { connect, loopback } from "../v2/client.ts";
 import { Server } from "../v2/server.ts";
@@ -9,6 +10,48 @@ import {
 } from "./v2-auth-test-helpers.ts";
 
 describe("memory session access loss", () => {
+  it("isolates throwing current and late observers from revocation delivery", async () => {
+    const server = new Server({
+      ...testSessionOpenServerOptions,
+      store: new URL("memory://throwing-session-access-observer"),
+    });
+    const client = await connect({ transport: loopback(server) });
+    const reported = stub(console, "error");
+    const failure = new Error("observer failure");
+    try {
+      const session = await client.mount(
+        "did:key:z6Mk-throwing-access-observer",
+        {},
+        testSessionOpenAuthFactory,
+      );
+      session.subscribeAccessLoss(() => {
+        throw failure;
+      });
+      const observed: Error[] = [];
+      session.subscribeAccessLoss((error) => observed.push(error));
+      expect(() => session.handleRevoked("unauthorized")).not.toThrow();
+      expect(observed).toEqual([session.closeError]);
+      expect(observed[0].name).toBe("AuthorizationError");
+      expect(() =>
+        session.subscribeAccessLoss(() => {
+          throw failure;
+        })
+      )
+        .not.toThrow();
+      const late: Error[] = [];
+      session.subscribeAccessLoss((error) => late.push(error));
+      expect(late).toEqual(observed);
+      expect(reported.calls.map((call) => call.args)).toEqual([
+        ["session-access-loss subscriber threw:", failure],
+        ["session-access-loss subscriber threw:", failure],
+      ]);
+    } finally {
+      reported.restore();
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("notifies current and late observers once for an unauthorized revocation", async () => {
     const server = new Server({
       ...testSessionOpenServerOptions,

@@ -913,12 +913,17 @@ export class WorkerReconciler {
     }
   }
 
+  /** Guards both the containing view and any linked event target at dispatch. */
   #registerHandler(
     ctx: ReconcileContext,
     handler: (event: unknown) => void,
+    target?: Cell<unknown>,
   ): number {
     return ctx.registerHandler((event) => {
-      if (ctx.space !== undefined && this.#spaceAccess?.error(ctx.space)) {
+      if (
+        (ctx.space !== undefined && this.#spaceAccess?.error(ctx.space)) ||
+        (target !== undefined && this.#cellAccessError(target))
+      ) {
         return;
       }
       handler(event);
@@ -937,7 +942,7 @@ export class WorkerReconciler {
     return undefined;
   }
 
-  /** Keeps a rendered subscription responsive to terminal session access loss. */
+  /** Keeps a rendered subscription responsive to session access loss and recovery. */
   #sinkCell<T>(cell: Cell<T>, deliver: (value: T | undefined) => void): Cancel {
     const [cancel, addCancel] = useCancelGroup();
     const watched = new Set<string>();
@@ -2357,7 +2362,7 @@ export class WorkerReconciler {
       const stream = value as Stream<unknown>;
       const handlerId = this.#registerHandler(ctx, (event) => {
         stream.withTx(undefined).send(event);
-      });
+      }, stream.asSchema({}));
       state.eventHandlers.set(eventType, handlerId);
       this.#queueOps([{
         op: "set-event",
@@ -2404,6 +2409,7 @@ export class WorkerReconciler {
             const handlerId = this.#registerHandler(
               ctx,
               handler as (event: unknown) => void,
+              value as Cell<unknown>,
             );
             state.eventHandlers.set(eventType, handlerId);
             this.#queueOps([{
@@ -2561,6 +2567,7 @@ export class WorkerReconciler {
           const handlerId = this.#registerHandler(
             ctx,
             (event) => resolvedTarget.withTx(undefined).send(event),
+            resolvedTarget,
           );
           state.eventHandlers.set(eventType, handlerId);
           this.#queueOps([{
@@ -3362,7 +3369,7 @@ export class WorkerReconciler {
           const stream = value as Stream<unknown>;
           const handlerId = this.#registerHandler(ctx, (event) => {
             stream.withTx(undefined).send(event);
-          });
+          }, stream.asSchema({}));
           state.eventHandlers.set(eventType, handlerId);
           this.#queueOps([{
             op: "set-event",
@@ -3409,6 +3416,7 @@ export class WorkerReconciler {
                 const handlerId = this.#registerHandler(
                   ctx,
                   handler as (event: unknown) => void,
+                  value as Cell<unknown>,
                 );
                 state.eventHandlers.set(eventType, handlerId);
                 this.#queueOps([{

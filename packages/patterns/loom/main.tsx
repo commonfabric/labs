@@ -224,7 +224,10 @@ export const PanelView = pattern<{ panel: Writable<Panel> }>(({ panel }) => ({
         </cf-vstack>
       );
     }
-    const document = value.content.get().source;
+    const document = value.content.get()?.source;
+    if (document === undefined) {
+      return <p>This document is unavailable.</p>;
+    }
     if (document.kind === "page-excerpt") {
       return (
         <cf-vstack gap="2">

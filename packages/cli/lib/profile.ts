@@ -103,7 +103,7 @@ export async function createdByThisCall(
   candidates: [string, Cell<unknown>][],
   name: string,
 ): Promise<[string, Cell<unknown>] | undefined> {
-  if (candidates.length <= 1) return candidates[0];
+  if (candidates.length === 0) return undefined;
   const named: [string, Cell<unknown>][] = [];
   for (const candidate of candidates) {
     // A foreign list handle can address a redirect slot. Load and resolve it
@@ -112,12 +112,17 @@ export async function createdByThisCall(
     await addressed.sync();
     const profile = addressed.resolveAsCell();
     await profile.sync();
+    const resolved: [string, Cell<unknown>] = [
+      profile.getAsNormalizedFullLink().space,
+      profile,
+    ];
+    if (candidates.length === 1) return resolved;
     const argument = getMetaLink(profile, "argument");
     if (argument === undefined) continue;
     const initialName = candidate[1].runtime.getCellFromLink(argument)
       .key("initialName");
     await initialName.sync();
-    if (String(initialName.get() ?? "") === name) named.push(candidate);
+    if (String(initialName.get() ?? "") === name) named.push(resolved);
   }
   if (named.length === 1) return named[0];
   throw new Error(

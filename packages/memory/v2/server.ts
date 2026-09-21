@@ -2096,9 +2096,10 @@ export class Server {
   #validateAclCommit(
     engine: Engine.Engine,
     space: string,
-    principal: string | undefined,
+    session: SessionState,
     commit: ClientCommit,
   ): V2Error | null {
+    const principal = session.principal;
     if (commit.genesisRoot !== undefined) {
       if (!isGenesisRoot(commit.genesisRoot)) {
         return toError("ProtocolError", "Invalid genesis root reservation");
@@ -2118,6 +2119,19 @@ export class Server {
           "A root reservation requires space-key ACL genesis",
         );
       }
+      if (!valueEqual(commit.genesisRoot, session.genesisRoot)) {
+        return toError(
+          "AuthorizationError",
+          "The genesis root must match the authenticated session intent",
+        );
+      }
+    } else if (
+      Engine.serverSeq(engine) === 0 && session.genesisRoot !== undefined
+    ) {
+      return toError(
+        "AuthorizationError",
+        "The genesis commit must retain the authenticated root intent",
+      );
     }
     if (this.#aclMode() === "off") return null;
 
@@ -3956,7 +3970,7 @@ export class Server {
           const invalid = this.#validateAclCommit(
             engine,
             message.space,
-            session.principal,
+            session,
             message.commit,
           );
           if (invalid) {
@@ -8015,12 +8029,12 @@ export const parseClientMessage = (
   ) {
     const holdings = parseHoldings(parsed.holdings);
     if (holdings === null) return null;
-    // A malformed ceiling refuses the message: a session opened without the
-    // ceiling its client asked for would read unbounded, silently.
     if (
       parsed.session.genesisRoot !== undefined &&
       !isGenesisRoot(parsed.session.genesisRoot)
     ) return null;
+    // A malformed ceiling refuses the message: a session opened without the
+    // ceiling its client asked for would read unbounded, silently.
     const readCeiling = parseSessionReadCeiling(parsed.session.readCeiling);
     if (readCeiling === null) return null;
     return {

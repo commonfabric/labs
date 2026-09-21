@@ -16,6 +16,100 @@ import {
 const SPACE_DID = "did:key:z6MkjosLwWEobyT9T6RqLTdaEhFrXAZUNkRZJuUae2ukgfEa";
 
 describe("view", () => {
+  it("compares explicit default piece qualifiers as the same address", () => {
+    const base = { spaceDid: SPACE_DID, pieceId: "of:fid1:document" } as const;
+    for (
+      const qualifiers of [
+        { pieceScope: "space" as const },
+        { piecePath: [] },
+        { pieceScope: "space" as const, piecePath: [] },
+      ]
+    ) {
+      const view = { ...base, ...qualifiers };
+      expect(isAppView(view)).toBe(true);
+      expect(isAppViewEqual(view, base)).toBe(true);
+      expect(isAppViewEqual(base, view)).toBe(true);
+      const parsed = urlToAppView(
+        new URL(appViewToUrlPath(view), "https://fabric.example"),
+      );
+      expect(isAppViewEqual(view, parsed)).toBe(true);
+    }
+  });
+
+  it("rejects piece qualifiers on IDs in the slug namespace", () => {
+    for (
+      const qualifiers of [
+        { pieceScope: "user" as const },
+        { piecePath: ["detail"] },
+        { pieceScope: "space" as const, piecePath: [] },
+      ]
+    ) {
+      const view = {
+        spaceDid: SPACE_DID,
+        pieceId: "plain-id",
+        ...qualifiers,
+      } satisfies AppView;
+      expect(isAppView(view)).toBe(false);
+      expect(() => appViewToUrlPath(view)).toThrow("Invalid piece reference");
+    }
+  });
+
+  it("requires a concrete piece ID before accepting scope or path qualifiers", () => {
+    for (const pieceId of [undefined, ""]) {
+      for (
+        const qualifiers of [
+          { pieceScope: "user" as const },
+          { piecePath: ["detail"] },
+        ]
+      ) {
+        const view = {
+          spaceDid: SPACE_DID,
+          pieceId,
+          ...qualifiers,
+        } satisfies AppView;
+        expect(isAppView(view)).toBe(false);
+        expect(() => appViewToUrlPath(view)).toThrow("Invalid piece reference");
+      }
+    }
+  });
+
+  it("refuses malformed scope and path qualifiers", () => {
+    for (
+      const qualifiers of [
+        { pieceScope: "inherit" },
+        { pieceScope: { toString: () => "user" } },
+        { piecePath: "detail" },
+        { piecePath: [1] },
+      ]
+    ) {
+      expect(isAppView({
+        spaceDid: SPACE_DID,
+        pieceId: "of:fid1:document",
+        ...qualifiers,
+      })).toBe(false);
+    }
+    const builtin = {
+      builtin: "home" as const,
+      pieceId: "of:fid1:document",
+      piecePath: ["detail"],
+    };
+    expect(isAppView(builtin)).toBe(false);
+    expect(() => appViewToUrlPath(builtin)).toThrow("Invalid piece reference");
+    const ambiguous = {
+      spaceName: "space",
+      pieceId: "of:fid1:document",
+      pieceSlug: "plain-id",
+      piecePath: ["detail"],
+    };
+    expect(isAppView(ambiguous)).toBe(false);
+    expect(() => appViewToUrlPath(ambiguous)).toThrow(
+      "Invalid piece reference",
+    );
+    expect(isAppView({ spaceName: "space", pieceId: "plain-id" })).toBe(true);
+    expect(urlToAppView(new URL("https://fabric.example/space/plain-id")))
+      .toEqual({ spaceName: "space", pieceSlug: "plain-id" });
+  });
+
   it("keeps URL-significant pointer keys in the selected cell address", () => {
     for (const key of ["a b", "?query", "#hash", ".", "..", "é🧶", "%2F", ""]) {
       const view = {
@@ -47,6 +141,13 @@ describe("view", () => {
       )
         .toThrow("Invalid cell path");
     }
+  });
+
+  it("refuses pinned documents as current piece views", () => {
+    const pinned = `of:fid1:document@pin=${"A".repeat(43)}`;
+    expect(() =>
+      urlToAppView(new URL(`https://fabric.example/${SPACE_DID}/${pinned}`))
+    ).toThrow("A piece view must name the current result document");
   });
 
   it("round trips a scoped nested target without dropping pointer keys", () => {

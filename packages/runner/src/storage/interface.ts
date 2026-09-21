@@ -356,6 +356,11 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * not once the space's first mount has begun. A manager that cannot
    * bootstrap an ACL refuses it rather than accept a document it would
    * never write.
+   *
+   * `options.genesisRoot` requires an explicit `genesisAcl`. Its complete
+   * source, cause, arguments, and attached source roots are snapshotted in
+   * the genesis receipt and authenticated on every mount. Later mounts must
+   * match that immutable reservation.
    */
   registerSpaceIdentity?(
     identity: Signer,
@@ -450,6 +455,13 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   subscribeSpaceAccessLoss?(
     observer: (space: MemorySpace, error: Error) => void,
   ): Cancel;
+
+  /**
+   * Observes authoritative denial and recovery after an authorized reopen.
+   * Read `spaceAccessError()` for the current verdict. Initial successful
+   * opens and transient connection failures do not emit.
+   */
+  subscribeSpaceAccessChange?(observer: (space: MemorySpace) => void): Cancel;
 
   /**
    * Register an in-flight commit so the durability barrier

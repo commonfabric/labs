@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 import * as Engine from "../v2/engine.ts";
+import { encodeMemoryBoundary } from "../v2.ts";
 import { readGenesisRoot } from "../v2/genesis-root.ts";
 
 const space = "did:key:root-test-space";
@@ -12,6 +13,47 @@ const root = {
 };
 
 describe("v2-genesis-root", () => {
+  it("refuses malformed durable root reservations instead of adopting an invalid source", async () => {
+    const engine = await Engine.open({
+      url: new URL("memory://invalid-genesis-receipt"),
+    });
+    const commit = {
+      localSeq: 1,
+      reads: { confirmed: [], pending: [] },
+      operations: [{ op: "set" as const, id: "of:root", value: { value: {} } }],
+      genesisRoot: root,
+    };
+    try {
+      Engine.applyCommit(engine, {
+        sessionId: "bootstrap",
+        space,
+        principal: space,
+        commit,
+      });
+      for (
+        const invalid of [null, {}, {
+          ...commit,
+          genesisRoot: {
+            source: "https://untrusted.example/main.tsx",
+            cause: "x",
+          },
+        }, {
+          ...commit,
+          genesisRoot: { ...root, sourceRoots: ["system:../outside.tsx"] },
+        }]
+      ) {
+        engine.database.prepare(
+          'UPDATE "commit" SET original = ? WHERE seq = 1',
+        ).run(encodeMemoryBoundary(invalid));
+        expect(() => readGenesisRoot(engine)).toThrow(
+          "Invalid genesis receipt",
+        );
+      }
+    } finally {
+      Engine.close(engine);
+    }
+  });
+
   it("retains the root reservation atomically across a store restart", async () => {
     const path = await Deno.makeTempFile({ suffix: ".sqlite" });
     let engine = await Engine.open({ url: toFileUrl(path) });

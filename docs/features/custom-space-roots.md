@@ -9,11 +9,13 @@ entries.
 
 The bootstrap client requires the host's `genesisRoot` protocol capability. An
 unsupported host is an explicit failure. The space key signs the ACL-only first
-commit; the root reservation is retained in that same durable commit receipt.
-Ordinary document queries do not export the reservation. A later ACL change or
-ordinary writer cannot install or alter it. The publisher uses the concrete
-OWNER in the ACL for management after bootstrap and retains the space key only
-for bootstrap recovery.
+commit and the complete root intent in its session descriptor. The server
+requires the commit's reservation to match that authenticated intent; the
+reservation is retained in the same durable commit receipt. Ordinary document
+queries do not export the reservation. A later ACL change or ordinary writer
+cannot install or alter it. The publisher uses the concrete OWNER in the ACL for
+management after bootstrap and retains the space key only for bootstrap
+recovery.
 
 The serving loop reads the reservation before ensuring the space root. It
 resolves and compiles the requested source and every attached test entry, then

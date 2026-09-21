@@ -29,7 +29,10 @@ import { resolveSlugTargetCell } from "../src/slugs.ts";
 import {
   completeServedRegistration,
   confirmServedInstantiate,
+  confirmServedRegistration,
   confirmServedSetSource,
+  finishServedRegistration,
+  prepareServedRegistration,
   servedInstantiatePiece,
   ServedLifecycleRefusal,
   type ServedPatternSource,
@@ -232,7 +235,8 @@ describe("served lifecycle verbs", () => {
           ...naming,
           actingUser: aliceSigner.did(),
         }),
-      (runtime, receipt) => confirmServedInstantiate(runtime, space, receipt),
+      (runtime, receipt) =>
+        confirmServedInstantiate(runtime, space, receipt, aliceSigner.did()),
     );
 
   const refusalOf = async (work: Promise<unknown>) => {
@@ -246,6 +250,130 @@ describe("served lifecycle verbs", () => {
   };
 
   describe("instantiate", () => {
+    it("refuses registration without a matching durable creation record", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM }, undefined, {
+        register: true,
+      });
+      const pieces = await clientPieces();
+      const missing = { ...created, requestKey: "absent-creation" };
+      for (const phase of ["prepare", "finish"] as const) {
+        await expect(
+          phase === "prepare"
+            ? prepareServedRegistration(pieces, missing, aliceSigner.did())
+            : finishServedRegistration(
+              pieces,
+              { receipt: missing },
+              aliceSigner.did(),
+              {},
+            ),
+        )
+          .rejects.toThrow("Could not retain the registration");
+      }
+      const record = pieces.runtime.getCell(pieces.getSpace(), {
+        purpose: "piece-instantiation-receipt",
+        principal: aliceSigner.did(),
+        requestKey: missing.requestKey,
+      });
+      expect(await record.pull()).toBeUndefined();
+      const other = await instantiate({ program: BASE_PROGRAM });
+      await expect(
+        prepareServedRegistration(pieces, {
+          ...created,
+          pieceId: other.pieceId,
+        }, aliceSigner.did()),
+      )
+        .rejects.toThrow("Could not retain the registration");
+      expect(await pieces.getDefaultPattern(false)).toBeUndefined();
+    });
+
+    it("retains a recoverable failure when the root has no registration handler", async () => {
+      const root = await instantiate({ program: BASE_PROGRAM });
+      const pending = await instantiate({ program: BASE_PROGRAM }, undefined, {
+        register: true,
+      });
+      const pieces = await clientPieces();
+      await pieces.linkDefaultPattern(
+        (await pieces.get(root.pieceId)).getCell(),
+      );
+      const prepared = await prepareServedRegistration(
+        pieces,
+        pending,
+        aliceSigner.did(),
+      );
+      expect(prepared.delivery).toBeUndefined();
+      expect(prepared.error).toBe(
+        "The default pattern has no addPiece handler",
+      );
+      const failed = await finishServedRegistration(
+        pieces,
+        prepared,
+        aliceSigner.did(),
+        {},
+      );
+      expect(failed.registration.status).toBe("failed");
+      expect(failed.registration.terminal).toBeUndefined();
+      await confirmServedRegistration(
+        pieces.runtime,
+        space,
+        failed,
+        aliceSigner.did(),
+      );
+      await expect(confirmServedRegistration(pieces.runtime, space, {
+        ...failed,
+        requestKey: "unknown-creation",
+      }, aliceSigner.did())).rejects.toThrow(
+        "Registration receipt was not retained",
+      );
+      await expect(confirmServedRegistration(pieces.runtime, space, {
+        ...failed,
+        registration: { status: "handled" },
+      }, aliceSigner.did())).rejects.toThrow(
+        "Registration outcome was not retained",
+      );
+      await expect(confirmServedRegistration(pieces.runtime, space, {
+        ...failed,
+        registration: { ...failed.registration, terminal: true },
+      }, aliceSigner.did())).rejects.toThrow(
+        "Registration outcome was not retained",
+      );
+    });
+
+    it("leaves skipped registration unchanged and refuses completion inside a serving wave", async () => {
+      const skipped = await instantiate({ program: BASE_PROGRAM });
+      const pieces = await clientPieces();
+      const prepared = await prepareServedRegistration(
+        pieces,
+        skipped,
+        aliceSigner.did(),
+      );
+      expect(
+        await finishServedRegistration(pieces, prepared, aliceSigner.did(), {}),
+      ).toEqual(skipped);
+      const pending = await instantiate({ program: BASE_PROGRAM }, undefined, {
+        register: true,
+      });
+      await expect(
+        served(
+          "unsafe-completion",
+          (controller) =>
+            completeServedRegistration(controller, pending, aliceSigner.did()),
+        ),
+      )
+        .rejects.toThrow(
+          "Registration completion requires a client runtime outside the serving wave",
+        );
+      const incomplete = await finishServedRegistration(
+        pieces,
+        { receipt: pending },
+        aliceSigner.did(),
+        {},
+      );
+      expect(incomplete.registration.error).toBe(
+        "Registration has no delivery plan",
+      );
+      expect(incomplete.registration.terminal).toBeUndefined();
+    });
+
     it("retries a terminal registration failure after repair without creating another piece", async () => {
       const rootReceipt = await instantiate({
         program: programOf(`
@@ -529,6 +657,113 @@ export default pattern(() => {
         expect(panels.get().length).toBe(0);
       });
     }
+
+    it("confirms only the caller's retained creation identity and original receipt", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM }, undefined, {
+        slug: "original",
+      });
+      const other = await instantiate({ program: BASE_PROGRAM });
+      const pieces = await clientPieces();
+      for (
+        const altered of [
+          { ...created, requestKey: "missing-creation" },
+          { ...created, pieceId: other.pieceId },
+          { ...created, slug: "changed" },
+          { ...created, pattern: { ...created.pattern, symbol: "other" } },
+          { ...created, pattern: { ...created.pattern, identity: "other" } },
+        ]
+      ) {
+        await expect(
+          confirmServedInstantiate(
+            pieces.runtime,
+            space,
+            altered,
+            aliceSigner.did(),
+          ),
+        )
+          .rejects.toThrow("Creation receipt was not retained");
+      }
+      await expect(
+        confirmServedInstantiate(
+          pieces.runtime,
+          space,
+          created,
+          serviceSigner.did(),
+        ),
+      )
+        .rejects.toThrow("Creation receipt was not retained");
+    });
+
+    it("resumes failed creation registration after a legitimate source update", async () => {
+      const pending = await instantiate({ program: BASE_PROGRAM }, {
+        seed: "retained",
+      }, {
+        requestKey: "registration-after-setsrc",
+        register: true,
+      });
+      const pieces = await clientPieces();
+      const failed = await completeServedRegistration(
+        pieces,
+        pending,
+        aliceSigner.did(),
+      );
+      expect(failed.registration.status).toBe("failed");
+      const successor = programOf(
+        BASE_PROGRAM.files[0]!.contents.replace(
+          "Served lifecycle",
+          "Updated lifecycle",
+        ),
+      );
+      const { ref } = await served(
+        "upload",
+        (controller) => servedUploadPattern(controller, successor),
+      );
+      await served(
+        "setsrc",
+        (controller) =>
+          servedSetPieceSource(controller, {
+            pieceId: pending.pieceId,
+            pattern: ref,
+            actingUser: aliceSigner.did(),
+          }),
+        (runtime, receipt) => confirmServedSetSource(runtime, space, receipt),
+      );
+      const rootReceipt = await instantiate({
+        program: programOf(`
+import { computed, handler, pattern, Writable } from "commonfabric";
+const addPiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>}>(
+  ({piece}, {panels}) => { panels.addUnique(piece); },
+);
+export default pattern(() => {
+  const panels = new Writable<Writable<unknown>[]>([]);
+  return { panels, pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({panels}) };
+});
+`),
+      });
+      const root = await pieces.get(rootReceipt.pieceId);
+      await pieces.linkDefaultPattern(root.getCell());
+      const replay = await instantiate({ program: BASE_PROGRAM }, {
+        seed: "replacement refused",
+      }, {
+        requestKey: pending.requestKey,
+        register: true,
+      });
+      expect(replay.pieceId).toBe(pending.pieceId);
+      expect(replay.pattern).toEqual(pending.pattern);
+      const handled = await completeServedRegistration(
+        pieces,
+        replay,
+        aliceSigner.did(),
+      );
+      expect(handled.registration.status).toBe("handled");
+      const updated = await (await clientPieces()).get(pending.pieceId);
+      expect(getPatternIdentityRef(updated.getCell())).toEqual(ref);
+      const argument = pieces.getArgument<{ seed: string }>(updated.getCell());
+      await argument.sync();
+      expect(argument.get().seed).toBe("retained");
+      const registry = await pieces.getRegisteredPieces();
+      expect(registry.map((piece) => piece.id)).toEqual([pending.pieceId]);
+    });
 
     it("retries one request key without creating another piece or resetting its argument", async () => {
       const first = await instantiate({ program: BASE_PROGRAM }, {

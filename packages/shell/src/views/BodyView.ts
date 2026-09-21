@@ -183,7 +183,8 @@ export class XBodyView extends BaseView {
         sidebarUI,
       };
     },
-    args: () => [this.activePattern, this.embedded, this.piecePath],
+    args:
+      () => [this.activePattern, this.embedded, JSON.stringify(this.piecePath)],
   });
 
   /**

@@ -46,6 +46,7 @@ import {
   setsrcSuccessLine,
 } from "../commands/piece.ts";
 import { normalizeApiUrl } from "../lib/api-url.ts";
+import { ServedLifecycleError } from "../lib/pattern-lifecycle.ts";
 import { space } from "../commands/space.ts";
 import {
   CellSelectionError,
@@ -1352,6 +1353,20 @@ describe("cli piece parsing", () => {
       expect(run.started).toEqual([run.cell]);
     });
 
+    it("preserves a deterministic serving refusal without reporting an uncertain creation", async () => {
+      const run = await fixture();
+      const refusal = new ServedLifecycleError(
+        "unauthorized",
+        403,
+        "Access denied",
+      );
+      run.state.transportError = refusal;
+      const result = await run.create().catch((error: unknown) => error);
+      expect(result).toBe(refusal);
+      expect(run.opened).toEqual([]);
+      expect(run.started).toEqual([]);
+    });
+
     it("retains the retry key after an unknown transport outcome and does not start", async () => {
       const run = await fixture();
       run.state.transportError = new Error("response connection closed");
@@ -1368,6 +1383,25 @@ describe("cli piece parsing", () => {
       expect((result as Error).message).toContain("response connection closed");
       expect(run.opened).toEqual([]);
       expect(run.started).toEqual([]);
+    });
+
+    it("retains retry guidance for malformed success, timeout, and server-error replies", async () => {
+      for (const status of [200, 408, 500, 503]) {
+        const run = await fixture();
+        run.state.transportError = new ServedLifecycleError(
+          `http-${status}`,
+          status,
+          "Unconfirmed response",
+        );
+        const error = await run.create().catch((error: unknown) => error);
+        expect(error).toBeInstanceOf(Error);
+        expect((error as Error).cause).toBe(run.state.transportError);
+        expect((error as Error).message).toContain(
+          `--request-key ${run.requests[0].requestKey}`,
+        );
+        expect(run.opened).toEqual([]);
+        expect(run.started).toEqual([]);
+      }
     });
   });
 
@@ -3750,8 +3784,10 @@ describe("cli piece parsing", () => {
     });
   }
 
+  const searchFixtures = new WeakMap<object, Promise<PiecesController>>();
+
   /** Supply root addresses to search fixtures that model data with plain objects. */
-  async function searchFixtureController(controller: {
+  function searchFixtureController(controller: {
     getRegisteredPieces(): Promise<
       Array<{
         id: string;
@@ -3760,26 +3796,32 @@ describe("cli piece parsing", () => {
       }>
     >;
   }): Promise<PiecesController> {
-    const registered = await controller.getRegisteredPieces();
-    const complete = await Promise.all(registered.map(async (piece) => {
-      if (piece.getCell) return piece;
-      let result: unknown;
-      try {
-        result = await piece.result.getCell();
-      } catch {
-        // Unreadable-data fixtures still have an address; the search reports their error.
-      }
-      const address = isCell(result)
-        ? result.getAsNormalizedFullLink()
-        : { space: SPACE_DID, id: piece.id, scope: "space", path: [] };
+    const previous = searchFixtures.get(controller);
+    if (previous) return previous;
+    const prepared = (async () => {
+      const registered = await controller.getRegisteredPieces();
+      const complete = await Promise.all(registered.map(async (piece) => {
+        if (piece.getCell) return piece;
+        let result: unknown;
+        try {
+          result = await piece.result.getCell();
+        } catch {
+          // Unreadable-data fixtures still have an address; the search reports their error.
+        }
+        const address = isCell(result)
+          ? result.getAsNormalizedFullLink()
+          : { space: SPACE_DID, id: piece.id, scope: "space", path: [] };
+        return {
+          ...piece,
+          getCell: () => ({ getAsNormalizedFullLink: () => address }),
+        };
+      }));
       return {
-        ...piece,
-        getCell: () => ({ getAsNormalizedFullLink: () => address }),
-      };
-    }));
-    return {
-      getRegisteredPieces: () => Promise.resolve(complete),
-    } as unknown as PiecesController;
+        getRegisteredPieces: () => Promise.resolve(complete),
+      } as unknown as PiecesController;
+    })();
+    searchFixtures.set(controller, prepared);
+    return prepared;
   }
 
   async function searchFixtureRows(
@@ -4382,6 +4424,79 @@ describe("cli piece parsing", () => {
         }]),
       );
       expect(nestedErrors).toEqual([new Error("nested cell unavailable")]);
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
+  it("attributes omitted and explicit space scopes to the same registered owner", async () => {
+    const signer = await Identity.fromPassphrase("cli search default scope");
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({ apiUrl: new URL(API_URL), storageManager });
+    try {
+      const tx = runtime.edit();
+      const owner = runtime.getCell(signer.did(), "scope-owner", undefined, tx);
+      const registeredOwner = runtime.getCell(
+        signer.did(),
+        "scope-owner",
+        undefined,
+        undefined,
+        "space",
+      );
+      const referrer = runtime.getCell(
+        signer.did(),
+        "scope-referrer",
+        undefined,
+        tx,
+      );
+      const input = runtime.getCell(signer.did(), "scope-referrer-input", {
+        type: "object",
+        properties: { linked: { asCell: ["cell"] } },
+      }, tx);
+      const ownerInput = runtime.getCell(
+        signer.did(),
+        "scope-owner-input",
+        undefined,
+        tx,
+      );
+      owner.set({ text: "same-scope-owner-needle" });
+      ownerInput.set({});
+      referrer.set({});
+      input.set({ linked: owner });
+      setResultCell(input, referrer);
+      setResultCell(ownerInput, owner);
+      expect((await tx.commit()).error).toBeUndefined();
+      expect(owner.getAsNormalizedFullLink()).toEqual(
+        registeredOwner.getAsNormalizedFullLink(),
+      );
+      const member = (
+        name: string,
+        input: Cell<unknown>,
+        result: Cell<unknown>,
+      ) => ({
+        id: pieceId(result)!,
+        name: () => name,
+        getCell: () => result,
+        getPatternRef: () => Promise.resolve(undefined),
+        input: { getCell: () => Promise.resolve(input.withTx()) },
+        result: { getCell: () => Promise.resolve(result.withTx()) },
+      });
+      const registered = [
+        member("Referrer", input, referrer),
+        member("Owner", ownerInput, registeredOwner),
+      ];
+      const matches = await searchPieces(
+        { apiUrl: API_URL, space: SPACE, identity: ID },
+        "same-scope-owner-needle",
+        {
+          loadPieces: () =>
+            Promise.resolve({
+              getRegisteredPieces: () => Promise.resolve(registered),
+            } as unknown as PiecesController),
+        },
+      );
+      expect(matches.map((match) => match.name)).toEqual(["Owner"]);
     } finally {
       await runtime.dispose();
       await storageManager.close();

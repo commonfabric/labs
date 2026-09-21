@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
 import {
@@ -23,6 +24,57 @@ class TestStorageManager extends StorageManager {
 }
 
 describe("storage space access loss", () => {
+  it("continues authoritative revocation delivery after an observer throws", async () => {
+    const identity = await Identity.fromPassphrase("throwing access observer");
+    const space = identity.did();
+    const server = new Server({
+      store: new URL("memory://throwing-access-observer"),
+      sessionOpenAuth: { audience: space },
+      authorizeSessionOpen: () => space,
+      acl: { mode: "enforce" },
+    });
+    const client = await connect({ transport: loopback(server) });
+    const session = await client.mount(
+      space,
+      {},
+      (_space, _options, context) => ({
+        invocation: {
+          aud: context.audience,
+          challenge: context.challenge.value,
+        },
+        authorization: {},
+      }),
+    );
+    const manager = new TestStorageManager({
+      as: identity,
+      memoryHost: new URL("memory://"),
+    }, { create: () => Promise.resolve({ client, session }) });
+    const failure = new Error("observer failure");
+    const reported = stub(console, "error");
+    try {
+      expect((await manager.open(space).sync(`of:${space}`)).error)
+        .toBeUndefined();
+      manager.subscribeSpaceAccessLoss(() => {
+        throw failure;
+      });
+      const observed: { target: MemorySpace; error: Error }[] = [];
+      manager.subscribeSpaceAccessLoss((target, error) =>
+        observed.push({ target, error })
+      );
+      expect(() => session.handleRevoked("unauthorized")).not.toThrow();
+      expect(observed).toEqual([{ target: space, error: session.closeError }]);
+      expect(manager.spaceAccessError(space)).toBe(session.closeError);
+      expect(reported.calls.map((call) => call.args)).toEqual([
+        ["space-access-loss subscriber threw:", failure],
+      ]);
+    } finally {
+      reported.restore();
+      await manager.close();
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("publishes an ACL revocation synchronously and clears it after an authorized reopen", async () => {
     const owner = await Identity.fromPassphrase("access-loss owner");
     const guest = await Identity.fromPassphrase("access-loss guest");
@@ -82,6 +134,14 @@ describe("storage space access loss", () => {
       });
     };
     const notices: MemorySpace[] = [];
+    const changes: { space: MemorySpace; denied: boolean }[] = [];
+    manager.subscribeSpaceAccessChange(
+      (target: MemorySpace) =>
+        changes.push({
+          space: target,
+          denied: manager.spaceAccessError(target) !== undefined,
+        }),
+    );
     const loss = Promise.withResolvers<void>();
     const cancel = manager.subscribeSpaceAccessLoss((target) => {
       expect(manager.spaceAccessError(target)?.name).toBe("AuthorizationError");
@@ -97,6 +157,7 @@ describe("storage space access loss", () => {
       await setAccess(false);
       await loss.promise;
       expect(notices).toEqual([space]);
+      expect(changes).toEqual([{ space, denied: true }]);
       expect(manager.spaceAccessError(guest.did())).toBeUndefined();
       expect(manager.authorizationError(space)?.name).toBe(
         "AuthorizationError",
@@ -106,6 +167,11 @@ describe("storage space access loss", () => {
       expect((await manager.open(space).sync(`of:${space}`)).error)
         .toBeUndefined();
       expect(guestSession).not.toBe(originalSession);
+      expect(changes).toEqual([{ space, denied: true }, {
+        space,
+        denied: false,
+      }]);
+      expect(notices).toEqual([space]);
       expect(manager.spaceAccessError(space)).toBeUndefined();
       expect(manager.authorizationError(space)).toBeUndefined();
       cancel();

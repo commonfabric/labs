@@ -22,7 +22,7 @@ import { readStatsActive, recordLinkResolution } from "./read-stats.ts";
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
-import { toMemorySpaceAddress } from "../src/link-utils.ts";
+import { schemaForSpaceCrossing, toMemorySpaceAddress } from "./link-utils.ts";
 import { opaqueReference, toCell } from "./back-to-cell.ts";
 import { type JSONSchema, type SchemaScope } from "./builder/types.ts";
 import { createCell, isCell } from "./cell.ts";
@@ -1148,6 +1148,7 @@ export function validateAndTransform(
   // If our link is asCell/asStream, and we don't have any path portions, we
   // can just create the cell and mostly skip reading the value and traversal.
   if (SchemaObjectTraverser.hasAsCell(effectiveSchema)) {
+    const handleSourceSpace = link.space;
     // We check for a link value, since we will follow links one step in get
     // We've already followed all the writeRedirect links above.
     const next = readMaybeLink(tx, link);
@@ -1194,6 +1195,9 @@ export function validateAndTransform(
       link.schema = SchemaObjectTraverser.hasAsCell(combined)
         ? combined
         : effectiveSchema!;
+    }
+    if (link.space !== handleSourceSpace) {
+      link.schema = schemaForSpaceCrossing(tx, handleSourceSpace, link.schema);
     }
     const handleSchema = resolveSchema(link.schema);
     const handleEntry = ContextualFlowControl.getAsCellValues(handleSchema)[0];

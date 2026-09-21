@@ -1168,6 +1168,7 @@ export class StorageManager implements IStorageManager {
   #providers = new Map<MemorySpace, Provider>();
   #spaceAccessErrors = new Map<MemorySpace, Error>();
   #spaceAccessObservers = new Set<(space: MemorySpace, error: Error) => void>();
+  #spaceAccessChangeObservers = new Set<(space: MemorySpace) => void>();
   #subscription = SubscriptionManager.create();
   #crossSpacePromises = new Set<Promise<void>>();
 
@@ -1821,14 +1822,27 @@ export class StorageManager implements IStorageManager {
           this.#syncCfcSchemaDocument(space, document),
         getTelemetry: () => this.#telemetry,
         onAccessChange: (error) => {
+          const alreadyDenied = this.#spaceAccessErrors.has(space);
           if (error === undefined) {
             this.#spaceAccessErrors.delete(space);
           } else {
-            const alreadyDenied = this.#spaceAccessErrors.has(space);
             this.#spaceAccessErrors.set(space, error);
             if (!alreadyDenied) {
               for (const observer of [...this.#spaceAccessObservers]) {
-                observer(space, error);
+                try {
+                  observer(space, error);
+                } catch (cause) {
+                  console.error("space-access-loss subscriber threw:", cause);
+                }
+              }
+            }
+          }
+          if (alreadyDenied !== (error !== undefined)) {
+            for (const observer of [...this.#spaceAccessChangeObservers]) {
+              try {
+                observer(space);
+              } catch (cause) {
+                console.error("space-access-change subscriber threw:", cause);
               }
             }
           }
@@ -2059,7 +2073,12 @@ export class StorageManager implements IStorageManager {
           await this.#sessionFactory.create(
             space,
             spaceIdentity,
-            { sessionId: bootstrapSessionId },
+            {
+              sessionId: bootstrapSessionId,
+              ...(registered?.root === undefined
+                ? {}
+                : { genesisRoot: registered.root }),
+            },
             routeSignal,
           ),
         );
@@ -2316,6 +2335,12 @@ export class StorageManager implements IStorageManager {
   ): Cancel {
     this.#spaceAccessObservers.add(observer);
     return () => this.#spaceAccessObservers.delete(observer);
+  }
+
+  /** @inheritDoc */
+  subscribeSpaceAccessChange(observer: (space: MemorySpace) => void): Cancel {
+    this.#spaceAccessChangeObservers.add(observer);
+    return () => this.#spaceAccessChangeObservers.delete(observer);
   }
 
   trackPendingCommit(promise: Promise<unknown>): void {
@@ -2988,7 +3013,8 @@ export class StorageManager implements IStorageManager {
     // A foreign handle with no declared value shape transfers only its
     // address. Loading its target requires a read through that handle.
     if (
-      space !== base.space && link.overwrite !== "redirect" &&
+      !hasDataUriScheme(link.id) && space !== base.space &&
+      link.overwrite !== "redirect" &&
       isUnknownCellSchema(schema)
     ) return;
     const scope = normalizeCellScope(link.scope as CellScope | undefined);

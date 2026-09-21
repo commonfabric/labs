@@ -47,59 +47,66 @@ describe("data URI sync", () => {
     expect(result).toBeDefined();
   });
 
-  it("retains foreign unknown-valued handles without syncing their targets", async () => {
-    const target = runtime.getCell(
-      foreign,
-      "opaque-target",
-      undefined,
-      undefined,
-      "user",
-    ).key("nested");
-    const schema = {
-      type: "object",
-      properties: {
-        ref: { type: "unknown", asCell: ["cell"] },
-        refs: {
-          type: "array",
-          items: { type: "unknown", asCell: ["readonly"] },
+  for (const type of ["unknown", ["unknown"]] as const) {
+    it(`retains foreign handles with ${JSON.stringify(type)} schemas without syncing targets`, async () => {
+      const target = runtime.getCell(
+        foreign,
+        "opaque-target",
+        undefined,
+        undefined,
+        "user",
+      ).key("nested");
+      const schema = {
+        type: "object",
+        properties: {
+          ref: { type, asCell: ["cell"] },
+          refs: {
+            type: "array",
+            items: { type, asCell: ["readonly"] },
+          },
         },
-      },
-      required: ["ref", "refs"],
-    } as const;
-    const dataCell = runtime.getImmutableCell<{
-      ref: Cell<unknown>;
-      refs: Cell<unknown>[];
-    }>(space, { ref: target, refs: [target] }, schema);
-    const provider = storageManager.open(foreign);
-    const originalSync = provider.sync.bind(provider);
-    const syncedIds: string[] = [];
-    provider.sync = (...args) => {
-      syncedIds.push(args[0]);
-      return originalSync(...args);
-    };
+        required: ["ref", "refs"],
+      } as const;
+      const dataCell = runtime.getImmutableCell<{
+        ref: Cell<unknown>;
+        refs: Cell<unknown>[];
+      }>(space, { ref: target, refs: [target] }, schema);
+      const provider = storageManager.open(foreign);
+      const originalSync = provider.sync.bind(provider);
+      const synced: Array<
+        { id: string; scope?: string; path: readonly string[] | undefined }
+      > = [];
+      provider.sync = (...args) => {
+        synced.push({ id: args[0], path: args[1]?.path, scope: args[2] });
+        return originalSync(...args);
+      };
 
-    await dataCell.sync();
-    const value = dataCell.get({ traverseCells: true });
-    const direct = dataCell.key("ref").get();
-    const { space: targetSpace, scope, id, path } = target
-      .getAsNormalizedFullLink();
-    for (const cell of [value.ref, value.refs[0], direct]) {
-      expect(cell.getAsNormalizedFullLink()).toMatchObject({
-        space: targetSpace,
-        scope,
-        id,
-        path,
-      });
-    }
-    await storageManager.synced();
-    expect(syncedIds).toEqual([]);
+      await dataCell.sync();
+      const value = dataCell.get({ traverseCells: true });
+      const direct = dataCell.key("ref").get();
+      const { space: targetSpace, scope, id, path } = target
+        .getAsNormalizedFullLink();
+      for (const cell of [value.ref, value.refs[0], direct]) {
+        expect(cell.getAsNormalizedFullLink()).toMatchObject({
+          space: targetSpace,
+          scope,
+          id,
+          path,
+        });
+      }
+      await storageManager.synced();
+      expect(synced).toEqual([]);
 
-    await dataCell.asSchema({
-      type: "object",
-      properties: { ref: { type: "number", asCell: ["cell"] } },
-    }).sync();
-    expect(syncedIds).toContain(id);
-  });
+      for (const valueType of ["number", ["number", "unknown"]] as const) {
+        synced.length = 0;
+        await dataCell.asSchema({
+          type: "object",
+          properties: { ref: { type: valueType, asCell: ["cell"] } },
+        }).sync();
+        expect(synced).toContainEqual({ id, scope: "user", path: ["nested"] });
+      }
+    });
+  }
 
   it("sync on a data: URI cell containing a sigil link calls sync on the linked cell", async () => {
     // Create a real cell that we expect to be synced
@@ -140,6 +147,33 @@ describe("data URI sync", () => {
 
     // The linked cell's id should have been synced
     expect(syncedIds).toContain(linkedId);
+  });
+
+  it("walks foreign inline handles locally to sync their linked inputs", async () => {
+    const target = runtime.getCell(space, "inline-input", undefined, tx).key(
+      "nested",
+    );
+    target.set(42);
+    const inline = runtime.getImmutableCell(foreign, { input: target });
+    const outer = runtime.getImmutableCell(space, { ref: inline }, {
+      type: "object",
+      properties: { ref: { type: "unknown", asCell: ["cell"] } },
+    });
+    const provider = storageManager.open(space);
+    const originalSync = provider.sync.bind(provider);
+    const synced: Array<
+      { id: string; scope?: string; path: readonly string[] | undefined }
+    > = [];
+    provider.sync = (...args) => {
+      synced.push({ id: args[0], path: args[1]?.path, scope: args[2] });
+      return originalSync(...args);
+    };
+    await outer.sync();
+    expect(synced).toContainEqual({
+      id: target.getAsNormalizedFullLink().id,
+      scope: "space",
+      path: ["nested"],
+    });
   });
 
   it("sync on a data: URI cell preserves linked cell scope", async () => {

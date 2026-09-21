@@ -5774,7 +5774,9 @@ function _mergeAnyOfBranchSchemasUncached(
 export function isUnknownCellSchema(schema: JSONSchema | undefined): boolean {
   if (!isObjectOrArray(schema)) return false;
   const resolved = resolveSchemaRefsCanonical(schema);
-  return isObjectOrArray(resolved) && resolved.type === "unknown" &&
+  return isObjectOrArray(resolved) &&
+    (resolved.type === "unknown" ||
+      (Array.isArray(resolved.type) && resolved.type.includes("unknown"))) &&
     SchemaObjectTraverser.hasAsCell(resolved);
 }
 

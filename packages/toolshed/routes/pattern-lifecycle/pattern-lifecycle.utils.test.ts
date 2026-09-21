@@ -3,6 +3,7 @@ import { assert } from "@std/assert";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import type { EntityDocument } from "@commonfabric/memory/v2";
 import { verifySessionOpenAuthorization } from "@commonfabric/memory/v2/session-open-auth";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { entityIdFrom, isStream, Runtime } from "@commonfabric/runner";
@@ -344,6 +345,132 @@ export default pattern(() => {
     );
     expect(result.registration.terminal).toBeUndefined();
   });
+
+  for (
+    const mode of ["terminal", "uncertain", "readback-unavailable"] as const
+  ) {
+    it(`retains ${mode} registration evidence after an append response fails`, async () => {
+      const root = ok(
+        await processInstantiate(deps, alice.did(), {
+          space,
+          register: false,
+          program: {
+            main: "/main.tsx",
+            files: [{
+              name: "/main.tsx",
+              contents: `
+import { computed, handler, pattern, Writable } from "commonfabric";
+const addPiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>}>(({piece}, {panels}) => panels.addUnique(piece));
+export default pattern(() => {
+  const panels = new Writable<Writable<unknown>[]>([]);
+  return {pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({panels})};
+});`,
+            }],
+          },
+        }),
+      );
+      const owner = new PiecesController(
+        await createSession({ identity: alice, spaceDid: spaceIdentity.did() }),
+        runtime,
+      );
+      await owner.ready;
+      await owner.linkDefaultPattern(runtime.getCellFromEntityId(
+        space as MemorySpace,
+        entityIdFrom(root.pieceId),
+      ));
+      let retained: EntityDocument | null = null;
+      const eventIds: string[] = [];
+      let cancelled = 0;
+      let reads = 0;
+      const transport: LifecycleDeps = {
+        ...deps,
+        readDocument: () => {
+          reads++;
+          if (mode === "readback-unavailable") {
+            return Promise.reject(new Error("readback unavailable"));
+          }
+          return Promise.resolve(retained);
+        },
+        append: async (entry) => {
+          eventIds.push(entry.eventId);
+          await Promise.resolve();
+          retained = mode === "terminal"
+            ? {
+              value: {
+                entries: [{
+                  eventId: entry.eventId,
+                  status: "dropped",
+                  reason: "handler refused",
+                }],
+              },
+            }
+            : null;
+          throw new Error("append acknowledgement lost");
+        },
+        watchAdmittedCommits: () => () => {
+          cancelled++;
+        },
+      };
+      const request = {
+        space,
+        program: PROGRAM,
+        register: true,
+        requestKey: `append-${mode}`,
+      };
+      const first = ok(await processInstantiate(transport, bob.did(), request));
+      expect(first.registration.status).toBe("failed");
+      expect(first.registration.terminal).toBe(
+        mode === "terminal" ? true : undefined,
+      );
+      expect(first.registration.error).toContain(
+        mode === "terminal" ? "handler refused" : "acknowledgement lost",
+      );
+      retained = null;
+      const retry = ok(await processInstantiate(transport, bob.did(), request));
+      expect(retry.pieceId).toBe(first.pieceId);
+      expect(eventIds).toHaveLength(2);
+      if (mode === "terminal") expect(eventIds[1]).not.toBe(eventIds[0]);
+      else expect(eventIds[1]).toBe(eventIds[0]);
+      expect(cancelled).toBe(2);
+      expect(reads).toBeGreaterThanOrEqual(4);
+    });
+  }
+
+  for (const refusalAt of [2, 3]) {
+    it(`preserves the durable creation receipt when registration phase ${refusalAt} loses authority`, async () => {
+      let reads = 0;
+      const request = {
+        space,
+        program: PROGRAM,
+        register: true,
+        requestKey: "withdrawn-after-creation",
+      };
+      const result = ok(
+        await processInstantiate(
+          {
+            ...deps,
+            authority: {
+              ...deps.authority,
+              readAcl: () =>
+                Promise.resolve({
+                  [alice.did()]: "OWNER",
+                  [bob.did()]: ++reads < refusalAt ? "WRITE" : "READ",
+                }),
+            },
+          },
+          bob.did(),
+          request,
+        ),
+      );
+      expect(reads).toBe(refusalAt);
+      expect(result.requestKey).toBe(request.requestKey);
+      expect(result.pieceId).toMatch(/\S/);
+      expect(result.registration.status).toBe("failed");
+      expect(result.registration.terminal).toBeUndefined();
+      const repeated = ok(await processInstantiate(deps, bob.did(), request));
+      expect(repeated.pieceId).toBe(result.pieceId);
+    });
+  }
 
   it("refuses a caller the ACL names as a reader only, and one it does not name", async () => {
     const mallorySees = refused(

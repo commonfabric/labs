@@ -905,6 +905,17 @@ Deno.test("command: a deno line that is not ours is reported as such", async () 
   assertEquals(out, ":cf:notmine");
 });
 
+Deno.test("shaping: equal document IDs preserve their distinct full target references", () => {
+  const pieces = [
+    { id: "fid1:same", reference: "//did:key:alpha/fid1:same@user/nested" },
+    { id: "fid1:same", reference: "//did:key:beta/fid1:same" },
+  ];
+  assertEquals(
+    shapePieceCandidates(pieces).map((row) => row.value),
+    pieces.map((row) => row.reference),
+  );
+});
+
 Deno.test("shaping: a piece is labeled by name, falling back to its pattern", () => {
   assertEquals(
     shapePieceCandidates([

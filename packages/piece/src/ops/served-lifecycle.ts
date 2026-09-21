@@ -25,6 +25,7 @@ import {
   entityIdFrom,
   getPatternIdentityRef,
   getPieceSourceRevisions,
+  isLink,
   isStream,
   type MemorySpace,
   type NormalizedFullLink,
@@ -74,8 +75,6 @@ export type ServedLifecycleRefusalCode =
   | "setup-failed"
   /** The requested slug already names something, and `force` was not set. */
   | "slug-taken"
-  /** The space has no root to register the piece with. */
-  | "no-space-root"
   /** The named piece is not held by the space. */
   | "piece-not-found"
   /** The candidate source cannot run over the piece's retained state. */
@@ -452,7 +451,10 @@ export async function prepareServedRegistration(
       });
       tx.setCfcTrustSnapshot(runtime.trustSnapshotForPrincipal(actingUser));
     }
-    const retained = requestRecord.withTx(tx).get() ?? receipt;
+    const retained = requestRecord.withTx(tx).get();
+    if (retained === undefined || retained.pieceId !== receipt.pieceId) {
+      throw new Error("Registration receipt was not retained for this piece");
+    }
     if (retained.registration.status === "handled") return retained;
     const attempt = (retained.registration.attempt ?? 0) +
       (retained.registration.status === "failed" &&
@@ -485,6 +487,13 @@ export async function prepareServedRegistration(
       throw new Error(
         "The space has no default pattern; install its root and retry this request key",
       );
+    }
+    const handlerCell = root.key("addPiece");
+    await handlerCell.sync();
+    // Inspect the declaration without reading a possibly foreign event target.
+    // The transport authorizes that target before it observes or appends events.
+    if (!isLink(handlerCell.getRaw())) {
+      throw new Error("The default pattern has no addPiece handler");
     }
     const handler = await root.asSchema({
       type: "object",
@@ -582,11 +591,13 @@ export async function finishServedRegistration(
       tx.setCfcTrustSnapshot(runtime.trustSnapshotForPrincipal(actingUser));
     }
     const current = requestRecord.withTx(tx).get();
+    if (current === undefined || current.pieceId !== receipt.pieceId) {
+      throw new Error("Registration receipt was not retained for this piece");
+    }
     if (
-      current?.registration.status === "handled" ||
-      (current !== undefined &&
-        (current.registration.attempt ?? 0) !== attempt) ||
-      (current?.registration.terminal === true &&
+      current.registration.status === "handled" ||
+      (current.registration.attempt ?? 0) !== attempt ||
+      (current.registration.terminal === true &&
         completed.registration.status === "failed" &&
         completed.registration.terminal !== true)
     ) return current;
@@ -878,29 +889,43 @@ export async function confirmServedSetSource(
 }
 
 /**
- * The durability read behind {@link servedInstantiatePiece}: the piece
- * document holds the pattern pointer the verb wrote.
+ * Confirm the creation record that commits atomically with setup, and the
+ * retained piece identity. A subsequent source update can change the current
+ * pattern before a creation or registration retry is confirmed.
  */
 export async function confirmServedInstantiate(
   runtime: Runtime,
   space: MemorySpace,
   receipt: ServedInstantiateReceipt,
+  actingUser: string,
 ): Promise<void> {
+  const retained = await registrationRecord(runtime, space, receipt, actingUser)
+    .pull();
+  const expectedPiece = runtime.getCell(space, {
+    purpose: "piece-instantiation",
+    principal: actingUser,
+    requestKey: receipt.requestKey,
+  });
+  if (
+    retained === undefined || retained.requestKey !== receipt.requestKey ||
+    retained.pieceId !== receipt.pieceId ||
+    pieceIdOf(expectedPiece) !== receipt.pieceId ||
+    retained.pattern.identity !== receipt.pattern.identity ||
+    retained.pattern.symbol !== receipt.pattern.symbol ||
+    retained.slug !== receipt.slug
+  ) {
+    throw new Error(
+      "Creation receipt was not retained for this piece and caller",
+    );
+  }
   const piece = runtime.getCellFromEntityId(
     space,
     entityIdFrom(receipt.pieceId),
   );
   await piece.sync();
-  const stored = getPatternIdentityRef(piece);
-  if (
-    stored === undefined ||
-    stored.identity !== receipt.pattern.identity ||
-    stored.symbol !== receipt.pattern.symbol
-  ) {
+  if (getPatternIdentityRef(piece) === undefined) {
     throw new Error(
-      `piece ${receipt.pieceId} does not hold pattern ` +
-        `${receipt.pattern.identity}#${receipt.pattern.symbol}: the ` +
-        "creation did not commit",
+      `piece ${receipt.pieceId} has no pattern: the creation did not commit`,
     );
   }
 }

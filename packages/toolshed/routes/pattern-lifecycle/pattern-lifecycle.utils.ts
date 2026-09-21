@@ -111,7 +111,6 @@ const REFUSAL_STATUS: Record<
   "pattern-not-found": 404,
   "setup-failed": 422,
   "slug-taken": 409,
-  "no-space-root": 422,
   "piece-not-found": 404,
   "incompatible": 422,
   "source-moved": 409,
@@ -268,7 +267,12 @@ export async function processInstantiate(
           actingUser: callerDid,
         }),
       confirm: (runtime, receipt) =>
-        confirmServedInstantiate(runtime, input.space as MemorySpace, receipt),
+        confirmServedInstantiate(
+          runtime,
+          input.space as MemorySpace,
+          receipt,
+          callerDid,
+        ),
       ...(input.start === false
         ? {}
         : { demandRoots: (receipt) => [pieceRootDocId(receipt.pieceId)] }),
@@ -279,6 +283,24 @@ export async function processInstantiate(
     result.body.registration.status === "skipped" ||
     result.body.registration.status === "handled"
   ) return result;
+  const incomplete = (
+    receipt: ServedInstantiateReceipt,
+    phase: string,
+    code: LifecycleErrorCode,
+  ): LifecycleResult<ServedInstantiateReceipt> => ({
+    status: 200,
+    body: {
+      ...receipt,
+      registration: {
+        status: "failed",
+        ...(receipt.registration.attempt === undefined
+          ? {}
+          : { attempt: receipt.registration.attempt }),
+        error:
+          `Registration ${phase} could not complete (${code}); retry the same request key`,
+      },
+    },
+  });
   const prepared = await runServedVerb<ServedRegistrationPreparation>(
     deps,
     callerDid,
@@ -296,7 +318,9 @@ export async function processInstantiate(
         ),
     },
   );
-  if (prepared.status !== 200) return prepared;
+  if (prepared.status !== 200) {
+    return incomplete(result.body, "preparation", prepared.body.code);
+  }
   const outcome = prepared.body.delivery === undefined
     ? {}
     : await observeRegistrationDelivery(
@@ -304,18 +328,26 @@ export async function processInstantiate(
       callerDid,
       prepared.body.delivery,
     );
-  return runServedVerb<ServedInstantiateReceipt>(deps, callerDid, input.space, {
-    name: "registration-finish",
-    run: (pieces) =>
-      finishServedRegistration(pieces, prepared.body, callerDid, outcome),
-    confirm: (runtime, receipt) =>
-      confirmServedRegistration(
-        runtime,
-        input.space as MemorySpace,
-        receipt,
-        callerDid,
-      ),
-  });
+  const finished = await runServedVerb<ServedInstantiateReceipt>(
+    deps,
+    callerDid,
+    input.space,
+    {
+      name: "registration-finish",
+      run: (pieces) =>
+        finishServedRegistration(pieces, prepared.body, callerDid, outcome),
+      confirm: (runtime, receipt) =>
+        confirmServedRegistration(
+          runtime,
+          input.space as MemorySpace,
+          receipt,
+          callerDid,
+        ),
+    },
+  );
+  return finished.status === 200
+    ? finished
+    : incomplete(prepared.body.receipt, "completion", finished.body.code);
 }
 
 /** Observe only a server-prepared stream; no process-identity session reads private space data. */

@@ -1,5 +1,5 @@
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
-import { debugStr } from "@commonfabric/data-model";
+import { cloneIfNecessary, debugStr } from "@commonfabric/data-model";
 import { getLogger } from "@commonfabric/utils/logger";
 import {
   isObjectNotArray,
@@ -299,6 +299,12 @@ export class Client {
     openAuthFactory?: SessionOpenAuthFactory,
     signal?: AbortSignal,
   ): Promise<SpaceSession> {
+    options = {
+      ...options,
+      ...(options.genesisRoot === undefined ? {} : {
+        genesisRoot: cloneIfNecessary(options.genesisRoot, { frozen: false }),
+      }),
+    };
     const auth = await runWithAbortSignal(
       signal,
       "memory session mount cancelled",
@@ -920,7 +926,9 @@ export class SpaceSession {
     this.#routeSignal = routeSignal;
     this.#actingAs = actingAs;
     this.#readCeiling = readCeiling;
-    this.#genesisRoot = genesisRoot;
+    this.#genesisRoot = genesisRoot === undefined
+      ? undefined
+      : cloneIfNecessary(genesisRoot, { frozen: false });
     this.#sessionId = sessionId;
     this.#sessionToken = sessionToken;
     this.#serverSeq = serverSeq;
@@ -1245,7 +1253,11 @@ export class SpaceSession {
    */
   subscribeAccessLoss(observer: (error: Error) => void): () => void {
     if (isPermanentAuthorizationError(this.#closeError)) {
-      observer(this.#closeError!);
+      try {
+        observer(this.#closeError!);
+      } catch (cause) {
+        console.error("session-access-loss subscriber threw:", cause);
+      }
       return () => {};
     }
     if (this.#closed) return () => {};
@@ -1664,7 +1676,13 @@ export class SpaceSession {
     const observers = [...this.#accessLossObservers];
     this.#accessLossObservers.clear();
     if (isPermanentAuthorizationError(error)) {
-      for (const observer of observers) observer(error);
+      for (const observer of observers) {
+        try {
+          observer(error);
+        } catch (cause) {
+          console.error("session-access-loss subscriber threw:", cause);
+        }
+      }
     }
   }
 

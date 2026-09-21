@@ -1,5 +1,13 @@
 /** Exercises occurrence identity and the computed default-pattern registry. */
-import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
+import {
+  action,
+  assert,
+  NAME,
+  pattern,
+  TESTS,
+  UI,
+  Writable,
+} from "commonfabric";
 import {
   childNodes,
   clickButton,
@@ -10,10 +18,23 @@ import {
 import Loom from "./main.tsx";
 import type { Panel, PublishedDocument } from "./schemas.tsx";
 
+/** Invokes a control on the first rendered occurrence. */
+function clickFirstPanel(root: unknown, label: string): void {
+  clickButton(findElement(root, "cf-card"), label);
+}
+
 export default pattern(() => {
   const loom = Loom({});
+  const title = new Writable("Configured Loom");
+  const namedLoom = Loom({ title });
+  const rename = action(() => title.set("Renamed Loom"));
+  const otherPiece = new Writable({ title: "Other target" });
   const piece = new Writable({ title: "Target" });
-  const url = new Writable<Panel>({ kind: "url", url: "https://example.com" });
+  const url = new Writable<Panel>({
+    kind: "url",
+    url: "https://example.com",
+    titleOverride: "Reference site",
+  });
   const content = new Writable<PublishedDocument>({
     source: { kind: "page-excerpt", title: "Source", body: "First" },
     notes: "Guest notes",
@@ -43,7 +64,11 @@ export default pattern(() => {
     loom.movePanel.send({ panel: url, before: loom.panels[0] })
   );
   const changeUrl = action(() =>
-    url.set({ kind: "url", url: "https://example.org/updated" })
+    url.set({
+      kind: "url",
+      url: "https://example.org/updated",
+      titleOverride: "Updated site",
+    })
   );
   const removeUrl = action(() => loom.removePanel.send({ panel: url }));
   const add = action(() => loom.addPiece.send({ piece }));
@@ -58,9 +83,47 @@ export default pattern(() => {
   );
   const duplicateUrl = action(() => loom.duplicatePanel.send({ panel: url }));
   const stageFromUI = action(() => clickButton(loom[UI], "Stage all"));
+  const addOtherPiece = action(() => loom.addPiece.send({ piece: otherPiece }));
+  const duplicatePiece = action(() =>
+    loom.duplicatePanel.send({ panel: loom.panels[1] })
+  );
+  const focusOther = action(() =>
+    loom.setPresentation.send({
+      stagedPanels: [...loom.panels],
+      focusedPanel: loom.panels[5],
+    })
+  );
+  const removePiece = action(() => loom.removePiece.send({ piece }));
+  const removeOtherPiece = action(() =>
+    loom.removePiece.send({ piece: otherPiece })
+  );
+  const selectFromUI = action(() => clickFirstPanel(loom[UI], "Select"));
+  const focusFromUI = action(() => clickFirstPanel(loom[UI], "Focus"));
+  const clearFocusFromUI = action(() => clickButton(loom[UI], "Clear focus"));
+  const clearStageFromUI = action(() => clickButton(loom[UI], "Clear stage"));
+  const duplicateFromUI = action(() => clickFirstPanel(loom[UI], "Duplicate"));
+  const moveLastFromUI = action(() => clickFirstPanel(loom[UI], "Move last"));
+  const moveFirstFromUI = action(() => clickFirstPanel(loom[UI], "Move first"));
+  const removeFromUI = action(() => clickFirstPanel(loom[UI], "Remove"));
   return {
     [TESTS]: [
       { assertion: assert(() => loom.panels.length === 0) },
+      {
+        assertion: assert(() =>
+          namedLoom.title === "Configured Loom" &&
+          namedLoom[NAME] === "Configured Loom" &&
+          hasText(namedLoom[UI], "Configured Loom")
+        ),
+      },
+      { action: rename },
+      { render: namedLoom[UI] },
+      {
+        assertion: assert(() =>
+          namedLoom.title === "Renamed Loom" &&
+          namedLoom[NAME] === "Renamed Loom" &&
+          hasText(namedLoom[UI], "Renamed Loom")
+        ),
+      },
       {
         assertion: assert(() => {
           const slots = childNodes(findElement(loom[UI], "cf-toolbar"));
@@ -78,6 +141,8 @@ export default pattern(() => {
       { assertion: assert(() => loom.pieceRegistry.length === 1) },
       { action: addAgain },
       { assertion: assert(() => loom.panels.length === 1) },
+      { action: addUrl },
+      { assertion: assert(() => loom.panels.length === 2) },
       { action: addUrl },
       { assertion: assert(() => loom.panels.length === 2) },
       { assertion: assert(() => loom.pieceRegistry.length === 1) },
@@ -138,7 +203,8 @@ export default pattern(() => {
         assertion: assert(() => {
           const copy = loom.panels[4].get();
           return copy.kind === "url" &&
-            copy.url === "https://example.org/updated";
+            copy.url === "https://example.org/updated" &&
+            copy.titleOverride === "Updated site";
         }),
       },
       { render: loom[UI] },
@@ -161,6 +227,63 @@ export default pattern(() => {
           !hasText(loom[UI], "Not staged")
         ),
       },
+      { action: addOtherPiece },
+      { action: duplicatePiece },
+      { assertion: assert(() => loom.pieceRegistry.length === 3) },
+      { action: focusOther },
+      { action: removePiece },
+      {
+        assertion: assert(() =>
+          loom.panels.length === 5 && loom.pieceRegistry.length === 1 &&
+          loom.pieceRegistry[0].equals(otherPiece)
+        ),
+      },
+      {
+        assertion: assert(() =>
+          loom.presentation.stagedPanels.length === 5 &&
+          loom.presentation.focusedPanel?.equals(loom.panels[4]) === true
+        ),
+      },
+      { action: removePiece },
+      { assertion: assert(() => loom.panels.length === 5) },
+      { action: removeOtherPiece },
+      {
+        assertion: assert(() =>
+          loom.panels.length === 4 && loom.pieceRegistry.length === 0 &&
+          loom.presentation.stagedPanels.length === 4 &&
+          loom.presentation.focusedPanel?.get() === undefined
+        ),
+      },
+      { render: loom[UI] },
+      { action: selectFromUI },
+      { render: loom[UI] },
+      {
+        assertion: assert(() =>
+          hasText(loom[UI], "Selected in this session") &&
+          loom.viewerState.key("selectedPanel").equals(loom.panels[0])
+        ),
+      },
+      { action: focusFromUI },
+      { render: loom[UI] },
+      { assertion: assert(() => hasText(loom[UI], "Focused for everyone")) },
+      { action: clearFocusFromUI },
+      { render: loom[UI] },
+      {
+        assertion: assert(() =>
+          !hasText(loom[UI], "Focused for everyone") &&
+          loom.presentation.stagedPanels.length === 4
+        ),
+      },
+      { action: clearStageFromUI },
+      { assertion: assert(() => loom.presentation.stagedPanels.length === 0) },
+      { action: duplicateFromUI },
+      { assertion: assert(() => loom.panels.length === 5) },
+      { action: moveLastFromUI },
+      { assertion: assert(() => loom.panels[4].equals(documentPanel)) },
+      { action: moveFirstFromUI },
+      { assertion: assert(() => !loom.panels[0].equals(documentPanel)) },
+      { action: removeFromUI },
+      { assertion: assert(() => loom.panels.length === 4) },
     ],
   };
 });

@@ -132,7 +132,9 @@ async function call<T>(
 /**
  * Create a piece in `space` from `program`, set up and not started here,
  * with its name in the setup transaction and registration through the
- * default pattern action after setup commits. The serving loop derives the piece in the cycle after the
+ * default pattern action after setup commits. Missing roots or handlers retain
+ * the created piece and report failed registration for a request-key retry.
+ * The serving loop derives the piece in the cycle after the
  * creation commits unless `start` is `false`, which leaves it to the
  * first demand.
  */
@@ -159,6 +161,8 @@ export async function instantiatePieceOnServer(
   registration: {
     status: "skipped" | "pending" | "handled" | "failed";
     error?: string;
+    attempt?: number;
+    terminal?: true;
   };
 }> {
   return await call(config, "instantiate", {

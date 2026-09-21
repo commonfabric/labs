@@ -294,7 +294,9 @@ describe("v2-server-acl", () => {
       };
       try {
         const authority = await connect(server);
-        const opened = await openSession(authority, space, space);
+        const opened = await openSession(authority, space, space, {
+          genesisRoot: root,
+        });
         expectExists(opened.ok);
         const commit = {
           localSeq: 1,
@@ -342,6 +344,61 @@ describe("v2-server-acl", () => {
         );
       } finally {
         await server.close();
+      }
+    });
+
+    it("refuses a genesis transaction that differs from its authenticated root intent", async () => {
+      const root = { source: "system:loom/main.tsx", cause: "signed-intent" };
+      for (const variant of ["undeclared", "changed", "omitted"] as const) {
+        const server = createAclServer(`memory://root-intent-${variant}`, {
+          mode: "enforce",
+        });
+        const space = `did:key:z6Mk-root-intent-${variant}`;
+        try {
+          const authority = await connect(server);
+          const opened = await openSession(
+            authority,
+            space,
+            space,
+            variant === "undeclared" ? {} : { genesisRoot: root },
+          );
+          expectExists(opened.ok);
+          await authority.connection.receive(encodeMemoryBoundary({
+            type: "transact",
+            requestId: nextRequestId("intent"),
+            space,
+            sessionId: opened.ok.sessionId,
+            commit: {
+              localSeq: 1,
+              reads: { confirmed: [], pending: [] },
+              ...(variant === "omitted" ? {} : {
+                genesisRoot: variant === "changed"
+                  ? { ...root, cause: "changed" }
+                  : root,
+              }),
+              operations: [{
+                op: "set",
+                id: `of:${space}`,
+                value: { value: { [ALICE]: "OWNER" } },
+              }],
+            },
+          }));
+          expect(nextResponse(authority.messages).error?.name, variant).toBe(
+            "AuthorizationError",
+          );
+          expect(readGenesisRoot(await server.engineForSpace(space)))
+            .toBeUndefined();
+          const acl = await graphQuery(
+            authority,
+            space,
+            opened.ok.sessionId,
+            `of:${space}`,
+          );
+          expectExists(acl.ok);
+          expect(acl.ok.entities[0]?.document ?? null).toBeNull();
+        } finally {
+          await server.close();
+        }
       }
     });
 

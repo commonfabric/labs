@@ -114,7 +114,8 @@ export function isAppBuiltInView(view: unknown): view is AppBuiltInView {
 export function isAppView(view: unknown): view is AppView {
   if (!view || typeof view !== "object") return false;
   if ("builtin" in view) {
-    return isAppBuiltInView(view.builtin) && !("mode" in view);
+    return isAppBuiltInView(view.builtin) && !("mode" in view) &&
+      hasValidPieceQualifiers(view);
   }
   if (!isAppViewModeRef(view)) return false;
   if (!isPieceViewRef(view)) return false;
@@ -157,15 +158,7 @@ function isAppViewModeRef(view: object): view is AppViewModeRef {
  * refused by them rather than resolved through them.
  */
 function isPieceViewRef(view: object): view is PieceViewRef {
-  if (
-    "piecePath" in view && (!("pieceId" in view) ||
-      !Array.isArray(view.piecePath) ||
-      !view.piecePath.every((key) => typeof key === "string"))
-  ) return false;
-  if (
-    "pieceScope" in view && (!("pieceId" in view) ||
-      !["space", "user", "session"].includes(String(view.pieceScope)))
-  ) return false;
+  if (!hasValidPieceQualifiers(view)) return false;
   if ("pieceId" in view && "pieceSlug" in view) return false;
   const member = "pieceMember" in view ? view.pieceMember : undefined;
   const slug = "pieceSlug" in view ? view.pieceSlug : undefined;
@@ -177,6 +170,24 @@ function isPieceViewRef(view: object): view is PieceViewRef {
     (extraPath === undefined ||
       (typeof extraPath === "string" && !!extraPath && member !== undefined &&
         isKeptAsWrittenInPath(extraPath)));
+}
+
+/** Scope and pointer qualifiers require an ID in the document namespace. */
+function hasValidPieceQualifiers(view: object): boolean {
+  if (!("pieceScope" in view) && !("piecePath" in view)) return true;
+  if (
+    "builtin" in view || "pieceSlug" in view || !("pieceId" in view) ||
+    typeof view.pieceId !== "string" || !view.pieceId ||
+    isSlugAddress(view.pieceId)
+  ) return false;
+  if (
+    "pieceScope" in view &&
+    (typeof view.pieceScope !== "string" ||
+      !["space", "user", "session"].includes(view.pieceScope))
+  ) return false;
+  return !("piecePath" in view) ||
+    (Array.isArray(view.piecePath) &&
+      view.piecePath.every((key) => typeof key === "string"));
 }
 
 /**
@@ -200,13 +211,19 @@ function isKeptAsWrittenInPath(path: string): boolean {
  * Whether two views address the same thing. Two views are equal when they hold
  * the same fields with the same values, whatever order the route or control
  * that built them wrote those fields in. Pointer keys compare by their contents.
- * A field holding `undefined` counts
- * as absent, which is what a URL or a history entry keeps of one.
+ * A field holding `undefined`, the default space scope, and an empty pointer
+ * path count as absent, which is how their URL addresses are written.
  */
 export function isAppViewEqual(a: AppView, b: AppView): boolean {
   if (a === b) return true;
   const held = (view: AppView) =>
-    new Map(Object.entries(view).filter(([, value]) => value !== undefined));
+    new Map(
+      Object.entries(view).filter(([name, value]) =>
+        value !== undefined &&
+        !(name === "pieceScope" && value === "space") &&
+        !(name === "piecePath" && Array.isArray(value) && value.length === 0)
+      ),
+    );
   const fields = held(a);
   const other = held(b);
   return fields.size === other.size &&
@@ -244,6 +261,9 @@ export function isViewingDefaultPatternView(view: AppView): boolean {
 }
 
 export function appViewToUrlPath(view: AppView): `/${string}` {
+  if (!hasValidPieceQualifiers(view)) {
+    throw new Error("Invalid piece reference");
+  }
   const prefix = isEmbeddedView(view) ? `/${EMBED_PATH_PREFIX}` : "";
   if ("builtin" in view) {
     switch (view.builtin) {

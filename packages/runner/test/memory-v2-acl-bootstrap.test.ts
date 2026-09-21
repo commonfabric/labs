@@ -1861,7 +1861,18 @@ Deno.test("custom root genesis snapshots preserve typed Fabric links", async () 
     assert(!sync.error, sync.error?.message);
     const stored = readGenesisRoot(await server.engineForSpace(space));
     assert(stored?.argument?.target instanceof FabricLink);
-    assertEquals(stored.argument.target, link);
+    assertEquals(stored.argument.target.payload, link.payload);
+    assertEquals(stored.argument.target.payload, {
+      id: "of:fid1:target",
+      space,
+      scope: "user",
+      path: ["nested"],
+    });
+    assertEquals(
+      factory.sessions.map((entry) => entry.requested.genesisRoot),
+      factory.sessions.map(() => stored),
+      "Every mount, including the space-key bootstrap, declares the complete root intent",
+    );
   } finally {
     await manager.close();
     await server.close();

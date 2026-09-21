@@ -358,8 +358,8 @@ export interface SpaceAccessProvider {
   /** Current authoritative access loss, if any, for the named space. */
   error(space: string): Error | undefined;
 
-  /** Observes future losses; the current snapshot is read through `error()`. */
-  subscribe(space: string, onLoss: () => void): Cancel;
+  /** Observes loss and recovery; the current snapshot is read through `error()`. */
+  subscribe(space: string, onChange: () => void): Cancel;
 }
 
 /** Options for a worker-side renderer and its host authority boundaries. */

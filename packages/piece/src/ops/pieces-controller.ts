@@ -1301,11 +1301,12 @@ export class PiecesController<T = unknown> {
   /**
    * Remove a piece from this space's registry. Does not clean up the piece's
    * cells. Returns whether this call removed the piece — `false` means the
-   * piece was not registered, and nothing was written. When the removed piece
-   * is the space's default pattern, the link to it is cleared with a tracked
-   * transaction. Other removals invoke the default pattern's removePiece action. A
-   * removal that cannot commit throws instead, so `false` never stands in for
-   * a storage failure.
+   * piece was not registered, and nothing was written. A writable registry
+   * removes the default pattern and clears its link in one transaction.
+   * Computed or action-backed registries require a `removePiece` action for
+   * members and refuse removal of their default root; unlinking that root is a
+   * separate operation. A removal that cannot commit throws instead, so `false`
+   * never stands in for a storage failure.
    *
    * `scope` completes an id into a document address and defaults to the
    * space, as it does for {@link getPieceCell}. A `Cell` argument already
@@ -1349,10 +1350,7 @@ export class PiecesController<T = unknown> {
       if (!piecesCell.get().some((member) => member.equals(piece))) {
         return false;
       }
-      const remove = await root.asSchema({
-        type: "object",
-        properties: { removePiece: { asCell: ["stream"] } },
-      }).key("removePiece").pull();
+      const remove = declaredRemove;
       if (!isStream(remove)) {
         throw new Error(
           "The computed registry has no removePiece action; use the default pattern's composition actions",

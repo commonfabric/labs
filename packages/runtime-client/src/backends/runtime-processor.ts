@@ -161,6 +161,7 @@ import {
   type EnsureHomePatternRunningRequest,
   type EventAttentionListResponse,
   type EventAttentionResolveResponse,
+  type EventIntentOutcomeNotification,
   type EventNeedsAttentionNotification,
   type GetActionRunTraceRequest,
   type GetCellRequest,
@@ -262,14 +263,26 @@ import {
 } from "@/shared/security-context.ts";
 import { cellRefToKey, describeFailure } from "@/shared/utils.ts";
 
-/** Subscribe the worker bridge to complete terminal-attention outcomes. Keeping
+/** Subscribe the worker bridge to attention and refused-admission outcomes. Keeping
  * the filter and wire projection here makes the host boundary independently
  * testable without booting a worker runtime. */
 export function subscribeEventAttentionNotifications(
   runtime: Pick<Runtime, "subscribeEventIntentOutcomes">,
   post: (notification: EventNeedsAttentionNotification) => void = postToClient,
+  postRefusal: (notification: EventIntentOutcomeNotification) => void =
+    postToClient,
 ): Cancel {
   return runtime.subscribeEventIntentOutcomes((outcome: EventIntentOutcome) => {
+    if (outcome.kind === "refused") {
+      postRefusal({
+        type: NotificationType.EventIntentOutcome,
+        space: outcome.space,
+        eventId: outcome.eventId,
+        kind: "refused",
+        reason: "admission-refused",
+      });
+      return;
+    }
     if (
       outcome.kind !== "needs-attention" ||
       outcome.sidecarId === undefined ||
@@ -671,17 +684,20 @@ export const hasExplicitSubscriptionSchema = (schema: unknown): boolean =>
     isObjectOrArray(schema) &&
     Object.keys(schema).length > 0);
 
-/** Connects render boundaries to authoritative storage access loss. */
+/** Connects render boundaries to authoritative access verdict changes. */
 export function renderSpaceAccessProviderFor(
   runtime: Pick<Runtime, "storageManager">,
 ): SpaceAccessProvider {
   const storage = runtime.storageManager;
   return {
     error: (space) => storage.spaceAccessError?.(space as MemorySpace),
-    subscribe: (space, onLoss) =>
-      storage.subscribeSpaceAccessLoss?.((lostSpace) => {
-        if (lostSpace === space) onLoss();
-      }) ?? (() => {}),
+    subscribe: (space, onChange) => {
+      const changed = (changedSpace: MemorySpace) => {
+        if (changedSpace === space) onChange();
+      };
+      return storage.subscribeSpaceAccessChange?.(changed) ??
+        storage.subscribeSpaceAccessLoss?.(changed) ?? (() => {});
+    },
   };
 }
 
@@ -854,6 +870,7 @@ export class RuntimeProcessor {
     identity: Identity,
     telemetry: RuntimeTelemetry,
     securityContext: RuntimeSecurityContext,
+    clients: () => Iterable<WorkerClient> = () => [ownerClient],
   ) {
     this.#runtime = runtime;
     this.#cc = cc;
@@ -864,11 +881,7 @@ export class RuntimeProcessor {
     this.#securityContext = securityContext;
     this.#cancelSpaceAccessLoss = runtime.storageManager
       ?.subscribeSpaceAccessLoss?.((space) => {
-        const clients = new Set([
-          ownerClient,
-          ...[...this.#vdomMounts.values()].map((mount) => mount.client),
-        ]);
-        for (const client of clients) {
+        for (const client of clients()) {
           client.post({ type: NotificationType.SpaceAccessLost, space });
         }
       });
@@ -3295,9 +3308,13 @@ export class RuntimeProcessor {
    * Rejects when the runtime's server-execution posture diverges from what
    * the host declared, or when the API host fails its health check. The
    * returned processor handles requests at once; a caller that needs storage
-   * and pieces to have converged waits on `synced()`.
+   * and pieces to have converged waits on `synced()`. `clients` resolves the
+   * current authorized recipients of runtime-wide access-loss notifications.
    */
-  static async initialize(data: InitializationData): Promise<RuntimeProcessor> {
+  static async initialize(
+    data: InitializationData,
+    clients: () => Iterable<WorkerClient> = () => [ownerClient],
+  ): Promise<RuntimeProcessor> {
     const apiUrlObj = new URL(data.apiUrl);
     const identity = await Identity.fromKeyPair(
       data.identity,
@@ -3415,6 +3432,7 @@ export class RuntimeProcessor {
       identity,
       telemetry,
       securityContextFrom(data, identity.did()),
+      clients,
     );
     // InitializationData crosses postMessage with no runtime validation, so a
     // typo'd host config or version-skewed peer must fail CLOSED, not open:
@@ -3437,6 +3455,10 @@ export class RuntimeProcessor {
     );
     processor.#intentOutcomeCancel = subscribeEventAttentionNotifications(
       runtime,
+      undefined,
+      (notification) => {
+        for (const client of clients()) client.post(notification);
+      },
     );
     // The home-space site table carries space-to-host hints, which the
     // runtime reads as its live host lookup. A seeded route or earlier hint

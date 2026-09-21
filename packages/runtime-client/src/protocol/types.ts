@@ -514,6 +514,7 @@ export enum NotificationType {
 
   /** Reports one authoritative terminal event-delivery notice. */
   EventNeedsAttention = "callback:event-needs-attention",
+  EventIntentOutcome = "callback:event-intent-outcome",
 }
 
 /**
@@ -3248,10 +3249,23 @@ export type NavigateRequestNotification = {
   targetCellRef: CellRef;
 };
 
+/** A refused event admission. Read access to the space can remain valid. */
+export type EventIntentOutcomeNotice = {
+  space: DID;
+  eventId: string;
+  kind: "refused";
+  reason: "admission-refused";
+};
+
+/** A payload-free outcome delivered to the runtime's accepted clients. */
+export type EventIntentOutcomeNotification = EventIntentOutcomeNotice & {
+  type: NotificationType.EventIntentOutcome;
+};
+
 /** An authoritative loss of the runtime principal's access to one space. */
 export type SpaceAccessLostNotification = {
   type: NotificationType.SpaceAccessLost;
-  space: string;
+  space: DID;
 };
 
 /**
@@ -3513,6 +3527,7 @@ export type IPCRemoteNotification =
   | ConsoleNotification
   | NavigateRequestNotification
   | ErrorNotification
+  | EventIntentOutcomeNotification
   | SpaceAccessLostNotification
   | TelemetryNotification
   | VDomBatchNotification

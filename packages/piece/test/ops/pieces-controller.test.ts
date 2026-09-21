@@ -50,11 +50,12 @@ describe("pieces-controller", () => {
     let defaultRoot: Cell<unknown>;
     let piece: Cell<unknown>;
 
-    beforeEach(async () => {
+    async function initialize(computedCellIds = true) {
       storageManager = StorageManager.emulate({ as: signer });
       runtime = new Runtime({
         apiUrl: new URL("http://toolshed.test"),
         storageManager,
+        experimental: { computedCellIds },
       });
       pieces = new PiecesController(
         await createSession({
@@ -82,7 +83,9 @@ describe("pieces-controller", () => {
       await pieces.add([piece]);
       await runtime.idle();
       await pieces.synced();
-    });
+    }
+
+    beforeEach(() => initialize());
 
     afterEach(async () => {
       await runtime?.dispose();
@@ -107,12 +110,71 @@ describe("pieces-controller", () => {
       };
     }
 
+    async function installComputedRegistry(mode: "missing" | "noop" | "throw") {
+      const source = `
+import { computed, handler, pattern, Writable } from "commonfabric";
+const removePiece = handler<{}, {}>(() => { ${
+        mode === "throw" ? 'throw new Error("removal refused");' : ""
+      } });
+export default pattern<{panels: Writable<Writable<unknown>[]>}>(({panels}) => ({
+  pieceRegistry: computed(() => panels.get().map(piece => piece)),
+  ${mode === "missing" ? "" : "removePiece: removePiece({}),"}
+}));
+`;
+      const compiled = await runtime.patternManager.compilePattern({
+        main: "/main.tsx",
+        files: [{ name: "/main.tsx", contents: source }],
+      }, { space: pieces.getSpace() });
+      const root = await pieces.runPersistent(
+        compiled,
+        { panels: [piece] },
+        `computed-${mode}`,
+      );
+      await pieces.linkDefaultPattern(root);
+      await runtime.idle();
+      await pieces.synced();
+      return root;
+    }
+
     async function registeredIds(): Promise<string[]> {
       return (await pieces.getRegisteredPieces()).map((entry) => entry.id);
     }
 
     describe("instance members", () => {
       describe("remove()", () => {
+        it("refuses to unlink a computed default root through member removal", async () => {
+          const root = await installComputedRegistry("noop");
+          await expect(pieces.remove(root)).rejects.toThrow(
+            "unlinking the root is a separate operation",
+          );
+          expect((await pieces.getDefaultPattern(false))?.equalLinks(root))
+            .toBe(true);
+          expect(await registeredIds()).toEqual([pieceId(piece)]);
+        });
+
+        it("returns false for an absent computed-registry member without changing membership", async () => {
+          await installComputedRegistry("noop");
+          expect(await pieces.remove(defaultRoot)).toBe(false);
+          expect(await registeredIds()).toEqual([pieceId(piece)]);
+        });
+
+        for (
+          const [mode, message] of [
+            ["missing", "The computed registry has no removePiece action"],
+            [
+              "noop",
+              "The removePiece action committed without unregistering the piece",
+            ],
+            ["throw", "Transaction was aborted"],
+          ] as const
+        ) {
+          it(`preserves membership when the removal action is ${mode}`, async () => {
+            await installComputedRegistry(mode);
+            await expect(pieces.remove(piece)).rejects.toThrow(message);
+            expect(await registeredIds()).toEqual([pieceId(piece)]);
+          });
+        }
+
         it("returns `true` and unregisters the piece it removes", async () => {
           const id = pieceId(piece)!;
           expect(await registeredIds()).toContain(id);
@@ -124,7 +186,9 @@ describe("pieces-controller", () => {
         });
 
         it("preserves writable registry removal when computed cell IDs are disabled", async () => {
-          runtime.experimental.computedCellIds = false;
+          await runtime.dispose();
+          await storageManager.close();
+          await initialize(false);
           expect(await pieces.remove(piece)).toBe(true);
           expect(await registeredIds()).not.toContain(pieceId(piece)!);
         });

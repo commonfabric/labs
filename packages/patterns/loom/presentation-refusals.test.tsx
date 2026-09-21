@@ -44,10 +44,11 @@ export default pattern(() => {
   const absentMove = action(() =>
     loom.movePanel.send({ panel: first, before: absent })
   );
+  const absentMoveSource = action(() => loom.movePanel.send({ panel: absent }));
   const invalidUrl = action(() => loom.addPanel.send({ panel: invalid }));
   return {
     allowRuntimeErrors: true,
-    expectRuntimeErrors: 7,
+    expectRuntimeErrors: 8,
     allowConsoleErrors: true,
     [TESTS]: [
       { action: addFirst },
@@ -59,6 +60,7 @@ export default pattern(() => {
       { action: absentSource },
       { action: absentAnchor },
       { action: absentMove },
+      { action: absentMoveSource },
       { action: invalidUrl },
       { assertion: assert(() => loom.panels.length === 2) },
       { assertion: assert(() => loom.panels[0].equals(first)) },

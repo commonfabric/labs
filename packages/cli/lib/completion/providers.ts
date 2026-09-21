@@ -218,6 +218,7 @@ async function slugCandidates(line: CompletionLine): Promise<ProviderResult> {
 /** Listing shape used by `shapePieceCandidates`, structural so tests need no runtime. */
 export interface PieceListingLike {
   readonly id: string;
+  readonly reference?: string;
   readonly name?: string;
   readonly patternRef?: { readonly symbol?: string } | null;
 }
@@ -238,7 +239,7 @@ export function shapePieceCandidates(
   pieces: readonly PieceListingLike[],
 ): Candidate[] {
   return pieces.map((piece) => ({
-    value: piece.id,
+    value: piece.reference ?? piece.id,
     description: piece.name ?? piece.patternRef?.symbol ?? undefined,
   }));
 }

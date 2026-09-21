@@ -4745,6 +4745,38 @@ describe("runtime-processor", () => {
       recovery: "explicit-retry" as const,
     };
 
+    it("publishes a safe admission refusal without private diagnostic content", () => {
+      let subscriber: ((outcome: never) => void) | undefined;
+      const attention: unknown[] = [];
+      const refusals: unknown[] = [];
+      const cancel = () => {};
+      expect(subscribeEventAttentionNotifications(
+        {
+          subscribeEventIntentOutcomes(callback: (outcome: never) => void) {
+            subscriber = callback;
+            return cancel;
+          },
+        },
+        (notice: unknown) => attention.push(notice),
+        (notice: unknown) => refusals.push(notice),
+      )).toBe(cancel);
+      subscriber!({
+        kind: "refused",
+        space,
+        eventId: "read-only-click",
+        reason: "private server diagnostic",
+        payload: "private event payload",
+      } as never);
+      expect(refusals).toEqual([{
+        type: "callback:event-intent-outcome",
+        space,
+        eventId: "read-only-click",
+        kind: "refused",
+        reason: "admission-refused",
+      }]);
+      expect(attention).toEqual([]);
+    });
+
     it("forwards only complete terminal-attention outcomes", () => {
       let subscriber: ((outcome: never) => void) | undefined;
       const cancel = () => {};

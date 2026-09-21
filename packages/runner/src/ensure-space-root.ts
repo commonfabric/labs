@@ -271,7 +271,10 @@ export type EnsureSpaceRootResult = {
  * transaction's OCC invariant converges the remaining client-vs-server
  * race whichever side wins.
  *
- * A persisted root is resolved and left alone. Following its origin is the
+ * A persisted root is resolved and left alone when its address matches any
+ * supplied genesis reservation; a different address is a conflict. The memory
+ * session separately authenticates the complete immutable creation intent.
+ * Following its origin is the
  * ordinary piece reconciliation, which belongs to the user who opens the
  * piece, not to a tenure that opens nothing.
  *

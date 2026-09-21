@@ -7,7 +7,9 @@
  * same string for nearly every row and differ wherever a name's own characters
  * are readings — a key called `..`, one holding the separator — which is a
  * question about the place rather than about the listing, so
- * `operandForChild` answers it and this module asks.
+ * `operandForChild` answers it and this module asks. Registered pieces outside
+ * the current space, scope, or document root carry their complete reference
+ * instead; selection preserves it, while `cd` refuses foreign spaces.
  *
  * A row also carries what it is. The kind is recorded as the row is made
  * rather than worked out again by whoever reads it, which is what lets a
@@ -104,7 +106,8 @@ export interface ListingRow {
    * The operand `cd` takes to reach it, as `cd` reads it, and absent where
    * `operandForChild` offers none. Absent is the narrower claim it makes:
    * that no spelling `operandForChild` tries names the row, not that nothing
-   * reaches it.
+   * reaches it. A registered piece outside the current space, scope, or
+   * document root supplies its complete reference as the operand instead.
    *
    * It is the decoded operand rather than the quoted token a line writes it
    * as. A row is read back by two consumers that want different forms — a

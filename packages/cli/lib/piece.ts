@@ -141,6 +141,7 @@ import { stderrConsoleHandler } from "./json-output.ts";
 import { validateEmbeddedSpaces } from "./llm-friendly-ref.ts";
 import {
   instantiatePieceOnServer,
+  ServedLifecycleError,
   setPieceSourceOnServer,
 } from "./pattern-lifecycle.ts";
 import { claimProcessDeployment } from "./process-deployment.ts";
@@ -1712,6 +1713,12 @@ async function createOnServer(
           ...(options?.start === false ? { start: false } : {}),
         });
     } catch (error) {
+      if (
+        error instanceof ServedLifecycleError && error.status >= 400 &&
+        error.status < 500 && error.status !== 408
+      ) {
+        throw error;
+      }
       throw new Error(
         `Piece creation outcome may be incomplete. Retry the same command ` +
           `with --request-key ${requestKey}. ` +
@@ -1761,7 +1768,8 @@ export async function newPiece(
 
   // Against a serving deployment the space root is the serving loop's to
   // ensure — it does so on activation, ahead of the verb this command sends
-  // — and a served creation that finds no root refuses with `no-space-root`.
+  // — and a served creation that finds no root retains its piece and reports
+  // failed registration, which the same request key can resume.
   // Otherwise registration through `pieces.add()` requires an existing
   // default pattern and fails before sending if none exists. Ensuring it
   // creates an absent root and reconciles and repairs an existing one; fail

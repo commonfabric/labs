@@ -101,16 +101,18 @@ describe("loom-root", () => {
       }, { eventId: "duplicate-foreign", session: signer.did() })
     );
     await runtime.idle();
-    await new Promise<void>((resolve, reject) =>
+    const replay = await new Promise<unknown>((resolve) =>
       duplicate.send({ panel: panels[1] }, (tx) => {
-        const status = tx.status();
-        if (
-          status.status === "error" &&
-          status.error.name !== "PreconditionFailedError"
-        ) reject(status.error);
-        else resolve();
+        resolve(tx.status());
       }, { eventId: "duplicate-foreign", session: signer.did() })
     );
+    expect(replay).toMatchObject({
+      status: "error",
+      error: {
+        name: "PreconditionFailedError",
+        precondition: "receipt-exists",
+      },
+    });
     await runtime.idle();
     const duplicated = await registry.pull();
     expect(duplicated.length).toBe(3);
