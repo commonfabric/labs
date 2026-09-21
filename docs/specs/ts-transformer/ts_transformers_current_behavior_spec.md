@@ -1423,9 +1423,8 @@ the binding takes its instantiated declared type, which holds every branch.
 
 Pattern result inference reads returned input bindings through the same
 function when a returned binding carries a scope wrapper. Scope detection reads
-both the emitted node and the recovered declaration: the printer can emit
-`unknown` for a scoped generic array, while its declaration still names the
-scope the result must retain. A node printed from a type is registered with that
+the emitted node, and a node printed from a type names the scope wrapper that
+type carries. A node printed from a type is registered with that
 type rather than with the type at the expression, which is the pattern body's
 view: the names a printed node spells
 resolve to nothing where it is emitted, so schema generation reads it by the

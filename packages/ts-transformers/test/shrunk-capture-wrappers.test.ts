@@ -69,6 +69,31 @@ export default pattern<Input>(({ roster }) => ({
       });
     });
 
+    it("keeps the empty default of an array declared on a nested property", async () => {
+      const capture = await captureOf(`
+interface Roster { people: Person[] | Default<[]>; }
+interface Input { roster: Roster; }
+export default pattern<Input>(({ roster }) => ({
+  s: computed(() => roster.people.map((p) => p.name)),
+}));`);
+
+      expect(capture.roster).toEqual({
+        type: "object",
+        properties: {
+          people: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { name: { type: "string" } },
+              required: ["name"],
+            },
+            default: [],
+          },
+        },
+        required: ["people"],
+      });
+    });
+
     it("keeps the default of a generic array binding", async () => {
       const capture = await captureOf(readingElementsOf(
         `interface Input<T> { c: T[] | ${BOX_DEFAULT}; }`,
@@ -136,6 +161,20 @@ export const names = lift((input: { items: Items }) =>
       expect(capture.c).toEqual({
         type: "array",
         items: VALUE_ONLY,
+        scope: "user",
+      });
+    });
+
+    it("keeps the scope and empty default of a generic array binding", async () => {
+      const capture = await captureOf(readingElementsOf(
+        `interface Input<T> { c: PerUser<T[] | Default<[]>>; }`,
+        "Box<number>",
+      ));
+
+      expect(capture.c).toEqual({
+        type: "array",
+        items: VALUE_ONLY,
+        default: [],
         scope: "user",
       });
     });

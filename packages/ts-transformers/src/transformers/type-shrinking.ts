@@ -20,7 +20,6 @@ import {
 import { spellingsWhere } from "@commonfabric/schema-generator/wrapper-names";
 import {
   createRegisteredTypeLiteral,
-  DEFAULT_TYPE_NODE_FLAGS,
   typeToTypeNodeWithRegistry,
 } from "../ast/type-building.ts";
 import { CF_HELPERS_IDENTIFIER } from "../core/cf-helpers.ts";
@@ -1467,7 +1466,6 @@ function restoreDefault(
     payload,
     { checker, factory, sourceFile, state },
     typeRegistry,
-    DEFAULT_TYPE_NODE_FLAGS | ts.NodeBuilderFlags.AllowEmptyTuple,
   );
   return wrapTypeNodeWithRestoredDefault(node, value, factory);
 }
