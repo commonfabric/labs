@@ -736,25 +736,43 @@ Deno.test("live candidates: the every-scope entity slot enumerates rows in one p
   }
 });
 
-Deno.test("live candidates: the every-scope entity slot reconstructs one scan's worth in total", async () => {
-  // Each scope's listing is capped on its own, so without a shared budget a
-  // store of many scopes reconstructs the cap once per scope — every entity in
-  // the space, for one keystroke. The slot offers what one unscoped
-  // `cf inspect entities` would: the scan cap, counted across every scope.
+Deno.test("live candidates: a saturated space scope does not hide later scopes", async () => {
+  // The scan cap bounds reconstruction, which only labels a candidate. A space
+  // scope holding more than the cap spends all of it, and the per-user and
+  // per-session entities after it — the ones `inspect overlay` exists to show
+  // — are still offered, unlabeled.
   const dir = await Deno.makeTempDir();
   try {
     const path = `${dir}/space.sqlite`;
-    const half = Math.ceil(DEFAULT_SCAN_LIMIT * 0.75);
+    const inSpace = DEFAULT_SCAN_LIMIT + 10;
     seedScopedSpace(path, [
-      ...Array.from({ length: half }, (_, i) => [`of:s${i}`, "space"] as const),
-      ...Array.from({ length: half }, (_, i) => [`of:o${i}`, "other"] as const),
+      ...Array.from(
+        { length: inSpace },
+        (_, i) => [`of:s${i}`, "space"] as const,
+      ),
+      ...Array.from({ length: 20 }, (_, i) => [`of:o${i}`, "other"] as const),
     ]);
     const offered =
       (await liveCandidates(lineFor(`cf inspect overlay ${path} `)))
-        .candidates.map((candidate) => candidate.value);
-    assertEquals(offered.length, DEFAULT_SCAN_LIMIT);
-    // The space scope is read first, so its entities are the ones kept whole.
-    assert(offered.includes(`of:s${half - 1}`));
+        .candidates;
+    assertEquals(offered.length, inSpace + 20);
+    assertEquals(
+      offered.filter((candidate) => candidate.description !== undefined).length,
+      DEFAULT_SCAN_LIMIT,
+    );
+    const values = new Set(offered.map((candidate) => candidate.value));
+    for (let i = 0; i < 20; i++) assert(values.has(`of:o${i}`), `of:o${i}`);
+
+    // What is typed narrows the rows before any is reconstructed, so a prefix
+    // that matches fewer than the cap labels every one it offers.
+    const narrowed = (await liveCandidates(
+      lineFor(`cf inspect overlay ${path} of:o1`),
+    )).candidates;
+    assertEquals(
+      narrowed.map((candidate) => candidate.value).sort(),
+      ["of:o1", ...Array.from({ length: 10 }, (_, i) => `of:o1${i}`)].sort(),
+    );
+    assert(narrowed.every((candidate) => candidate.description !== undefined));
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
