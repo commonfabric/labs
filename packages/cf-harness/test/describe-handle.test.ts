@@ -303,6 +303,79 @@ describe("describe_handle", () => {
     );
   });
 
+  it("preserves session scopes on a composed Discord and Linear result", async () => {
+    const minted = await mintAddressHandle(
+      createHarnessHandleTable("run-describe"),
+      REF_A,
+      {
+        schema: {
+          type: "object",
+          properties: {
+            matches: {
+              type: "array",
+              items: { $ref: "#/$defs/CtLink" },
+              scope: "session",
+            },
+            ready: { type: "boolean", scope: "session" },
+            error: { type: "string", scope: "session" },
+            matchCount: { type: "number", scope: "session" },
+            bounds: { $ref: "#/$defs/Bounds", scope: "session" },
+            $NAME: { type: "string", default: "private piece name" },
+          },
+          $defs: {
+            Bounds: {
+              type: "object",
+              properties: { messages: { type: "number" } },
+            },
+            CtLink: {
+              type: "object",
+              properties: {
+                content: { type: "string", examples: ["private message"] },
+                issueKey: { type: "string", description: "private prose" },
+              },
+            },
+          },
+        },
+      },
+    );
+
+    const output = await describeHandleTool.invoke(
+      contextWith(minted.table),
+      { token: minted.token },
+    );
+
+    expect(output.known).toBe(true);
+    expect(output.hasSchema).toBe(true);
+    expect(output.schema).toEqual({
+      type: "object",
+      properties: {
+        matches: {
+          type: "array",
+          items: { $ref: "#/$defs/d1" },
+          scope: "session",
+        },
+        ready: { type: "boolean", scope: "session" },
+        error: { type: "string", scope: "session" },
+        matchCount: { type: "number", scope: "session" },
+        bounds: { $ref: "#/$defs/d0", scope: "session" },
+        $NAME: { type: "string" },
+      },
+      $defs: {
+        d0: {
+          type: "object",
+          properties: { messages: { type: "number" } },
+        },
+        d1: {
+          type: "object",
+          properties: {
+            content: { type: "string" },
+            issueKey: { type: "string" },
+          },
+        },
+      },
+    });
+  });
+
   it("reports the path of a known token that carries no schema", async () => {
     const minted = await mintAddressHandle(
       createHarnessHandleTable("run-describe"),

@@ -1118,14 +1118,16 @@ is what a pattern does with the answer.
 
 **What is disclosed is structure and only structure**: property names, types,
 nesting, required-ness, array and object composition, a `type` from the schema
-vocabulary, a `format` from the small known set, and a local `$ref` with the
-`$defs` it points into. Definition names are not part of that: every `$defs` and
-`definitions` key is replaced by an opaque `d0`, `d1`, … and every `$ref` that
-resolves to one is rewritten to match, so the reported schema stays
-referentially valid while no name its author chose for a definition crosses. A
-`$ref` that resolves to nothing — a pointer into a `$defs` the schema does not
-declare — is dropped rather than reported, since there is nothing left of it but
-its author's text.
+vocabulary, a `format` from the small known set, a recognized `scope` (`space`,
+`user`, `session`, or `any`), and a local `$ref` with the `$defs` it points
+into. Scope annotations survive at every schema depth so a composing author can
+declare the same scope on the corresponding input. Definition names are not part
+of that: every `$defs` and `definitions` key is replaced by an opaque `d0`,
+`d1`, … and every `$ref` that resolves to one is rewritten to match, so the
+reported schema stays referentially valid while no name its author chose for a
+definition crosses. A `$ref` that resolves to nothing — a pointer into a `$defs`
+the schema does not declare — is dropped rather than reported, since there is
+nothing left of it but its author's text.
 
 **What is not disclosed is anything a value or a word can hide in.** A JSON
 Schema is a place to put data: `const`, `enum`, `default` and `examples` carry
@@ -1135,8 +1137,9 @@ therefore REBUILT from an allowlist of structural keywords rather than copied
 with a few keywords deleted — at every depth, through `properties`, `items`,
 `$defs`, and every combinator — so a keyword nobody anticipated is absent rather
 than disclosed. A `required` name that no property declares is dropped too: that
-is a string, not structure. Numeric bounds, string patterns, and the Common
-Fabric schema extensions do not cross either.
+is a string, not structure. Numeric bounds, string patterns, unrecognized scope
+values, and Common Fabric schema extensions other than `scope` do not cross
+either.
 
 The schema is also reduced to a bounded depth. Past a nesting depth no authored
 schema reaches, a subschema reports as the empty shape `{}`, the same answer a
