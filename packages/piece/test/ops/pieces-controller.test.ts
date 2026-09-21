@@ -196,63 +196,74 @@ export default pattern<{panels: Writable<Writable<unknown>[]>}>(({panels}) => ({
           await runtime.dispose();
           await storageManager.close();
           const server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
-          await initialize(computedCellIds, server);
-          const { root, registry } = await computedRegistrationRoot();
-          const member = await pieces.runPersistent(
-            valuePattern(),
-            { value: 7 },
-            "unstarted-member",
-            { start: false },
-          );
-          const realStart = runtime.start.bind(runtime);
-          const started: unknown[] = [];
-          runtime.start = ((cell, ...args) => {
-            started.push(address(cell));
-            return realStart(cell, ...args);
-          }) as typeof runtime.start;
           try {
-            await pieces.add([member]);
-            expect(
-              registry.get().map((cell) => address(cell.resolveAsCell())),
-            )
-              .toEqual([address(member)]);
-            expect(started).not.toContainEqual(address(member));
-            runtime.runner.stop(root);
-            const readerStorage = EmulatedStorageManager.connectTo(server, {
-              as: signer,
-            });
-            const readerRuntime = new Runtime({
-              apiUrl: new URL("http://toolshed.test"),
-              storageManager: readerStorage,
-              experimental: { serverExecution: true, computedCellIds },
-            });
-            let readerStarts = 0;
-            const readerStart = readerRuntime.start.bind(readerRuntime);
-            readerRuntime.start = ((cell, ...args) => {
-              readerStarts++;
-              return readerStart(cell, ...args);
-            }) as typeof readerRuntime.start;
+            await initialize(computedCellIds, server);
+            const { root, registry } = await computedRegistrationRoot();
+            const member = await pieces.runPersistent(
+              valuePattern(),
+              { value: 7 },
+              "unstarted-member",
+              { start: false },
+            );
+            const realStart = runtime.start.bind(runtime);
+            const started: unknown[] = [];
+            runtime.start = ((cell, ...args) => {
+              started.push(address(cell));
+              return realStart(cell, ...args);
+            }) as typeof runtime.start;
             try {
-              const reader = new PiecesController({
-                as: signer,
-                space: pieces.getSpace(),
-              }, readerRuntime);
-              const durable = await reader.getRegisteredPieces();
+              await pieces.add([member]);
               expect(
-                await Promise.all(
-                  durable.map(async (entry) => address(await entry.getCell())),
-                ),
-              ).toEqual([address(member)]);
-              expect(readerStarts).toBe(0);
+                registry.get().map((cell) => address(cell.resolveAsCell())),
+              )
+                .toEqual([address(member)]);
+              expect(started).not.toContainEqual(address(member));
+              runtime.runner.stop(root);
+              const readerStorage = EmulatedStorageManager.connectTo(server, {
+                as: signer,
+              });
+              const readerRuntime = new Runtime({
+                apiUrl: new URL("http://toolshed.test"),
+                storageManager: readerStorage,
+                experimental: { serverExecution: true, computedCellIds },
+              });
+              let readerStarts = 0;
+              const readerStart = readerRuntime.start.bind(readerRuntime);
+              readerRuntime.start = ((cell, ...args) => {
+                readerStarts++;
+                return readerStart(cell, ...args);
+              }) as typeof readerRuntime.start;
+              try {
+                const reader = new PiecesController({
+                  as: signer,
+                  space: pieces.getSpace(),
+                }, readerRuntime);
+                const durable = await reader.getRegisteredPieces();
+                expect(
+                  await Promise.all(
+                    durable.map(async (entry) =>
+                      address(await entry.getCell())
+                    ),
+                  ),
+                ).toEqual([address(member)]);
+                expect(readerStarts).toBe(0);
+              } finally {
+                await readerRuntime.dispose();
+                await readerStorage.close();
+              }
             } finally {
-              await readerRuntime.dispose();
-              await readerStorage.close();
+              runtime.start = realStart;
             }
           } finally {
-            runtime.start = realStart;
-            await runtime.dispose();
-            await storageManager.close();
-            await server.close();
+            try {
+              await runtime.dispose();
+            } finally {
+              try {
+                await storageManager.close();
+              } finally {
+                await server.close();
+              }
+            }
           }
         });
       }
