@@ -74,19 +74,10 @@ export const render = (
   });
 
   // Start rendering asynchronously
-  let cancelAsync: (() => Promise<void>) | null = null;
   let disposed = false;
 
-  const renderPromise = renderer
+  renderer
     .render(parent, cellRef)
-    .then((cancel) => {
-      if (disposed) {
-        // Already cancelled before render completed
-        cancel().catch(() => {});
-      } else {
-        cancelAsync = cancel;
-      }
-    })
     .catch((error) => {
       // Swallow errors caused by teardown: this render being cancelled, or the
       // connection being disposed (which cancels an in-flight mount).
@@ -103,12 +94,8 @@ export const render = (
     if (activeRenders.get(parent) === entry) {
       activeRenders.delete(parent);
     }
-    if (cancelAsync) {
-      cancelAsync().catch(() => {});
-    }
-    // Dispose renderer to clean up event listeners and applicator.
-    // Also ensure the render promise doesn't leak unhandled rejections.
-    renderPromise.then(() => renderer.dispose().catch(() => {}));
+    // Local teardown must precede any pending mount or unmount response.
+    renderer.dispose().catch(() => {});
   };
 };
 

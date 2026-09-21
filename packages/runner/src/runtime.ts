@@ -352,9 +352,9 @@ export interface ExperimentalOptions {
   /**
    * The `agent` builtin (`docs/common/capabilities/agent.md`): a pattern's
    * request for an agent run, staged as a sink request and handed to a
-   * runner through an `AgentRun` record. Off, the builtin settles every
-   * request with an error naming this flag and stages nothing. Defaults to
-   * off.
+   * runner through an `AgentRun` record. When false, the builtin settles
+   * every request with an error naming this flag and stages nothing. Defaults
+   * to on.
    */
   agentBuiltin?: boolean | undefined;
 
@@ -1698,14 +1698,13 @@ export class Runtime {
       }
     }
 
-    // Unlike ambient flags, computedCellIds and plainResultReceipts are
-    // consumed from this Runtime instance (the builder frame and the runner's
-    // receipt-only branch respectively). Normalize their local defaults after
-    // override logging so an omitted option does not appear as an explicit
-    // `true` override.
+    // These flags are consumed from this Runtime instance. Normalize their
+    // local defaults after override logging so an omitted option does not
+    // appear as an explicit `true` override.
     this.experimental.computedCellIds ??= true;
     this.experimental.plainResultReceipts ??= true;
     this.experimental.lazyMaterialization ??= true;
+    this.experimental.agentBuiltin ??= true;
 
     // Propagate experimental flags to their ambient control points, then read
     // back the effective state so `experimental.*` reflects what is actually in

@@ -63,6 +63,26 @@ describe("InboxClient", () => {
     ).rejects.toThrow("service-error");
     expect(calls).toBe(1);
   });
+  it("classifies malformed refusal bodies as service failures without exposing their contents", async () => {
+    const signer = await Identity.fromPassphrase("sdk-error-bodies");
+    for (const body of ["private upstream text", "null", "[]", "42", "{}"]) {
+      for (const status of [503, 200]) {
+        let calls = 0;
+        const client = new InboxClient({
+          host: "https://inbox.example",
+          signer,
+          fetch: () => {
+            calls++;
+            return Promise.resolve(new Response(body, { status }));
+          },
+        });
+        await expect(client.list()).rejects.toThrow(
+          status === 503 ? "service-error" : "invalid-response",
+        );
+        expect(calls).toBe(1);
+      }
+    }
+  });
   it("rejects non-JSON and oversized payloads before sending", async () => {
     const signer = await Identity.fromPassphrase("sdk-limits");
     let calls = 0;

@@ -13,6 +13,15 @@ confirmation, and revalidates source state and retained inputs. A changed review
 during confirmation is returned to the caller without automatically accepting
 it.
 
+A piece whose current pattern cannot be loaded is reported the same way: the
+candidate cannot be compared with what the piece ran, and that is the
+incompatibility. Under `--dangerously-allow-incompatible-schema` the piece
+adopts the origin's pattern and records the origin in one transition, and keeps
+the identity it displaced where its space retains no source for it. The stored
+argument is still checked against the candidate, which no flag waives, and a
+piece with recorded source history whose current source cannot be restored is
+still refused.
+
 For a detached profile with the legacy inbox descriptor, the manual migration is
 `cf piece follow --cell <profile> system:system/profile-home.tsx
 --dangerously-allow-incompatible-schema`

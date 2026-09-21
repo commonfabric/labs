@@ -124,19 +124,21 @@ export class VDomRenderer {
     this.#applicator.setContainer(container);
 
     // Request the worker to start rendering
-    logger.timeStart("mount", String(this.#mountId));
+    const mountId = this.#mountId;
+    logger.timeStart("mount", String(mountId));
     try {
-      const response = await this.#session.mount(this.#mountId, cellRef);
+      const response = await this.#session.mount(mountId, cellRef);
+      const elapsed = logger.timeEnd("mount", String(mountId));
+      if (this.#disposed) return async () => {};
       this.#rootNodeId = response.rootId;
 
-      const elapsed = logger.timeEnd("mount", String(this.#mountId));
       logger.debug("render-mount", () => [
-        `Mounted VDOM ${this.#mountId} in ${elapsed?.toFixed(2)}ms`,
+        `Mounted VDOM ${mountId} in ${elapsed?.toFixed(2)}ms`,
         `rootId=${response.rootId}`,
       ]);
     } catch (error) {
       // Reset state on failure so the renderer can be reused
-      logger.timeEnd("mount", String(this.#mountId));
+      logger.timeEnd("mount", String(mountId));
       this.#mountId = null;
       this.#containerElement = null;
       throw error;
@@ -187,18 +189,15 @@ export class VDomRenderer {
   /**
    * Dispose of the renderer and clean up all resources. Used when this render
    * is cancelled while the connection is still alive (e.g. a cell or variant
-   * change), so it unmounts the worker-side mount before tearing down locally.
+   * change). Local teardown is synchronous; the worker unmount completes afterward.
    */
   async dispose(): Promise<void> {
     if (this.#disposed) return;
     // We are tearing ourselves down, so detach from the connection's disposal.
     this.#session.detach();
-    try {
-      await this.stopRendering();
-    } finally {
-      // Detach listeners and drop DOM even if the unmount round-trip failed.
-      this.#disposeLocal();
-    }
+    const unmount = this.stopRendering();
+    this.#disposeLocal();
+    await unmount;
   }
 
   /**

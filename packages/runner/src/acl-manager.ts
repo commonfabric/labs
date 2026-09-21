@@ -1,5 +1,5 @@
 import { cloneIfNecessary, type FabricValue } from "@commonfabric/data-model";
-import { isDIDKey } from "@commonfabric/identity/did";
+import { isDID } from "@commonfabric/identity/did";
 import {
   type ACL,
   aclDocId,
@@ -60,7 +60,7 @@ export class ACLManager {
 
   /** Adds READ or WRITE while retaining stronger access, including concurrent grants. */
   async grant(user: DID, capability: "READ" | "WRITE"): Promise<ACL> {
-    if (!isDIDKey(user) || (capability !== "READ" && capability !== "WRITE")) {
+    if (!isDID(user) || (capability !== "READ" && capability !== "WRITE")) {
       throw new Error("A grant must be READ or WRITE.");
     }
     await this.get();

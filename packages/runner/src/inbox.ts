@@ -191,7 +191,7 @@ export class InboxClient {
     try {
       data = object(await response.json());
     } catch {
-      throw new InboxError("invalid-response");
+      throw new InboxError(response.ok ? "invalid-response" : "service-error");
     }
     if (!response.ok) {
       const codes = [

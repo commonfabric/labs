@@ -46,25 +46,17 @@ const operation = (value: string) => {
 export class InboxStore {
   #database: Database;
   #closed = false;
+  #lockPath: string | undefined;
 
   /** Opens durable storage, or an isolated in-memory database for a test server. */
   constructor(path: string) {
-    // SQLite journal-mode upgrades cannot always wait on busy_timeout. Serialize
-    // connection initialization on a separate lock file, including the first open.
-    const initialization = path === ":memory:"
-      ? undefined
-      : Deno.openSync(`${path}.initialize.lock`, {
-        read: true,
-        write: true,
-        create: true,
-        mode: 0o600,
-      });
-    let database: Database | undefined;
-    try {
-      initialization?.lockSync(true);
-      database = new Database(path);
-      database.exec(
-        `PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
+    this.#lockPath = path === ":memory:" ? undefined : `${path}.write.lock`;
+    this.#database = this.#write(() => {
+      let database: Database | undefined;
+      try {
+        database = new Database(path);
+        database.exec(
+          `PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
       CREATE TABLE IF NOT EXISTS inbox_recipients (recipient TEXT PRIMARY KEY);
       CREATE TABLE IF NOT EXISTS inbox_messages (
         sequence INTEGER PRIMARY KEY AUTOINCREMENT, recipient TEXT NOT NULL, sender TEXT NOT NULL,
@@ -72,22 +64,45 @@ export class InboxStore {
         UNIQUE(recipient,sender,operation));
       CREATE INDEX IF NOT EXISTS inbox_pending ON inbox_messages(recipient,sequence) WHERE payload IS NOT NULL;
       CREATE INDEX IF NOT EXISTS inbox_sender ON inbox_messages(recipient,sender) WHERE payload IS NOT NULL;`,
-      );
-      this.#database = database;
-    } catch (error) {
-      database?.close();
-      throw error;
+        );
+        return database;
+      } catch (error) {
+        database?.close();
+        throw error;
+      }
+    });
+  }
+
+  // Every cooperating writer, including schema initialization, waits on the same
+  // retained inode. Closing the descriptor releases ownership even after a crash;
+  // readers use WAL snapshots without taking this lock.
+  #write<T>(operation: () => T): T {
+    const lock = this.#lockPath === undefined
+      ? undefined
+      : Deno.openSync(this.#lockPath, {
+        read: true,
+        write: true,
+        create: true,
+        mode: 0o600,
+      });
+    try {
+      lock?.lockSync(true);
+      return operation();
     } finally {
-      initialization?.close();
+      lock?.close();
     }
   }
 
   /** Explicitly opts the authenticated recipient into delivery. */
   enable(recipient: string): { recipientDid: string; enabled: true } {
     did(recipient);
-    this.#database.prepare("INSERT OR IGNORE INTO inbox_recipients VALUES (?)")
-      .run(recipient);
-    return { recipientDid: recipient, enabled: true };
+    return this.#write(() => {
+      this.#database.prepare(
+        "INSERT OR IGNORE INTO inbox_recipients VALUES (?)",
+      )
+        .run(recipient);
+      return { recipientDid: recipient, enabled: true };
+    });
   }
 
   /** Returns public readiness without revealing message data. */
@@ -116,45 +131,49 @@ export class InboxStore {
     const snapshot = snapshotInboxPayload(request.payload);
     const hash = hashStringOf(snapshot.payload);
     const payload = snapshot.json;
-    return this.#database.transaction(() => {
-      const existing = this.#row(
-        request.recipientDid,
-        sender,
-        request.operationId,
-      );
-      if (existing) {
-        if (existing.hash !== hash) throw new InboxError("operation-conflict");
-        return receipt(existing);
-      }
-      if (!this.status(request.recipientDid).enabled) {
-        throw new InboxError("not-enabled");
-      }
-      const counts = this.#database.prepare(`SELECT count(*) AS total,
-        count(CASE WHEN payload IS NOT NULL THEN 1 END) AS pending,
-        count(CASE WHEN payload IS NOT NULL AND sender=? THEN 1 END) AS senderPending
-        FROM inbox_messages WHERE recipient=?`).get<
-        { total: number; pending: number; senderPending: number }
-      >(sender, request.recipientDid)!;
-      if (
-        counts.total >= INBOX_CAPABILITY.maxReceipts ||
-        counts.pending >= INBOX_CAPABILITY.maxPending ||
-        counts.senderPending >= INBOX_CAPABILITY.maxPendingPerSender
-      ) throw new InboxError("inbox-full");
-      this.#database.prepare(
-        "INSERT INTO inbox_messages(recipient,sender,operation,hash,received,payload) VALUES (?,?,?,?,?,?)",
-      )
-        .run(
+    return this.#write(() =>
+      this.#database.transaction(() => {
+        const existing = this.#row(
           request.recipientDid,
           sender,
           request.operationId,
-          hash,
-          Date.now(),
-          payload,
         );
-      return receipt(
-        this.#row(request.recipientDid, sender, request.operationId)!,
-      );
-    }).immediate();
+        if (existing) {
+          if (existing.hash !== hash) {
+            throw new InboxError("operation-conflict");
+          }
+          return receipt(existing);
+        }
+        if (!this.status(request.recipientDid).enabled) {
+          throw new InboxError("not-enabled");
+        }
+        const counts = this.#database.prepare(`SELECT count(*) AS total,
+        count(CASE WHEN payload IS NOT NULL THEN 1 END) AS pending,
+        count(CASE WHEN payload IS NOT NULL AND sender=? THEN 1 END) AS senderPending
+        FROM inbox_messages WHERE recipient=?`).get<
+          { total: number; pending: number; senderPending: number }
+        >(sender, request.recipientDid)!;
+        if (
+          counts.total >= INBOX_CAPABILITY.maxReceipts ||
+          counts.pending >= INBOX_CAPABILITY.maxPending ||
+          counts.senderPending >= INBOX_CAPABILITY.maxPendingPerSender
+        ) throw new InboxError("inbox-full");
+        this.#database.prepare(
+          "INSERT INTO inbox_messages(recipient,sender,operation,hash,received,payload) VALUES (?,?,?,?,?,?)",
+        )
+          .run(
+            request.recipientDid,
+            sender,
+            request.operationId,
+            hash,
+            Date.now(),
+            payload,
+          );
+        return receipt(
+          this.#row(request.recipientDid, sender, request.operationId)!,
+        );
+      }).immediate()
+    );
   }
 
   /** Lists only pending deliveries addressed to the authenticated recipient. */
@@ -201,19 +220,23 @@ export class InboxStore {
     did(recipient);
     did(key.senderDid);
     operation(key.operationId);
-    const row = this.#row(recipient, key.senderDid, key.operationId);
-    if (!row) return { acknowledged: false };
-    this.#database.prepare(
-      "UPDATE inbox_messages SET payload=NULL WHERE recipient=? AND sender=? AND operation=?",
-    ).run(recipient, key.senderDid, key.operationId);
-    return { acknowledged: true };
+    return this.#write(() => {
+      const row = this.#row(recipient, key.senderDid, key.operationId);
+      if (!row) return { acknowledged: false };
+      this.#database.prepare(
+        "UPDATE inbox_messages SET payload=NULL WHERE recipient=? AND sender=? AND operation=?",
+      ).run(recipient, key.senderDid, key.operationId);
+      return { acknowledged: true };
+    });
   }
 
-  /** Releases the owned database connection. */
+  /** Releases the connection while coordinating SQLite's final WAL checkpoint. */
   close(): void {
     if (!this.#closed) {
-      this.#closed = true;
-      this.#database.close();
+      this.#write(() => {
+        this.#database.close();
+        this.#closed = true;
+      });
     }
   }
 

@@ -1,5 +1,5 @@
 import { Database } from "@db/sqlite";
-import { toFileUrl } from "@std/path";
+import { fromFileUrl, toFileUrl } from "@std/path";
 import { Server } from "../v2/server.ts";
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
@@ -7,7 +7,144 @@ import { Identity } from "@commonfabric/identity";
 import { InboxStore } from "../inbox-store.ts";
 import type { InboxPayload } from "../inbox.ts";
 
+function stopChild(child: Deno.ChildProcess): void {
+  try {
+    child.kill("SIGKILL");
+  } catch (error) {
+    if (
+      !(error instanceof Deno.errors.NotFound) &&
+      !(error instanceof TypeError &&
+        error.message === "Child process has already terminated")
+    ) throw error;
+  }
+}
+
 describe("InboxStore", () => {
+  it("waits for independent writers to release their transactions without a success deadline", async () => {
+    const directory = await Deno.makeTempDir();
+    const path = `${directory}/inbox.sqlite`;
+    const recipient = "did:key:lock-recipient";
+    const initial = new InboxStore(path);
+    initial.enable(recipient);
+    initial.send(recipient, {
+      recipientDid: recipient,
+      operationId: "pending",
+      payload: null,
+    });
+    initial.close();
+    const children: Deno.ChildProcess[] = [];
+    const readers: ReadableStreamDefaultReader<string>[] = [];
+    const diagnostics: Promise<string>[] = [];
+    try {
+      const root = fromFileUrl(new URL("../../../", import.meta.url));
+      const lock = `${directory}/deno.lock`;
+      await Deno.copyFile(`${root}/deno.lock`, lock);
+      const start = async (operation: string) => {
+        const child = new Deno.Command(Deno.execPath(), {
+          cwd: root,
+          args: [
+            "run",
+            `--lock=${lock}`,
+            "--frozen",
+            "-A",
+            fromFileUrl(
+              new URL("./fixtures/inbox-write-lock.ts", import.meta.url),
+            ),
+            path,
+            operation,
+          ],
+          stdin: "piped",
+          stdout: "piped",
+          stderr: "piped",
+        }).spawn();
+        children.push(child);
+        diagnostics.push(new Response(child.stderr).text());
+        const reader = child.stdout.pipeThrough(new TextDecoderStream())
+          .getReader();
+        readers.push(reader);
+        let buffered = "";
+        const line = async () => {
+          while (!buffered.includes("\n")) {
+            const next = await reader.read();
+            if (next.done) throw new Error("writer ended before its marker");
+            buffered += next.value;
+          }
+          const end = buffered.indexOf("\n");
+          const result = buffered.slice(0, end);
+          buffered = buffered.slice(end + 1);
+          return result;
+        };
+        expect(await line()).toBe("ready");
+        const release = async () => {
+          const writer = child.stdin.getWriter();
+          try {
+            await writer.write(new Uint8Array([1]));
+          } finally {
+            writer.releaseLock();
+          }
+        };
+        return { child, line, release };
+      };
+      const holder = await start("hold");
+      const contenders = [];
+      for (const operation of ["enable", "send", "acknowledge"]) {
+        contenders.push(await start(operation));
+      }
+      await holder.release();
+      expect(await holder.line()).toBe("holding");
+      for (const contender of contenders) {
+        await contender.release();
+        expect(await contender.line()).toBe("writing");
+      }
+      // This duration is the behavior under test: a healthy write must survive
+      // contention lasting longer than five seconds. Readiness
+      // and transaction release use process markers, not this clock.
+      await new Promise((resolve) => setTimeout(resolve, 5500));
+      await holder.release();
+      expect(await holder.line()).toBe("committed");
+      expect(await holder.line()).toBe("closing");
+      const checkpointLock = await Deno.open(`${path}.write.lock`, {
+        read: true,
+        write: true,
+      });
+      try {
+        expect(checkpointLock.tryLockSync(true)).toBe(false);
+      } finally {
+        checkpointLock.close();
+      }
+      await holder.release();
+      for (const contender of contenders) {
+        expect(await contender.line()).toBe("committed");
+      }
+      const stored = new InboxStore(path);
+      try {
+        expect(stored.status("did:key:new-recipient").enabled).toBe(true);
+        expect(
+          stored.list(recipient).messages.map((row) => row.receipt.operationId),
+        ).toEqual(["hold", "send"]);
+        expect(
+          stored.get(recipient, {
+            senderDid: recipient,
+            operationId: "pending",
+          }).message,
+        ).toBeNull();
+      } finally {
+        stored.close();
+      }
+    } finally {
+      for (const child of children) {
+        stopChild(child);
+        await child.status;
+        await child.stdin.close();
+      }
+      for (const reader of readers) {
+        await reader.cancel();
+        reader.releaseLock();
+      }
+      await Promise.all(diagnostics);
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
   it("refuses invalid identities and operation keys without committing deliveries", async () => {
     const recipient = (await Identity.fromPassphrase("validation-recipient"))
       .did();
@@ -123,7 +260,7 @@ describe("InboxStore", () => {
     try {
       await Deno.writeTextFile(path, "not a SQLite database");
       expect(() => new InboxStore(path)).toThrow();
-      const lock = await Deno.open(`${path}.initialize.lock`, {
+      const lock = await Deno.open(`${path}.write.lock`, {
         read: true,
         write: true,
       });

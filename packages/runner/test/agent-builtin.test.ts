@@ -78,7 +78,6 @@ describe("agent builtin", () => {
     runtime = new Runtime({
       apiUrl: new URL("https://fabric.example/"),
       storageManager,
-      experimental: { agentBuiltin: true },
       ...options,
     });
     tx = runtime.edit();
@@ -130,7 +129,7 @@ describe("agent builtin", () => {
   };
 
   it("settles with an error naming the flag when `agentBuiltin` is off", async () => {
-    setUp({ experimental: {} });
+    setUp({ experimental: { agentBuiltin: false } });
     const result = runAgentPattern("agent-flag-off");
     await tx.commit();
 

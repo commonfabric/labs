@@ -699,6 +699,19 @@ Deno.test("ACLManager monotonic grants preserve stronger concurrent access", asy
   const harness = await withGenesisedSpace("monotonic-grant");
   try {
     const guest = (await Identity.fromPassphrase("monotonic-guest")).did();
+    await harness.acl.remove("*");
+    const external = "did:web:principal.example";
+    await harness.acl.grant(external, "READ");
+    assertEquals(
+      (await harness.readStoredAcl() as Record<string, string>)[external],
+      "READ",
+    );
+    await harness.acl.set(external, "WRITE");
+    await harness.acl.grant(external, "READ");
+    assertEquals(
+      (await harness.readStoredAcl() as Record<string, string>)[external],
+      "WRITE",
+    );
     await harness.acl.set("*", "WRITE");
     await harness.acl.grant(guest, "READ");
     assertEquals((await harness.acl.get())?.[guest], "WRITE");

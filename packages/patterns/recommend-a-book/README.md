@@ -98,8 +98,8 @@ membership. A missing or denied ACL leaves the run personal-only. Membership is
 not rechecked within an already-running model session, so revoking a reader
 takes effect for its next run rather than interrupting that session.
 
-For bounded-host development, enable the experimental `agentBuiltin` flag and
-run a configured `cf agent runner` for each participating user's home queue. See
+For bounded-host development, run a configured `cf agent runner` for each
+participating user's home queue. The `agentBuiltin` flag is on by default. See
 the
 [agent request demo](../book-recommendations/README.md#run-against-disposable-dev-local)
 for disposable server and runner setup. Use a nonzero port offset for local
