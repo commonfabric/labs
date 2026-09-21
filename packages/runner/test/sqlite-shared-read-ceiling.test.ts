@@ -334,7 +334,7 @@ describe("sqlite shared read ceiling", () => {
   });
 
   it("withholds private cell content from a shared query's provider error", async () => {
-    const narrow = reader([{ type: "User", user: signer.did() }]);
+    const narrow = reader([{ type: "User", subject: signer.did() }]);
     const result = await run(
       narrow,
       "SELECT json_extract('{}', body) AS value FROM emails WHERE id = 2",

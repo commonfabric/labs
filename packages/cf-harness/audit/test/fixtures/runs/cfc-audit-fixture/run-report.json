@@ -976,6 +976,10 @@
         ],
         "hostToolIds": [],
         "maxModelTurns": 8,
+        "confidentialityCeiling": {
+          "source": "parent",
+          "mode": "owner-view"
+        },
         "returnPolicy": {
           "type": "cf-harness.subagent-return-policy",
           "channel": "summary-and-sanitized-state",

@@ -319,7 +319,6 @@ describe("seeded violations", () => {
       ).toEqual({
         [at("AUD-21")]: "fail",
         [at("AUD-22")]: "fail",
-        [at("AUD-23")]: "warn",
         [on("AUD-22", `${FIXTURE_RUN_ID}.subagent.1`)]: "fail",
       });
     });
@@ -920,8 +919,8 @@ describe("seeded violations", () => {
   });
 
   describe("AUD-23 delegation ceiling", () => {
-    it("warns today, on a delegation binding tools and no ceiling", () => {
-      expect(CLEAN[at("AUD-23")]).toBe("warn");
+    it("passes a delegation carrying the inherited owner view", () => {
+      expect(CLEAN[at("AUD-23")]).toBe("pass");
     });
 
     it("still sees the delegation when the run state loses it", () => {
@@ -957,11 +956,15 @@ describe("seeded violations", () => {
       });
     });
 
-    it("passes a delegation whose manifest records a ceiling", () => {
-      turnsOnly("AUD-23", "pass", (root) => {
+    it("warns when a delegation loses its inherited ceiling", () => {
+      turnsOnly("AUD-23", "warn", (root) => {
         for (const delegation of stateOf(root).subagentRuns ?? []) {
-          (delegation.manifest as unknown as Record<string, unknown>)
-            .confidentialityCeiling = { source: "parent", mode: "owner-view" };
+          delete (delegation.manifest as unknown as Record<string, unknown>)
+            .confidentialityCeiling;
+        }
+        for (const delegation of reportOf(root).subagentRuns ?? []) {
+          delete (delegation.manifest as unknown as Record<string, unknown>)
+            .confidentialityCeiling;
         }
       });
     });

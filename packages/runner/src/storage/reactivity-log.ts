@@ -47,6 +47,10 @@ const linkResolutionProbeMarker: unique symbol = Symbol(
   "linkResolutionProbeMarker",
 );
 
+const dereferenceResolutionProbeMarker: unique symbol = Symbol(
+  "dereferenceResolutionProbeMarker",
+);
+
 const mergeableOpReadMarker: unique symbol = Symbol(
   "mergeableOpReadMarker",
 );
@@ -106,6 +110,16 @@ export const pendingWriteElisionRead: Metadata = {
  */
 export const linkResolutionProbe: Metadata = {
   [linkResolutionProbeMarker]: true,
+};
+
+/**
+ * Marks a link probe issued inside the resolver that follows links on behalf
+ * of a content read. The probe itself is runtime machinery; the target read is
+ * the observation and is checked independently.
+ */
+export const dereferenceResolutionProbe: Metadata = {
+  ...linkResolutionProbe,
+  [dereferenceResolutionProbeMarker]: true,
 };
 
 /**
@@ -406,6 +420,10 @@ export function isInternalVerifierRead(meta?: Metadata): boolean {
 
 export function isLinkResolutionProbe(meta?: Metadata): boolean {
   return meta?.[linkResolutionProbeMarker] === true;
+}
+
+export function isDereferenceResolutionProbe(meta?: Metadata): boolean {
+  return meta?.[dereferenceResolutionProbeMarker] === true;
 }
 
 const schedulerDependencyReadMarker: unique symbol = Symbol(

@@ -181,10 +181,10 @@ describe("cli", () => {
 
   describe("runAuditCli()", () => {
     it("reports the fixture's known defects at the default threshold", async () => {
-      // The fixture is a captured run of a system with the gaps the Group E
-      // checks report, so a green exit here would be the audit failing to say
-      // what it knows. The Group A and Group C checks are what still find
-      // nothing: no clause about what the run DID is contradicted.
+      // The fixture retains the unresolved Group E findings. A green exit here
+      // would be the audit failing to say what it knows. The Group A and Group
+      // C checks still find nothing: no clause about what the run did is
+      // contradicted.
       const written: string[] = [];
 
       expect(
@@ -195,7 +195,7 @@ describe("cli", () => {
       const report = written.join("");
       expect(report).toContain("AUD-21 label-consulting admission");
       expect(report).toContain("AUD-22 prompt-slot binding");
-      expect(report).toContain("AUD-23 delegation ceiling");
+      expect(report).not.toContain("AUD-23 delegation ceiling");
     });
 
     it("marks a finding that rests on our judgment rather than the specification", () => {

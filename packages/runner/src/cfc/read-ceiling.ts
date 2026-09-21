@@ -22,6 +22,7 @@ import type {
 } from "../storage/interface.ts";
 import {
   internalVerifierRead,
+  isDereferenceResolutionProbe,
   isInternalVerifierRead,
   isLinkResolutionProbe,
   isWriteDestinationRead,
@@ -144,8 +145,10 @@ export class CfcReadCeilingError extends Error {
 /**
  * Measures a payload read against its runtime ceiling before returning content.
  * Labels come from the stored envelope, including descendants of a raw object
- * read. Link-resolution and write-destination probes are runtime machinery;
- * the content read that follows a resolved link is measured at its target.
+ * read. A link-resolution probe issued inside dereference resolution and a
+ * write-destination probe are runtime machinery. A standalone link probe is an
+ * observation of the pointer and is measured here; the content read that
+ * follows a resolved link is measured at its target.
  */
 export function assertCfcReadCeiling(
   tx: IExtendedStorageTransaction,
@@ -153,16 +156,19 @@ export function assertCfcReadCeiling(
   ceiling: readonly CfcConfClause[] | undefined,
   options?: IReadOptions,
 ): void {
+  const linkProbe = isLinkResolutionProbe(options?.meta);
   if (
     ceiling === undefined ||
     (address.path.length > 0 && address.path[0] !== "value") ||
     isInternalVerifierRead(options?.meta) ||
-    isLinkResolutionProbe(options?.meta) ||
+    isDereferenceResolutionProbe(options?.meta) ||
     isWriteDestinationRead(options?.meta)
   ) return;
   const metadata = readStoredCfcMetadata(tx, address);
   let entries = cfcLabelViewFromMetadata(metadata, address.path)?.entries ?? [];
-  if (address.path.at(-1) === "length") {
+  if (linkProbe) {
+    entries = entries.filter((entry) => readConsumesEntry("followRef", entry));
+  } else if (address.path.at(-1) === "length") {
     const parentPath = address.path.slice(0, -1);
     // Only an array's native length observes its parent's membership. The
     // verifier probe distinguishes it from an ordinary object field without

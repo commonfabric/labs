@@ -596,7 +596,7 @@ describe("sqliteQuery under a runtime read ceiling", () => {
       );
       expect(state.error).toBeUndefined();
       expect(bodies(state)).toEqual(["mine"]);
-      expect(() => cell.get()).toThrow(/read ceiling/);
+      expect(() => cell.key("result").get()).toThrow(/read ceiling/);
     });
 
     it("resolves a placeholder inside an `anyOf` of the runtime's ceiling", async () => {

@@ -8,6 +8,10 @@ import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { toMemorySpaceAddress } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import {
+  dereferenceResolutionProbe,
+  linkResolutionProbe,
+} from "../src/storage/reactivity-log.ts";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -87,6 +91,59 @@ describe("cfc-cell-read-ceiling", () => {
         .toThrow(/read ceiling/);
     } finally {
       tx.abort();
+    }
+  });
+
+  it("withholds a standalone probe of a protected link", async () => {
+    const tx = writer.edit();
+    const cell = writer.getCell(
+      signer.did(),
+      "protected link probe",
+      undefined,
+      tx,
+    );
+    const link = cell.getAsNormalizedFullLink();
+    writeSeedEnvelopeDoc(tx, signer.did());
+    seedStoredEnvelope(tx, { ...toMemorySpaceAddress(link), path: [] }, {
+      value: { slot: { "/": { "link@1": { id: "of:target" } } } },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["slot"],
+            label: { confidentiality: [B] },
+            origin: "link",
+          }],
+        },
+      },
+    });
+    expect((await tx.commit()).error).toBeUndefined();
+
+    const readTx = readerFor([A]).edit();
+    try {
+      const slot = toMemorySpaceAddress({ ...link, path: ["slot"] });
+      expect(() => readTx.read(slot, { meta: linkResolutionProbe })).toThrow(
+        /read ceiling/,
+      );
+    } finally {
+      readTx.abort();
+    }
+  });
+
+  it("allows a protected link probe issued by dereference machinery", async () => {
+    const link = await seed([B]);
+    const reader = readerFor([A]);
+    const readTx = reader.edit();
+    try {
+      expect(() =>
+        readTx.read(toMemorySpaceAddress(link), {
+          meta: dereferenceResolutionProbe,
+        })
+      ).not.toThrow();
+    } finally {
+      readTx.abort();
     }
   });
 

@@ -292,14 +292,37 @@ describe("Group E readings off the clean path", () => {
     });
   }
 
-  it("reads delegations from the run state alone when the report is gone, and claims no divergence", () => {
+  it("AUD-23 refuses an invalid mode on an inherited owner view", () => {
+    const fam = withoutArtifact("runReport");
+    if (
+      fam.root.runState.status !== "present" ||
+      fam.children[0].runState.status !== "present"
+    ) {
+      throw new Error("fixture has no run states");
+    }
+    const posture = {
+      enforcementMode: "enforce-strict",
+      enforcementModeSource: "configured",
+      flowLabels: "persist",
+      flowLabelsSource: "configured",
+      readOnExceed: "invalid",
+    } as unknown as NonNullable<
+      typeof fam.root.runState.value.fabricSessionCfc
+    >;
+    fam.root.runState.value.fabricSessionCfc = posture;
+    fam.children[0].runState.value.fabricSessionCfc = structuredClone(posture);
+
+    expect(checkById("AUD-23").inspect(fam.root, fam).verdict).toBe("warn");
+  });
+
+  it("passes delegations from the run state alone when the report is gone", () => {
     // Divergence is a comparison, so an artifact that is absent is not an
     // artifact that disagrees. The check still has the run state's
     // delegations and still reports on their ceilings; what it must not do is
     // read a missing second opinion as a conflicting one.
     const fam = withoutArtifact("runReport");
     const result = checkById("AUD-23").inspect(fam.root, fam);
-    expect(result.verdict).toBe("warn");
+    expect(result.verdict).toBe("pass");
     expect(JSON.stringify(result.evidence)).not.toContain("has lost a child");
   });
 

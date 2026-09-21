@@ -422,20 +422,27 @@ const recordsCeiling = (
   const parentCeiling = parentState?.fabricSessionCfc?.readMaxConfidentiality;
   const childCeiling = child.runState.value.fabricSessionCfc
     ?.readMaxConfidentiality;
-  if (parentCeiling === undefined || childCeiling === undefined) {
-    return record.mode === "owner-view" && parentCeiling === undefined &&
-      childCeiling === undefined;
-  }
+  const parentOnExceed = parentState?.fabricSessionCfc?.readOnExceed;
+  const childOnExceed = child.runState.value.fabricSessionCfc?.readOnExceed;
   try {
-    buildCfcReadCeiling({ cfcReadMaxConfidentiality: parentCeiling });
-    buildCfcReadCeiling({ cfcReadMaxConfidentiality: childCeiling });
+    buildCfcReadCeiling({
+      cfcReadMaxConfidentiality: parentCeiling,
+      cfcReadOnExceed: parentOnExceed,
+    });
+    buildCfcReadCeiling({
+      cfcReadMaxConfidentiality: childCeiling,
+      cfcReadOnExceed: childOnExceed,
+    });
   } catch {
     return false;
   }
+  if (parentCeiling === undefined || childCeiling === undefined) {
+    return record.mode === "owner-view" && parentCeiling === undefined &&
+      childCeiling === undefined && parentOnExceed === childOnExceed;
+  }
   return record.mode === "bounded" &&
     clausesEqual(parentCeiling, childCeiling) &&
-    parentState?.fabricSessionCfc?.readOnExceed ===
-      child.runState.value.fabricSessionCfc?.readOnExceed;
+    parentOnExceed === childOnExceed;
 };
 
 /**

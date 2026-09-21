@@ -941,7 +941,7 @@ export interface BrowserWorkerPresetParams extends CoreParams {
   cfcFlowLabels?: CfcFlowLabelsMode;
 
   /**
-   * The runtime-wide read ceiling for this worker's `db.query` reads
+   * The runtime-wide read ceiling for this worker's cell and `db.query` reads
    * (`RuntimeOptions.cfcReadMaxConfidentiality`), from `InitializationData`:
    * a worker is one device's runtime, so a ceiling set here is per device
    * by construction and never touches the space. Under server execution

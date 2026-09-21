@@ -60,14 +60,6 @@
       "detail": "without binding what AH-CFC-3 requires it to bind",
       "why": "H2. No mint site populates a `valueDigest`, and the subject is a run-scoping fact — a workspace path or a resume-run id — rather than an authenticated principal. Both halves are additive: the contract already types the fields, and the work is at the two mint sites.",
       "issue": "CT-2216"
-    },
-    {
-      "checkId": "AUD-23",
-      "runShape": "any episode that delegates",
-      "runs": "delegation-obedient",
-      "detail": "no confidentiality ceiling",
-      "why": "H8. Nothing in the subagent profile represents a ceiling, so a child that inherits a handle to a cell the parent could read can read it, whatever tools it was given. Not harness-local: the reads bottom out in the runner, so the ceiling has to be something the runner's access check can consume.",
-      "issue": "CT-2217"
     }
   ]
 }

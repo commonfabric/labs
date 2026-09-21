@@ -1179,7 +1179,7 @@ export function sqliteQuery(
               // the pattern holding the finished query's rows under a statement
               // it no longer runs.
               const stored = result.withTx(settleTx).getRaw({
-                meta: writeDestinationRead,
+                meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
               }) as QueryState | undefined;
               // A newer accepted action can select a memo without changing
               // its stored value. Publication ownership permits this binding

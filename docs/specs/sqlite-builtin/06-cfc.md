@@ -474,7 +474,7 @@ request hash or filter its stored rows. The hash includes the shared result's
 shape-label contract version, so a memo without that protection is reissued.
 Each reader instead observes the
 materialized result through the ordinary cell read guard. The result array
-carries the canonical join of all returned row labels, including rows that the
+carries the canonical join of all source-row labels, including rows that the
 query contract skips, as an `enumerate` label. Its membership and length are
 therefore withheld when any contributor exceeds the reader's ceiling. An
 addressed row payload carries that row's own labels without inheriting the
@@ -490,25 +490,26 @@ replacing one reader's filtered rows with another's.
 **Under server execution the ceiling travels with the session.** A client
 runtime under server execution (`experimental.serverExecution` on, without
 the serving posture) executes no query of its own — the space server's
-runtime serves them — so its option cannot bound them where it sits. It
-declares the ceiling instead, once, in every session it opens: the signed
+runtime serves them — so its option cannot bound session-scoped queries where
+it sits. It declares the ceiling instead, once, in every session it opens: the signed
 `session.open` descriptor carries `readCeiling` (memory-v2 `04-protocol.md`
 §4.1.2), the memory server records it on the session, and the SpaceServer
 stamps it onto every run it serves AS that session (`WaveRunContext.readCeiling`,
-serving-loop.md §3c). The served `db.query` then reads under the serving
-runtime's own option met with the carried ceiling, through the one path
-above: the meet joins the request hash, decides the rows, and supplies the
-`onExceed` default (the mode meets toward `fail`). A served run acting as a
-session that declared none reads under the serving runtime's option alone.
+serving-loop.md §3c). A served session-scoped `db.query` reads under the serving
+runtime's own option met with the carried ceiling: the meet joins the request
+hash, decides the rows, and supplies the `onExceed` default (the mode meets
+toward `fail`). A served run acting as a session that declared none reads under
+the serving runtime's option alone. A shared result instead materializes under
+its query contract on a served run too, and each reader observes that labeled
+materialization through the ordinary cell read guard.
 The session record is the seam: a ceiling the server assigns to a session
 lands in the same record and reaches the run the same way. Fail-closed at
 the edges: a client carrying a ceiling refuses a server that does not
 advertise the `sessionReadCeiling` protocol flag, since an older server
 would accept the descriptor and serve unbounded; a runtime whose storage
 manager cannot carry the ceiling refuses to be built with one; and the
-session-scoped-result rule holds on a served run exactly as on a client —
-a query whose result is broader is refused on the serving runtime before it
-is staged.
+session-scoped and shared-result rules hold on a served run exactly as on a
+client.
 
 **Read-time clearance (Phase 3.b).** Filtering by *who is asking*, rather than
 by a declared contract: `db.query(sql, { readClearance: true })` keeps only the

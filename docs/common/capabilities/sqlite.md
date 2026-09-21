@@ -286,13 +286,14 @@ and dropping the rows that exceed it.
 
 Where the label lands decides where to look for it. Each result row splits into
 its own entity doc and the column's label sits on that doc, at the column's own
-path; the query's own document holds `pending`, `result` and `requestHash` and
-carries no label at any path. So a probe of the query document reports a fully
-labeled result as unlabeled, and the read that answers is one that follows the
-links the path crosses — `cf cell get-label <cell> <path>/result/<i>/<col>`
-does, and reports the column's label from the row's own doc. Inside a pattern
-nothing has to be asked for: a consumer inherits the label from the
-dereferences its read traverses.
+path. The query document labels `result` membership with the join of every
+source-row label, including rows skipped by the query contract, and labels the
+`withheld` count with that same join. A reader outside the join therefore
+cannot observe the array's membership, length, or withheld count. An addressed
+row's payload retains only that row's own labels. `cf cell get-label <cell>
+<path>/result/<i>/<col>` follows the links the path crosses and reports the
+column's label from the row's own doc. Inside a pattern nothing has to be asked
+for: a consumer inherits the label from the dereferences its read traverses.
 
 ## The rest of the API
 
