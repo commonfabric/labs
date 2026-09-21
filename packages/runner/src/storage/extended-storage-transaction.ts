@@ -1676,6 +1676,10 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     this.#readResultCacheSets++;
   }
 
+  resetCurrentReadMemoization(): void {
+    this.#invalidateReadResultCache();
+  }
+
   getSnapshotMemo(): Map<string, unknown> | undefined {
     // A finished transaction answers no reads, so nothing it memoized earlier
     // may be handed out as if it had.
@@ -4024,6 +4028,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
 
   resetNarrowestReadScope(scope?: CellScope): void {
     this.#wrapped.resetNarrowestReadScope(scope);
+  }
+
+  resetCurrentReadMemoization(): void {
+    this.#wrapped.resetCurrentReadMemoization();
   }
 
   recordCfcDereferenceTrace(trace: CfcDereferenceTrace): void {

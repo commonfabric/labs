@@ -1098,20 +1098,22 @@ cf agent runner --identity ./my.key --api-url https://toolshed.example \
   --loom-retrieval-config /etc/loom/retrieval.json
 ```
 
-| Option                      | Meaning                                                                                                   |
-| --------------------------- | --------------------------------------------------------------------------------------------------------- |
-| `--identity`, `CF_IDENTITY` | The keyfile of the user whose requests this runner runs.                                                  |
-| `--api-url`, `CF_API_URL`   | The toolshed serving that user's home space.                                                              |
-| `--local-api-url`           | The toolshed the runner sits beside, recorded as the runner's `host`. Defaults to `--api-url`.            |
-| `--loom-retrieval-config`   | The host-owned JSON file backing the read-only Loom tools. Without it the runner offers no `loom_*` tool. |
-| `--tools`                   | Comma-separated tool names the runner offers. Defaults to what its configuration backs.                   |
-| `--max-concurrent`          | How many runs the process holds at once. Defaults to 1.                                                   |
-| `--lease-seconds`           | How far a claim's lease reaches past the run's last durable write. Defaults to 300.                       |
-| `--work-root`               | Where run workspaces and artifacts go. Defaults to `$CF_HARNESS_HOME/agent-runs`.                         |
-| `--model`                   | The model name passed to `cf-harness`.                                                                    |
+| Option                      | Meaning                                                                                                                           |
+| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| `--identity`, `CF_IDENTITY` | The keyfile of the user whose requests this runner runs.                                                                          |
+| `--api-url`, `CF_API_URL`   | The toolshed serving that user's home space.                                                                                      |
+| `--local-api-url`           | The toolshed the runner sits beside, recorded as the runner's `host`. Defaults to `--api-url`.                                    |
+| `--loom-retrieval-config`   | The host-owned JSON file backing the read-only Loom tools. Without it the runner offers no `loom_*` tool.                         |
+| `--tools`                   | Comma-separated tool names the runner offers. Defaults to what its configuration backs.                                           |
+| `--max-concurrent`          | How many runs the process holds at once. Defaults to 1.                                                                           |
+| `--lease-seconds`           | How far a claim's lease reaches past the run's last durable write. Defaults to 300.                                               |
+| `--work-root`               | Where run workspaces and artifacts go. Defaults to `$CF_HARNESS_HOME/agent-runs`, falling back to `$HOME/.cf-harness/agent-runs`. |
+| `--model`                   | The model name passed to `cf-harness`.                                                                                            |
 
-The model provider is the one `cf-harness` is configured with under
-`CF_HARNESS_HOME`.
+The model provider is the one `cf-harness` is configured with under its harness
+home directory. The runner uses the `context` prompt role, so the default
+`enforce-strict` mode admits only `submit_result`; set
+`CF_HARNESS_CFC_ENFORCEMENT_MODE=enforce-explicit` to use read tools.
 
 What the runner does, in order:
 
@@ -1143,11 +1145,12 @@ What the runner does, in order:
 | had its result write refused by the space's policy    | `refused`, `REFUSED`         |
 | was cancelled (`cancelRequestedAt` set on the record) | `cancelled`, `CANCELLED`     |
 
-A `claimed` or `running` record whose `leaseUntil` has passed belongs to a
-runner that stopped. The next runner to see it, on start or on a queue change,
-queues it again when its `attempts` is 1 and ends it `failed` as `RUNNER_LOST`
-when its `attempts` is 2. If `cancelRequestedAt` is set, recovery ends the
-expired record as `cancelled` instead. A live lease stays with its runner.
+A `claimed` or `running` record whose `leaseUntil` has passed is treated as
+having stopped writing. The runner wakes at known lease deadlines, or another
+runner sees it on start or a queue change; it queues it again when its
+`attempts` is 1 and ends it `failed` as `RUNNER_LOST` when its `attempts` is 2.
+If `cancelRequestedAt` is set, recovery ends the expired record as `cancelled`
+instead. A live lease stays with its runner.
 
 A runner opens one full connection to its home deployment. For queued records,
 it opens a storage-only runtime for each distinct record host and reuses that

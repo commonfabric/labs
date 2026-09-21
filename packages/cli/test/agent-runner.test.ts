@@ -637,6 +637,115 @@ describe("agent runner", () => {
     expect(executions).toBe(2);
   });
 
+  it("keeps an active run when renewal wins a race with expiry recovery", async () => {
+    const result = await submit();
+    const runnerSide = connect(CLOUD);
+    const renewalReady = defer<void>();
+    const renewalCommitted = defer<void>();
+    const recoveryReady = defer<void>();
+    const releaseRenewal = defer<void>();
+    const held = defer<AgentRunExecution>();
+    const original = runnerSide.editWithRetry.bind(runnerSide);
+    let delayedRenewal = false;
+    let delayedRecovery = false;
+    runnerSide.editWithRetry = ((fn, ...rest) =>
+      original((tx) => {
+        const value = fn(tx);
+        if (
+          !delayedRenewal && value === true &&
+          clock.toISOString() === "2026-09-18T12:00:30.000Z"
+        ) {
+          delayedRenewal = true;
+          const commit = tx.commit.bind(tx);
+          tx.commit = async (...args) => {
+            renewalReady.resolve();
+            await releaseRenewal.promise;
+            const result = await commit(...args);
+            renewalCommitted.resolve();
+            return result;
+          };
+        } else if (!delayedRecovery && value === "re-queued") {
+          delayedRecovery = true;
+          const commit = tx.commit.bind(tx);
+          tx.commit = async (...args) => {
+            recoveryReady.resolve();
+            await renewalCommitted.promise;
+            return await commit(...args);
+          };
+        }
+        return value;
+      }, ...rest)) as typeof runnerSide.editWithRetry;
+    let active: ClaimedAgentRun | undefined;
+    let wake: (() => void) | undefined;
+    const runner = await startRunner((run) => {
+      active = run;
+      return held.promise;
+    }, {
+      runtimeForHost: () => Promise.resolve(runnerSide),
+      scheduleAt: (at, scheduled) => {
+        if (at.toISOString() === "2026-09-18T12:01:00.000Z") wake = scheduled;
+        return () => {};
+      },
+    });
+    await waitForState(result, "running");
+
+    clock = new Date("2026-09-18T12:00:30.000Z");
+    const renewal = active!.renewLease();
+    await renewalReady.promise;
+    clock = new Date("2026-09-18T12:01:00.000Z");
+    wake!();
+    await recoveryReady.promise;
+    releaseRenewal.resolve();
+    await renewal;
+    await waitForCellValue<AgentRunRecord>(
+      patternSide,
+      recordOf(result),
+      (value) => value?.claim?.leaseUntil === "2026-09-18T12:01:30.000Z",
+    );
+
+    expect(active!.signal.aborted).toBe(false);
+    expect(runner.activeRuns).toBe(1);
+    held.resolve({ outcome: "refused" });
+    await waitForState(result, "refused");
+  });
+
+  it("keeps an expiry wake after aborting a cancelled active run", async () => {
+    const aborted = defer<void>();
+    const scheduled: { at: Date; wake: () => void; cancelled: boolean }[] = [];
+    const runner = await startRunner((run) => {
+      run.signal.addEventListener("abort", () => aborted.resolve(), {
+        once: true,
+      });
+      return new Promise<AgentRunExecution>(() => {});
+    }, {
+      scheduleAt: (at, wake) => {
+        const entry = { at, wake, cancelled: false };
+        scheduled.push(entry);
+        return () => entry.cancelled = true;
+      },
+    });
+    const result = await submit();
+    await waitForState(result, "running");
+    const scheduledBeforeCancel = scheduled.length;
+    await patternSide.editWithRetry((tx) => {
+      recordOf(result).withTx(tx).key("cancelRequestedAt")
+        .set("2026-09-18T12:00:30.000Z");
+    });
+    await aborted.promise;
+
+    expect(scheduled.length).toBeGreaterThan(scheduledBeforeCancel);
+    expect(scheduled.slice(0, -1).some((entry) => entry.cancelled)).toBe(true);
+    const expiry = scheduled.at(-1)!;
+    expect(expiry.cancelled).toBe(false);
+    expect(expiry.at.toISOString()).toBe("2026-09-18T12:01:00.000Z");
+
+    clock = expiry.at;
+    expiry.wake();
+    const record = await waitForState(result, "cancelled");
+    expect(record.errorCode).toBe("CANCELLED");
+    await runner.idle();
+  });
+
   it("stops following a record removed from the queue", async () => {
     const result = await submit();
     await patternSide.editWithRetry((tx) => {
@@ -1593,7 +1702,7 @@ describe("agent runner", () => {
         required: ["answer", "basedOn"],
       };
       const input: { finished?: Cell<unknown> } = {};
-      await startHarnessRunner(async ({ resultPath }) => {
+      const execute = async ({ resultPath }: { resultPath: string }) => {
         const minted = await mintAddressHandle(
           createHarnessHandleTable("run-token"),
           renderCellReference(input.finished!.getAsNormalizedFullLink()),
@@ -1607,7 +1716,7 @@ describe("agent runner", () => {
           ...result,
           runState: { ...result.runState, handleTable: minted.table },
         };
-      });
+      };
       // A link is written only to a document that carries a label, so the
       // input is labeled, and the request's ceiling admits that label.
       const READING = "https://cfc.test/atom/reading";
@@ -1621,6 +1730,7 @@ describe("agent runner", () => {
           string,
           Cell<unknown>
         >).finished;
+      await startHarnessRunner(execute);
 
       const record = await waitForState(result, "completed");
 

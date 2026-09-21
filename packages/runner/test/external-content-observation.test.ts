@@ -236,6 +236,66 @@ describe("external content observation", () => {
     });
   });
 
+  it("traverses afresh after a linked-content load settles", async () => {
+    await withRuntime(async (runtime, storageManager) => {
+      let afterSettle = false;
+      let cacheHitsAfterSettle = 0;
+      let cacheSetsAfterSettle = 0;
+      const targetTx = runtime.edit();
+      identifyProducer(targetTx);
+      const edit = runtime.edit.bind(runtime);
+      runtime.edit = ((...args: Parameters<Runtime["edit"]>) => {
+        runtime.edit = edit as Runtime["edit"];
+        const tx = edit(...args);
+        return new Proxy(tx, {
+          get(target, property) {
+            if (property === "getCachedReadResult") {
+              return (...cacheArgs: [string, string]) => {
+                const cached = target.getCachedReadResult?.(...cacheArgs);
+                if (afterSettle && cached !== undefined) cacheHitsAfterSettle++;
+                return cached;
+              };
+            }
+            if (property === "setCachedReadResult") {
+              return (...cacheArgs: [string, string, unknown]) => {
+                if (afterSettle) cacheSetsAfterSettle++;
+                return target.setCachedReadResult?.(...cacheArgs);
+              };
+            }
+            const value = Reflect.get(target, property, target);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      }) as Runtime["edit"];
+      let pendingChecks = 0;
+      using _pending = stub(
+        storageManager,
+        "pendingCrossSpacePromiseCount",
+        () => pendingChecks++ === 0 ? 1 : 0,
+      );
+      using _settled = stub(
+        storageManager,
+        "crossSpaceSettled",
+        () => {
+          afterSettle = true;
+          return Promise.resolve();
+        },
+      );
+      await runtime.prepareExternalContentObservation({
+        targetTx,
+        space,
+        cause: "fresh-linked-content-traversal",
+        schema: ROW_SCHEMA,
+        value: { title: "private row" },
+        producer: PRODUCER,
+      });
+
+      expect(cacheHitsAfterSettle).toBe(0);
+      expect(cacheSetsAfterSettle).toBeGreaterThan(0);
+      targetTx.abort("test complete");
+    }, { cfcEnforcementMode: "disabled" });
+  });
+
   it("refuses when link-target load convergence exhausts its bound", async () => {
     await withRuntime(async (runtime, storageManager) => {
       let pendingChecks = 0;

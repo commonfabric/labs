@@ -359,7 +359,6 @@ export class AgentRunner {
       if (value.cancelRequestedAt !== undefined) {
         if (active !== undefined) {
           active.abort.abort(new Error("the requester cancelled the run"));
-          continue;
         } else if (value.state === "queued") {
           await this.#cancelQueued(followed);
           continue;
@@ -382,11 +381,14 @@ export class AgentRunner {
         }
         continue;
       }
-      if (active !== undefined) {
+      const recovered = await this.#recover(followed);
+      if (
+        recovered && active !== undefined &&
+        this.#active.get(key)?.token === active.token
+      ) {
         active.abort.abort(new Error("the agent run's lease expired"));
         this.#active.delete(key);
       }
-      await this.#recover(followed);
     }
 
     queued.sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
@@ -412,9 +414,9 @@ export class AgentRunner {
    * has been claimed once, `failed` as `RUNNER_LOST` when it has been claimed
    * twice. A cancellation request ends the expired run as `cancelled`.
    * The transaction re-reads the state and lease, so a record another runner
-   * moved in the meantime is left alone.
+   * moved in the meantime is left alone. Returns whether recovery committed.
    */
-  async #recover({ runtime, record }: FollowedRecord): Promise<void> {
+  async #recover({ runtime, record }: FollowedRecord): Promise<boolean> {
     const now = this.#now();
     const stamp = now.toISOString();
     const { ok } = await runtime.editWithRetry((tx) => {
@@ -450,6 +452,7 @@ export class AgentRunner {
         `agent runner: ${record.get()?.requestHash} lost its runner, ${ok}`,
       );
     }
+    return ok !== undefined;
   }
 
   /** Ends a record nobody claimed, when it is still `queued`. */
