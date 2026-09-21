@@ -1275,6 +1275,11 @@ Capture analysis:
 - captures nested callback closures with filtering for outer locals/params
 - builds hierarchical capture trees by root path
 
+Input-bound expression wrappers also capture enclosing function locals used
+inside nested callbacks. Parameters and locals declared within the wrapped
+expression stay inside it, including when the wrapper belongs to a reactive
+collection callback. Module bindings remain lexical references.
+
 ### 9.2 Handler strategy
 
 Transforms inline JSX event handlers:
@@ -1343,6 +1348,10 @@ Transform eligibility:
   `map-paren-wrapped-callback` pins the emission)
 - transformed callbacks are marked in `mapCallbackRegistry` and become
   pattern-callback contexts for downstream classification
+- a collection chain consumed by a terminal operation such as `slice` or
+  `join` runs its callbacks as plain JavaScript inside the chain's lift. This
+  computation boundary takes precedence over an enclosing reactive collection
+  callback; nested array calls do not inherit that outer pattern context
 - synthetic compute-owned array-method nodes assert that stale pattern ownership
   is not retained after earlier rewrites
 

@@ -1,6 +1,10 @@
 import ts from "typescript";
 import { getCallArgumentPosition } from "./call-arguments.ts";
-import { detectCallKind } from "./call-kind.ts";
+import {
+  classifyArrayMethodCall,
+  detectCallKind,
+  isConsumedByTerminalChainCall,
+} from "./call-kind.ts";
 import { getCallbackBoundarySemantics } from "../policy/callback-boundary.ts";
 
 export type ReactiveContextKind = "pattern" | "compute" | "neutral";
@@ -83,6 +87,16 @@ function getMarkedSyntheticCallbackContext(
     if (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) {
       if (lookup?.isArrayMethodCallback(current)) {
         return { kind: "pattern", owner: "array-method", inJsxExpression };
+      }
+
+      // A terminal receiver chain runs its callbacks as values inside its
+      // lift, before an enclosing collection callback's pattern boundary.
+      const position = getCallArgumentPosition(current);
+      if (
+        position && classifyArrayMethodCall(position.call) &&
+        isConsumedByTerminalChainCall(position.call)
+      ) {
+        return { kind: "compute", owner: "unknown", inJsxExpression };
       }
 
       if (lookup?.isSyntheticComputeCallback?.(current)) {
