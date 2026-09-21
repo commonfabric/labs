@@ -641,9 +641,22 @@ The strict-only delta is:
     the route gives up whatever its own ceiling was refusing, so the test is
     what refuses that write instead. A builtin that stages its request as a
     `sink-request` write-policy input has a ceiling to move the refusal to;
-    one that stages its effect directly — `sqliteQuery` and `navigateTo`
-    both call `enqueuePostCommitEffect` themselves — has none, so its stores
-    keep their own ceilings until the gate that should own them exists. Most
+    one that stages its effect directly — `navigateTo` calls
+    `enqueuePostCommitEffect` itself — has none, so its stores keep their own
+    ceilings until the gate that should own them exists. `sqliteQuery` has
+    that gate now. Its request stages under a `sqliteQuery` sink, which
+    releases ungated under the max-enforcement posture for a reason of its
+    own: the bound a read wants is the database's own SPACE, and a per-sink
+    ceiling holds a clause list and nothing else. That bound is also what the
+    store's own ceiling was refusing, and it was worth exactly one case — a
+    database in another space receiving a parameter derived from a labeled
+    read — so the builtin applies it before staging, where which space the
+    database is in is a thing it can see. The control state takes the route,
+    because a request hash is a function of parameters no author can foresee,
+    while `/result`'s per-column entries stay the author's: the route
+    declines at a declared path, and the transaction that settles a request
+    reads its destination's hash as a read of the write destination, so the
+    clauses the control state accumulates never reach the rows. Most
     builtins are in neither group: a list coordinator, `ifElse`, `when`,
     `unless`, `cellFromUrl` and `inspectConfLabel` stage nothing at all, so
     there is no egress to govern and no refusal to move,

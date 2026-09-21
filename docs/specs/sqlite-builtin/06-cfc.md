@@ -732,6 +732,53 @@ Demos:
 [`sqlite-cfc-commit-eval.test.ts`](../../../packages/runner/integration/sqlite-cfc-commit-eval.test.ts)
 (3.c: atomic rollback + post-image upsert relabel).
 
+## The query's control state
+
+A query result cell holds the rows under `/result` and the request's own
+bookkeeping beside them: `/pending`, `/requestHash`, `/error`. The rows'
+policy is the author's — the columns a table declares, and the rule a row
+carries. The bookkeeping's is not, and cannot be: a request hash is a digest
+over the statement, the parameters, the ceiling and the reader, so a parameter
+read out of a labeled row puts that row's label on the hash. Which atoms that
+is depends on what the transaction issuing the request read, which no `ifc`
+written into a schema can say.
+
+So the result cell is a store the runtime owns, and its control paths declare
+their policy from the issuing transaction — CFC spec §8.12.5 route 2, the
+same route the runner's own piece documents take. The declaration grows by
+clause and never shrinks, which is the ratchet §8.12.2 asks for: a query cell
+parameterized out of three differently labeled reads ends up admitting all
+three and readable by whoever satisfies all three. `/result`'s per-column
+entries are untouched — the route declines at a path a schema declares — and
+so are the row documents, because the transaction that settles a request
+reads the destination's request hash as a read of the write destination (CFC
+spec §18.6.2) and therefore carries no clause of its own.
+
+What the store's undeclared bookkeeping was refusing by accident, before the
+route reached it, was one case: a query whose database lies in another space,
+issued by a transaction carrying confidentiality. The parameters of such a
+query go to whoever holds THAT space's replicas, who are not the audience the
+result document's residency names. The builtin refuses it directly, before
+the request is staged, with a stable reason and no request hash — a later
+pass whose reads carry nothing asks again rather than finding a memo hit.
+
+Every request also stages through the sink-request seam, under the
+`sqliteQuery` sink. Under the max-enforcement posture that sink releases
+ungated, because the bound it wants is the database's space rather than a
+clause list, and a per-sink registry ceiling holds only the latter; the gap
+carries its owner and the condition that retires it, like every other ungated
+sink. A deployment that wants a confidentiality gate on sqlite reads declares
+a ceiling for the sink, and the seam is where it applies.
+
+> Implementation: `makeResultCell` plus `recordRuntimeOwnedStore` /
+> `enrollRuntimeOwnedStore`, the `crossSpace` refusal, and
+> `enqueueSinkRequestPostCommitEffect` in
+> [`sqlite-builtins.ts`](../../../packages/runner/src/builtins/sqlite-builtins.ts);
+> asserted in
+> [`cfc-sqlite-query-control-state.test.ts`](../../../packages/runner/test/cfc-sqlite-query-control-state.test.ts).
+> The route's conditions are in
+> [`cfc-enforcement-matrix.md`](../cfc-enforcement-matrix.md) §4.
+
 ## Why this stays declarative
 
 Keeping row labels as a declarative projection (rather than a callback into
