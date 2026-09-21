@@ -1,7 +1,14 @@
+---
+status: historical
+created: 2026-09-21
+archived: 2026-09-21
+reason: "Executed plan; the personalized book invitation demo shipped in #7839."
+---
+
 # Personalized book recommendations
 
 This is the final demonstration stage following the
-[agent-requests implementation](../history/plans/agent-requests-implementation.md).
+[agent-requests implementation](agent-requests-implementation.md).
 It adds a personal reading shelf and a shared invitation asking visitors to
 recommend books to its originator.
 
@@ -99,5 +106,5 @@ enforces its reader boundary.
 - [x] Run a visitor request against a disposable toolshed with real ACL genesis,
       a visitor WRITE grant, a home queue, and a scripted model; verify shelf
       filtering and private result visibility.
-- [ ] Complete full package tests, repository gates, coverage, and self-review.
-- [ ] Open a ready PR, answer review comments, and obtain green CI.
+- [x] Complete full package tests, repository gates, coverage, and self-review.
+- [x] Open a ready PR, answer review comments, and obtain green CI.
