@@ -27,10 +27,11 @@ The authoritative field inventory is the `JSONSchema` type in
   (a stream interface for connecting events to listeners), or
   `asCell: ["opaque"]` (pass-through-only). Nesting composes:
   `Cell<Cell<T>>` becomes `asCell: ["cell", "cell"]`. See `AsCellType` in
-  `packages/api/index.ts` for the entry shape. (A separate boolean-style
-  `asStream` field existed historically; it is no longer part of the type and
-  is not emitted — a couple of runner utilities still tolerate it on stored
-  data.)
+  `packages/api/index.ts` for the entry shape, and
+  [Streams](#streams-are-declarations-not-views) for the one entry that is not
+  a view onto a value. (A separate boolean-style `asStream` field existed
+  historically; it is no longer part of the type and is not emitted — a couple
+  of runner utilities still tolerate it on stored data.)
 - **`scope`**: storage-partition selector emitted for `PerSpace<T>` /
   `PerUser<T>` / `PerSession<T>` wrappers.
 - **`tier`**: verb listing mark on stream properties. `tier: "wrapper"` names
@@ -42,6 +43,19 @@ The authoritative field inventory is the `JSONSchema` type in
   (adds and removes freely). Standard `deprecated: true` is the companion
   mark on the other axis, produced from `@deprecated` JSDoc.
 - **`ifc`**: Information Flow Control (IFC) annotations (see [IFC](#ifc))
+
+### Streams are declarations, not views
+
+`asCell: ["cell"]` is a flag about how the value beside it is handed over. The
+rest of the schema still describes that value and still filters it; a reader
+that drops the flag reads the same data inline.
+
+`asCell: ["stream"]` is not that kind of flag. It says what the position is —
+a stream, which holds no value — so the keywords beside it describe the event
+a `send()` carries, not something readable at the position. The marker stands
+in front of the event schema rather than combining with a description of the
+position's own value, and the two do not compose: a schema cannot declare a
+stream and a readable value at the same place.
 
 ### IFC
 
