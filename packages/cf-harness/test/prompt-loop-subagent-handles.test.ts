@@ -1435,6 +1435,58 @@ describe("prompt-loop cross-agent address handles", () => {
     expect(success.resultRef).toBe(token);
   });
 
+  it("returns an applied revision with an inert unavailable-inspection marker", async () => {
+    const requests: unknown[] = [];
+    const loop = new CfHarnessPromptLoop({
+      apiKey: "test-key",
+      engine: new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        runId: "run-uninspected-revision",
+        model: "gpt-5.4",
+      }),
+      allowedSubagentProfiles: ["pattern-author"],
+      fetchFn: scriptedFetch([
+        delegateCallTurn("call-revise", {
+          goal: "Apply the requested filter; inspection was withheld.",
+          profile: "pattern-author",
+        }),
+        finalTurn(JSON.stringify({
+          ok: true,
+          resultRef: URI_A,
+          verificationRef: URI_B,
+          verification: "not-checked",
+          describes: "Changed the filter; inspect the piece to check it.",
+        })),
+        finalTurn(
+          "Changed the filter. I could not inspect the result; check the piece.",
+        ),
+      ], requests),
+    });
+
+    const result = await loop.runPrompt({
+      prompt: "Change the filter on this piece.",
+      promptSlotBinding: directPromptSlotBinding,
+    });
+    const returned = result.runState.subagentRuns?.[0]?.structuredReturn;
+    expect(returned?.status).toBe("valid");
+    const value = returned?.value as Record<string, unknown>;
+    expect(value).toMatchObject({ ok: true, verification: "not-checked" });
+    expect(value.resultRef).not.toBe(value.verificationRef);
+    const parentContext = chatViewOfRequest(requests[2]).messages;
+    const childReturn = parentContext.find((message) =>
+      message.role === "tool"
+    );
+    expect(childReturn?.content).toContain('"verification":"not-checked"');
+    expect(childReturn?.content).not.toContain("Changed the filter; inspect");
+    const childPrompt = chatViewOfRequest(requests[1]).messages[0]?.content;
+    expect(childPrompt).toContain(
+      'the child returns ok: true with the actual piece resultRef and verification: "not-checked"',
+    );
+    expect(childPrompt).toContain(
+      "never ask the user for a nonexistent permission to release aggregates or change the sink ceiling",
+    );
+  });
+
   for (const ok of [true, false]) {
     it(`returns a separate verification handle when the revision success is ${ok}`, async () => {
       const runId = `run-revision-verification-${ok}`;
