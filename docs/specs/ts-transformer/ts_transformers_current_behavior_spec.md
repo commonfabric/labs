@@ -1777,6 +1777,18 @@ adjustments:
 - node-driven shrinking can still shrink the inner type of cell-like wrappers
   when `.get()` contributes an empty path but coexists with more specific
   non-empty paths
+- a node the type-driven shrink builds keeps the scope wrapper and the default
+  of the type it stands for, at every level it retains. A scope wrapper the
+  type's alias names wraps the shrunk value as `__cfHelpers.PerUser<...>` (or
+  the wrapper of the same name), and a default the type carries in its
+  `Default` brand wraps it as `__cfHelpers.Default<shrunk, V>`, with `V`
+  printed from the brand's payload. Branded members that disagree on the value
+  restore no default, and a scope the type carries only as its brand, with no
+  alias left to name it, is not restored. A restored `Default` does not count
+  toward the preference for the node-driven candidate, which applies where only
+  that candidate holds an authored `Default` (`getScopeWrapper` and
+  `restoreDefault` in `transformers/type-shrinking.ts`;
+  `test/shrunk-capture-wrappers.test.ts`)
 - tuple types and numeric-indexed object types are not rewritten to
   array-with-unknown-items during this optimization
 - after shrinking, `validateShrinkCoverage` checks that all requested property

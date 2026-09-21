@@ -16,11 +16,11 @@ import {
   extractDefaultValueFromBrandedMembers,
   getNativeTypeSchema,
   getPropertyNameText,
-  hasDefaultMarker,
   isEmptyObjectDefaultType,
   resolveWrapperNode,
   TypeWithInternals,
 } from "../type-utils.ts";
+import { hasDefaultMarker } from "../typescript/default-brand.ts";
 import {
   extractLiteralValueOfSymbol,
   resolveAliasedSymbol,
