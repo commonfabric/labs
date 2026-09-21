@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import type { CfcConfClause } from "@commonfabric/runner/cfc";
 import type { HarnessPromptLoopResult } from "@commonfabric/cf-harness/prompt-loop";
 import { hashStringOf } from "@commonfabric/data-model";
 import {
@@ -130,7 +131,7 @@ describe("agent runner", () => {
   const submit = async (
     params: Record<string, unknown> = {},
     runtime: Runtime = patternSide,
-    inputIfc?: { confidentiality: string[] },
+    inputIfc?: { confidentiality: CfcConfClause[] },
   ) => {
     const id = `request-${++requests}`;
     const { commonfabric } = createTrustedBuilder(runtime);
@@ -1588,7 +1589,7 @@ describe("agent runner", () => {
     });
 
     for (const explicitCeiling of [false, true]) {
-      it(`bounds observations by ${explicitCeiling ? "the explicit request ceiling" : "the requester by default"}`, async () => {
+      it(`bounds observations by ${explicitCeiling ? "the request within host authority" : "the requester by default"}`, async () => {
         const seen = await startHarnessRunner(async ({ resultPath }) => {
           await Deno.writeTextFile(
             resultPath,
@@ -1608,11 +1609,25 @@ describe("agent runner", () => {
         );
 
         expect(record.state).toBe("completed");
-        expect(seen().observationCeiling).toEqual(
-          explicitCeiling
-            ? ["https://cfc.test/atom/reading"]
-            : [{ type: CFC_ATOM_TYPE.User, subject: home }],
-        );
+        if (explicitCeiling) {
+          const ceiling = seen().observationCeiling as Array<{
+            anyOf: unknown[];
+          }>;
+          expect(ceiling).toHaveLength(1);
+          expect(ceiling[0].anyOf).toHaveLength(2);
+          expect(ceiling[0].anyOf).toContainEqual(
+            "https://cfc.test/atom/reading",
+          );
+          expect(ceiling[0].anyOf).toContainEqual({
+            type: CFC_ATOM_TYPE.User,
+            subject: home,
+          });
+        } else {
+          expect(seen().observationCeiling).toEqual([{
+            type: CFC_ATOM_TYPE.User,
+            subject: home,
+          }]);
+        }
       });
     }
 
@@ -1719,7 +1734,7 @@ describe("agent runner", () => {
       };
       // A link is written only to a document that carries a label, so the
       // input is labeled, and the request's ceiling admits that label.
-      const READING = "https://cfc.test/atom/reading";
+      const READING = { type: CFC_ATOM_TYPE.User, subject: home };
       const result = await submit(
         { resultSchema: schema, maxConfidentiality: [READING] },
         patternSide,

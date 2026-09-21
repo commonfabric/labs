@@ -38,6 +38,7 @@ import {
 import type { JSONSchema } from "@commonfabric/api";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { cloneIfNecessary, hashStringOf } from "@commonfabric/data-model";
+import type { ACL } from "@commonfabric/memory/acl";
 import { cloneSchemaMutable } from "@commonfabric/data-model-schema";
 import {
   LIMIT_REACHED,
@@ -45,6 +46,13 @@ import {
 } from "@commonfabric/runner/agent-run";
 import { addressKey, renderCellReference } from "@commonfabric/runner/shared";
 import type { Cell } from "@commonfabric/runner";
+import {
+  type CfcObservationMaxConfidentiality,
+  meetCfcObservationCeilings,
+  spaceReaderRole,
+} from "@commonfabric/runner/cfc";
+
+import { getAcl } from "./acl.ts";
 
 import type {
   AgentRunExecution,
@@ -81,8 +89,47 @@ export interface HarnessAgentRunExecutorOptions {
    */
   harnessDeps?: RunCfHarnessCliDependencies;
 
+  /** Reads the request space's current ACL as the runner identity. */
+  readSpaceAcl?: (host: string, space: string) => Promise<ACL | null>;
+
   /** Operator-facing lines the harness prints. */
   report?: (message: string) => void;
+}
+
+/** Resolves the run's ceiling from a fresh host ACL and the authored bound. */
+export async function agentRunObservationCeiling(
+  options: Pick<
+    HarnessAgentRunExecutorOptions,
+    "identityKeyPath" | "requester" | "readSpaceAcl" | "report"
+  >,
+  host: string,
+  space: string,
+  requested: CfcObservationMaxConfidentiality,
+): Promise<CfcObservationMaxConfidentiality> {
+  let acl: ACL | null = null;
+  if (space !== options.requester) {
+    try {
+      acl = await (options.readSpaceAcl ?? ((host, space) =>
+        getAcl({
+          apiUrl: host,
+          space,
+          identity: options.identityKeyPath,
+        })))(host, space);
+    } catch (error) {
+      options.report?.(
+        `agent runner: could not verify space membership: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+  const personal = { type: CFC_ATOM_TYPE.User, subject: options.requester };
+  const member = space !== options.requester &&
+    spaceReaderRole(acl ?? undefined, space, options.requester) !== null;
+  const hostCeiling: CfcObservationMaxConfidentiality = member
+    ? [personal, { type: CFC_ATOM_TYPE.Space, id: space }]
+    : [personal];
+  return meetCfcObservationCeilings(requested, hostCeiling);
 }
 
 /** Helper for the executor, which turns a run's loop result into a report. */
@@ -138,10 +185,17 @@ async (run: ClaimedAgentRun): Promise<AgentRunExecution> => {
   const resultSchema = typeof requestedSchema === "boolean"
     ? requestedSchema
     : cloneSchemaMutable(requestedSchema, true);
-  // The same ceiling bounds what the run observes and what its result carries.
-  const maxConfidentiality = record.maxConfidentiality === undefined
-    ? [{ type: CFC_ATOM_TYPE.User, subject: options.requester }]
+  // A request may narrow this host ceiling, but cannot grant itself a Space.
+  // The request record resides in the invitation space whose ACL is checked.
+  const requestedCeiling = record.maxConfidentiality === undefined
+    ? undefined
     : cloneIfNecessary(record.maxConfidentiality, { frozen: false });
+  const maxConfidentiality = (await agentRunObservationCeiling(
+    options,
+    run.host,
+    run.link.space,
+    requestedCeiling as CfcObservationMaxConfidentiality,
+  ))!;
   const inputs = record.inputs as Record<string, Cell<unknown>>;
   const tools = record.tools ?? options.allowedTools;
   const argv = [
