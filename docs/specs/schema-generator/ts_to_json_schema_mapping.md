@@ -767,11 +767,25 @@ inert. The wrapped type comes from the alias declaration's own
 type's aliasSymbol or from the node the type was written as. A generic alias
 whose wrapped type is one of its own parameters (`type Mine<T> = PerUser<T>`)
 takes that alias argument. Anything else formats the single constituent the
-brand was intersected onto; when there is no single constituent — the checker
-distributed the brand over a union, or flattened it into a wider intersection
-— generation **throws** (`… cannot be separated from the type it wraps …`)
-rather than emit an unscoped value schema (tested, scope-wrappers.test.ts;
-end-to-end: ts-transformers `aliased-scope-wrapper-schema.test.ts`).
+brand was intersected onto. With no single constituent — a mapped type copied
+the brand in beside the data properties (`Readonly<PerUser<T>>`,
+`Partial<…>`, `Omit<…>`), or the intersection is wider (`PerUser<T> & U`) —
+the formatters after `CommonFabricFormatter` supply the value schema, which
+already leaves a brand out, and the scope goes beside it
+(`SchemaGenerator.formatWithLaterFormatter`). Two shapes **throw**
+(`… cannot be separated from the type it wraps …`) rather than emit an
+unscoped value schema: a brand the checker distributed over a union with no
+authored node to read (`type Either<T> = PerUser<T | number>`), since each
+member would come back scoped inside `anyOf`; and a brand naming no single
+scope (`PerUser<A> & PerSession<B>`). Tested, scope-wrappers.test.ts;
+end-to-end: ts-transformers `aliased-scope-wrapper-schema.test.ts`.
+
+A scoped alias that refers to itself (`type Tree = PerUser<{ kids: Tree[] }>`)
+is the open case: the cycle is broken with an anonymous definition, the scope
+lands inside it, and a scope behind a `$ref` is one the runtime does not read.
+Writing the recursion through a named type keeps the scope on the slot
+(`interface TreeNode { kids: PerUser<TreeNode>[] }` →
+`items: { $ref: "#/$defs/TreeNode", scope: "user" }`).
 
 A scope wrapper **as a union member throws** (`A scope wrapper cannot be a
 member of a union.`; tested, scope-wrappers.test.ts). The runtime reads a
@@ -999,7 +1013,7 @@ Everything that throws, with source (test-pinned unless noted):
 | `DeepDefault` unknown key | `DeepDefault key "…" does not exist on the target object type.` | `union-formatter.ts` |
 | Nested scope wrappers | `Nested scope wrappers require a cell boundary between scopes.` | `common-fabric-formatter.ts` |
 | Scope wrapper as a union member | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
-| Scope-branded type with no single wrapped constituent | `The scope wrapper inside … cannot be separated from the type it wraps, …` | `common-fabric-formatter.ts` |
+| Scope brand distributed over a union with no authored node, or naming no single scope | `The scope wrapper inside … cannot be separated from the type it wraps, …` | `common-fabric-formatter.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |
 | Wrapper/scope/CFC alias without type argument | `<Kind><T> requires type argument` | `common-fabric-formatter.ts` (untested) |

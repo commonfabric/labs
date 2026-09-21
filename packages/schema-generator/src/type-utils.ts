@@ -450,11 +450,11 @@ export function getNamedTypeKey(
     return undefined;
   }
 
-  // An alias of a scope wrapper names the value type together with the scope of
-  // the slot holding it. A definition is shared by every use of the alias, and
-  // the write path reads a slot's scope from that slot's own schema, never
-  // through a `$ref`, so the scope has to be emitted where the alias is used.
-  if (aliasName && hasScopeBrand(type)) {
+  // A type carrying a scope brand names a value type together with the scope
+  // of the slot holding it. A definition is shared by every use of the name,
+  // and the write path reads a slot's scope from that slot's own schema, never
+  // through a `$ref`, so the scope has to be emitted where the type is used.
+  if (hasScopeBrand(type)) {
     return undefined;
   }
 

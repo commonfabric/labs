@@ -1102,6 +1102,27 @@ export class SchemaGenerator {
   }
 
   /**
+   * Formats `type` with the first formatter after `formatter` in the chain
+   * that supports it, returning `undefined` when none does. For a formatter
+   * that owns one aspect of a type and leaves the value schema to the rest of
+   * the chain. The type is already being formatted, so it is neither hoisted
+   * into a definition nor counted as a cycle here.
+   */
+  public formatWithLaterFormatter(
+    formatter: TypeFormatter,
+    type: ts.Type,
+    context: GenerationContext,
+  ): MutableJSONSchema | undefined {
+    const index = this.#formatters.indexOf(formatter);
+    if (index < 0) {
+      throw new Error("`formatWithLaterFormatter()` needs a chain formatter");
+    }
+    return this.#formatters.slice(index + 1)
+      .find((candidate) => candidate.supportsType(type, context))
+      ?.formatType(type, context);
+  }
+
+  /**
    * Create a stack key that distinguishes erased wrapper types from their
    * inner types
    */

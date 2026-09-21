@@ -650,8 +650,10 @@ export class CommonFabricFormatter implements TypeFormatter {
   /**
    * Formats a type that carries a scope brand without being written as a scope
    * wrapper where it is used: one reached through an alias, or built by a
-   * generic. Throws when the wrapped type cannot be recovered, since emitting
-   * the value schema alone would store the slot as shared space-scoped data.
+   * generic. Throws when the scope cannot be placed beside a value schema — a
+   * brand distributed over a union, or one that names no single scope — since
+   * emitting the value schema alone would store the slot as shared
+   * space-scoped data.
    */
   #formatScopeBrandedType(
     type: TypeWithInternals,
@@ -691,23 +693,37 @@ export class CommonFabricFormatter implements TypeFormatter {
       }
     }
 
-    // Otherwise the wrapped type is whatever the brand was intersected onto,
-    // which is recoverable only while it is still a single constituent.
+    // Otherwise the wrapped type is whatever the brand was intersected onto.
     const scope = getScopeBrand(type, context.typeChecker);
     const constituents = type.isIntersection()
       ? type.types.filter((part) => !isScopeBrandConstituent(part))
       : [];
-    if (scope === undefined || constituents.length !== 1) {
+    if (scope !== undefined && constituents.length === 1) {
+      return this.#applyScopeWrapperSemantics(
+        this.#schemaGenerator.formatChildType(
+          constituents[0]!,
+          context,
+          undefined,
+        ),
+        scope,
+      );
+    }
+
+    // With no single constituent to format, the brand sits among other
+    // members: a mapped type copied it beside the data properties
+    // (`Readonly<PerUser<T>>`), or the intersection is wider
+    // (`PerUser<T> & U`). The formatters below already leave a brand out of
+    // the value schema, so theirs is the value schema and the scope goes
+    // beside it. A union is the exception: the checker distributed the brand
+    // over its members, each would come back scoped, and a scope inside
+    // `anyOf` is one the write path never reads.
+    const value = scope === undefined || type.isUnion()
+      ? undefined
+      : this.#schemaGenerator.formatWithLaterFormatter(this, type, context);
+    if (scope === undefined || value === undefined) {
       throw inseparableScopeError(context.typeChecker.typeToString(type));
     }
-    return this.#applyScopeWrapperSemantics(
-      this.#schemaGenerator.formatChildType(
-        constituents[0]!,
-        context,
-        undefined,
-      ),
-      scope,
-    );
+    return this.#applyScopeWrapperSemantics(value, scope);
   }
 
   /**

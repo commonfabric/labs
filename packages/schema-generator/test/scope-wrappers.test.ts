@@ -622,9 +622,69 @@ interface SchemaRoot {
       ).toThrow("A scope wrapper cannot be a member of a union.");
     });
 
+    it("emits the scope beside the value schema of a type that kept the brand", async () => {
+      // A mapped type copies the brand in beside the data properties, and a
+      // wider intersection leaves it among several constituents. Neither has a
+      // single wrapped type to format.
+      const { properties, defs } = await propertiesOf(`
+interface Named { nickname: string }
+interface Branded { readonly [SCOPE_BRAND]?: "session"; label: string }
+interface SchemaRoot {
+  frozen: Readonly<PerUser<{ a: string }>>;
+  partial: Partial<PerUser<{ a: string }>>;
+  omitted: Omit<PerUser<{ a: string; b: number }>, "b">;
+  wider: PerUser<Named> & { extra: number };
+  branded: Branded;
+}
+`);
+      const a = { type: "string" };
+
+      expect(properties.frozen).toEqual({
+        type: "object",
+        properties: { a },
+        required: ["a"],
+        scope: "user",
+      });
+      expect(properties.partial).toEqual({
+        type: "object",
+        properties: { a },
+        scope: "user",
+      });
+      expect(properties.omitted).toEqual(properties.frozen);
+      expect(properties.wider).toEqual({
+        type: "object",
+        properties: { nickname: { type: "string" }, extra: { type: "number" } },
+        required: ["nickname", "extra"],
+        scope: "user",
+      });
+      expect(properties.branded).toEqual({
+        type: "object",
+        properties: { label: { type: "string" } },
+        required: ["label"],
+        scope: "session",
+      });
+      expect(defs).toEqual([]);
+    });
+
+    it("throws for an intersection of two different scopes", async () => {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `
+interface SchemaRoot {
+  draft: PerUser<{ a: string }> & PerSession<{ b: number }>;
+}
+`,
+        "SchemaRoot",
+      );
+
+      expect(() =>
+        new SchemaGenerator().generateSchema(type, checker, typeNode)
+      ).toThrow("cannot be separated from the type it wraps");
+    });
+
     it("throws for a scoped type it cannot separate from its brand", async () => {
       // A generic alias leaves no authored argument to read, and the checker
-      // has already distributed the brand over the union.
+      // has already distributed the brand over the union, where each member
+      // would come back with a scope of its own.
       const { type, checker, typeNode } = await getTypeFromCode(
         `
 type Either<T> = PerUser<T | number>;
