@@ -322,6 +322,27 @@ describe("submit_result", () => {
     });
   });
 
+  it("reports replacement when a resumed run overwrites an existing result", async () => {
+    const first = await run("run-resumed-result", [
+      submit("call-1", { answer: "Hyperion" }),
+      finalTurn("Done."),
+    ]);
+    const resumed = new CfHarnessEngine({
+      sandboxRuntime: new FakeSandboxRuntime(),
+      runState: first.engine.getRunState(),
+      structuredResult: { schema: RESULT_SCHEMA, path: resultPath },
+    });
+
+    const { output } = await resumed.invokeBuiltinTool("submit_result", {
+      result: { answer: "Ubik" },
+    });
+
+    expect(output).toMatchObject({ status: "ok", replaced: true });
+    expect(JSON.parse(await Deno.readTextFile(resultPath))).toEqual({
+      answer: "Ubik",
+    });
+  });
+
   it("keeps a handle token in the result a token", async () => {
     const engine = new CfHarnessEngine({
       sandboxRuntime: new FakeSandboxRuntime(),

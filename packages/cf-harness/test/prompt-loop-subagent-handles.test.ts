@@ -20,6 +20,7 @@ import { createFileSystemHarnessArtifactStore } from "../src/artifacts.ts";
 import {
   CfHarnessPromptLoop,
   seedSubagentHandleTable,
+  transferChildHandleTokens,
 } from "../src/prompt-loop.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "../src/revision-verification.ts";
 import { CAPABILITY_PROBE_SENTINEL } from "../src/diagnostics.ts";
@@ -27,6 +28,7 @@ import {
   createHarnessHandleTable,
   mintAddressHandle,
   mintReferentHandle,
+  resolveReferentToken,
 } from "../src/handle-table.ts";
 import { HANDLE_TOKEN_PATTERN } from "../src/contracts/handle-table.ts";
 import type { HarnessResearchRunSummary } from "../src/contracts/research.ts";
@@ -415,6 +417,42 @@ describe("prompt-loop cross-agent address handles", () => {
     expect(child?.referents?.map((entry) => entry.token)).toEqual([
       first.token,
     ]);
+  });
+
+  it("adopts referents discovered by a child and preserves seeded identities", async () => {
+    const parentRunId = "run-parent-referent-return";
+    const parent = await mintReferentHandle(
+      createHarnessHandleTable(parentRunId),
+      {
+        source: "loom_search",
+        value: { title: "Seeded" },
+        label: {},
+        labelSource: "query",
+      },
+    );
+    const childSeeded = seedSubagentHandleTable(
+      parent.table,
+      `${parentRunId}.subagent.1`,
+      { goal: `Inspect ${parent.token}.`, profile: "pattern-author" },
+    )!;
+    const childOnly = await mintReferentHandle(childSeeded, {
+      source: "loom_search",
+      value: { title: "Discovered by child" },
+      label: { confidentiality: ["private"] },
+      labelSource: "row",
+    });
+
+    const transferred = await transferChildHandleTokens(
+      parent.table,
+      childOnly.table,
+      `${parent.token} ${childOnly.token}`,
+    );
+    const [seededToken, discoveredToken] = transferred.text.split(" ");
+
+    expect(seededToken).toBe(parent.token);
+    expect(discoveredToken).toMatch(/^cfh:v:[2-9a-z]{5}$/);
+    expect(resolveReferentToken(transferred.table, discoveredToken!))
+      .toMatchObject({ value: { title: "Discovered by child" } });
   });
 
   it("resolves a token named in the delegate_task goal against the child's own table", async () => {

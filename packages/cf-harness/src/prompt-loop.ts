@@ -30,6 +30,7 @@ import {
 } from "./contracts/cfc-policy-snapshot.ts";
 import {
   ADDRESS_HANDLE_TOKEN_PREFIX,
+  ANY_HANDLE_TOKEN_PATTERN,
   HANDLE_TOKEN_PATTERN,
   type HarnessHandleEntry,
   type HarnessHandleReferent,
@@ -158,6 +159,7 @@ import {
   createHarnessHandleTable,
   defineOwnEntry,
   mintAddressHandle,
+  mintReferentHandle,
   resolveHandleRef,
   resolveHandleToken,
   resolveReferentToken,
@@ -1057,9 +1059,10 @@ const subagentProfileConfigForRun = (
 
 /**
  * The child's initial handle table for a delegation: an empty table salted
- * with the child's own run id, carrying a verbatim copy of every parent entry
- * whose token the parent named in the delegation's `goal` or `context`, or
- * declared as an input binding in the selected research kits.
+ * with the child's own run id, carrying a verbatim copy of every parent
+ * address entry or non-cell referent whose token the parent named in the
+ * delegation's `goal` or `context`, or declared as an input binding in the
+ * selected research kits.
  * Returns `undefined` when the delegation names no resolvable token, leaving
  * the child to mint its first table itself.
  *
@@ -1067,8 +1070,8 @@ const subagentProfileConfigForRun = (
  * delegated nor declared as a selected kit input is absent, so the child cannot
  * resolve it — what a child can reach is exactly what the delegation handed
  * it. Copying entries verbatim keeps the token stable across the hierarchy:
- * minting looks up by `addressKey`, so a child minting a handle for a seeded
- * address returns the parent's token.
+ * minting looks up by `addressKey` or canonical referent identity, so a child
+ * minting a handle for a seeded item returns the parent's token.
  */
 export const seedSubagentHandleTable = (
   parentTable: HarnessHandleTable | undefined,
@@ -1247,22 +1250,71 @@ export const outstandingSkillCustody = (
     .map(([token]) => token);
 };
 
-const resolveChildHandleTokens = (
-  childEngine: CfHarnessEngine,
+export const transferChildHandleTokens = async (
+  parentTable: HarnessHandleTable,
+  childTable: HarnessHandleTable | undefined,
   text: string,
-): string => {
-  const table = childEngine.handleTable;
-  return text.replace(
-    new RegExp(HANDLE_TOKEN_PATTERN.source, "g"),
-    (token) => {
-      const entry = table === undefined
+): Promise<{ table: HarnessHandleTable; text: string }> => {
+  let table = parentTable;
+  let resolved = "";
+  let offset = 0;
+  for (const match of text.matchAll(new RegExp(ANY_HANDLE_TOKEN_PATTERN))) {
+    const token = match[0];
+    const index = match.index;
+    resolved += text.slice(offset, index);
+    const entry = childTable === undefined
+      ? undefined
+      : resolveHandleToken(childTable, token);
+    if (entry !== undefined && entry.capability === undefined) {
+      resolved += entry.ref;
+    } else {
+      const referent = childTable === undefined
         ? undefined
-        : resolveHandleToken(table, token);
-      return entry !== undefined && entry.capability === undefined
-        ? entry.ref
-        : SCRUBBED_CHILD_HANDLE_TOKEN;
-    },
-  );
+        : resolveReferentToken(childTable, token);
+      if (referent === undefined) {
+        resolved += SCRUBBED_CHILD_HANDLE_TOKEN;
+      } else {
+        const minted = await mintReferentHandle(table, {
+          source: referent.source,
+          value: referent.value,
+          label: referent.label,
+          labelSource: referent.labelSource,
+        });
+        table = minted.table;
+        resolved += minted.token;
+      }
+    }
+    offset = index + token.length;
+  }
+  resolved += text.slice(offset);
+  return { table, text: resolved };
+};
+
+/** Maps each string leaf and key through an asynchronous boundary transform. */
+const mapSubagentReturnTextAsync = async (
+  value: unknown,
+  transform: (text: string) => Promise<string>,
+): Promise<unknown> => {
+  if (typeof value === "string") return await transform(value);
+  if (Array.isArray(value)) {
+    const mapped: unknown[] = [];
+    for (const entry of value) {
+      mapped.push(await mapSubagentReturnTextAsync(entry, transform));
+    }
+    return mapped;
+  }
+  if (isObjectOrArray(value)) {
+    const mapped: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value)) {
+      defineOwnEntry(
+        mapped,
+        await transform(key),
+        await mapSubagentReturnTextAsync(entry, transform),
+      );
+    }
+    return mapped;
+  }
+  return value;
 };
 
 /**
@@ -5761,11 +5813,10 @@ export class CfHarnessPromptLoop {
           ? { onTranscriptEvent: forwardChildTranscriptEvent }
           : {}),
       });
-      // The child speaks in its own tokens; the parent boundary speaks in
-      // addresses. Resolving here is what makes a reference the child
-      // produced usable by the parent: the parent's outbound swap mints the
-      // canonical address into a parent token — the same token for a seeded
-      // address, a fresh one for an address only the child ever saw.
+      // The child speaks in its own tokens. Address tokens become canonical
+      // addresses for the parent's outbound mint; non-cell referents are
+      // adopted into the parent's table and remain tokens, because no address
+      // can stand for them.
       //
       // The skill scrub runs on the RAW text, BEFORE token resolution: a
       // payload that itself contains a seeded token would otherwise be
@@ -5773,8 +5824,22 @@ export class CfHarnessPromptLoop {
       // the scrub's needle, walking an echoed skill past it. Scrubbing first
       // takes any embedded token out with the payload; resolution then runs
       // over what remains.
-      const childFinalText = resolveChildHandleTokens(
-        childEngine,
+      const childHandleTable = childEngine.handleTable;
+      let parentHandleTable = this.engine.handleTable ??
+        createHarnessHandleTable(parentRunState.runId);
+      let parentHandleTableChanged = false;
+      const resolveChildText = async (text: string): Promise<string> => {
+        const priorTable = parentHandleTable;
+        const transferred = await transferChildHandleTokens(
+          parentHandleTable,
+          childHandleTable,
+          text,
+        );
+        parentHandleTable = transferred.table;
+        parentHandleTableChanged ||= parentHandleTable !== priorTable;
+        return transferred.text;
+      };
+      const childFinalText = await resolveChildText(
         options.resolvedSkill === undefined
           ? childResult.finalAssistantText
           : scrubHandleSkillText(
@@ -5787,16 +5852,18 @@ export class CfHarnessPromptLoop {
       );
       // Apply the existing delegation boundary before the source footer changes
       // whitespace or markup. Keep the child's evidence and continuation raw.
-      nativeModelToolResults = mapSubagentReturnText(
+      nativeModelToolResults = await mapSubagentReturnTextAsync(
         childSearchResults,
         (text) =>
-          resolveChildHandleTokens(
-            childEngine,
+          resolveChildText(
             options.resolvedSkill === undefined
               ? text
               : scrubHandleSkillText(text, options.resolvedSkill.text),
           ),
       ) as HarnessOpenAIWebSearchResult[];
+      if (parentHandleTableChanged) {
+        await this.engine.recordHandleTable(parentHandleTable);
+      }
       summary = childFinalText +
         (delegateInput.returnSchema === undefined
           ? searchSourceSummary(nativeModelToolResults)

@@ -3462,7 +3462,8 @@ export class Runtime {
       cell.set(options.value);
       this.prepareTxForCommit(tx);
       const preparedState = tx.getCfcState();
-      if (preparedState.prepare.status !== "prepared") {
+      const enforcementDisabled = preparedState.enforcementMode === "disabled";
+      if (!enforcementDisabled && preparedState.prepare.status !== "prepared") {
         throw externalObservationRefusal(
           "CFC refused the external content observation",
           preparedState,
@@ -3515,13 +3516,32 @@ export class Runtime {
         posture: [...externalObservationPosture(preparedState)],
       };
 
-      // This read runs only after the staged write passed preparation. It
-      // traverses the complete value closure, then the ordinary derivation
-      // and egress collectors compute the receipt's two canonical views.
-      cell.get({ traverseCells: true });
+      // This read runs only after the staged write passed preparation, or in
+      // disabled mode where preparation is intentionally a no-op. Traversal
+      // can discover an unloaded linked document and start its sync, so each
+      // arrival is followed by another read until no link-target load remains.
+      // The storage manager deduplicates every document load for the session;
+      // a finite observed value therefore reaches this fixed point without a
+      // timer or retrying a failed request.
+      while (true) {
+        cell.get({ traverseCells: true });
+        // Link resolution can register its tracked sync in a promise
+        // continuation. Let that continuation run before inspecting the
+        // manager's settled pool, or a just-kicked load looks absent here.
+        await Promise.resolve();
+        if (
+          (this.storageManager.pendingCrossSpacePromiseCount?.() ?? 0) === 0
+        ) {
+          break;
+        }
+        await (this.storageManager.crossSpaceSettled?.() ?? Promise.resolve());
+      }
       tx.prepareCfc();
       const finalPreparedState = tx.getCfcState();
-      if (finalPreparedState.prepare.status !== "prepared") {
+      if (
+        !enforcementDisabled &&
+        finalPreparedState.prepare.status !== "prepared"
+      ) {
         throw externalObservationRefusal(
           "CFC refused the traversed external content observation",
           finalPreparedState,

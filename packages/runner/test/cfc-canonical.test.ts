@@ -81,6 +81,24 @@ describe("canonical", () => {
     expect(preparedDigestFor(input)).not.toBe(before);
   });
 
+  it("orders external observations with the same source by their content", () => {
+    const observation = (content: string) => ({
+      source: address("external"),
+      flow: { confidentiality: [content], integrity: [] },
+      consumed: { confidentiality: [], integrity: [] },
+      labeledSpaces: [],
+      sources: [],
+    });
+    const first = observation("first");
+    const second = observation("second");
+
+    expect(preparedDigestFor(baseInput({
+      externalContentObservations: [first, second],
+    }))).toBe(preparedDigestFor(baseInput({
+      externalContentObservations: [second, first],
+    })));
+  });
+
   describe("dereference traces in the prepared digest", () => {
     const hop = trace(address("board"), address("row"));
 

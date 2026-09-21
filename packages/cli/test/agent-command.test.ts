@@ -11,8 +11,12 @@ import { ValidationError } from "@cliffy/command";
 
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import { Runtime } from "@commonfabric/runner";
-import { agentQueueIndexCell } from "@commonfabric/runner/agent-run";
+import { type Cell, Runtime } from "@commonfabric/runner";
+import {
+  agentQueueIndexCell,
+  type AgentRunRecord,
+  AgentRunRecordSchema,
+} from "@commonfabric/runner/agent-run";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import {
@@ -190,12 +194,31 @@ describe("cf agent runner", () => {
       "http://localhost:8100",
       "--tools",
       "loom_search, describe_handle,",
+      "--loom-retrieval-config",
+      "/etc/loom/retrieval.json",
       "--work-root",
       "/var/agent-runs",
     ]);
 
     expect(started[0].tools).toEqual(["loom_search", "describe_handle"]);
     expect(started[0].workRoot).toBe("/var/agent-runs");
+  });
+
+  it("throws a validation error for an explicit Loom tool without its backing", async () => {
+    const { deps, started } = stubDeps();
+
+    await expect(
+      run(deps, [
+        "runner",
+        "-i",
+        "/keys/me.key",
+        "-a",
+        "http://localhost:8100",
+        "--tools",
+        "loom_search",
+      ]),
+    ).rejects.toThrow(/--loom-retrieval-config/);
+    expect(started).toEqual([]);
   });
 
   it("throws a validation error, and starts nothing, for a missing identity or API URL", async () => {
@@ -225,6 +248,9 @@ describe("cf agent runner", () => {
     await expect(
       run(deps, ["runner", "-i", "/k", "-a", "not a url"]),
     ).rejects.toThrow(/--api-url/);
+    await expect(
+      run(deps, ["runner", "-i", "/k", "-a", "file:///tmp/toolshed"]),
+    ).rejects.toThrow(/http.*https/);
   });
 
   it("stops the runner when waiting throws", async () => {
@@ -285,12 +311,21 @@ describe("cf agent runner", () => {
       });
       // Stands in for the queue piece's `setAgentRunner` handler.
       const cancel = runtime.scheduler.addEventHandler(
-        (tx, event: { runner?: unknown }) => {
+        (tx, event: {
+          runner?: { registrationId?: string };
+          expectedRegistrationId?: string;
+        }) => {
           if (options.registrationError) {
             throw new Error("registration rejected for the test");
           }
-          homePattern.withTx(tx).key("agentQueue").key("agentRunner")
-            .set(event.runner);
+          const runner = homePattern.withTx(tx).key("agentQueue")
+            .key("agentRunner");
+          if (
+            event.runner === undefined &&
+            event.expectedRegistrationId !== undefined &&
+            runner.get()?.registrationId !== event.expectedRegistrationId
+          ) return;
+          runner.set(event.runner);
         },
         homePattern.key("agentQueue").key("setAgentRunner")
           .getAsNormalizedFullLink(),
@@ -382,37 +417,76 @@ describe("cf agent runner", () => {
     it("reuses one connection for two entries on the same toolshed", async () => {
       const opened = await openHome({ queue: true });
       const remote = await openHome({ queue: false });
+      const records = ["first", "second"].map((id) =>
+        remote.runtime.getCell(
+          remote.config.home as never,
+          id,
+          AgentRunRecordSchema,
+        ) as unknown as Cell<AgentRunRecord>
+      );
+      await remote.runtime.editWithRetry((tx) => {
+        for (const [index, record] of records.entries()) {
+          const request = remote.runtime.getCell(
+            remote.config.home as never,
+            `request-${index}`,
+            undefined,
+            tx,
+          );
+          record.withTx(tx).set({
+            requestHash: `request-${index}`,
+            request,
+            piece: request,
+            space: request,
+            task: `request ${index}`,
+            inputs: {},
+            resultSchema: {},
+            state: "queued",
+            stateSince: "2026-09-20T12:00:00.000Z",
+            submittedAt: "2026-09-20T12:00:00.000Z",
+          });
+        }
+      });
       await opened.runtime.editWithRetry((tx) => {
         const entries = agentQueueIndexCell(
           opened.runtime,
           opened.config.home as never,
           tx,
         ).key("entries");
-        for (const id of ["first", "second"]) {
+        for (const record of records) {
           entries.push({
-            run: remote.runtime.getCell(remote.config.home as never, id),
+            run: record,
             host: "https://other.example/",
           });
         }
       });
       const hosts: string[] = [];
-      const connected = Promise.withResolvers<void>();
-      const running = await startAgentRunner(opened.config, () => {}, {
-        openHome: () =>
-          Promise.resolve({
-            runtime: opened.runtime,
-            homePattern: opened.homePattern,
-          }),
-        openHost: (_config, origin) => {
-          hosts.push(origin);
-          connected.resolve();
-          return Promise.resolve(remote.runtime);
+      const bothExecuted = Promise.withResolvers<void>();
+      let executions = 0;
+      const running = await startAgentRunner(
+        opened.config,
+        () => {},
+        {
+          openHome: () =>
+            Promise.resolve({
+              runtime: opened.runtime,
+              homePattern: opened.homePattern,
+            }),
+          openHost: (_config, origin) => {
+            hosts.push(origin);
+            return Promise.resolve(remote.runtime);
+          },
         },
-      });
-      await connected.promise;
+        () => {
+          executions += 1;
+          if (executions === 2) bothExecuted.resolve();
+          return Promise.resolve({ outcome: "refused" });
+        },
+      );
+      await bothExecuted.promise;
       await running.stop();
 
       expect(hosts).toEqual(["https://other.example"]);
+      expect(executions).toBe(2);
       await opened.close();
       await remote.close();
     });

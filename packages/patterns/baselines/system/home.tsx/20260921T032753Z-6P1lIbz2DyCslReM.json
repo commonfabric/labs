@@ -9,14 +9,14 @@
     "$defs": {
       "AgentQueueEntry": {
         "properties": {
-          "address": {
-            "type": "string"
-          },
           "host": {
             "type": "string"
           },
           "run": {
-            "$ref": "#/$defs/AgentRunRecord"
+            "asCell": [
+              "cell"
+            ],
+            "scope": "user"
           }
         },
         "required": [
@@ -50,7 +50,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/agent-queue.tsx",
-                  "moduleIdentity": "tnwsp0GBVDsnxkpZf7erUxsDwA19OcnusCE8nM0XKhY",
+                  "moduleIdentity": "q5QgH0JRNdnjbW8zm_R7mYcdpzWlMWkGH3YG3SzaX8k",
                   "path": [
                     "setAgentRunner"
                   ]
@@ -214,9 +214,6 @@
           "refused",
           "cancelled"
         ]
-      },
-      "AgentRunRecord": {
-        "$ref": "#/$defs/AgentRun"
       },
       "AgentRunState": {
         "enum": [
