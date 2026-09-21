@@ -41,6 +41,7 @@ import {
   type VerifyResult,
 } from "@commonfabric/state-inspector";
 
+import { buildSpaceInviteCommand } from "./space-invites.ts";
 import { hasJsonArgument } from "../lib/json-output.ts";
 import { buildRecreateRootCommand, buildSetHomeCommand } from "./piece.ts";
 
@@ -231,8 +232,8 @@ function verifyUncertaintyNote(u: VerifyResult["uncertainty"]): string {
 export const space = new Command()
   .name("space")
   .description(
-    "Commands that act on a space: its root and home patterns, and rehearsal " +
-      "clones of its store.",
+    "Commands that act on a space: its root and home patterns, access " +
+      "invitations, and rehearsal clones of its store.",
   )
   .default("help")
   .error((error, command) => {
@@ -471,4 +472,5 @@ export const space = new Command()
     buildRecreateRootCommand("space recreate-root"),
   )
   /* space set-home */
-  .command("set-home", buildSetHomeCommand("space set-home"));
+  .command("set-home", buildSetHomeCommand("space set-home"))
+  .command("invite", buildSpaceInviteCommand());

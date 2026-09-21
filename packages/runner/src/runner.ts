@@ -145,6 +145,7 @@ import { entityKey } from "./scheduler/keys.ts";
 import { RetryImmediately } from "./scheduler/retry-immediately.ts";
 import { isSchemaMismatchError } from "./schema-view.ts";
 import { rendererVDOMSchema } from "./schemas.ts";
+import { combineOptionalSchema } from "./traverse.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
 import { TransactionWrapper } from "./storage/extended-storage-transaction.ts";
 import { getTransactionReadActivities } from "./storage/transaction-inspection.ts";
@@ -9355,11 +9356,13 @@ export class Runner {
         const link = parseLink(currentValue, resultCell);
         links.push({
           ...link,
-          schema: link.schema ??
-            (schema === undefined ? undefined : cfcSchemaWithInheritedDefs(
+          schema: combineOptionalSchema(
+            schema === undefined ? undefined : cfcSchemaWithInheritedDefs(
               schema as JSONSchema,
               rootDefinitions,
-            )),
+            ),
+            link.schema,
+          ),
         });
         return;
       }

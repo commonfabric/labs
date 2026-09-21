@@ -30,6 +30,7 @@
     "./framework-result-keys": "./src/framework-result-keys.ts",
     "./index-tracking-stack": "./src/index-tracking-stack.ts",
     "./json-pointer": "./src/json-pointer.ts",
+    "./loopback": "./src/loopback.ts",
     "./logger": "./src/logger.ts",
     "./markdown": "./src/markdown.ts",
     "./objects": "./src/objects.ts",

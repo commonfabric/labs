@@ -107,6 +107,13 @@ import {
 import { classifyCommitTelemetry } from "./commit-telemetry.ts";
 import * as Engine from "./engine.ts";
 import {
+  executeInvite,
+  type InviteRequest,
+  type InviteResult,
+} from "./invites.ts";
+import { SpaceInviteError } from "../space-invites.ts";
+import { isGenesisRoot, readGenesisRoot } from "./genesis-root.ts";
+import {
   executionLeaseHolder,
   liveExecutionLeaseHolder,
 } from "./execution-lease.ts";
@@ -2089,9 +2096,43 @@ export class Server {
   #validateAclCommit(
     engine: Engine.Engine,
     space: string,
-    principal: string | undefined,
+    session: SessionState,
     commit: ClientCommit,
   ): V2Error | null {
+    const principal = session.principal;
+    if (commit.genesisRoot !== undefined) {
+      if (!isGenesisRoot(commit.genesisRoot)) {
+        return toError("ProtocolError", "Invalid genesis root reservation");
+      }
+      if (
+        principal !== space || Engine.serverSeq(engine) !== 0 ||
+        commit.operations.length !== 1 || commit.operations[0].op !== "set" ||
+        commit.operations[0].id !== aclDocId(space) ||
+        (commit.operations[0].scope !== undefined &&
+          commit.operations[0].scope !== "space") ||
+        (commit.branch !== undefined && commit.branch !== "") ||
+        !isACL(commit.operations[0].value?.value) ||
+        !hasConcreteOwner(commit.operations[0].value?.value)
+      ) {
+        return toError(
+          "AuthorizationError",
+          "A root reservation requires space-key ACL genesis",
+        );
+      }
+      if (!valueEqual(commit.genesisRoot, session.genesisRoot)) {
+        return toError(
+          "AuthorizationError",
+          "The genesis root must match the authenticated session intent",
+        );
+      }
+    } else if (
+      Engine.serverSeq(engine) === 0 && session.genesisRoot !== undefined
+    ) {
+      return toError(
+        "AuthorizationError",
+        "The genesis commit must retain the authenticated root intent",
+      );
+    }
     if (this.#aclMode() === "off") return null;
 
     const state = this.#aclState(engine, space);
@@ -2342,6 +2383,38 @@ export class Server {
     ) {
       await this.flushSessions();
     }
+  }
+
+  /** Executes an authenticated invitation operation with ordinary ACL publication. */
+  async invite(request: InviteRequest): Promise<InviteResult["result"]> {
+    return await this.#withSpacePublicationLock(request.space, async () => {
+      if (!(await this.#spaceStoreExists(request.space))) {
+        throw new SpaceInviteError(
+          request.operation === "redeem" ? "invite-unavailable" : "not-owner",
+        );
+      }
+      const engine = await this.#openEngine(request.space);
+      const { result, commit } = executeInvite(engine, {
+        ...request,
+        implicitOwner: request.principal === request.space ||
+          this.#isServicePrincipal(request.principal),
+      });
+      if (commit !== undefined) {
+        this.#invalidateAclCapabilities(request.space);
+        this.#revokeDeauthorizedSessions(engine, request.space);
+        this.markSpaceDirty(request.space, [
+          toDirtyKey(aclDocId(request.space)),
+        ]);
+        this.#notifyCommitAdmitted({
+          space: request.space,
+          seq: commit.seq,
+          class: "system",
+          sessionId: "invite-service",
+          writes: [{ id: aclDocId(request.space), scopeKey: "space" }],
+        });
+      }
+      return result;
+    });
   }
 
   async readDocument(
@@ -3282,6 +3355,21 @@ export class Server {
       if (deny) {
         return respondTypedError<SessionOpenResult>(message.requestId, deny);
       }
+      const requestedRoot = message.session.genesisRoot;
+      if (
+        requestedRoot !== undefined &&
+        (!isGenesisRoot(requestedRoot) ||
+          (Engine.serverSeq(engine) > 0 &&
+            !valueEqual(readGenesisRoot(engine), requestedRoot)))
+      ) {
+        return respondTypedError<SessionOpenResult>(
+          message.requestId,
+          toError(
+            "ProtocolError",
+            "The requested root intent differs from the space's immutable genesis",
+          ),
+        );
+      }
       const opened = this.#sessions.open(
         message.space,
         message.session,
@@ -3882,7 +3970,7 @@ export class Server {
           const invalid = this.#validateAclCommit(
             engine,
             message.space,
-            session.principal,
+            session,
             message.commit,
           );
           if (invalid) {
@@ -7941,6 +8029,10 @@ export const parseClientMessage = (
   ) {
     const holdings = parseHoldings(parsed.holdings);
     if (holdings === null) return null;
+    if (
+      parsed.session.genesisRoot !== undefined &&
+      !isGenesisRoot(parsed.session.genesisRoot)
+    ) return null;
     // A malformed ceiling refuses the message: a session opened without the
     // ceiling its client asked for would read unbounded, silently.
     const readCeiling = parseSessionReadCeiling(parsed.session.readCeiling);
@@ -7969,6 +8061,9 @@ export const parseClientMessage = (
           ? (parsed.session.actingAs as "space-owner")
           : undefined,
         ...(readCeiling !== undefined ? { readCeiling } : {}),
+        ...(isGenesisRoot(parsed.session.genesisRoot)
+          ? { genesisRoot: parsed.session.genesisRoot }
+          : {}),
       },
       invocation: isFabricPlainObject(parsed.invocation)
         ? parsed.invocation

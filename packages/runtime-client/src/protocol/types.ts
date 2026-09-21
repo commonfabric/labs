@@ -494,6 +494,9 @@ export enum NotificationType {
    */
   ErrorReport = "callback:error",
 
+  /** Reports authoritative loss of the runtime principal's access to a space. */
+  SpaceAccessLost = "callback:space-access-lost",
+
   /** Carries one telemetry marker, sent only while telemetry is enabled. */
   Telemetry = "callback:telemetry",
 
@@ -511,6 +514,7 @@ export enum NotificationType {
 
   /** Reports one authoritative terminal event-delivery notice. */
   EventNeedsAttention = "callback:event-needs-attention",
+  EventIntentOutcome = "callback:event-intent-outcome",
 }
 
 /**
@@ -3245,6 +3249,25 @@ export type NavigateRequestNotification = {
   targetCellRef: CellRef;
 };
 
+/** A refused event admission. Read access to the space can remain valid. */
+export type EventIntentOutcomeNotice = {
+  space: DID;
+  eventId: string;
+  kind: "refused";
+  reason: "admission-refused";
+};
+
+/** A payload-free outcome delivered to the runtime's accepted clients. */
+export type EventIntentOutcomeNotification = EventIntentOutcomeNotice & {
+  type: NotificationType.EventIntentOutcome;
+};
+
+/** An authoritative loss of the runtime principal's access to one space. */
+export type SpaceAccessLostNotification = {
+  type: NotificationType.SpaceAccessLost;
+  space: DID;
+};
+
 /**
  * An error with no request to fail -- a renderer error, or one a pattern
  * raised between requests. Every field but `message` is context that the
@@ -3504,6 +3527,8 @@ export type IPCRemoteNotification =
   | ConsoleNotification
   | NavigateRequestNotification
   | ErrorNotification
+  | EventIntentOutcomeNotification
+  | SpaceAccessLostNotification
   | TelemetryNotification
   | VDomBatchNotification
   | PendingWritesNotification

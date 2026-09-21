@@ -111,8 +111,12 @@ export {
   PieceInputPathError,
 } from "./piece-input-path.ts";
 export {
+  completeServedRegistration,
   confirmServedInstantiate,
+  confirmServedRegistration,
   confirmServedSetSource,
+  finishServedRegistration,
+  prepareServedRegistration,
   servedInstantiatePiece,
   type ServedInstantiateReceipt,
   type ServedInstantiateRequest,
@@ -120,6 +124,8 @@ export {
   type ServedLifecycleRefusalCode,
   type ServedPatternRef,
   type ServedPatternSource,
+  type ServedRegistrationOutcome,
+  type ServedRegistrationPreparation,
   servedSetPieceSource,
   type ServedSetSourceReceipt,
   type ServedSetSourceRequest,

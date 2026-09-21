@@ -3670,7 +3670,23 @@ const transformEffectsDocOperation = <
 export const applyCommit = (
   engine: Engine,
   options: ApplyCommitOptions,
-): AppliedCommit => {
+): AppliedCommit => runAtomicCommit(engine, (apply) => apply(options));
+
+/**
+ * Serializes private service metadata with ordinary engine commits. The callback
+ * reads the latest store under the write lock; decoded revisions become visible
+ * in the cache only after the entire transaction commits durably.
+ */
+export const runAtomicCommit = <T>(
+  engine: Engine,
+  operation: (apply: (options: ApplyCommitOptions) => AppliedCommit) => T,
+  options: { durable?: boolean } = {},
+): T => {
+  if (engine.database.inTransaction) {
+    throw new ProtocolError(
+      "atomic service operations cannot nest transactions",
+    );
+  }
   // A commit reads its own uncommitted rows — snapshot materialization asks
   // for the state it has just written — and those reads are worth keeping,
   // being of the revisions everything is about to ask for. They are held aside
@@ -3678,11 +3694,20 @@ export const applyCommit = (
   // SQLite back, and an entry recorded from what it wrote would describe a
   // revision that never happened. A retry then writes its own revision at the
   // sequence and operation index the rolled-back one had.
+  const previousSync = options.durable
+    ? engine.database.prepare("PRAGMA synchronous").get<
+      { synchronous: number }
+    >()!.synchronous
+    : undefined;
+  if (previousSync !== undefined) {
+    engine.database.exec("PRAGMA synchronous = FULL");
+  }
   const staged = new Map<string, DocumentCacheEntry>();
   engine.stagedDocumentCache = staged;
   try {
-    const applied = engine.database.transaction(applyCommitTransaction)
-      .immediate(engine, options);
+    const applied = engine.database.transaction(() =>
+      operation((options) => applyCommitTransaction(engine, options))
+    ).immediate();
     // Durable now, so what was read from those rows can be remembered. A
     // revision the cache already holds was served from it rather than
     // staged, so a present key here is not expected; skipping it keeps the
@@ -3697,6 +3722,9 @@ export const applyCommit = (
   } finally {
     // Also the rollback path, where `staged` is dropped unread.
     engine.stagedDocumentCache = undefined;
+    if (previousSync !== undefined) {
+      engine.database.exec(`PRAGMA synchronous = ${previousSync}`);
+    }
   }
 };
 

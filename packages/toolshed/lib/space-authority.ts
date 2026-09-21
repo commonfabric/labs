@@ -31,6 +31,7 @@
 import {
   type ACL,
   type Capability,
+  hasConcreteOwner,
   isACL,
   isCapable,
 } from "@commonfabric/memory/acl";
@@ -93,6 +94,9 @@ export interface SpaceAuthorityDeps {
   runtime: Runtime;
   operatorDid: string;
   serviceDids: readonly string[];
+
+  /** Hosted control-plane ACL read; grants no graph access to the process identity. */
+  readAcl?: (space: string) => Promise<unknown>;
 
   /**
    * The deployment's `MEMORY_ACL_MODE`. Load-bearing for the operator-write
@@ -180,7 +184,16 @@ export async function authorizeSpaceWriter(
   if (deps.aclMode === "off") return { ok: true };
   let acl: ACL | null;
   try {
-    acl = await new ACLManager(deps.runtime, space as DID).get();
+    if (deps.readAcl) {
+      const value = await deps.readAcl(space);
+      if (value === undefined || value === null) acl = null;
+      else {
+        if (!isACL(value) || !hasConcreteOwner(value)) {
+          throw new Error("Stored ACL is malformed or has no concrete OWNER.");
+        }
+        acl = value;
+      }
+    } else acl = await new ACLManager(deps.runtime, space as DID).get();
   } catch (error) {
     return deny(`acl malformed or ownerless: ${error}`);
   }

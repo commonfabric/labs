@@ -730,6 +730,12 @@ loop's duty).
   is in `consequenceOf`" (§4) holds for drops and errors too, and the
   client's step-2 retirement (speculation.md §4) fires for them through
   the same carrier (the entry's own `status` / `error` mark).
+- A client append rejected by a current-ACL `AuthorizationError` carrying
+  `permanentEvidence: true` and a numeric `aclRevision` settles as refused
+  and leaves the append queue. The client does not automatically replay that
+  denied intent after a later access grant. A verdict marked `retriable`, or
+  an authorization failure without the current ACL evidence, retains the
+  queued intent for transport or session recovery.
 - Duplicate submission (client retry after ambiguous network outcome):
   the append is CAS-guarded by `eventId` uniqueness above the dedupe
   horizon (§4) — a duplicate of a not-yet-consequenced event is

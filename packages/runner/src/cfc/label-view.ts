@@ -20,6 +20,7 @@ import {
 
 export type { CfcLabelView, CfcLabelViewEntry };
 export {
+  cfcLabelViewForAddress,
   cfcLabelViewForDereference,
   cfcLabelViewForDereferenceTraces,
   cfcLabelViewFromMetadata,

@@ -114,6 +114,14 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
     reachedBy: [],
   },
   {
+    name: "check-address-examples",
+    kind: "gate",
+    run: ["task", "check-address-examples"],
+    // Reads every Markdown document and the comments of every TypeScript
+    // file, so a comment added anywhere can fail it.
+    reachedBy: [],
+  },
+  {
     name: "check-tripwires",
     kind: "gate",
     run: ["task", "check-tripwires"],

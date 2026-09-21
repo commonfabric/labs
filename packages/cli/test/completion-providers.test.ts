@@ -1,5 +1,14 @@
 import { assert, assertEquals, assertFalse, assertRejects } from "@std/assert";
 import { Database } from "@db/sqlite";
+import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
+import { taggedHashStringOf } from "@commonfabric/data-model";
+import { Identity } from "@commonfabric/identity";
+import { PiecesController } from "@commonfabric/piece/ops";
+import { entityIdFrom, Runtime } from "@commonfabric/runner";
+import { StorageManager as WorkerStorageManager } from "@commonfabric/runner/storage/cache";
+import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { resetProcessDeployment } from "../lib/process-deployment.ts";
 import {
   type CompletionLine,
   declaredSlots,
@@ -23,6 +32,7 @@ import {
   shapeSlugCandidates,
   shapeVerbCandidates,
   splitPathPrefix,
+  splitPiecePathPrefix,
   splitSelectPrefix,
   wishTargetCandidates,
 } from "../lib/completion/providers.ts";
@@ -907,6 +917,60 @@ Deno.test("command: a deno line that is not ours is reported as such", async () 
   assertEquals(out, ":cf:notmine");
 });
 
+Deno.test("shaping: equal document IDs preserve their distinct full target references", () => {
+  const pieces = [
+    { id: "fid1:same", reference: "//did:key:alpha/fid1:same@user/nested" },
+    { id: "fid1:same", reference: "//did:key:beta/fid1:same" },
+  ];
+  assertEquals(
+    shapePieceCandidates(pieces).map((row) => row.value),
+    pieces.map((row) => row.reference),
+  );
+});
+
+Deno.test("endpoint prefixes retain qualified scope and parent path", () => {
+  const id = `fid1:${"a".repeat(43)}`;
+  for (
+    const root of [
+      `/of:${id}`,
+      `//did:key:foreign/of:${id}@user`,
+      `/@did:key:foreign/of:${id}@user`,
+    ]
+  ) {
+    assertEquals(splitPiecePathPrefix(root), undefined);
+    assertEquals(splitPiecePathPrefix(`${root}/nested/fi`), {
+      reference: `${root}/nested`,
+      prefix: `${root}/nested/`,
+    });
+    assertEquals(splitPiecePathPrefix(`${root}/`), {
+      reference: root,
+      prefix: `${root}/`,
+    });
+  }
+  for (const root of ["board", id]) {
+    assertEquals(splitPiecePathPrefix(`${root}/nested/fi`), {
+      reference: root,
+      prefix: `${root}/nested/`,
+      parentPath: "nested",
+    });
+  }
+});
+
+Deno.test("shaping: only default root references in the resolved listing space shorten", () => {
+  const local = "did:key:local";
+  const id = `fid1:${"a".repeat(43)}`;
+  const pieces = [
+    { id, reference: `//${local}/of:${id}@space` },
+    { id, reference: `//did:key:foreign/of:${id}@space` },
+    { id, reference: `//${local}/of:${id}@user` },
+    { id, reference: `//${local}/of:${id}@space/nested` },
+  ];
+  assertEquals(shapePieceCandidates(pieces, local).map((row) => row.value), [
+    id,
+    ...pieces.slice(1).map((row) => row.reference),
+  ]);
+});
+
 Deno.test("shaping: a piece is labeled by name, falling back to its pattern", () => {
   assertEquals(
     shapePieceCandidates([
@@ -1248,4 +1312,96 @@ Deno.test("shaping: a piece-and-path prefix never doubles the separator", () => 
   assertEquals(pieceWithPathPrefix("fid1:a", ""), "fid1:a/");
   assertEquals(pieceWithPathPrefix("fid1:a", "items"), "fid1:a/items/");
   assertEquals(pieceWithPathPrefix("fid1:a", "items/0"), "fid1:a/items/0/");
+});
+
+Deno.test("live candidates preserve qualified space, user scope, and nested paths", async () => {
+  const identity = await Identity.fromPassphrase(
+    "completion qualified viewer",
+    { implementation: "noble" },
+  );
+  const foreign = await Identity.fromPassphrase("completion foreign space");
+  const storage = StorageManager.emulate({ as: identity });
+  const keyPath = await Deno.makeTempFile();
+  await Deno.writeFile(keyPath, identity.toPkcs8());
+  const piece = entityIdFrom(taggedHashStringOf("completion-qualified-piece"));
+  const reference = `/@${foreign.did()}/of:${piece.toString()}@user/items/0/`;
+  const runtimes: Runtime[] = [];
+  const openedSpaces: string[] = [];
+  const open = stub(WorkerStorageManager, "open", () => storage);
+  const fetchMeta = stub(
+    globalThis,
+    "fetch",
+    () => Promise.resolve(Response.json({ experimental: {} })),
+  );
+  const health = stub(Runtime.prototype, "healthCheck", async function () {
+    runtimes.push(this);
+    const addressed = this.getCellFromEntityId(
+      foreign.did(),
+      piece,
+      [],
+      undefined,
+      undefined,
+      "user",
+    );
+    const otherScope = this.getCellFromEntityId(foreign.did(), piece);
+    const otherSpace = this.getCellFromEntityId(
+      identity.did(),
+      piece,
+      [],
+      undefined,
+      undefined,
+      "user",
+    );
+    await Promise.all([addressed.sync(), otherScope.sync(), otherSpace.sync()]);
+    for (
+      const [cell, value] of [
+        [addressed, {
+          items: [{ title: "target", detail: "target" }],
+          rootDecoy: true,
+        }],
+        [otherScope, { items: [{ wrongScope: true }] }],
+        [otherSpace, { items: [{ wrongSpace: true }] }],
+      ] as const
+    ) {
+      const tx = this.edit();
+      cell.withTx(tx).set(value);
+      await tx.commit();
+    }
+    return true;
+  });
+  const session = stub(
+    PiecesController.prototype,
+    "ensureSpaceSession",
+    function () {
+      openedSpaces.push(this.getSpace());
+      return Promise.resolve();
+    },
+  );
+  resetProcessDeployment();
+  try {
+    await withEnv(
+      { identity: keyPath, apiUrl: "http://127.0.0.1:1" },
+      async () => {
+        const result = await liveCandidates(
+          lineFor(`cf piece link ${reference}ti`),
+        );
+        expect(result).toEqual({
+          candidates: [{ value: `${reference}title` }, {
+            value: `${reference}detail`,
+          }],
+          directives: [{ kind: "nospace" }],
+        });
+        expect(openedSpaces).toEqual([foreign.did()]);
+      },
+    );
+  } finally {
+    session.restore();
+    health.restore();
+    fetchMeta.restore();
+    open.restore();
+    for (const runtime of runtimes) await runtime.dispose();
+    await storage.close();
+    await Deno.remove(keyPath);
+    resetProcessDeployment();
+  }
 });
