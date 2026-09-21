@@ -671,7 +671,7 @@
     // map is re-verified; the stamp is drawn in the canvas's top-left corner.
     const SNAPSHOT = {
       date: "2026-09-21",
-      sha: "e4bdd99340+agent-review-fixes",
+      sha: "94aab0d205+agent-review-fixes",
     };
     const W = 2760, H = 1840;
     const bands = [
@@ -2311,7 +2311,7 @@
       e_runner_artifacts:
         `<p>Labels, decisions, commit refusals and, since today, the cell-label snapshot for touched cells, written in the same write as the run's outcome.</p>`,
       e_parent_artifacts:
-        `<p>The run retains its model-facing transcript, state, policy snapshot, and full tool outputs. In the same transcript write, a sibling record names every omission rule with its artifact path and JSON pointer, but never copies withheld content.</p>`,
+        `<p>The run retains its model-facing transcript, state, policy snapshot, and full tool outputs. In the same transcript write, a sibling record names every omission rule with its artifact path and JSON pointer, but never copies withheld content.</p><p>A <code>run_pattern</code> tool artifact retains the exact index identity in <code>patternPublication.patternId</code> when it queues a publication. An <code>assign_slug</code> artifact records the slug beside its target <code>pieceId</code>, which joins to the creating attempt across parent and child run directories. A revision does not publish or replace that record, and a separate probe has its own piece and attempt. The publication status remains <code>queued</code>, not an index acknowledgment.</p>`,
       e_audit_operator:
         `<p>Findings for a person to act on. Operator access to raw artifacts is the intended gate that has no code yet.</p>`,
       e_operator_policy:
