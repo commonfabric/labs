@@ -3,9 +3,12 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { resolveLinkTracingDereferences } from "../src/link-resolution.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
+import { toURI } from "../src/uri-utils.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 
 const signer = await Identity.fromPassphrase("inspace-child-owner-seed");
@@ -206,6 +209,67 @@ describe("inSpace child owner-protected seed value (profile name)", () => {
         | undefined;
       expect(value).toBeDefined();
       expect(value?.name).toBe("hi");
+
+      // The list entry is a mutable reference to the child. Its target is the
+      // actual piece; attack the name chain beginning at that piece's projection.
+      const inspect = rt2.edit();
+      const resolved = resolveLinkTracingDereferences(
+        rt2,
+        inspect,
+        nameCell.getAsNormalizedFullLink(),
+      );
+      const pieceIndex = resolved.traces.findIndex((trace) =>
+        rt2.getCellFromLink({
+          ...trace.source,
+          id: toURI(trace.source.id),
+          path: [],
+        })
+          .getMetaRaw("patternIdentity") !== undefined
+      );
+      expect(pieceIndex).toBeGreaterThanOrEqual(0);
+      const addresses = [
+        ...resolved.traces.slice(pieceIndex).map((trace) => trace.source),
+        resolved.link,
+      ];
+      expect(addresses).toHaveLength(3);
+      for (const address of addresses) {
+        expect(readStoredCfcMetadata(inspect, address)).toBeDefined();
+      }
+      await inspect.commit();
+      for (const address of addresses) {
+        const attack = rt2.edit();
+        const replacement = rt2.getCell(
+          spaceB,
+          "unprotected-replacement",
+          undefined,
+          attack,
+        );
+        replacement.set("other");
+        attack.writeValueOrThrow(
+          {
+            ...address,
+            id: toURI(address.id),
+            path: [...address.path],
+            schema: undefined,
+          },
+          replacement.getAsWriteRedirectLink(),
+        );
+        rt2.prepareTxForCommit(attack);
+        expect((await attack.commit()).error?.message).toContain(
+          "missing schema write-policy input",
+        );
+      }
+      const overwrite = rt2.edit();
+      rt2.getCellFromLink(
+        { ...resolved.link, schema: undefined },
+        undefined,
+        overwrite,
+      ).set("other");
+      rt2.prepareTxForCommit(overwrite);
+      expect((await overwrite.commit()).error?.message).toContain(
+        "writeAuthorizedBy",
+      );
+      expect(nameCell.get()).toBe("hi");
     } finally {
       await rt2.dispose();
       await rt1.dispose();

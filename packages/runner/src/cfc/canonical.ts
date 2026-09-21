@@ -221,6 +221,7 @@ const compareWritePolicyInput = (
   // canonical hash to give a total order on otherwise-distinct records.
   let primary = 0;
   switch (left.kind) {
+    case "initialization":
     case "schema":
     case "structural-provenance":
     case "trusted-event":
@@ -285,6 +286,7 @@ export const canonicalizeWritePolicyInput = (
   input: WritePolicyInput,
 ): WritePolicyInput => {
   switch (input.kind) {
+    case "initialization":
     case "schema":
       return { ...input, target: canonicalizeAttemptedWrite(input.target) };
     case "structural-provenance":

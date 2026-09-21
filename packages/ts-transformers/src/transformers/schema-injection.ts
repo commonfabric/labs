@@ -28,7 +28,9 @@ import {
   widenLiteralType,
 } from "../ast/mod.ts";
 import {
+  containsTypeQuery,
   createRegisteredTypeLiteral,
+  getAuthoredCellTypeNode,
   getPreservedTypeForBindingElement,
   type PreservedBindingType,
   reportUnknownReactiveType,
@@ -672,7 +674,7 @@ function collectFunctionSchemaTypeNodes(
     context &&
     unwrappedReturnExpr &&
     ts.isObjectLiteralExpression(unwrappedReturnExpr) &&
-    objectLiteralHasExplicitScopeValueTypeNodes(unwrappedReturnExpr, checker)
+    objectLiteralHasPreservedValueTypeNodes(unwrappedReturnExpr, checker)
   ) {
     const scopedResult = buildObjectLiteralReturnTypeNode(
       unwrappedReturnExpr,
@@ -2009,6 +2011,8 @@ function getExplicitValueTypeNode(
   checker: ts.TypeChecker,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
 ): PreservedBindingType | undefined {
+  const cellType = getAuthoredCellTypeNode(valueExpr, checker, typeRegistry);
+  if (cellType) return { typeNode: cellType };
   if (!ts.isIdentifier(valueExpr)) {
     return undefined;
   }
@@ -2034,7 +2038,7 @@ function getExplicitValueTypeNode(
   return undefined;
 }
 
-function objectLiteralHasExplicitScopeValueTypeNodes(
+function objectLiteralHasPreservedValueTypeNodes(
   expr: ts.ObjectLiteralExpression,
   checker: ts.TypeChecker,
 ): boolean {
@@ -2050,11 +2054,12 @@ function objectLiteralHasExplicitScopeValueTypeNodes(
       ? unwrapExpression(property.initializer)
       : property.name;
     const explicit = getExplicitValueTypeNode(valueExpr, checker);
-    // The printer can emit `unknown` for a scoped generic array. The authored
-    // node it stands in for still names the scope the result must retain.
+    // Inference can erase a scope wrapper or print a writer binding as a
+    // structural function type. Authored syntax retains both declarations.
     if (
       explicit &&
-      (typeNodeContainsScopeWrapper(explicit.typeNode) ||
+      (containsTypeQuery(explicit.typeNode) ||
+        typeNodeContainsScopeWrapper(explicit.typeNode) ||
         (explicit.preservedTypeNode &&
           typeNodeContainsScopeWrapper(explicit.preservedTypeNode)))
     ) {

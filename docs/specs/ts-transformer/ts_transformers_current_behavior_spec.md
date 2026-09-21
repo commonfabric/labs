@@ -2117,6 +2117,14 @@ carry a repeated source-metadata helper implementation.
 
 ## 12. Schema Generation
 
+Cell constructors whose authored type arguments include a `typeof` value binding
+retain those arguments when their result is lowered into a lift. Recovery follows
+`.for()` and unannotated `const` aliases, and also preserves the declaration in
+an inferred object-literal pattern result. This keeps `WriteAuthorizedBy` tied to
+the named writer instead of an inferred structural function type. Explicit
+variable annotations remain authoritative; mutable aliases are not followed.
+`protected-cell-policy.test.ts` pins both generated schemas.
+
 `SchemaGeneratorTransformer` replaces `toSchema<T>(options?)` calls with JSON
 schema literals.
 

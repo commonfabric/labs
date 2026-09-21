@@ -160,7 +160,6 @@ import {
 } from "./schema-refs.ts";
 import { createTrustResolver } from "./trust.ts";
 import {
-  CFC_STRUCTURAL_PROVENANCE_SEED_MATERIALIZATION,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type CfcAddress,
   cfcEnforcementStrictness,
@@ -1025,47 +1024,6 @@ const setupProjectionSourceMatchesValue = (
 // write, a no-op re-write, a later field edit — remains fully enforced. The
 // slot the pattern result is placed into is independently gated by its own
 // `writeAuthorizedBy`, and the owner binding by `currentPrincipalIntegrityReason`.
-// `writeAuthorizedBy` gates *modification* of an existing owner-protected
-// value (§8.15.10); the runtime materializing a runtime-constructed cell's
-// initial value (`Writable(initialValue)` in a lift/handler frame — the CTS
-// wraps derived initializers this way) is the trusted initialization step
-// (§8.15.4), like the projection-marker case above. It is not (and cannot be)
-// the claim-referenced edit handler. Recognize it by BOTH signals together:
-// the seed-materialization marker — recorded ONLY by the runtime's
-// cell-serialization path (data-updating.ts BRANCH_CELL), never reachable
-// from arbitrary `cell.set` — AND the write creating the doc (a root-level
-// write whose previousValue is undefined, the same signal
-// `derivePersistedLinkLabel` uses for same-tx child docs). Edits to existing
-// docs and direct unmarked writes stay fully enforced; ownerPrincipal /
-// integrity minting is gated separately (`currentPrincipalIntegrityReason`
-// runs before this).
-const writeIsSeedMaterialization = (
-  tx: IExtendedStorageTransaction,
-  target: {
-    space: MemorySpace;
-    id: URI;
-    scope: ReturnType<typeof normalizeCellScope>;
-  },
-): boolean => {
-  const marked = tx.getCfcState().writePolicyInputs.some((input) =>
-    input.kind === "structural-provenance" &&
-    input.claim === CFC_STRUCTURAL_PROVENANCE_SEED_MATERIALIZATION &&
-    input.sources.some((source) =>
-      source.space === target.space && source.id === target.id &&
-      normalizeCellScope(source.scope) === target.scope
-    )
-  );
-  if (!marked) {
-    return false;
-  }
-  return [...(tx.getWriteDetails?.(target.space) ?? [])].some((detail) =>
-    detail.address.id === target.id &&
-    normalizeCellScope(detail.address.scope) === target.scope &&
-    detail.address.path.length <= 1 &&
-    detail.previousValue === undefined
-  );
-};
-
 const writeIsPatternSetupInitialization = (
   tx: IExtendedStorageTransaction,
   target: {
@@ -1097,6 +1055,65 @@ const writeIsPatternSetupInitialization = (
         canonicalizeLogicalPath(source.path),
       );
     })
+  );
+};
+
+/** A runtime initialization covers one absent slot and its exact final value. */
+const writeIsRuntimeInitialization = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean => {
+  const input = tx.getCfcState().writePolicyInputs.find((input) =>
+    input.kind === "initialization" && tx.isRuntimeWritePolicyInput(input) &&
+    input.target.space === target.space && input.target.id === target.id &&
+    normalizeCellScope(input.target.scope) === target.scope &&
+    concretePathHasPrefix(path, input.target.path)
+  );
+  if (input?.kind !== "initialization") return false;
+  const stored = loadStoredCfcEnvelope(tx, target);
+  if (stored.status === "unreadable") return false;
+  if (
+    stored.status === "loaded" &&
+    cfcSchemaEntries(stored.schema).some((entry) =>
+      pathPatternsOverlap(entry.path, path) &&
+      isObjectOrArray(entry.schema) &&
+      entry.schema.ifc?.writeAuthorizedBy !== undefined
+    )
+  ) return false;
+  const addressPath = ["value", ...input.target.path];
+  const details = tx.getWriteDetailsForTarget?.(target) ??
+    tx.getWriteDetails?.(target.space) ?? [];
+  const covering = [...details].filter((detail) =>
+    detail.address.id === target.id &&
+    normalizeCellScope(detail.address.scope) === target.scope &&
+    concretePathHasPrefix(addressPath, detail.address.path.map(String))
+  );
+  // Overlapping write paths can capture different intermediate states. Every
+  // covering snapshot must agree on absence; the deepest alone is insufficient.
+  const absent = covering.length > 0 && covering.every((detail) => {
+    if (detail.previousPresent === undefined) return false;
+    if (!detail.previousPresent) return true;
+    let previous = detail.previousValue;
+    const remaining = addressPath.slice(detail.address.path.length);
+    for (const segment of remaining) {
+      if (!isWalkableObjectOrArray(previous) || isWriteRedirectLink(previous)) {
+        return false;
+      }
+      if (!Object.hasOwn(previous, segment)) return true;
+      previous = (previous as Record<string, FabricValue>)[segment];
+    }
+    return false;
+  });
+  return absent && valueEqual(
+    tx.readValueOrThrow({ ...target, path: [...input.target.path] }, {
+      meta: INTERNAL_VERIFIER_META,
+    }),
+    input.value,
   );
 };
 
@@ -4495,7 +4512,7 @@ const verifyInputRequirements = (
       target,
       entry.path,
     ) || writeIsPatternSetupInitialization(tx, target, entry.path) ||
-      writeIsSeedMaterialization(tx, target);
+      writeIsRuntimeInitialization(tx, target, entry.path);
     if (writeAuthorizedByFailure !== undefined && !setupProjection) {
       return { reason: writeAuthorizedByFailure, verdict: true };
     }
