@@ -27,6 +27,7 @@ import {
 } from "../cfc-label-disclosure.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { HarnessFabricSession } from "../fabric-session.ts";
+import { admitsFabricReference } from "../foreign-spaces.ts";
 import { resolveHandleToken, resolveReferentToken } from "../handle-table.ts";
 import { schemaShapeOnly } from "../schema-shape.ts";
 import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
@@ -702,9 +703,9 @@ interface DescribedReferent {
  * schema rather than a read of the data. The labels come off the same synced
  * document, rebased onto the referent's own path, so one read answers both.
  *
- * A reference outside the session's own space is not followed: the session's
- * authority ends at its space, the same boundary `run_pattern` draws over its
- * inputs. Anything that goes wrong — an unparseable reference, a document
+ * References are followed within the session's space and operator-admitted
+ * foreign spaces, under the session's identity and CFC posture. Anything that
+ * goes wrong — an unparseable reference, a document
  * that does not exist, a path the schema does not describe — answers nothing,
  * since what the session cannot state is reported as absent rather than as a
  * failed call.
@@ -721,7 +722,7 @@ const describeInFabric = async (
   } catch {
     return {};
   }
-  if (link.space !== space) {
+  if (!admitsFabricReference(link.space, space, session.foreignSpaces)) {
     return {};
   }
   try {
@@ -766,7 +767,7 @@ const describeInFabric = async (
     // database that discloses its tables still discloses them when nothing
     // could be counted.
     const fill = await readDatabaseFill(
-      pieces.runtime.storageManager.open(space),
+      pieces.runtime.storageManager.open(link.space),
       db,
       database.tables,
     );

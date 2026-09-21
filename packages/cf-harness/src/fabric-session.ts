@@ -7,6 +7,7 @@
  */
 
 import { Identity } from "@commonfabric/identity";
+import { isDIDKey } from "@commonfabric/identity/did";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
   fabricSessionPresetCfcDials,
@@ -17,9 +18,16 @@ import {
   createFabricInstantiationRecorder,
   type FabricPatternInstantiations,
 } from "./fabric-instantiations.ts";
+import {
+  type HarnessForeignSpaces,
+  validateHarnessForeignSpaces,
+} from "./foreign-spaces.ts";
 
 export interface HarnessFabricSession {
   pieces: PiecesController;
+
+  /** Operator admission snapshot whose host routes are registered at startup. */
+  readonly foreignSpaces?: HarnessForeignSpaces;
 
   /**
    * The identity this session acts as, when the session was built from one.
@@ -120,6 +128,8 @@ export const fabricSessionRuntimeBoundedAsConfigured = (
  * silent absence. The controller's runtime is given an instantiation recorder,
  * whose read side rides along on the session — the observer is a runtime
  * constructor option, so this is the only point at which it can be installed.
+ * Admitted foreign host routes are registered before the session is returned;
+ * a refused route disposes the runtime and fails construction.
  *
  * The session is refused, and its runtime disposed, when the runtime is not
  * bounded by the read ceiling the config asked for
@@ -130,6 +140,9 @@ export const createHarnessFabricSessionFactory = (
   deps: HarnessFabricSessionFactoryDeps = {},
 ): HarnessFabricSessionFactory =>
 async () => {
+  const foreignSpaces = validateHarnessForeignSpaces(
+    config.foreignSpaces ?? {},
+  );
   const loadIdentity = deps.loadIdentity ??
     (async (path: string) => Identity.fromPkcs8(await Deno.readFile(path)));
   const initialize = deps.initialize ??
@@ -149,7 +162,25 @@ async () => {
         "ceiling; refusing to run under it",
     );
   }
-  return { pieces, identity, instantiations: recorder.instantiations };
+  try {
+    for (const [space, host] of Object.entries(foreignSpaces)) {
+      if (
+        !isDIDKey(space) || space === pieces.getSpace() ||
+        !pieces.runtime.registerSpaceHost(space, host)
+      ) {
+        throw new Error("Foreign space host route was refused by the session");
+      }
+    }
+  } catch (error) {
+    await pieces.runtime.dispose().catch(() => {});
+    throw error;
+  }
+  return {
+    pieces,
+    identity,
+    foreignSpaces,
+    instantiations: recorder.instantiations,
+  };
 };
 
 /**

@@ -76,6 +76,56 @@ describe("fabric-session", () => {
   });
 
   describe("createHarnessFabricSessionFactory()", () => {
+    it("registers admitted hosts before returning the session under its own identity", async () => {
+      const routed: Array<[string, string]> = [];
+      const controller = {
+        getSpace: () => "did:key:zLocal",
+        runtime: {
+          registerSpaceHost: (space: string, host: string) => {
+            routed.push([space, host]);
+            return true;
+          },
+        },
+      } as unknown as PiecesController;
+      const session = await createHarnessFabricSessionFactory({
+        apiUrl: "https://local.example/",
+        identityKeyPath: "/fixture.key",
+        space: "local",
+        foreignSpaces: { "did:key:zForeign": "https://foreign.example" },
+      }, {
+        loadIdentity: () => Promise.resolve(identity),
+        initialize: (options) => {
+          expect(options.identity).toBe(identity);
+          expect(routed).toEqual([]);
+          return Promise.resolve(controller);
+        },
+      })();
+      expect(routed).toEqual([[
+        "did:key:zForeign",
+        "https://foreign.example/",
+      ]]);
+      expect(session.foreignSpaces).toEqual(Object.fromEntries(routed));
+      expect(session.identity).toBe(identity);
+    });
+
+    it("disposes the session when an admitted route is refused", async () => {
+      const disposed: string[] = [];
+      const controller = controllerBoundedBy({}, disposed);
+      controller.getSpace = () => "did:key:zLocal";
+      controller.runtime.registerSpaceHost = () => false;
+      const factory = createHarnessFabricSessionFactory({
+        apiUrl: "https://local.example/",
+        identityKeyPath: "/fixture.key",
+        space: "local",
+        foreignSpaces: { "did:key:zForeign": "https://foreign.example" },
+      }, {
+        loadIdentity: () => Promise.resolve(identity),
+        initialize: () => Promise.resolve(controller),
+      });
+      await expect(factory()).rejects.toThrow("host route was refused");
+      expect(disposed).toEqual(["runtime"]);
+    });
+
     const bounded = {
       apiUrl: "https://toolshed.example/",
       identityKeyPath: "/keys/agent.pkcs8",

@@ -9,7 +9,11 @@ import { normalize } from "@std/path/posix";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
-import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
+import { cfcLabelViewForCellFailClosed } from "@commonfabric/runner/cfc";
+import {
+  createLLMFriendlyLink,
+  parseLLMFriendlyLink,
+} from "@commonfabric/runner/shared";
 import {
   EmulatedStorageManager,
   newLoopbackServer,
@@ -17,6 +21,7 @@ import {
 } from "@commonfabric/runner/storage/cache.deno";
 import { CfHarnessEngine } from "../src/engine.ts";
 import type { HarnessFabricSession } from "../src/fabric-session.ts";
+import { resolveHandleToken } from "../src/handle-table.ts";
 import {
   createFabricInstantiationRecorder,
   type FabricInstantiationRecord,
@@ -2259,6 +2264,93 @@ describe("run-pattern", () => {
       expect(output.status).toBe("error");
       expect(output.message).toContain("targets another space");
       expect(spy.calls).toBe(0);
+    });
+
+    it("runs over an admitted foreign input while retaining its CFC labels", async () => {
+      const { runtime, pieces, space, dispose } = await createStrictFabric();
+      try {
+        const foreign = (await createSession({
+          identity: signer,
+          spaceName: `foreign-input-${crypto.randomUUID()}`,
+        })).space;
+        const tx = runtime.edit();
+        const source = runtime.getCell(
+          foreign,
+          "foreign-labeled-input",
+          undefined,
+          tx,
+        );
+        const link = source.getAsNormalizedFullLink();
+        const label = {
+          confidentiality: ["secret"],
+          integrity: ["topic-source"],
+        };
+        writeSeedEnvelopeDoc(tx, foreign);
+        seedStoredEnvelope(tx, { ...link, path: [] }, {
+          value: { secret: "s3cr3t" },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: { version: 1, entries: [{ path: ["secret"], label }] },
+          },
+        });
+        expect((await tx.commit()).ok).toBeDefined();
+        const ref = createLLMFriendlyLink(link, space);
+        const engine = new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          runId: `foreign-labels-${crypto.randomUUID()}`,
+          inputCells: [{ name: "source", ref }],
+          fabricSessionFactory: () =>
+            Promise.resolve({
+              pieces,
+              foreignSpaces: { [foreign]: "https://foreign.example/" },
+            }),
+        });
+        const [attached] = await engine.establishInputCells();
+        const admittedRef =
+          resolveHandleToken(engine.handleTable!, attached.token)!.ref;
+        expect(admittedRef).toContain(foreign);
+        const result = await engine.invokeBuiltinTool("run_pattern", {
+          sourceText: [
+            "import { pattern } from 'commonfabric';",
+            "interface Input { source: { secret: string }; }",
+            "interface Output { secret: string; }",
+            "export default pattern<Input, Output>(({ source }) => ({",
+            "  secret: source.secret,",
+            "}));",
+          ].join("\n"),
+          inputs: { source: admittedRef },
+          resultSchema: {
+            type: "object",
+            properties: { secret: { type: "string" } },
+            required: ["secret"],
+          },
+        });
+        const output = result.output as RunPatternToolSuccessOutput;
+        expect(output.status).toBe("ok");
+        expect(output.rawValue).toEqual({ secret: "s3cr3t" });
+        expect(output.value).toBeUndefined();
+        expect(output.valueError).toContain("policy refused to release");
+        const forwarded = runtime.getCellFromLink(
+          parseLLMFriendlyLink(output.resultRef, space),
+        ).key("secret");
+        expect(forwarded.get()).toBe("s3cr3t");
+        expect(cfcLabelViewForCellFailClosed(forwarded)?.entries)
+          .toContainEqual({
+            path: [],
+            label,
+            observes: "followRef",
+          });
+        const foreignSecret = runtime.getCellFromLink(link).key("secret");
+        expect(foreignSecret.get()).toBe("s3cr3t");
+        expect(cfcLabelViewForCellFailClosed(foreignSecret)?.entries)
+          .toContainEqual({
+            path: [],
+            label,
+          });
+      } finally {
+        await dispose();
+      }
     });
 
     it("returns an error for a live-cell input whose value does not match the argument schema, creating no piece", async () => {

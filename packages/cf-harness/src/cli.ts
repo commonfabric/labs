@@ -211,6 +211,7 @@ const CLI_STRING_FLAGS = [
   "fabric-api-url",
   "fabric-identity",
   "fabric-space",
+  "fabric-foreign-spaces",
   "fabric-cfc-enforcement-mode",
   "fabric-cfc-flow-labels",
   "fabric-cfc-posture",
@@ -562,6 +563,7 @@ Options:
   --fabric-identity <path>      PKCS#8 identity keyfile for the fabric session
   --fabric-space <space>        Target space (name or did:key) for the fabric-session tools;
                                 all three --fabric-* session flags go together
+  --fabric-foreign-spaces <json> Operator-admitted foreign space DID-to-host map
   --fabric-cfc-enforcement-mode <mode> enforce-explicit | enforce-strict for the fabric
                                 session's runtime (enforcing rungs only; distinct
                                 from --cfc-enforcement-mode, which governs the
@@ -613,6 +615,7 @@ Environment:
   CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE Default value for --fabric-cfc-enforcement-mode
   CF_HARNESS_FABRIC_CFC_FLOW_LABELS Default value for --fabric-cfc-flow-labels
   CF_HARNESS_FABRIC_CFC_POSTURE Default value for --fabric-cfc-posture
+  CF_HARNESS_FABRIC_FOREIGN_SPACES Default value for --fabric-foreign-spaces
   CF_HARNESS_SPACE_DB           Default value for --space-db
   CF_HARNESS_PATTERN_INDEX_URL  Default value for --pattern-index-url
   CF_HARNESS_PATTERN_INDEX_PUBLISH 0 applies --no-pattern-index-publish

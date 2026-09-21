@@ -297,11 +297,11 @@ The current package provides:
   nothing being declared — a database's tables are the contract it was created
   under, its rows are in the database file, and nothing here opens one; a count
   is taken of a whole table and of whole columns, never under a caller's own
-  predicate. Disclosure is permissive and fixed rather than configurable — no
-  setting narrows it — and is bounded to addresses in the session's own space;
-  that bound is on the handle's own address rather than on everything the
-  document reaches from it. Answering from the fabric establishes the run's
-  fabric session despite the tool's `read` effect class;
+  predicate. Disclosure admits addresses in the session's own space and foreign
+  DIDs the operator lists with their host in `--fabric-foreign-spaces`; that
+  bound is on the handle's own address rather than on everything the document
+  reaches from it. Answering from the fabric establishes the run's fabric
+  session despite the tool's `read` effect class;
 - bounded request-attribution headers on OpenAI-compatible gateway traffic,
   using persisted operational provenance rather than request content or personal
   identifiers;
@@ -337,12 +337,12 @@ The current package provides:
   `run_pattern`: compiles and runs an inline `sourceText` pattern (capped at 256
   KiB) against a deployed Fabric space from the trusted host side over a lazy
   per-run session that caches only a healthy, authorized construction; passes
-  whole-string LLM-friendly link inputs as live cells, refusing links into
-  another space, inputs the compiled pattern declares no argument for, input
-  values that carry a sealed opaque link anywhere within them, and values that
-  mismatch the compiled argument schema whether a live cell or plain JSON
-  supplies them, all before any piece exists; honors the run's abort signal by
-  stopping the created piece and returning a structured `cancelled` error;
+  whole-string LLM-friendly link inputs as live cells, refusing links into an
+  unadmitted foreign space, inputs the compiled pattern declares no argument
+  for, input values that carry a sealed opaque link anywhere within them, and
+  values that mismatch the compiled argument schema whether a live cell or plain
+  JSON supplies them, all before any piece exists; honors the run's abort signal
+  by stopping the created piece and returning a structured `cancelled` error;
   scrubs bare fabric identifiers from model-facing diagnostics; reports a result
   that settles to empty or schema-failing as an error when the invocation's
   settle window observed a cause — an action error attributed to the piece, or a

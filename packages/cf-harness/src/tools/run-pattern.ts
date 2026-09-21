@@ -43,6 +43,7 @@ import {
   comparableEntityHash,
   fabricRuntimeObservations,
 } from "../fabric-observations.ts";
+import { admitsFabricReference } from "../foreign-spaces.ts";
 import { defineOwnEntry } from "../handle-table.ts";
 import {
   dedupedObservedOutputs,
@@ -1026,11 +1027,11 @@ export const runPatternTool: HarnessToolDefinition<
     // Whole-string LLM-friendly links become live cell references; the
     // prompt loop has already resolved any handle tokens, so the strings
     // seen here carry canonical addresses. Non-link strings and non-strings
-    // pass through as plain JSON. A link that resolves outside the session's
-    // configured space is refused before anything is created: the session's
-    // authority ends at its own space. So is a value carrying a sealed
-    // opaque link anywhere within it, which is a redaction the model copied
-    // back out of an earlier result rather than a reference to anything.
+    // pass through as plain JSON. A link outside the local and
+    // operator-admitted spaces is refused before anything is created. So is a
+    // value carrying a sealed opaque link anywhere within it, which is a
+    // redaction the model copied back out of an earlier result rather than a
+    // reference to anything.
     let pieceInput: Record<string, unknown> | undefined;
     const liveCellInputs: Array<{ key: string; cell: Cell<unknown> }> = [];
     const plainInputs: Array<{ key: string; value: unknown }> = [];
@@ -1058,10 +1059,12 @@ export const runPatternTool: HarnessToolDefinition<
             // Not a parseable link after all — keep the plain string.
           }
           if (link !== undefined) {
-            if (link.space !== space) {
+            if (
+              !admitsFabricReference(link.space, space, session.foreignSpaces)
+            ) {
               return errorOutput(
                 "error",
-                `run_pattern input "${key}" reference targets another space; only references into the configured session space are allowed`,
+                `run_pattern input "${key}" reference targets another space; the operator must admit its DID and host with --fabric-foreign-spaces`,
               );
             }
             const linkHash = comparableEntityHash(link.id);

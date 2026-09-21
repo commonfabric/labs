@@ -58,6 +58,7 @@ import {
   resolveHarnessModelProviderPreference,
 } from "../src/auth/provider-settings.ts";
 import { harnessFabricSessionPostureBanner } from "../src/cfc-posture.ts";
+import { parseHarnessForeignSpaces } from "../src/foreign-spaces.ts";
 import type {
   HarnessFabricCfcEnforcementMode,
   HarnessFabricCfcFlowLabelsMode,
@@ -562,6 +563,7 @@ export const resolveConsoleConfig = async (
       "fabric-api-url",
       "fabric-identity",
       "fabric-space",
+      "fabric-foreign-spaces",
       "pattern-index-url",
       "skills-registry-url",
       "skills-root",
@@ -677,6 +679,10 @@ export const resolveConsoleConfig = async (
     ),
     identityKeyPath: resolve(cwd, identityKeyPath),
     space,
+    foreignSpaces: parseHarnessForeignSpaces(
+      flag("fabric-foreign-spaces") ??
+        nonEmpty(env.CF_HARNESS_FABRIC_FOREIGN_SPACES),
+    ),
     ...(posture === "none"
       ? {}
       : { cfcPosture: (posture ?? DEFAULT_FABRIC_CFC_POSTURE) as CfcPosture }),

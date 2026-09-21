@@ -36,6 +36,7 @@ import type {
 import type { HarnessBrowserAccessLease } from "./contracts/browser-access.ts";
 import type { HarnessDocsCorpusRecord } from "./contracts/docs-corpus.ts";
 import { resolveHarnessDocsCorpus } from "./docs-corpus/corpus.ts";
+import type { HarnessForeignSpaces } from "./foreign-spaces.ts";
 import { resolveHarnessSkillsRoot } from "./skills/root.ts";
 import type { DockerRunscSandboxConfig } from "./sandbox/types.ts";
 
@@ -80,6 +81,10 @@ export interface HarnessFabricSessionConfig {
   apiUrl: string;
   identityKeyPath: string;
   space: string;
+
+  /** Operator-admitted foreign space DIDs and their HTTP(S) host routes. */
+  foreignSpaces?: HarnessForeignSpaces;
+
   cfcEnforcementMode?: HarnessFabricCfcEnforcementMode;
   cfcFlowLabels?: HarnessFabricCfcFlowLabelsMode;
   cfcPosture?: CfcPosture;
