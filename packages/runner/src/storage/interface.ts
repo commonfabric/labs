@@ -3330,7 +3330,9 @@ export interface TransactionWriteDetail {
    * absent slot from a present slot holding `undefined`, which
    * `previousValue` alone cannot (the storage write path keeps presence
    * distinct from value). Optional: transactions that cannot compute it
-   * omit it, and consumers fall back to `previousValue` definedness.
+   * omit it. Consumers that only need approximate presence may fall back
+   * to `previousValue` definedness; authorization requiring proven absence
+   * must refuse unknown presence.
    */
   previousPresent?: boolean;
 }

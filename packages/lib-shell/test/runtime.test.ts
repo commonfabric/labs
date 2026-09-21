@@ -247,6 +247,39 @@ describe("RuntimeInternals", () => {
     }
   }
 
+  describe("createPiece", () => {
+    it("forwards deterministic creation options and the explicit home space", async () => {
+      const calls: unknown[] = [];
+      const piece = { id: () => "participant-header" };
+      const client = Object.assign(new MockRuntimeClient(), {
+        createPiece: (...args: unknown[]) => {
+          calls.push(args);
+          return Promise.resolve(piece);
+        },
+      });
+      const runtime = new RuntimeInternals(client as never);
+      const space = "did:key:z6Mk-host-create-home" as DID;
+      const source = new URL("https://fabric.example/header.tsx");
+      const options = {
+        cause: "host:participant-header:v1",
+        argument: {},
+        run: true,
+      };
+      try {
+        expect(
+          await runtime.createPiece(space, source, {
+            cause: options.cause,
+            argument: {},
+            run: true,
+          }),
+        ).toBe(piece);
+        expect(calls).toEqual([[source, space, options]]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+  });
+
   describe("getSpaceRootPattern", () => {
     it("caches a successful root-pattern lookup", async () => {
       const client = new MockRuntimeClient();

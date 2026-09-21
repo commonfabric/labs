@@ -19,7 +19,6 @@ import { getDerivedInternalCellLink, parseLink } from "../src/link-utils.ts";
 import { CFC_LABEL_READ_FAILED_ATOM } from "../src/cfc/observation.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
-  CFC_STRUCTURAL_PROVENANCE_SEED_MATERIALIZATION,
   CFC_STRUCTURAL_PROVENANCE_UNDECLARABLE_STORE,
   runtimeWritePolicyAuthorization,
 } from "../src/cfc/types.ts";
@@ -3486,9 +3485,8 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
     });
 
     it("rejects a substrate write named by a different provenance claim", async () => {
-      // The claim discriminates. The seed-materialization marker records a
-      // whole-document address too, so without it that unrelated runtime
-      // marker would carry the route.
+      // A whole-document address alone does not establish runtime ownership;
+      // the provenance claim must name that authority.
 
       const storageManager = StorageManager.emulate({ as: signer });
       const runtime = newRuntime(storageManager);
@@ -3519,7 +3517,7 @@ describe("CFC writer-fit (canWrite, §8.12.4 / SC-18b)", () => {
             id: link.id,
             path: [],
           },
-          claim: CFC_STRUCTURAL_PROVENANCE_SEED_MATERIALIZATION,
+          claim: "unrelated.claim",
           sources: [{
             space: link.space,
             scope: link.scope,

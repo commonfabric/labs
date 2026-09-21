@@ -1009,6 +1009,16 @@ report these through the same collector (deduplicated via §2.2's
   schema use.
   Repeated reports for that source range collapse to one. See §7 of the
   schema-generator mapping spec and `test/default-empty-record-schema.test.ts`.
+- **Warning** `schema-type:unread` (`schema-generator.ts`,
+  `unread-type-diagnostics.ts`) — a schema accepts any value in place of a type
+  node-based analysis could not read and no wrapper recovered from a resolved
+  type, such as a name the emitting module does not resolve or an
+  `import("…")` type it does not resolve; the node-based analyzer's section of
+  the schema-generator mapping spec states what it reads. One warning per
+  generated schema names each such type once; compilation continues. It points
+  to the local schema use, since the unread node is a print with no source
+  position, and like the default warning collapses to one per source range. See the node-based analyzer's fallback in
+  the schema-generator mapping spec and `test/unread-type-diagnostic.test.ts`.
 - **Error** `pattern-context:receiver-method-call`
   (`pattern-body-reactive-root-lowering.ts:162`) — the pattern-body
   reactive-root seam could not admit a receiver-method call on a tracked
@@ -1797,6 +1807,20 @@ adjustments:
 - node-driven shrinking can still shrink the inner type of cell-like wrappers
   when `.get()` contributes an empty path but coexists with more specific
   non-empty paths
+- a node the type-driven shrink builds keeps the scope wrapper and the default
+  of the type it stands for, at every level it retains. A scope wrapper the
+  type's alias names wraps the shrunk value as `__cfHelpers.PerUser<...>` (or
+  the wrapper of the same name), and a default the type carries in its
+  `Default` brand wraps it as `__cfHelpers.Default<shrunk, V>`, with `V`
+  printed from the brand's payload. Branded members that disagree on the value
+  restore no default, and a scope the type carries only as its brand, with no
+  alias left to name it, is not restored. Neither is a scope wrapper around a
+  cell: schema generation reads the wrapper by the scoped type it is registered
+  with, which would undo the capability narrowing of the cell inside it. A restored `Default` does not count
+  toward the preference for the node-driven candidate, which applies where only
+  that candidate holds an authored `Default` (`getScopeWrapper` and
+  `restoreDefault` in `transformers/type-shrinking.ts`;
+  `test/shrunk-capture-wrappers.test.ts`)
 - tuple types and numeric-indexed object types are not rewritten to
   array-with-unknown-items during this optimization
 - after shrinking, `validateShrinkCoverage` checks that all requested property
@@ -2136,6 +2160,15 @@ for `WriteAuthorizedBy` trusted bindings; ordinary transformed patterns do not
 carry a repeated source-metadata helper implementation.
 
 ## 12. Schema Generation
+
+Cell constructors whose authored type arguments include a `typeof` value binding
+retain those arguments when their result is lowered into a lift. Recovery follows
+`.for()` and unannotated `const` aliases, and also preserves the declaration in
+an inferred object-literal pattern result. This keeps `WriteAuthorizedBy` tied to
+the named writer instead of an inferred structural function type. Explicit
+variable annotations remain authoritative; mutable aliases are not followed.
+Pattern-local object value aliases retain their definitions in each generated
+schema. `protected-cell-policy.test.ts` pins both generated schemas.
 
 `SchemaGeneratorTransformer` replaces `toSchema<T>(options?)` calls with JSON
 schema literals.

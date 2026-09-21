@@ -4,6 +4,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./cell-brand": "./src/typescript/cell-brand.ts",
+    "./default-brand": "./src/typescript/default-brand.ts",
     "./wrapper-names": "./src/typescript/wrapper-names.ts",
     "./property-optionality": "./src/typescript/property-optionality.ts",
     "./property-name": "./src/typescript/property-name.ts",

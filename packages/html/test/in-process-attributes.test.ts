@@ -65,4 +65,82 @@ describe("in-process-attributes", () => {
       await runtime.dispose();
     }
   });
+
+  it("updates and removes ARIA attributes through the default property setter", async () => {
+    const signer = await Identity.fromPassphrase("in-process ARIA attributes");
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: StorageManager.emulate({ as: signer }),
+    });
+    const mock = new MockDoc('<div id="root"></div>');
+    const container = mock.document.getElementById("root")!;
+    const elementDescriptor = Object.getOwnPropertyDescriptor(
+      globalThis,
+      "Element",
+    );
+    // A supplied document may create nodes outside the ambient DOM realm.
+    // Its elements must still receive attributes through the default setter.
+    Object.defineProperty(globalThis, "Element", {
+      configurable: true,
+      value: class AmbientElement {},
+    });
+    let render: ReturnType<typeof renderInProcess> | undefined;
+    try {
+      const tx = runtime.edit();
+      const vdom = runtime.getCell<unknown>(
+        signer.did(),
+        "aria",
+        undefined,
+        tx,
+      );
+      vdom.set({
+        type: "vnode",
+        name: "button",
+        props: { "aria-label": "Edit name", "aria-expanded": false },
+        children: ["Edit"],
+      });
+      await tx.commit();
+      render = renderInProcess(container, vdom, { document: mock.document });
+      await runtime.idle();
+      render.flush();
+      const element = container.firstChild as Element;
+      expect(element.getAttribute("aria-label")).toBe("Edit name");
+      expect(element.getAttribute("aria-expanded")).toBe("false");
+      expect(Object.hasOwn(element, "aria-label")).toBe(false);
+
+      const updates = [
+        { "aria-label": "Save name", "aria-expanded": true },
+        { "aria-label": null, "aria-expanded": false },
+        { "aria-label": "Edit again", "aria-expanded": undefined },
+        {},
+      ];
+      for (const props of updates) {
+        const update = runtime.edit();
+        vdom.withTx(update).key("props").set(props);
+        await update.commit();
+        await runtime.idle();
+        render.flush();
+        expect(container.firstChild).toBe(element);
+        for (const key of ["aria-label", "aria-expanded"] as const) {
+          const value = props[key];
+          if (value == null) {
+            expect(element.hasAttribute(key)).toBe(false);
+          } else {
+            expect(element.getAttribute(key)).toBe(String(value));
+          }
+        }
+      }
+    } finally {
+      if (elementDescriptor) {
+        Object.defineProperty(globalThis, "Element", elementDescriptor);
+      } else {
+        Reflect.deleteProperty(globalThis, "Element");
+      }
+      try {
+        render?.cancel();
+      } finally {
+        await runtime.dispose();
+      }
+    }
+  });
 });

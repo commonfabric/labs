@@ -3,9 +3,13 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
+import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import { diffAndUpdate } from "../src/data-updating.ts";
+import { resolveLinkTracingDereferences } from "../src/link-resolution.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
+import { toURI } from "../src/uri-utils.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 
 const signer = await Identity.fromPassphrase("inspace-child-owner-seed");
@@ -124,6 +128,129 @@ describe("inSpace child owner-protected seed value (profile name)", () => {
     await server?.close();
   });
 
+  for (const rename of [false, true]) {
+    it(`reruns the initializer without replacing ${rename ? "an owner edit" : "the seed"} or its policy`, async () => {
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: managerA,
+      });
+      const errors: Error[] = [];
+      runtime.scheduler.onError((error) => errors.push(error));
+      try {
+        const setup = runtime.edit();
+        const pattern = await runtime.patternManager.compilePattern({
+          ...PROGRAM,
+          mainExport: "child",
+        }, { space: spaceB, tx: setup });
+        const child = runtime.getCell(spaceB, "rerun-child", undefined, setup);
+        const result = runtime.run(
+          setup,
+          pattern,
+          { initialName: "hi" },
+          child,
+        );
+        runtime.prepareTxForCommit(setup);
+        expect((await setup.commit()).error).toBeUndefined();
+        await result.pull();
+        await runtime.idle();
+        expect(result.key("name").get()).toBe("hi");
+
+        if (rename) {
+          await result.key("setName").pull();
+          const edit = runtime.edit();
+          result.withTx(edit).key("setName").send({ name: "owner saved" });
+          runtime.prepareTxForCommit(edit);
+          expect((await edit.commit()).error).toBeUndefined();
+          await result.pull();
+          await runtime.idle();
+        }
+        const saved = rename ? "owner saved" : "hi";
+        expect(result.key("name").get()).toBe(saved);
+        expect(errors).toEqual([]);
+
+        const inspect = runtime.edit();
+        const chain = resolveLinkTracingDereferences(
+          runtime,
+          inspect,
+          result.key("name").getAsNormalizedFullLink(),
+        );
+        const addresses = [
+          ...chain.traces.map((trace) => trace.source),
+          chain.link,
+        ].map((address) => ({
+          ...address,
+          id: toURI(address.id),
+          path: [...address.path],
+        }));
+        expect(addresses).toHaveLength(3);
+        const values = addresses.map((address) =>
+          inspect.readValueOrThrow(address)
+        );
+        const policies = addresses.map((address) =>
+          readStoredCfcMetadata(inspect, address)
+        );
+        expect(policies.every((policy) => policy !== undefined)).toBe(true);
+        inspect.abort();
+
+        const update = runtime.edit();
+        const argument = result.getArgumentCell();
+        expect(argument).toBeDefined();
+        argument!.withTx(update).key("initialName").set(
+          "new default",
+        );
+        runtime.prepareTxForCommit(update);
+        expect((await update.commit()).error).toBeUndefined();
+        await result.pull();
+        await runtime.idle();
+        expect(errors).toEqual([]);
+        expect(result.key("name").get()).toBe(saved);
+        const after = runtime.edit();
+        expect(addresses.map((address) => after.readValueOrThrow(address)))
+          .toEqual(values);
+        expect(
+          addresses.map((address) => readStoredCfcMetadata(after, address)),
+        ).toEqual(policies);
+        after.abort();
+
+        // Reusing a generated result does not authorize even a same-value
+        // explicit write, or a generated result that replaces its reference.
+        const reassert = runtime.edit();
+        runtime.getCellFromLink(
+          { ...chain.link, schema: undefined },
+          undefined,
+          reassert,
+        ).set(saved);
+        runtime.prepareTxForCommit(reassert);
+        expect((await reassert.commit()).error?.message).toContain(
+          "writeAuthorizedBy",
+        );
+
+        const retarget = runtime.edit();
+        const replacement = runtime.getCell(spaceB, "replacement", {
+          ...chain.link.schema as object,
+          type: "string",
+          default: "replacement name",
+        }, retarget);
+        retarget.recordCfcWritePolicyInput({
+          kind: "schema",
+          target: addresses[1],
+          schema: replacement.schema,
+          schemaRole: "output",
+        });
+        diffAndUpdate(runtime, retarget, addresses[1], replacement, undefined, {
+          schemaRole: "output",
+        });
+        runtime.prepareTxForCommit(retarget);
+        expect((await retarget.commit()).error?.message).toContain(
+          "writeAuthorizedBy",
+        );
+        expect(result.key("name").get()).toBe(saved);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+  }
+
   it("a fresh session reads the seeded owner-protected name", async () => {
     const rt1 = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -206,6 +333,67 @@ describe("inSpace child owner-protected seed value (profile name)", () => {
         | undefined;
       expect(value).toBeDefined();
       expect(value?.name).toBe("hi");
+
+      // The list entry is a mutable reference to the child. Its target is the
+      // actual piece; attack the name chain beginning at that piece's projection.
+      const inspect = rt2.edit();
+      const resolved = resolveLinkTracingDereferences(
+        rt2,
+        inspect,
+        nameCell.getAsNormalizedFullLink(),
+      );
+      const pieceIndex = resolved.traces.findIndex((trace) =>
+        rt2.getCellFromLink({
+          ...trace.source,
+          id: toURI(trace.source.id),
+          path: [],
+        })
+          .getMetaRaw("patternIdentity") !== undefined
+      );
+      expect(pieceIndex).toBeGreaterThanOrEqual(0);
+      const addresses = [
+        ...resolved.traces.slice(pieceIndex).map((trace) => trace.source),
+        resolved.link,
+      ];
+      expect(addresses).toHaveLength(3);
+      for (const address of addresses) {
+        expect(readStoredCfcMetadata(inspect, address)).toBeDefined();
+      }
+      await inspect.commit();
+      for (const address of addresses) {
+        const attack = rt2.edit();
+        const replacement = rt2.getCell(
+          spaceB,
+          "unprotected-replacement",
+          undefined,
+          attack,
+        );
+        replacement.set("other");
+        attack.writeValueOrThrow(
+          {
+            ...address,
+            id: toURI(address.id),
+            path: [...address.path],
+            schema: undefined,
+          },
+          replacement.getAsWriteRedirectLink(),
+        );
+        rt2.prepareTxForCommit(attack);
+        expect((await attack.commit()).error?.message).toContain(
+          "missing schema write-policy input",
+        );
+      }
+      const overwrite = rt2.edit();
+      rt2.getCellFromLink(
+        { ...resolved.link, schema: undefined },
+        undefined,
+        overwrite,
+      ).set("other");
+      rt2.prepareTxForCommit(overwrite);
+      expect((await overwrite.commit()).error?.message).toContain(
+        "writeAuthorizedBy",
+      );
+      expect(nameCell.get()).toBe("hi");
     } finally {
       await rt2.dispose();
       await rt1.dispose();

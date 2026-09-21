@@ -57,6 +57,30 @@ describe("canonical", () => {
   const digestOf = (traces: CfcDereferenceTrace[]) =>
     preparedDigestFor(baseInput({ dereferenceTraces: traces }));
 
+  it("preserves literal value field paths in initialization permissions", () => {
+    const inputAt = (path: string[]) =>
+      baseInput({
+        writePolicyInputs: [{
+          kind: "initialization",
+          mode: "default",
+          target: address("initialized", ...path),
+          value: [],
+        }],
+      });
+    for (const path of [["value"], ["value", "name"]]) {
+      const input = inputAt(path);
+      expect(canonicalizePreparedDigestInput(input).writePolicyInputs[0])
+        .toEqual(input.writePolicyInputs[0]);
+      expect(
+        canonicalizePreparedDigestInput(canonicalizePreparedDigestInput(input))
+          .writePolicyInputs,
+      ).toEqual(input.writePolicyInputs);
+      expect(preparedDigestFor(input)).not.toBe(
+        preparedDigestFor(inputAt(path.slice(1))),
+      );
+    }
+  });
+
   it("preserves hash-tiebreak order and value binding across mutable policy inputs", () => {
     const inputs = Array.from({ length: 40 }, (_, index) => ({
       kind: "custom" as const,

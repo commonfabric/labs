@@ -4,7 +4,7 @@
 // the server already wrote and never mutate it — the durable store is the
 // flight recorder (see README.md).
 
-import { Database } from "@db/sqlite";
+import { type BindValue, Database, type Statement } from "@db/sqlite";
 
 export interface CommitRow {
   seq: number;
@@ -41,6 +41,23 @@ export interface BranchRow {
 export interface SpaceDb {
   readonly db: Database;
   readonly path: string;
+
+  /**
+   * The first row `sql` yields for `params`, or undefined when it yields none.
+   *
+   * The statement is prepared once per SQL text and reused for the life of the
+   * space, which is what a read issued once per entity needs: one prepared per
+   * call stays alive until the database closes, a few KB each, and a
+   * space-wide walk issues millions. The statement never leaves this object,
+   * because one used after it is finalized, or after its database closes,
+   * crashes the process rather than throwing — so a read after `close` is
+   * refused here with an error instead.
+   */
+  get<T extends object>(sql: string, ...params: BindValue[]): T | undefined;
+
+  /** Every row `sql` yields for `params`, prepared as {@link get} prepares. */
+  all<T extends object>(sql: string, ...params: BindValue[]): T[];
+
   close(): void;
 }
 
@@ -48,10 +65,28 @@ export interface SpaceDb {
 export function openSpace(path: string): SpaceDb {
   const db = new Database(path, { readonly: true });
   shimScopeKey(db);
+  const statements = new Map<string, Statement>();
+  let closed = false;
+  const statement = (sql: string): Statement => {
+    if (closed) throw new Error(`The space at ${path} is closed.`);
+    let stmt = statements.get(sql);
+    if (stmt === undefined) statements.set(sql, stmt = db.prepare(sql));
+    return stmt;
+  };
   return {
     db,
     path,
-    close: () => db.close(),
+    get: <T extends object>(sql: string, ...params: BindValue[]) =>
+      statement(sql).get<T>(...params),
+    all: <T extends object>(sql: string, ...params: BindValue[]) =>
+      statement(sql).all<T>(...params),
+    close: () => {
+      if (closed) return;
+      closed = true;
+      for (const stmt of statements.values()) stmt.finalize();
+      statements.clear();
+      db.close();
+    },
   };
 }
 

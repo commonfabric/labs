@@ -6,6 +6,10 @@ import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import { getPropertyNameText } from "./typescript/property-name.ts";
 import type { CellWrapperKind } from "./typescript/cell-brand.ts";
 import {
+  getDefaultMarkerPayload,
+  hasDefaultMarker,
+} from "./typescript/default-brand.ts";
+import {
   isWrapperSpelling,
   spellingsWhere,
   WRAPPER_SPELLING_TO_KIND,
@@ -1004,61 +1008,12 @@ export function extractValueFromLiteralType(
   return undefined;
 }
 
-/**
- * True for a "brand-only" object type that carries only symbol-keyed markers
- * (e.g. `{ readonly [DEFAULT_MARKER]: V }`) — no string-keyed data
- * properties. TypeScript encodes unique-symbol property names as "__@..."
- * internally; a type with only such properties is a brand, not data.
- */
-export function isBrandOnlyMarkerType(
-  type: ts.Type,
-  typeChecker: ts.TypeChecker,
-): boolean {
-  if ((type.flags & ts.TypeFlags.Object) === 0) return false;
-  const props = typeChecker.getPropertiesOfType(type);
-  if (props.length === 0) return true;
-  return props.every((prop) =>
-    String(prop.escapedName as string).startsWith("__@")
-  );
-}
-
-/**
- * Recognizes an actual DEFAULT_MARKER property on an expanded Default member.
- * Ordinary empty objects and unrelated symbol brands do not promise a default.
- */
-export function hasDefaultMarker(
-  member: ts.Type,
-  typeChecker: ts.TypeChecker,
-): boolean {
-  return getDefaultMarkerProperty(member, typeChecker) !== undefined;
-}
-
-/** Finds the marker on a brand-only constituent of an expanded Default. */
-function getDefaultMarkerProperty(
-  member: ts.Type,
-  typeChecker: ts.TypeChecker,
-): ts.Symbol | undefined {
-  const brandParts = (member.flags & ts.TypeFlags.Intersection) !== 0
-    ? ((member as ts.IntersectionType).types ?? []).filter((part) =>
-      isBrandOnlyMarkerType(part, typeChecker)
-    )
-    : isBrandOnlyMarkerType(member, typeChecker)
-    ? [member]
-    : [];
-  return brandParts
-    .flatMap((part) => typeChecker.getPropertiesOfType(part))
-    .find((prop) =>
-      String(prop.escapedName as string).startsWith("__@DEFAULT_MARKER")
-    );
-}
-
 function extractPayloadFromBrandedMember(
   member: ts.Type,
   typeChecker: ts.TypeChecker,
 ): { value: unknown } | undefined {
-  const markerProp = getDefaultMarkerProperty(member, typeChecker);
-  if (!markerProp) return undefined;
-  const payload = typeChecker.getTypeOfSymbol(markerProp);
+  const payload = getDefaultMarkerPayload(member, typeChecker);
+  if (!payload) return undefined;
   const extracted = extractValueFromLiteralType(payload, typeChecker);
   if (!extracted || extracted.value === undefined) return undefined;
   return extracted;

@@ -4,6 +4,7 @@ import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { DEFAULT_SCAN_LIMIT } from "@commonfabric/state-inspector";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { entityIdFrom, Runtime } from "@commonfabric/runner";
 import { StorageManager as WorkerStorageManager } from "@commonfabric/runner/storage/cache";
@@ -616,10 +617,20 @@ Deno.test("an inspect entity slot reads the view its command will read", () => {
 });
 
 /**
- * A space DB holding one entity in the default scope and one in another, so a
- * listing taken from the wrong scope offers the wrong id rather than none.
+ * A space DB holding the given entities, each written once in its scope, with
+ * its id as its value unless one is given. The default is one entity in the
+ * default scope and one in another, so a listing taken from the wrong scope
+ * offers the wrong id rather than none.
  */
-function seedScopedSpace(path: string): void {
+function seedScopedSpace(
+  path: string,
+  entities: ReadonlyArray<
+    readonly [id: string, scope: string, value?: string]
+  > = [
+    ["of:in-space", "space"],
+    ["of:in-other", "other"],
+  ],
+): void {
   const db = new Database(path, { create: true });
   db.exec(`
 CREATE TABLE "commit" (
@@ -640,7 +651,7 @@ CREATE TABLE branch (
   fork_seq INTEGER, created_seq INTEGER NOT NULL DEFAULT 0,
   head_seq INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'active'
 );
-INSERT INTO branch (name, head_seq, status) VALUES ('', 2, 'active');`);
+INSERT INTO branch (name, head_seq, status) VALUES ('', 0, 'active');`);
   const commit = db.prepare(
     `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution)
      VALUES (?, 'session:did%3Akey%3AzAlice:s1', ?, '{}', '{"seq":0}')`,
@@ -649,15 +660,15 @@ INSERT INTO branch (name, head_seq, status) VALUES ('', 2, 'active');`);
     `INSERT INTO revision (id, scope_key, seq, op_index, op, data, commit_seq)
      VALUES (?, ?, ?, 0, 'set', ?, ?)`,
   );
-  const entities: Array<[string, string]> = [
-    ["of:in-space", "space"],
-    ["of:in-other", "other"],
-  ];
-  entities.forEach(([id, scope], index) => {
-    const seq = index + 1;
-    commit.run(seq, seq);
-    rev.run(id, scope, seq, JSON.stringify({ value: id }), seq);
-  });
+  db.transaction(() => {
+    entities.forEach(([id, scope, value = id], index) => {
+      const seq = index + 1;
+      commit.run(seq, seq);
+      rev.run(id, scope, seq, JSON.stringify({ value }), seq);
+    });
+    db.prepare(`UPDATE branch SET head_seq = ? WHERE name = ''`)
+      .run(entities.length);
+  })();
   db.close();
 }
 
@@ -687,6 +698,112 @@ Deno.test("live candidates: an entity slot lists the scope the line named", asyn
         .candidates.map((candidate) => candidate.value).sort(),
       ["of:in-other", "of:in-space"],
     );
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("live candidates: the every-scope entity slot enumerates rows in one pass", async () => {
+  // A row query filtered on one scope cannot seek (the revision index leads
+  // with `id`), so it walks the whole branch; one per scope made completing
+  // `inspect overlay` on a store of thousands of scopes take over an hour.
+  const dir = await Deno.makeTempDir();
+  const original = Database.prototype.prepare;
+  let perScopeQueries = 0;
+  const prepare = stub(
+    Database.prototype,
+    "prepare",
+    function (this: Database, sql: string) {
+      // The row enumeration, filtered to one scope. Reconstruction also
+      // filters on a scope, alongside an `id` the index can seek on.
+      if (/scope_key = \?/.test(sql) && /GROUP BY scope_key, id/.test(sql)) {
+        perScopeQueries++;
+      }
+      return original.call(this, sql);
+    },
+  );
+  try {
+    const path = `${dir}/space.sqlite`;
+    seedScopedSpace(
+      path,
+      Array.from({ length: 6 }, (_, i) => [`of:e${i}`, `scope-${i}`] as const),
+    );
+    const offered =
+      (await liveCandidates(lineFor(`cf inspect overlay ${path} `)))
+        .candidates.map((candidate) => candidate.value).sort();
+    assertEquals(offered, [0, 1, 2, 3, 4, 5].map((i) => `of:e${i}`));
+    assertEquals(perScopeQueries, 0);
+  } finally {
+    prepare.restore();
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("live candidates: an entity in several scopes is offered once, with its space-scope label", async () => {
+  // `inspect overlay` reads every scope, and one id can hold a value in each.
+  // The id is offered once, labeled from the space scope, which is read first.
+  const dir = await Deno.makeTempDir();
+  try {
+    const path = `${dir}/space.sqlite`;
+    seedScopedSpace(path, [
+      ["of:shared", "other", "value-in-other"],
+      ["of:shared", "space", "value-in-space"],
+      ["of:only-other", "other"],
+    ]);
+    const offered =
+      (await liveCandidates(lineFor(`cf inspect overlay ${path} `)))
+        .candidates;
+    assertEquals(
+      offered.map((candidate) => candidate.value).sort(),
+      ["of:only-other", "of:shared"],
+    );
+    const shared = offered.find((candidate) => candidate.value === "of:shared");
+    assert(
+      shared?.description?.includes("value-in-space"),
+      `labeled from the space scope: ${shared?.description}`,
+    );
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("live candidates: a saturated space scope does not hide later scopes", async () => {
+  // The scan cap bounds reconstruction, which only labels a candidate. A space
+  // scope holding more than the cap spends all of it, and the per-user and
+  // per-session entities after it — the ones `inspect overlay` exists to show
+  // — are still offered, unlabeled.
+  const dir = await Deno.makeTempDir();
+  try {
+    const path = `${dir}/space.sqlite`;
+    const inSpace = DEFAULT_SCAN_LIMIT + 10;
+    seedScopedSpace(path, [
+      ...Array.from(
+        { length: inSpace },
+        (_, i) => [`of:s${i}`, "space"] as const,
+      ),
+      ...Array.from({ length: 20 }, (_, i) => [`of:o${i}`, "other"] as const),
+    ]);
+    const offered =
+      (await liveCandidates(lineFor(`cf inspect overlay ${path} `)))
+        .candidates;
+    assertEquals(offered.length, inSpace + 20);
+    assertEquals(
+      offered.filter((candidate) => candidate.description !== undefined).length,
+      DEFAULT_SCAN_LIMIT,
+    );
+    const values = new Set(offered.map((candidate) => candidate.value));
+    for (let i = 0; i < 20; i++) assert(values.has(`of:o${i}`), `of:o${i}`);
+
+    // What is typed narrows the rows before any is reconstructed, so a prefix
+    // that matches fewer than the cap labels every one it offers.
+    const narrowed = (await liveCandidates(
+      lineFor(`cf inspect overlay ${path} of:o1`),
+    )).candidates;
+    assertEquals(
+      narrowed.map((candidate) => candidate.value).sort(),
+      ["of:o1", ...Array.from({ length: 10 }, (_, i) => `of:o1${i}`)].sort(),
+    );
+    assert(narrowed.every((candidate) => candidate.description !== undefined));
   } finally {
     await Deno.remove(dir, { recursive: true });
   }

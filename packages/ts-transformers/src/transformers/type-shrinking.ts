@@ -1,4 +1,5 @@
 import ts from "typescript";
+import { getDefaultMarkerPayload } from "@commonfabric/schema-generator/default-brand";
 import { getPropertyNameText } from "@commonfabric/schema-generator/property-name";
 import {
   readAuthoredTypeNode,
@@ -7,6 +8,7 @@ import {
 import { spellingsWhere } from "@commonfabric/schema-generator/wrapper-names";
 import {
   createRegisteredTypeLiteral,
+  DEFAULT_TYPE_NODE_FLAGS,
   typeToTypeNodeWithRegistry,
 } from "../ast/type-building.ts";
 import { CF_HELPERS_IDENTIFIER } from "../core/cf-helpers.ts";
@@ -17,6 +19,7 @@ import {
   type CapabilityParamDefault,
   type CapabilityParamSummary,
   type ReactiveCapability,
+  resolvesToCommonFabricSymbol,
   TransformationContext,
 } from "../core/mod.ts";
 import {
@@ -293,11 +296,17 @@ function shouldPreferTypeDrivenShrink(
     );
 }
 
+/**
+ * Returns `true` for a node that references `Default`. A `Default` that type
+ * shrinking restored does not count: a candidate built from a type holds one
+ * wherever the type had one, and the choice between candidates weighs a
+ * default only where shrinking one of them lost it.
+ */
 function containsDefaultTypeNode(node: ts.TypeNode): boolean {
   let found = false;
   const visit = (current: ts.Node) => {
     if (found) return;
-    if (ts.isTypeReferenceNode(current)) {
+    if (ts.isTypeReferenceNode(current) && !RESTORED_DEFAULTS.has(current)) {
       const name = ts.isIdentifier(current.typeName)
         ? current.typeName.text
         : ts.isQualifiedName(current.typeName)
@@ -819,6 +828,12 @@ export function printTypeNode(
 // Core type-shrinking
 //
 
+/**
+ * Returns a type node for the part of `type` that `paths` reach, or
+ * `undefined` when there is none to build. The node keeps the scope wrapper
+ * that the alias of `type` names and the default its `Default` brand carries,
+ * and so does each part of it the node retains.
+ */
 function buildShrunkTypeNodeFromType(
   type: ts.Type,
   paths: readonly (readonly string[])[],
@@ -835,6 +850,31 @@ function buildShrunkTypeNodeFromType(
   const normalizedFullShapePaths = uniquePaths(fullShapePaths);
   if (normalized.length === 0) {
     return undefined;
+  }
+  // Only the alias names the scope, so a node built from the scoped type's
+  // structure would drop it.
+  const scopeWrapper = getScopeWrapper(type, checker);
+  if (scopeWrapper) {
+    const shrunk = buildShrunkTypeNodeFromType(
+      scopeWrapper.scoped,
+      paths,
+      checker,
+      sourceFile,
+      factory,
+      typeRegistry,
+      fullShapePaths,
+      visiting,
+    );
+    if (!shrunk) return undefined;
+    const wrapped = createHelperWrapperTypeNode(
+      shrunk,
+      scopeWrapper.name,
+      factory,
+    );
+    // Schema generation reads a wrapper reference by its type, and the
+    // synthesized one resolves to nothing where it is emitted.
+    typeRegistry?.set(wrapped, type);
+    return wrapped;
   }
   // A (type, requested-paths) pair already on the descent path cannot be
   // materialized as a literal — the recursion would never bottom out. The
@@ -903,8 +943,15 @@ function buildShrunkTypeNodeFromType(
     const allNonItem = normalized.every((path) => isArrayRootOnlyPath(path));
     if (allNonItem && isHomogeneousArrayType(type, checker)) {
       // No item access — emit unknown[] to avoid fetching item schemas.
-      return factory.createArrayTypeNode(
-        factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword),
+      return restoreDefault(
+        factory.createArrayTypeNode(
+          factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword),
+        ),
+        type,
+        checker,
+        sourceFile,
+        factory,
+        typeRegistry,
       );
     }
     if (itemPaths.length > 0 && isHomogeneousArrayType(type, checker)) {
@@ -928,7 +975,14 @@ function buildShrunkTypeNodeFromType(
           );
         const arrayNode = factory.createArrayTypeNode(elementNode);
         ensureTypeNodeRegistered(arrayNode, checker, typeRegistry);
-        return arrayNode;
+        return restoreDefault(
+          arrayNode,
+          type,
+          checker,
+          sourceFile,
+          factory,
+          typeRegistry,
+        );
       }
     }
     return typeToTypeNodeWithRegistry(
@@ -1108,10 +1162,83 @@ function buildShrunkTypeNodeFromType(
     return undefined;
   }
 
-  return createRegisteredTypeLiteral(
-    properties,
-    { factory, checker, typeRegistry },
+  return restoreDefault(
+    createRegisteredTypeLiteral(
+      properties,
+      { factory, checker, typeRegistry },
+    ),
+    type,
+    checker,
+    sourceFile,
+    factory,
+    typeRegistry,
   );
+}
+
+/** The wrappers that store a value in a scope. A type names one by its alias. */
+const SCOPE_WRAPPER_NAMES: ReadonlySet<string> = new Set([
+  "PerAny",
+  "PerSession",
+  "PerSpace",
+  "PerUser",
+]);
+
+/**
+ * Helper for `buildShrunkTypeNodeFromType()`, which returns the name of the
+ * `commonfabric` scope wrapper `type` instantiates, with the type it scopes,
+ * or `undefined` for any other type. A type of the author's own that shares a
+ * wrapper's name is not one, and neither is a scope wrapper around a cell: the
+ * wrapper is read by the scoped type it is registered with, which would undo
+ * the capability narrowing applied to the cell node inside it.
+ */
+function getScopeWrapper(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): { readonly name: string; readonly scoped: ts.Type } | undefined {
+  const symbol = type.aliasSymbol;
+  const scoped = type.aliasTypeArguments?.[0];
+  return symbol && scoped && SCOPE_WRAPPER_NAMES.has(symbol.name) &&
+      !isCellLikeType(scoped, checker) &&
+      resolvesToCommonFabricSymbol(symbol, checker, symbol.name)
+    ? { name: symbol.name, scoped }
+    : undefined;
+}
+
+/** The `Default` wrappers `restoreDefault()` built. */
+const RESTORED_DEFAULTS = new WeakSet<ts.TypeNode>();
+
+/**
+ * Helper for `buildShrunkTypeNodeFromType()`, which wraps `node`, a node built
+ * from the structure of `type`, in the `Default` that `type` carries. Once the
+ * checker resolves `Default` away, its value survives only in the brand on the
+ * members of `type`, and a node built from their structure drops it. Returns
+ * `node` itself when `type` carries no default, or members that disagree on
+ * one.
+ */
+function restoreDefault(
+  node: ts.TypeNode,
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  sourceFile: ts.SourceFile,
+  factory: ts.NodeFactory,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+): ts.TypeNode {
+  const payloads = new Set<ts.Type>();
+  for (const member of type.isUnion() ? type.types : [type]) {
+    const payload = getDefaultMarkerPayload(member, checker);
+    if (payload) payloads.add(payload);
+  }
+  const [payload, ...others] = payloads;
+  if (!payload || others.length > 0) return node;
+  const value = typeToTypeNodeWithRegistry(
+    payload,
+    { checker, factory, sourceFile },
+    typeRegistry,
+    DEFAULT_TYPE_NODE_FLAGS | ts.NodeBuilderFlags.AllowEmptyTuple,
+  );
+  const restored = wrapTypeNodeWithDefault(node, value, factory);
+  RESTORED_DEFAULTS.add(restored);
+  return restored;
 }
 
 function buildShrunkTypeNodeFromTypeNode(

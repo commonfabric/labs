@@ -18,6 +18,8 @@ decision is reversed or superseded).
 
 ## Index
 
+- [Protected initialization](cfc-protected-initialization.md) — transaction-scoped initialization of protected cells and new defaulted fields
+
 ### Addressing and navigation
 
 - [Random space identities](random-space-identities.md) (proposed; active

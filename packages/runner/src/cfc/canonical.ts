@@ -1,5 +1,6 @@
 import { hashStringOf } from "@commonfabric/data-model";
 import { getLogger } from "@commonfabric/utils/logger";
+import { normalizeCellScope } from "../scope.ts";
 import type { CfcConfClause } from "./clause.ts";
 import { encodePointer } from "../../../memory/v2/path.ts";
 import type {
@@ -221,6 +222,14 @@ const compareWritePolicyInput = (
   // canonical hash to give a total order on otherwise-distinct records.
   let primary = 0;
   switch (left.kind) {
+    case "preserved-output":
+    case "initialization": {
+      primary = compareCanonicalAddress(
+        left.target,
+        (right as typeof left).target,
+      );
+      break;
+    }
     case "schema":
     case "structural-provenance":
     case "trusted-event":
@@ -285,6 +294,18 @@ export const canonicalizeWritePolicyInput = (
   input: WritePolicyInput,
 ): WritePolicyInput => {
   switch (input.kind) {
+    case "preserved-output":
+    case "initialization":
+      // Runtime evidence addresses are already value-relative. A literal leading
+      // `value` is a field name, not the storage envelope segment.
+      return {
+        ...input,
+        target: {
+          ...input.target,
+          scope: normalizeCellScope(input.target.scope),
+          path: Object.freeze([...input.target.path]),
+        },
+      };
     case "schema":
       return { ...input, target: canonicalizeAttemptedWrite(input.target) };
     case "structural-provenance":

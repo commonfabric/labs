@@ -23,9 +23,13 @@ import { hashOf } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 import type { SpaceDb } from "./db.ts";
-import { type EntityModel, listEntityModels } from "./model.ts";
+import {
+  type EntityModel,
+  listEntityModels,
+  visibleEntityRowsByScope,
+} from "./model.ts";
 import { type EntityAddress, reconstructDocument } from "./reconstruct.ts";
-import { listScopes } from "./scopes.ts";
+import { scopesOfRows } from "./scopes.ts";
 
 /**
  * `listEntityModels` caps at 5,000 by default — a real Estuary space already
@@ -60,7 +64,7 @@ export function hashEntityValue(
  *
  * `listEntityModels()` defaults to the shared space scope. Per-user and
  * per-session state is durable content too, so this walk uses every scope
- * reported by `listScopes()`.
+ * the rows are grouped under.
  */
 function allEntities(
   space: SpaceDb,
@@ -68,11 +72,16 @@ function allEntities(
   cap: number = ENUMERATION_CAP,
 ): EntityModel[] {
   const out: EntityModel[] = [];
-  for (const scope of listScopes(space, { branch })) {
+  // Scopes and their rows come from one pass, so every scope walked is one the
+  // rows were grouped under.
+  const rowsByScope = visibleEntityRowsByScope(space, { branch });
+  for (const scope of scopesOfRows(rowsByScope)) {
+    const rows = rowsByScope.get(scope.raw) ?? [];
     const listing = listEntityModels(space, {
       branch,
       scope: scope.raw,
       limit: cap,
+      rows,
     });
     if (listing.extent.truncated) {
       throw new Error(
@@ -205,20 +214,32 @@ export function generatedInternalCellIds(
   space: SpaceDb,
   options: { branch?: string; enumerationCap?: number } = {},
 ): { generated: Set<string>; named: Set<string> } {
+  const branch = options.branch ?? "";
+  return generatedIdsAmong(
+    space,
+    allEntities(space, branch, options.enumerationCap),
+    branch,
+  );
+}
+
+/**
+ * {@link generatedInternalCellIds} over models a caller already enumerated, so
+ * a caller that walks every entity for its own reasons does not build every
+ * model a second time to learn which ones are generated.
+ */
+function generatedIdsAmong(
+  space: SpaceDb,
+  models: Iterable<EntityModel>,
+  branch: string,
+): { generated: Set<string>; named: Set<string> } {
   const generated = new Set<string>();
   const named = new Set<string>();
-  for (
-    const model of allEntities(
-      space,
-      options.branch ?? "",
-      options.enumerationCap,
-    )
-  ) {
+  for (const model of models) {
     if (model.kind !== "piece") continue;
     const doc = reconstructDocument(space, {
       id: model.id,
       scope: model.scope,
-      branch: options.branch ?? "",
+      branch,
     });
     const internal = (doc as Record<string, unknown> | undefined)?.internal;
     if (!Array.isArray(internal)) continue;
@@ -259,12 +280,12 @@ export function contentFingerprint(
   options: FingerprintOptions = {},
 ): FingerprintReport {
   const branch = options.branch ?? "";
+  // One walk serves both the generated-cell exclusion and the hashing: every
+  // model is built once, which is most of what a fingerprint costs.
+  const models = allEntities(space, branch, options.enumerationCap);
   const { generated, named } = options.includeGenerated
     ? { generated: new Set<string>(), named: new Set<string>() }
-    : generatedInternalCellIds(space, {
-      branch,
-      enumerationCap: options.enumerationCap,
-    });
+    : generatedIdsAmong(space, models, branch);
 
   const ambiguous = [...generated].filter((id) => named.has(id)).sort(
     utf8Compare,
@@ -273,7 +294,7 @@ export function contentFingerprint(
   const unhashable: { id: string; reason: string }[] = [];
   const excludedGeneratedAddresses: ScopedEntity[] = [];
 
-  for (const model of allEntities(space, branch, options.enumerationCap)) {
+  for (const model of models) {
     if (generated.has(model.id)) {
       excludedGeneratedAddresses.push({ id: model.id, scope: model.scope });
       continue;

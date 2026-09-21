@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
+  getMetaLink,
   getPatternIdentityRef,
   getPatternSetupIdentityRef,
   getPatternSource,
@@ -125,6 +126,33 @@ const SOURCE_HOME_TWO_EXPORT = [
   "  const favorites = new Writable<string[]>([]).for('favorites');",
   "  const count = new Writable<number>(0).for('count');",
   "  return { items, favorites, count, bump: bump({ count }) };",
+  "});",
+  "",
+].join("\n");
+
+const SOURCE_HOME_GUARDED_DEFAULT = [
+  "import { Cfc, Default, RepresentsCurrentUser, Writable, WriteAuthorizedBy, handler, pattern } from 'commonfabric';",
+  "const bump = handler<void, { count: Writable<number> }>((_, { count }) => {",
+  "  count.set((count.get() ?? 0) + 1);",
+  "});",
+  "type GuardedRow = { label: string };",
+  "const addGuardedRow = handler<",
+  "  { label?: string },",
+  "  { guarded: Writable<GuardedRow[]> }",
+  ">((event, { guarded }) => {",
+  "  guarded.push({ label: event.label ?? '' });",
+  "});",
+  "type CurrentPrincipal = { readonly __ctCurrentPrincipal: true };",
+  "type GuardedList = RepresentsCurrentUser<Cfc<",
+  "  WriteAuthorizedBy<GuardedRow[], typeof addGuardedRow>,",
+  "  { ownerPrincipal: CurrentPrincipal }",
+  ">>;",
+  "export default pattern<{",
+  "  items?: string[];",
+  "  guarded: Default<GuardedList, []>;",
+  "}>(({ items, guarded }) => {",
+  "  const count = new Writable<number>(0).for('count');",
+  "  return { items, guarded, addGuardedRow: addGuardedRow({ guarded }), count, bump: bump({ count }) };",
   "});",
   "",
 ].join("\n");
@@ -1882,6 +1910,67 @@ describe("opening a space root", () => {
     await (after as unknown as { pull: () => Promise<unknown> }).pull();
     const afterEvent = (await controller.getDefaultPattern(false))!;
     expect(afterEvent.key("count").get()).toBe(1);
+  });
+
+  it("swaps in a pattern whose argument adds an owner-protected defaulted field", async () => {
+    await setupHome();
+    expect(runtime.cfcEnforcementMode).not.toBe("disabled");
+    await controller.recreateDefaultPattern({
+      customProgram: {
+        main: "/custom-home.tsx",
+        files: [{ name: "/custom-home.tsx", contents: SOURCE_V1 }],
+      },
+    });
+    const root = (await controller.getDefaultPattern(false))!;
+    const staleRef = getPatternIdentityRef(root)!;
+    const edit = runtime.edit();
+    root.withTx(edit).key("items").set(["saved"]);
+    runtime.prepareTxForCommit(edit);
+    expect((await edit.commit()).error).toBeUndefined();
+    await controller.stopPiece(root);
+
+    stub.setSource(SOURCE_HOME_GUARDED_DEFAULT);
+    const restore = shadowLoadProbe(staleRef.identity, "undefined");
+    try {
+      await controller.ensureDefaultPattern();
+    } finally {
+      restore();
+    }
+    await runtime.idle();
+
+    const after = (await controller.getDefaultPattern(true))!;
+    await runtime.idle();
+    expect(getPatternIdentityRef(after)?.identity).toBe(
+      await identityForSource(
+        SOURCE_HOME_GUARDED_DEFAULT,
+        {},
+        HOME_PATTERN_PATH,
+      ),
+    );
+    expect(after.key("count").get()).toBe(0);
+    expect(after.key("items").get()).toEqual(["saved"]);
+    expect(after.key("guarded").get()).toEqual([]);
+    const append = runtime.edit();
+    after.withTx(append).key("addGuardedRow").send({ label: "owner edit" });
+    runtime.prepareTxForCommit(append);
+    expect((await append.commit()).error).toBeUndefined();
+    await after.pull();
+    await runtime.idle();
+    const updated = (await controller.getDefaultPattern(false))!;
+    expect(updated.key("guarded").get()).toEqual([{ label: "owner edit" }]);
+
+    const attack = runtime.edit();
+    const argument = getMetaLink(after.withTx(attack), "argument")!;
+    runtime.getCellFromLink(
+      { ...argument, schema: undefined },
+      undefined,
+      attack,
+    )
+      .key("guarded").set([]);
+    runtime.prepareTxForCommit(attack);
+    expect((await attack.commit()).error?.message).toContain(
+      "writeAuthorizedBy",
+    );
   });
 
   it("heals a root whose pinned pattern fails CFC migration by rolling forward to official", async () => {

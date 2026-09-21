@@ -26,8 +26,9 @@ Authoritative implementation sources:
 If this document conflicts with code or passing tests, code/tests win.
 
 Package exports (`deno.jsonc`): `.` → `src/index.ts` (no `mod.ts`), plus
-six subpaths — `./cell-brand`, `./wrapper-names`, `./property-optionality`,
-`./property-name`, `./numeric-expression`, `./type-node`.
+seven subpaths — `./cell-brand`, `./default-brand`, `./wrapper-names`,
+`./property-optionality`, `./property-name`, `./numeric-expression`,
+`./type-node`.
 `src/index.ts` exports the `SchemaGenerator` class, the
 `SchemaGenerationOptions`, `SchemaGenerationDiagnostic`, and
 `WriterSourceIdentity` types, and re-exports `MutableJSONSchemaObj`.
@@ -43,13 +44,13 @@ consumer package is `@commonfabric/ts-transformers`, along two axes:
    this package reads only the bare `WeakMap`s, not `CrossStageState`).
 2. **Wrapper-vocabulary oracle** — ts-transformers imports the subpaths
    directly: `cell-brand` (call-root-support, cell-type, opaque-get-validation,
-   helper-owned-expression), `wrapper-names` (cast-validation, type-shrinking,
-   call-kind), `property-name` (reactive-keys, type-shrinking),
-   `property-optionality` (`ast/utils.ts`), `type-node` (type-building,
-   type-shrinking, schema-injection, cast-validation,
-   pattern-context-validation, capability-analysis). The `src/typescript/`
-   tables are load-bearing for the whole transformer pipeline, not just schema
-   output.
+   helper-owned-expression), `default-brand` (type-shrinking), `wrapper-names`
+   (cast-validation, type-shrinking, call-kind), `property-name`
+   (reactive-keys, type-shrinking), `property-optionality` (`ast/utils.ts`),
+   `type-node` (type-building, type-shrinking, schema-injection,
+   cast-validation, pattern-context-validation, capability-analysis). The
+   `src/typescript/` tables are load-bearing for the whole transformer
+   pipeline, not just schema output.
 
 Instance state: `AnonymousType_N` naming lives on the `SchemaGenerator`
 instance (`anonymousNames` WeakMap + counter, `src/schema-generator.ts`)
@@ -104,6 +105,15 @@ authored or imported shadow of the name keeps the general path; then a
 scope-based name-resolution fallback for unbindable synthetic references via
 `checker.getSymbolsInScope` — plus a `Date`-by-name special case), keyword
 types, and a final resolve-else-`true` fallback.
+
+A `true` from that fallback is a guess rather than a reading, and is recorded
+as one (`uninterpretedTypeNodes`). A wrapper holding a resolved type recovers
+the value from it; a guess nothing recovers reaches the generation root, which
+reports it as the `schema-type:unread` warning (`unread-type-diagnostics.ts`),
+one per schema, naming each unread type once. An authored `any`, or a name
+declared as `any`, is a reading, not a guess, and is not reported; nor is a
+guess inside an intersection that accepts nothing, which leaves nothing of it in
+the schema.
 
 An intersection node is settled the way the checker settles the type, each
 constituent read through its reference, and what remains is merged as

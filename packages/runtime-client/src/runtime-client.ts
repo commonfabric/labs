@@ -590,12 +590,15 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
    * of a single-file one.
    *
    * `options.argument` is the piece's input, which is a record: a piece is
-   * created with named inputs or with none.
+   * created with named inputs or with none. `options.cause` derives the
+   * piece identity within its space. Reusing a cause reapplies setup to the
+   * same piece and requires the same pattern identity; a different pattern
+   * is rejected. Omitting the cause creates a new identity.
    */
   async createPiece<T = unknown>(
     input: string | URL | Program,
     space: DID,
-    options?: { argument?: FabricPlainObject; run?: boolean },
+    options?: { argument?: FabricPlainObject; run?: boolean; cause?: string },
   ): Promise<PieceHandle<T>> {
     const source = input instanceof URL
       ? { url: input.href }
@@ -619,6 +622,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       source,
       argument: options?.argument,
       run: options?.run,
+      ...(options?.cause === undefined ? {} : { cause: options.cause }),
     });
 
     return new PieceHandle<T>(this, response.piece);

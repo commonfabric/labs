@@ -28,15 +28,6 @@ export type {
 export const CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION =
   "runtime.setup.result-projection";
 
-// Recorded ONLY by the runtime's cell-serialization path (data-updating.ts
-// BRANCH_CELL) when it materializes a runtime-constructed cell's initial
-// value into the brand-new doc the cell points at. The prepare gate accepts a
-// protected write only when this marker covers the target AND the write
-// creates the doc — arbitrary `cell.set` calls record no marker and stay
-// fully enforced.
-export const CFC_STRUCTURAL_PROVENANCE_SEED_MATERIALIZATION =
-  "runtime.setup.seed-materialization";
-
 // A store the runtime owns: a document it materializes to hold a piece's
 // machinery rather than data an author named. Four kinds carry it — a piece's
 // argument, result and internal documents, minted by the runner from the
@@ -570,6 +561,19 @@ export type ModuleDelegationSnapshotEntry = {
 // `deepFreeze()` covers the whole record); this just keeps the type
 // surface narrower.
 export type WritePolicyInput =
+  | {
+    /** Private runtime evidence; preparation must also prove unchanged protection. */
+    readonly kind: "preserved-output";
+    readonly target: CfcAddress;
+    readonly value: FabricValue;
+  }
+  | {
+    /** Authority is carried by the runtime's private mark, never this record alone. */
+    readonly kind: "initialization";
+    readonly target: CfcAddress;
+    readonly value: FabricValue;
+    readonly mode: "seed" | "default" | "projection";
+  }
   | {
     readonly kind: "schema";
     readonly target: CfcAddress;
