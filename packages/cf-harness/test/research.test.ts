@@ -748,7 +748,7 @@ describe("research", () => {
         heading: "Pattern contract",
         text: "Use the exact documented pattern contract.",
       }]);
-      const usage: number[] = [];
+      const usage: (number | undefined)[] = [];
       const model = new ScriptedModelClient([
         () =>
           assistant("", [{
@@ -806,10 +806,12 @@ describe("research", () => {
 
       const reply = await createResearchRunner({
         modelClient: model,
-        onUsage: (entry) => usage.push(entry.totalTokens ?? 0),
+        onUsage: (entry) => {
+          usage.push(entry?.totalTokens);
+        },
       })(requestFor({ corpus }));
 
-      expect(usage).toEqual([23]);
+      expect(usage).toEqual([undefined, undefined, 23]);
       expect(model.requests[2].tools).toEqual([]);
       expect(reply.record.messages.at(-1)).toEqual({
         role: "tool",
@@ -2192,7 +2194,7 @@ describe("research", () => {
     });
 
     it("reports private usage through the parent accounting hook", async () => {
-      const usage: number[] = [];
+      const usage: (number | undefined)[] = [];
       const model = new ScriptedModelClient([
         () => ({
           ...finalResult(),
@@ -2202,7 +2204,9 @@ describe("research", () => {
 
       await createResearchRunner({
         modelClient: model,
-        onUsage: (entry) => usage.push(entry.totalTokens ?? 0),
+        onUsage: (entry) => {
+          usage.push(entry?.totalTokens);
+        },
       })(requestFor());
 
       expect(usage).toEqual([17]);

@@ -438,13 +438,21 @@ CF_HARNESS_API_KEY=... deno task run -- \
   --prompt "Inspect the cf-harness package and summarize its model adapters."
 ```
 
-Operator output includes one aggregate `usage:` line covering the parent and
-completed descendant runs. The persisted `run-report.json` keeps `usage` and
-`modelUsage` for the direct run, plus `totalUsage` including completed
-descendants. The batch result JSON carries that total usage object. `costUsd`,
-when present, came from the provider; `estimatedCostUsd` is an estimate based on
-the public OpenAI GPT-5.6 price schedule and is not an invoice or a subscription
-quota conversion.
+Operator output includes one aggregate `usage:` line covering reported parent,
+research, and descendant calls. Each completed model call contributes once,
+including calls made by a child that later fails or is canceled. The persisted
+`run-report.json` keeps `usage` and `modelUsage` for the direct run, plus
+`totalUsage` including research and descendants. The batch result JSON carries
+that total usage object. `costUsd`, when present, came from the provider;
+`estimatedCostUsd` is an estimate based on the public OpenAI GPT-5.6 price
+schedule and is not an invoice or a subscription quota conversion.
+
+Interactive streams emit `turn_usage` after each completed model call with the
+root turn id, cumulative `usage`, and `elapsedMs` on the turn's wall clock. The
+console's completed-turn result carries the same usage aggregate and elapsed
+time through its terminal event. Unreported usage fields stay absent, and a call
+without usage prevents a partial dollar cost from being shown as a total. There
+is no estimate of tokens still being generated within a provider call.
 
 For an ordinary task with a configured Fabric session, the parent completes only
 after `assign_slug` successfully names a UI piece in that run. A text answer

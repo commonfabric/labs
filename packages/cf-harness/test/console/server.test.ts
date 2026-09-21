@@ -1105,6 +1105,7 @@ describe("console/server", () => {
           sessionId: started.sessionId,
           continuable: true,
           finalText: "built it",
+          elapsedMs: 4000,
         });
       } finally {
         await Deno.remove(artifactRoot, { recursive: true });
@@ -1139,6 +1140,7 @@ describe("console/server", () => {
             createPromptLoop: artifactLoop([
               { role: "assistant", content: "restored result" },
             ]),
+            now: advancingClock(),
             onEvent,
             runIdForTurn: (_sessionId, turnId) => turnId,
             sessionStore: store,
@@ -1180,6 +1182,7 @@ describe("console/server", () => {
           sessionId: started.sessionId,
           continuable: true,
           finalText: "restored result",
+          elapsedMs: 2000,
         });
       } finally {
         store.close();
@@ -1858,6 +1861,7 @@ describe("console/server", () => {
         sessionId: expect.any(String),
         continuable: true,
         finalText: "built it",
+        elapsedMs: 2000,
       });
     });
 
@@ -1874,6 +1878,7 @@ describe("console/server", () => {
         sessionId: expect.any(String),
         continuable: true,
         finalText: "calculated it",
+        elapsedMs: 2000,
       });
     });
 

@@ -1133,8 +1133,8 @@ export const createResearchRunner = (options: {
   /** Records each provider attempt in the parent run report. */
   onAttempt?: (attempt: HarnessModelAttemptDiagnostic) => void | Promise<void>;
 
-  /** Counts research usage beside delegated usage. */
-  onUsage?: (usage: HarnessModelUsage) => void;
+  /** Reports every completed private model call before the next one starts. */
+  onUsage?: (usage: HarnessModelUsage | undefined) => void | Promise<void>;
 }): HarnessResearchRunner =>
 async (request) => {
   const model = researchModel(options.modelClient.providerId);
@@ -1248,7 +1248,7 @@ async (request) => {
           : {}),
       });
       modelTurns += 1;
-      if (result.usage !== undefined) options.onUsage?.(result.usage);
+      await options.onUsage?.(result.usage);
       transcript.push(result.assistant);
       const calls = result.assistant.toolCalls ?? [];
       if (calls.length === 0) {
@@ -1353,7 +1353,7 @@ async (request) => {
           : {}),
       });
       modelTurns += 1;
-      if (repaired.usage !== undefined) options.onUsage?.(repaired.usage);
+      await options.onUsage?.(repaired.usage);
       transcript.push(repaired.assistant);
       const repairCalls = repaired.assistant.toolCalls ?? [];
       for (const call of repairCalls) {

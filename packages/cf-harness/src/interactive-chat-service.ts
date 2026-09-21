@@ -43,6 +43,7 @@ import {
   type HarnessChatStructuredEvent,
   type HarnessChatSubagentRef,
   type HarnessChatSubagentSummary,
+  harnessChatTurnElapsedMs,
   type HarnessChatTurnRecord,
   type HarnessChatTurnStatus,
   reduceHarnessChatSessionStatus,
@@ -1611,6 +1612,18 @@ export class HarnessInteractiveChatService {
               ? { kind: "tool_started", tool }
               : { kind: "tool_completed", tool, status: research.status },
           );
+        },
+        onModelUsage: async ({ totalUsage }) => {
+          if (record.canceledTurnIds.has(turnId)) return;
+          await this.#emit(session.sessionId, turnId, {
+            kind: "turn_usage",
+            turnId,
+            ...(totalUsage === undefined ? {} : { usage: totalUsage }),
+            elapsedMs: harnessChatTurnElapsedMs(
+              record.turns.get(turnId)?.turn.startedAt,
+              this.#now(),
+            ),
+          });
         },
         onCheckpoint: (checkpoint) => {
           if (

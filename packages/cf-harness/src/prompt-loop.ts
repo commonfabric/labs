@@ -284,6 +284,15 @@ export interface CreateHarnessPromptLoopOptions
   subagentCompositionGuidance?: boolean;
 }
 
+/** One completed model call and the usage accumulated by its owning loop. */
+export interface HarnessModelUsageUpdate {
+  /** Provider usage for this call; absent when the provider did not report it. */
+  usage?: HarnessModelUsage;
+
+  /** This loop's calls plus calls made by its research and delegated children. */
+  totalUsage?: HarnessModelUsage;
+}
+
 export interface RunHarnessPromptOptions {
   prompt: string;
   /** Trusted driver marker for research before a new root task. */
@@ -295,6 +304,10 @@ export interface RunHarnessPromptOptions {
   model?: string;
   promptSlotBinding?: PromptSlotBinding;
   signal?: AbortSignal;
+
+  /** Reports each completed model call, including research and descendants. */
+  onModelUsage?: (update: HarnessModelUsageUpdate) => void | Promise<void>;
+
   onTranscriptEvent?: (
     event: HarnessTranscriptEvent,
   ) => void | Promise<void>;
@@ -313,6 +326,9 @@ export interface RunHarnessTranscriptOptions {
   onOpeningResearch?: (
     research: Pick<HarnessOpeningResearch, "toolCallId" | "status">,
   ) => void | Promise<void>;
+
+  /** Reports each completed model call, including research and descendants. */
+  onModelUsage?: (update: HarnessModelUsageUpdate) => void | Promise<void>;
 
   /**
    * Completed tool batch or opening handoff with matching research and model
@@ -343,7 +359,7 @@ export interface HarnessPromptLoopResult {
   /** Usage from model turns executed directly by this loop. */
   usage?: HarnessModelUsage;
 
-  /** Direct usage plus usage reported by completed descendant loops. */
+  /** Direct usage plus reported research and descendant calls, even on failure. */
   totalUsage?: HarnessModelUsage;
 
   modelUsage?: HarnessModelTurnUsage[];
@@ -3390,7 +3406,7 @@ export class CfHarnessPromptLoop {
     signal?: AbortSignal;
     sequence: number;
     recordActivity: (activity: HarnessToolActivity) => void;
-    recordDescendantUsage: (usage: HarnessModelUsage) => void;
+    recordModelUsage: (usage: HarnessModelUsage | undefined) => Promise<void>;
     onTranscriptEvent?: (
       event: HarnessTranscriptEvent,
     ) => void | Promise<void>;
@@ -3445,7 +3461,7 @@ export class CfHarnessPromptLoop {
         options.signal,
         options.sequence,
         options.recordActivity,
-        options.recordDescendantUsage,
+        options.recordModelUsage,
         options.onTranscriptEvent,
         "opening-research",
       );
@@ -3560,6 +3576,7 @@ export class CfHarnessPromptLoop {
       maxModelTurns: options.maxModelTurns,
       promptSlotBinding: options.promptSlotBinding,
       signal: options.signal,
+      onModelUsage: options.onModelUsage,
       onTranscriptEvent: options.onTranscriptEvent,
     });
   }
@@ -3640,7 +3657,17 @@ export class CfHarnessPromptLoop {
     const toolActivity: HarnessToolActivity[] = [];
     const modelAttempts: HarnessModelAttempt[] = [];
     const modelUsage: HarnessModelTurnUsage[] = [];
-    const descendantUsage: HarnessModelUsage[] = [];
+    const allModelUsage: (HarnessModelUsage | undefined)[] = [];
+    const totalUsage = () =>
+      allModelUsage.some((usage) => usage !== undefined)
+        ? sumHarnessModelUsage(allModelUsage)
+        : undefined;
+    const recordModelUsage = async (
+      usage: HarnessModelUsage | undefined,
+    ): Promise<void> => {
+      allModelUsage.push(usage);
+      await options.onModelUsage?.({ usage, totalUsage: totalUsage() });
+    };
     const reportTimeline: HarnessRunTimelineEntryInput[] = [];
     let modelTurns = 0;
     const buildPolicyTrace = async () => {
@@ -3696,16 +3723,7 @@ export class CfHarnessPromptLoop {
               ),
             }
             : {}),
-          ...(
-            modelUsage.length > 0 || descendantUsage.length > 0
-              ? {
-                totalUsage: sumHarnessModelUsage([
-                  ...modelUsage.map((entry) => entry.usage),
-                  ...descendantUsage,
-                ]),
-              }
-              : {}
-          ),
+          totalUsage: totalUsage(),
         }),
       );
     };
@@ -3726,7 +3744,7 @@ export class CfHarnessPromptLoop {
     const runResearch = createResearchRunner({
       modelClient: this.modelClient,
       onAttempt: recordModelAttempt,
-      onUsage: (usage) => descendantUsage.push(usage),
+      onUsage: recordModelUsage,
     });
     this.engine.setResearchRunner(runResearch);
     await this.engine.ensureDiagnosticsInitialized();
@@ -3763,7 +3781,7 @@ export class CfHarnessPromptLoop {
         ...(options.signal !== undefined ? { signal: options.signal } : {}),
         sequence: toolActivity.length + 1,
         recordActivity: (activity) => toolActivity.push(activity),
-        recordDescendantUsage: (usage) => descendantUsage.push(usage),
+        recordModelUsage,
         onOpeningResearch: options.onOpeningResearch,
         ...(options.onTranscriptEvent !== undefined
           ? { onTranscriptEvent: options.onTranscriptEvent }
@@ -3878,6 +3896,7 @@ export class CfHarnessPromptLoop {
             usage: response.usage,
           });
         }
+        await recordModelUsage(response.usage);
         options.signal?.throwIfAborted();
         const assistantMessage = response.assistant;
         transcript.push(assistantMessage);
@@ -3954,7 +3973,7 @@ export class CfHarnessPromptLoop {
             options.signal,
             toolActivity.length + 1,
             (activity) => toolActivity.push(activity),
-            (usage) => descendantUsage.push(usage),
+            recordModelUsage,
             options.onTranscriptEvent,
             undefined,
             toolCalls.length,
@@ -4072,16 +4091,7 @@ export class CfHarnessPromptLoop {
           ),
         }
         : {}),
-      ...(
-        modelUsage.length > 0 || descendantUsage.length > 0
-          ? {
-            totalUsage: sumHarnessModelUsage([
-              ...modelUsage.map((entry) => entry.usage),
-              ...descendantUsage,
-            ]),
-          }
-          : {}
-      ),
+      totalUsage: totalUsage(),
       runState: this.engine.getRunState(),
     };
   }
@@ -4410,7 +4420,8 @@ export class CfHarnessPromptLoop {
     signal?: AbortSignal,
     sequence = 1,
     recordActivity: (activity: HarnessToolActivity) => void = () => {},
-    recordDescendantUsage: (usage: HarnessModelUsage) => void = () => {},
+    recordModelUsage: (usage: HarnessModelUsage | undefined) => Promise<void> =
+      async () => {},
     onTranscriptEvent?: (event: HarnessTranscriptEvent) => void | Promise<void>,
     origin?: HarnessToolInvocationOrigin,
     toolCallCount = 1,
@@ -4894,7 +4905,7 @@ export class CfHarnessPromptLoop {
           promptSlotBinding,
           signal,
           sequence,
-          recordDescendantUsage,
+          recordModelUsage,
           ...(onTranscriptEvent !== undefined ? { onTranscriptEvent } : {}),
         })
         : await this.#invokeBuiltinTool(
@@ -5476,7 +5487,7 @@ export class CfHarnessPromptLoop {
     promptSlotBinding?: PromptSlotBinding;
     signal?: AbortSignal;
     sequence: number;
-    recordDescendantUsage: (usage: HarnessModelUsage) => void;
+    recordModelUsage: (usage: HarnessModelUsage | undefined) => Promise<void>;
 
     /**
      * The parent run's transcript handler. The child's own messages reach it
@@ -5898,6 +5909,7 @@ export class CfHarnessPromptLoop {
         maxModelTurns,
         promptSlotBinding: options.promptSlotBinding,
         signal: options.signal,
+        onModelUsage: ({ usage }) => options.recordModelUsage(usage),
         ...(options.onTranscriptEvent !== undefined
           ? { onTranscriptEvent: forwardChildTranscriptEvent }
           : {}),
@@ -5958,13 +5970,6 @@ export class CfHarnessPromptLoop {
           ? searchSourceSummary(nativeModelToolResults)
           : "");
       childModelTurns = childResult.modelTurns;
-      const childUsage = childResult.totalUsage ?? childResult.usage;
-      if (childUsage !== undefined) {
-        // The child has already incurred this usage. Record it before
-        // structured-return processing or parent artifact persistence can
-        // fail, so the parent failure report remains cost-complete.
-        options.recordDescendantUsage(childUsage);
-      }
       if (childResult.runState.status !== "completed") {
         subagentStatus = "failed";
       }
