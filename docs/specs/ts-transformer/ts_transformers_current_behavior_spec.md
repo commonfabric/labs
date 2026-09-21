@@ -1479,10 +1479,11 @@ Result shape:
   method calls
 - callback schema includes `{ element, index?, array? }` and adds `params` only
   when captures exist
-- `element` is the element of the receiver's list. An array or tuple receiver
-  is the list, so the element is its own: a row of a `T[][]`, the union of a
-  tuple's positions. A cell-like receiver wraps the list type, and the element
-  is read through a union or an intersection around the array —
+- `element` is the element of the receiver's list. A receiver that is itself
+  a list — an array, a tuple, or a type indexed by number, as an interface
+  extending `Array<T>` is — has its own element: a row of a `T[][]`, the union
+  of a tuple's positions. A cell-like receiver wraps the list type, and the
+  element is read through a union or an intersection around the list —
   `T[] | Default<[]>`, `Default<T[], V>`, `T[] | undefined`,
   `Cfc<T[], Meta>` — so the callback schema is the same with or without an
   explicit annotation on the pattern parameter (`ast/type-inference.ts`;

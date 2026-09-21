@@ -322,6 +322,12 @@ Deno.test("inferArrayElementType: a Default<string[]> alias yields the element t
   assertEquals(elementTypeText("cellDefaultArray"), "string");
 });
 
+Deno.test("inferArrayElementType: a Cell<Default<string[]> | undefined> yields the element type", () => {
+  // The cell's argument is a union around the array that keeps no alias, so
+  // only a read through the union's arms finds `string`.
+  assertEquals(elementTypeText("cellDefaultOrUndefined"), "string");
+});
+
 Deno.test("inferArrayElementType: a plain Default<string[]> reference yields the element type via the array fallback", () => {
   assertEquals(elementTypeText("defaultArray"), "string");
 });

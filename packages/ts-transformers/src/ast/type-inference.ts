@@ -870,6 +870,17 @@ function combineExtractedElementTypes(
 }
 
 /**
+ * Whether a type is itself a list: an array, a tuple, or an object type that
+ * is indexed by number, which is what an interface or a class extending
+ * `Array<T>` is. A cell is not one, whatever list it holds.
+ */
+function isListType(type: ts.Type, checker: ts.TypeChecker): boolean {
+  if (checker.isArrayType(type) || checker.isTupleType(type)) return true;
+  return (type.flags & ts.TypeFlags.Object) !== 0 &&
+    checker.getIndexTypeOfType(type, ts.IndexKind.Number) !== undefined;
+}
+
+/**
  * Extract element type from array-like types (T[] -> T), including unions,
  * intersections, and wrapped/reference forms used by reactive cell types.
  */
@@ -881,7 +892,7 @@ function extractElementFromArrayType(
   if (seen.has(type)) return undefined;
   seen.add(type);
 
-  if (checker.isArrayType(type) || checker.isTupleType(type)) {
+  if (isListType(type, checker)) {
     return checker.getIndexTypeOfType(type, ts.IndexKind.Number);
   }
 
@@ -946,7 +957,8 @@ function extractElementFromArrayType(
  * - FactoryInput<T[]> → Reactive<T[]> → T[] → T (union type case)
  * - Cell<T[] | Default<[]>>, Cell<Cfc<T[], Meta>> → the array inside the union
  *   or intersection → T (wrapped list type case)
- * - Plain Array<T> → T, where T may itself be an array (a row of T[][])
+ * - Plain Array<T>, a tuple, or a type derived from one → its own element,
+ *   which may itself be an array (a row of T[][])
  *
  * @param arrayExpr - Expression representing an array or array-like type
  * @param context - Context with checker, factory, and sourceFile
@@ -1021,12 +1033,12 @@ export function inferArrayElementType(
   if (reference && typeArgs && typeArgs.length > 0) {
     const innerType = typeArgs[0];
     if (innerType) {
-      // An array receiver is the list, so the element is its own, even when
-      // that element is an array in turn. Any other reference wraps the list
-      // type: the array itself, or a union or an intersection around it —
+      // A receiver that is a list has its own element, even when that element
+      // is an array in turn. Any other reference wraps the list type: the
+      // array itself, or a union or an intersection around it —
       // `T[] | Default<[]>`, `T[] | undefined`, `Cfc<T[], Meta>`.
       let elementType: ts.Type;
-      if (checker.isArrayType(reference) || checker.isTupleType(reference)) {
+      if (isListType(reference, checker)) {
         elementType = extractElementFromArrayType(reference, checker) ??
           innerType;
       } else if (checker.isArrayType(innerType)) {

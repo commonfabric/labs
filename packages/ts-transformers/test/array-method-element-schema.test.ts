@@ -24,6 +24,7 @@ async function callbackSchemas(
     interface Entry { name: string; tag: string }
     type EntriesValue = Entry[] | Default<[]>;
     type EntriesCell = Writable<Entry[] | Default<[]>>;
+    interface Entries<T> extends Array<T> {}
     interface Input { entries: ${listType}; }
     export default pattern<Input>(${parameter} => ({
       [UI]: <div>{${expression}}</div>,
@@ -56,6 +57,8 @@ describe("array-method-element-schema", () => {
       "`Default<T[], []>`": "Writable<Default<Entry[], []>>",
       "`Cfc<T[], Meta>`":
         'Writable<Cfc<Entry[], { confidentiality: ["secret"] }>>',
+      "a list derived from `Array<T>`":
+        "Writable<Entries<Entry> | Default<[]>>",
     };
 
     for (const [form, listType] of Object.entries(listTypes)) {
@@ -123,6 +126,34 @@ describe("array-method-element-schema", () => {
       );
 
       expect(schemas.map(elementOf)).toEqual([{ type: ["number", "string"] }]);
+    });
+
+    it("emits the whole element of an interface extending `Array<T>`", async () => {
+      const schemas = await callbackSchemas(
+        "Entries<string[] | number>",
+        true,
+        "entries.map((row) => <span>{String(row)}</span>)",
+      );
+
+      expect(schemas.map(elementOf)).toEqual([{
+        anyOf: [{ type: "number" }, {
+          type: "array",
+          items: { type: "string" },
+        }],
+      }]);
+    });
+
+    it("emits a row as `element` for an interface extending `Array<T[]>`", async () => {
+      const schemas = await callbackSchemas(
+        "Entries<Entry[]>",
+        true,
+        "entries.map((row) => <span>{row.length}</span>)",
+      );
+
+      expect(schemas.map(elementOf)).toEqual([{
+        type: "array",
+        items: { $ref: "#/$defs/Entry" },
+      }]);
     });
 
     it("emits the array's own element when that element is itself a union around an array", async () => {
