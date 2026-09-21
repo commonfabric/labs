@@ -537,23 +537,25 @@ Deno.test("one pass yields each scope's rows exactly as the per-scope query does
  *
  * The count is the property, not a timing: a threshold would pass on a fast
  * machine and prove nothing there. Before the fix this is 2 x the number of
- * scopes; after it, the scoped query is never prepared at all.
+ * scopes; after it, the scoped query is never issued at all. Queries are
+ * counted where they are issued rather than where they are prepared, since a
+ * space prepares each statement once and reuses it.
  */
 Deno.test("the fingerprint enumerates rows in one unscoped pass", () => {
   // A row query filtered on one scope cannot seek (the index leads with `id`),
   // so each walks the whole branch; the walk issues none, and derives its
   // scopes from the same pass rather than enumerating a second time.
   withScopedSpace((space) => {
-    const prepare = space.db.prepare.bind(space.db);
+    const all = space.all.bind(space);
     let scoped = 0;
     let unscoped = 0;
-    space.db.prepare = ((sql: string) => {
+    space.all = ((sql: string, ...params) => {
       if (/GROUP BY scope_key, id/.test(sql)) {
         if (/scope_key = \?/.test(sql)) scoped++;
         else unscoped++;
       }
-      return prepare(sql);
-    }) as typeof space.db.prepare;
+      return all(sql, ...params);
+    }) as typeof space.all;
     const scopeCount = listScopes(space, { branch: "" }).length;
     assert(scopeCount >= 5, `fixture spans several scopes (${scopeCount})`);
     unscoped = 0;
