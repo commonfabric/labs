@@ -21,6 +21,10 @@
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import { settleAbandonedRequest } from "./abandoned-request.ts";
+import {
+  enrollRuntimeOwnedStore,
+  recordRuntimeOwnedStore,
+} from "./runtime-owned-store.ts";
 import { resultRowKeys } from "./sqlite/row-identity.ts";
 import {
   computeRowLabelRead,
@@ -57,6 +61,8 @@ import {
   joinCfcObservedConfidentiality,
   meetCfcObservationCeilings,
 } from "../cfc/observation.ts";
+import { collectConsumedLabel } from "../cfc/prepare.ts";
+import { enqueueSinkRequestPostCommitEffect } from "../cfc/sink-request.ts";
 import {
   ignoreReadForScheduling,
   writeDestinationRead,
@@ -96,6 +102,9 @@ type WireParams = SqliteParamsWire | undefined;
 
 const errMsg = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
+
+/** The sink every sqlite query request is staged under. */
+export const SQLITE_QUERY_SINK = "sqliteQuery";
 
 /**
  * The read ceiling a query issued on `tx` reads under: the runtime's own
@@ -937,6 +946,25 @@ export function sqliteQuery(
         tx,
         scope,
       );
+      // The control state this node keeps — `/pending`, `/requestHash`,
+      // `/error` — holds whatever the transaction issuing a request read. A
+      // request hash is a function of the parameters, so a parameter derived
+      // from a labeled read is carried onto those paths, and no `ifc` an
+      // author writes into a schema can declare which atoms a given
+      // transaction will bring. Naming the store here is what lets §8.12.5
+      // route 2 declare that policy from the transaction instead of refusing
+      // the write; `docs/specs/cfc-enforcement-matrix.md` §4 states the
+      // route, and the bound the store's own ceiling was carrying by
+      // accident is applied below, before the request is staged.
+      //
+      // The marker names the store for THIS transaction; the enrollment is
+      // what reaches the later ones, since a re-issue and a settled
+      // request's writeback each run on a transaction of their own. The mint
+      // stays `makeResultCell` rather than `ownedCell` because the cause and
+      // the result/pattern links it sets are this builtin's, and the cause
+      // is the stored cell's identity.
+      recordRuntimeOwnedStore(tx, parentCell, selectedResult);
+      enrollRuntimeOwnedStore(tx, parentCell, selectedResult);
       initialized = true;
       resultScope = scope;
     }
@@ -1129,6 +1157,29 @@ export function sqliteQuery(
       return;
     }
     if (decision === "dedupe") return;
+    // The bound a sqlite read's egress has, applied where the sink registry
+    // cannot hold it (`cfc/sink-inventory.ts`). A query whose database lies
+    // in another space hands its statement and parameters to whoever holds
+    // THAT space's replicas, who are not the audience this result document's
+    // residency names; a same-space query reaches only the provider that
+    // already holds every byte of that document. So the refusal is the pair
+    // — another space, and a transaction carrying confidentiality — and it
+    // runs before the claim is written and before the request is staged,
+    // which are the two things that would carry the parameters out.
+    if (crossSpace && collectConsumedLabel(tx).confidentiality.length > 0) {
+      // No request hash goes with it: recording this one's would make the
+      // next evaluation of the same inputs a memo hit, so a later pass whose
+      // reads carry nothing would never ask again. What the pattern reads is
+      // the rule and nothing more — which atoms did not fit names the
+      // principals that introduced them, and that detail faces the operator.
+      result.withTx(tx).set({
+        pending: false,
+        error:
+          "sqlite: a query whose transaction carries confidentiality cannot " +
+          "read a database in another space",
+      });
+      return;
+    }
     // Diffing the pending publication likewise observes only its destination.
     // The query's inputs, read above, are what schedule another request.
     result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set({
@@ -1138,91 +1189,109 @@ export function sqliteQuery(
 
     const sql = inputs.sql;
     requestStaged = true;
+    // The claim above rides this transaction, and so does this request. When
+    // the scheduler stops attempting the commit neither landed and no read is
+    // coming; a release check that refuses after the commit is the other way
+    // a staged request never goes out. Either ending leaves a reader of the
+    // claim waiting on a query nobody is running, so both settle it here.
+    const settleUnsent = () => {
+      runtime.trackAsyncWork(
+        settleAbandonedRequest(
+          runtime,
+          "sqliteQuery",
+          effectKey,
+          (settleTx) => {
+            if (runIdentity !== undefined) {
+              settleTx.tx.scopeKeyIdentity = runIdentity;
+            }
+            if (!ownsAnnouncement()) return;
+            sendResult(settleTx, result);
+            recordPublication(settleTx);
+            // Read the stored claim at write time. Another query holds
+            // this result in either of two ways, and the ending steps around
+            // both. One is running: the pending flag is up under a hash that
+            // is not this query's, and from then on the result is that
+            // query's to write, exactly as `failQuery` decides it. Or one
+            // has committed here since this query was staged, whatever state
+            // it left — a later query that already answered leaves its own
+            // hash with the flag down, and that answer is its own to keep.
+            //
+            // What is left over from before this query was staged is neither.
+            // A query that finished leaves its hash standing with the flag
+            // down, so every query after the first one finds a hash here that
+            // belongs to nobody, and reading that as a takeover would leave
+            // the pattern holding the finished query's rows under a statement
+            // it no longer runs.
+            const stored = result.withTx(settleTx).getRaw({
+              meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
+            }) as QueryState | undefined;
+            // A newer accepted action can select a memo without changing
+            // its stored value. Publication ownership permits this binding
+            // to link that result; field ownership preserves the memo.
+            if (!ownsAnnouncement() || !staging.fieldsSelected) return;
+            const running = stored?.pending === true &&
+              stored.requestHash !== undefined && stored.requestHash !== hash;
+            // Whole value, not one field of it: a query that answers
+            // records rows without moving the hash, and one that takes over
+            // moves the hash without recording rows.
+            // `valueEqual` rather than a structural walk: a decoded row can
+            // carry a `FabricValue` whose contents live in private fields
+            // that such a walk cannot see, and every distinct instance of one
+            // compares equal to every other.
+            const writtenSinceStaged = !valueEqual(
+              storedBeforeClaim as FabricValue,
+              stored as FabricValue,
+            );
+            if (running || writtenSinceStaged) {
+              return;
+            }
+            // What the pattern reads is that the query was refused, and
+            // nothing more. The refusal names the document the rule matched
+            // on and the source of each caveat — the principal that
+            // introduced it — which is what the pattern-facing surface
+            // withholds. That detail reaches the operator through the
+            // scheduler's report of the dropped write.
+            result.withTx(settleTx).set({
+              pending: false,
+              error: "sqliteQuery request was refused before it started",
+              requestHash: hash,
+            });
+          },
+        ).finally(releaseStaging),
+        parentCell,
+      );
+    };
     // Per-target dedupe key (stage-G round-2 headline): the bare
     // `sqliteQuery:<hash>` collides across DISTINCT nodes issuing the
     // same query, and the dropped second closure would leave that
     // node's result cell pending forever.
-    tx.enqueuePostCommitEffect({
-      id: `sqliteQuery:${hash}`,
-      idempotencyKey: effectKey,
-      kind: "sqlite-query",
-      // The claim above rides this transaction, and so does this effect. When
-      // the scheduler stops attempting the commit neither landed and no read
-      // is coming, so a reader of the claim would wait on a query nobody is
-      // running.
-      abandon: () => {
-        runtime.trackAsyncWork(
-          settleAbandonedRequest(
-            runtime,
-            "sqliteQuery",
-            effectKey,
-            (settleTx) => {
-              if (runIdentity !== undefined) {
-                settleTx.tx.scopeKeyIdentity = runIdentity;
-              }
-              if (!ownsAnnouncement()) return;
-              sendResult(settleTx, result);
-              recordPublication(settleTx);
-              // Read the stored claim at write time. Another query holds
-              // this result in either of two ways, and the ending steps around
-              // both. One is running: the pending flag is up under a hash that
-              // is not this query's, and from then on the result is that
-              // query's to write, exactly as `failQuery` decides it. Or one
-              // has committed here since this query was staged, whatever state
-              // it left — a later query that already answered leaves its own
-              // hash with the flag down, and that answer is its own to keep.
-              //
-              // What is left over from before this query was staged is neither.
-              // A query that finished leaves its hash standing with the flag
-              // down, so every query after the first one finds a hash here that
-              // belongs to nobody, and reading that as a takeover would leave
-              // the pattern holding the finished query's rows under a statement
-              // it no longer runs.
-              const stored = result.withTx(settleTx).getRaw({
-                meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
-              }) as QueryState | undefined;
-              // A newer accepted action can select a memo without changing
-              // its stored value. Publication ownership permits this binding
-              // to link that result; field ownership preserves the memo.
-              if (!ownsAnnouncement() || !staging.fieldsSelected) return;
-              const running = stored?.pending === true &&
-                stored.requestHash !== undefined && stored.requestHash !== hash;
-              // Whole value, not one field of it: a query that answers
-              // records rows without moving the hash, and one that takes over
-              // moves the hash without recording rows.
-              // `valueEqual` rather than a structural walk: a decoded row can
-              // carry a `FabricValue` whose contents live in private fields
-              // that such a walk cannot see, and every distinct instance of one
-              // compares equal to every other.
-              const writtenSinceStaged = !valueEqual(
-                storedBeforeClaim as FabricValue,
-                stored as FabricValue,
-              );
-              if (running || writtenSinceStaged) {
-                return;
-              }
-              // What the pattern reads is that the query was refused, and
-              // nothing more. The refusal names the document the rule matched
-              // on and the source of each caveat — the principal that
-              // introduced it — which is what the pattern-facing surface
-              // withholds. That detail reaches the operator through the
-              // scheduler's report of the dropped write.
-              result.withTx(settleTx).set({
-                pending: false,
-                error: "sqliteQuery request was refused before it started",
-                requestHash: hash,
-              });
-            },
-          ).finally(releaseStaging),
-          parentCell,
-        );
-      },
+    //
+    // The request is staged through the sink-request seam rather than
+    // enqueued directly, which is what gives the read's egress a gate of its
+    // own now that the result store declares from the transaction rather
+    // than refusing it (`docs/specs/cfc-enforcement-matrix.md` §4). What the
+    // snapshot holds is what goes to the provider — the database named, the
+    // statement, the parameters, and the reader a cross-space read carries —
+    // rather than the handle's table declarations, which the request hash
+    // above already covers and which would clone a whole label spec per
+    // issue.
+    enqueueSinkRequestPostCommitEffect(
+      tx,
+      SQLITE_QUERY_SINK,
+      `sqliteQuery:${hash}`,
+      {
+        database: { space: databaseSpace, id: db.id },
+        sql,
+        params: params ?? null,
+        reader: crossSpace ? (actingReader ?? null) : null,
+      } as FabricValue,
+      "sqlite-query",
       // The flush awaits the query and its writeback, so the transaction's own
       // commit promise spans them and the scheduler registers that promise for
       // every commit carrying post-commit effects. Nothing here is handed to
-      // `trackAsyncWork` for that reason; the abandonment settle above is
-      // separate work with its own completion, and is registered.
-      async flush() {
+      // `trackAsyncWork` for that reason; the unsent settle above is separate
+      // work with its own completion, and is registered.
+      async () => {
         inFlightIssues.add(effectKey);
         // The requesting RUN's identity, applied to every writeback
         // transaction of this flush (OW53; serving-loop.md §4: the effect
@@ -1239,6 +1308,25 @@ export function sqliteQuery(
         const applyRunIdentity = (wtx: IExtendedStorageTransaction) => {
           if (runIdentity !== undefined) wtx.tx.scopeKeyIdentity = runIdentity;
         };
+        // The request hash this writeback's destination records, read as a
+        // read of the destination (§18.6.2,
+        // `docs/specs/cfc-write-destination-reads.md`): it decides WHETHER
+        // this writeback happens and never what it writes, so it stays out
+        // of the transaction's join. What that keeps out matters now that
+        // the control paths declare: `/requestHash` carries every clause the
+        // issues of this query ever brought, and a plain read of it would
+        // put all of them on the rows this settle writes — where each
+        // column's own declared ceiling is what the write is measured
+        // against, and where the route declines because the schema declares
+        // there. The rows are labeled by the columns they came from; the
+        // parameters that selected them are the issuing transaction's to
+        // declare, and it does.
+        const storedRequestHash = (
+          wtx: IExtendedStorageTransaction,
+        ): string | undefined =>
+          (result.withTx(wtx).getRaw({
+            meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
+          }) as QueryState | undefined)?.requestHash;
         // The acting reader at flush time: the CAPTURED run principal for
         // a served request (the flush's own ambient is the service); the
         // ambient provider read for an unstamped one (the client/OFF
@@ -1256,7 +1344,7 @@ export function sqliteQuery(
             runtime.editWithRetry((wtx) => {
               markEffectCompletion(wtx, effectKey);
               applyRunIdentity(wtx);
-              if (result.withTx(wtx).key("requestHash").get() !== hash) return;
+              if (storedRequestHash(wtx) !== hash) return;
               result.withTx(wtx).set({
                 pending: false,
                 error,
@@ -1476,7 +1564,7 @@ export function sqliteQuery(
               // Stale-writeback guard: a newer query (different inputs -> different
               // hash) may have superseded this one while the RPC was in flight.
               // Only write back if the result cell still records THIS request.
-              if (result.withTx(wtx).key("requestHash").get() !== hash) {
+              if (storedRequestHash(wtx) !== hash) {
                 return;
               }
               const base = result.getAsNormalizedFullLink();
@@ -1575,7 +1663,12 @@ export function sqliteQuery(
           inFlightIssues.delete(effectKey);
         }
       },
-    });
+      {
+        idempotencyKey: effectKey,
+        onRejected: settleUnsent,
+        onReleaseRejected: settleUnsent,
+      },
+    );
   };
   return { action };
 }

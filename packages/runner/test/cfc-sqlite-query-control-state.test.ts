@@ -157,11 +157,15 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     );
   };
 
-  /** Every stored label entry on the document `cell` addresses. */
+  /**
+   * Every stored label entry on the document `cell` addresses. Resolved
+   * first: a pattern's result holds a LINK to the builtin's result cell, and
+   * the scoped instance the builtin writes is what carries the labels.
+   */
   const storedEntries = (cell: Cell<unknown>): StoredEntry[] => {
     const tx = runtime.edit();
     try {
-      const link = cell.getAsNormalizedFullLink();
+      const link = cell.resolveAsCell().getAsNormalizedFullLink();
       return (readStoredCfcMetadata(tx, link)?.labelMap.entries ??
         []) as StoredEntry[];
     } finally {
@@ -181,15 +185,58 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         entry.path.every((segment, i) => segment === path[i])
       )?.label.confidentiality;
 
+  /**
+   * A stable rendering of an atom: the stored form and the fixture's are the
+   * same object with its keys in a different order, so comparing the two as
+   * written would report every clause as absent.
+   */
+  const canonical = (value: unknown): string =>
+    JSON.stringify(
+      value,
+      (_key, held) =>
+        held !== null && typeof held === "object" && !Array.isArray(held)
+          ? Object.fromEntries(
+            Object.entries(held as Record<string, unknown>).sort(([a], [b]) =>
+              a < b ? -1 : a > b ? 1 : 0
+            ),
+          )
+          : held,
+    );
+
+  /** Whether every alternative of `clause` is among `atoms`. */
   const hasClause = (
     atoms: readonly unknown[] | undefined,
     clause: readonly unknown[],
   ): boolean =>
     clause.every((atom) =>
-      (atoms ?? []).some((held) =>
-        JSON.stringify(held) === JSON.stringify(atom)
-      )
+      (atoms ?? []).some((held) => canonical(held) === canonical(atom))
     );
+
+  /**
+   * A lift returning one SQL parameter.
+   *
+   * The result schema is not decoration: a lift with none writes its output
+   * document without a schema write-policy input, which the commit refuses
+   * once that document carries stored label metadata — so the SECOND labeled
+   * value such a lift produces never lands, and a case that flips a parameter
+   * would be reading the first one throughout.
+   */
+  const parameterLift = (
+    fn: (input: unknown) => string,
+  ): (input: unknown) => unknown => {
+    const { commonfabric: cf } = createTrustedBuilder(runtime);
+    const { lift } = cf as unknown as {
+      lift: (
+        fn: (value: unknown) => unknown,
+        argumentSchema?: unknown,
+        resultSchema?: unknown,
+      ) => (value: unknown) => unknown;
+    };
+    return lift((input: unknown) => [fn(input)], undefined, {
+      type: "array",
+      items: { type: "string" },
+    });
+  };
 
   /**
    * Runs a first query over the labeled key column and a second query whose
@@ -202,14 +249,9 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     options: { literalParameter?: string } = {},
   ) => {
     const { commonfabric: cf } = createTrustedBuilder(runtime);
-    const { lift } = cf as unknown as {
-      lift: (fn: (value: unknown) => unknown) => (value: unknown) => unknown;
-    };
-    const parameterOf = lift((keys: unknown) => [
-      String(
-        (keys as QueryState<KeyRow>)?.result?.[0]?.container_id ?? "",
-      ),
-    ]);
+    const parameterOf = parameterLift((keys) =>
+      String((keys as QueryState<KeyRow>)?.result?.[0]?.container_id ?? "")
+    );
     const testPattern = cf.pattern<Record<string, never>>(() => {
       const keys = cf.sqliteQuery.asScope("session")(
         // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
@@ -259,7 +301,14 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     expect(state.result).toEqual([{ body: "first" }, { body: "second" }]);
   });
 
-  it("declares the parameter's clause on the control paths", async () => {
+  it("declares the parameter's clause on the request hash", async () => {
+    // `/requestHash` rather than `/pending` because of which writes touch
+    // which path. The issuing transaction declares on both; the settle then
+    // rewrites `pending` from a transaction that reads only its own write
+    // destination, and the runtime re-derives that path's entry from what
+    // the writer carried, which is nothing. The hash does not change between
+    // the two writes, so the entry the issue declared is what stands.
+
     const db = labeledDb();
     await seedMessages(db);
     const { bodies } = await runDerivedParameterPattern(db, "derived-declares");
@@ -270,10 +319,9 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       (value) => (value?.result ?? []).length === 2,
     );
 
-    // The clause the PARAMETER carried, on the paths no schema declares. The
-    // key column's clause is not the projected column's, so this cannot be
+    // The clause the PARAMETER carried, on a path no schema declares. The key
+    // column's clause is not the projected column's, so this cannot be
     // satisfied by the query's own static confidentiality.
-    expect(hasClause(declaredAt(bodies, ["pending"]), KEY_CLAUSE)).toBe(true);
     expect(hasClause(declaredAt(bodies, ["requestHash"]), KEY_CLAUSE))
       .toBe(true);
   });
@@ -297,7 +345,8 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     );
     expect(state.error).toBeUndefined();
     expect(state.result).toEqual([{ body: "first" }, { body: "second" }]);
-    expect(hasClause(declaredAt(bodies, ["pending"]), KEY_CLAUSE)).toBe(false);
+    expect(hasClause(declaredAt(bodies, ["requestHash"]), KEY_CLAUSE))
+      .toBe(false);
   });
 
   it("leaves the projected column's declared ceiling as its author wrote it", async () => {
@@ -318,63 +367,78 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
 
     const rows = bodies.key("result");
     const row = rows.key(0) as Cell<unknown>;
-    const declared = declaredAt(row.resolveAsCell(), ["body"]);
+    const declared = declaredAt(row, ["body"]);
     expect(hasClause(declared, BODY_CLAUSE)).toBe(true);
     expect(hasClause(declared, KEY_CLAUSE)).toBe(false);
   });
 
   it("accumulates a clause per differently-labeled parameter and drops none", async () => {
-    // The ratchet the route asks for: every clause a transaction put on the
-    // control paths stays there after the read that carried it stops. Three
+    // The ratchet the route asks for: a clause a transaction put on the
+    // control state stays there after the read that carried it stops. Three
     // issues of ONE query node, each parameterized out of a differently
-    // labeled column.
+    // labeled column of the same row, so each issue's transaction carries one
+    // clause and the accumulation is visible one clause at a time.
 
     const first = clauseFor(space, "first-class");
     const second = clauseFor(space, "second-class");
     const third = clauseFor(space, "third-class");
-    const db = labeledDb({
-      k1: { type: "string", sqlType: "text", ifc: { confidentiality: first } },
-      k2: { type: "string", sqlType: "text", ifc: { confidentiality: second } },
-      k3: { type: "string", sqlType: "text", ifc: { confidentiality: third } },
+    const column = (clause: unknown[]) => ({
+      type: "string",
+      sqlType: "text",
+      ifc: { confidentiality: clause },
     });
+    const db = labeledDb({
+      k1: column(first),
+      k2: column(second),
+      k3: column(third),
+    });
+    // Row 0's three key columns name the two-row container, the one-row
+    // container, and the two-row container again, so each step's row count
+    // says which parameter the query actually ran with.
     await seed(
       db,
       "INSERT INTO messages (container_id, body, k1, k2, k3) VALUES " +
-        "(?, ?, ?, ?, ?), (?, ?, ?, ?, ?)",
+        "(?, ?, ?, ?, ?), (?, ?, ?, ?, ?), (?, ?, ?, ?, ?)",
       [
         "c-alpha",
         "first",
         "c-alpha",
         "c-beta",
         "c-alpha",
-        "c-beta",
-        "only",
+        "c-alpha",
+        "second",
         "x",
         "y",
         "z",
+        "c-beta",
+        "only",
+        "p",
+        "q",
+        "r",
       ],
     );
 
     const { commonfabric: cf } = createTrustedBuilder(runtime);
-    const { lift } = cf as unknown as {
-      lift: (fn: (value: unknown) => unknown) => (value: unknown) => unknown;
-    };
-    // Reads ONE column, chosen by `pick`: the transaction's join carries that
-    // column's clause and no other, which is what makes the accumulation
-    // visible one clause at a time.
-    const parameterOf = lift((input: unknown) => {
+    // Reads ONE column, chosen by `pick`. A branch the lift does not take is
+    // a column it does not read, which is what keeps each issue's join down
+    // to the one clause this step is about.
+    const parameterOf = parameterLift((input) => {
       const { keys, pick } = input as {
         keys?: QueryState<Record<string, string>>;
         pick?: number;
       };
       const row = keys?.result?.[0];
-      const column = pick === 0 ? "k1" : pick === 1 ? "k2" : "k3";
-      return [String(row?.[column] ?? "")];
+      const name = pick === 0 ? "k1" : pick === 1 ? "k2" : "k3";
+      return String(row?.[name] ?? "");
     });
     const testPattern = cf.pattern<{ pick: number }>(({ pick }) => {
       const keys = cf.sqliteQuery.asScope("session")(
-        // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
-        { db, reactOn: db, sql: "SELECT k1, k2, k3 FROM messages ORDER BY id" } as any,
+        {
+          db,
+          reactOn: db,
+          sql: "SELECT k1, k2, k3 FROM messages ORDER BY id",
+          // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
+        } as any,
       );
       const bodies = cf.sqliteQuery.asScope("session")(
         {
@@ -389,46 +453,53 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     });
 
     const tx = runtime.edit();
+    const pick = runtime.getCell<number>(space, "ratchet-pick", {
+      type: "number",
+    }, tx);
+    pick.set(0);
     const resultCell = runtime.getCell(
       space,
       "ratchet",
       testPattern.resultSchema,
       tx,
     );
-    const result = runtime.run(tx, testPattern, { pick: 0 }, resultCell);
+    const result = runtime.run(
+      tx,
+      testPattern,
+      // deno-lint-ignore no-explicit-any -- a cell stands in for the argument
+      { pick: pick as any },
+      resultCell,
+    );
     runtime.prepareTxForCommit(tx);
     expect((await tx.commit()).error).toBeUndefined();
     // deno-lint-ignore no-explicit-any -- the builtin's state, as it writes it
     const bodies = result.key("bodies") as Cell<any>;
 
-    const rowsFor = async (expected: number) =>
-      await waitForCellValue<QueryState<BodyRow>>(
+    const rowsFor = (expected: number) =>
+      waitForCellValue<QueryState<BodyRow>>(
         runtime,
         bodies,
         (value) => (value?.result ?? []).length === expected,
       );
 
-    // k1 names the two-row container, k2 the one-row container, k3 the
-    // two-row one again — so each step's row count says which parameter the
-    // query actually ran with.
     await rowsFor(2);
-    expect(hasClause(declaredAt(bodies, ["pending"]), first)).toBe(true);
+    expect(hasClause(declaredAt(bodies, ["requestHash"]), first)).toBe(true);
 
     const pickSecond = runtime.edit();
-    result.getArgumentCell()!.withTx(pickSecond).key("pick").set(1);
+    pick.withTx(pickSecond).set(1);
     expect((await pickSecond.commit()).error).toBeUndefined();
     await rowsFor(1);
-    expect(hasClause(declaredAt(bodies, ["pending"]), first)).toBe(true);
-    expect(hasClause(declaredAt(bodies, ["pending"]), second)).toBe(true);
+    expect(hasClause(declaredAt(bodies, ["requestHash"]), first)).toBe(true);
+    expect(hasClause(declaredAt(bodies, ["requestHash"]), second)).toBe(true);
 
     const pickThird = runtime.edit();
-    result.getArgumentCell()!.withTx(pickThird).key("pick").set(2);
+    pick.withTx(pickThird).set(2);
     expect((await pickThird.commit()).error).toBeUndefined();
     await rowsFor(2);
-    const finalClauses = declaredAt(bodies, ["pending"]);
-    expect(hasClause(finalClauses, first)).toBe(true);
-    expect(hasClause(finalClauses, second)).toBe(true);
-    expect(hasClause(finalClauses, third)).toBe(true);
+    const held = declaredAt(bodies, ["requestHash"]);
+    expect(hasClause(held, first)).toBe(true);
+    expect(hasClause(held, second)).toBe(true);
+    expect(hasClause(held, third)).toBe(true);
   });
 
   describe("a database in another space", () => {
@@ -451,12 +522,9 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       expect((await handleTx.commit()).error).toBeUndefined();
 
       const { commonfabric: cf } = createTrustedBuilder(runtime);
-      const { lift } = cf as unknown as {
-        lift: (fn: (value: unknown) => unknown) => (value: unknown) => unknown;
-      };
-      const parameterOf = lift((keys: unknown) => [
-        String((keys as QueryState<KeyRow>)?.result?.[0]?.container_id ?? ""),
-      ]);
+      const parameterOf = parameterLift((keys) =>
+        String((keys as QueryState<KeyRow>)?.result?.[0]?.container_id ?? "")
+      );
       const testPattern = cf.pattern<{ db: unknown }>(({ db: handleInput }) => {
         const keys = cf.sqliteQuery(
           // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
@@ -464,7 +532,11 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
         );
         const bodies = cf.sqliteQuery(
           // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
-          { db: handleInput, sql: BODIES_SQL, params: parameterOf(keys) } as any,
+          {
+            db: handleInput,
+            sql: BODIES_SQL,
+            params: parameterOf(keys),
+          } as any,
         );
         return { keys, bodies };
       });
