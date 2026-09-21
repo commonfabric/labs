@@ -1849,6 +1849,14 @@ Deno.test("custom root genesis snapshots preserve typed Fabric links", async () 
     path: ["nested"],
   });
   try {
+    assertThrows(
+      () =>
+        manager.registerSpaceIdentity(spaceIdentity, {
+          genesisRoot: { source: "system:loom/main.tsx", cause: "root-link" },
+        }),
+      Error,
+      "genesisRoot requires an explicit genesisAcl",
+    );
     manager.registerSpaceIdentity(spaceIdentity, {
       genesisAcl: { [user.did()]: "OWNER" },
       genesisRoot: {

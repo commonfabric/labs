@@ -57,6 +57,11 @@ describe("storage space access loss", () => {
       manager.subscribeSpaceAccessLoss(() => {
         throw failure;
       });
+      manager.subscribeSpaceAccessChange(() => {
+        throw failure;
+      });
+      const changed: MemorySpace[] = [];
+      manager.subscribeSpaceAccessChange((target) => changed.push(target));
       const observed: { target: MemorySpace; error: Error }[] = [];
       manager.subscribeSpaceAccessLoss((target, error) =>
         observed.push({ target, error })
@@ -64,8 +69,10 @@ describe("storage space access loss", () => {
       expect(() => session.handleRevoked("unauthorized")).not.toThrow();
       expect(observed).toEqual([{ target: space, error: session.closeError }]);
       expect(manager.spaceAccessError(space)).toBe(session.closeError);
+      expect(changed).toEqual([space]);
       expect(reported.calls.map((call) => call.args)).toEqual([
         ["space-access-loss subscriber threw:", failure],
+        ["space-access-change subscriber threw:", failure],
       ]);
     } finally {
       reported.restore();

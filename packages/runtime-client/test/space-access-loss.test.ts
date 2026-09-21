@@ -9,6 +9,7 @@ import {
 } from "@commonfabric/data-model/codecs";
 import { type DID, Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { RuntimeClients } from "@/backends/client-registry.ts";
@@ -30,6 +31,7 @@ import {
   type SpaceAccessLostNotification,
 } from "@/protocol/mod.ts";
 import { RuntimeClient } from "@/runtime-client.ts";
+import { buildProcessor } from "./backends/build-processor.ts";
 import { stubWorkerBoot } from "./backends/stub-worker-boot.ts";
 
 class TestTransport extends EventEmitter<RuntimeTransportEvents>
@@ -137,6 +139,51 @@ describe("space access loss notification", () => {
       if (!losses.restored) losses.restore();
       Reflect.deleteProperty(storage, "subscribeSpaceAccessChange");
       Reflect.deleteProperty(storage, "subscribeSpaceAccessLoss");
+      await storage.close();
+    }
+  });
+
+  it("notifies the default owner from the processor factory and cancels on disposal", async () => {
+    const identity = await Identity.fromPassphrase(
+      "processor owner access loss",
+    );
+    const storage = StorageManager.emulate({ as: identity });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://fabric.example"),
+      storageManager: storage,
+    });
+    let loss: ((space: MemorySpace, error: Error) => void) | undefined;
+    let cancelled = false;
+    const subscribe = stub(storage, "subscribeSpaceAccessLoss", (observer) => {
+      loss = observer;
+      return () => {
+        cancelled = true;
+      };
+    });
+    const notices: IPCRemotePost[] = [];
+    const post = stub(ownerClient, "post", (notice) => {
+      notices.push(notice);
+      return true;
+    });
+    const processor = buildProcessor({
+      runtime,
+      identity,
+      space: identity.did(),
+    });
+    try {
+      expect(loss).toBeDefined();
+      loss!(identity.did(), new Error("private diagnostic"));
+      expect(notices).toEqual([{
+        type: NotificationType.SpaceAccessLost,
+        space: identity.did(),
+      }]);
+      expect(cancelled).toBe(false);
+      await processor.dispose();
+      expect(cancelled).toBe(true);
+    } finally {
+      await processor.dispose();
+      subscribe.restore();
+      post.restore();
       await storage.close();
     }
   });

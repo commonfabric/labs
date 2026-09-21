@@ -347,7 +347,12 @@ export default pattern(() => {
   });
 
   for (
-    const mode of ["terminal", "uncertain", "readback-unavailable"] as const
+    const mode of [
+      "terminal",
+      "terminal-with-late-notice",
+      "uncertain",
+      "readback-unavailable",
+    ] as const
   ) {
     it(`retains ${mode} registration evidence after an append response fails`, async () => {
       const root = ok(
@@ -378,7 +383,9 @@ export default pattern(() => {
         space as MemorySpace,
         entityIdFrom(root.pieceId),
       ));
+      const terminal = mode.startsWith("terminal");
       let retained: EntityDocument | null = null;
+      let delivery: Parameters<LifecycleDeps["append"]>[0] | undefined;
       const eventIds: string[] = [];
       let cancelled = 0;
       let reads = 0;
@@ -393,8 +400,9 @@ export default pattern(() => {
         },
         append: async (entry) => {
           eventIds.push(entry.eventId);
+          delivery = entry;
           await Promise.resolve();
-          retained = mode === "terminal"
+          retained = terminal
             ? {
               value: {
                 entries: [{
@@ -407,8 +415,17 @@ export default pattern(() => {
             : null;
           throw new Error("append acknowledgement lost");
         },
-        watchAdmittedCommits: () => () => {
+        watchAdmittedCommits: (watcher) => () => {
           cancelled++;
+          if (mode === "terminal-with-late-notice" && delivery) {
+            watcher({
+              space: delivery.targetSpace,
+              seq: 1,
+              class: "derived",
+              sessionId: "queued-before-disposal",
+              writes: [{ id: delivery.targetStream, scopeKey: "space" }],
+            });
+          }
         },
       };
       const request = {
@@ -420,19 +437,20 @@ export default pattern(() => {
       const first = ok(await processInstantiate(transport, bob.did(), request));
       expect(first.registration.status).toBe("failed");
       expect(first.registration.terminal).toBe(
-        mode === "terminal" ? true : undefined,
+        terminal ? true : undefined,
       );
       expect(first.registration.error).toContain(
-        mode === "terminal" ? "handler refused" : "acknowledgement lost",
+        terminal ? "handler refused" : "acknowledgement lost",
       );
       retained = null;
       const retry = ok(await processInstantiate(transport, bob.did(), request));
       expect(retry.pieceId).toBe(first.pieceId);
       expect(eventIds).toHaveLength(2);
-      if (mode === "terminal") expect(eventIds[1]).not.toBe(eventIds[0]);
+      if (terminal) expect(eventIds[1]).not.toBe(eventIds[0]);
       else expect(eventIds[1]).toBe(eventIds[0]);
       expect(cancelled).toBe(2);
       expect(reads).toBeGreaterThanOrEqual(4);
+      if (mode === "terminal-with-late-notice") expect(reads).toBe(4);
     });
   }
 

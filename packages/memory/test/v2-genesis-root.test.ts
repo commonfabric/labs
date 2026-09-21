@@ -24,23 +24,48 @@ describe("v2-genesis-root", () => {
       genesisRoot: root,
     };
     try {
+      expect(readGenesisRoot(engine)).toBeUndefined();
       Engine.applyCommit(engine, {
         sessionId: "bootstrap",
         space,
         principal: space,
         commit,
       });
+      engine.database.prepare(
+        'UPDATE "commit" SET original = ? WHERE seq = 1',
+      ).run("truncated durable receipt");
+      expect(() => readGenesisRoot(engine)).toThrow("Invalid genesis receipt");
       for (
-        const invalid of [null, {}, {
-          ...commit,
-          genesisRoot: {
-            source: "https://untrusted.example/main.tsx",
-            cause: "x",
+        const invalid of [
+          null,
+          {},
+          ...[
+            null,
+            [],
+            "root",
+            { ...root, cause: "" },
+            {
+              ...root,
+              cause: "x".repeat(513),
+            },
+            { ...root, source: "system:loom/data.json" },
+            {
+              ...root,
+              sourceRoots: [false],
+            },
+          ].map((genesisRoot) => ({ ...commit, genesisRoot })),
+          {
+            ...commit,
+            genesisRoot: {
+              source: "https://untrusted.example/main.tsx",
+              cause: "x",
+            },
           },
-        }, {
-          ...commit,
-          genesisRoot: { ...root, sourceRoots: ["system:../outside.tsx"] },
-        }]
+          {
+            ...commit,
+            genesisRoot: { ...root, sourceRoots: ["system:../outside.tsx"] },
+          },
+        ]
       ) {
         engine.database.prepare(
           'UPDATE "commit" SET original = ? WHERE seq = 1',

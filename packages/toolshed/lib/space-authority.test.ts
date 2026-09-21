@@ -295,6 +295,28 @@ describe("authorizeSpaceOwner against real ACL enforcement", () => {
     expect(reads).toBe(0);
   });
 
+  it("refuses absent and malformed hosted ACLs without exposing their contents", async () => {
+    for (
+      const value of [undefined, null, "private malformed ACL", {
+        [alice.did()]: "WRITE",
+      }, { [alice.did()]: "SUPERUSER" }]
+    ) {
+      const result = await authorizeSpaceWriter(
+        {
+          ...deps(),
+          readAcl: () => Promise.resolve(value),
+        },
+        space,
+        alice.did(),
+      );
+      expect(result).toMatchObject({
+        ok: false,
+        kind: "not-owner",
+        message: NOT_WRITER_MESSAGE,
+      });
+    }
+  });
+
   it("admits every caller as a writer where the deployment enforces no ACL", async () => {
     const admitted = await authorizeSpaceWriter(
       { ...deps(), aclMode: "off" },
