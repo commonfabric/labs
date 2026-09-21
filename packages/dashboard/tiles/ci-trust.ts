@@ -2,11 +2,13 @@
  * Reports the share of recent completed runs that passed on the first attempt,
  * which is the dashboard's signal for flakiness, with a history strip carrying
  * the newest runs in the trust window. An attempt cancelled before it started a
- * job, as a queued run is when a newer push replaces it, is not a try: a run's
- * first other attempt decides it, and a run with no other attempt is left out
- * of the share. A cancelled attempt that ran jobs timed out or was stopped, and
- * is a failed try. One factory builds both the labs and loom instances against
- * their own repository and workflow.
+ * job, as a queued run is when a newer push replaces it, is not a try and is
+ * passed over. A run passes on the first try when exactly one try is left and
+ * it succeeded. A try that did not succeed, a cancelled attempt that ran jobs
+ * among them, makes the run a failure, and so does a second try whatever its
+ * result, since the run needed a rerun. A run with no try left is left out of
+ * the share. One factory builds both the labs and loom instances against their
+ * own repository and workflow.
  */
 
 import {
@@ -23,12 +25,13 @@ import { CI_WORKFLOW, LOOM_CI_WORKFLOW, LOOM_REPO, REPO, TRUST_GOOD, TRUST_RUNS_
 type TrustOutcome = "green" | "red" | "run" | "gray";
 
 /**
- * Scores `run` by its first attempt that was not cancelled before it started a
- * job: green when that attempt succeeded, and red otherwise, a cancelled
- * attempt that ran jobs included. A run that is unfinished, or whose every
- * attempt was cancelled before it started a job, is left out of the share.
- * Rejects when an earlier attempt, or a cancelled attempt's job count, cannot
- * be read from GitHub.
+ * Scores `run` by the attempts left once every attempt cancelled before it
+ * started a job is passed over: green when exactly one is left and it
+ * succeeded, gray when none is, and red otherwise, so a rerun makes a run red
+ * whatever its result. An unfinished run is left out of the share too. Reads
+ * attempts in order and stops once the outcome is decided. Rejects when an
+ * earlier attempt, or a cancelled attempt's job count, cannot be read from
+ * GitHub.
  */
 async function trustOutcome(
   run: Run,
@@ -36,13 +39,14 @@ async function trustOutcome(
 ): Promise<TrustOutcome> {
   if (run.status === "in_progress") return "run";
   if (run.status !== "completed" || !run.conclusion) return "gray";
+  let passed = false;
   for (let attempt = 1; attempt <= run.run_attempt; attempt++) {
     const tried = await attempts.get(run, attempt);
-    if (!(await attempts.cancelledBeforeAnyJob(tried))) {
-      return tried.conclusion === "success" ? "green" : "red";
-    }
+    if (await attempts.cancelledBeforeAnyJob(tried)) continue;
+    if (passed || tried.conclusion !== "success") return "red";
+    passed = true;
   }
-  return "gray";
+  return passed ? "green" : "gray";
 }
 
 function makeCiTrust(opts: { id: string; label: string; repo: string; workflow: string }): Tile {

@@ -204,14 +204,20 @@ Deno.test("labs and loom ci trust: a cancelled run that ran jobs counts as a fai
   }
 });
 
-Deno.test("labs ci trust: a rerun is scored by its first attempt not cancelled before it started", async () => {
+Deno.test("labs ci trust: a run is green only when its one attempt not cancelled before starting succeeded", async () => {
   const afterUnstartedGreen = run({ conclusion: "success", run_attempt: 2 });
   const afterUnstartedRed = run({ conclusion: "failure", run_attempt: 2 });
   const redAfterUnstarted = run({ conclusion: "success", run_attempt: 3 });
   const rerunOfGreen = run({ conclusion: "success", run_attempt: 2 });
   const neverStarted = run({ conclusion: "cancelled", run_attempt: 2 });
   const cancelledRetry = run({ conclusion: "cancelled", run_attempt: 2 });
-  const greenAfterTimeout = run({ conclusion: "success", run_attempt: 2 });
+  const successAfterTimeout = run({ conclusion: "success", run_attempt: 2 });
+  const failedRerunOfGreen = run({ conclusion: "failure", run_attempt: 2 });
+  const timedOutRerunOfGreen = run({ conclusion: "cancelled", run_attempt: 2 });
+  const unstartedRerunOfGreen = run({
+    conclusion: "cancelled",
+    run_attempt: 2,
+  });
   const earlier = [
     attemptOf(afterUnstartedGreen, 1, "cancelled"),
     attemptOf(afterUnstartedRed, 1, "cancelled"),
@@ -220,7 +226,10 @@ Deno.test("labs ci trust: a rerun is scored by its first attempt not cancelled b
     attemptOf(rerunOfGreen, 1, "success"),
     attemptOf(neverStarted, 1, "cancelled"),
     attemptOf(cancelledRetry, 1, "failure"),
-    attemptOf(greenAfterTimeout, 1, "cancelled"),
+    attemptOf(successAfterTimeout, 1, "cancelled"),
+    attemptOf(failedRerunOfGreen, 1, "success"),
+    attemptOf(timedOutRerunOfGreen, 1, "success"),
+    attemptOf(unstartedRerunOfGreen, 1, "success"),
   ];
   const unstarted = [
     attemptOf(afterUnstartedGreen, 1, "cancelled"),
@@ -228,8 +237,12 @@ Deno.test("labs ci trust: a rerun is scored by its first attempt not cancelled b
     attemptOf(redAfterUnstarted, 1, "cancelled"),
     attemptOf(neverStarted, 1, "cancelled"),
     neverStarted,
+    unstartedRerunOfGreen,
   ];
-  const timedOut = attemptOf(greenAfterTimeout, 1, "cancelled");
+  const ranJobs = [
+    attemptOf(successAfterTimeout, 1, "cancelled"),
+    timedOutRerunOfGreen,
+  ];
 
   await withGithubAttempt(
     byUrl([
@@ -237,7 +250,9 @@ Deno.test("labs ci trust: a rerun is scored by its first attempt not cancelled b
       ...unstarted.map((attempt) =>
         [jobsUrl(attempt), { total_count: 0 }] as const
       ),
-      [jobsUrl(timedOut), { total_count: 38 }],
+      ...ranJobs.map((attempt) =>
+        [jobsUrl(attempt), { total_count: 38 }] as const
+      ),
     ]),
     async (urls) => {
       const v = await labsCiTrust.collect(ctx([
@@ -247,27 +262,35 @@ Deno.test("labs ci trust: a rerun is scored by its first attempt not cancelled b
         rerunOfGreen,
         neverStarted,
         cancelledRetry,
-        greenAfterTimeout,
+        successAfterTimeout,
+        failedRerunOfGreen,
+        timedOutRerunOfGreen,
+        unstartedRerunOfGreen,
       ]));
-      // Green: the first and fourth. Red: the second, third, sixth, and last,
-      // whose first attempt ran jobs before it was cancelled. The fifth was
-      // cancelled before starting a job on every attempt and is left out.
+      // Green: the first and last, each left with one successful attempt once
+      // the attempt cancelled before starting is passed over. The fifth was
+      // cancelled before starting on every attempt and is left out. Every other
+      // run is red: it failed, or ran jobs before it was cancelled, or needed a
+      // rerun of an attempt that was left.
       assertEquals(cellColors(v.extra), [
         "var(--status-good)",
         "var(--status-bad)",
         "var(--status-bad)",
-        "var(--status-good)",
+        "var(--status-bad)",
         "var(--status-unknown)",
         "var(--status-bad)",
         "var(--status-bad)",
+        "var(--status-bad)",
+        "var(--status-bad)",
+        "var(--status-good)",
       ]);
-      assertEquals(v.value, "33.3%");
-      assertEquals(v.sub, "first-try green · 6 of last 7 runs");
+      assertEquals(v.value, "22.2%");
+      assertEquals(v.sub, "first-try green · 9 of last 10 runs");
       assertEquals(
         urls.toSorted(),
         [
           ...earlier.map((attempt) => attemptUrl(attempt)),
-          ...[...unstarted, timedOut].map((attempt) => jobsUrl(attempt)),
+          ...[...unstarted, ...ranJobs].map((attempt) => jobsUrl(attempt)),
         ].toSorted(),
       );
     },
@@ -312,6 +335,17 @@ Deno.test("labs ci trust: the job count of a cancelled attempt is requested once
       assertEquals(urls.toSorted(), jobs.toSorted());
     },
   );
+});
+
+Deno.test("labs ci trust: a job count is forgotten once its run leaves the window", async () => {
+  const cancelled = run({ conclusion: "cancelled" });
+  const other = run({ conclusion: "success" });
+  await withGithubAttempt({ total_count: 0 }, async (urls) => {
+    await labsCiTrust.collect(ctx([cancelled]));
+    await labsCiTrust.collect(ctx([other]));
+    await labsCiTrust.collect(ctx([cancelled]));
+    assertEquals(urls, [jobsUrl(cancelled), jobsUrl(cancelled)]);
+  });
 });
 
 Deno.test("labs ci trust: an earlier attempt GitHub does not return fails the collection", async () => {

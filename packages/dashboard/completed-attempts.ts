@@ -7,21 +7,22 @@ interface HeldRun {
   /** The run's completed attempts, by attempt number. */
   readonly attempts: Map<number, Run>;
 
-  /** Whether each cancelled attempt started a job, by attempt number. */
+  /** Whether each cancelled attempt listed any job, by attempt number. */
   readonly startedJobs: Map<number, boolean>;
 }
 
 /**
  * The completed attempts of one repository's workflow runs, and whether each
- * cancelled one started a job. GitHub's run listing carries only each run's
+ * cancelled one listed any job. GitHub's run listing carries only each run's
  * latest attempt, so an earlier attempt takes a request of its own. GitHub
- * reports three events as `cancelled`: a newer push replacing a run while it
- * is still queued, a job running past its `timeout-minutes`, and someone
- * stopping a run while it runs. The first never starts a job and the other two
- * do, and an attempt does not carry its job count, so that takes a request of
- * its own too. A completed attempt and its job count never change, so each
- * is requested once and held for as long as its run stays among the runs
- * observed.
+ * reports several events as `cancelled`, among them a newer push replacing a
+ * run while it is still queued, a job running past its `timeout-minutes`, and
+ * someone stopping a run while it runs. Of those, only the first says nothing
+ * about the commit, and an empty job listing is what marks it: the other two
+ * ran jobs, though a listing can also hold jobs no runner started. An attempt
+ * does not carry its job count, so that takes a request of its own too. A
+ * completed attempt and its job count never change, so each is requested once
+ * and held for as long as its run stays among the runs observed.
  */
 export class CompletedAttempts {
   #repo: string;
@@ -75,8 +76,8 @@ export class CompletedAttempts {
   }
 
   /**
-   * Returns whether `attempt`, a completed attempt, was cancelled before it
-   * started a job, as a run is when a newer push replaces it while it is still
+   * Returns whether `attempt`, a completed attempt, was cancelled with an empty
+   * job listing, as a run is when a newer push replaces it while it is still
    * queued. A cancelled attempt takes a request for its job count unless that
    * count is already held; any other conclusion returns `false` without one.
    * Rejects when the request fails, or when GitHub returns no numeric
