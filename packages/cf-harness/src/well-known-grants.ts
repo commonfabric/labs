@@ -16,10 +16,12 @@
  *
  * Connection identities and CFC classes come from the operator's Loom
  * records. Each is validated before interpolation into model-facing text.
- * The name selects a store; its class describes the data that store holds.
+ * The name selects a store; its classes describe the data that store holds.
  */
 
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
+import { isObjectNotArray } from "@commonfabric/utils/types";
+
 import type { HarnessFabricSession } from "./fabric-session.ts";
 import { createHarnessHandleTable, mintAddressHandle } from "./handle-table.ts";
 import { HANDLE_NAME_PATTERN } from "./input-cells.ts";
@@ -51,6 +53,18 @@ const GRANT_DESCRIPTIONS: Record<HarnessWellKnownGrantName, string> = {
 const CONNECTION_NAME_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]*$/;
 const COMPANION_KEY_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
+const isDescriptionText = (value: unknown): value is string =>
+  typeof value === "string" && value.trim() !== "";
+
+/** Whether a receipt observation is an ISO8601 timestamp with an explicit zone. */
+export const isConnectorObservationTimestamp = (
+  value: unknown,
+): value is string =>
+  typeof value === "string" &&
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/
+    .test(value) &&
+  Number.isFinite(Date.parse(value));
+
 /** The Loom store identity, independent of which piece exposes it. */
 export const connectorGrantName = (
   source: HarnessConnectorGrantSource,
@@ -59,24 +73,89 @@ export const connectorGrantName = (
     ? source.connection
     : `${source.connection}#${source.companionKey}`;
 
-/** Human-readable connection and class, shared by prompts and launch reports. */
+/** Reads class metadata, including the singular and class-named record forms. */
+const connectorGrantClasses = (grant: HarnessConnectorGrantSpec): string[] =>
+  grant.cfcClasses !== undefined
+    ? grant.cfcClasses
+    : [grant.cfcClass !== undefined ? grant.cfcClass : grant.name];
+
+/** Human-readable connection and classes, shared by prompts and launch reports. */
 export const connectorGrantLabel = (grant: HarnessConnectorGrantSpec): string =>
   `${grant.source.connection}${
     grant.source.companionKey === undefined
       ? ""
       : ` / ${grant.source.companionKey}`
-  } (${grant.cfcClass ?? grant.name})`;
+  } (${connectorGrantClasses(grant).join(", ")})`;
+
+/** Describes the receipt's account state, quoting provider text as data. */
+const connectorViewerDescription = (
+  viewer: HarnessConnectorGrantSpec["viewer"],
+): string => {
+  if (viewer === undefined) {
+    return "not recorded in the injection receipt";
+  }
+  if (viewer.identity === "none") {
+    return `no account (${JSON.stringify(viewer.reason)})`;
+  }
+  if (viewer.identity === "conflicting") {
+    return "conflicting injection receipts";
+  }
+  if (viewer.identity === "unknown") {
+    return viewer.reason === undefined
+      ? "unknown"
+      : `unknown (${JSON.stringify(viewer.reason)})`;
+  }
+  const identity = viewer.sourceId ?? viewer.email ?? viewer.label;
+  const parts = [
+    identity === undefined
+      ? `account (${
+        viewer.reason === undefined
+          ? "provider identity not reported"
+          : JSON.stringify(viewer.reason)
+      })`
+      : JSON.stringify(identity),
+  ];
+  if (viewer.email === null) {
+    parts.push("no email address");
+  } else if (viewer.email !== undefined && viewer.email !== identity) {
+    parts.push(`email ${JSON.stringify(viewer.email)}`);
+  }
+  if (viewer.label !== undefined && viewer.label !== identity) {
+    parts.push(`label ${JSON.stringify(viewer.label)}`);
+  }
+  return parts.join("; ");
+};
+
+/** Describes observation time without substituting receipt or content time. */
+const connectorObservationDescription = (
+  observation: HarnessConnectorGrantSpec["observation"],
+): string => {
+  if (observation === undefined) {
+    return "unknown (not reported by the injection receipt)";
+  }
+  if (observation.newestAt !== null) {
+    return new Date(observation.newestAt).toISOString();
+  }
+  return observation.reason === "no-rows"
+    ? "none (empty store)"
+    : `unknown (${JSON.stringify(observation.reason)})`;
+};
 
 /**
- * Model-facing description of one connector grant. Harness-authored except
- * for the validated connection identity and declared class.
+ * Describes a connector using validated identity, classes, and receipt metadata.
  */
 const connectorGrantDescription = (grant: HarnessConnectorGrantSpec): string =>
   `${
     connectorGrantLabel(grant)
   }: a read-only connector database whose columns carry \`${
-    grant.cfcClass ?? grant.name
-  }\` CFC labels. Wire it into run_pattern \`inputs\` and read it with \`db.query\`; use describe_handle first to see its tables and how full each column is, because a column that is empty for every row is a filter that returns nothing. Refer to the connection by its human name when speaking to the user, never by a handle token.`;
+    connectorGrantClasses(grant).join("`, `")
+  }\` CFC labels. Account identity: ${
+    connectorViewerDescription(grant.viewer)
+  }. Physical rows at injection: ${
+    grant.rowCount ?? "unknown"
+  } (including metadata and history). Newest observed at: ${
+    connectorObservationDescription(grant.observation)
+  } (when Loom observed a record, not its content time). Wire it into run_pattern \`inputs\` and read it with \`db.query\`; use describe_handle first to see its tables and how full each column is, because a column that is empty for every row is a filter that returns nothing. Refer to the connection by its human name when speaking to the user, never by a handle token.`;
 
 /**
  * Holds one connector grant to the rule its handle is minted under: a name
@@ -111,15 +190,24 @@ export const checkConnectorGrantSpec = (
       `connector companion key must match ${COMPANION_KEY_PATTERN}`,
     );
   }
-  if (spec.cfcClass === undefined && !HANDLE_NAME_PATTERN.test(spec.name)) {
+  if (
+    spec.cfcClasses === undefined && spec.cfcClass === undefined &&
+    !HANDLE_NAME_PATTERN.test(spec.name)
+  ) {
     throw new Error(
       `connector grant name must match ${HANDLE_NAME_PATTERN}, got \`${spec.name}\``,
     );
   }
-  if (spec.cfcClass !== undefined) {
+  if (spec.cfcClasses !== undefined && spec.cfcClass !== undefined) {
+    throw new Error("connector grant must carry only one class metadata field");
+  }
+  if (spec.cfcClasses !== undefined || spec.cfcClass !== undefined) {
+    const classes = connectorGrantClasses(spec);
     if (
-      typeof spec.cfcClass !== "string" ||
-      !HANDLE_NAME_PATTERN.test(spec.cfcClass)
+      !Array.isArray(classes) || classes.length === 0 ||
+      classes.some((value) =>
+        typeof value !== "string" || !HANDLE_NAME_PATTERN.test(value)
+      )
     ) {
       throw new Error(`connector CFC class must match ${HANDLE_NAME_PATTERN}`);
     }
@@ -128,6 +216,44 @@ export const checkConnectorGrantSpec = (
         "connector grant name must match its connection and companion key",
       );
     }
+  }
+  if (
+    spec.rowCount !== undefined &&
+    (!Number.isSafeInteger(spec.rowCount) || spec.rowCount < 0)
+  ) {
+    throw new Error("connector row count must be a nonnegative safe integer");
+  }
+  const viewer = spec.viewer;
+  if (
+    viewer !== undefined &&
+    (!isObjectNotArray(viewer) ||
+      (viewer.identity !== "account" && viewer.identity !== "none" &&
+        viewer.identity !== "unknown" && viewer.identity !== "conflicting") ||
+      (viewer.identity === "conflicting" && viewer.reason !== undefined) ||
+      (viewer.reason !== undefined && !isDescriptionText(viewer.reason)) ||
+      (viewer.identity === "account"
+        ? (viewer.sourceId !== undefined &&
+          !isDescriptionText(viewer.sourceId)) ||
+          (viewer.email != null && !isDescriptionText(viewer.email)) ||
+          (viewer.label !== undefined && !isDescriptionText(viewer.label))
+        : viewer.identity === "none" && !isDescriptionText(viewer.reason)))
+  ) {
+    throw new Error(
+      "connector viewer must record account, none, unknown, or conflicting with nonempty string metadata",
+    );
+  }
+  const observation = spec.observation;
+  if (
+    observation !== undefined &&
+    (!isObjectNotArray(observation) ||
+      (observation.newestAt === null
+        ? !isDescriptionText(observation.reason)
+        : !isConnectorObservationTimestamp(observation.newestAt) ||
+          observation.reason !== undefined))
+  ) {
+    throw new Error(
+      "connector observation must name a timestamp or explain its absence",
+    );
   }
   if (spec.ref.trim() === "") {
     throw new Error(`connector grant \`${spec.name}\` names no reference`);
@@ -235,7 +361,15 @@ export const mintWellKnownGrants = async (
         ? { name: grant.name, token: minted.token, ref: entry.ref }
         : {
           name: grant.name,
+          ...(grant.cfcClasses === undefined
+            ? {}
+            : { cfcClasses: grant.cfcClasses }),
           ...(grant.cfcClass === undefined ? {} : { cfcClass: grant.cfcClass }),
+          ...(grant.rowCount === undefined ? {} : { rowCount: grant.rowCount }),
+          ...(grant.viewer === undefined ? {} : { viewer: grant.viewer }),
+          ...(grant.observation === undefined
+            ? {}
+            : { observation: grant.observation }),
           token: minted.token,
           ref: entry.ref,
           source: grant.source,
