@@ -209,6 +209,27 @@ describe("captured-cell-value-schema", () => {
       });
     });
 
+    it("emits only the labels of a nongeneric alias whose payload substitution does not reach", async () => {
+      // `Contact` names no parameter, but the lowering's expansion reaches
+      // `Secret`'s `T` through an indexed access it does not substitute.
+      const output = await transformFiles({
+        "/test.tsx":
+          `import { computed, Confidential, pattern, Writable } from "commonfabric";
+          type Secret<T extends { name: string }> =
+            Confidential<{ name: T["name"] }, readonly ["owner"]>;
+          export type Contact = Secret<{ name: "Ada" }>;
+          ${READ_CONTACT}`,
+      }, { types: COMMONFABRIC_TYPES });
+      const input = callSchemas(parseModule(output["/test.tsx"]!), "lift")[0]!;
+
+      expect((input.properties as Record<string, unknown>).contact).toEqual(
+        stored,
+      );
+      expect(input.$defs).toEqual({
+        Contact: { ifc: { confidentiality: ["owner"] } },
+      });
+    });
+
     it("emits the labels of an alias the CFC lowering fills from the argument", async () => {
       const schema = await capturedContactSchema({
         "/test.tsx":

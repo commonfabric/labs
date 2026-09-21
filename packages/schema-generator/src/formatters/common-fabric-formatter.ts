@@ -50,6 +50,11 @@ type ResolvedCfcAlias = {
   readonly aliasName: string;
   readonly aliasArgs: readonly ts.Type[];
   readonly aliasArgNodes?: readonly ts.TypeNode[];
+  /**
+   * The parameters, along the chain to `aliasName`, that an argument node was
+   * substituted for.
+   */
+  readonly substituted?: readonly ts.TypeParameterDeclaration[];
 };
 
 type ResolvedScopeWrapper = {
@@ -222,16 +227,23 @@ const substituteTypeNode = (
   return typeNode;
 };
 
-/** Whether `node` holds a reference the checker binds to a type parameter. */
+/**
+ * Whether `node` holds a reference the checker binds to a type parameter, or,
+ * given `parameters`, to one of those.
+ */
 const holdsTypeParameter = (
   node: ts.Node,
   checker: ts.TypeChecker,
+  parameters?: readonly ts.TypeParameterDeclaration[],
 ): boolean =>
   (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) &&
-    ((checker.getSymbolAtLocation(node.typeName)?.flags ?? 0) &
-        ts.SymbolFlags.TypeParameter) !== 0) ||
+    (checker.getSymbolAtLocation(node.typeName)?.declarations?.some(
+      (declaration) =>
+        ts.isTypeParameterDeclaration(declaration) &&
+        (parameters === undefined || parameters.includes(declaration)),
+    ) ?? false)) ||
   (ts.forEachChild(node, (child) =>
-    holdsTypeParameter(child, checker) || undefined) ?? false);
+    holdsTypeParameter(child, checker, parameters) || undefined) ?? false);
 
 /**
  * Whether the CFC lowering, handed `args` for `declaration`'s parameters,
@@ -1317,7 +1329,20 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     const baseTypeNode = resolved.aliasArgNodes?.[0];
-    const baseSchema = baseTypeNode
+    // A payload still referring to a parameter substitution had an argument
+    // for, but did not reach, would be read with that parameter unbound, so
+    // it is a guess.
+    const unsubstituted = baseTypeNode !== undefined &&
+      resolved.substituted !== undefined &&
+      holdsTypeParameter(
+        baseTypeNode,
+        context.typeChecker,
+        resolved.substituted,
+      );
+    if (unsubstituted) context.uninterpretedTypeNodes?.push(baseTypeNode);
+    const baseSchema = unsubstituted
+      ? true
+      : baseTypeNode
       ? this.#formatCfcAliasTypeNode(baseTypeNode, context) ??
         this.#schemaGenerator.formatChildType(baseType, context, baseTypeNode)
       : this.#schemaGenerator.formatChildType(baseType, context, undefined);
@@ -1413,6 +1438,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     aliasArgNodes: readonly ts.TypeNode[] | undefined,
     context: GenerationContext,
     visited: Set<string>,
+    substituted: readonly ts.TypeParameterDeclaration[] = [],
   ): ResolvedCfcAlias | undefined {
     const aliasName = aliasDeclaration.name.text;
     if (CFC_ALIAS_NAMES.has(aliasName)) {
@@ -1420,6 +1446,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         aliasName,
         aliasArgs,
         ...(aliasArgNodes ? { aliasArgNodes } : {}),
+        ...(substituted.length > 0 ? { substituted } : {}),
       };
     }
 
@@ -1445,15 +1472,18 @@ export class CommonFabricFormatter implements TypeFormatter {
 
     const paramMap = new Map<string, ts.Type>();
     const paramNodeMap = new Map<string, ts.TypeNode>();
+    const substitutedHere: ts.TypeParameterDeclaration[] = [];
     for (let i = 0; i < (aliasDeclaration.typeParameters?.length ?? 0); i++) {
-      const paramName = aliasDeclaration.typeParameters?.[i]?.name.text;
+      const parameter = aliasDeclaration.typeParameters?.[i];
+      const paramName = parameter?.name.text;
       const actualArg = aliasArgs[i];
       if (paramName && actualArg) {
         paramMap.set(paramName, actualArg);
       }
       const actualArgNode = aliasArgNodes?.[i];
-      if (paramName && actualArgNode) {
+      if (parameter && paramName && actualArgNode) {
         paramNodeMap.set(paramName, actualArgNode);
+        substitutedHere.push(parameter);
       }
     }
 
@@ -1474,6 +1504,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       resolvedArgNodes,
       context,
       visited,
+      [...substituted, ...substitutedHere],
     );
   }
 

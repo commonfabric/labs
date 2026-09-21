@@ -3010,6 +3010,46 @@ type CalculatorRequest = {
           });
         }
 
+        it("reads a parameter under a rest element in the payload from the argument", async () => {
+          const schema = await generate(
+            {
+              "/main.ts": CFC +
+                "export type Secret<T extends unknown[] = number[]> =\n" +
+                '  Confidential<{ name: [...T] }, readonly ["owner"]>;',
+            },
+            generic(
+              "Secret",
+              f.createArrayTypeNode(keyword(ts.SyntaxKind.StringKeyword)),
+            ),
+          );
+
+          expect(schema).toEqual({
+            type: "object",
+            properties: { name: { type: "array", items: { type: "string" } } },
+            required: ["name"],
+            ifc: { confidentiality: ["owner"] },
+          });
+        });
+
+        it("reads a nongeneric alias whose payload substitution does not reach as its labels alone", async () => {
+          // `Contact` itself is read; the lowering leaves the payload, which
+          // still names `T`, as a guess.
+          const schema = await generate(
+            {
+              "/main.ts": CFC +
+                "type Secret<T extends { name: string }> =\n" +
+                '  Confidential<{ name: T["name"] }, readonly ["owner"]>;\n' +
+                'export type Contact = Secret<{ name: "Ada" }>;',
+            },
+            reference("Contact"),
+          );
+
+          expect(schema).toEqual({
+            $ref: "#/$defs/Contact",
+            $defs: { Contact: { ifc: { confidentiality: ["owner"] } } },
+          });
+        });
+
         it("returns `true` for a payload holding a parameter where substitution does not reach", async () => {
           // Substitution does not open an indexed access, so `T` would stay
           // unbound in the payload.
