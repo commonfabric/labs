@@ -124,7 +124,8 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
   #visitValue(
     value: FabricValuePlus<PlusType>,
   ): BaselineVisitResult<ResultType> {
-    const result = this.#visitResolvingSubtype(value);
+    const tag = this.#tagOfValueElseNull(value);
+    const result = this.#visitResolvingSubtype(value, tag);
 
     switch (result?.type) {
       case "mainResult":
@@ -185,6 +186,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   #visitResolvingSubtype(
     value: FabricValuePlus<PlusType>,
+    tag: FabricValuePlusTag | null,
   ):
     | RecurseOfForm<PlusType>
     | Exclude<
@@ -194,7 +196,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
     const vis = this.#visitor;
 
     for (;;) {
-      const resolvedResult = this.#visitResolvingCyclesAndReplacement(value);
+      const resolvedResult = this.#visitResolvingCyclesAndReplacement(value, tag);
 
       switch (resolvedResult?.type) {
         case "visitSubtype": {
@@ -205,6 +207,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
         case "visitSubtypeOf": {
           // Need dispatch. `value` _has_ been replaced.
           value = resolvedResult.value;
+          tag = this.#tagOfValueElseNull(value);
           break;
         }
 
@@ -214,7 +217,6 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
         }
       }
 
-      const tag = this.#tagOfValueElseNull(value);
       let result: DispatchingVisitorResult<PlusType, ResultType>;
 
       switch (tag) {
@@ -288,6 +290,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   #visitResolvingCyclesAndReplacement(
     value: FabricValuePlus<PlusType>,
+    tag: FabricValuePlusTag | null,
   ):
     | RecurseOfForm<PlusType>
     | VisitSubtypeOfForm<PlusType>
@@ -299,7 +302,6 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
     const origValue = value;
 
     for (;;) {
-      const tag = this.#tagOfValueElseNull(value);
       let result;
 
       if (isFabricContainerValueTag(tag)) {
@@ -323,6 +325,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
 
         case "replace": {
           value = result.value;
+          tag = this.#tagOfValueElseNull(value);
           break;
         }
 
@@ -520,7 +523,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
   #adjustRecurseForm(
     result: RecurseForm,
     finalValue: FabricValuePlus<PlusType>,
-    finalValueTag: FabricValuePlusTag,
+    finalValueTag: FabricValuePlusTag | null,
   ): RecurseOfForm<PlusType> {
     switch (finalValueTag) {
       case VALUE_TAGS.Array:
