@@ -1,16 +1,22 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { preparedDigestFor } from "../src/cfc/mod.ts";
-import { deriveFlowJoin } from "../src/cfc/prepare.ts";
+import { collectConsumedLabel, deriveFlowJoin } from "../src/cfc/prepare.ts";
 import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../src/cfc/sink-request.ts";
+import {
+  type CfcTxState,
+  runtimeWritePolicyAuthorization,
+} from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { TransactionWrapper } from "../src/storage/extended-storage-transaction.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -39,18 +45,26 @@ const RESULT_SCHEMA = {
   ifc: { maxConfidentiality: [SECRET] },
 } as const satisfies JSONSchema;
 
+const PUBLIC_RESULT_SCHEMA = {
+  type: "string",
+  ifc: { maxConfidentiality: [] },
+} as const satisfies JSONSchema;
+
 const withRuntime = async (
   fn: (
     runtime: Runtime,
     storageManager: ReturnType<typeof StorageManager.emulate>,
   ) => void | Promise<void>,
-  options: { cfcWriteFloor?: "off" | "observe" | "enforce" } = {},
+  options: {
+    cfcWriteFloor?: "off" | "observe" | "enforce";
+    cfcEnforcementMode?: "disabled" | "enforce-explicit";
+  } = {},
 ): Promise<void> => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL("https://example.com"),
     storageManager,
-    cfcEnforcementMode: "enforce-explicit",
+    cfcEnforcementMode: options.cfcEnforcementMode ?? "enforce-explicit",
     cfcFlowLabels: "persist",
     cfcWriteFloor: options.cfcWriteFloor,
     cfcSinkMaxConfidentiality: { fetchJson: [] },
@@ -73,7 +87,155 @@ const identifyProducer = (
   });
 };
 
+type ObservationProbePhase = "initial" | "traversal";
+
+/** Replaces the next observation probe's state view at one preparation phase. */
+const interceptObservationProbeState = (
+  runtime: Runtime,
+  transform: (
+    phase: ObservationProbePhase,
+    state: Readonly<CfcTxState>,
+  ) => Readonly<CfcTxState>,
+): void => {
+  const edit = runtime.edit.bind(runtime);
+  runtime.edit = ((...args: Parameters<Runtime["edit"]>) => {
+    runtime.edit = edit as Runtime["edit"];
+    const tx = edit(...args);
+    let phase: ObservationProbePhase | undefined;
+    return new Proxy(tx, {
+      get(target, property) {
+        if (property === "prepareForCommit") {
+          return () => {
+            target.prepareForCommit();
+            phase = "initial";
+          };
+        }
+        if (property === "prepareCfc") {
+          return () => {
+            const digest = target.prepareCfc();
+            phase = "traversal";
+            return digest;
+          };
+        }
+        if (property === "getCfcState") {
+          return () => {
+            const state = target.getCfcState();
+            return phase === undefined ? state : transform(phase, state);
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+  }) as Runtime["edit"];
+};
+
 describe("external content observation", () => {
+  it("forwards only authorized observations through transaction wrappers", async () => {
+    await withRuntime(async (runtime) => {
+      const tx = runtime.edit();
+      const wrapped = new TransactionWrapper(tx);
+      const source = {
+        space,
+        id: "of:external-wrapper-source" as const,
+        scope: "space" as const,
+        path: [],
+      };
+      const observation = {
+        source,
+        flow: { confidentiality: [], integrity: [] },
+        consumed: { confidentiality: [], integrity: [] },
+        labeledSpaces: [],
+        sources: [],
+      };
+
+      wrapped.recordCfcExternalContentObservation(observation);
+      expect(tx.getCfcState().externalContentObservations).toEqual([]);
+      wrapped.recordCfcExternalContentObservation(
+        observation,
+        runtimeWritePolicyAuthorization,
+      );
+      expect(tx.getCfcState().externalContentObservations).toEqual([
+        observation,
+      ]);
+      expect(collectConsumedLabel(wrapped).confidentiality).toEqual([]);
+
+      const result = runtime.getCell(space, "external-wrapper-result", {
+        type: "object",
+        properties: { summary: { type: "string" } },
+        required: ["summary"],
+        ifc: { maxConfidentiality: [] },
+      }, tx);
+      await result.sync();
+      result.set({ summary: "public result" });
+      runtime.prepareTxForCommit(tx);
+      expect(tx.getCfcState().prepare.status).toBe("prepared");
+      tx.abort("test complete");
+    });
+  });
+
+  it("admits a receipt when CFC enforcement is disabled", async () => {
+    await withRuntime(async (runtime) => {
+      const targetTx = runtime.edit();
+      identifyProducer(targetTx);
+
+      const receipt = await runtime.prepareExternalContentObservation({
+        targetTx,
+        space,
+        cause: "disabled-external-content-row",
+        schema: ROW_SCHEMA,
+        value: { title: "row outside CFC enforcement" },
+        producer: PRODUCER,
+      });
+
+      expect(() =>
+        runtime.recordExternalContentObservation(targetTx, receipt, {
+          space,
+          producer: PRODUCER,
+        })
+      ).not.toThrow();
+      targetTx.abort("test complete");
+    }, { cfcEnforcementMode: "disabled" });
+  });
+
+  it("awaits link-target loads before deriving the receipt", async () => {
+    await withRuntime(async (runtime, storageManager) => {
+      let pendingChecks = 0;
+      let settled = 0;
+      using _pending = stub(
+        storageManager,
+        "pendingCrossSpacePromiseCount",
+        () => pendingChecks++ === 0 ? 1 : 0,
+      );
+      using _settled = stub(
+        storageManager,
+        "crossSpaceSettled",
+        () => {
+          settled++;
+          return Promise.resolve();
+        },
+      );
+      const targetTx = runtime.edit();
+      identifyProducer(targetTx);
+
+      const receipt = await runtime.prepareExternalContentObservation({
+        targetTx,
+        space,
+        cause: "settled-external-content-row",
+        schema: ROW_SCHEMA,
+        value: { title: "private row" },
+        producer: PRODUCER,
+      });
+
+      expect(settled).toBe(1);
+      runtime.recordExternalContentObservation(targetTx, receipt, {
+        space,
+        producer: PRODUCER,
+      });
+      targetTx.abort("test complete");
+    });
+  });
+
   it("records canonical flow and egress evidence without persisting the observed value", async () => {
     await withRuntime(async (runtime, storageManager) => {
       const targetTx = runtime.edit();
@@ -103,6 +265,248 @@ describe("external content observation", () => {
       expect(observation.consumed.confidentiality).toContainEqual(SECRET);
       expect(observation.consumed.integrity).toContainEqual(VERIFIED);
       targetTx.abort("test complete");
+    });
+  });
+
+  it("accepts matching nonempty module-delegation snapshots", async () => {
+    await withRuntime(async (runtime) => {
+      runtime.registerModuleDelegations(
+        space,
+        new Map([["module:successor", new Set(["module:predecessor"])]]),
+      );
+      const targetTx = runtime.edit();
+      identifyProducer(targetTx);
+
+      const receipt = await runtime.prepareExternalContentObservation({
+        targetTx,
+        space,
+        cause: "external-content-matching-delegations",
+        schema: PUBLIC_RESULT_SCHEMA,
+        value: "public",
+        producer: PRODUCER,
+      });
+
+      expect(receipt).toEqual({});
+      targetTx.abort("test complete");
+    });
+  });
+
+  it("refuses when module delegations change before admission", async () => {
+    await withRuntime(async (runtime) => {
+      const targetTx = runtime.edit();
+      identifyProducer(targetTx);
+      runtime.registerModuleDelegations(
+        space,
+        new Map([["module:successor", new Set(["module:predecessor"])]]),
+      );
+
+      try {
+        await expect(runtime.prepareExternalContentObservation({
+          targetTx,
+          space,
+          cause: "external-content-changed-delegations",
+          schema: PUBLIC_RESULT_SCHEMA,
+          value: "public",
+          producer: PRODUCER,
+        })).rejects.toThrow(/admission context changed/);
+      } finally {
+        targetTx.abort("test complete");
+      }
+    });
+  });
+
+  it("refuses module delegations from a different space", async () => {
+    await withRuntime(async (runtime) => {
+      runtime.registerModuleDelegations(
+        space,
+        new Map([["module:successor", new Set(["module:predecessor"])]]),
+      );
+      const targetTx = runtime.edit();
+      identifyProducer(targetTx);
+      interceptObservationProbeState(
+        runtime,
+        (phase, state) =>
+          phase === "initial"
+            ? {
+              ...state,
+              moduleDelegations: new Map([[
+                `${space}:other` as typeof space,
+                new Map([
+                  ["module:successor", ["module:predecessor"]],
+                ]),
+              ]]),
+            }
+            : state,
+      );
+
+      try {
+        await expect(runtime.prepareExternalContentObservation({
+          targetTx,
+          space,
+          cause: "external-content-different-delegation-space",
+          schema: PUBLIC_RESULT_SCHEMA,
+          value: "public",
+          producer: PRODUCER,
+        })).rejects.toThrow(/admission context changed/);
+      } finally {
+        targetTx.abort("test complete");
+      }
+    });
+  });
+
+  it("refuses changed predecessor authority within a module delegation", async () => {
+    await withRuntime(async (runtime) => {
+      runtime.registerModuleDelegations(
+        space,
+        new Map([["module:successor", new Set(["module:predecessor"])]]),
+      );
+      const targetTx = runtime.edit();
+      identifyProducer(targetTx);
+      interceptObservationProbeState(
+        runtime,
+        (phase, state) =>
+          phase === "initial"
+            ? {
+              ...state,
+              moduleDelegations: new Map([[
+                space,
+                new Map([
+                  ["module:successor", ["module:other"]],
+                ]),
+              ]]),
+            }
+            : state,
+      );
+
+      try {
+        await expect(runtime.prepareExternalContentObservation({
+          targetTx,
+          space,
+          cause: "external-content-changed-delegation-authority",
+          schema: PUBLIC_RESULT_SCHEMA,
+          value: "public",
+          producer: PRODUCER,
+        })).rejects.toThrow(/admission context changed/);
+      } finally {
+        targetTx.abort("test complete");
+      }
+    });
+  });
+
+  it("refuses a probe that is not prepared after its initial write gate", async () => {
+    await withRuntime(async (runtime) => {
+      const targetTx = runtime.edit();
+      identifyProducer(targetTx);
+      interceptObservationProbeState(
+        runtime,
+        (phase, state) =>
+          phase === "initial"
+            ? {
+              ...state,
+              prepare: { status: "invalidated", reasons: ["test"] },
+            }
+            : state,
+      );
+
+      try {
+        await expect(runtime.prepareExternalContentObservation({
+          targetTx,
+          space,
+          cause: "external-content-initial-refusal",
+          schema: PUBLIC_RESULT_SCHEMA,
+          value: "public",
+          producer: PRODUCER,
+        })).rejects.toThrow(/CFC refused the external content observation/);
+      } finally {
+        targetTx.abort("test complete");
+      }
+    });
+  });
+
+  it("refuses mutable policy evidence during initial admission", async () => {
+    await withRuntime(async (runtime) => {
+      const targetTx = runtime.edit();
+      identifyProducer(targetTx);
+      interceptObservationProbeState(
+        runtime,
+        (phase, state) =>
+          phase === "initial"
+            ? {
+              ...state,
+              consultedGrants: [{ space, id: "grant", digest: "digest" }],
+            }
+            : state,
+      );
+
+      try {
+        await expect(runtime.prepareExternalContentObservation({
+          targetTx,
+          space,
+          cause: "external-content-initial-mutable-evidence",
+          schema: PUBLIC_RESULT_SCHEMA,
+          value: "public",
+          producer: PRODUCER,
+        })).rejects.toThrow(/admission depends on mutable policy evidence/);
+      } finally {
+        targetTx.abort("test complete");
+      }
+    });
+  });
+
+  it("refuses mutable policy evidence discovered during traversal", async () => {
+    await withRuntime(async (runtime) => {
+      const targetTx = runtime.edit();
+      identifyProducer(targetTx);
+      interceptObservationProbeState(
+        runtime,
+        (phase, state) =>
+          phase === "traversal"
+            ? {
+              ...state,
+              consultedGrants: [{ space, id: "grant", digest: "digest" }],
+            }
+            : state,
+      );
+
+      try {
+        await expect(runtime.prepareExternalContentObservation({
+          targetTx,
+          space,
+          cause: "external-content-traversal-mutable-evidence",
+          schema: PUBLIC_RESULT_SCHEMA,
+          value: "public",
+          producer: PRODUCER,
+        })).rejects.toThrow(/traversal depends on mutable policy evidence/);
+      } finally {
+        targetTx.abort("test complete");
+      }
+    });
+  });
+
+  it("refuses a posture change discovered during traversal", async () => {
+    await withRuntime(async (runtime) => {
+      const targetTx = runtime.edit();
+      identifyProducer(targetTx);
+      interceptObservationProbeState(
+        runtime,
+        (phase, state) =>
+          phase === "traversal"
+            ? { ...state, enforcementMode: "enforce-strict" }
+            : state,
+      );
+
+      try {
+        await expect(runtime.prepareExternalContentObservation({
+          targetTx,
+          space,
+          cause: "external-content-traversal-posture-change",
+          schema: PUBLIC_RESULT_SCHEMA,
+          value: "public",
+          producer: PRODUCER,
+        })).rejects.toThrow(/context changed during traversal/);
+      } finally {
+        targetTx.abort("test complete");
+      }
     });
   });
 

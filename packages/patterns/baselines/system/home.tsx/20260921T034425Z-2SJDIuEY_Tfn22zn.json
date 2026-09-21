@@ -16,7 +16,10 @@
             "type": "string"
           },
           "run": {
-            "$ref": "#/$defs/AgentRunRecord"
+            "asCell": [
+              "cell"
+            ],
+            "scope": "user"
           }
         },
         "required": [
@@ -50,7 +53,7 @@
               "writeAuthorizedBy": {
                 "__ctWriterIdentityOf": {
                   "file": "/packages/patterns/system/agent-queue.tsx",
-                  "moduleIdentity": "tnwsp0GBVDsnxkpZf7erUxsDwA19OcnusCE8nM0XKhY",
+                  "moduleIdentity": "7vV_mbbT-SgWo8ou6pS-dxf68_aGF9fpgbhX9HcwTXo",
                   "path": [
                     "setAgentRunner"
                   ]
@@ -215,9 +218,6 @@
           "cancelled"
         ]
       },
-      "AgentRunRecord": {
-        "$ref": "#/$defs/AgentRun"
-      },
       "AgentRunState": {
         "enum": [
           "queued",
@@ -270,6 +270,9 @@
             "type": "string"
           },
           "registeredAt": {
+            "type": "string"
+          },
+          "registrationId": {
             "type": "string"
           },
           "tools": {
@@ -812,6 +815,9 @@
       },
       "SetAgentRunnerEvent": {
         "properties": {
+          "expectedRegistrationId": {
+            "type": "string"
+          },
           "runner": {
             "$ref": "#/$defs/AgentRunnerEntry"
           }

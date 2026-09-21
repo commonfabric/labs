@@ -21,6 +21,7 @@ import {
   cfcLabelAtomTypes,
   type DisclosedCfcLabel,
 } from "../cfc-label-disclosure.ts";
+import { isCfcAtomShape, isCfcClauseShape } from "../cfc-label-shape.ts";
 import {
   type HarnessCfcModelContextObservationInput,
   mergeConfidentialityOnlyLabels,
@@ -171,27 +172,8 @@ const pick = (
     ) => [key, source[key]]),
   );
 
-/** Whether a value has the shape of one atom: a string, or a typed record. */
-const isAtomShape = (value: unknown): boolean =>
-  typeof value === "string" ||
-  (isRecord(value) && typeof value.type === "string");
-
-/**
- * Whether a value has the shape of one confidentiality clause: an atom, or
- * an `anyOf` over a nonempty list of atoms. Anything else — an `anyOf` that
- * is not a list, a record with no `type` — is not a clause, so a label
- * carrying one is unreadable rather than measured.
- */
-const isClauseShape = (value: unknown): boolean =>
-  isAtomShape(value) ||
-  (isRecord(value) && Array.isArray(value.anyOf) && value.anyOf.length > 0 &&
-    value.anyOf.every(isAtomShape));
-
 /** A label as a row states it, or as the unlabeled-row policy assigns it. */
-interface LoomRowLabel {
-  confidentiality: CfcConfClause[];
-  integrity: unknown[];
-}
+type LoomRowLabel = Required<Pick<IFCLabel, "confidentiality" | "integrity">>;
 
 /**
  * The label a row with no `ifc` field is given: the label of the query that
@@ -226,8 +208,11 @@ const readRowLabel = (
   if (!Object.hasOwn(row, "ifc")) return "absent";
   const ifc = row.ifc;
   if (!isRecord(ifc) || !Array.isArray(ifc.confidentiality)) return undefined;
-  if (!ifc.confidentiality.every(isClauseShape)) return undefined;
+  if (!ifc.confidentiality.every(isCfcClauseShape)) return undefined;
   if (ifc.integrity !== undefined && !Array.isArray(ifc.integrity)) {
+    return undefined;
+  }
+  if (ifc.integrity !== undefined && !ifc.integrity.every(isCfcAtomShape)) {
     return undefined;
   }
   return {
@@ -372,7 +357,7 @@ const measureRows = async (
     if (entry.status === "admitted" && hold !== undefined && label) {
       entry.handle = await hold({
         value: entry.value,
-        label: label as IFCLabel,
+        label,
         labelSource: entry.labelSource,
       });
     }

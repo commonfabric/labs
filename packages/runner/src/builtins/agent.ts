@@ -97,6 +97,7 @@ export type AgentQueueIndex = {
   agentRunner?: {
     host: string;
     tools: string[];
+    registrationId?: string;
     registeredAt: string;
     lastClaimAt?: string;
   };
@@ -332,6 +333,8 @@ export function agent(
       !AGENT_INPUT_NAME_PATTERN.test(name)
     );
     if (invalidInputName !== undefined) {
+      state.previousCallHash = undefined;
+      state.currentHash = undefined;
       settleWithoutRun(
         fields,
         `${INVALID_INPUT}: agent input name must match ${AGENT_INPUT_NAME_PATTERN}, got \`${invalidInputName}\``,
@@ -392,24 +395,6 @@ export function agent(
       return;
     }
 
-    if (tools !== undefined && tools.length > 0) {
-      const runner = agentQueueIndexCell(runtime, homeSpace, tx)
-        .key("agentRunner").withTx(tx).get();
-      if (runner !== undefined) {
-        const missing = tools.filter((tool) => !runner.tools.includes(tool));
-        if (missing.length > 0) {
-          state.previousCallHash = undefined;
-          settleWithoutRun(
-            fields,
-            `${INVALID_INPUT}: the registered agent runner does not offer ` +
-              `${missing.map((tool) => `\`${tool}\``).join(", ")}`,
-            hash,
-          );
-          return;
-        }
-      }
-    }
-
     // The request is measured against the pattern's own ceiling here, before
     // anything is staged, over the label this transaction has consumed so
     // far — the same set the commit boundary measures — and on the raw
@@ -456,6 +441,24 @@ export function agent(
      * to create one for a request the node has since replaced.
      */
     const createRecord = async (): Promise<void> => {
+      const queue = agentQueueIndexCell(runtime, homeSpace);
+      await queue.sync();
+      if (tools !== undefined && tools.length > 0) {
+        const runner = queue.key("agentRunner").get();
+        if (runner !== undefined) {
+          const missing = tools.filter((tool) => !runner.tools.includes(tool));
+          if (missing.length > 0) {
+            state.previousCallHash = undefined;
+            await settleAbandoned(
+              new Error(
+                `${INVALID_INPUT}: the registered agent runner does not offer ` +
+                  `${missing.map((tool) => `\`${tool}\``).join(", ")}`,
+              ),
+            );
+            return;
+          }
+        }
+      }
       const { error } = await runtime.editWithRetry((tx) => {
         markEffectCompletion(tx, effectKey);
         tx.tx.scopeKeyIdentity = identity;
@@ -525,9 +528,6 @@ export function agent(
         );
         return;
       }
-      // The queue lives in another space than the request, so nothing so far
-      // has loaded it; an unloaded queue reads as absent.
-      await agentQueueIndexCell(runtime, homeSpace).sync();
       const indexed = await runtime.editWithRetry((tx) => {
         tx.tx.scopeKeyIdentity = identity;
         const record = agentRunRecordCell(

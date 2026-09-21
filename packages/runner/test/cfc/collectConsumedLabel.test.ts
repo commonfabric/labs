@@ -2,11 +2,13 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/api";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 
 import { collectConsumedLabel } from "../../src/cfc/prepare.ts";
 import { describeRefusalInputs } from "../../src/cfc/refusal-detail.ts";
 import type {
   CfcAddress,
+  CfcExternalContentObservation,
   CfcLabelMetadataObservation,
 } from "../../src/cfc/types.ts";
 import type {
@@ -26,10 +28,12 @@ function transaction(
   observations: readonly CfcLabelMetadataObservation[] = [],
   reads: readonly IReadActivity[] = [],
   entries: FabricValue = [],
+  externalContentObservations: readonly CfcExternalContentObservation[] = [],
 ): IExtendedStorageTransaction {
   const state = {
     triggerReadGating: false,
     labelMetadataObservations: [...observations],
+    externalContentObservations: [...externalContentObservations],
   } satisfies Partial<ReturnType<IExtendedStorageTransaction["getCfcState"]>>;
   const surfaces: Partial<IExtendedStorageTransaction> = {
     getCfcState: () =>
@@ -53,6 +57,35 @@ function observation(
 }
 
 describe("collectConsumedLabel()", () => {
+  it("attributes external module-policy evidence to its observed space", () => {
+    const modulePolicy = {
+      type: CFC_ATOM_TYPE.Policy,
+      policyRefKind: "module" as const,
+      moduleIdentity: "module:test",
+      symbol: "canPublish",
+      policyDigest: "sha256:test",
+    };
+    const observed = {
+      source: address,
+      flow: { confidentiality: [], integrity: [] },
+      consumed: {
+        confidentiality: [modulePolicy],
+        integrity: [{ type: "verified" }],
+      },
+      labeledSpaces: [address.space],
+      sources: [{ atom: modulePolicy, read: address, labelPath: [] }],
+    } satisfies CfcExternalContentObservation;
+
+    const result = collectConsumedLabel(transaction([], [], [], [observed]));
+
+    expect(result.confidentiality).toEqual([modulePolicy]);
+    expect(result.integrity).toEqual([{ type: "verified" }]);
+    expect([...result.modulePolicySpaces.values()]).toEqual([
+      new Set([address.space]),
+    ]);
+    expect(result.sources).toEqual(observed.sources);
+  });
+
   it("keeps distinct atoms at one source while collapsing structural duplicates", () => {
     const atoms = Array.from({ length: 40 }, (_, index) => ({
       type: "secret",

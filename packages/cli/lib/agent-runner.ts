@@ -26,6 +26,8 @@ import {
   RUNNER_LOST,
 } from "@commonfabric/runner/agent-run";
 import type { MemorySpace } from "@commonfabric/runner/storage/cache.deno";
+import { addressKey } from "@commonfabric/runner/shared";
+import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 
 /** The `agentRunner` entry a runner writes into the user's queue. */
 export type AgentRunnerEntry = NonNullable<AgentQueueIndex["agentRunner"]>;
@@ -104,7 +106,10 @@ export interface AgentRunnerOptions {
   runtimeForHost: (host: string) => Promise<Runtime>;
 
   /** Writes the `agentRunner` entry through the queue's authorized writer. */
-  registerRunner: (entry: AgentRunnerEntry | undefined) => Promise<void>;
+  registerRunner: (
+    entry: AgentRunnerEntry | undefined,
+    expectedRegistrationId?: string,
+  ) => Promise<void>;
 
   /** Runs one claimed record to its outcome. */
   execute: (run: ClaimedAgentRun) => Promise<AgentRunExecution>;
@@ -129,12 +134,13 @@ type FollowedRecord = {
 /** A run this runner holds. */
 type ActiveRun = {
   abort: AbortController;
-  finished: Promise<void>;
+  token: object;
+  finished?: Promise<void>;
 };
 
 /** Helper for {@link AgentRunner}, which names a record across hosts. */
-const recordKey = (link: NormalizedFullLink): string =>
-  `${link.space}/${link.id}`;
+const recordKey = (host: string, link: NormalizedFullLink): string =>
+  stringTupleKey([host, addressKey(link)]);
 
 /**
  * One user's runner over their agent queue. `start()` registers it and
@@ -172,7 +178,10 @@ export class AgentRunner {
       this.#stopQueue = queue.key("entries").sink(() => this.#requestScan());
     } catch (error) {
       try {
-        await this.#options.registerRunner(undefined);
+        await this.#options.registerRunner(
+          undefined,
+          this.#options.runnerId,
+        );
       } catch (cleanupError) {
         this.#options.report?.(
           `agent runner: could not clear a failed registration: ${
@@ -203,7 +212,10 @@ export class AgentRunner {
     }
     this.#followed.clear();
     if (this.#registeredAt !== undefined) {
-      await this.#options.registerRunner(undefined);
+      await this.#options.registerRunner(
+        undefined,
+        this.#options.runnerId,
+      );
       this.#registeredAt = undefined;
     }
   }
@@ -213,7 +225,9 @@ export class AgentRunner {
     while (this.#scan !== undefined || this.#active.size > 0) {
       await Promise.all([
         this.#scan,
-        ...[...this.#active.values()].map((run) => run.finished),
+        ...[...this.#active.values()].flatMap((run) =>
+          run.finished === undefined ? [] : [run.finished]
+        ),
       ]);
     }
   }
@@ -229,6 +243,7 @@ export class AgentRunner {
     return this.#options.registerRunner({
       host: runnerHost,
       tools: [...tools],
+      registrationId: this.#options.runnerId,
       registeredAt: this.#registeredAt!,
       ...(lastClaimAt !== undefined ? { lastClaimAt } : {}),
     });
@@ -285,7 +300,9 @@ export class AgentRunner {
     const entries = agentQueueIndexCell(runtime, this.#options.homeSpace)
       .key("entries").get() ?? [];
     const present = new Set(
-      entries.map((entry) => recordKey(entry.run.getAsNormalizedFullLink())),
+      entries.map((entry) =>
+        recordKey(entry.host, entry.run.getAsNormalizedFullLink())
+      ),
     );
     for (const [key, followed] of this.#followed) {
       if (present.has(key)) continue;
@@ -295,7 +312,7 @@ export class AgentRunner {
     let failed = false;
     for (const entry of entries) {
       const link = entry.run.getAsNormalizedFullLink();
-      const key = recordKey(link);
+      const key = recordKey(entry.host, link);
       if (this.#followed.has(key)) continue;
       try {
         const hostRuntime = await this.#options.runtimeForHost(entry.host);
@@ -357,9 +374,6 @@ export class AgentRunner {
         continue;
       }
 
-      // `claimed` or `running`. One this process holds is live by
-      // construction; any other is live while its lease reaches past now.
-      if (active !== undefined) continue;
       const leaseUntil = value.claim?.leaseUntil;
       if (leaseUntil !== undefined && new Date(leaseUntil) > now) {
         const deadline = new Date(leaseUntil);
@@ -367,6 +381,10 @@ export class AgentRunner {
           nextWake = deadline;
         }
         continue;
+      }
+      if (active !== undefined) {
+        active.abort.abort(new Error("the agent run's lease expired"));
+        this.#active.delete(key);
       }
       await this.#recover(followed);
     }
@@ -376,7 +394,13 @@ export class AgentRunner {
       if (
         this.#stopped || this.#active.size >= this.#options.maxConcurrent
       ) break;
-      await this.#claim(candidate.key, candidate.followed);
+      const deadline = await this.#claim(candidate.key, candidate.followed);
+      if (
+        deadline !== undefined &&
+        (nextWake === undefined || deadline < nextWake)
+      ) {
+        nextWake = deadline;
+      }
     }
     if (nextWake !== undefined && !this.#stopped) {
       this.#scheduleWake(nextWake);
@@ -448,7 +472,10 @@ export class AgentRunner {
    * racing for one record one commits and the other, re-run against the
    * winner's write, finds the record no longer queued and writes nothing.
    */
-  async #claim(key: string, followed: FollowedRecord): Promise<void> {
+  async #claim(
+    key: string,
+    followed: FollowedRecord,
+  ): Promise<Date | undefined> {
     const { runtime, record } = followed;
     const now = this.#now();
     const stamp = now.toISOString();
@@ -464,13 +491,13 @@ export class AgentRunner {
       current.key("attempts").set((current.key("attempts").get() ?? 0) + 1);
       return true;
     });
-    if (ok !== true) return;
+    if (ok !== true) return undefined;
     const abort = new AbortController();
-    this.#active.set(key, {
-      abort,
-      finished: this.#run(key, followed, abort),
-    });
+    const active: ActiveRun = { abort, token: {} };
+    this.#active.set(key, active);
+    active.finished = this.#run(key, followed, active);
     await this.#register(stamp);
+    return new Date(leaseUntil);
   }
 
   /**
@@ -500,11 +527,12 @@ export class AgentRunner {
   async #run(
     key: string,
     followed: FollowedRecord,
-    abort: AbortController,
+    active: ActiveRun,
   ): Promise<void> {
     // Yields once, so `#claim` has recorded this run as active before the
     // run's first write wakes a scan.
     await Promise.resolve();
+    const { abort } = active;
     const { record, host } = followed;
     const leaseUntil = () =>
       new Date(this.#now().getTime() + this.#options.leaseMs).toISOString();
@@ -517,7 +545,7 @@ export class AgentRunner {
         current.key("startedAt").set(started);
         current.key("claim").key("leaseUntil").set(leaseUntil());
       });
-      if (held) {
+      if (held && this.#active.get(key)?.token === active.token) {
         const value = record.get();
         if (value === undefined) {
           throw new Error("the claimed record does not read");
@@ -529,9 +557,11 @@ export class AgentRunner {
           host,
           signal: abort.signal,
           renewLease: async () => {
-            await this.#writeHeld(followed, (current) => {
+            if (this.#active.get(key)?.token !== active.token) return;
+            const renewed = await this.#writeHeld(followed, (current) => {
               current.key("claim").key("leaseUntil").set(leaseUntil());
             });
+            if (renewed) this.#requestScan();
           },
         });
       }
@@ -544,12 +574,17 @@ export class AgentRunner {
       execution = { outcome: "failed", errorCode: PROVIDER_FAILURE };
     }
     try {
-      if (execution !== undefined) {
+      if (
+        execution !== undefined &&
+        this.#active.get(key)?.token === active.token
+      ) {
         await this.#finish(followed, execution, abort);
       }
     } finally {
-      this.#active.delete(key);
-      this.#requestScan();
+      if (this.#active.get(key)?.token === active.token) {
+        this.#active.delete(key);
+        this.#requestScan();
+      }
     }
   }
 

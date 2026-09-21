@@ -39,6 +39,7 @@ export default pattern(() => {
       runner: {
         host: "https://local.example",
         tools: [],
+        registrationId: "runner-1",
         registeredAt: "2026-09-18T00:00:00.000Z",
       },
     });

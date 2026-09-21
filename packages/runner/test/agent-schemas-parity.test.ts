@@ -27,6 +27,15 @@ const typeBody = (source: string, name: string): string => {
   return source.slice(start, end);
 };
 
+/** The body of `export type <name> = …;` in `source`. */
+const unionBody = (source: string, name: string): string => {
+  const start = source.indexOf(`export type ${name} =`);
+  expect(start).toBeGreaterThanOrEqual(0);
+  const end = source.indexOf(";", start);
+  expect(end).toBeGreaterThan(start);
+  return source.slice(start, end);
+};
+
 /** The property names a type body declares at its top level. */
 const declaredIn = (body: string): string[] =>
   [...body.matchAll(/^ {2}(\w+)\??:/gm)].map((match) => match[1]).toSorted();
@@ -47,11 +56,13 @@ describe("agent schemas parity", () => {
   });
 
   it("names every state and error code in the pattern-facing unions", () => {
+    const states = unionBody(agentRun, "AgentRunState");
+    const errorCodes = unionBody(agentRun, "AgentRunErrorCode");
     for (const state of AGENT_RUN_STATES) {
-      expect(agentRun).toContain(`| "${state}"`);
+      expect(states).toContain(`| "${state}"`);
     }
     for (const code of AGENT_RUN_ERROR_CODES) {
-      expect(agentRun).toContain(`| "${code}"`);
+      expect(errorCodes).toContain(`| "${code}"`);
     }
   });
 

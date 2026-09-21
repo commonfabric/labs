@@ -331,8 +331,9 @@ The host is trusted code; this is the same line the llm builtins stand on.
 writer over its fabric session (`packages/cf-harness/src/result-writer.ts`,
 `writeAgentResult`) that resolves handles to links, mints documents for cited
 non-cell referents, admits uncited referents through runtime observation
-receipts, reads observed cells, and writes under the builtin identity — and no
-new model-facing tool. Against the alternative of
+receipts, reads observed cells, and writes under the builtin identity — plus
+the model-facing `submit_result` tool that carries a schema-validated value to
+that host routine without granting a sandbox write. Against the alternative of
 the builtin stamping a label the runner reported, this removes the one trusted
 label input the earlier draft needed and gives per-referent labels for free.
 It is the cheaper design once the harness is writing anyway, and the harness
@@ -545,6 +546,7 @@ the runner when it starts and refreshed on every claim:
 agentRunner (in the home space, owner-protected like the profile's inbox pointer)
   host          the runner's toolshed origin (http(s) origin, like ProfileInboxPointer.host)
   tools         the tool names this runner offers
+  registrationId  the runner process whose cleanup may clear this entry
   registeredAt, lastClaimAt
 ```
 
