@@ -38,6 +38,7 @@
 
 import { deepEqual, deepEqualKey } from "@commonfabric/utils/deep-equal";
 
+import type { CfcConfClause } from "./clause.ts";
 import type { CfcAddress } from "./types.ts";
 
 /**
@@ -51,7 +52,7 @@ import type { CfcAddress } from "./types.ts";
  * wrong, in both directions.
  */
 export type ConsumedAtomSource = {
-  readonly atom: unknown;
+  readonly atom: CfcConfClause;
   readonly read: CfcAddress;
   readonly labelPath: readonly string[];
 };

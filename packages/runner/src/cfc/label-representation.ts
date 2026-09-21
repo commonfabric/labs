@@ -1,4 +1,4 @@
-import type { CfcAtom } from "@commonfabric/api/cfc";
+import type { CfcAtom, CfcJsonValue } from "@commonfabric/api/cfc";
 import { hashStringOf } from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
@@ -47,7 +47,9 @@ export const isCfcFieldCommitment = (
   typeof (value as { digestOf?: unknown }).digestOf === "string";
 
 /** The commitment form of one atom field value: its canonical digest, marked. */
-export const commitCfcFieldValue = (value: unknown): CfcFieldCommitment => ({
+export const commitCfcFieldValue = (
+  value: CfcJsonValue,
+): CfcFieldCommitment => ({
   digestOf: hashStringOf(value),
 });
 
@@ -125,10 +127,10 @@ export const containsCfcFieldCommitment = (value: unknown): boolean => {
  * by reference.
  */
 const transformValue = (
-  value: unknown,
+  value: CfcJsonValue,
   contextAtom: unknown,
   pathInAtom: readonly string[],
-): unknown => {
+): CfcJsonValue => {
   if (isCfcFieldCommitment(value)) {
     return value;
   }
@@ -156,13 +158,13 @@ const transformValue = (
   const atom = isAtom ? value : contextAtom;
   const basePath = isAtom ? [] : pathInAtom;
   let changed = false;
-  const out: Record<string, unknown> = {};
+  const out: Record<string, CfcJsonValue> = {};
   for (const [key, field] of Object.entries(value)) {
     const fieldPath = [...basePath, key];
     const cls = atom === undefined
       ? undefined
       : classifyAtomField(atom, fieldPath);
-    let next: unknown;
+    let next: CfcJsonValue;
     if (cls === "commitment" && !isCfcFieldCommitment(field)) {
       next = commitCfcFieldValue(field);
     } else if (cls === "commitment" || cls === "public") {
@@ -191,7 +193,7 @@ const transformValue = (
  * and committed form from another (the documented mixed migration period)
  * counts as ONE shared witness.
  */
-export const cfcCommitmentNormalForm = (atom: unknown): unknown =>
+export const cfcCommitmentNormalForm = (atom: CfcAtom): CfcAtom =>
   transformValue(atom, undefined, []);
 
 /**

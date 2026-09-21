@@ -347,7 +347,7 @@ export const cfcIntegrityWitnessKey = (
     isObjectOrArray((actual as { scope?: unknown }).scope) &&
     (actual as { scope: { valueRef?: unknown } }).scope.valueRef !== undefined
   ) {
-    const scope = { ...(actual as { scope: Record<string, unknown> }).scope };
+    const scope = { ...(actual as { scope: Record<string, CfcAtom> }).scope };
     delete scope.projection;
     return hashStringOf(cfcCommitmentNormalForm({ ...actual, scope }));
   }

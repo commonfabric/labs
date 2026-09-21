@@ -5901,7 +5901,7 @@ const collectConsumedLabelImpl = (
   // snapshot per document here; another collection observes its current view.
   const labelIndexes = new Map<string, ConsumedLabelIndex | undefined>();
   const noteSource = (
-    atom: unknown,
+    atom: CfcConfClause,
     read: CfcAddress,
     labelPath: readonly string[],
   ): void => {

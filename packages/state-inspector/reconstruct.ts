@@ -40,12 +40,7 @@ export interface ReconstructOptions extends EntityAddress {
   atSeq?: number;
 }
 
-export type EntityDocument =
-  & { value?: unknown; source?: unknown }
-  & Record<
-    string,
-    unknown
-  >;
+export type EntityDocument = StoredDocument;
 
 export interface PathSelection {
   /** Whether every segment selected an own property. */
@@ -497,7 +492,7 @@ export function reconstructOutcome(
         row.seq,
         row.op_index,
       );
-    return { status: "present", document: document as EntityDocument };
+    return { status: "present", document };
   } catch (error) {
     return { status: "undecodable", error };
   }
