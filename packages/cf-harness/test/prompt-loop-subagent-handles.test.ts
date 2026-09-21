@@ -1492,6 +1492,15 @@ describe("prompt-loop cross-agent address handles", () => {
     expect(childSystemPrompt).toContain(
       "Ask research a useful follow-up question",
     );
+    expect(childSystemPrompt).toContain(
+      "An applicable indexed pattern can discover data within that scope under the existing piece-targeting and release rules",
+    );
+    expect(childSystemPrompt).toContain(
+      "it does not grant access to another store",
+    );
+    expect(childSystemPrompt).not.toContain(
+      "there is nowhere to look another one up",
+    );
     expect(childSystemPrompt).not.toContain(
       "Use research on the whole task before you author anything",
     );

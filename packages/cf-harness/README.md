@@ -1518,6 +1518,23 @@ host-observed metadata, usable as search references for delegation, and remain
 separate from inspected `patterns`. The current user goal accompanies narrower
 research questions and delegated tasks so they retain the original context.
 
+Orientation and the parent distinguish inputs already given, inputs findable
+within the granted scope, and actions the available capabilities cannot perform.
+They inspect relevant grants or reuse established descriptions before asking the
+user to connect a source; a grant's name alone does not establish its contents.
+For findable inputs, private research can identify an applicable space-search
+pattern from the index and tell the parent how to run it. The parent executes
+discovery under the existing tool, piece-targeting, and release rules. An
+indexed pattern does not grant access to another store.
+
+The action path is checked before collecting execution details: a read-only
+mailbox does not establish the ability to send, and an unavailable send path
+calls for an upfront limitation and an offered draft. The guidance favors the
+closest achievable outcome without silently substituting data or claiming the
+original task is complete. Unavailable or withheld evidence remains unknown; the
+agent follows the not-checked verification rule and never asks for a nonexistent
+permission to release it.
+
 The parent uses findings that settle a decision directly. It requests `answer`
 for a specific remaining uncertainty, with `followUpTo` selecting the relevant
 prior result. Code is optional in either purpose and may demonstrate a small

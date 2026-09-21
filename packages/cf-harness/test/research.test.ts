@@ -160,6 +160,58 @@ describe("research", () => {
   });
 
   describe("private tool boundaries", () => {
+    for (
+      const task of [
+        "what's on my calendar",
+        "show me my documents",
+        "email my landlord, the heater is broken",
+      ]
+    ) {
+      it(`orients the rehearsal request ${JSON.stringify(task)} within the private loop's reading capability`, async () => {
+        const model = new ScriptedModelClient([
+          () =>
+            assistant(JSON.stringify({
+              status: "incomplete",
+              summary: "Inspect the relevant input and action path.",
+              inputs: [],
+              selectedPatternIds: [],
+              rules: [],
+              sourceIds: [],
+              missing: ["source description"],
+              leads: [],
+              questions: [],
+            })),
+        ]);
+        await createResearchRunner({ modelClient: model })(requestFor({
+          task,
+          purpose: "orient",
+        }));
+        const request = model.requests[0];
+        const system = request.transcript.find((message) =>
+          message.role === "system"
+        )?.content;
+        expect(system).toContain(
+          "inspect unresolved relevant handles with describe_handle before asking",
+        );
+        expect(system).toContain(
+          "Private research inspects candidates and tells the parent what to run; it cannot execute them",
+        );
+        expect(system).toContain(
+          "If sending is unavailable, say so immediately",
+        );
+        expect(system).toContain(
+          "Never ask the user to release aggregates or change a sink ceiling through a control that does not exist",
+        );
+        expect(
+          request.transcript.some((message) =>
+            message.role === "user" && message.content.includes(task)
+          ),
+        ).toBe(true);
+        expect(request.tools.some((tool) => tool.toolId === "run_pattern"))
+          .toBe(false);
+      });
+    }
+
     for (const attached of [true, false]) {
       it(`distinguishes explicit input attachments from general grants when attached is ${attached}`, async () => {
         const token = "cfh:a:attached";

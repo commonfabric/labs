@@ -530,6 +530,9 @@ describe("scoped research", () => {
     const selected = record("selected");
     const trial = run([
       (request) => {
+        expect(request.transcript[0].content).not.toContain(
+          "Orient to the user's goal: distinguish what is given",
+        );
         expect(request.transcript[1].content).toContain(
           '"researchRunId":"selected"',
         );
