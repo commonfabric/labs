@@ -251,6 +251,170 @@ describe("space invite", () => {
     }
   });
 
+  it("refuses missing or unsafe default state directories before HTTP", async () => {
+    const signer = await Identity.fromPassphrase(
+      "CLI state directory refusal",
+      {
+        implementation: "noble",
+      },
+    );
+    const directory = await Deno.makeTempDir();
+    const identity = `${directory}/identity.key`;
+    await Deno.writeFile(identity, signer.toPkcs8());
+    let state: string | undefined;
+    const getEnv = Deno.env.get.bind(Deno.env);
+    using _state = stub(Deno.env, "get", (name) => {
+      if (name === "XDG_STATE_HOME") return state;
+      if (name === "HOME") return undefined;
+      return getEnv(name);
+    });
+    using http = stub(
+      globalThis,
+      "fetch",
+      () => Promise.reject(new Error("unexpected request")),
+    );
+    const run = () =>
+      buildSpaceInviteCommand().reset().throwErrors().parse([
+        "create",
+        "--access",
+        "READ",
+        "--ttl",
+        "60",
+        "--api-url",
+        "https://fabric.example",
+        "--space",
+        signer.did(),
+        "--identity",
+        identity,
+      ]);
+    try {
+      await expect(run()).rejects.toThrow("Specify --request-file");
+      state = directory;
+      const requests = `${directory}/commonfabric/space-invites`;
+      await Deno.mkdir(requests, { recursive: true, mode: 0o755 });
+      await Deno.chmod(requests, 0o755);
+      await expect(run()).rejects.toThrow("private directory (0700)");
+      expect(await Array.fromAsync(Deno.readDir(requests))).toEqual([]);
+      await Deno.remove(requests);
+      const target = `${directory}/private-target`;
+      await Deno.mkdir(target, { mode: 0o700 });
+      await Deno.symlink(target, requests);
+      await expect(run()).rejects.toThrow("private directory (0700)");
+      expect((await Deno.lstat(requests)).isSymlink).toBe(true);
+      expect(await Array.fromAsync(Deno.readDir(target))).toEqual([]);
+      expect(http.calls).toHaveLength(0);
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("refuses malformed retained requests without replacing their contents or making HTTP requests", async () => {
+    const signer = await Identity.fromPassphrase(
+      "CLI invalid retained request",
+      {
+        implementation: "noble",
+      },
+    );
+    const directory = await Deno.makeTempDir();
+    const identity = `${directory}/identity.key`;
+    const requestFile = `${directory}/prepared.json`;
+    await Deno.writeFile(identity, signer.toPkcs8());
+    const valid = {
+      version: 1,
+      host: "https://fabric.example",
+      space: signer.did(),
+      issuer: signer.did(),
+      access: "READ",
+      ttlSeconds: 60,
+      maxUses: 1,
+      inviteId: "A".repeat(22),
+      code: "A".repeat(43),
+    };
+    using http = stub(
+      globalThis,
+      "fetch",
+      () => Promise.reject(new Error("unexpected request")),
+    );
+    try {
+      for (
+        const invalid of [
+          null,
+          {},
+          { ...valid, version: 2 },
+          { ...valid, code: 7 },
+          { ...valid, code: "private-invalid-code" },
+          { ...valid, inviteId: "invalid-id" },
+        ]
+      ) {
+        const before = JSON.stringify(invalid);
+        await Deno.writeTextFile(requestFile, before, { mode: 0o600 });
+        await expect(
+          buildSpaceInviteCommand().reset().throwErrors().parse([
+            "create",
+            "--access",
+            "READ",
+            "--ttl",
+            "60",
+            "--request-file",
+            requestFile,
+            "--api-url",
+            "https://fabric.example",
+            "--space",
+            signer.did(),
+            "--identity",
+            identity,
+          ]),
+        ).rejects.toThrow("Invalid invitation request file");
+        expect(await Deno.readTextFile(requestFile)).toBe(before);
+      }
+      expect(http.calls).toHaveLength(0);
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("refuses creation when the request file cannot be persisted", async () => {
+    const signer = await Identity.fromPassphrase("CLI persistence refusal", {
+      implementation: "noble",
+    });
+    const directory = await Deno.makeTempDir();
+    const identity = `${directory}/identity.key`;
+    await Deno.writeFile(identity, signer.toPkcs8());
+    using http = stub(
+      globalThis,
+      "fetch",
+      () => Promise.reject(new Error("unexpected request")),
+    );
+    try {
+      await expect(
+        buildSpaceInviteCommand().reset().throwErrors().parse([
+          "create",
+          "--access",
+          "READ",
+          "--ttl",
+          "60",
+          "--request-file",
+          `${directory}/missing-parent/prepared.json`,
+          "--api-url",
+          "https://fabric.example",
+          "--space",
+          signer.did(),
+          "--identity",
+          identity,
+        ]),
+      ).rejects.toBeInstanceOf(Deno.errors.NotFound);
+      expect(http.calls).toHaveLength(0);
+      expect(
+        (await Array.fromAsync(Deno.readDir(directory))).map((entry) =>
+          entry.name
+        ),
+      )
+        .toEqual(["identity.key"]);
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
   it("transports the requested invite operations and returns caller-only credentials", async () => {
     const signer = await Identity.fromPassphrase("invite CLI operations", {
       implementation: "noble",
@@ -421,6 +585,19 @@ describe("space invite", () => {
           "--access must be READ or WRITE",
         ],
         [["create", "--access", "READ"], "--ttl is required"],
+        [["create", "--access", "READ", "--ttl", "0"], "--ttl must be between"],
+        [
+          ["create", "--access", "READ", "--ttl", "2592001"],
+          "--ttl must be between",
+        ],
+        [
+          ["create", "--access", "READ", "--ttl", "60", "--max-uses", "0"],
+          "--max-uses must be between",
+        ],
+        [
+          ["create", "--access", "READ", "--ttl", "60", "--max-uses", "1001"],
+          "--max-uses must be between",
+        ],
         [["create", "--access", "READ", "--ttl", "60"], "explicit space DID"],
         [["redeem", "A".repeat(22)], "--code-file is required"],
       ] as const
