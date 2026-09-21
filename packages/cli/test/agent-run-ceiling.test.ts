@@ -85,6 +85,25 @@ describe("agent run observation ceiling", () => {
     expect(cfcObservationFitsCeiling([invitation], unavailable)).toBe(false);
   });
 
+  it("keeps a default ACL lookup failure personal-only", async () => {
+    const reports: string[] = [];
+    const ceiling = await agentRunObservationCeiling(
+      {
+        identityKeyPath:
+          `/tmp/missing-agent-ceiling-${crypto.randomUUID()}.key`,
+        requester: USER,
+        report: (line) => reports.push(line),
+      },
+      "http://127.0.0.1:1",
+      SPACE,
+      undefined,
+    );
+    expect(cfcObservationFitsCeiling([personal], ceiling)).toBe(true);
+    expect(cfcObservationFitsCeiling([invitation], ceiling)).toBe(false);
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toContain("could not verify space membership");
+  });
+
   it("lets an authored ceiling narrow but never expand host access", async () => {
     const options = {
       identityKeyPath: "/unused.key",

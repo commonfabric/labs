@@ -92,6 +92,20 @@ describe("snapshot-share", () => {
     });
   });
 
+  it("rejects append targets that are not list bindings before issuing consent", async () => {
+    await withFixture(async ({ processor, sourceRef, destinationRef }) => {
+      await expect(processor.handleSnapshotSharePrepare({
+        type: RequestType.SnapshotSharePrepare,
+        source: sourceRef,
+        audience: { space: destinationRef },
+        appendBooksTo: {
+          recommended: sourceRef,
+          received: destinationRef,
+        },
+      })).rejects.toThrow("Snapshot recommendation binding is not a cell link");
+    });
+  });
+
   it("rejects a confirmation id without a prepared consent", async () => {
     const processor = buildProcessor();
     await expect(processor.handleRequest({
