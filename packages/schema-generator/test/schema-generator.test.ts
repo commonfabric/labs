@@ -2849,6 +2849,101 @@ type CalculatorRequest = {
         expect(schema).toEqual(readAsDefault);
       });
 
+      describe("with a literal default", () => {
+        // A literal argument is read without the checker, which reads nothing
+        // from a synthetic node, so each literal kind is compared on its own.
+
+        const tag = (defaultText: string, argument: ts.TypeNode) =>
+          generate(
+            {
+              "/main.ts":
+                `export interface Tag<T = ${defaultText}> { value: T }`,
+            },
+            ts.factory.createTypeReferenceNode(
+              ts.factory.createIdentifier("Tag"),
+              [argument],
+            ),
+          );
+        const literal = (expression: ts.LiteralTypeNode["literal"]) =>
+          ts.factory.createLiteralTypeNode(expression);
+
+        const EQUAL: [string, string, () => ts.TypeNode][] = [
+          [
+            "a string",
+            '"open"',
+            () => literal(ts.factory.createStringLiteral("open")),
+          ],
+          ["a number", "1", () => literal(ts.factory.createNumericLiteral(1))],
+          ["a `true`", "true", () => literal(ts.factory.createTrue())],
+          ["a `false`", "false", () => literal(ts.factory.createFalse())],
+          ["a `null`", "null", () => literal(ts.factory.createNull())],
+        ];
+        for (const [kind, defaultText, argument] of EQUAL) {
+          it(`reads the declaration for ${kind} argument equal to the default`, async () => {
+            const schema = await tag(defaultText, argument());
+
+            expect(schema).toMatchObject({
+              type: "object",
+              required: ["value"],
+            });
+            expect(
+              (schema as { properties: { value: unknown } }).properties.value,
+            ).not.toEqual({});
+          });
+        }
+
+        it("returns `true` for a string argument other than the default", async () => {
+          const schema = await tag(
+            '"open"',
+            literal(ts.factory.createStringLiteral("closed")),
+          );
+
+          expect(schema).toBe(true);
+        });
+
+        it("returns `true` for a literal argument this analysis cannot read", async () => {
+          // `-1` is a prefix expression, not a literal token.
+          const schema = await tag(
+            "-1",
+            literal(
+              ts.factory.createPrefixUnaryExpression(
+                ts.SyntaxKind.MinusToken,
+                ts.factory.createNumericLiteral(1),
+              ),
+            ),
+          );
+
+          expect(schema).toBe(true);
+        });
+      });
+
+      it("reads an argument by the type registered for it", async () => {
+        // The transformer registers the type a node was printed from; an
+        // argument naming nothing in scope is still compared by that type.
+        const { checker, sourceFile } = await createTestProgramFromFiles(
+          { "/main.ts": BOX },
+          "/main.ts",
+        );
+        const argument = reference("PrintedElsewhere");
+        const typeRegistry = new WeakMap<ts.Node, ts.Type>([
+          [argument, checker.getNumberType()],
+        ]);
+        const result = new SchemaGenerator()
+          .generateSchemaFromSyntheticTypeNode(
+            box(argument),
+            checker,
+            typeRegistry,
+            undefined,
+            sourceFile,
+          );
+        const { $schema: _schema, ...schema } = result as Record<
+          string,
+          unknown
+        >;
+
+        expect(schema).toEqual(readAsDefault);
+      });
+
       it("reads the declaration for a named argument equal to a named default", async () => {
         const schema = await generate(
           {
