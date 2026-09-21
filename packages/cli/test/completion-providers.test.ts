@@ -617,13 +617,16 @@ Deno.test("an inspect entity slot reads the view its command will read", () => {
 });
 
 /**
- * A space DB holding the given entities, each written once in its scope. The
- * default is one entity in the default scope and one in another, so a listing
- * taken from the wrong scope offers the wrong id rather than none.
+ * A space DB holding the given entities, each written once in its scope, with
+ * its id as its value unless one is given. The default is one entity in the
+ * default scope and one in another, so a listing taken from the wrong scope
+ * offers the wrong id rather than none.
  */
 function seedScopedSpace(
   path: string,
-  entities: ReadonlyArray<readonly [id: string, scope: string]> = [
+  entities: ReadonlyArray<
+    readonly [id: string, scope: string, value?: string]
+  > = [
     ["of:in-space", "space"],
     ["of:in-other", "other"],
   ],
@@ -658,10 +661,10 @@ INSERT INTO branch (name, head_seq, status) VALUES ('', 0, 'active');`);
      VALUES (?, ?, ?, 0, 'set', ?, ?)`,
   );
   db.transaction(() => {
-    entities.forEach(([id, scope], index) => {
+    entities.forEach(([id, scope, value = id], index) => {
       const seq = index + 1;
       commit.run(seq, seq);
-      rev.run(id, scope, seq, JSON.stringify({ value: id }), seq);
+      rev.run(id, scope, seq, JSON.stringify({ value }), seq);
     });
     db.prepare(`UPDATE branch SET head_seq = ? WHERE name = ''`)
       .run(entities.length);
@@ -732,6 +735,34 @@ Deno.test("live candidates: the every-scope entity slot enumerates rows in one p
     assertEquals(perScopeQueries, 0);
   } finally {
     prepare.restore();
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("live candidates: an entity in several scopes is offered once, with its space-scope label", async () => {
+  // `inspect overlay` reads every scope, and one id can hold a value in each.
+  // The id is offered once, labeled from the space scope, which is read first.
+  const dir = await Deno.makeTempDir();
+  try {
+    const path = `${dir}/space.sqlite`;
+    seedScopedSpace(path, [
+      ["of:shared", "other", "value-in-other"],
+      ["of:shared", "space", "value-in-space"],
+      ["of:only-other", "other"],
+    ]);
+    const offered =
+      (await liveCandidates(lineFor(`cf inspect overlay ${path} `)))
+        .candidates;
+    assertEquals(
+      offered.map((candidate) => candidate.value).sort(),
+      ["of:only-other", "of:shared"],
+    );
+    const shared = offered.find((candidate) => candidate.value === "of:shared");
+    assert(
+      shared?.description?.includes("value-in-space"),
+      `labeled from the space scope: ${shared?.description}`,
+    );
+  } finally {
     await Deno.remove(dir, { recursive: true });
   }
 });
