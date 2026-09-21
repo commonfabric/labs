@@ -21,7 +21,7 @@ import {
 import { debugStr } from "@/value-debug";
 
 import {
-  type BaselineVisitResult,
+  type BaselineVisitorMethodResult,
   type LeafVisitorResult,
   type RecurseForm,
   type ReplaceForm,
@@ -78,7 +78,9 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    * Visits the indicated value as a top-level operation. See the top-level
    * `visitValue()` for the extent to which encountered values are inspected.
    */
-  visit(value: FabricValuePlus<PlusType>): BaselineVisitResult<ResultType> {
+  visit(
+    value: FabricValuePlus<PlusType>,
+  ): BaselineVisitorMethodResult<ResultType> {
     if (this.#inProgress) {
       // This is a defense-in-depth protection against bugs in this submodule,
       // and also serves as documentation for the intended use of this class.
@@ -106,7 +108,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   #visitValue(
     value: FabricValuePlus<PlusType>,
-  ): BaselineVisitResult<ResultType> {
+  ): BaselineVisitorMethodResult<ResultType> {
     const tag = this.#tagOfValueElseNull(value);
     const result = this.#visitResolvingCyclesAndReplacement(value, tag);
 
@@ -215,7 +217,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   #recurseFabricArray(
     result: RecurseOfForm<PlusType>,
-  ): BaselineVisitResult<ResultType> {
+  ): BaselineVisitorMethodResult<ResultType> {
     const { container, doValues } = result;
     const array = container as FabricArrayPlus<PlusType>;
     const vis = this.#visitor;
@@ -294,7 +296,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   #recurseFabricInstance(
     result: RecurseOfForm<PlusType>,
-  ): BaselineVisitResult<ResultType> {
+  ): BaselineVisitorMethodResult<ResultType> {
     const { container, doValues } = result;
     const instance = container as FabricInstancePlus<PlusType>;
     const vis = this.#visitor;
@@ -335,7 +337,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   #recurseFabricPlainObject(
     result: RecurseOfForm<PlusType>,
-  ): BaselineVisitResult<ResultType> {
+  ): BaselineVisitorMethodResult<ResultType> {
     const { container, doKeys, doValues } = result;
     const plainObj = container as FabricPlainObjectPlus<PlusType>;
     const vis = this.#visitor;

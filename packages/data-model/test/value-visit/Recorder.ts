@@ -18,7 +18,7 @@ import type {
   PrimitiveValueTag,
 } from "@";
 import {
-  type BaselineVisitResult,
+  type BaselineVisitorMethodResult,
   DefaultValueVisitor,
   type LeafVisitorResult,
 } from "@/value-visit";
@@ -76,16 +76,19 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
   onVisitedElement?: (
     index: number,
     value: unknown,
-  ) => BaselineVisitResult<unknown>;
-  onVisitedGap?: (start: number, count: number) => BaselineVisitResult<unknown>;
+  ) => BaselineVisitorMethodResult<unknown>;
+  onVisitedGap?: (
+    start: number,
+    count: number,
+  ) => BaselineVisitorMethodResult<unknown>;
   onVisitedInstance?: (
     instance: FabricInstancePlus<unknown>,
     state: unknown,
-  ) => BaselineVisitResult<unknown>;
+  ) => BaselineVisitorMethodResult<unknown>;
   onVisitedMapping?: (
     key: unknown,
     value: unknown,
-  ) => BaselineVisitResult<unknown>;
+  ) => BaselineVisitorMethodResult<unknown>;
 
   /** The names of the recorded calls, in order. */
   get names(): string[] {
@@ -165,7 +168,7 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     array: FabricArrayPlus<unknown>,
     index: number,
     value: unknown,
-  ): BaselineVisitResult<unknown> {
+  ): BaselineVisitorMethodResult<unknown> {
     this.events.push(["visitedElement", array, index, value]);
     return this.onVisitedElement
       ? this.onVisitedElement(index, value)
@@ -176,7 +179,7 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     array: FabricArrayPlus<unknown>,
     start: number,
     count: number,
-  ): BaselineVisitResult<unknown> {
+  ): BaselineVisitorMethodResult<unknown> {
     this.events.push(["visitedGap", array, start, count]);
     return this.onVisitedGap ? this.onVisitedGap(start, count) : undefined;
   }
@@ -184,7 +187,7 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
   override visitedFabricInstance(
     instance: FabricInstancePlus<unknown>,
     state: unknown,
-  ): BaselineVisitResult<unknown> {
+  ): BaselineVisitorMethodResult<unknown> {
     this.events.push(["visitedInstance", instance, state]);
     return this.onVisitedInstance
       ? this.onVisitedInstance(instance, state)
@@ -195,7 +198,7 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     container: FabricPlainObjectPlus<unknown>,
     key: unknown,
     value: unknown,
-  ): BaselineVisitResult<unknown> {
+  ): BaselineVisitorMethodResult<unknown> {
     this.events.push(["visitedFabricPlainObjectEntry", container, key, value]);
     return this.onVisitedMapping
       ? this.onVisitedMapping(key, value)
