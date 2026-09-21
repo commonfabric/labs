@@ -63,6 +63,15 @@ import { modalStyles } from "./styles.ts";
 /** Z-index for an open modal: the `--cf-z-layer-overlay` token's value. */
 const MODAL_Z_INDEX = 1000;
 
+/** Finds the focused control through open renderer and component shadow roots. */
+function activeControl(): HTMLElement | null {
+  let active = document.activeElement;
+  while (active?.shadowRoot?.activeElement) {
+    active = active.shadowRoot.activeElement;
+  }
+  return active instanceof HTMLElement ? active : null;
+}
+
 export class CFModal extends BaseElement {
   static override styles = [BaseElement.baseStyles, modalStyles];
 
@@ -209,7 +218,7 @@ export class CFModal extends BaseElement {
    */
   private _onOpen() {
     // Store currently focused element for restoration
-    this._previousActiveElement = document.activeElement as HTMLElement;
+    this._previousActiveElement = activeControl();
 
     this._applyZIndex(MODAL_Z_INDEX);
 
@@ -250,7 +259,9 @@ export class CFModal extends BaseElement {
     }
 
     // Restore focus to previously focused element
-    this._previousActiveElement?.focus();
+    if (this._previousActiveElement?.isConnected) {
+      this._previousActiveElement.focus();
+    }
 
     // Fire closed event after transition
     const dialog = this.shadowRoot?.querySelector(".dialog") as HTMLElement;
@@ -340,16 +351,21 @@ export class CFModal extends BaseElement {
 
     const first = focusables[0];
     const last = focusables[focusables.length - 1];
+    // A single-control host can forward focus into a native shadow control
+    // with tabindex=-1. Its place in the tab order belongs to the host.
+    const active = e.composedPath().find((target) =>
+      target instanceof HTMLElement && focusables.includes(target)
+    );
 
     if (e.shiftKey) {
       // Shift+Tab: wrap from first to last
-      if (document.activeElement === first) {
+      if (active === first) {
         e.preventDefault();
         last.focus();
       }
     } else {
       // Tab: wrap from last to first
-      if (document.activeElement === last) {
+      if (active === last) {
         e.preventDefault();
         first.focus();
       }
@@ -369,30 +385,32 @@ export class CFModal extends BaseElement {
 
     const selector =
       'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-    const shadowFocusables = Array.from(
-      dialog.querySelectorAll(selector),
-    ) as HTMLElement[];
-
-    // Also get focusables from slotted content
-    const slots = dialog.querySelectorAll("slot");
-    const slottedFocusables: HTMLElement[] = [];
-    slots.forEach((slot) => {
-      const assigned = (slot as HTMLSlotElement).assignedElements({
-        flatten: true,
-      });
-      assigned.forEach((el) => {
-        if ((el as HTMLElement).matches?.(selector)) {
-          slottedFocusables.push(el as HTMLElement);
-        }
-        slottedFocusables.push(
-          ...(Array.from(el.querySelectorAll(selector)) as HTMLElement[]),
-        );
-      });
-    });
-
-    return [...shadowFocusables, ...slottedFocusables].filter(
-      (el) => !el.hasAttribute("disabled") && el.offsetParent !== null,
-    );
+    const focusables: HTMLElement[] = [];
+    const visit = (element: Element): void => {
+      if (element instanceof HTMLElement) {
+        const style = getComputedStyle(element);
+        if (
+          element.hidden || element.inert || element.hasAttribute("disabled") ||
+          style.display === "none"
+        ) return;
+        if (
+          element.matches(selector) && element.tabIndex >= 0 &&
+          !element.matches(":disabled") && style.visibility === "visible" &&
+          element.getClientRects().length > 0
+        ) focusables.push(element);
+      }
+      // Walk the flattened tree in rendered order, replacing slots with assigned
+      // content and hosts with their shadow children rather than counting both.
+      const assigned = element instanceof HTMLSlotElement
+        ? element.assignedElements({ flatten: true })
+        : [];
+      const children = assigned.length > 0
+        ? assigned
+        : (element.shadowRoot ?? element).children;
+      for (const child of children) visit(child);
+    };
+    visit(dialog);
+    return focusables;
   }
 
   /**
