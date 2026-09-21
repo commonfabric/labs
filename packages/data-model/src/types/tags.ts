@@ -95,7 +95,9 @@ export type FabricContainerValueTag =
   typeof FABRIC_CONTAINER_VALUE_TAGS[keyof typeof FABRIC_CONTAINER_VALUE_TAGS];
 
 /** Type predicate for membership in `FabricContainerValueTag`. */
-export function isFabricContainerValueTag(tag: ValueTag | null): tag is FabricContainerValueTag {
+export function isFabricContainerValueTag(
+  tag: ValueTag | null,
+): tag is FabricContainerValueTag {
   switch (tag) {
     case VALUE_TAGS.Array:
     case VALUE_TAGS.FabricInstance:

@@ -196,7 +196,10 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
     const vis = this.#visitor;
 
     for (;;) {
-      const resolvedResult = this.#visitResolvingCyclesAndReplacement(value, tag);
+      const resolvedResult = this.#visitResolvingCyclesAndReplacement(
+        value,
+        tag,
+      );
 
       switch (resolvedResult?.type) {
         case "visitSubtype": {
