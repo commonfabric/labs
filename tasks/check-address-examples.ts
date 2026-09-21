@@ -377,9 +377,20 @@ export function refusalMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** Keys an exemption by the file it is about and the string it names. */
-function exemptionKey(file: string, example: string): string {
-  return `${file} ${example}`;
+/**
+ * Keys an exemption by the file it is about and the string it names.
+ *
+ * The pair is encoded rather than joined. A join needs a separator neither
+ * half can hold, and a path and an address between them leave few characters
+ * that qualify; the ones that do are control characters, which source may not
+ * carry — a single NUL makes `grep` skip the whole file, which is what
+ * `deno task check-control-characters` exists to stop. Encoding needs no such
+ * character: the pair round-trips whatever either half holds, and the key is
+ * built from the data rather than written into this file, so no escape here
+ * has to survive being typed.
+ */
+export function exemptionKey(file: string, example: string): string {
+  return JSON.stringify([file, example]);
 }
 
 /**

@@ -10,6 +10,7 @@ import {
   collectFindings,
   type Document,
   type Exemption,
+  exemptionKey,
   EXEMPTIONS,
   findingLocation,
   governedKind,
@@ -279,6 +280,30 @@ describe("check-address-examples", () => {
       expect(addressExample("//bakery/glaze-\n * tracker/items")).toBe(
         "//bakery/glaze-tracker/items",
       );
+    });
+  });
+
+  describe("exemptionKey()", () => {
+    it("returns a key holding no control character", () => {
+      // The key is built from data at run time, so what it holds is decided
+      // by the entry rather than by this file. A key joined on a control
+      // character puts one in a string nothing else would show: a NUL makes
+      // `grep` skip a whole file, so a search for the problem reports clean.
+
+      const control = String.fromCharCode(0);
+      const key = exemptionKey(`docs/a${control}.md`, `/@x/y${control}`);
+
+      expect([...key].some((character) => character.charCodeAt(0) < 0x20))
+        .toBe(false);
+    });
+
+    it("returns different keys where a bare join would agree", () => {
+      expect(exemptionKey("ab", "/c/d")).not.toBe(exemptionKey("a", "b/c/d"));
+    });
+
+    it("returns the same key for the same pair", () => {
+      expect(exemptionKey("docs/a.md", "/@x/y"))
+        .toBe(exemptionKey("docs/a.md", "/@x/y"));
     });
   });
 
