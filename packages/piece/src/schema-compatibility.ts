@@ -100,7 +100,8 @@ type ActivePairsByRoot = WeakMap<
  * The annotations omitted by keyword and equality comparisons. Two schemas
  * that differ only in these compare equally through {@link schemaSubtreesEqual}.
  * Nested-union splitting keeps `$comment` wrappers opaque because the runner
- * reserves some comment values for traversal markers.
+ * reserves some comment values for traversal markers;
+ * {@link sourceAlternativeAcceptedBy} says why that covers every comment.
  *
  * {@link ANNOTATION_KEYS} extends this set with four keywords the subset proof
  * likewise treats as annotations but the equality walk still compares:
@@ -1925,6 +1926,22 @@ function sourceAlternativeAcceptedBy(
       typeof fragment === "boolean" || fragment.anyOf === undefined ||
       Object.keys(fragment).some((key) =>
         key !== "anyOf" &&
+        // `$comment` is descriptive to this module but not to the runner,
+        // which reads a few reserved values (`emptyProperties`,
+        // `missingProperty`, `rejectedProperty`) as traversal markers. It
+        // recognizes them by the string alone, on any node, including a
+        // hand-written property schema that carries other keywords beside
+        // the marker, and treats such a node as a marker rather than as a
+        // schema to validate against. Splitting that wrapper would prove its
+        // branches while the runtime never checks them.
+        //
+        // Every `$comment` stays opaque, not only the reserved values. The
+        // runner keeps no shared list of them: `schema-view.ts` and
+        // `traverse.ts` each test their own, and the two do not test the
+        // same values, so a value check here would be a third private copy
+        // to drift. Narrowing this should wait for a runner-owned
+        // classifier. The cost is that an ordinary descriptive comment also
+        // stops this split; whole-branch and equality proofs are unaffected.
         (key === "$comment" || !DESCRIPTIVE_ANNOTATION_KEYS.has(key))
       )
     ) return false;
