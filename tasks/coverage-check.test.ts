@@ -11,6 +11,7 @@ import {
   type BaselineSample,
   COVERAGE_SUGGESTION_MARKER,
   type CoverageCommentPayload,
+  GitHubRateLimitError,
   PERF_METRICS_ARTIFACT_NAME,
   PERF_METRICS_FILE,
   type PRInfo,
@@ -33,8 +34,10 @@ import {
   type CoverageRatchetInput,
   CoverageRateLimitedError,
   currentWorkflowRunFromEvent,
+  EXPECTED_COVERAGE_ARTIFACT_NAMES,
   fetchAncestorRanks,
   fetchArtifactsForRunBestEffort,
+  fetchCurrentRunArtifacts,
   fetchGroupsChangedOnBase,
   fetchLatestBaselineRunSha,
   fetchPRForCommitWithError,
@@ -1730,6 +1733,125 @@ Deno.test("main reports no coverage data and exits cleanly without coverage arti
   } finally {
     await Deno.remove(eventPath).catch(() => {});
     await Deno.remove("perf-metrics.json").catch(() => {});
+  }
+});
+
+/** GitHub's answer when the token has spent its hourly request window. */
+function spentRateLimitWindow(): Response {
+  return new Response('{"message":"API rate limit exceeded for user"}', {
+    status: 403,
+    statusText: "Forbidden",
+    headers: { "x-ratelimit-remaining": "0" },
+  });
+}
+
+Deno.test("fetchCurrentRunArtifacts reads the downloaded artifacts when a rate limit refuses the listing", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "coverage-artifacts-" });
+  try {
+    await Deno.mkdir(path.join(dir, "coverage-profile-workspace-1"));
+    await Deno.mkdir(path.join(dir, "coverage-profile-runner-1"));
+    await Deno.writeTextFile(path.join(dir, "stray.txt"), "not an artifact");
+
+    const captured = await captureConsoleAsync(() =>
+      withMockFetch(
+        spentRateLimitWindow,
+        () => fetchCurrentRunArtifacts(123, dir),
+      )
+    );
+
+    assertEquals(
+      captured.result.sort((a, b) => a.name.localeCompare(b.name)),
+      [
+        makeArtifact(0, "coverage-profile-runner-1"),
+        makeArtifact(0, "coverage-profile-workspace-1"),
+      ].map((artifact) => ({ ...artifact, size_in_bytes: 0 })),
+    );
+    const warnings = captured.warnings.join("\n");
+    assertStringIncludes(
+      warnings,
+      "GitHub API rate limit while listing this run's artifacts; reading " +
+        `the ones downloaded to \`${dir}\` instead`,
+    );
+    assertStringIncludes(warnings, "403 Forbidden (rate limit)");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("fetchCurrentRunArtifacts rethrows a rate limit with no downloaded artifacts to read", async () => {
+  await withMockFetch(
+    spentRateLimitWindow,
+    () =>
+      assertRejects(
+        () => fetchCurrentRunArtifacts(123, undefined),
+        GitHubRateLimitError,
+      ),
+  );
+});
+
+Deno.test("fetchCurrentRunArtifacts rethrows a refusal that is not a rate limit", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "coverage-artifacts-" });
+  try {
+    await Deno.mkdir(path.join(dir, "coverage-profile-workspace-1"));
+
+    // A refusal the token would meet again after any wait is not one the
+    // downloaded artifacts should paper over.
+    await withMockFetch(
+      () => new Response("forbidden", { status: 403, statusText: "Forbidden" }),
+      () =>
+        assertRejects(
+          () => fetchCurrentRunArtifacts(123, dir),
+          Error,
+          "GitHub API GET 403 Forbidden: /repos/",
+        ),
+    );
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("main measures the downloaded coverage when a rate limit refuses the current run's artifact listing", async () => {
+  const eventPath = await Deno.makeTempFile({ suffix: ".json" });
+  await Deno.writeTextFile(eventPath, JSON.stringify({ after: SHA_C }));
+  // Every expected artifact downloaded, each of them empty.
+  const dir = await Deno.makeTempDir({ prefix: "coverage-artifacts-" });
+  for (const name of EXPECTED_COVERAGE_ARTIFACT_NAMES) {
+    await Deno.mkdir(path.join(dir, name));
+  }
+
+  const currentRunId = 123;
+  try {
+    const captured = await captureConsoleAsync(() =>
+      withEnv(
+        {
+          GITHUB_TOKEN: "test-token",
+          GITHUB_RUN_ID: String(currentRunId),
+          GITHUB_EVENT_PATH: eventPath,
+          GITHUB_EVENT_NAME: "workflow_run",
+          GITHUB_SHA: SHA_C,
+          PR_NUMBER: "",
+          COVERAGE_ARTIFACTS_DIR: dir,
+        },
+        () =>
+          withMockFetch(
+            (input) =>
+              String(input).includes(`/actions/runs/${currentRunId}/artifacts`)
+                ? spentRateLimitWindow()
+                : jsonResponse({ workflow_runs: [] }),
+            () => withMockExit(() => main()),
+          ),
+      )
+    );
+
+    // Extraction got as far as reading the downloaded directories, which is
+    // what finds them empty; the listing's refusal stopped nothing.
+    const errors = captured.errors.join("\n");
+    assertStringIncludes(errors, "contained no profile or LCOV files.");
+    assertFalse(errors.includes("Could not fetch current run artifacts"));
+  } finally {
+    await Deno.remove(eventPath).catch(() => {});
+    await Deno.remove(dir, { recursive: true });
+    await Deno.remove(PERF_METRICS_FILE).catch(() => {});
   }
 });
 

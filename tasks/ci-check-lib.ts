@@ -407,6 +407,12 @@ function isSecondaryRateLimit(resp: Response, body: string): boolean {
   return isRateLimitResponse(resp, body) && !isOverPrimaryRateLimit(resp);
 }
 
+/**
+ * Helper for the GitHub client, which composes the error a refusal raises. A
+ * limit says so in its message as well as in its type, because a caller that
+ * treats every failure alike still logs the message, and a 403 read there
+ * would otherwise pass for a permission failure.
+ */
 function githubApiError(
   resp: Response,
   path: string,
@@ -414,10 +420,11 @@ function githubApiError(
   body: string,
 ): Error {
   const statusText = resp.statusText ? ` ${resp.statusText}` : "";
-  const message = `GitHub API ${method} ${resp.status}${statusText}: ${path}`;
-  return isRateLimitResponse(resp, body)
-    ? new GitHubRateLimitError(message)
-    : new Error(message);
+  const rateLimited = isRateLimitResponse(resp, body);
+  const message = `GitHub API ${method} ${resp.status}${statusText}${
+    rateLimited ? " (rate limit)" : ""
+  }: ${path}`;
+  return rateLimited ? new GitHubRateLimitError(message) : new Error(message);
 }
 
 /**

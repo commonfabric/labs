@@ -1166,8 +1166,8 @@ Deno.test("fetchCurrentPRBody falls back to the event body if the live request f
     assertEquals(result.body, "EVENT BODY");
     assertEquals(result.source, "event-fallback");
     assertEquals(
-      result.errorMessage?.includes("GitHub API GET 429:"),
-      true,
+      result.errorMessage,
+      "GitHub API GET 429 (rate limit): /repos/commonfabric/labs/pulls/3427",
     );
   } finally {
     globalThis.fetch = originalFetch;
@@ -1273,7 +1273,10 @@ Deno.test("githubGet reports a spent request window as a rate limit, not a refus
       () => githubGet("/repos/commonfabric/labs/actions/runs"),
       GitHubRateLimitError,
     );
-    assertStringIncludes(error.message, "GitHub API GET 403 Forbidden");
+    assertEquals(
+      error.message,
+      "GitHub API GET 403 Forbidden (rate limit): /repos/commonfabric/labs/actions/runs",
+    );
   });
 
   // A window that is spent does not refill inside one job, so it is not retried.
@@ -1383,7 +1386,7 @@ Deno.test("githubGet reads a secondary limit out of a refusal that sends no head
       // The body classified the refusal and stayed out of what is reported.
       assertEquals(
         error.message,
-        "GitHub API GET 403 Forbidden: /repos/commonfabric/labs/actions/runs",
+        "GitHub API GET 403 Forbidden (rate limit): /repos/commonfabric/labs/actions/runs",
       );
     },
   );
