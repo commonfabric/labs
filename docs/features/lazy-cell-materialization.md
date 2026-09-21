@@ -55,6 +55,14 @@ Accessing one of these boundaries therefore registers reads throughout its
 selected subtree. An untouched sibling remains deferred. Cell handles retain
 their ordinary traversal boundaries.
 
+A subtree evaluated whole can dead-end at a linked document the replica cannot
+serve. Nothing in it is then known to be invalid, so the read refuses as
+unresolved input — the same `UnresolvedInputError` a view raises when its own
+link chain dead-ends — and neither a property default nor an array substitute
+answers for it. Any unserved hop inside the subtree counts, including one the
+failure did not turn on; the refusal errs toward waiting, and the reader runs
+again when the document arrives.
+
 A mismatch the reader does touch surfaces at the **nearest enclosing property**,
 which is where an eager read decides the same question:
 
@@ -91,6 +99,13 @@ wrong. These rules hold that agreement:
   decided by the traverser. `oneOf` requires exactly one match; `allOf` requires
   every branch to match. A failed branch cannot contribute properties to an
   `anyOf` result.
+- **A handle branch the value selects is minted as a handle.** An optional
+  handle — `Cell<T> | undefined` — generates as a union whose one branch
+  declares `asCell`, and the entry point's dispatch sees the marker only at the
+  top of a schema. Once the value selects that branch, the view hands the
+  selected schema back to the entry point, whose dispatch mints the handle,
+  unwraps the consumed marker off the handle's own schema, and applies the
+  follow-scope cap. A reader gets the same `Cell` either way.
 - **Object property defaults follow filtering.** A missing or rejected
   declared property takes its non-null default, including when it is required.
   A property default of `null` does not fill an absent or rejected property.
@@ -99,8 +114,9 @@ wrong. These rules hold that agreement:
 - **Invalid array items take a permitted substitute.** `undefined` takes
   precedence over `null`; when neither is permitted, the mismatch refuses.
   Both paths use the same fallback selector. An unavailable linked document
-  still raises the lazy read's `UnresolvedInputError`: its value is not known
-  to be invalid, so an array substitute does not satisfy that refusal.
+  still raises the lazy read's `UnresolvedInputError`, whether it is the item
+  itself or a link inside an item evaluated whole: its value is not known to be
+  invalid, so an array substitute does not satisfy that refusal.
 - **An inline array element is identified by its value.** `toCell` on such an
   element, including a nested array, must not name the array's index; written
   elsewhere that link would follow whatever lands at the index next. Eager

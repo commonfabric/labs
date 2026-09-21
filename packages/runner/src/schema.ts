@@ -1302,6 +1302,27 @@ export function validateAndTransform(
       tx.noteSchemaRefusal(refusal);
       throw refusal;
     }
+    // A handle branch the value selected carries the marker the dispatch above
+    // could not see under the union — `Cell<T> | undefined` generates as a
+    // union whose one branch declares `asCell`, and `hasAsCell` holds for a
+    // union only when every branch does. Hand the selected schema back
+    // through the front door rather than minting the handle here: the
+    // dispatch is where the consumed marker is unwrapped off the handle's own
+    // schema and where the follow-scope cap is applied, and it returns the
+    // handle without arriving here again.
+    if (SchemaObjectTraverser.hasAsCell(viewSchema)) {
+      return validateAndTransform(
+        runtime,
+        tx,
+        { link: { ...resolvedValueLink, schema: viewSchema }, cfcLabelView },
+        [],
+        {
+          synced: options?.synced,
+          mismatchThrows: options?.mismatchThrows,
+          viewChild: true,
+        },
+      );
+    }
     // Combinators decide which entire branches validate before merging their
     // results. Evaluating that boundary uses the traverser; a shallow schema
     // union would admit values assembled from different, failing branches.
@@ -1339,6 +1360,16 @@ export function validateAndTransform(
   const runIdentity =
     waveRunContextOf(tx as IExtendedStorageTransaction)?.scopeKeyIdentity ??
       (tx as IExtendedStorageTransaction).tx?.scopeKeyIdentity;
+  // A hop the traversal follows to a doc this replica cannot serve is the
+  // eager counterpart of `pendingHopDoc`: nothing about the value behind it is
+  // knowable yet. The first one is kept so that a failed traversal a view
+  // asked for refuses as unresolved input, which no default or array
+  // substitute may answer, rather than as a mismatch one may. Any unserved
+  // hop in the subtree counts, including one under a property the failure
+  // did not turn on; the refusal errs toward waiting, and the reader runs
+  // again when the doc arrives.
+  let unservedHop: NormalizedFullLink | undefined;
+  const kickAbsentTargetLoads = !usesLocalReads(tx);
   const traverser = new SchemaObjectTraverser<any>(
     tx!,
     selector,
@@ -1346,25 +1377,29 @@ export function validateAndTransform(
       runIdentity ?? runtime.scopeKeyIdentity,
       options?.traverseCells ?? false,
       undefined,
-      // Absent link targets get an async load kicked (cross-space always;
-      // same-space only when the replica has never seen the doc); the
-      // tracked read re-runs the reader on arrival. A served per-instance
-      // run's absent target loads AS that run's instance (stage A — the
-      // runner's explicit-instance read).
-      usesLocalReads(tx)
-        ? undefined
-        : (missing, sourceSpace) =>
-          runtime.ensureLinkedDocLoaded(missing, sourceSpace, runIdentity),
+      (missing, sourceSpace) => {
+        unservedHop ??= missing;
+        // Absent link targets get an async load kicked (cross-space always;
+        // same-space only when the replica has never seen the doc); the
+        // tracked read re-runs the reader on arrival. A served per-instance
+        // run's absent target loads AS that run's instance (stage A — the
+        // runner's explicit-instance read).
+        if (kickAbsentTargetLoads) {
+          runtime.ensureLinkedDocLoaded(missing, sourceSpace, runIdentity);
+        }
+      },
     ),
     objectCreator,
   );
   const { ok: val, error } = traverser.traverse(doc, link);
   if (error !== undefined && options?.mismatchThrows === true) {
     tx.readValueOrThrow(resolvedValueLink);
-    const refusal = new SchemaMismatchError(
-      resolvedValueLink,
-      "selected subtree does not match the schema",
-    );
+    const refusal = unservedHop === undefined
+      ? new SchemaMismatchError(
+        resolvedValueLink,
+        "selected subtree does not match the schema",
+      )
+      : new UnresolvedInputError(unservedHop);
     tx.noteSchemaRefusal(refusal);
     throw refusal;
   }

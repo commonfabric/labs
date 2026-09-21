@@ -12,7 +12,7 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { toCell } from "../src/back-to-cell.ts";
-import { type Cell } from "../src/cell.ts";
+import { type Cell, isCell } from "../src/cell.ts";
 import { snapshotQueryResult } from "../src/query-result-proxy.ts";
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -145,6 +145,17 @@ const cases: ProjectionCase[] = [
       required: ["n"],
     },
     expected: { n: 7 },
+  },
+  {
+    name: "omits a rejected property whose only default sits in a branch",
+    value: { n: true },
+    schema: {
+      type: "object",
+      properties: {
+        n: { anyOf: [{ type: "number", default: 7 }, { type: "string" }] },
+      },
+    },
+    expected: {},
   },
   {
     name: "omits an optional property with multiple matching `oneOf` branches",
@@ -361,6 +372,105 @@ describe("materialization-parity", () => {
         items: { type: ["number", "null"] },
       }, tx).get();
       expect(() => value[0]).toThrow(UnresolvedInputError);
+      expect(tx.takeSchemaRefusal()).toBeInstanceOf(UnresolvedInputError);
+    } finally {
+      await tx.commit();
+    }
+  });
+
+  it("mints a handle for the selected branch of an optional handle union", async () => {
+    const handle: JSONSchema = {
+      anyOf: [{ type: "number", asCell: ["cell"] }, { type: "undefined" }],
+    };
+    const write = runtime.edit();
+    runtime.getCell(space, "root-handle", undefined, write).setRaw(1);
+    runtime.getCell(space, "nested-handle", undefined, write).setRaw({
+      h: 1,
+    });
+    await write.commit();
+    for (const lazy of [false, true]) {
+      const tx = runtime.edit();
+      tx.markLazyMaterialize(lazy);
+      try {
+        const root = runtime.getCell<Cell<number>>(
+          space,
+          "root-handle",
+          handle,
+          tx,
+        ).get();
+        expect(isCell(root)).toBe(true);
+        expect(root.get()).toBe(1);
+        const nested = runtime.getCell<{ h: Cell<number> }>(
+          space,
+          "nested-handle",
+          { type: "object", properties: { h: handle } },
+          tx,
+        ).get();
+        expect(isCell(nested.h)).toBe(true);
+        expect(nested.h.get()).toBe(1);
+      } finally {
+        await tx.commit();
+      }
+    }
+  });
+
+  it("refuses an unavailable link inside an array item even when a null substitute is allowed", async () => {
+    const write = runtime.edit();
+    const missing = runtime.getCell(space, "missing-child", undefined, write);
+    runtime.getCell(space, "missing-in-item", undefined, write).setRaw([
+      { n: missing.getAsLink() },
+    ]);
+    await write.commit();
+    const tx = runtime.edit();
+    tx.markLazyMaterialize(true);
+    try {
+      const value = runtime.getCell<({ n: number } | null)[]>(
+        space,
+        "missing-in-item",
+        {
+          type: "array",
+          items: {
+            type: ["object", "null"],
+            properties: { n: { type: "number" } },
+            required: ["n"],
+          },
+        },
+        tx,
+      ).get();
+      expect(() => value[0]).toThrow(UnresolvedInputError);
+      expect(tx.takeSchemaRefusal()).toBeInstanceOf(UnresolvedInputError);
+    } finally {
+      await tx.commit();
+    }
+  });
+
+  it("refuses an unavailable link inside a property that declares a default", async () => {
+    const write = runtime.edit();
+    const missing = runtime.getCell(space, "missing-boxed", undefined, write);
+    runtime.getCell(space, "missing-in-box", undefined, write).setRaw({
+      box: { n: missing.getAsLink() },
+    });
+    await write.commit();
+    const tx = runtime.edit();
+    tx.markLazyMaterialize(true);
+    try {
+      const value = runtime.getCell<{ box: { n: number } }>(
+        space,
+        "missing-in-box",
+        {
+          type: "object",
+          properties: {
+            box: {
+              type: "object",
+              properties: { n: { type: "number" } },
+              required: ["n"],
+              default: { n: 7 },
+            },
+          },
+        },
+        tx,
+      ).get();
+      expect(() => value.box).toThrow(UnresolvedInputError);
       expect(tx.takeSchemaRefusal()).toBeInstanceOf(UnresolvedInputError);
     } finally {
       await tx.commit();

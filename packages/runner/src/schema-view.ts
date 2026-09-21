@@ -577,6 +577,14 @@ function createObjectView(
       );
     } catch (error) {
       if (!isSchemaMismatchError(error)) throw error;
+      // A subtree evaluated whole for its default can dead-end at a doc the
+      // replica cannot serve. Nothing in it is known to be invalid, so neither
+      // the default nor absence answers for it, and the refusal stands. The
+      // property's own dead-end never arrives here: the entry point stands
+      // the declared default in before it can refuse.
+      if (defaultSchema !== undefined && isUnresolvedInputError(error)) {
+        throw error;
+      }
       if (defaultSchema !== undefined) {
         const fallback = applyDefault();
         if (fallback !== undefined) {
@@ -677,14 +685,15 @@ function createArrayView(
       path: [...link.path, key],
       schema: itemSchema,
     };
-    // An inline object element takes its identity from its own value, not from
-    // the slot it sits in. `toCell` on `xs[0]` would otherwise hand back a link
-    // to INDEX 0 of this array: write that anywhere and it names whatever lands
-    // there next rather than this object. Eager traversal rebases the same
-    // elements onto a `data:` URI, and the value is already in hand here, so
-    // the identity costs no read. An element that is itself a link already
-    // carries its own identity, and an `asCell` item is a handle whose link is
-    // the point of it.
+    // An inline element that is a container — an object, or a nested array —
+    // takes its identity from its own value, not from the slot it sits in.
+    // `toCell` on `xs[0]` would otherwise hand back a link to INDEX 0 of this
+    // array: write that anywhere and it names whatever lands there next rather
+    // than this element. Eager traversal rebases the same elements onto a
+    // `data:` URI, and the value is already in hand here, so the identity
+    // costs no read. An element that is itself a link already carries its own
+    // identity, and an `asCell` item is a handle whose link is the point of
+    // it; `arrayItemUsesValueIdentity` is the one predicate both paths apply.
     if (arrayItemUsesValueIdentity(item, itemSchema)) {
       // The read still belongs to the slot, and recursively: the identity is
       // derived from the whole element value, so anything inside it changing
@@ -729,7 +738,8 @@ function createArrayView(
       return resolveElement(index);
     } catch (error) {
       if (!isSchemaMismatchError(error)) throw error;
-      // An unavailable hop target has no value to validate or substitute yet.
+      // An unavailable hop target has no value to validate or substitute yet,
+      // whether it is the slot's own or one inside an item evaluated whole.
       if (isUnresolvedInputError(error)) throw error;
       const fallbackType = arrayItemFallbackType(
         childSchema(schema, String(index)),

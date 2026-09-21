@@ -61,10 +61,13 @@ the data has stopped matching.
 
 **Schema narrowing already exists.** `ContextualFlowControl.schemaAtPath`
 ([`cfc.ts`](../../packages/runner/src/cfc.ts)) narrows a schema by a path,
-resolves `$ref`, unions `anyOf` / `oneOf` branches, and caches per interned
-schema. `canBranchMatch`, in `traverse.ts`, is a shallow branch prefilter — type
-check plus required-key presence, no descent. Together these are the narrowing
-primitive a lazy proxy needs.
+resolves `$ref`, and caches per interned schema. That is the narrowing a view
+applies to an ordinary container child. It does not decide a combinator: the
+view defers `anyOf`, `oneOf` and `allOf` to the eager traverser at the position
+where they are accessed, because whether a branch matches is a question about
+the whole branch. `canBranchMatch`, in `traverse.ts`, stays a shallow prefilter
+on the eager path — type check plus required-key presence, no descent — and
+nothing in the view is decided by it.
 
 **The "argument did not resolve" path.** `readJavaScriptArgument`
 ([`runner.ts`](../../packages/runner/src/runner.ts)) computes `isValidArgument`

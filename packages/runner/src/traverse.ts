@@ -5748,6 +5748,12 @@ export function schemaAcceptsType(
  * Returns the schema supplying an object property's fallback after projection.
  * Only declared properties participate; a null default does not fill a missing
  * or rejected property. Top-level absent-value defaults are a separate rule.
+ *
+ * The default is the property schema's own, read after its root `$ref` is
+ * resolved. One declared inside a combinator branch of that schema is not a
+ * property fallback: it is applied, on both read paths, only by traversing
+ * that branch against a value, and an absent or rejected property has no
+ * branch traversed.
  */
 export function getPropertyDefaultSchema(
   schema: JSONSchema | undefined,
