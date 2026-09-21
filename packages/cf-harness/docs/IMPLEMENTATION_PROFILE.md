@@ -138,32 +138,34 @@ readiness.
   tool and allowlisted skill scripts, bound to an explicit local CDP lease the
   harness attaches itself, and the `run_pattern` tool, which compiles
   model-authored pattern source and runs it against the configured Fabric space
-  over a lazy authorized session. The Fabric identity remains outside Docker,
-  the session is constrained to one configured space, and the separate
-  `assign_slug` tool registers a piece the run holds a handle to in that space's
-  piece list under a caller-chosen slug. Neither surface admits arbitrary host
-  commands, and both fabric-session tools are present only when a fabric session
-  is configured. Dedicated Loom tools additionally invoke three fixed command
-  ids through an operator-configured host CLI, using argv and stdin with pinned
-  routing and attribution. This is an authority-only host boundary, not a new
-  flow-aware store commit gate; see [LOOM_AUTHORING.md](LOOM_AUTHORING.md). The
-  agent result writer (`src/result-writer.ts`) is a third trusted host path and
-  not a model tool: a host caller invokes it after a run reaches its structured
-  result, and it writes that result into the same configured space over the same
-  session. Its bounded authority is the session's (AH-TOOL-7): every handle the
-  result names must be one the run's table holds, a cell handle becomes a link
-  and never a copy, a non-cell referent becomes a document under the label its
-  tool reported when the result cites it, and an uncited referent passes the
-  same write admission in an isolated aborted transaction and contributes
-  through an opaque runtime CONTENT-observation receipt. The cells the run
-  observed and the cited referents are read through the writing transaction so
-  the runner derives the inline text's label without making uncited content
-  durable. The write is attributed to the `agent` builtin so the result carries
-  the runtime-minted `LlmDerived` family, and the run's observation ceiling is
-  declared as the result document's store policy so the runner's commit boundary
-  — not the writer — decides whether the derived join fits. A refusal reaches
-  the caller as a typed failure carrying the refusal code and the boundary's
-  structured detail, with no label atom in its message.
+  over a lazy authorized session. The Fabric identity remains outside Docker.
+  The session runs pieces in the configured space and admits input references
+  from that space or foreign DIDs the operator lists with their hosts. The
+  separate `assign_slug` tool registers a piece the run holds a handle to in
+  that space's piece list under a caller-chosen slug. Neither surface admits
+  arbitrary host commands, and both fabric-session tools are present only when a
+  fabric session is configured. Dedicated Loom tools additionally invoke three
+  fixed command ids through an operator-configured host CLI, using argv and
+  stdin with pinned routing and attribution. This is an authority-only host
+  boundary, not a new flow-aware store commit gate; see
+  [LOOM_AUTHORING.md](LOOM_AUTHORING.md). The agent result writer
+  (`src/result-writer.ts`) is a third trusted host path and not a model tool: a
+  host caller invokes it after a run reaches its structured result, and it
+  writes that result into the same configured space over the same session. Its
+  bounded authority is the session's (AH-TOOL-7): every handle the result names
+  must be one the run's table holds, a cell handle becomes a link and never a
+  copy, a non-cell referent becomes a document under the label its tool reported
+  when the result cites it, and an uncited referent passes the same write
+  admission in an isolated aborted transaction and contributes through an opaque
+  runtime CONTENT-observation receipt. The cells the run observed and the cited
+  referents are read through the writing transaction so the runner derives the
+  inline text's label without making uncited content durable. The write is
+  attributed to the `agent` builtin so the result carries the runtime-minted
+  `LlmDerived` family, and the run's observation ceiling is declared as the
+  result document's store policy so the runner's commit boundary — not the
+  writer — decides whether the derived join fits. A refusal reaches the caller
+  as a typed failure carrying the refusal code and the boundary's structured
+  detail, with no label atom in its message.
 - Network: explicit in configuration but still provisional. Sandboxed `bash`
   applies a direct-`curl` destination guard; `web_fetch` and web child profiles
   have their own bounded request policies.

@@ -231,8 +231,9 @@ export type DescribeHandleLabel = DisclosedCfcLabel;
  *    of the pattern behind it, which is the shape an agent holding a handle to
  *    that piece would be wiring into a pattern of its own. The read is of the
  *    document's declared schema and of nothing else; the referent's value is
- *    not read, and a reference outside the session's own space is not
- *    followed.
+ *    not read. References are followed within the session's own space and
+ *    foreign spaces whose DID and host the operator admits at startup, under
+ *    the session's identity and CFC posture.
  * 2. The schema the mint recorded out of the harness's OWN work — the result
  *    schema of a pattern this harness compiled and ran, marked
  *    `schemaSource: "harness"` on the entry.

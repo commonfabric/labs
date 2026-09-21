@@ -2,7 +2,7 @@
 
 Status: current implementation reference\
 Last verified: 2026-09-21\
-Revision: `90e1cfac7d+feedback-authors`
+Revision: `7d22be553d`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -28,10 +28,11 @@ The runtime has four main boundaries:
    `runsc-cfc`. The browser child is a constrained host-adjacent profile whose
    typed `browser` tool the harness binds to a leased local CDP endpoint itself.
    The optional `run_pattern` tool is a distinct trusted-host path whose Fabric
-   identity stays outside Docker and whose authority is constrained to one
-   configured space. The agent result writer is a second such path, invoked by a
+   identity stays outside Docker. It runs pieces in the configured space and
+   admits input references from that space or foreign DIDs the operator lists
+   with their hosts. The agent result writer is a second such path, invoked by a
    host caller rather than by the model, writing a run's structured result into
-   that same space.
+   the configured space.
 4. The artifact store records run state, the model-facing transcript, a sibling
    record of the omission rules and full-artifact locations applied to each tool
    result, reports, capability and policy snapshots, tool outputs, child

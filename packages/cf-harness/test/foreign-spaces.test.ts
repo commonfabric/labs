@@ -41,11 +41,14 @@ describe("foreign-spaces", () => {
         null,
         "foreign",
         { foreign: "https://foreign.example" },
+        { "did:key:": "https://foreign.example" },
+        { "did:key:z Foreign": "https://foreign.example" },
         { [FOREIGN]: 1 },
         { [FOREIGN]: "file:///tmp" },
         { [FOREIGN]: "https://user:password@foreign.example" },
         { [FOREIGN]: "https://foreign.example/path" },
         { [FOREIGN]: "https://foreign.example/?query=yes" },
+        { [FOREIGN]: "https://foreign.example/#frag" },
       ]
     ) {
       expect(() => validateHarnessForeignSpaces(value)).toThrow();
