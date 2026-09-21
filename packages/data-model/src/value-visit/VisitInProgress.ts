@@ -318,7 +318,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
 
       switch (result?.type) {
         case "recurse": {
-          return this.#adjustRecurseForm(result, value);
+          return this.#adjustRecurseForm(result, value, tag);
         }
 
         case "replace": {
@@ -520,19 +520,15 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
   #adjustRecurseForm(
     result: RecurseForm,
     finalValue: FabricValuePlus<PlusType>,
-    finalValueTagIfKnown?: FabricValuePlusTag | null,
+    finalValueTag: FabricValuePlusTag,
   ): RecurseOfForm<PlusType> {
-    const tag = (finalValueTagIfKnown === undefined)
-      ? this.#tagOfValueElseNull(finalValue)
-      : finalValueTagIfKnown;
-
-    switch (tag) {
+    switch (finalValueTag) {
       case VALUE_TAGS.Array:
       case VALUE_TAGS.FabricInstance:
       case VALUE_TAGS.Object: {
         return {
           type: "recurseOf",
-          containerTag: tag,
+          containerTag: finalValueTag,
           container: finalValue as FabricContainerValuePlus<PlusType>,
           doKeys: result.doKeys,
           doValues: result.doValues,
