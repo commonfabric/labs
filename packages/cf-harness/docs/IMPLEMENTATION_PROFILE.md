@@ -235,15 +235,16 @@ shapeless token remains an ordinary bounded tool result rather than a
 dereference path.
 
 `run_pattern` accepts at most 256 KiB of inline source. It resolves whole-string
-LLM-friendly link inputs to live cells only within the configured space and
-checks declared inputs, opaque-link containment, and argument schemas before
-piece creation. Success returns the result reference and an optional
-schema-sanitized value while raw evidence stays in artifacts; the created piece
-stays out of the space's piece list. Naming is the separate `assign_slug` tool:
-it takes a handle token referring to a piece plus a slug, registers the piece in
-the list, points the slug at it, and returns the slug and, when possible, an
-openable URL. Cancellation of `run_pattern` stops the created piece. The session
-separately records its Fabric CFC enforcement and flow-label posture.
+LLM-friendly link inputs to live cells in the configured space and foreign
+spaces whose DID and host the operator admits at startup. It checks declared
+inputs, opaque-link containment, and argument schemas before piece creation.
+Success returns the result reference and an optional schema-sanitized value
+while raw evidence stays in artifacts; the created piece stays out of the
+space's piece list. Naming is the separate `assign_slug` tool: it takes a handle
+token referring to a piece plus a slug, registers the piece in the list, points
+the slug at it, and returns the slug and, when possible, an openable URL.
+Cancellation of `run_pattern` stops the created piece. The session separately
+records its Fabric CFC enforcement and flow-label posture.
 
 Current child profiles are `default`, `browser`, `web_fetch`, `web_search`, and
 `pattern-author`. Each profile supplies an exact tool/network/skill policy.

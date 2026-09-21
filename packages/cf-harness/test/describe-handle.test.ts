@@ -1076,9 +1076,7 @@ describe("describe_handle", () => {
     });
 
     it("reports an address the session's space does not hold as shapeless", async () => {
-      // The session's authority ends at its own space, and an address it
-      // cannot state a shape for is answered as absent rather than as a
-      // failed call.
+      // A missing document contributes no shape rather than failing the call.
       const minted = await mintAddressHandle(
         createHarnessHandleTable("run-describe"),
         REF_A,
