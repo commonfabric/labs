@@ -2,6 +2,23 @@
 
 `RuntimeClient` connects a host to the Common Fabric runtime and renderer.
 
+## Cell write acknowledgments
+
+`CellHandle` exposes three overwrite contracts:
+
+| Method        | Local display                                                                    | Promise completion                                    | Operation queue                                         |
+| ------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------- |
+| `set()`       | Publishes an optimistic handle value immediately                                 | Request acknowledgment; transport failures are logged | Releases after acknowledgment                           |
+| `setStrict()` | Publishes after commit if no newer write or delivery superseded it               | Commit outcome; rejects refusal                       | Holds subsequent operations until commit                |
+| `setForUI()`  | The calling control owns its optimistic display; subscriptions update the handle | Commit outcome; rejects refusal                       | Releases after dispatch so subsequent input can proceed |
+
+`setForUI()` is for controls that protect a pending local edit while observing
+the stored value through a subscription. A matching value delivery can still be
+speculative; the control retains that edit until the commit outcome arrives. A
+refused write must release the edit and repaint from the bound state. The commit
+promise is distinct from the subscription stream: resolving it does not itself
+publish a value or guarantee that a component has rendered.
+
 ## Refused event admission
 
 The `eventintentoutcome` event reports a refused event admission to every

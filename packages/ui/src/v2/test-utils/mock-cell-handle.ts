@@ -88,7 +88,11 @@ class MockCellNetwork {
     value: unknown,
   ): void {
     const root = this.#roots.get(this.#rootKey(cellRef));
-    if (!root || cellRef.path.length === 0) return;
+    if (!root) return;
+    if (cellRef.path.length === 0) {
+      root[$onCellUpdate](value);
+      return;
+    }
 
     // Reconstruct the root's full value with the nested path updated
     const rootValue = root.get();
@@ -142,6 +146,7 @@ function createMockConnection(
   network: MockCellNetwork,
 ): InitializedRuntimeConnection {
   return {
+    signal: new AbortController().signal,
     request: (data: { type: string; cell?: CellRef; value?: unknown }) => {
       if (data.type === "cell:set" && data.cell && data.value !== undefined) {
         network.handleCellSet(data.cell, data.value);
@@ -171,7 +176,10 @@ function createMockConnection(
 function createMockRuntimeClient(
   conn: InitializedRuntimeConnection,
 ): RuntimeClient {
-  return { [$conn]: () => conn } as unknown as RuntimeClient;
+  return {
+    [$conn]: () => conn,
+    signal: conn.signal,
+  } as unknown as RuntimeClient;
 }
 
 /**
