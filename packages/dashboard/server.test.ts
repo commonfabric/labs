@@ -486,6 +486,59 @@ Deno.test("an update still running after one minute stays gray until it complete
   }
 });
 
+Deno.test("an intermediate view with no chart keeps the chart on the tile", async () => {
+  const charted: TileView = {
+    label: "charted flaky tests",
+    status: "good",
+    value: "last value",
+    extra: "<span>last chart</span>",
+    duration: 3_600_000,
+    alignChartBottom: true,
+  };
+  const final = deferred<TileView>();
+  let publishIntermediate = (_view: TileView) => {};
+  const tile: Tile = {
+    id: "test-flakes",
+    intervalMs: 0,
+    collect(_ctx, publish) {
+      publishIntermediate = publish ?? publishIntermediate;
+      return final.promise;
+    },
+  };
+  await tick([fake("test-flakes", () => charted)]);
+  const collection = tick([tile]);
+  try {
+    publishIntermediate({
+      label: "charted flaky tests",
+      status: "good",
+      value: "headline ahead of the chart",
+    });
+    const intermediate = tileHtml("charted flaky tests");
+    expect(intermediate).toContain("headline ahead of the chart");
+    expect(intermediate).toContain("last chart");
+    expect(intermediate).toContain("1 hour");
+
+    // A chart the intermediate view brings of its own is the one to show.
+    publishIntermediate({
+      label: "charted flaky tests",
+      status: "good",
+      value: "headline with a chart",
+      extra: "<span>its own chart</span>",
+    });
+    const carried = tileHtml("charted flaky tests");
+    expect(carried).toContain("its own chart");
+    expect(carried).not.toContain("last chart");
+  } finally {
+    final.resolve({ label: "charted flaky tests", status: "good", value: "complete" });
+    await collection;
+  }
+  // The completed view has every part, so a tile it leaves chartless is one.
+  const complete = tileHtml("charted flaky tests");
+  expect(complete).toContain("complete");
+  expect(complete).not.toContain("last chart");
+  expect(complete).not.toContain("its own chart");
+});
+
 Deno.test("a stale source log names its active GitHub operation", async () => {
   const realNow = Date.now;
   const realFetch = globalThis.fetch;
