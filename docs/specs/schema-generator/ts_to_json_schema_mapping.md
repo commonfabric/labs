@@ -750,7 +750,8 @@ name the emitting module does not import, and the
 `T & { readonly [DEFAULT_MARKER]: V }` arm of an expanded `Default`, which
 carries the default. Both cost whatever narrowing the node carried: the schema
 is then that of the whole declared value. Tested: scope-wrappers.test.ts, and
-end-to-end in ts-transformers `aliased-binding-declared-type.test.ts`.
+end-to-end in ts-transformers `aliased-binding-declared-type.test.ts` and
+`scoped-interface-schema.test.ts` (local, exported, and imported interfaces).
 
 A scope wrapper **as a union member throws** (`A scope wrapper cannot be a
 member of a union.`; tested, scope-wrappers.test.ts). The runtime reads a
