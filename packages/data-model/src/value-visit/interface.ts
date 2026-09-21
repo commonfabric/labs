@@ -187,9 +187,11 @@ export interface ValueVisitor<PlusType = never, ResultType = FabricValue> {
   ): LeafVisitorResult<PlusType, ResultType>;
 
   /**
-   * Visits the given arbitrary value. If this returns type `visitSubtype`, then
-   * the visitor system will call one of `visitFabricContainer()`,
-   * `visitPlusType()`, or `visitPrimitive()`.
+   * Visits the given arbitrary value. The visitor engine calls this method for
+   * every value it encounters, other than a container which is already in the
+   * middle of being visited (for which, see `visitCycle()`). `tag` is the tag
+   * of `value`, or `null` if `value` has no fabric shape and `isPlusType()` did
+   * not claim it.
    */
   visitValue(
     value: FabricValuePlus<PlusType>,

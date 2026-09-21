@@ -1,3 +1,5 @@
+import { type Primitive } from "@commonfabric/utils/types";
+
 import {
   FabricBytes,
   FabricEpochDay,
@@ -10,8 +12,10 @@ import {
 } from "@/fabric-primitives";
 import {
   type FabricArrayPlus,
+  type FabricContainerValuePlus,
   type FabricInstancePlus,
   type FabricPlainObjectPlus,
+  type FabricPrimitive,
   type FabricValue,
   type FabricValuePlus,
 } from "@/interface.ts";
@@ -147,7 +151,7 @@ export abstract class DefaultValueVisitor<
   visitFabricPlainObject(
     value: FabricPlainObjectPlus<PlusType>,
   ): LeafVisitorResult<PlusType, ResultType> {
-    return this.visitFabricContainerValue(value, VALUE_TAGS.Array);
+    return this.visitFabricContainerValue(value, VALUE_TAGS.Object);
   }
 
   /**
@@ -261,7 +265,7 @@ export abstract class DefaultValueVisitor<
    * of course just override this implementation.
    */
   visitFabricContainerValue(
-    _value: FabricValuePlus<PlusType>,
+    _value: FabricContainerValuePlus<PlusType>,
     _tag: FabricContainerValueTag,
   ): LeafVisitorResult<PlusType, ResultType> {
     return DO_RECURSE_VALUES;
@@ -272,7 +276,7 @@ export abstract class DefaultValueVisitor<
    * `visitPrimitiveValue()`.
    */
   visitFabricPrimitiveValue(
-    value: FabricValuePlus<PlusType>,
+    value: FabricPrimitive,
     tag: FabricPrimitiveValueTag,
   ): LeafVisitorResult<PlusType, ResultType> {
     return this.visitPrimitiveValue(value, tag);
@@ -283,7 +287,7 @@ export abstract class DefaultValueVisitor<
    * `visitPrimitiveValue()`.
    */
   visitJsPrimitiveValue(
-    value: FabricValuePlus<PlusType>,
+    value: Primitive,
     tag: JsPrimitiveTypeValueTag,
   ): LeafVisitorResult<PlusType, ResultType> {
     return this.visitPrimitiveValue(value, tag);
@@ -294,7 +298,7 @@ export abstract class DefaultValueVisitor<
    * `FabricPrimitive`s. If not overridden, this calls `visitAnyValue()`.
    */
   visitPrimitiveValue(
-    value: FabricValuePlus<PlusType>,
+    value: Primitive | FabricPrimitive,
     tag: PrimitiveValueTag,
   ): LeafVisitorResult<PlusType, ResultType> {
     return this.visitAnyValue(value, tag);
@@ -386,9 +390,26 @@ export abstract class DefaultValueVisitor<
         );
       }
 
+      case VALUE_TAGS.PlusType: {
+        return this.visitPlusType(value as PlusType);
+      }
+
       case null: {
         return this.visitUnrecognizedValue(value);
       }
+
+      default: {
+        // deno-coverage-ignore-start
+
+        // This is a defense-in-depth protection against a dishonest `tag`. The
+        // above covers every tag the parameter's type admits, which the
+        // `satisfies` holds this method to, so nothing else can reach here.
+        tag satisfies never;
+        throw new Error(
+          `Shouldn't happen: Got unrecognized \`tag\`: \`${tag}\``,
+        );
+      }
+        // deno-coverage-ignore-stop
     }
   }
 
