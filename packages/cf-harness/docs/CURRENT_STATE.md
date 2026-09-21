@@ -2,7 +2,7 @@
 
 Status: current implementation reference\
 Last verified: 2026-09-21\
-Revision: `0d95be8028+pending-captures`
+Revision: `666518baaa+publication-artifacts`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -438,8 +438,12 @@ The current package provides:
   as the request the pattern answers, the compiled argument and result schemas,
   and the published patterns the source imports. The tool's
   `patternPublication.status` is `queued`: the index has not confirmed
-  publication at tool return. Saved tool results remain snapshots of what was
-  known at return. The session's final ledger flush sends retained
+  publication at tool return. `patternPublication.patternId` retains the exact
+  identity queued by that `run_pattern` attempt. The `assign_slug` artifact's
+  `pieceId` joins its slug to the attempt's piece and publication across the run
+  family. Revisions publish nothing and leave that record intact; a separate
+  probe records a separate piece. Saved tool results remain snapshots of what
+  was known at return. The session's final ledger flush sends retained
   contributions; index refusals and other publication failures are logged
   without failing the pattern run. Automatic publication requests a record
   without search visibility; discoverability is earned from later evidence.

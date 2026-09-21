@@ -20,7 +20,10 @@ import {
   FileSystemHarnessArtifactStore,
   type HarnessArtifactStore,
 } from "../src/artifacts.ts";
-import type { HarnessTranscriptOmissions } from "../src/contracts/transcript-omissions.ts";
+import {
+  createHarnessTranscriptOmissions,
+  type HarnessTranscriptOmissions,
+} from "../src/contracts/transcript-omissions.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
 import { CAPABILITY_PROBE_SENTINEL } from "../src/diagnostics.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
@@ -375,11 +378,15 @@ describe("prompt-loop run_pattern model boundary", () => {
           }),
         );
       };
+      const artifactStore = new RecordingArtifactStore(
+        "run-pattern-registration",
+      );
       const loop = new CfHarnessPromptLoop({
         apiKey: "test-key",
         engine: new CfHarnessEngine({
           sandboxRuntime: new FakeSandboxRuntime(),
           runId: "run-pattern-registration",
+          artifactStore,
           model: "gpt-5.4",
           fabricSessionFactory: () => Promise.resolve({ pieces }),
         }),
@@ -406,6 +413,27 @@ describe("prompt-loop run_pattern model boundary", () => {
       expect(registered.length).toBe(1);
       expect(toolMessage?.content).not.toContain(registered[0].id);
       expect(toolMessage?.content).not.toContain("pieceId");
+      expect(
+        artifactStore.toolOutputs.find((entry) =>
+          entry.toolId === "assign_slug"
+        )?.output,
+      )
+        .toMatchObject({ slug: "doubling-report", pieceId: registered[0].id });
+      const named = result.runState.toolOutputs.find((entry) =>
+        entry.toolId === "assign_slug"
+      );
+      const omissions = createHarnessTranscriptOmissions(result.transcript);
+      expect(
+        omissions.results.find((entry) => entry.outputId === named?.outputId)
+          ?.rules,
+      )
+        .toEqual([{
+          rule: "artifact-only",
+          locations: [{
+            artifactPath: named?.artifactPath,
+            jsonPointer: "/pieceId",
+          }],
+        }]);
     } finally {
       await fabricRuntime.dispose();
       await storageManager.close();

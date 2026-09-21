@@ -23,6 +23,7 @@ import {
 } from "@commonfabric/piece";
 import { PiecesController } from "@commonfabric/piece/ops";
 import {
+  computeEntryIdentity,
   entityIdFrom,
   getEntityId,
   Runtime,
@@ -38,7 +39,11 @@ import {
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
-import { CfHarnessEngine } from "../src/engine.ts";
+import {
+  CfHarnessEngine,
+  type CreateHarnessEngineOptions,
+} from "../src/engine.ts";
+import { PatternIndexClient } from "../src/pattern-index/client.ts";
 import {
   HarnessInteractiveChatService,
   type HarnessInteractivePromptLoopFactory,
@@ -156,11 +161,12 @@ describe("assign-slug", () => {
     globalThis.fetch = originalFetch;
   });
 
-  function createEngine() {
+  function createEngine(options: CreateHarnessEngineOptions = {}) {
     return new CfHarnessEngine({
       sandboxRuntime: new FakeSandboxRuntime(),
       runId: `assign-slug-test-${crypto.randomUUID()}`,
       fabricSessionFactory: () => Promise.resolve({ pieces }),
+      ...options,
     });
   }
 
@@ -606,6 +612,8 @@ describe("assign-slug", () => {
       const output = result.output as AssignSlugToolSuccessOutput;
       expect(output.status).toBe("ok");
       expect(output.slug).toBe("doubling-report");
+      expect(output.pieceId).toBe(created.pieceId);
+      expect(created.patternPublication).toBeUndefined();
       // The URL is the session's API URL, the space name, and the slug.
       expect(output.url).toContain("http://toolshed.test/");
       expect(output.url).toContain("/doubling-report");
@@ -616,6 +624,121 @@ describe("assign-slug", () => {
       expect(await resolvePieceAddress(pieces, "doubling-report")).toBe(
         created.pieceId,
       );
+    });
+
+    it("joins the slug artifact to its published attempt across revision and an unrelated probe", async () => {
+      await linkDefaultPattern();
+      const artifactRoot = await Deno.makeTempDir();
+      const published: string[] = [];
+      const client = new PatternIndexClient({
+        baseUrl: "https://index.test",
+        signer,
+        fetchFn: (url, init) => {
+          const body = JSON.parse(String(init?.body));
+          if (String(url).endsWith("/publishPattern")) {
+            published.push(body.patternId);
+            return Promise.resolve(Response.json({
+              patternId: body.patternId,
+              created: true,
+            }));
+          }
+          return Promise.resolve(Response.json({ ok: true }));
+        },
+      });
+      try {
+        const publishingEngine = createEngine({
+          artifactRoot,
+          patternIndexClientFactory: () => Promise.resolve(client),
+        });
+        const created = await publishingEngine.invokeBuiltinTool(
+          "run_pattern",
+          {
+            sourceText: DOUBLING_PATTERN_SOURCE,
+            inputs: { n: 21 },
+            description: "Doubles a number",
+          },
+        );
+        const createdArtifact = JSON.parse(
+          await Deno.readTextFile(created.resultRef.artifactPath!),
+        ) as RunPatternToolSuccessOutput;
+        expect(createdArtifact.status).toBe("ok");
+        const publishedId = computeEntryIdentity("/main.tsx", [{
+          name: "/main.tsx",
+          contents: DOUBLING_PATTERN_SOURCE,
+        }]);
+        expect(createdArtifact.patternPublication).toMatchObject({
+          patternId: publishedId,
+          status: "queued",
+        });
+        expect(published).toEqual([]);
+        await publishingEngine.flushPatternIndexLedger();
+        expect(published).toEqual([publishedId]);
+
+        // Separate engines share the fabric but not a publication ledger,
+        // as a child that builds a piece and a parent that names it do.
+        const namingEngine = createEngine({
+          artifactRoot,
+          patternIndexClientFactory: () => Promise.resolve(client),
+        });
+        const revisedSource = DOUBLING_PATTERN_SOURCE.replace("n * 2", "n * 3");
+        const revised = await namingEngine.invokeBuiltinTool("revise_piece", {
+          token: createdArtifact.resultRef,
+          sourceText: revisedSource,
+        });
+        expect(revised.output.status).toBe("ok");
+        const source =
+          (await namingEngine.invokeBuiltinTool("read_piece_source", {
+            token: createdArtifact.resultRef,
+          })).output as ReadPieceSourceToolSuccessOutput;
+        expect(source.files.map((file) => file.contents)).toContain(
+          revisedSource,
+        );
+        await namingEngine.flushPatternIndexLedger();
+        expect(published).toEqual([publishedId]);
+
+        const probe = await namingEngine.invokeBuiltinTool("run_pattern", {
+          sourceText: DOUBLING_PATTERN_SOURCE.replace("n * 2", "n * 7"),
+          inputs: { n: 1 },
+          description: "An unrelated probe",
+        });
+        await namingEngine.flushPatternIndexLedger();
+        const probeArtifact = JSON.parse(
+          await Deno.readTextFile(probe.resultRef.artifactPath!),
+        ) as RunPatternToolSuccessOutput;
+        expect(probeArtifact.status).toBe("ok");
+        expect(published).toEqual([
+          publishedId,
+          probeArtifact.patternPublication?.patternId,
+        ]);
+        expect(probeArtifact.patternPublication?.patternId).not.toBe(
+          publishedId,
+        );
+
+        for (const _ of ["first assignment", "same-piece assignment"]) {
+          const named = await namingEngine.invokeBuiltinTool("assign_slug", {
+            token: createdArtifact.resultRef,
+            slug: "doubling-report",
+          });
+          const slugArtifact = JSON.parse(
+            await Deno.readTextFile(named.resultRef.artifactPath!),
+          ) as AssignSlugToolSuccessOutput;
+          expect(slugArtifact.status).toBe("ok");
+          expect(slugArtifact.slug).toBe("doubling-report");
+          const attempts = [createdArtifact, probeArtifact].filter(
+            (attempt) => attempt.pieceId === slugArtifact.pieceId,
+          );
+          expect(attempts.map((attempt) => attempt.outputId)).toEqual([
+            createdArtifact.outputId,
+          ]);
+          expect(attempts[0].patternPublication?.patternId).toBe(publishedId);
+        }
+        expect(
+          JSON.parse(await Deno.readTextFile(created.resultRef.artifactPath!)),
+        )
+          .toEqual(createdArtifact);
+      } finally {
+        await Deno.remove(artifactRoot, { recursive: true });
+      }
     });
 
     it("refuses a slug that already names another piece, leaving the address where it pointed", async () => {

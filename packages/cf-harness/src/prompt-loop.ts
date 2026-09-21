@@ -5060,14 +5060,20 @@ export class CfHarnessPromptLoop {
     if (toolId === "assign_slug" && isObjectNotArray(output)) {
       // The slug is the model's own word and the URL is composed from the
       // session's API URL and space name, so neither is a fabric identifier;
-      // only the free-text error message could carry one.
-      const scrubbed: Record<string, unknown> = { ...output };
+      // the piece id stays in the artifact, and the error text is scrubbed.
+      const { pieceId: _pieceId, ...publicOutput } = output;
+      const scrubbed: Record<string, unknown> = { ...publicOutput };
       if (typeof scrubbed.message === "string") {
         scrubbed.message = scrubBareFabricIdentifiers(scrubbed.message);
       }
       return {
         output: stripInternalToolFields(scrubbed),
         omissionRules: omissionRules(
+          createHarnessTranscriptOmissionRuleRecord(
+            "artifact-only",
+            resultRef,
+            presentFieldPointers(output, ["pieceId"]),
+          ),
           createHarnessTranscriptOmissionRuleRecord(
             "bare-fabric-identifier-scrub",
             resultRef,
