@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { stub } from "@std/testing/mock";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/data-model";
@@ -9,6 +8,7 @@ import type { JSONSchema } from "../src/builder/types.ts";
 import { recordNewProtectedDefaults } from "../src/cfc/default-initialization.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
+import { diffAndUpdate } from "../src/data-updating.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 
@@ -88,6 +88,165 @@ describe("protected initialization", () => {
     });
   });
 
+  it("refuses the whole commit when a protected seed belongs to another owner", async () => {
+    const tx = runtime.edit();
+    const seed = runtime.getCell(signer.did(), "foreign-owner-seed", {
+      type: "string",
+      default: "Initial name",
+      ifc: {
+        ownerPrincipal: other.did(),
+        addIntegrity: [{ kind: "represents-principal", subject: other.did() }],
+        writeAuthorizedBy: writer,
+      },
+    }, tx);
+    const result = runtime.getCell(signer.did(), "seed-result", undefined, tx);
+    result.set({ name: seed });
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit()).error?.message).toContain(
+      "ownerPrincipal mismatch",
+    );
+    expect(runtime.getCell(signer.did(), "foreign-owner-seed").getRaw())
+      .toBeUndefined();
+    expect(runtime.getCell(signer.did(), "seed-result").getRaw())
+      .toBeUndefined();
+  });
+
+  it("propagates a seed write failure without staging an output link", () => {
+    const tx = runtime.edit();
+    const seed = runtime.getCell(signer.did(), "write-failure-seed", {
+      type: "string",
+      default: "Initial name",
+      ifc: {
+        ownerPrincipal: signer.did(),
+        addIntegrity: [{ kind: "represents-principal", subject: signer.did() }],
+        writeAuthorizedBy: writer,
+      },
+    }, tx);
+    const seedLink = seed.getAsNormalizedFullLink();
+    const result = runtime.getCell(
+      signer.did(),
+      "write-failure-result",
+      undefined,
+      tx,
+    );
+    const write = tx.writeValueOrThrow.bind(tx);
+    const failure = new Error("seed write failed");
+    tx.writeValueOrThrow = (target, value, options) => {
+      if (target.id === seedLink.id) throw failure;
+      return write(target, value, options);
+    };
+    let raised: unknown;
+    try {
+      result.set({ name: seed });
+    } catch (error) {
+      raised = error;
+    }
+    expect(raised).toBe(failure);
+    expect(tx.readValueOrThrow(seedLink)).toBeUndefined();
+    expect(result.getRaw()).toBeUndefined();
+    tx.abort();
+  });
+
+  it("does not adopt an unprotected reference when reusing a protected output", async () => {
+    const setup = runtime.edit();
+    const backing = runtime.getCell(
+      signer.did(),
+      "protected-backing",
+      field,
+      setup,
+    );
+    runtime.getCell(signer.did(), "first-output", undefined, setup).set({
+      guarded: backing,
+    });
+    runtime.prepareTxForCommit(setup);
+    expect((await setup.commit()).error).toBeUndefined();
+
+    const referenceSetup = runtime.edit();
+    const reference = runtime.getCell(
+      signer.did(),
+      "legacy-reference",
+      undefined,
+      referenceSetup,
+    );
+    const address = reference.getAsNormalizedFullLink();
+    referenceSetup.writeValueOrThrow(address, backing.getAsLink());
+    runtime.prepareTxForCommit(referenceSetup);
+    expect((await referenceSetup.commit()).error).toBeUndefined();
+
+    const rerun = runtime.edit();
+    expect(readStoredCfcMetadata(rerun, address)).toBeUndefined();
+    const previous = rerun.readValueOrThrow(address);
+    const candidate = runtime.getCell(signer.did(), "protected-backing", {
+      ...field as object,
+      default: ["unused"],
+    }, rerun);
+    rerun.recordCfcWritePolicyInput({
+      kind: "schema",
+      target: address,
+      schema: candidate.schema,
+      schemaRole: "output",
+    });
+    diffAndUpdate(runtime, rerun, address, candidate, undefined, {
+      schemaRole: "output",
+    });
+    runtime.getCell(signer.did(), "unrelated-result", undefined, rerun).set(
+      "new result",
+    );
+    runtime.prepareTxForCommit(rerun);
+    expect((await rerun.commit()).error?.message).toContain(
+      "writeAuthorizedBy",
+    );
+    const inspect = runtime.edit();
+    expect(readStoredCfcMetadata(inspect, address)).toBeUndefined();
+    expect(inspect.readValueOrThrow(address)).toEqual(previous);
+    expect(runtime.getCell(signer.did(), "protected-backing").get()).toEqual(
+      [],
+    );
+    inspect.abort();
+  });
+
+  it("materializes an absent protected backing value behind an existing reference", async () => {
+    const setup = runtime.edit();
+    const backing = runtime.getCell(
+      signer.did(),
+      "absent-backing",
+      field,
+      setup,
+    );
+    const reference = runtime.getCell(
+      signer.did(),
+      "existing-reference",
+      undefined,
+      setup,
+    );
+    const address = reference.getAsNormalizedFullLink();
+    setup.writeValueOrThrow(address, backing.getAsLink());
+    runtime.prepareTxForCommit(setup);
+    expect((await setup.commit()).error).toBeUndefined();
+    expect(runtime.getCell(signer.did(), "absent-backing").getRaw())
+      .toBeUndefined();
+
+    const rerun = runtime.edit();
+    const candidate = runtime.getCell(
+      signer.did(),
+      "absent-backing",
+      field,
+      rerun,
+    );
+    diffAndUpdate(runtime, rerun, address, candidate, undefined, {
+      schemaRole: "output",
+    });
+    runtime.prepareTxForCommit(rerun);
+    expect((await rerun.commit()).error).toBeUndefined();
+    expect(runtime.getCell(signer.did(), "absent-backing").getRaw()).toEqual(
+      [],
+    );
+    const inspect = runtime.edit();
+    expect(readStoredCfcMetadata(inspect, candidate.getAsNormalizedFullLink()))
+      .toBeDefined();
+    inspect.abort();
+  });
+
   it("refuses default initialization when the argument document is unreadable", async () => {
     const tx = runtime.edit();
     const cell = runtime.getCell(signer.did(), "argument", schema, tx);
@@ -164,14 +323,10 @@ describe("protected initialization", () => {
     }, runtimeWritePolicyAuthorization);
     cell.key("guarded").set([]);
     const details = tx.getWriteDetailsForTarget!.bind(tx);
-    using _details = stub(
-      tx,
-      "getWriteDetailsForTarget",
-      (target: Parameters<typeof details>[0]) =>
-        [...details(target)].map(({ previousPresent: _present, ...detail }) =>
-          detail
-        ),
-    );
+    tx.getWriteDetailsForTarget = (target) =>
+      [...details(target)].map(({ previousPresent: _present, ...detail }) =>
+        detail
+      );
     runtime.prepareTxForCommit(tx);
     expect((await tx.commit()).error?.message).toContain("writeAuthorizedBy");
   });

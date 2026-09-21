@@ -78,11 +78,15 @@ import {
   isInternalVerifierRead,
   isLinkResolutionProbe,
   isMachineryRead,
+  isReadMarkedAsAttemptedWrite,
   isSchedulerDependencyRead,
   isWriteDestinationRead,
   stableInternalVerifierRead,
 } from "../storage/reactivity-log.ts";
-import { getTransactionWriteAttempts } from "../storage/transaction-inspection.ts";
+import {
+  getTransactionReadActivities,
+  getTransactionWriteAttempts,
+} from "../storage/transaction-inspection.ts";
 import { atomPropagationClass } from "./atom-classes.ts";
 import {
   canonicalizeCfcMetadata,
@@ -1115,6 +1119,44 @@ const writeIsRuntimeInitialization = (
     }),
     input.value,
   );
+};
+
+/** A single runtime output attempt may preserve an existing root reference. */
+const writePreservesRuntimeOutput = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): boolean => {
+  const sameTarget = (
+    address: {
+      space: MemorySpace;
+      id: string;
+      scope?: ReturnType<typeof normalizeCellScope>;
+    },
+  ) =>
+    address.space === target.space && address.id === target.id &&
+    normalizeCellScope(address.scope) === target.scope;
+  const input = tx.getCfcState().writePolicyInputs.find((input) =>
+    input.kind === "preserved-output" && tx.isRuntimeWritePolicyInput(input) &&
+    sameTarget(input.target) && input.target.path.length === 0
+  );
+  if (input?.kind !== "preserved-output") return false;
+  const writes = getTransactionWriteAttempts(tx);
+  if (writes === undefined || writes.some(sameTarget)) return false;
+  const attemptedReads = [...getTransactionReadActivities(tx)].filter((read) =>
+    sameTarget(read) && isReadMarkedAsAttemptedWrite(read.meta)
+  );
+  return attemptedReads.length === 1 &&
+    canonicalizeLogicalPath(attemptedReads[0].path.map(String)).length === 0 &&
+    valueEqual(
+      tx.readValueOrThrow({ ...target, path: [] }, {
+        meta: INTERNAL_VERIFIER_META,
+      }),
+      input.value,
+    );
 };
 
 // The prepare pass's reader of a stored envelope. `cfc/metadata.ts` owns
@@ -4308,6 +4350,9 @@ const verifyInputRequirements = (
   // accumulated across the boundary pass. undefined — the default, whenever
   // no onPrefixProvenance hook is installed — skips all measurement.
   provenance?: CfcPrefixProvenanceSummary,
+  // A preserved runtime output defers only its writer refusal. The persist
+  // loop must prove the final envelope unchanged before discarding this reason.
+  deferWriterRefusal?: (reason: string) => boolean,
   // `verdict` says whether the failure is a VERDICT on the data (see
   // cfc/verdict-reason.ts): every check here is, except a `maxConfidentiality`
   // miss whose policy evaluation could not resolve a manifest or grant — the
@@ -4514,7 +4559,12 @@ const verifyInputRequirements = (
     ) || writeIsPatternSetupInitialization(tx, target, entry.path) ||
       writeIsRuntimeInitialization(tx, target, entry.path);
     if (writeAuthorizedByFailure !== undefined && !setupProjection) {
-      return { reason: writeAuthorizedByFailure, verdict: true };
+      if (
+        entry.path.length !== 0 ||
+        deferWriterRefusal?.(writeAuthorizedByFailure) !== true
+      ) {
+        return { reason: writeAuthorizedByFailure, verdict: true };
+      }
     }
     const requiredIntegrity = ifc?.requiredIntegrity ?? [];
     const maxConfidentiality = ifc?.maxConfidentiality;
@@ -6990,6 +7040,7 @@ export const prepareBoundaryCommit = (
         )
       : schema;
 
+    let deferredWriterRefusal: string | undefined;
     const requirementFailure = verifyInputRequirements(
       tx,
       verificationSchema,
@@ -6998,6 +7049,13 @@ export const prepareBoundaryCommit = (
       prefixBounds,
       metadataResolver,
       prefixProvenance,
+      stored.status === "loaded"
+        ? (reason) => {
+          if (!writePreservesRuntimeOutput(tx, target)) return false;
+          deferredWriterRefusal ??= reason;
+          return true;
+        }
+        : undefined,
     );
     // A verification failure records a reason (which rejects the whole commit
     // in enforcing modes) and skips persisting this target's declared label.
@@ -8349,6 +8407,9 @@ export const prepareBoundaryCommit = (
       coalescedLabelEntries.length === 0 && !flowCleared && !remintCleared &&
       !droppedLabelMetadataTemplates
     ) {
+      if (deferredWriterRefusal !== undefined) {
+        reasons.push(verdictReason(deferredWriterRefusal));
+      }
       continue;
     }
 
@@ -8408,6 +8469,14 @@ export const prepareBoundaryCommit = (
         canonicalizeCfcMetadata(metadata),
       )
     ) {
+      continue;
+    }
+
+    // A repeated initializer may reuse its reference only when SC-11 proved
+    // the entire envelope unchanged. Changed schemas or labels require the
+    // ordinary writer authority, even when no value bytes changed.
+    if (deferredWriterRefusal !== undefined) {
+      reasons.push(verdictReason(deferredWriterRefusal));
       continue;
     }
 

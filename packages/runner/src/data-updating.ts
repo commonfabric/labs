@@ -79,6 +79,7 @@ import {
   allowMutableTransactionRead,
   markReadAsAttemptedWrite,
 } from "./scheduler.ts";
+import { schemaHasIfc } from "./schema-ifc.ts";
 import { resolveSchema, resolveSchemaForValue } from "./schema.ts";
 import { isCellScope, scopeRank } from "./scope.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
@@ -88,6 +89,7 @@ import type {
 } from "./storage/interface.ts";
 import {
   ignoreReadForScheduling,
+  internalVerifierRead,
   linkResolutionProbe,
   writeDestinationRead,
 } from "./storage/reactivity-log.ts";
@@ -1276,14 +1278,60 @@ export function normalizeAndDiff(
         // write commits, the next check finds the doc present and settles.
       }
     }
+    const streamHandle = newValue instanceof CellImpl &&
+      newValue.kind === "stream";
+    // A rerun can return the same protected cell with a different, unused
+    // default. Record the unchanged root reference for CFC to verify alongside
+    // its final protection. Materialization runs first so an existing reference
+    // cannot hide an absent backing document.
+    if (
+      options?.schemaRole === "output" && !streamHandle &&
+      link.path.length === 0 &&
+      seedTarget !== undefined && seedTarget.path.length === 0 &&
+      !initializedSeed && schemaHasIfc(cellSchema) &&
+      !cfcLabelViewHasValues(carriedCfcLabelView)
+    ) {
+      const probeOptions = {
+        meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+      };
+      const currentReference = tx.readValueOrThrow(link, probeOptions);
+      if (
+        isPrimitiveCellLink(currentReference) &&
+        !isWriteRedirectLink(currentReference) &&
+        scopeInitialization(currentReference) === undefined &&
+        areNormalizedLinksSame(parseLink(currentReference, link), seedTarget) &&
+        tx.readValueOrThrow(seedTarget, probeOptions) !== undefined
+      ) {
+        // Preserve this attempt: preparation must refuse changed policy or any
+        // additional write attempt, even when the reference bytes stay equal.
+        tx.readValueOrThrow(link, {
+          ...options,
+          meta: {
+            ...options?.meta,
+            ...markReadAsAttemptedWrite,
+            ...writeDestinationRead,
+          },
+        });
+        tx.recordCfcWritePolicyInput({
+          kind: "preserved-output",
+          target: {
+            space: link.space,
+            id: link.id,
+            scope: link.scope,
+            path: [],
+          },
+          value: currentReference,
+        }, runtimeWritePolicyAuthorization);
+        tx.retainPendingWriteElision?.(toMemorySpaceAddress(link));
+        return [];
+      }
+    }
     // A stream handle's own schema is the event schema it accepts. The link
     // that stands for the handle declares the stream, so a reader following
     // it to a document that holds nothing still knows what the position is.
     // The handle's kind decides, with nothing read: a read of the target here
     // would join its label into this write.
     const cellLink = newValue.getAsNormalizedFullLink();
-    const streamHandle = newValue instanceof CellImpl &&
-      newValue.kind === "stream";
     newValue = attachCfcLabelViewToSigilLink(
       createSigilLinkFromParsedLink(
         streamHandle

@@ -562,6 +562,12 @@ export type ModuleDelegationSnapshotEntry = {
 // surface narrower.
 export type WritePolicyInput =
   | {
+    /** Private runtime evidence; preparation must also prove unchanged protection. */
+    readonly kind: "preserved-output";
+    readonly target: CfcAddress;
+    readonly value: FabricValue;
+  }
+  | {
     /** Authority is carried by the runtime's private mark, never this record alone. */
     readonly kind: "initialization";
     readonly target: CfcAddress;

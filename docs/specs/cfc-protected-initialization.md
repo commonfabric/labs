@@ -14,6 +14,14 @@ schema document, and CFC envelope commit together. Failure aborts the operation.
 The reference that exposes the cell requires its own protection: changing that
 reference must not provide an alternative way to replace the protected value.
 
+When a generated initializer returns the same protected cell again, its changed
+default does not replace an existing backing value. The runtime may record a
+private claim for an unchanged ordinary root output reference with no carried
+labels. Preparation permits that single attempt only when its final reference
+and complete stored CFC envelope remain unchanged. Extra attempts, applied
+writes, and changed policy require ordinary writer authorization. This cannot
+adopt an unprotected reference. Streams retain their ordinary declaration path.
+
 Lowering preserves authored writer-binding syntax through a cell constructor,
 its `.for()` call, and stable local bindings. Generated lift-result and inferred
 pattern-result schemas retain the same `writeAuthorizedBy` identity as the

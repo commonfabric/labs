@@ -2123,7 +2123,8 @@ retain those arguments when their result is lowered into a lift. Recovery follow
 an inferred object-literal pattern result. This keeps `WriteAuthorizedBy` tied to
 the named writer instead of an inferred structural function type. Explicit
 variable annotations remain authoritative; mutable aliases are not followed.
-`protected-cell-policy.test.ts` pins both generated schemas.
+Pattern-local object value aliases retain their definitions in each generated
+schema. `protected-cell-policy.test.ts` pins both generated schemas.
 
 `SchemaGeneratorTransformer` replaces `toSchema<T>(options?)` calls with JSON
 schema literals.
