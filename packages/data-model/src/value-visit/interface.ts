@@ -103,8 +103,8 @@ export const DO_RECURSE_VALUES: RecurseForm = Object.freeze(
 //
 
 /**
- * Baseline possible results from arbitrary `visit*()` calls, defining the
- * result cases common to all of these methods.
+ * Baseline possible results from most `ValueVisitor` and `DefaultValueVisitor`
+ * methods, defining the result cases common to all of these methods.
  *
  * See the included result types for details on what they mean. As for
  * `undefined`, if a visitor returns it in the context of this type, it means
@@ -128,14 +128,16 @@ export type LeafVisitorResult<PlusType = never, ResultType = FabricValue> =
   | ReplaceForm<PlusType>;
 
 /**
+ * Possible results from the `visitValue()` call and similar functions.
+ */
+export type MainVisitResult<ResultType = FabricValue> =
+  BaselineVisitorMethodResult<
+    ResultType
+  >;
+
+/**
  * Possible results from `visited*()` calls (container iteration post-visit
  * methods).
- *
- * See the included result types for details on what they mean. As for
- * `undefined`, if a visitor returns it in the context of this type, it means
- * that the visit of the given value was completed; the visitor engine will
- * not process it further, and there is no specific value to return from (this
- * part of) the visit.
  */
 export type VisitedResult<ResultType = FabricValue> =
   BaselineVisitorMethodResult<

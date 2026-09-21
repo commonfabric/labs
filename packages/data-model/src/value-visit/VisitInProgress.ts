@@ -21,8 +21,8 @@ import {
 import { debugStr } from "@/value-debug";
 
 import {
-  type BaselineVisitorMethodResult,
   type LeafVisitorResult,
+  type MainVisitResult,
   type RecurseForm,
   type ReplaceForm,
   type ValueVisitor,
@@ -80,7 +80,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   visit(
     value: FabricValuePlus<PlusType>,
-  ): BaselineVisitorMethodResult<ResultType> {
+  ): MainVisitResult<ResultType> {
     if (this.#inProgress) {
       // This is a defense-in-depth protection against bugs in this submodule,
       // and also serves as documentation for the intended use of this class.
@@ -108,7 +108,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   #visitValue(
     value: FabricValuePlus<PlusType>,
-  ): BaselineVisitorMethodResult<ResultType> {
+  ): MainVisitResult<ResultType> {
     const tag = this.#tagOfValueElseNull(value);
     const result = this.#visitResolvingCyclesAndReplacement(value, tag);
 
@@ -217,7 +217,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   #recurseFabricArray(
     result: RecurseOfForm<PlusType>,
-  ): BaselineVisitorMethodResult<ResultType> {
+  ): MainVisitResult<ResultType> {
     const { container, doValues } = result;
     const array = container as FabricArrayPlus<PlusType>;
     const vis = this.#visitor;
@@ -296,7 +296,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   #recurseFabricInstance(
     result: RecurseOfForm<PlusType>,
-  ): BaselineVisitorMethodResult<ResultType> {
+  ): MainVisitResult<ResultType> {
     const { container, doValues } = result;
     const instance = container as FabricInstancePlus<PlusType>;
     const vis = this.#visitor;
@@ -337,7 +337,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   #recurseFabricPlainObject(
     result: RecurseOfForm<PlusType>,
-  ): BaselineVisitorMethodResult<ResultType> {
+  ): MainVisitResult<ResultType> {
     const { container, doKeys, doValues } = result;
     const plainObj = container as FabricPlainObjectPlus<PlusType>;
     const vis = this.#visitor;
