@@ -1,8 +1,10 @@
 /**
  * Reports the share of recent completed runs that passed on the first attempt,
  * which is the dashboard's signal for flakiness, with a history strip carrying
- * the newest runs in the trust window. One factory builds both the labs and
- * loom instances against their own repository and workflow.
+ * the newest runs in the trust window. A cancelled attempt is not a try: a
+ * run's first attempt that was not cancelled decides it, and a run whose every
+ * attempt was cancelled is left out of the share. One factory builds both the
+ * labs and loom instances against their own repository and workflow.
  */
 
 import {
@@ -12,28 +14,47 @@ import {
   type Tile,
   type TileView,
 } from "../types.ts";
+import { CompletedAttempts } from "../completed-attempts.ts";
 import { strip } from "../lib.ts";
 import { CI_WORKFLOW, LOOM_CI_WORKFLOW, LOOM_REPO, REPO, TRUST_GOOD, TRUST_RUNS_MAX, TRUST_WARN } from "../config.ts";
 
 type TrustOutcome = "green" | "red" | "run" | "gray";
 
-function trustOutcome(run: Run): TrustOutcome {
+/**
+ * Scores `run` by its first attempt that was not cancelled: green when that
+ * attempt succeeded, and red otherwise. A run that is unfinished, or whose
+ * every attempt was cancelled, is left out of the share. Rejects when an
+ * earlier attempt cannot be read from GitHub.
+ */
+async function trustOutcome(
+  run: Run,
+  attempts: CompletedAttempts,
+): Promise<TrustOutcome> {
   if (run.status === "in_progress") return "run";
   if (run.status !== "completed" || !run.conclusion) return "gray";
-  return run.conclusion === "success" && run.run_attempt === 1 ? "green" : "red";
+  for (let attempt = 1; attempt <= run.run_attempt; attempt++) {
+    const tried = await attempts.get(run, attempt);
+    if (tried.conclusion !== "cancelled") {
+      return tried.conclusion === "success" ? "green" : "red";
+    }
+  }
+  return "gray";
 }
 
 function makeCiTrust(opts: { id: string; label: string; repo: string; workflow: string }): Tile {
+  const attempts = new CompletedAttempts(opts.repo);
   return {
     id: opts.id,
     intervalMs: 30_000,
     runSources: [runSource(opts.repo, opts.workflow)],
     async collect(ctx): Promise<TileView> {
       const runs = await ctx.runsFor(opts.repo, opts.workflow);
-      const scored = runs.slice(0, TRUST_RUNS_MAX).map((run) => ({
+      const recent = runs.slice(0, TRUST_RUNS_MAX);
+      attempts.observe(recent);
+      const scored = await Promise.all(recent.map(async (run) => ({
         run,
-        outcome: trustOutcome(run),
-      }));
+        outcome: await trustOutcome(run, attempts),
+      })));
       const counted = scored.filter(({ outcome }) => outcome === "green" || outcome === "red");
       const firstTryGreen = counted.filter(({ outcome }) => outcome === "green").length;
       const pct = counted.length ? (firstTryGreen / counted.length) * 100 : 0;

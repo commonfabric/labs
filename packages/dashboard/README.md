@@ -362,10 +362,20 @@ other host checks before that signal. The confirmation lasts for the process
 lifetime, so an unreachable host is then reported as an outage even when every
 host is unreachable together.
 
-The **labs ci** and **loom ci** headlines use the most recent completed
-workflow attempt. While GitHub reruns a workflow, the prior attempt's conclusion
-remains visible and the tile marks the activity as **build rerunning**. A new
-workflow run still appears as **next build running**.
+The **labs ci** and **loom ci** headlines use the most recent completed workflow
+attempt that was not cancelled. A cancelled attempt neither sets the headline
+nor ends the streak beneath it, so a run cancelled by a newer push leaves the
+previous result showing. While GitHub reruns a workflow, the prior attempt's
+conclusion remains visible and the tile marks the activity as **build
+rerunning**. A new workflow run still appears as **next build running**.
+
+The **labs ci trust** and **loom ci trust** percentages score each run by its
+first attempt that was not cancelled: the run is first-try green when that
+attempt succeeded. A run whose every attempt was cancelled is left out of the
+percentage. The run listing carries only a run's latest attempt, so the tile
+requests a rerun's earlier attempts from GitHub, once each, and holds them while
+the run stays in the trust window. An earlier attempt that cannot be read turns
+the tile gray, keeping its last value, until a later collection reads it.
 
 The **labs ci duration** and **loom ci duration** tiles use successful main push
 runs. Each duration starts when GitHub creates the workflow run for the landed
@@ -1105,7 +1115,7 @@ Everything below is a tunable constant in `config.ts`:
 
 - **Status thresholds:** `TRUST_GOOD`/`TRUST_WARN` (first-try-green %), `DUR_GOOD`/`DUR_WARN` (median CI minutes).
 - **Data windows:** The shared fetch returns at most `CI_RUNS_MAX=200` workflow runs and stops at `CI_RUNS_MAX_AGE_DAYS=60` days. CI trust uses the newest `TRUST_RUNS_MAX=160` fetched runs. CI duration uses whichever is larger: `DUR_MIN_RUNS=20` passing runs or `DUR_MAX_AGE_HOURS=6` hours. The benchmark trend uses the same larger-of-the-two idea in days: `BENCH_TREND_MIN_RUNS=20` runs or `BENCH_TREND_MAX_AGE_DAYS=14` days. Recent runs shows `RECENT_DISPLAY=50` entries.
-- **ci-trust cell grid:** The grid has up to `TRUST_RUNS_MAX=160` square cells in rows of `TRUST_COLS=40`. On wide tiles, the squares stop growing and the columns spread out to keep the grid clear of the subheading while preserving its equal left, right, and bottom insets. First-try successes are green. In-progress runs are blue. Completed runs that lower the trust percentage are red. Ignored runs are gray.
+- **ci-trust cell grid:** The grid has up to `TRUST_RUNS_MAX=160` square cells in rows of `TRUST_COLS=40`. On wide tiles, the squares stop growing and the columns spread out to keep the grid clear of the subheading while preserving its equal left, right, and bottom insets. First-try successes are green. In-progress runs are blue. Completed runs that lower the trust percentage are red. Ignored runs, a run cancelled on every attempt among them, are gray.
 
 ## Local development
 

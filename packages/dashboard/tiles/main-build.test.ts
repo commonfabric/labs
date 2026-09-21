@@ -11,6 +11,7 @@ import {
 import { LOOM_REPO, REPO } from "../config.ts";
 import type { Ctx, Run } from "../types.ts";
 import { labsCi, loomCi } from "./main-build.ts";
+import { withGithubAttempt } from "../test/github-attempts.ts";
 
 function ctx(runs: Run[]): Ctx {
   return {
@@ -43,33 +44,6 @@ function run(over: Partial<Run>): Run {
 
 // Runs arrive newest-first, and the tile ages the streak off Date.now().
 const ago = (mins: number) => new Date(Date.now() - mins * 60_000).toISOString();
-
-async function withGithubAttempt(
-  response: Run | Error | ((url: string) => Run | Error),
-  body: (urls: string[]) => Promise<void>,
-): Promise<void> {
-  const urls: string[] = [];
-  const realFetch = globalThis.fetch;
-  const realToken = Deno.env.get("GH_TOKEN");
-  Deno.env.set("GH_TOKEN", "test-token");
-  globalThis.fetch = ((input: string | URL | Request) => {
-    const url = input instanceof Request ? input.url : String(input);
-    urls.push(url);
-    const attempt = typeof response === "function"
-      ? response(url)
-      : response;
-    return attempt instanceof Error
-      ? Promise.reject(attempt)
-      : Promise.resolve(Response.json(attempt));
-  }) as typeof fetch;
-  try {
-    await body(urls);
-  } finally {
-    globalThis.fetch = realFetch;
-    if (realToken === undefined) Deno.env.delete("GH_TOKEN");
-    else Deno.env.set("GH_TOKEN", realToken);
-  }
-}
 
 Deno.test("labs and loom ci: an active rerun retains its last completed failure", async () => {
   const cases = [
@@ -572,6 +546,71 @@ Deno.test("labs ci streak: in-flight runs neither start nor break a streak", asy
   // The unfinished run is not a verdict, so the last completed green still stands.
   assertEquals(v.status, "good");
   assertEquals(v.sub, "green for 1h 10m");
+});
+
+Deno.test("labs and loom ci streak: cancelled runs neither set the verdict nor break a streak", async () => {
+  for (const tile of [labsCi, loomCi]) {
+    const runs = [
+      run({ status: "in_progress", conclusion: null, run_started_at: ago(5) }),
+      run({ conclusion: "cancelled", run_started_at: ago(10) }),
+      run({ conclusion: "success", run_started_at: ago(30) }),
+      run({ conclusion: "cancelled", run_started_at: ago(50) }),
+      run({ conclusion: "success", run_started_at: ago(70) }),
+      run({ conclusion: "failure", run_started_at: ago(200) }),
+    ];
+    const v = await tile.collect(ctx(runs));
+    assertEquals(v.status, "good");
+    assertEquals(v.value, "passing");
+    assertEquals(v.sub, "green for 1h 10m");
+    assertStringIncludes(v.extra ?? "", "next build running");
+  }
+});
+
+Deno.test("labs ci streak: a cancelled run between failures does not end the red streak", async () => {
+  const runs = [
+    run({ conclusion: "failure", run_started_at: ago(10) }),
+    run({ conclusion: "cancelled", run_started_at: ago(20) }),
+    run({ conclusion: "failure", run_started_at: ago(40) }),
+    run({ conclusion: "success", run_started_at: ago(100) }),
+  ];
+  const v = await labsCi.collect(ctx(runs));
+  assertEquals(v.status, "bad");
+  assertEquals(v.value, "failure");
+  assertEquals(v.sub, "failure for 40m");
+});
+
+Deno.test("labs ci: a cancelled rerun yields to its prior completed attempt", async () => {
+  const id = 70;
+  const cancelledRerun = run({
+    id,
+    conclusion: "cancelled",
+    run_attempt: 2,
+    head_sha: "latest",
+    run_started_at: ago(5),
+  });
+  const firstAttempt = run({
+    id,
+    conclusion: "success",
+    run_attempt: 1,
+    head_sha: "latest",
+    run_started_at: ago(30),
+  });
+  const olderFailure = run({
+    id: 170,
+    conclusion: "failure",
+    head_sha: "older",
+    run_started_at: ago(90),
+  });
+
+  await withGithubAttempt(firstAttempt, async (urls) => {
+    const view = await labsCi.collect(ctx([cancelledRerun, olderFailure]));
+    assertEquals(view.status, "good");
+    assertEquals(view.value, "passing");
+    assertEquals(view.sub, "green for 30m");
+    assertEquals(urls, [
+      `https://api.github.com/repos/${REPO}/actions/runs/${id}/attempts/1`,
+    ]);
+  });
 });
 
 Deno.test("labs ci: no completed runs -> unknown, and no streak claimed", async () => {
