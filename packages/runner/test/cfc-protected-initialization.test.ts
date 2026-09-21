@@ -51,7 +51,6 @@ describe("protected initialization", () => {
   });
   afterEach(async () => {
     await runtime.dispose();
-    await manager.close();
   });
 
   async function seed(value: FabricValue) {
@@ -235,6 +234,30 @@ describe("protected initialization", () => {
     expect((await tx.commit()).error?.message).toContain(
       "ownerPrincipal mismatch",
     );
+  });
+
+  it("does not issue initialization authority for a literal wildcard-named field", async () => {
+    await seed({ note: "saved" });
+    const tx = runtime.edit();
+    const wildcardSchema = {
+      ...schema,
+      properties: { "*": field },
+    };
+    const cell = runtime.getCell(signer.did(), "argument", wildcardSchema, tx);
+    recordNewProtectedDefaults(
+      tx,
+      cell.getAsNormalizedFullLink(),
+      previousSchema,
+      wildcardSchema,
+      { "*": [] },
+      { "*": [] },
+    );
+    expect(
+      tx.getCfcState().writePolicyInputs.some((input) =>
+        input.kind === "initialization"
+      ),
+    ).toBe(false);
+    tx.abort();
   });
 
   for (

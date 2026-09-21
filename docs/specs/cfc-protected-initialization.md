@@ -26,8 +26,9 @@ Verified pattern setup may initialize a concrete, newly declared protected
 argument field from its schema default. It uses the candidate schema's ordinary
 default extraction and argument validation. The prior argument schema must be
 known and must not already declare the field. The argument document must be
-readable. Wildcard paths and ambiguous previous declarations do not receive this
-permission.
+readable. Paths containing `*` (including a literal property with that name)
+and ambiguous previous declarations do not receive this permission. CFC's
+schema-entry paths do not distinguish literal `*` properties from wildcards.
 
 The setup records the permission alongside the candidate argument schema and
 source transition. Preparation requires the field to be absent and the final

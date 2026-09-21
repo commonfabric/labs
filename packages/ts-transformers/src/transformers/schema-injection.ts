@@ -2005,7 +2005,7 @@ function buildObjectLiteralReturnTypeNode(
   );
 }
 
-/** The type node a returned identifier declares. */
+/** The authored type of a returned cell expression or identifier declaration. */
 function getExplicitValueTypeNode(
   valueExpr: ts.Expression,
   checker: ts.TypeChecker,

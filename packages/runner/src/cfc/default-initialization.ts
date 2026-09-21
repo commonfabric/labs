@@ -34,6 +34,8 @@ export function recordNewProtectedDefaults(
   if (!isWalkableObjectOrArray(previous) || isWriteRedirectLink(previous)) {
     return;
   }
+  // Schema-entry paths do not distinguish a literal `*` property from a
+  // wildcard. Neither receives automatic initialization authority.
   for (const entry of cfcSchemaEntries(schema)) {
     if (
       !isObjectOrArray(entry.schema) ||
