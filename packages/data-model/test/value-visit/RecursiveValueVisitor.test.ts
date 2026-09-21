@@ -10,7 +10,7 @@ describe("RecursiveValueVisitor", () => {
   describe("instance members", () => {
     describe("visitFabricContainer()", () => {
       it("returns `DO_RECURSE_VALUES`, without subtype dispatch", () => {
-        expect(new Recursive().visitFabricContainer([])).toBe(
+        expect(new Recursive().visitFabricContainer([], "Array")).toBe(
           DO_RECURSE_VALUES,
         );
       });

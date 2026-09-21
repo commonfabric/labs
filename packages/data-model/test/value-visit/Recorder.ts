@@ -13,9 +13,11 @@ import type { Primitive } from "@commonfabric/utils/types";
 import type {
   FabricArrayPlus,
   FabricContainerValuePlus,
+  FabricContainerValueTag,
   FabricInstancePlus,
   FabricPlainObjectPlus,
   FabricPrimitive,
+  FabricValuePlusTag,
   PrimitiveValueTag,
 } from "@";
 import {
@@ -45,9 +47,13 @@ export class Recorder extends RecursiveValueVisitor<unknown, unknown> {
   readonly plusTypeChecks: unknown[] = [];
 
   onIsPlusType?: (value: unknown) => boolean;
-  onValue?: (value: unknown) => DispatchingVisitorResult<unknown, unknown>;
-  onCycle?: (
+  onValue?: (
     value: unknown,
+    tag: FabricValuePlusTag | null,
+  ) => DispatchingVisitorResult<unknown, unknown>;
+  onCycle?: (
+    value: FabricContainerValuePlus<unknown>,
+    tag: FabricContainerValueTag,
     originalDepth: number,
     thisDepth: number,
   ) => LeafVisitorResult<unknown, unknown>;
@@ -92,26 +98,29 @@ export class Recorder extends RecursiveValueVisitor<unknown, unknown> {
 
   override visitValue(
     value: unknown,
+    tag: FabricValuePlusTag | null,
   ): DispatchingVisitorResult<unknown, unknown> {
-    this.events.push(["value", value]);
-    return this.onValue ? this.onValue(value) : DO_VISIT_SUBTYPE;
+    this.events.push(["value", value, tag]);
+    return this.onValue ? this.onValue(value, tag) : DO_VISIT_SUBTYPE;
   }
 
   override visitCycle(
-    value: unknown,
+    value: FabricContainerValuePlus<unknown>,
+    tag: FabricContainerValueTag,
     originalDepth: number,
     thisDepth: number,
   ): LeafVisitorResult<unknown, unknown> {
-    this.events.push(["cycle", value, originalDepth, thisDepth]);
+    this.events.push(["cycle", value, tag, originalDepth, thisDepth]);
     return this.onCycle
-      ? this.onCycle(value, originalDepth, thisDepth)
+      ? this.onCycle(value, tag, originalDepth, thisDepth)
       : undefined;
   }
 
   override visitFabricContainer(
     value: FabricContainerValuePlus<unknown>,
+    tag: FabricContainerValueTag,
   ): DispatchingVisitorResult<unknown, unknown> {
-    this.events.push(["container", value]);
+    this.events.push(["container", value, tag]);
     return DO_VISIT_SUBTYPE;
   }
 
