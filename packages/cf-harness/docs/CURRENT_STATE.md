@@ -2,7 +2,7 @@
 
 Status: current implementation reference\
 Last verified: 2026-09-21\
-Revision: `3a315a91f6+pending-captures`
+Revision: `0d95be8028+pending-captures`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -364,8 +364,9 @@ The current package provides:
   bare fabric identifier, an openable URL. Successful naming records a host-only
   reference. Completed interactive turns retain those references atomically with
   history for bare follow-ups, including after restart, and remint them through
-  the existing input-cell path. Explicit attachments take precedence; failed
-  turns leave the retained references unchanged. Without the session
+  the existing input-cell path. Explicit attachments, including an empty list,
+  take precedence and clear the retained targets when that turn completes
+  without naming a piece; failed turns leave them unchanged. Without the session
   configuration both tools are absent from the tool surface, for a `default`- or
   `pattern-author`-profile subagent as much as for the parent — a child shares
   the one session the parent built; `--fabric-cfc-enforcement-mode` (the

@@ -219,7 +219,9 @@ export interface HarnessChatStartTurnParams {
    * Cells the caller attaches to this turn by reference, each under a name the
    * model sees. A turn is its own run with its own handle table, so input
    * cells are named per turn rather than per session: the tokens the model is
-   * given are the ones this turn's run minted.
+   * given are the ones this turn's run minted. Omission reuses session-retained
+   * named targets; an explicit empty list attaches none and clears those targets
+   * when the turn completes without naming a new piece.
    */
   inputCells?: readonly HarnessInputCellSpec[];
 

@@ -352,11 +352,16 @@ describe("assign-slug", () => {
       runTranscript: async (request) => {
         const engine = options.engine ?? new CfHarnessEngine(options);
         inputs.push(engine.getRunState().inputCells ?? []);
-        if (options.taskText === "Make a counter") {
+        if (
+          options.taskText === "Make a counter" ||
+          options.taskText === "Make another counter"
+        ) {
           created = await createPiece(engine);
           const named = await engine.invokeBuiltinTool("assign_slug", {
             token: created.resultRef,
-            slug: "my-counter",
+            slug: options.taskText === "Make a counter"
+              ? "my-counter"
+              : "next-counter",
           });
           expect(named.output.status).toBe("ok");
           // Unnamed intermediate results do not become next-turn targets.
@@ -475,6 +480,30 @@ describe("assign-slug", () => {
       ]);
 
       expect(store.getSession("follow-up")?.assignedPieces).toEqual([]);
+
+      await service.startTurn("named-again", {
+        sessionId: "follow-up",
+        turnId: "named-again",
+        input: { text: "Make another counter" },
+      });
+      await service.waitForTurn("follow-up", "named-again");
+      expect(store.getSession("follow-up")?.assignedPieces).toHaveLength(1);
+      await service.startTurn("empty", {
+        sessionId: "follow-up",
+        turnId: "empty",
+        input: { text: "Start without an attached piece" },
+        inputCells: [],
+      });
+      await service.waitForTurn("follow-up", "empty");
+      expect(inputs[5]).toEqual([]);
+      expect(store.getSession("follow-up")?.assignedPieces).toEqual([]);
+      await service.startTurn("after-empty", {
+        sessionId: "follow-up",
+        turnId: "after-empty",
+        input: { text: "Keep the attachment list empty" },
+      });
+      await service.waitForTurn("follow-up", "after-empty");
+      expect(inputs[6]).toEqual([]);
     } finally {
       store.close();
       await Deno.remove(root, { recursive: true });

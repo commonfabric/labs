@@ -979,7 +979,11 @@ session that cannot be established leaves the run to proceed without its grants,
 and the CLI says so on stderr rather than staying silent. The grant list is
 designed to grow; the identity's profile is the expected next entry.
 
-#### Operator input cells
+#### Input cells
+
+Input cells are host-supplied references: explicit operator attachments or named
+targets retained from a completed interactive turn. Both use the same space
+checks and handle-minting path; their values remain in the fabric.
 
 `--input-cell <name>=<link>` (repeatable) passes a cell into the run by
 reference: a cell populated in the space before the run exists, handed to the
@@ -1009,13 +1013,12 @@ carries no name — refuses the qualified form rather than answering with this
 space's same-slug piece, because the same slug in another space is a different
 piece. A bare slug is unaffected: it names no space to disagree about.
 
-Unlike a grant, an input cell is explicit configuration, so failure is closed
-and loud rather than tolerated: a malformed argument is a usage error, and a
-reference that does not parse, targets another space, names a piece the space
-does not hold, or arrives on a run without a fabric session fails the run before
-the model is involved. The cells are recorded in run state (`inputCells`),
-replayed rather than re-minted on resume, and reported in the operator summary
-as `inputCells:`.
+An input cell names a task target, so failure is closed and loud rather than
+tolerated: a malformed argument is a usage error, and a reference that does not
+parse, targets another space, names a piece the space does not hold, or arrives
+on a run without a fabric session fails the run before the model is involved.
+The cells are recorded in run state (`inputCells`), replayed rather than
+re-minted on resume, and reported in the operator summary as `inputCells:`.
 
 #### Inspecting a handle's shape
 
@@ -1664,9 +1667,10 @@ and the piece's complete reference, including its space. A completed turn that
 names pieces replaces the session's naming checkpoint; unnamed intermediate
 probes add nothing. A bare follow-up mints fresh tokens for those pieces through
 the ordinary input-cell path. SQLite restart preserves the checkpoint; a failed
-or canceled turn cannot replace it. Explicit attachments take precedence and,
-when that turn completes without naming a piece, clear the earlier implicit
-target. References stay host-side and input-cell space checks still apply.
+or canceled turn cannot replace it. Explicit attachments, including
+`inputCells: []`, take precedence and, when that turn completes without naming a
+piece, clear the earlier implicit target. Omitting `inputCells` retains it.
+References stay host-side and input-cell space checks still apply.
 
 SQLite checkpoints also retain the existing transcript-omissions record.
 Restoration verifies every recorded result's unique identity before attaching

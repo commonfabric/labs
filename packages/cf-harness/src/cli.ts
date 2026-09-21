@@ -549,7 +549,7 @@ Options:
   --browser-access-profile-mode <mode> persistent | transient
   --browser-access-account-access <access> available | none
   --handle-value-origin <origin> Origin a handle's value may be sent to (repeatable; none by default)
-  --input-cell <name>=<link>       Pass a cell in the fabric space into the run by reference, announced to the model as a handle under the operator-authored <name>; its shape and labels live on the cell's declared schema (repeatable; requires --fabric-space)
+  --input-cell <name>=<link>       Explicitly attach a cell in the fabric space to this run by reference, announced as a handle under <name>; its shape and labels live on the cell's declared schema (repeatable; requires --fabric-space)
   --cfc-enforcement-mode <mode> disabled | observe | enforce-explicit | enforce-strict
   --cfc-result-dir <path>       Host dir where runsc writes the CFC result sidecar (required for enforce-* modes)
   --cfc-invocation-context-dir <path> Host dir where the harness writes the CFC invocation-context sidecar (required for enforce-* modes)
@@ -933,8 +933,8 @@ const parseHandleValueOrigins = (
 };
 
 /**
- * The input cells `--input-cell` names. Grammar defects are refused at
- * parse: an input cell is explicit operator configuration, and a run must
+ * The explicit attachments `--input-cell` names. Grammar defects are refused at
+ * parse: these are operator configuration, and a run must
  * not start without what it asked for. No shape is stated here — a cell's
  * schema and labels live on its declaration in the fabric. A reference is
  * held to the handle-table grammar here; whether it names the session's own

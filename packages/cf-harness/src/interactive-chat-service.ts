@@ -1512,7 +1512,7 @@ export class HarnessInteractiveChatService {
     const session = record.status;
     const researchGoal = record.researchContext?.researchGoal ??
       params.input.text;
-    const inputCells = params.inputCells?.length
+    const inputCells = params.inputCells !== undefined
       ? params.inputCells
       : record.assignedPieces?.length
       ? record.assignedPieces.map(({ slug, ref }) => ({ name: slug, ref }))
@@ -1687,7 +1687,7 @@ export class HarnessInteractiveChatService {
         },
         ...(result.runState.assignedPieces?.length
           ? { assignedPieces: result.runState.assignedPieces }
-          : params.inputCells?.length
+          : params.inputCells !== undefined
           ? { assignedPieces: [] }
           : {}),
       });
@@ -1789,9 +1789,7 @@ export class HarnessInteractiveChatService {
     return {
       ...this.#basePromptLoopOptions,
       ...(loomAuthoring !== undefined ? { loomAuthoring } : {}),
-      ...(inputCells !== undefined && inputCells.length > 0
-        ? { inputCells }
-        : {}),
+      ...(inputCells !== undefined ? { inputCells } : {}),
       ...(patternRefs !== undefined && patternRefs.length > 0
         ? { patternRefs }
         : {}),

@@ -1,9 +1,9 @@
 /**
- * The record of an operator input cell: a cell the operator passed into the
- * run by reference, given a handle-table token at start so the run's inputs
- * reach the model as tokens from its first turn. `src/input-cells.ts`
- * documents the posture and does the parsing and minting; this contract is
- * what run state persists.
+ * Input cells supplied by the host: operator attachments or targets retained
+ * from a completed session turn that named a piece. Each receives a handle
+ * token at run start, so inputs reach the model as tokens from its first turn.
+ * `src/input-cells.ts` documents the posture and performs parsing and minting;
+ * this contract is what run state persists.
  */
 
 /** One host-supplied input cell, before minting its turn's handle. */

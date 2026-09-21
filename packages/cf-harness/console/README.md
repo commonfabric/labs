@@ -8,9 +8,11 @@ pane a host embeds to show one session working.
 
 A completed turn that names a piece keeps its reference for a bare follow-up in
 the same session, including after restart. Explicit attachments select the new
-turn's inputs. A `pending: true` output declared by the piece's top-level result
-schema prevents naming it as a ready page, and data-only probes stay unnamed.
-Reread the same piece after its read settles and verify the result.
+turn's inputs; `inputCells: []` attaches none and clears the retained target on
+successful completion without naming a piece. Omission or `null` keeps the bare
+follow-up behavior. A `pending: true` output declared by the piece's top-level
+result schema prevents naming it as a ready page, and data-only probes stay
+unnamed. Reread the same piece after its read settles and verify the result.
 
 A successful `run_pattern` result may carry `outputConcerns`: `error-branch`
 reports an observed failure, `pending` marks an unfinished read, and `no-rows`
