@@ -6,7 +6,7 @@ import {
   type FabricValue,
   type FabricValuePlus,
 } from "@/interface.ts";
-import { type FabricContainerValueTag, type PrimitiveValueTag } from "@/types";
+import { type FabricContainerValueTag } from "@/types";
 
 import { BaseValueVisitor } from "./BaseValueVisitor.ts";
 import {
