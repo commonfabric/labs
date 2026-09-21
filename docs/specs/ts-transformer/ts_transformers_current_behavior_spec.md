@@ -846,9 +846,12 @@ the wrapper that hid it.
 `WriteAuthorizedByValidationTransformer` separately validates writer-binding
 claims.
 
-It scans `toSchema<T>()` (one type arg) and `pattern<I, R>()` (the result type
-arg) for `WriteAuthorizedBy<T, typeof binding>` references, resolving through
-local type aliases and type-parameter substitution
+It scans `toSchema<T>()` (one type arg), `pattern<I, R>()` (the result type
+arg), and `new` expressions (every type argument, since a constructed cell's
+policy is written there) for `WriteAuthorizedBy<T, typeof binding>` references.
+It runs after the stages that lower expressions, so it matches declarations to
+the file by name, and looks a binding up in the file as authored. It resolves
+through local type aliases and type-parameter substitution
 (`findWriteAuthorizedByReferences`). For each reference it emits
 **`cfc-write-authorized-by`** when usage is malformed:
 
@@ -2176,12 +2179,13 @@ it, in anything it holds, or in a type alias or interface it refers to by name,
 through any import binding and without substituting a generic alias's
 parameters. Only declarations in authored modules are followed: a declaration
 file's `typeof`, such as a brand key, names no writer. The schema generator
-reads a writer binding, and the type arguments of the reference that carries a
-policy, through parentheses and plain aliases (`readAuthoredTypeNode`), so
-`type Binding = typeof setName` and a pattern-local
-`type Name = Owned<string, typeof setName>` name the writer that the same
-syntax written in place names. `protected-cell-policy.test.ts` pins the
-generated schemas for each spelling.
+reads the type arguments of the reference that carries a policy through
+parentheses and plain aliases (`readAuthoredTypeNode`), so a pattern-local
+`type Name = Owned<string, typeof setName>` names the writer that the same
+syntax written in place names. The binding itself stays a direct `typeof`
+(§6.8): `type Binding = typeof setName` is refused, on a constructor's type
+arguments as on a declared field. `protected-cell-policy.test.ts` pins the
+generated schemas and the refusals.
 
 `SchemaGeneratorTransformer` replaces `toSchema<T>(options?)` calls with JSON
 schema literals.

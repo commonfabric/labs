@@ -1604,12 +1604,10 @@ export class CommonFabricFormatter implements TypeFormatter {
     aliasArgNodes: readonly ts.TypeNode[] | undefined,
     bindingIndex: number,
   ): Record<string, unknown> | undefined {
-    // The binding is read the way its author wrote it, so that
-    // `type Binding = typeof setName` names the writer `typeof setName` does.
-    const writtenBindingNode = aliasArgNodes?.[bindingIndex] ??
+    // The binding itself must be a direct `typeof` (cfc_authoring_contract.md);
+    // `WriteAuthorizedByValidationTransformer` reports any other spelling.
+    const bindingNode = aliasArgNodes?.[bindingIndex] ??
       this.#getAliasTypeArgumentNode(context, bindingIndex);
-    const bindingNode = writtenBindingNode &&
-      readAuthoredTypeNode(writtenBindingNode, context.typeChecker);
     if (!bindingNode || !ts.isTypeQueryNode(bindingNode)) {
       return undefined;
     }

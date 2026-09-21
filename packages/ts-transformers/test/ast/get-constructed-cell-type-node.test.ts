@@ -95,6 +95,33 @@ describe("getConstructedCellTypeNode()", () => {
     expect(typeArguments[0]).toBe(checker.getTypeAtLocation(writer.name));
   });
 
+  it("keeps the authored argument when an alias is what names the binding", () => {
+    const { checker, result, sourceFile } = programFor(`
+      import { Writable } from "commonfabric";
+      const writer = () => {};
+      type Held = { by: typeof writer };
+      const result = new Writable<Held>({ by: writer }).for("held");
+    `);
+    const registry = new WeakMap<ts.Node, ts.Type>();
+    const reference = getConstructedCellTypeNode(
+      result,
+      checker,
+      registry,
+    ) as ts.TypeReferenceNode;
+    expect(ts.isTypeReferenceNode(reference)).toBe(true);
+    const qualified = reference.typeName as ts.QualifiedName;
+    expect((qualified.left as ts.Identifier).text).toBe("__cfHelpers");
+    expect(qualified.right.text).toBe("Writable");
+    // The argument is the author's own node, alias name and all, so the
+    // generator reads `Held` from its declaration.
+    const constructor = collect(sourceFile, ts.isNewExpression)[0];
+    expect(reference.typeArguments).toHaveLength(1);
+    expect(reference.typeArguments![0]).toBe(constructor.typeArguments![0]);
+    expect(registry.get(reference)).toBe(
+      checker.getTypeAtLocation(constructor),
+    );
+  });
+
   it("terminates on circular const aliases without inventing a cell type", () => {
     const { checker, result } = programFor(`
       const first = second;

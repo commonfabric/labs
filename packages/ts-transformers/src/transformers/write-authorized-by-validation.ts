@@ -21,6 +21,14 @@ export class WriteAuthorizedByValidationTransformer
           validateWriteAuthorizedByUsage(resultTypeArg, context);
         }
       }
+      // A constructed cell's policy is written on its constructor, and reaches
+      // the lift-result and pattern-result schemas from there. Unvalidated, a
+      // binding the generator cannot read produced a schema with no writer.
+      if (ts.isNewExpression(node)) {
+        for (const typeArg of node.typeArguments ?? []) {
+          validateWriteAuthorizedByUsage(typeArg, context);
+        }
+      }
 
       return ts.visitEachChild(node, visit, context.tsContext);
     };
@@ -192,13 +200,18 @@ function isSupportedWriteAuthorizedByBindingName(
   sourceFile: ts.SourceFile,
 ): boolean {
   let found = false;
+  // The file as its author wrote it. By this stage earlier ones have rewritten
+  // `sourceFile`, and a declaration they carried over still reports the
+  // authored file as its own, so identity against the rewritten file holds
+  // for nothing.
+  const authored = ts.getOriginalNode(sourceFile, ts.isSourceFile) ??
+    sourceFile;
 
   const visit = (node: ts.Node): void => {
     if (found) return;
 
     if (
-      ts.isFunctionDeclaration(node) && node.name?.text === name &&
-      node.getSourceFile() === sourceFile
+      ts.isFunctionDeclaration(node) && node.name?.text === name
     ) {
       found = true;
       return;
@@ -206,7 +219,7 @@ function isSupportedWriteAuthorizedByBindingName(
 
     if (
       ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) &&
-      node.name.text === name && node.getSourceFile() === sourceFile
+      node.name.text === name
     ) {
       found = node.initializer !== undefined &&
         isSupportedWriteAuthorizedByInitializer(node.initializer);
@@ -216,7 +229,7 @@ function isSupportedWriteAuthorizedByBindingName(
     ts.forEachChild(node, visit);
   };
 
-  visit(sourceFile);
+  visit(authored);
   return found;
 }
 
@@ -229,7 +242,9 @@ function getLocalTypeDeclaration(
     decl,
   ): decl is ts.TypeAliasDeclaration | ts.InterfaceDeclaration =>
     (ts.isTypeAliasDeclaration(decl) || ts.isInterfaceDeclaration(decl)) &&
-    decl.getSourceFile() === context.sourceFile
+    // By file name: earlier stages have rewritten `context.sourceFile`, and a
+    // declaration the checker returns belongs to the file as authored.
+    decl.getSourceFile().fileName === context.sourceFile.fileName
   );
   return declaration;
 }
