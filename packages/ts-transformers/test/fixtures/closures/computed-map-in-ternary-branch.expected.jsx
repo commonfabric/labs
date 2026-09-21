@@ -20,7 +20,8 @@ interface PatternInput {
     ]>>;
 }
 const __cfLift_1 = __cfHelpers.lift<{
-    people: __cfHelpers.ReadonlyCell<Person[]>;
+    people: __cfHelpers.ReadonlyCell<Default<Person[], [
+    ]>>;
 }, { name: string; rank: number; isFirst: boolean; }[]>(({ people }) => [...people.get()]
     .sort((a, b) => a.rank - b.rank)
     .map((p) => ({ name: p.name, rank: p.rank, isFirst: p.rank === 1 })), {
@@ -31,6 +32,7 @@ const __cfLift_1 = __cfHelpers.lift<{
             items: {
                 $ref: "#/$defs/Person"
             },
+            "default": [],
             asCell: ["readonly"]
         }
     },
@@ -68,19 +70,35 @@ const __cfLift_1 = __cfHelpers.lift<{
     }
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });
 const __cfLift_2 = __cfHelpers.lift<{
-    people: __cfHelpers.ReadonlyCell<unknown[]>;
+    people: __cfHelpers.ReadonlyCell<Default<Person[], [
+    ]>>;
 }, number>(({ people }) => people.get().length, {
     type: "object",
     properties: {
         people: {
             type: "array",
             items: {
-                type: "unknown"
+                $ref: "#/$defs/Person"
             },
+            "default": [],
             asCell: ["readonly"]
         }
     },
-    required: ["people"]
+    required: ["people"],
+    $defs: {
+        Person: {
+            type: "object",
+            properties: {
+                name: {
+                    type: "string"
+                },
+                rank: {
+                    type: "number"
+                }
+            },
+            required: ["name", "rank"]
+        }
+    }
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "number"
 } as const satisfies __cfHelpers.JSONSchema, { completeSchedulerScopeSummary: true });

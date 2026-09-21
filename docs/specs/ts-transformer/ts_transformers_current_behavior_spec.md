@@ -1285,11 +1285,21 @@ One case reads the declaration instead. Inside a pattern body, a binding
 destructured from the callback parameter has its `Default` and scope wrappers
 (`PerSpace`, `PerUser`, `PerSession`, `PerAny`) stripped from its type. A
 binding whose declared property type carries one — as the type itself, as a
-member of a union or an intersection, or as the argument of `Writable` — is
-therefore emitted from the type node its author wrote
-(`getPreservedTypeForBindingElement`, `src/ast/type-building.ts`). A wrapper's
-name counts only where it resolves to the declaration `commonfabric` exports: a
-type of the author's own named `Default` is an ordinary type, and its binding is
+member of a union or an intersection, or as the argument of a cell wrapper that
+keeps it — is therefore emitted from the type node its author wrote
+(`getPreservedTypeForBindingElement`, `src/ast/type-building.ts`). The cell
+wrappers that keep their argument are `Cell`, `Writable`, `ReadonlyCell`,
+`WriteonlyCell`, `ComparableCell`, and `Stream`, classified by spelling in
+`ARGUMENT_KEEPING_WRAPPER_NAMES`: a binding declared with one is captured as
+that cell, and capability narrowing wraps the argument it reads from the
+authored node, so a `Cell` of a value captures with the same `default` and
+`scope` as a `Writable` of that value. The argument read is the first, the value
+the cell holds; a `Stream`'s declared result is not read. A `computed()`
+captures an `OpaqueCell` as its value, and `Reactive<T>` is `T` itself, so the
+authored node of either would be captured as a cell; a binding declared with one
+is typed by inference, and its capture carries no default. A wrapper's name
+counts only where it resolves to the declaration `commonfabric` exports: a type
+of the author's own named `Default` is an ordinary type, and its binding is
 typed by inference. At any of those positions, a reference to a non-generic type
 alias whose type carries a wrapper is replaced by the type the alias names, so
 `type Draft = Writable<string | Default<"">>` captures with the schema of the

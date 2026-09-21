@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import type { WrapperSpelling } from "@commonfabric/schema-generator/wrapper-names";
 import ts from "typescript";
 
 import {
@@ -13,7 +14,17 @@ import {
 // module under test imports them. They are generic aliases here as they are in
 // `commonfabric`.
 const COMMONFABRIC = `declare module "commonfabric" {
-  export type Writable<T> = { get(): T };
+  export interface Cell<T> { get(): T }
+  export type Writable<T> = Cell<T>;
+  export interface ReadonlyCell<T> { get(): T }
+  export interface WriteonlyCell<T> { set(value: T): void }
+  export interface ComparableCell<T> { readonly __value?: T }
+  export interface OpaqueCell<T> { readonly __value?: T }
+  export interface Stream<E, R = void> { send(event: E): R }
+  export type Reactive<T> = T;
+  export interface SqliteDb<T> { readonly __database?: T }
+  export interface CellTypeConstructor<T> { readonly __kind?: T }
+  export interface ScopedCellTypeConstructor<T> { readonly __kind?: T }
   export type Default<T, V = T> = T & { readonly __default?: V };
   export type PerUser<T> = T & { readonly __scope?: "user" };
 }
@@ -188,6 +199,73 @@ describe("getPreservedBindingTypeNode()", () => {
       import type { Default } from "commonfabric";
       type Writable<T> = { mine: T };
       interface Input { c: Writable<string | Default<"">>; }
+    `)).toBeUndefined();
+  });
+
+  describe("a wrapper around a value with a default, by spelling", () => {
+    // Whether each spelling's argument is kept as written: kept for a cell a
+    // binding is captured as, and not for an opaque cell or a `Reactive`, whose
+    // value a `computed()` captures, nor for the rest, which hold no value that
+    // has a default.
+
+    const KEEPS_ARGUMENT = {
+      Cell: true,
+      Writable: true,
+      ReadonlyCell: true,
+      WriteonlyCell: true,
+      ComparableCell: true,
+      Stream: true,
+      OpaqueCell: false,
+      Reactive: false,
+      SqliteDb: false,
+      CellTypeConstructor: false,
+      ScopedCellTypeConstructor: false,
+    } satisfies Record<WrapperSpelling, boolean>;
+
+    for (const [spelling, keeps] of Object.entries(KEEPS_ARGUMENT)) {
+      const declared = `${spelling}<string | Default<"">>`;
+      it(
+        keeps
+          ? `returns the declared node for \`${declared}\``
+          : `returns \`undefined\` for \`${declared}\``,
+        () => {
+          expect(preserved(`
+            import type { Default, ${spelling} } from "commonfabric";
+            interface Input { c: ${declared}; }
+          `)).toBe(keeps ? declared : undefined);
+        },
+      );
+    }
+  });
+
+  it("returns a `Cell` of the type its aliased argument names", () => {
+    expect(preserved(`
+      import type { Cell, Default } from "commonfabric";
+      type Blank = string | Default<"">;
+      interface Input { c: Cell<Blank>; }
+    `)).toBe(`Cell<string | Default<"">>`);
+  });
+
+  it("leaves a `Stream`'s aliased result as written", () => {
+    expect(preserved(`
+      import type { Default, Stream } from "commonfabric";
+      type Blank = string | Default<"">;
+      interface Input { c: Stream<Blank, Blank>; }
+    `)).toBe(`Stream<string | Default<"">, Blank>`);
+  });
+
+  it("returns `undefined` for a `Stream` whose result alone carries a wrapper", () => {
+    expect(preserved(`
+      import type { Default, Stream } from "commonfabric";
+      interface Input { c: Stream<string, string | Default<"">>; }
+    `)).toBeUndefined();
+  });
+
+  it("returns `undefined` for the author's own `Cell` around a wrapper", () => {
+    expect(preserved(`
+      import type { Default } from "commonfabric";
+      interface Cell<T> { mine: T }
+      interface Input { c: Cell<string | Default<"">>; }
     `)).toBeUndefined();
   });
 
