@@ -1855,6 +1855,86 @@ Deno.test("main measures the downloaded coverage when a rate limit refuses the c
   }
 });
 
+Deno.test("main passes a pull request ungated when a rate limit refuses its artifact listing and then its baselines", async () => {
+  // The measurement reads the working directory as the repository root, so
+  // the run is given one of its own holding a single `tasks` source file.
+  const root = await Deno.makeTempDir({ prefix: "coverage-rate-limited-pr-" });
+  const originalCwd = Deno.cwd();
+  const source = path.join(root, "tasks", "limited.ts");
+  await Deno.mkdir(path.dirname(source));
+  await Deno.writeTextFile(source, "export const limited = 1;\n");
+
+  const artifactsDir = path.join(root, "coverage-artifacts");
+  for (const name of EXPECTED_COVERAGE_ARTIFACT_NAMES) {
+    await Deno.mkdir(path.join(artifactsDir, name), { recursive: true });
+    await Deno.writeTextFile(
+      path.join(artifactsDir, name, "coverage.lcov"),
+      `SF:${source}\nDA:1,0\nend_of_record\n`,
+    );
+  }
+
+  const eventPath = path.join(root, "event.json");
+  await Deno.writeTextFile(
+    eventPath,
+    JSON.stringify({ pull_request: { head: { sha: SHA_C }, body: "" } }),
+  );
+  const commentFile = path.join(root, "coverage-comment.json");
+
+  const prNumber = 7;
+  const currentRunId = 123;
+  try {
+    Deno.chdir(root);
+    const captured = await captureConsoleAsync(() =>
+      withEnv(
+        {
+          GITHUB_TOKEN: "test-token",
+          GITHUB_RUN_ID: String(currentRunId),
+          GITHUB_EVENT_PATH: eventPath,
+          GITHUB_EVENT_NAME: "pull_request",
+          GITHUB_SHA: SHA_C,
+          PR_NUMBER: String(prNumber),
+          COVERAGE_ARTIFACTS_DIR: artifactsDir,
+          COVERAGE_COMMENT_FILE: commentFile,
+          GITHUB_STEP_SUMMARY: undefined,
+        },
+        () =>
+          // The description and the changed files are read before the window
+          // is spent; every read after them meets the limit.
+          withMockFetch(
+            (input) => {
+              const url = String(input);
+              if (url.includes(`/pulls/${prNumber}/files`)) {
+                return jsonResponse([{ filename: "tasks/limited.ts" }]);
+              }
+              if (url.endsWith(`/pulls/${prNumber}`)) {
+                return jsonResponse({ body: "" });
+              }
+              return spentRateLimitWindow();
+            },
+            () => withMockExit(() => main()),
+          ),
+      )
+    );
+
+    assertEquals(captured.result, 0);
+    assertStringIncludes(
+      captured.logs.join("\n"),
+      "Extracted 2 coverage metrics from current run.",
+    );
+    const payload = JSON.parse(
+      await Deno.readTextFile(commentFile),
+    ) as CoverageCommentPayload;
+    assertEquals(payload.state, "ungated");
+    assertStringIncludes(
+      payload.body ?? "",
+      "| `tasks` | GitHub's API rate limit stopped this run reading",
+    );
+  } finally {
+    Deno.chdir(originalCwd);
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
 Deno.test("selectMergedPRForCommit prefers the merged PR", () => {
   const prs = [
     { number: 1, merged_at: null },
