@@ -543,40 +543,19 @@ ignored, and nothing reads it.
 This plan leaves a stream's document in place as a back-link-only record
 because a bare stream id says nothing about who owns it: the owner's result id
 is hashed into the id (`createRef({}, { parent, type: "internal", cause })`
-at `link-utils.ts:856`) but cannot be read back out. The follow-up makes the
-owner recoverable from the address itself, so any party holding a stream's id
-can name the owner's result document with no lookup and no record. It is the
-next plan after this one, and this plan is written on the assumption that it
-happens. What it changes:
-
-- **Identity.** A stream's id carries its owner's result id and its cause in
-  a form a reader can take apart, either as a stream entity kind minted into
-  the URI scheme (`link-utils.ts:845`; `EntityKind` is only `"computed"`
-  today) or as a structured id. It is minted from owner and cause, as derived
-  ids are today, and never content-addressed: a `cid:` id is a function of
-  the value, every stream's value is the same nothing, and what tells two
-  streams apart is the owner and cause that live in meta. Every existing
-  stream re-materializes under a new id. That is the migration decision 1
-  declines here, and the follow-up's first section states it and the cutover
-  for it.
-- **Sidecars.** A stream's event sidecar hashes the stream link
-  (`packages/memory/v2.ts:407`), so it moves with the id; entries in flight at
-  the cutover drain first or are rewritten.
-- **Readers.** The inspector, FUSE, the shuttle listing and the runtime's
-  bare-address case classify a stream from its id alone. The owner walk stage
-  3 adds is deleted; the link-schema stamp and the handle kind stay, since
-  dispatch and `send()` decide from them and neither depends on the id.
-- **Auto-start.** `ensurePieceRunning` reads a stream's owner from the address
-  and skips the back-link chain for it.
-- **The document.** Nothing writes to it and nothing reads it. Whether the
-  record exists at all becomes the storage question the unification in
-  `docs/specs/space-model/2-storage-format.md:95` answers, and can be settled
-  there.
+at `link-utils.ts:856`) but cannot be read back out.
+[Streams as positions on their owner](streams-as-positions.md) is the next
+plan, and this plan is written on the assumption that it happens. It goes
+further than recovering the owner from the id: a stream is addressed as a
+path on its owner's result document and has no document of its own, every
+stream re-materializes under its new address, and the owner walk stage 3 adds
+is deleted with it. Its stage 2 withdraws the wiring of that walk into
+`Cell.isStream` and the proxy, so stage 3 here lands without that item.
 
 What this plan does in anticipation: stream-ness decisions key on the link
-schema and the handle kind, both of which survive an id change; the owner
-walk is one shared function, so the follow-up deletes one thing; and nothing
-new is written onto the stream document that a migration would have to carry.
+schema and the handle kind, both of which survive an address change; the owner
+walk is one shared function, so the next plan deletes one thing; and nothing
+new is written onto the stream document that a cutover would have to carry.
 
 ## Not in scope
 

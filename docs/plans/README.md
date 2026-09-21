@@ -98,8 +98,16 @@ a record: archive it to `docs/history/plans/` following the procedure in
 - [Stream markers out of stored data](stream-markers-out-of-stored-data.md)
   moves stream-ness out of the stored `{ "$stream": true }` value and into the
   link schema and the module wrapper, and triggers the cold-start repairs on a
-  structural mismatch instead of the missing marker. It names putting the
-  owner into a stream's address as the follow-up it is written toward.
+  structural mismatch instead of the missing marker.
+  [Streams as positions on their owner](streams-as-positions.md) is what it is
+  written toward.
+- [Streams as positions on their owner](streams-as-positions.md) removes a
+  stream's document: a stream is addressed as a path on its owner's result
+  document — its result path for a verb, a synthetic path only its links
+  carry for a view handler — and everything that carries an event is already
+  keyed on a link's id and path. It deletes the walk from a stream's document
+  to its owner, and carries the measurement that no part of delivery needs
+  the document.
 - [Pre-syncing from node plans](presync-from-node-plans.md) makes one
   derivation per pattern node serve both instantiation and the pre-sync, so a
   resume and a fresh start name exactly what each lift, handler, builtin, and
