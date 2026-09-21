@@ -388,3 +388,50 @@ Deno.test("an entity with no value is recorded, not dropped", () => {
     },
   );
 });
+
+/** Seeds the base space and adds `count` documents in one transaction. */
+function seedBulk(path: string, count: number): void {
+  seed(path);
+  const db = new Database(path);
+  const commit = db.prepare(
+    `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution)
+     VALUES (?, ?, ?, '{}', '{}')`,
+  );
+  const rev = db.prepare(
+    `INSERT INTO revision (id, scope_key, seq, op_index, op, data, commit_seq)
+     VALUES (?, 'space', ?, 0, 'set', ?, ?)`,
+  );
+  db.exec("BEGIN");
+  for (let i = 0; i < count; i++) {
+    const seq = 100 + i;
+    commit.run(seq, SESSION, seq);
+    rev.run(`of:bulk${i}`, seq, JSON.stringify({ value: i }), seq);
+  }
+  db.exec("COMMIT");
+  db.close();
+}
+
+Deno.test("enumerates a store past the spread-argument ceiling", () => {
+  // `200_000` entities exceed V8's default spread-argument limit while staying
+  // below `ENUMERATION_CAP`. The margin accommodates variations in stack size.
+
+  const dir = Deno.makeTempDirSync({ prefix: "fingerprint-bulk-" });
+  try {
+    const path = `${dir}/space.sqlite`;
+    seedBulk(path, 200_000);
+    const space = openSpace(path);
+    try {
+      // `.extent.total` includes rows beyond the listing's display cap.
+      assertEquals(listEntityModels(space).extent.total, 200_004);
+
+      // This exercises `allEntities()` without hashing every document.
+      const { generated, named } = generatedInternalCellIds(space);
+      assertEquals([...generated], ["of:generated"]);
+      assertEquals([...named], ["of:named"]);
+    } finally {
+      space.close();
+    }
+  } finally {
+    Deno.removeSync(dir, { recursive: true });
+  }
+});

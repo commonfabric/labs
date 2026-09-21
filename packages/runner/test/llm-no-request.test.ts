@@ -15,9 +15,9 @@
  * been set, which a pattern that gates its prompt on an input does every time
  * that input is cleared. Further tests cover that transition. Entering the
  * no-request state has to abandon a request already in flight, so a response
- * that lands afterwards writes nothing; and it has to forget the request it
- * remembered, so the same prompt coming back is sent again rather than
- * suppressed as a duplicate.
+ * that lands afterwards writes nothing and runs none of the tool calls it asks
+ * for; and it has to forget the request it remembered, so the same prompt
+ * coming back is sent again rather than suppressed as a duplicate.
  *
  * Both of those apply to a request the builtin can abandon. A queued request
  * runs to completion under the queue's own lifecycle, so it is remembered
@@ -34,7 +34,7 @@ import {
   enableMockMode,
   resetMockMode,
 } from "@commonfabric/llm/client";
-import { LLMClient } from "@commonfabric/llm";
+import { LLMClient, type LLMResponse } from "@commonfabric/llm";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { waitForLlmSettled } from "./support/llm-result.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -356,6 +356,108 @@ describe("LLM builtin no-request paths", () => {
       expect(result.key("requestHash").get()).toBeUndefined();
       expect(result.key("result").get()).toBeUndefined();
       expect(result.key("partial").get()).toBeUndefined();
+      expect(result.key("pending").get()).toBe(false);
+    } finally {
+      LLMClient.prototype.sendRequest = original;
+    }
+  });
+
+  it("`llm` runs no tool call of a request a cleared message list abandoned", async () => {
+    // The parked request's response asks for a tool. Its request was abandoned
+    // when the list was cleared, so the tools loop stops at the run check it
+    // makes once a response arrives, ahead of reading the tool calls out of
+    // it. The completion's check on the remembered hash sits past the tools
+    // loop, and cannot stand in for this one.
+    const original = LLMClient.prototype.sendRequest;
+    let calls = 0;
+    let toolRan = false;
+    const arrived = Promise.withResolvers<void>();
+    const held = new Promise<void>((resolve) => {
+      releaseHeldRequest = resolve;
+    });
+    LLMClient.prototype.sendRequest = async (): Promise<LLMResponse> => {
+      calls++;
+      // A request sent with the tool's result ends the loop, so a loop that
+      // does run the tool call comes to rest rather than asking again.
+      if (calls > 1) {
+        return { id: "abandoned-tools-2", role: "assistant", content: "done" };
+      }
+      arrived.resolve();
+      await held;
+      return {
+        id: "abandoned-tools-1",
+        role: "assistant",
+        content: [{
+          type: "tool-call",
+          toolCallId: "call_lookup",
+          toolName: "lookup",
+          input: {},
+        }],
+      };
+    };
+    try {
+      const lookup = builder.handler(
+        {
+          type: "object",
+          properties: { result: { type: "object", asCell: ["cell"] } },
+          required: ["result"],
+        },
+        { type: "object", properties: {} },
+        // deno-lint-ignore no-explicit-any
+        (args: { result: any }) => {
+          toolRan = true;
+          args.result.set({ found: true });
+        },
+      );
+      const testPattern = builder.pattern<{ messages: Msg[] }>(
+        ({ messages }) =>
+          builder.llm({
+            messages,
+            tools: {
+              lookup: {
+                description: "Looks something up.",
+                handler: lookup({}),
+              },
+            },
+          }),
+      );
+      const messagesCell = runtime.getCell<Msg[]>(
+        space,
+        "abandoned-tools-input",
+        undefined,
+        tx,
+      );
+      messagesCell.set([{ role: "user", content: "look up cats" }]);
+      const resultCell = runtime.getCell(
+        space,
+        "abandoned-tools",
+        testPattern.resultSchema,
+        tx,
+      );
+      const result = runtime.run(
+        tx,
+        testPattern,
+        { messages: messagesCell },
+        resultCell,
+      );
+      // A reader holds the node live across the message list's transitions; the
+      // runtime's disposal ends the subscription.
+      result.sink(() => {});
+      tx.commit();
+      tx = runtime.edit();
+
+      await arrived.promise;
+
+      const clear = runtime.edit();
+      messagesCell.withTx(clear).set([]);
+      clear.commit();
+      await runtime.idle();
+
+      releaseHeldRequest!();
+      await runtime.settled();
+
+      expect(toolRan).toBe(false);
+      expect(calls).toBe(1);
       expect(result.key("pending").get()).toBe(false);
     } finally {
       LLMClient.prototype.sendRequest = original;

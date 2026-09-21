@@ -182,6 +182,26 @@ function getStringRep(value: string) {
 }
 
 /**
+ * Returns the eight bytes that represent the given number in a hash, which are
+ * its big-endian IEEE 754 form. Every `NaN` gets `CANONICAL_NAN_BYTES`, and
+ * those are not read from the value, so whichever bits an engine holds for a
+ * `NaN` have no effect on a hash.
+ *
+ * The result is good until the next call. For every value other than `NaN`, it
+ * is the one buffer this function writes into each time.
+ *
+ * @internal Exported so that `for-testing-only.ts` can offer it to tests.
+ */
+export function float64BytesOf(value: number): Uint8Array {
+  if (Number.isNaN(value)) {
+    return CANONICAL_NAN_BYTES;
+  }
+
+  f64View.setFloat64(0, value, false); // big-endian
+  return f64Bytes;
+}
+
+/**
  * Updates an incremental hasher with a length value, using the standard
  * in-hash encoding for same.
  */
@@ -205,12 +225,7 @@ function feedValue(hasher: IncrementalHasher, value: unknown): void {
 
     case "number":
       hasher.update(TAG_NUMBER_BYTES);
-      if (Number.isNaN(value)) {
-        hasher.update(CANONICAL_NAN_BYTES);
-      } else {
-        f64View.setFloat64(0, value, false); // big-endian
-        hasher.update(f64Bytes);
-      }
+      hasher.update(float64BytesOf(value));
       break;
 
     case "string": {

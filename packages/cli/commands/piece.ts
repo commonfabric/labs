@@ -2621,6 +2621,11 @@ command refuses, since the served update takes no origin.`,
     `Make "${EX_PIECE}" follow the deployment's profile pattern.`,
   )
   .option("-c,--cell, --piece <cell:string>", PIECE_OPTION_HELP)
+  .option(
+    "--dangerously-allow-incompatible-schema",
+    "Accept the reviewed schema incompatibility. Stored-input validation " +
+      "and source-transition protections still apply.",
+  )
   .arguments("<origin:string>")
   .action(async (options, origin) => {
     setQuietMode(!!options.quiet);
@@ -5098,16 +5103,32 @@ export async function followPieceSourceAction(
   const result = await (deps.followPieceSource ?? followPieceSource)(
     config,
     trimmed,
+    {
+      dangerouslyAllowIncompatibleSchema:
+        options.dangerouslyAllowIncompatibleSchema,
+    },
   );
   if (result.status === "incompatible") {
     (deps.printError ?? console.error)(
       `The source ${trimmed} serves now cannot replace what ${config.piece} ` +
         `runs: ${result.message}`,
     );
+    if (!options.dangerouslyAllowIncompatibleSchema) {
+      (deps.printError ?? console.error)(
+        "Review the incompatibility before retrying with " +
+          "--dangerously-allow-incompatible-schema. Existing links may no " +
+          "longer fit the new pattern.",
+      );
+    }
     (deps.setExitCode ?? ((code: number) => {
       Deno.exitCode = code;
     }))(1);
     return;
+  }
+  if (result.acceptedIncompatibility !== undefined) {
+    (deps.render ?? render)(
+      `Accepted incompatibility: ${result.acceptedIncompatibility}`,
+    );
   }
   (deps.render ?? render)(`${config.piece} now follows ${trimmed}`);
   if (result.executionWarning !== undefined) {
