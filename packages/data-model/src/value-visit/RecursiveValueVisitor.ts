@@ -20,8 +20,8 @@ import {
 
 /**
  * Visitor which handles all containers by requesting that the engine iterate
- * over their contents. This includes a new subclass contract method for
- * visiting non-container values, along with no-op implementations of all the
+ * over their contents. This includes a subclass contract method for visiting
+ * atomic (non-container) values, along with no-op implementations of all the
  * `visited*()` methods. `recurse` results from container visits always request
  * value recursion only (not keys).
  */
