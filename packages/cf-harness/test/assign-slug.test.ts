@@ -264,8 +264,7 @@ describe("assign-slug", () => {
           mail: createLLMFriendlyLink(mail.getAsNormalizedFullLink(), space),
         },
         resultSchema,
-      });
-      creation.restore();
+      }).finally(() => creation.restore());
       const output = result.output as RunPatternToolSuccessOutput;
       expect(output.status).toBe("ok");
       expect(output.value).toMatchObject({ n: 0, pending: true });
