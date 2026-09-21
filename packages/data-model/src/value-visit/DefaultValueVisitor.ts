@@ -31,19 +31,18 @@ import {
 } from "./interface.ts";
 
 /**
- * `BaseValueVisitor` subclass which provides a convenient structure for some of
- * the most commonly-needed visitor patterns. It provides tag-based dispatch to
- * visitor methods for each recognized tag along with one for unrecognized
- * values, along with (for most of them) default implementations which "roll up"
- * to category-specific methods. See the documentation on each method for
- * information about default implementations and category structure. This class
- * also provides a default no-op implementation for all the `visited*()`
- * methods.
+ * `BaseValueVisitor` subclass which provides a convenient structure and default
+ * implementation, with the aim of making it easy to define concrete subclasses
+ * for a particular purpose, via minimal method overriding.
  *
- * As a general aim, the set of methods and implementations thereof is intended
- * to make it easy to create a concrete subclass for a particular purpose by
- * overriding minimally, leading to a readable, understandable, and
- * mainatainable result.
+ * The class provides tag-based dispatch to visitor methods for each recognized
+ * tag along with one for unrecognized values, along with (for most of them)
+ * default implementations which "roll up" to category-specific methods. See the
+ * documentation on each method for information about default implementations
+ * and category structure.
+ *
+ * This class also provides a default no-op implementation for all the
+ * `visited*()` methods.
  *
  * **Note:** This class is marked `abstract` not because it has any `abstract`
  * methods, but rather as an indicator that without being subclassed it doesn't
