@@ -172,6 +172,25 @@ describe("captured-cell-value-schema", () => {
       expect(schema).toEqual(unread);
     });
 
+    it("emits the payload of an alias the CFC lowering fills from the argument", async () => {
+      // Read from the declaration, `name` would be the default's number.
+      const schema = await capturedContactSchema({
+        "/test.tsx":
+          `import { computed, Confidential, pattern, Writable } from "commonfabric";
+          export type Secret<T = number> =
+            Confidential<{ name: T }, readonly ["owner"]>;
+          ${readContact("Secret<string>")}`,
+      });
+
+      expect(schema).toEqual({
+        type: "object",
+        properties: { name: { type: "string" } },
+        required: ["name"],
+        ifc: { confidentiality: ["owner"] },
+        asCell: ["readonly"],
+      });
+    });
+
     it("emits the labels of an alias the CFC lowering fills from the argument", async () => {
       const schema = await capturedContactSchema({
         "/test.tsx":

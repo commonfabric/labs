@@ -2883,6 +2883,37 @@ type CalculatorRequest = {
         expect(schema).toBe(true);
       });
 
+      it("returns `true` for an argument the registry holds a type for", async () => {
+        // The generic is left unread whatever its argument denotes.
+        const { checker, sourceFile } = await createTestProgramFromFiles(
+          { "/main.ts": BOX },
+          "/main.ts",
+        );
+        const argument = reference("PrintedElsewhere");
+        const typeRegistry = new WeakMap<ts.Node, ts.Type>([
+          [argument, checker.getNumberType()],
+        ]);
+
+        expect(
+          new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+            generic("Box", argument),
+            checker,
+            typeRegistry,
+            undefined,
+            sourceFile,
+          ),
+        ).toBe(true);
+      });
+
+      it("returns `true` for a scope wrapper naming no payload", async () => {
+        const schema = await generate(
+          { "/main.ts": "export type PerUser<T> = T;" },
+          reference("PerUser"),
+        );
+
+        expect(schema).toBe(true);
+      });
+
       it("reads a scope wrapper, its payload taken from the argument", async () => {
         const schema = await generate(
           { "/main.ts": "export type PerUser<T> = T;" },
@@ -2924,6 +2955,45 @@ type CalculatorRequest = {
             type: "string",
             ifc: { confidentiality: ["owner"] },
           });
+        });
+
+        it("reads a payload holding a parameter from the argument", async () => {
+          // Read from the declaration, `name` would be the default's number.
+          const schema = await generate(
+            {
+              "/main.ts": CFC +
+                "export type Secret<T = number> =\n" +
+                '  Confidential<{ name: T }, readonly ["owner"]>;',
+            },
+            generic("Secret", keyword(ts.SyntaxKind.StringKeyword)),
+          );
+
+          expect(schema).toEqual({
+            type: "object",
+            properties: { name: { type: "string" } },
+            required: ["name"],
+            ifc: { confidentiality: ["owner"] },
+          });
+        });
+
+        it("leaves a generic the payload names unread, keeping the labels", async () => {
+          const schema = await generate(
+            {
+              "/main.ts": CFC +
+                "export interface Box<T> { value: T }\n" +
+                "export type Secret<T extends { label: string }> =\n" +
+                '  Confidential<Box<T>, readonly ["owner"]>;',
+            },
+            generic(
+              "Secret",
+              objectOf({
+                label: keyword(ts.SyntaxKind.StringKeyword),
+                extra: keyword(ts.SyntaxKind.NumberKeyword),
+              }),
+            ),
+          );
+
+          expect(schema).toEqual({ ifc: { confidentiality: ["owner"] } });
         });
 
         it("returns `true` for a reference that leaves an argument to its default", async () => {

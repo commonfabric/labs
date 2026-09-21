@@ -821,7 +821,11 @@ Mechanics:
 - User alias chains are followed with type-parameter node substitution until a
   canonical name is reached (`resolveCfcAliasFromDeclaration` /
   `substituteTypeNode`); unresolvable expansions fall back to
-  ordinary generation (tested).
+  ordinary generation (tested). A subtree holding a substituted parameter is
+  built afresh, with no original node, so the payload is read from the node
+  and its arguments, never back through the checker as the declaration's
+  subtree with the parameter unbound; a subtree holding none keeps its
+  declaration node.
 - Metadata values come from type-level literals: literal nodes, tuples, type
   literals, `typeof` value reads, alias-parameter substitution, and
   tuple/object **types** via the checker when nodes are gone

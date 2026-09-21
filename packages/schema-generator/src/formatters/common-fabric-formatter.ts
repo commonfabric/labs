@@ -148,8 +148,8 @@ const reachesCfcAlias = (
 
 /**
  * Whether this formatter lowers `reference`, to the generic `symbol`, from the
- * reference's own type arguments: a scope wrapper, whose payload it reads from
- * the reference's argument, or an alias that is not itself a CFC alias and
+ * reference's own type arguments: a scope wrapper naming its payload, which it
+ * reads from that argument, or an alias that is not itself a CFC alias and
  * whose whole body references one, directly or through further such aliases,
  * named with every argument, which it substitutes down that chain.
  */
@@ -158,7 +158,9 @@ export function lowersFromReferenceArguments(
   symbol: ts.Symbol,
   checker: ts.TypeChecker,
 ): boolean {
-  if (resolveScopeWrapperNode(reference)) return true;
+  if (resolveScopeWrapperNode(reference)) {
+    return (reference.typeArguments?.length ?? 0) > 0;
+  }
   const declaration = symbol.declarations?.find(ts.isTypeAliasDeclaration);
   return declaration !== undefined &&
     (reference.typeArguments?.length ?? 0) >=
@@ -1377,6 +1379,12 @@ export class CommonFabricFormatter implements TypeFormatter {
     );
   }
 
+  /**
+   * `typeNode` with each reference to a parameter in `paramMap` replaced by its
+   * argument. A subtree holding no such reference is returned as it is; one
+   * holding one is built afresh, with no original node, so the checker cannot
+   * read it back as the declaration's subtree, its parameters unbound.
+   */
   #substituteTypeNode(
     typeNode: ts.TypeNode,
     paramMap: ReadonlyMap<string, ts.TypeNode>,
@@ -1384,76 +1392,70 @@ export class CommonFabricFormatter implements TypeFormatter {
     if (paramMap.size === 0) {
       return typeNode;
     }
+    const f = ts.factory;
+    const substitute = (node: ts.TypeNode) =>
+      this.#substituteTypeNode(node, paramMap);
+    const changed = (
+      before: readonly ts.Node[],
+      after: readonly ts.Node[],
+    ) => after.some((node, index) => node !== before[index]);
 
     if (
       ts.isTypeReferenceNode(typeNode) && ts.isIdentifier(typeNode.typeName)
     ) {
+      const args = typeNode.typeArguments;
       const mapped = paramMap.get(typeNode.typeName.text);
-      if (mapped && !typeNode.typeArguments?.length) {
+      if (mapped && !args?.length) {
         return mapped;
       }
-      if (typeNode.typeArguments?.length) {
-        return ts.factory.updateTypeReferenceNode(
-          typeNode,
-          typeNode.typeName,
-          ts.factory.createNodeArray(
-            typeNode.typeArguments.map((arg) =>
-              this.#substituteTypeNode(arg, paramMap)
-            ),
-          ),
-        );
-      }
-      return typeNode;
+      const substituted = args?.map(substitute);
+      return args && substituted && changed(args, substituted)
+        ? f.createTypeReferenceNode(typeNode.typeName, substituted)
+        : typeNode;
     }
 
     if (ts.isTypeLiteralNode(typeNode)) {
-      return ts.factory.updateTypeLiteralNode(
-        typeNode,
-        ts.factory.createNodeArray(
-          typeNode.members.map((member) => {
-            if (ts.isPropertySignature(member) && member.type) {
-              return ts.factory.updatePropertySignature(
-                member,
-                member.modifiers,
-                member.name,
-                member.questionToken,
-                this.#substituteTypeNode(member.type, paramMap),
-              );
-            }
-            return member;
-          }),
-        ),
-      );
+      const members = typeNode.members.map((member) => {
+        if (!ts.isPropertySignature(member) || !member.type) return member;
+        const type = substitute(member.type);
+        return type === member.type ? member : f.createPropertySignature(
+          member.modifiers,
+          member.name,
+          member.questionToken,
+          type,
+        );
+      });
+      return changed(typeNode.members, members)
+        ? f.createTypeLiteralNode(members)
+        : typeNode;
     }
 
     if (ts.isTupleTypeNode(typeNode)) {
-      return ts.factory.updateTupleTypeNode(
-        typeNode,
-        typeNode.elements.map((element) =>
-          this.#substituteTypeNode(element, paramMap) as ts.TypeNode
-        ),
-      );
+      const elements = typeNode.elements.map(substitute);
+      return changed(typeNode.elements, elements)
+        ? f.createTupleTypeNode(elements)
+        : typeNode;
     }
 
     if (ts.isArrayTypeNode(typeNode)) {
-      return ts.factory.updateArrayTypeNode(
-        typeNode,
-        this.#substituteTypeNode(typeNode.elementType, paramMap),
-      );
+      const element = substitute(typeNode.elementType);
+      return element === typeNode.elementType
+        ? typeNode
+        : f.createArrayTypeNode(element);
     }
 
     if (ts.isTypeOperatorNode(typeNode)) {
-      return ts.factory.updateTypeOperatorNode(
-        typeNode,
-        this.#substituteTypeNode(typeNode.type, paramMap),
-      );
+      const operand = substitute(typeNode.type);
+      return operand === typeNode.type
+        ? typeNode
+        : f.createTypeOperatorNode(typeNode.operator, operand);
     }
 
     if (ts.isParenthesizedTypeNode(typeNode)) {
-      return ts.factory.updateParenthesizedType(
-        typeNode,
-        this.#substituteTypeNode(typeNode.type, paramMap),
-      );
+      const inner = substitute(typeNode.type);
+      return inner === typeNode.type
+        ? typeNode
+        : f.createParenthesizedType(inner);
     }
 
     return typeNode;
