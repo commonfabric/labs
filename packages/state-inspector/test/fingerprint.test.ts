@@ -17,7 +17,7 @@ import {
   visibleEntityRows,
   visibleEntityRowsByScope,
 } from "../model.ts";
-import { listScopes } from "../scopes.ts";
+import { listScopes, scopesOfRows } from "../scopes.ts";
 import {
   contentFingerprint,
   diffFingerprints,
@@ -539,19 +539,34 @@ Deno.test("one pass yields each scope's rows exactly as the per-scope query does
  * machine and prove nothing there. Before the fix this is 2 x the number of
  * scopes; after it, the scoped query is never prepared at all.
  */
-Deno.test("the fingerprint issues no per-scope row query", () => {
+Deno.test("the entity walk enumerates rows in one unscoped pass", () => {
+  // A row query filtered on one scope cannot seek (the index leads with `id`),
+  // so each walks the whole branch; the walk issues none, and derives its
+  // scopes from the same pass rather than enumerating a second time.
   withScopedSpace((space) => {
     const prepare = space.db.prepare.bind(space.db);
     let scoped = 0;
+    let unscoped = 0;
     space.db.prepare = ((sql: string) => {
-      if (/scope_key = \?/.test(sql) && /GROUP BY scope_key, id/.test(sql)) {
-        scoped++;
+      if (/GROUP BY scope_key, id/.test(sql)) {
+        if (/scope_key = \?/.test(sql)) scoped++;
+        else unscoped++;
       }
       return prepare(sql);
     }) as typeof space.db.prepare;
     const scopeCount = listScopes(space, { branch: "" }).length;
     assert(scopeCount >= 5, `fixture spans several scopes (${scopeCount})`);
-    contentFingerprint(space);
-    assertEquals(scoped, 0);
+    unscoped = 0;
+    generatedInternalCellIds(space);
+    assertEquals({ scoped, unscoped }, { scoped: 0, unscoped: 1 });
+  });
+});
+
+Deno.test("scopes of grouped rows are the scopes listScopes reports", () => {
+  withScopedSpace((space) => {
+    assertEquals(
+      scopesOfRows(visibleEntityRowsByScope(space, { branch: "" })),
+      listScopes(space, { branch: "" }),
+    );
   });
 });

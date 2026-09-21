@@ -29,7 +29,7 @@ import {
   visibleEntityRowsByScope,
 } from "./model.ts";
 import { type EntityAddress, reconstructDocument } from "./reconstruct.ts";
-import { listScopes } from "./scopes.ts";
+import { scopesOfRows } from "./scopes.ts";
 
 /**
  * `listEntityModels` caps at 5,000 by default — a real Estuary space already
@@ -64,7 +64,7 @@ export function hashEntityValue(
  *
  * `listEntityModels()` defaults to the shared space scope. Per-user and
  * per-session state is durable content too, so this walk uses every scope
- * reported by `listScopes()`.
+ * the rows are grouped under.
  */
 function allEntities(
   space: SpaceDb,
@@ -72,18 +72,11 @@ function allEntities(
   cap: number = ENUMERATION_CAP,
 ): EntityModel[] {
   const out: EntityModel[] = [];
+  // Scopes and their rows come from one pass, so every scope walked is one the
+  // rows were grouped under.
   const rowsByScope = visibleEntityRowsByScope(space, { branch });
-  for (const scope of listScopes(space, { branch })) {
-    // Both come from the same unscoped pass, so every listed scope has rows.
-    // A miss would mean they diverged, and enumerating it as empty would hash
-    // a partial space under a complete-looking verdict — so refuse instead.
-    const rows = rowsByScope.get(scope.raw);
-    if (rows === undefined) {
-      throw new Error(
-        `scope ${scope.raw} is listed but has no rows in the enumeration pass; ` +
-          `refusing to fingerprint a space whose scopes disagree.`,
-      );
-    }
+  for (const scope of scopesOfRows(rowsByScope)) {
+    const rows = rowsByScope.get(scope.raw) ?? [];
     const listing = listEntityModels(space, {
       branch,
       scope: scope.raw,

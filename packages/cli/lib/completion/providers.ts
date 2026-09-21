@@ -749,9 +749,9 @@ async function entityCandidates(
   const {
     DEFAULT_SCAN_LIMIT,
     listEntityModels,
-    listScopes,
     openSpace,
     resolveSpace,
+    scopesOfRows,
     visibleEntityRowsByScope,
   } = await import("@commonfabric/state-inspector");
   const space = openSpace(await resolveSpace(token));
@@ -773,7 +773,7 @@ async function entityCandidates(
     // reconstructs at most one listing's worth rather than the cap once per
     // scope.
     //
-    // `listScopes` sorts the space scope first, and a row already offered from
+    // Scopes sort with the space scope first, and a row already offered from
     // an earlier scope is dropped before it is reconstructed, so an entity
     // written in more than one scope keeps the label its space-scope value
     // reconstructs to.
@@ -782,7 +782,7 @@ async function entityCandidates(
     });
     const seen = new Set<string>();
     const entities: EntityListingLike[] = [];
-    for (const scope of listScopes(space, { branch: view.branch })) {
+    for (const scope of scopesOfRows(rowsByScope)) {
       const budget = DEFAULT_SCAN_LIMIT - entities.length;
       if (budget <= 0) break;
       const rows = (rowsByScope.get(scope.raw) ?? []).filter((row) =>
