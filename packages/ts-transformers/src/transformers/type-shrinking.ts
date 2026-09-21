@@ -10,7 +10,7 @@ import {
   typeToTypeNodeWithRegistry,
 } from "../ast/type-building.ts";
 import { CF_HELPERS_IDENTIFIER } from "../core/cf-helpers.ts";
-import { resolvesToCommonFabricSymbol } from "../core/common-fabric-symbols.ts";
+import { isCommonFabricSymbol } from "../core/common-fabric-symbols.ts";
 import { createPropertyName } from "../utils/identifiers.ts";
 import { uniquePaths } from "../utils/path-serialization.ts";
 import {
@@ -738,30 +738,34 @@ export function isCellLikeTypeNode(node: ts.TypeNode): boolean {
 }
 
 /**
- * Returns `true` for a reference to one of `commonfabric`'s cell wrappers: a
- * cell-like spelling (`isCellLikeTypeNode()`) whose name resolves to the
- * declaration `commonfabric` exports. A type of the author's own that shares a
- * wrapper's name is something else. A reference the transformer builds — one
- * qualified by its helper namespace, or one the checker cannot resolve — is
- * judged by its spelling alone.
+ * Returns `true` for a reference to one of `commonfabric`'s cell wrappers
+ * (`CELL_LIKE_TYPE_NODE_NAMES`): one whose name resolves, through its import
+ * binding, to the wrapper `commonfabric` declares, under whatever name it was
+ * imported as. A type of the author's own that shares a wrapper's name is
+ * something else, and so is an alias of a wrapper: its type arguments are its
+ * own, not the wrapper's, and `readAuthoredTypeNode()` reads through the ones
+ * that can be read through. A reference the transformer builds — one qualified
+ * by its helper namespace, or one the checker cannot resolve — is judged by
+ * its spelling alone (`isCellLikeTypeNode()`).
  */
 function namesCellWrapper(
   node: ts.TypeNode,
   checker: ts.TypeChecker,
 ): node is ts.TypeReferenceNode {
-  if (!ts.isTypeReferenceNode(node) || !isCellLikeTypeNode(node)) return false;
-  if (
-    ts.isQualifiedName(node.typeName) &&
+  if (!ts.isTypeReferenceNode(node)) return false;
+  const helper = ts.isQualifiedName(node.typeName) &&
     ts.isIdentifier(node.typeName.left) &&
-    node.typeName.left.text === CF_HELPERS_IDENTIFIER
-  ) {
-    return true;
-  }
+    node.typeName.left.text === CF_HELPERS_IDENTIFIER;
   const name = ts.isIdentifier(node.typeName)
     ? node.typeName
     : node.typeName.right;
-  const symbol = checker.getSymbolAtLocation(name);
-  return !symbol || resolvesToCommonFabricSymbol(symbol, checker, name.text);
+  const symbol = helper ? undefined : checker.getSymbolAtLocation(name);
+  if (!symbol) return isCellLikeTypeNode(node);
+  const declared = symbol.flags & ts.SymbolFlags.Alias
+    ? checker.getAliasedSymbol(symbol)
+    : symbol;
+  return CELL_LIKE_TYPE_NODE_NAMES.has(declared.getName()) &&
+    isCommonFabricSymbol(declared);
 }
 
 function getTypeReferenceNodeName(

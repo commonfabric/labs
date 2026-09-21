@@ -327,6 +327,46 @@ describe("aliased-cell-value-schema", () => {
     });
   });
 
+  describe("a `commonfabric` cell wrapper imported under another name", () => {
+    // The wrapper is recognized by the declaration its name resolves to, not
+    // by the name it is imported as.
+
+    for (
+      const [imported, spelling] of [
+        ["Cell as Writable", "Writable"],
+        ["ReadonlyCell as Cell", "Cell"],
+        ["Writable as MyCell", "MyCell"],
+      ]
+    ) {
+      for (
+        const position of [
+          "a `lift()` property",
+          "a `handler()` event property",
+          "a `handler()` state",
+        ]
+      ) {
+        it(`emits for \`${imported}\` in ${position} what \`Writable\` emits`, async () => {
+          const { source, schemaOf } = CELL_DECLARATION_POSITIONS[position]!;
+          const transformWith = (specifier: string, cellType: string) =>
+            transformSource(
+              `import { computed, handler, lift, pattern, ${specifier} } from "commonfabric";
+               ${source(cellType)}`,
+              { types: COMMONFABRIC_TYPES },
+            );
+
+          const renamed = schemaOf(
+            await transformWith(imported!, `${spelling}<string>`),
+          );
+
+          expect(renamed).toEqual(
+            schemaOf(await transformWith("Writable", "Writable<string>")),
+          );
+          expect(renamed).toHaveProperty("asCell");
+        });
+      }
+    }
+  });
+
   describe("a type of the author's own named like a wrapper", () => {
     // A wrapper's name counts only where it resolves to `commonfabric`'s
     // declaration, written in place and through an alias alike.

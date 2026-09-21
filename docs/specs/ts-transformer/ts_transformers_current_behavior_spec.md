@@ -417,11 +417,13 @@ A cell declared as `type ProfileCell = Writable<...>`, or as
 `(Writable<...>)`, therefore emits the value schema the same wrapper emits
 written in place, under every inferred capability and for an alias imported
 from another module, and a `Default` the value type does not admit fails
-compilation the same way. A wrapper's name counts only where it resolves to
-the declaration `commonfabric` exports (`namesCellWrapper`): a type of the
-author's own named `Writable`, written in place or reached through an alias,
-is that type and not a cell. A node the transformer builds, which the checker
-cannot resolve, is read by its spelling.
+compilation the same way. A reference is a cell wrapper where its name
+resolves, through its import binding, to a cell wrapper `commonfabric`
+declares (`namesCellWrapper`), under whatever name it was imported as:
+`import { Cell as Writable }` and `import { Writable as MyCell }` are cells,
+and a type of the author's own named `Writable`, written in place or reached
+through an alias, is that type and not a cell. A node the transformer builds,
+which the checker cannot resolve, is read by its spelling.
 
 A cell reached through a generic alias — `type MyCell<T> = Writable<...>` —
 has no authored node for its value, since the node the alias names is written
