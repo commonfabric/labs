@@ -310,7 +310,7 @@ export default pattern<LoomInput, LoomOutput>(
               <cf-vstack gap="4" padding="4">
                 {panels.map((panel) => (
                   <cf-card>
-                    <cf-hstack gap="2">
+                    <cf-hstack gap="2" wrap>
                       <cf-button onClick={selectPanel({ panel, viewerState })}>
                         {viewerState.key("selectedPanel").equals(panel)
                           ? "Selected in this session"

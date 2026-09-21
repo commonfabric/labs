@@ -1,13 +1,14 @@
 /** Public linked-cell contract of a shared Loom. */
 import type {
   Default,
+  NAME,
   PerSession,
   PerSpace,
   Stream,
+  UI,
   VNode,
   Writable,
 } from "commonfabric";
-import { NAME, UI } from "commonfabric";
 
 /** Allowlisted public contact information supplied by the publisher. */
 export interface PublishedChannel {
