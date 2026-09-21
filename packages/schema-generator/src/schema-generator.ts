@@ -31,6 +31,7 @@ import {
 } from "./type-utils.ts";
 import { attachDocTags, extractDocFromType } from "./doc-utils.ts";
 import { unionFoldedFrom } from "./schema-origins.ts";
+import { reportUnreadTypes } from "./unread-type-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
 
@@ -964,6 +965,11 @@ export class SchemaGenerator {
   ): MutableJSONSchema {
     // Create unified context with all state
     const cycles = this.#getCycles(type, checker);
+
+    // A guess a wrapper recovers never reaches this list, so what arrives here
+    // is what the finished schema accepts without having read it.
+    const unread: ts.TypeNode[] = [];
+
     const context: GenerationContext = {
       // Immutable context
       typeChecker: checker,
@@ -974,6 +980,7 @@ export class SchemaGenerator {
       definitions: {},
       emittedRefs: new Set(),
       schemaOrigins: new WeakMap(),
+      uninterpretedTypeNodes: unread,
 
       // Stack state
       definitionStack: new Set(),
@@ -1024,6 +1031,8 @@ export class SchemaGenerator {
       // Build final schema with definitions if needed
       result = this.#buildFinalSchema(schema, type, context, typeNode);
     }
+
+    if (unread.length > 0) reportUnreadTypes(context, unread);
 
     assertScopeDeclarationsAreReachable(result);
     return result;
