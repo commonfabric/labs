@@ -36,6 +36,13 @@ export interface AssignSlugToolSuccessOutput {
   slug: string;
 
   /**
+   * The slug's target, joining this artifact to the `run_pattern` attempt
+   * that created the piece. Artifact-only: the prompt loop strips this bare
+   * fabric identifier from model context.
+   */
+  pieceId: string;
+
+  /**
    * Absolute URL for the named piece, composed from the session's API URL
    * and the space's configured name. Absent when the session was configured
    * by `did:key` rather than by name: the only URL available then would
@@ -98,6 +105,7 @@ export const assignSlugToolDescriptor: HarnessToolDescriptor = {
       outputId: { type: "string" },
       status: { enum: ["ok", "error"] },
       slug: { type: "string" },
+      pieceId: { type: "string" },
       url: { type: "string" },
       message: { type: "string" },
     },
@@ -370,6 +378,7 @@ export const assignSlugTool: HarnessToolDefinition<
         outputId,
         status: "ok",
         slug,
+        pieceId: targetId,
         ...(url !== undefined ? { url } : {}),
       };
     };
