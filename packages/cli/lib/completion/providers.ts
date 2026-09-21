@@ -192,14 +192,18 @@ export function resolvePieceContext(line: CompletionLine): PieceConfig | null {
 async function pieceCandidates(line: CompletionLine): Promise<ProviderResult> {
   const config = resolveSpaceContext(line);
   if (!config) return NOTHING;
-  const { listPieces, listSpaceSlugs } = await import("../piece.ts");
+  const { listPieces, listSpaceSlugs, loadPieces } = await import(
+    "../piece.ts"
+  );
+  const controller = await loadPieces(config);
+  const deps = { loadPieces: () => Promise.resolve(controller) };
   const [pieces, slugs] = await Promise.all([
-    listPieces(config),
-    listSpaceSlugs(config),
+    listPieces(config, deps),
+    listSpaceSlugs(config, deps),
   ]);
   return values([
     ...shapeSlugCandidates(slugs, pieces),
-    ...shapePieceCandidates(pieces),
+    ...shapePieceCandidates(pieces, controller.getSpace()),
   ]);
 }
 
@@ -233,15 +237,28 @@ export interface SlugListingLike {
  * Label pieces for the annotation column: the piece's own name reads best, and
  * the pattern symbol is the fallback for a piece never given one. A piece that
  * failed to load still lists — its id is exactly what an operator reaches for
- * completion to recover.
+ * completion to recover. A root in the resolved listing space can use its
+ * short ID; foreign spaces, scopes, and paths retain their full reference.
  */
 export function shapePieceCandidates(
   pieces: readonly PieceListingLike[],
+  listingSpace?: string,
 ): Candidate[] {
-  return pieces.map((piece) => ({
-    value: piece.reference ?? piece.id,
-    description: piece.name ?? piece.patternRef?.symbol ?? undefined,
-  }));
+  return pieces.map((piece) => {
+    let value = piece.reference ?? piece.id;
+    if (piece.reference && listingSpace) {
+      const target = normalizeLLMFriendlyRef(piece.reference);
+      if (
+        target?.embeddedSpace === listingSpace &&
+        (target.scope === undefined || target.scope === "space") &&
+        target.path.length === 0 && !target.input && !target.pin
+      ) value = piece.id;
+    }
+    return {
+      value,
+      description: piece.name ?? piece.patternRef?.symbol ?? undefined,
+    };
+  });
 }
 
 /**
@@ -627,28 +644,48 @@ export function shapeProjectionCandidates(
 async function pieceWithPathCandidates(
   line: CompletionLine,
 ): Promise<ProviderResult> {
-  const typed = line.word;
-  const cut = typed.indexOf("/");
-  if (cut === -1) {
+  const target = splitPiecePathPrefix(line.word);
+  if (!target) {
     const pieces = await pieceCandidates(line);
-    // A link endpoint continues with `/`, so hold the cursor in place.
     return { candidates: pieces.candidates, directives: [{ kind: "nospace" }] };
   }
 
-  const config = resolveSpaceContext(line);
+  const config = resolvePieceContext({
+    ...line,
+    options: new Map([...line.options, ["cell", target.reference]]),
+  });
   if (!config) return NOTHING;
-  const pieceId = typed.slice(0, cut);
-  const { parentPath } = splitPathPrefix(typed.slice(cut + 1));
-
   const { listCellKeys } = await import("../cell-listing.ts");
-  const keys = await listCellKeys({ ...config, piece: pieceId }, parentPath);
+  const keys = await listCellKeys(config, target.parentPath ?? "");
   if (keys.length === 0) return NOTHING;
-
-  const prefix = pieceWithPathPrefix(pieceId, parentPath);
+  const prefix = target.prefix;
   return {
     candidates: keys.map((key) => ({ value: `${prefix}${key}` })),
     directives: [{ kind: "nospace" }],
   };
+}
+
+/** Separate an endpoint's partial final key from its complete target reference. */
+export function splitPiecePathPrefix(
+  typed: string,
+): { reference: string; prefix: string; parentPath?: string } | undefined {
+  const parsed = normalizeLLMFriendlyRef(typed);
+  if (parsed && parsed.path.length === 0 && !typed.endsWith("/")) {
+    return undefined;
+  }
+  if (!parsed) {
+    const first = typed.indexOf("/");
+    if (first < 0) return undefined;
+    const { parentPath } = splitPathPrefix(typed.slice(first + 1));
+    return {
+      reference: typed.slice(0, first),
+      prefix: pieceWithPathPrefix(typed.slice(0, first), parentPath),
+      parentPath,
+    };
+  }
+  const cut = typed.lastIndexOf("/");
+  if (cut < 0) return undefined;
+  return { reference: typed.slice(0, cut), prefix: typed.slice(0, cut + 1) };
 }
 
 /**

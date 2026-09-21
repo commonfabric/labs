@@ -23,6 +23,7 @@ import {
   shapeSlugCandidates,
   shapeVerbCandidates,
   splitPathPrefix,
+  splitPiecePathPrefix,
   splitSelectPrefix,
   wishTargetCandidates,
 } from "../lib/completion/providers.ts";
@@ -914,6 +915,49 @@ Deno.test("shaping: equal document IDs preserve their distinct full target refer
     shapePieceCandidates(pieces).map((row) => row.value),
     pieces.map((row) => row.reference),
   );
+});
+
+Deno.test("endpoint prefixes retain qualified scope and parent path", () => {
+  const id = `fid1:${"a".repeat(43)}`;
+  for (
+    const root of [
+      `/of:${id}`,
+      `//did:key:foreign/of:${id}@user`,
+      `/@did:key:foreign/of:${id}@user`,
+    ]
+  ) {
+    assertEquals(splitPiecePathPrefix(root), undefined);
+    assertEquals(splitPiecePathPrefix(`${root}/nested/fi`), {
+      reference: `${root}/nested`,
+      prefix: `${root}/nested/`,
+    });
+    assertEquals(splitPiecePathPrefix(`${root}/`), {
+      reference: root,
+      prefix: `${root}/`,
+    });
+  }
+  for (const root of ["board", id]) {
+    assertEquals(splitPiecePathPrefix(`${root}/nested/fi`), {
+      reference: root,
+      prefix: `${root}/nested/`,
+      parentPath: "nested",
+    });
+  }
+});
+
+Deno.test("shaping: only default root references in the resolved listing space shorten", () => {
+  const local = "did:key:local";
+  const id = `fid1:${"a".repeat(43)}`;
+  const pieces = [
+    { id, reference: `//${local}/of:${id}@space` },
+    { id, reference: `//did:key:foreign/of:${id}@space` },
+    { id, reference: `//${local}/of:${id}@user` },
+    { id, reference: `//${local}/of:${id}@space/nested` },
+  ];
+  assertEquals(shapePieceCandidates(pieces, local).map((row) => row.value), [
+    id,
+    ...pieces.slice(1).map((row) => row.reference),
+  ]);
 });
 
 Deno.test("shaping: a piece is labeled by name, falling back to its pattern", () => {
