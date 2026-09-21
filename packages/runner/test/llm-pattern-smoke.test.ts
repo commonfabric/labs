@@ -222,6 +222,59 @@ describe("LLM pattern smoke tests", () => {
     });
   });
 
+  it("preserves a closed schema and resolves nested references in the `generateObject` client request", async () => {
+    const prompt = "smoke-test-generateObject-closed-schema";
+    const entrySchema = {
+      type: "object",
+      additionalProperties: false,
+      properties: { subject: { type: "string" } },
+      required: ["subject"],
+    } as const;
+    const schema: JSONSchema = {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        messages: { type: "array", items: { $ref: "#/$defs/Mail" } },
+      },
+      required: ["messages"],
+      $defs: { Mail: entrySchema },
+    };
+    const object = { messages: [{ subject: "Your weekly summary" }] };
+    let observedSchema: unknown;
+
+    addMockObjectResponse(
+      (req) => {
+        if (
+          !req.messages.some((m) =>
+            typeof m.content === "string" && m.content.includes(prompt)
+          )
+        ) return false;
+        observedSchema = req.schema;
+        return true;
+      },
+      { object, id: "smoke-closed-schema" },
+    );
+
+    const testPattern = pattern(() => generateObject({ prompt, schema }));
+    const resultCell = runtime.getCell(
+      space,
+      "smoke-generateObject-closed-schema",
+      testPattern.resultSchema,
+      tx,
+    );
+    const result = runtime.run(tx, testPattern, {}, resultCell);
+    await tx.commit();
+    await waitForLlmSettled(runtime, result);
+
+    expect(observedSchema).toEqual({
+      type: "object",
+      additionalProperties: false,
+      properties: { messages: { type: "array", items: entrySchema } },
+      required: ["messages"],
+    });
+    expect(result.key("result").get()).toEqual(object);
+  });
+
   it("generateObject with tools and presentResult", async () => {
     const prompt = "smoke-test-generateObject-tools";
     const schema: JSONSchema = {

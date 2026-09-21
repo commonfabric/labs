@@ -307,7 +307,11 @@ function resolveRefsForLLM(
     const result: any = {};
     for (const [key, value] of Object.entries(nodeObj)) {
       if (key === "$defs") continue; // strip $defs from output
-      if (Array.isArray(value)) {
+      if (key === "additionalProperties" && value === false) {
+        // This keyword controls object openness; converting `false` to an
+        // object would permit the extra properties the schema forbids.
+        result[key] = value;
+      } else if (Array.isArray(value)) {
         result[key] = value.map((item) =>
           isWalkableObjectOrArray(item) || typeof item === "boolean"
             ? resolve(item, refDepth, activeRefs)
