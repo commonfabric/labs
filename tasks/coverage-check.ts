@@ -1098,7 +1098,7 @@ export async function fetchCurrentRunArtifacts(
  * Helper for {@link fetchCurrentRunArtifacts}, which names each artifact
  * downloaded into `dir` by the directory holding it. The id and the size are
  * the listing's to report, so each is zero here; what reads a downloaded
- * artifact finds it by name.
+ * artifact, and what copies its files, tells it apart by name.
  */
 async function downloadedArtifacts(dir: string): Promise<Artifact[]> {
   const artifacts: Artifact[] = [];
@@ -1309,6 +1309,11 @@ function sampleForRun(
  * combined report is built from, and reports what it found: how many raw
  * profile files and how many LCOV reports, plus the members the job that
  * uploaded it never launched, read from the record it carries.
+ *
+ * Each copy is named after the artifact it came from. Shards carry files of the
+ * same name, so the name has to tell the artifacts apart, which is what the
+ * artifact's own name does within one run; an artifact's id need not, since the
+ * run's artifacts read from their downloaded directories carry none.
  */
 export async function copyCoverageArtifactFiles(
   artifact: Artifact,
@@ -1375,7 +1380,7 @@ export async function copyCoverageArtifactFiles(
       const destDir = isLcov ? lcovDir : profileDir;
       const dest = path.join(
         destDir,
-        `${artifact.id}-${count}-${path.basename(entry.path)}`,
+        `${artifact.name}-${count}-${path.basename(entry.path)}`,
       );
       await Deno.copyFile(entry.path, dest);
       if (isLcov) lcovFiles++;

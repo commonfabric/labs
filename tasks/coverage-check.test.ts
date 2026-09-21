@@ -158,7 +158,9 @@ Deno.test("copyCoverageArtifactFiles reads a pre-downloaded artifact in place", 
     }
     assertEquals(copiedLcov.sort(), ["pattern", "runtime"]);
     assertEquals(
-      await Deno.readTextFile(path.join(profileDir, "17-0-profile.json")),
+      await Deno.readTextFile(
+        path.join(profileDir, "coverage-profile-workspace-1-0-profile.json"),
+      ),
       "profile",
     );
     assert((await Deno.stat(sourceDir)).isDirectory);
@@ -1773,6 +1775,46 @@ Deno.test("fetchCurrentRunArtifacts reads the downloaded artifacts when a rate l
         `the ones downloaded to \`${dir}\` instead`,
     );
     assertStringIncludes(warnings, "403 Forbidden (rate limit)");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("the downloaded artifacts a rate-limited listing falls back to keep every shard's coverage", async () => {
+  // Shards upload files of the same name, and the artifacts read from their
+  // directories all carry the same id, so only the name tells them apart.
+  const dir = await Deno.makeTempDir({ prefix: "coverage-artifacts-" });
+  try {
+    for (
+      const [index, name] of [
+        "coverage-profile-runner-1",
+        "coverage-profile-runner-2",
+      ].entries()
+    ) {
+      await Deno.mkdir(path.join(dir, name));
+      await Deno.writeTextFile(
+        path.join(dir, name, "coverage.lcov"),
+        [
+          `SF:/home/runner/work/labs/labs/packages/example/src/shard-${index}.ts`,
+          "DA:1,1",
+          "end_of_record",
+        ].join("\n"),
+      );
+    }
+
+    const { lcov, sourceDescription } = await captureConsoleAsync(async () =>
+      combinedLcovFromArtifacts(
+        await withMockFetch(
+          spentRateLimitWindow,
+          () => fetchCurrentRunArtifacts(123, dir),
+        ),
+        dir,
+      )
+    ).then((captured) => captured.result);
+
+    assertStringIncludes(lcov, "packages/example/src/shard-0.ts");
+    assertStringIncludes(lcov, "packages/example/src/shard-1.ts");
+    assertEquals(sourceDescription, "2 LCOV report files");
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
