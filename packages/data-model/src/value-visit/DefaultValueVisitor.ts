@@ -45,9 +45,8 @@ import {
  * This class also provides a default no-op implementation for all the
  * `visited*()` methods.
  *
- * **Note:** This class is marked `abstract` not because it has any `abstract`
- * methods, but rather as an indicator that without being subclassed it doesn't
- * actually do anything useful.
+ * **Note:** This class is marked `abstract` not because it has `abstract`
+ * members but instead because it's simply not useful if directly instantiated.
  */
 export abstract class DefaultValueVisitor<
   PlusType = never,
