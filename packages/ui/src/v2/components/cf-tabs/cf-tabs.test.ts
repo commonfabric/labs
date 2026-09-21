@@ -367,11 +367,13 @@ describe("CFTabs pure-on-mount contract (safe inside computed)", () => {
   function countingCell(initial: string) {
     const cell = createMockCellHandle<string>(initial);
     let writes = 0;
-    const origSet = cell.set.bind(cell);
-    (cell as unknown as { set: (v: string) => unknown }).set = (v: string) => {
-      writes++;
-      return origSet(v);
-    };
+    for (const method of ["set", "setForUI"] as const) {
+      const original = cell[method].bind(cell);
+      cell[method] = (value) => {
+        writes++;
+        return original(value);
+      };
+    }
     return { cell, writes: () => writes };
   }
 

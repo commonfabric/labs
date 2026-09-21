@@ -30,6 +30,21 @@ src/
 TODO(ui-path-cleanup): Rename the `src/v2` path now that it is the only UI
 component implementation.
 
+## Cell-bound edits
+
+`CellController` displays local edits immediately and uses
+`CellHandle.setForUI()` to observe their commit outcomes. Input dispatch stays
+responsive while persistence is pending. Subscription echoes, including a value
+equal to the edit, cannot release that edit before commit. After commit, the
+controller releases a converged edit or waits for the next live delivery when a
+replacement handle still holds an older snapshot.
+
+Write refusal is logged and releases the affected edit, notifying the component
+to render the bound value. Completion of an older write does not release a newer
+edit, including an edit awaiting blur or debounce. Custom setters supply no
+commit promise to the controller and remain responsible for their own write
+outcomes.
+
 ## 🎯 Quick Start
 
 ### Installation with Deno

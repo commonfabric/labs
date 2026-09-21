@@ -173,7 +173,8 @@ export class CellHandle<T = unknown> {
   }
 
   /**
-   * Set the cell's value locally, as well as in the runtime.
+   * Publishes an optimistic value and sends it to the runtime. The returned
+   * promise covers request acknowledgment; transport failures are logged.
    */
   async set(value: T): Promise<void> {
     this.#requireSchema("set");
@@ -200,7 +201,38 @@ export class CellHandle<T = unknown> {
     });
   }
 
-  /** Set the cell's value and reject when the runtime refuses the write. */
+  /**
+   * Writes a UI edit and rejects when the runtime refuses it. Dispatch follows
+   * queued operations, then releases the queue while the commit is pending so
+   * later input can reach the runtime. The caller owns the optimistic display;
+   * subscriptions supply this handle's value, including any rollback.
+   */
+  async setForUI(value: T): Promise<void> {
+    this.#requireSchema("setForUI");
+    const serialized = this.#serializeWrite(value);
+    this.#writeGeneration++;
+    const { committed } = await this.#enqueueOperation((queue) => {
+      const committed = this.#conn.request<RequestType.CellSet>({
+        type: RequestType.CellSet,
+        cell: this.ref(),
+        value: serialized,
+        awaitCommit: true,
+      });
+      // A snapshot cached by an earlier queued operation predates this edit.
+      queue.hasValue = false;
+      // The dispatch promise releases the queue first. Observe a refusal
+      // even if it arrives before the caller starts awaiting the outcome.
+      void committed.catch(() => {});
+      return Promise.resolve({ committed });
+    });
+    await committed;
+  }
+
+  /**
+   * Sets the value and holds subsequent operations until its commit completes.
+   * Rejects refusal; publishes after commit unless a newer write or delivery
+   * superseded it.
+   */
   async setStrict(value: T): Promise<void> {
     this.#requireSchema("setStrict");
     const serialized = this.#serializeWrite(value);

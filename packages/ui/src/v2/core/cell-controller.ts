@@ -28,7 +28,7 @@ export interface CellControllerOptions<T> {
 
   /**
    * Custom setter function for updating CellHandle<T> | T values
-   * Defaults to standard transaction-based Cell.set() or direct assignment
+   * Defaults to commit-aware `CellHandle.setForUI()` for cell bindings.
    */
   setValue?: (value: CellHandle<T> | T, newValue: T, oldValue: T) => void;
 
@@ -103,14 +103,12 @@ export class CellController<T> implements ReactiveController {
    * Pending-local-edit tracking (early-boot wipe guard)
    * A locally-edited value that bound state has not yet confirmed. While set,
    * it wins over stale bound state in getValue(), so a re-render cannot
-   * repaint a pre-write snapshot over what the user just typed. Released when
-   * the echo confirms it (a delivery equal to the edit), when a post-settle
-   * delivery supersedes it, or when the binding moves to a different cell.
+   * repaint a pre-write snapshot over what the user just typed. Released after
+   * commit and subscription convergence, on refusal, or when the binding moves
+   * to a different cell. `writing` distinguishes a default-setter write from
+   * a custom setter, whose completion this controller cannot observe.
    */
-  private _localEdit: { value: T } | undefined;
-
-  /** Number of in-flight cell writes started by the default setter. */
-  private _inFlightWrites = 0;
+  private _localEdit: { value: T; writing: boolean } | undefined;
 
   /**
    * Re-entrancy marker: a subscription delivery firing synchronously from our
@@ -120,14 +118,14 @@ export class CellController<T> implements ReactiveController {
   private _applyingLocalWrite = false;
 
   /**
-   * All writes settled but bound state never converged (e.g. a rebind swapped
-   * in a pre-write snapshot first): deliveries are FIFO, so the next one
-   * reflects post-write state and is authoritative.
+   * The current edit committed but bound state has not converged. A live
+   * delivery after that commit acknowledgment supersedes the edit; a rebound
+   * handle's initial cache echo carries no such ordering guarantee.
    */
   private _settledAwaitingRelease = false;
 
   /**
-   * Last authoritative user-visible value. Survives same-cell rebinds so a
+   * Last displayed value. Survives same-cell rebinds so a
    * replacement handle that has not hydrated yet (get() still undefined)
    * does not repaint emptiness over it.
    */
@@ -255,7 +253,7 @@ export class CellController<T> implements ReactiveController {
       // Track the edit so stale bound-state deliveries (late hydration,
       // partial echoes of earlier keystrokes, pre-write snapshots on rebound
       // handles) cannot repaint over it while the write is pending.
-      this._localEdit = { value: newValue };
+      this._localEdit = { value: newValue, writing: false };
       this._settledAwaitingRelease = false;
       this._lastKnownValue = newValue;
     }
@@ -268,11 +266,9 @@ export class CellController<T> implements ReactiveController {
         this._applyingLocalWrite = false;
       }
 
-      // A custom setter gives no in-flight signal, so the local apply is all
-      // the confirmation we will get — release the edit right away (status
-      // quo behavior for such components). The default setter tracks its
-      // write and releases on settle instead.
-      if (this._inFlightWrites === 0) {
+      // Custom setters expose no completion signal. The default setter marks
+      // the edit and keeps it protected until its commit outcome arrives.
+      if (!this._localEdit?.writing) {
         this._localEdit = undefined;
       }
 
@@ -379,14 +375,33 @@ export class CellController<T> implements ReactiveController {
   ): void {
     if (isCellHandle(value)) {
       const epoch = this._bindEpoch;
-      this._inFlightWrites++;
-      // set() resolves once the write round-trip completes (it never rejects;
-      // failures are logged and swallowed inside set()).
-      value.set(newValue).finally(() => {
-        this._inFlightWrites--;
-        if (epoch !== this._bindEpoch || this._inFlightWrites > 0) return;
-        this._releaseLocalEditAfterSettle();
-      });
+      const edit = this._localEdit;
+      if (edit) edit.writing = true;
+      // The controller renders optimistically through `_localEdit` while the
+      // handle observes the runtime's commit outcome. Each observer belongs
+      // to its exact edit, including while a newer edit is still debounced.
+      void value.setForUI(newValue).then(
+        () => {
+          if (epoch !== this._bindEpoch || this._localEdit !== edit) return;
+          this._releaseLocalEditAfterSettle();
+        },
+        (error) => {
+          if (!value.runtime().signal.aborted) {
+            console.error("[CellController] Write failed:", error);
+          }
+          if (
+            !edit || epoch !== this._bindEpoch || this._localEdit !== edit
+          ) return;
+          this._localEdit = undefined;
+          this._settledAwaitingRelease = false;
+          this._lastKnownValue = this.defaultGetValue(this._currentValue!);
+          const restored = this.getValue();
+          if (!deepValueEqual(restored, edit.value)) {
+            this.options.onChange(restored as T, edit.value);
+          }
+          if (this.options.triggerUpdate) this.host.requestUpdate();
+        },
+      );
     } else {
       // For non-Cell values, we can't directly modify them
       // This should be handled by the component's property system
@@ -395,11 +410,8 @@ export class CellController<T> implements ReactiveController {
   }
 
   /**
-   * All in-flight writes settled: release the pending local edit if bound
-   * state converged on it. If it did not (a same-cell rebind may have swapped
-   * in a pre-write snapshot first), keep the edit but mark that the next
-   * delivery is authoritative — deliveries are FIFO, so anything arriving
-   * after the write settled reflects post-write state.
+   * Releases a committed edit when the bound value has converged. Otherwise
+   * preserves it until a live delivery follows the commit acknowledgment.
    */
   private _releaseLocalEditAfterSettle(): void {
     if (this._localEdit === undefined) return;
@@ -473,21 +485,20 @@ export class CellController<T> implements ReactiveController {
       return false;
     }
     if (value !== undefined && deepValueEqual(value, this._localEdit.value)) {
-      // Bound state caught up with the edit — the echo confirmed it.
-      this._localEdit = undefined;
-      this._settledAwaitingRelease = false;
+      // A matching echo can still be speculative. Only the commit outcome
+      // permits it to release protection against a subsequent stale value.
+      if (this._settledAwaitingRelease) {
+        this._localEdit = undefined;
+        this._settledAwaitingRelease = false;
+      }
       this._lastKnownValue = value;
       return false;
     }
     if (
-      this._settledAwaitingRelease &&
-      (value !== undefined || this._bindingHydrated)
+      this._settledAwaitingRelease && !this._subscribeEcho
     ) {
-      // Writes settled without converging; deliveries are FIFO, so this one
-      // reflects post-write state and supersedes the local edit — whether a
-      // genuinely newer remote edit or an authoritative clear (the edit was
-      // lost). A fresh rebound handle's initial undefined echo carries no
-      // information and does not release.
+      // The commit acknowledgment precedes this live delivery on the worker
+      // connection, so a remote edit or clear supersedes the committed edit.
       this._localEdit = undefined;
       this._settledAwaitingRelease = false;
       this._lastKnownValue = value;
@@ -495,7 +506,8 @@ export class CellController<T> implements ReactiveController {
     }
     // Stale pre-write snapshot: late hydration, the partial echo of an
     // earlier keystroke, or a rebound handle's initial state. The local edit
-    // wins until the echo confirms or a post-settle value supersedes it.
+    // wins until the commit and echo confirm it or a post-commit delivery
+    // supersedes it.
     return true;
   }
 
