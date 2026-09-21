@@ -3,9 +3,9 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { createSession, Identity } from "@commonfabric/identity";
-import { assignSlug } from "@commonfabric/piece";
+import { assignSlug, setSlugLink } from "@commonfabric/piece";
 import { PiecesController } from "@commonfabric/piece/ops";
-import { Runtime } from "@commonfabric/runner";
+import { entityIdFrom, Runtime, slugIdForSpace } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
 import { parseCfHarnessCliArgs } from "../../src/cli.ts";
@@ -126,6 +126,35 @@ describe("resolve-piece", () => {
     expect(engine.getRunState().failureRecords).toEqual([]);
     expect(engine.getRunState().status).not.toBe("failed");
   });
+
+  for (const target of ["malformed", "not-piece", "inside-piece"]) {
+    it(`returns an actionable not-found result for a readable ${target} target`, async () => {
+      if (target === "malformed") {
+        const slugCell = runtime.getCellFromEntityId(
+          pieces.getSpace(),
+          entityIdFrom(slugIdForSpace(pieces.getSpace(), target)),
+        );
+        await runtime.editWithRetry((tx) => {
+          slugCell.withTx(tx).setRawUntyped("not a redirect");
+        });
+      } else if (target === "not-piece") {
+        const plain = runtime.getCell(pieces.getSpace(), { target });
+        await runtime.editWithRetry((tx) => {
+          plain.withTx(tx).set({ value: 1 });
+        });
+        await setSlugLink(pieces, target, plain);
+      } else {
+        const piece = await pieces.get(pieceId);
+        await setSlugLink(pieces, target, piece.getCell().key("count"));
+      }
+      const { output } = await engine.invokeBuiltinTool("resolve_piece", {
+        slug: target,
+      });
+      expect(output).toMatchObject({ status: "error", code: "not-found" });
+      expect(output).not.toHaveProperty("resultRef");
+      expect(engine.getRunState().failureRecords).toEqual([]);
+    });
+  }
 
   for (
     const slug of [

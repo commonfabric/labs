@@ -120,11 +120,19 @@ export const resolvePieceTool: HarnessToolDefinition<
       const pieceId = await resolvePieceAddress(session.pieces, address.slug);
       return { outputId, status: "ok", resultRef: `/of:${pieceId}` };
     } catch (cause) {
-      if (cause instanceof SlugResolutionError && cause.code === "missing") {
-        return error(
-          "not-found",
-          "That slug does not name a piece in this session's space. Ask for its exact slug or an attachment.",
-        );
+      if (cause instanceof SlugResolutionError) {
+        switch (cause.code) {
+          case "missing":
+          case "malformed":
+          case "not-piece":
+          case "inside-piece":
+          case "missing-member":
+          case "missing-piece-id":
+            return error(
+              "not-found",
+              "That slug does not resolve to a usable piece in this session's space. Ask for its exact slug or an attachment.",
+            );
+        }
       }
       return error(
         "unavailable",

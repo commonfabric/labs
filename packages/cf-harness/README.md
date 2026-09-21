@@ -136,6 +136,9 @@ What works today:
   - `describe_handle` (shape and labels of a handle's referent, and the tables
     of one that is a database together with how full each of them is, never its
     data; see [Inspecting a handle's shape](#inspecting-a-handles-shape))
+  - `resolve_piece` (parent-only exact slug resolution in the session's space;
+    returns a handle for child source reads and revisions, without source or
+    values; requires a Fabric session)
   - `run_pattern` (present only when the run configures a fabric session; see
     [Running patterns against a Fabric space](#running-patterns-against-a-fabric-space))
   - `search_patterns` (present only when the run configures a pattern index with
@@ -455,8 +458,9 @@ read. It accepts a bare slug in the session's space or `pattern:<space>/<slug>`
 and uses the same exact-address resolver as input-cell attachments. It returns
 only a handle, so a display name differing from the slug does not affect
 resolution and source remains on the child-only read/revise path. Foreign spaces
-are refused; an unheld slug returns an actionable error without failing the run.
-An unavailable lookup does not establish absence. The same path serves a fresh
+are refused. An unheld slug or a readable target that is not a usable piece
+returns recoverable `not-found` without failing the run. A failed read returns
+`unavailable` and does not establish absence. The same path serves a fresh
 request and a follow-up answering which piece the user meant.
 
 A display name without a slug permits at most one registry read across the

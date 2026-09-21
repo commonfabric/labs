@@ -208,9 +208,11 @@ The current package provides:
   registry read and preserves established conversation targets. The parent
   resolves a user-supplied slug with `resolve_piece` before author delegation,
   using the input-cell path's exact-address resolver and space restriction. Only
-  an opaque handle returns; source remains child-only. An unheld slug is an
-  actionable tool error. A display name without a slug permits at most one
-  registry lookup; only a unique released match allows work to proceed;
+  an opaque handle returns; source remains child-only. An unheld slug or a
+  readable target that is not a usable piece returns recoverable `not-found`. A
+  failed read returns `unavailable` and does not establish absence. A display
+  name without a slug permits at most one registry lookup; only a unique
+  released match allows work to proceed;
 - a session-local address handle table: deterministic `cfh:a:` tokens minted per
   run for cell addresses, recorded in `run-state.json`, and carried across
   resume; the prompt loop swaps addresses to tokens in model-bound tool output
