@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { TemplateResult } from "lit";
 import { ConsoleIndexView } from "../../../console/src/index-view.ts";
+import { templateText } from "./template-text.ts";
 
 /** Exposes the component's render result without connecting it to a page. */
 class TestIndexView extends ConsoleIndexView {
@@ -10,19 +11,6 @@ class TestIndexView extends ConsoleIndexView {
     return this.render();
   }
 }
-
-/** Helper for badge assertions, which reads templates without running handlers. */
-const templateText = (value: unknown): string => {
-  if (typeof value === "string" || typeof value === "number") {
-    return String(value);
-  }
-  if (Array.isArray(value)) return value.map(templateText).join("");
-  if (value === null || typeof value !== "object") return "";
-  const template = value as Partial<TemplateResult>;
-  return (template.strings ?? []).map((part, index) =>
-    part + templateText(template.values?.[index])
-  ).join("");
-};
 
 describe("console/src/index-view", () => {
   it("renders author DIDs and unattributed counts in the event badges", () => {

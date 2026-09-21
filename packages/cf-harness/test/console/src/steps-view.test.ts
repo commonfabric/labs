@@ -15,24 +15,9 @@ import {
 } from "../../../console/steps.ts";
 import type { HarnessTranscriptMessage } from "../../../src/contracts/transcript.ts";
 import { createToolOutputId } from "../../../src/contracts/tool-result.ts";
+import { templateText } from "./template-text.ts";
 
 describe("console/src/steps-view", () => {
-  const templateText = (value: unknown): string => {
-    if (value === null || value === undefined) return "";
-    if (typeof value === "string" || typeof value === "number") {
-      return String(value);
-    }
-    if (Array.isArray(value)) return value.map(templateText).join("");
-    if (typeof value !== "object") return "";
-    const template = value as {
-      strings?: readonly string[];
-      values?: readonly unknown[];
-    };
-    return (template.strings ?? []).map((part, index) =>
-      part + templateText(template.values?.[index])
-    ).join("");
-  };
-
   describe("clampSelection", () => {
     it("keeps a selection the run is long enough to hold", () => {
       expect(clampSelection(3, 9)).toBe(3);

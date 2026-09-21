@@ -25,24 +25,9 @@ import {
   HARNESS_CHAT_EVENT_TYPE,
   HARNESS_CHAT_PROTOCOL_VERSION,
 } from "../../../src/contracts/interactive-chat.ts";
+import { templateText } from "./template-text.ts";
 
 describe("console/src/live-view", () => {
-  const templateText = (value: unknown): string => {
-    if (value === null || value === undefined) return "";
-    if (typeof value === "string" || typeof value === "number") {
-      return String(value);
-    }
-    if (Array.isArray(value)) return value.map(templateText).join("");
-    if (typeof value !== "object") return "";
-    const template = value as {
-      strings?: readonly string[];
-      values?: readonly unknown[];
-    };
-    return (template.strings ?? []).map((part, index) =>
-      part + templateText(template.values?.[index])
-    ).join("");
-  };
-
   /** The log a page reads, numbered in the order the events were emitted. */
   const log = (
     ...events: readonly (
