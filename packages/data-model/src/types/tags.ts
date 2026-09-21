@@ -94,6 +94,21 @@ export const FABRIC_CONTAINER_VALUE_TAGS = Object.freeze(
 export type FabricContainerValueTag =
   typeof FABRIC_CONTAINER_VALUE_TAGS[keyof typeof FABRIC_CONTAINER_VALUE_TAGS];
 
+/** Type predicate for membership in `FabricContainerValueTag`. */
+export function isFabricContainerValueTag(tag: ValueTag | null): tag is FabricContainerValueTag {
+  switch (tag) {
+    case VALUE_TAGS.Array:
+    case VALUE_TAGS.FabricInstance:
+    case VALUE_TAGS.Object: {
+      return true;
+    }
+
+    default: {
+      return false;
+    }
+  }
+}
+
 /** Tags for all values that could possibly be valid `FabricValue`s. */
 export const FABRIC_VALUE_TAGS = Object.freeze(
   {
