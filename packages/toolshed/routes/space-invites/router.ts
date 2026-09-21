@@ -38,6 +38,10 @@ export function createSpaceInviteRouter(
   options: { server: Server; now?: () => number; host?: string },
 ) {
   const router = createRouter();
+  router.onError((_error, c) => {
+    c.get("logger")?.error("Space invitation service failed");
+    return c.json({ code: "service-error" }, 500);
+  });
   const now = options.now ?? Date.now;
   const configuredHost = options.host === undefined
     ? undefined
@@ -183,7 +187,7 @@ export function createSpaceInviteRouter(
               : 409,
           );
         }
-        // The shared error boundary records failures without private storage
+        // The invitation error boundary records failures without private storage
         // diagnostics, invitation credentials, or request bodies.
         throw new Error("Space invitation service failed");
       }

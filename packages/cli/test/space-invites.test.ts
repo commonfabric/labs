@@ -213,6 +213,8 @@ describe("space invite", () => {
     const target = `${directory}/target.json`;
     const symlink = `${directory}/linked.json`;
     const nonprivate = `${directory}/public.json`;
+    const childDirectory = `${directory}/directory`;
+    await Deno.mkdir(childDirectory, { mode: 0o700 });
     await Deno.writeFile(identity, signer.toPkcs8());
     await Deno.writeTextFile(target, "private existing data", { mode: 0o600 });
     await Deno.symlink(target, symlink);
@@ -223,7 +225,7 @@ describe("space invite", () => {
       () => Promise.reject(new Error("unexpected request")),
     );
     try {
-      for (const path of [symlink, directory, nonprivate]) {
+      for (const path of [symlink, childDirectory, nonprivate]) {
         await expect(
           buildSpaceInviteCommand().reset().throwErrors().parse([
             "create",
@@ -251,6 +253,113 @@ describe("space invite", () => {
     }
   });
 
+  for (
+    const mode of [
+      "public parent",
+      "replaced file",
+      "unverifiable identity",
+    ] as const
+  ) {
+    it(`refuses unsafe explicit request files: ${mode}`, async () => {
+      const signer = await Identity.fromPassphrase("CLI request replacement", {
+        implementation: "noble",
+      });
+      const directory = await Deno.makeTempDir();
+      const identity = `${directory}/identity.key`;
+      const publicDirectory = `${directory}/public`;
+      const requestFile = `${directory}/prepared.json`;
+      const replacement = `${directory}/replacement.json`;
+      await Deno.writeFile(identity, signer.toPkcs8());
+      await Deno.mkdir(publicDirectory, { mode: 0o755 });
+      await Deno.chmod(publicDirectory, 0o755);
+      const saved = {
+        version: 1,
+        host: "https://fabric.example",
+        space: signer.did(),
+        issuer: signer.did(),
+        access: "READ",
+        ttlSeconds: 60,
+        maxUses: 1,
+        inviteId: "A".repeat(22),
+        code: "A".repeat(43),
+      };
+      await Deno.writeTextFile(requestFile, JSON.stringify(saved), {
+        mode: 0o600,
+      });
+      await Deno.writeTextFile(
+        replacement,
+        JSON.stringify({ ...saved, inviteId: "B".repeat(22) }),
+        { mode: 0o600 },
+      );
+      using _output = stub(console, "log", () => {});
+      using _error = stub(console, "error", () => {});
+      using http = stub(
+        globalThis,
+        "fetch",
+        () => Promise.resolve(Response.json({ inviteId: saved.inviteId })),
+      );
+      const run = (file: string) =>
+        buildSpaceInviteCommand().reset().throwErrors().parse([
+          "create",
+          "--access",
+          "READ",
+          "--ttl",
+          "60",
+          "--request-file",
+          file,
+          "--api-url",
+          "https://fabric.example",
+          "--space",
+          signer.did(),
+          "--identity",
+          identity,
+        ]);
+      try {
+        if (mode === "public parent") {
+          await expect(run(`${publicDirectory}/new.json`)).rejects.toThrow(
+            "private directory",
+          );
+          expect(await Array.fromAsync(Deno.readDir(publicDirectory))).toEqual(
+            [],
+          );
+          expect(http.calls).toHaveLength(0);
+          return;
+        }
+        const lstat = Deno.lstat.bind(Deno);
+        const stat = Deno.FsFile.prototype.stat;
+        using _stat = stub(
+          Deno.FsFile.prototype,
+          "stat",
+          async function (this: Deno.FsFile) {
+            const info = await stat.call(this);
+            return mode === "unverifiable identity"
+              ? { ...info, ino: null }
+              : info;
+          },
+        );
+        let replaced = false;
+        using _replace = stub(Deno, "lstat", async (path) => {
+          const info = await lstat(path);
+          if (path === requestFile && mode === "unverifiable identity") {
+            return { ...info, ino: null };
+          }
+          if (path === requestFile && !replaced) {
+            replaced = true;
+            await Deno.rename(replacement, requestFile);
+          }
+          return info;
+        });
+        await expect(run(requestFile)).rejects.toThrow("changed while opening");
+        expect(replaced).toBe(mode === "replaced file");
+        expect(http.calls).toHaveLength(0);
+        expect(JSON.parse(await Deno.readTextFile(requestFile)).inviteId).toBe(
+          (mode === "replaced file" ? "B" : "A").repeat(22),
+        );
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+  }
   it("refuses missing or unsafe default state directories before HTTP", async () => {
     const signer = await Identity.fromPassphrase(
       "CLI state directory refusal",
@@ -385,24 +494,40 @@ describe("space invite", () => {
       "fetch",
       () => Promise.reject(new Error("unexpected request")),
     );
+    const run = (requestFile: string) =>
+      buildSpaceInviteCommand().reset().throwErrors().parse([
+        "create",
+        "--access",
+        "READ",
+        "--ttl",
+        "60",
+        "--request-file",
+        requestFile,
+        "--api-url",
+        "https://fabric.example",
+        "--space",
+        signer.did(),
+        "--identity",
+        identity,
+      ]);
     try {
-      await expect(
-        buildSpaceInviteCommand().reset().throwErrors().parse([
-          "create",
-          "--access",
-          "READ",
-          "--ttl",
-          "60",
-          "--request-file",
-          `${directory}/missing-parent/prepared.json`,
-          "--api-url",
-          "https://fabric.example",
-          "--space",
-          signer.did(),
-          "--identity",
-          identity,
-        ]),
-      ).rejects.toBeInstanceOf(Deno.errors.NotFound);
+      await expect(run(`${directory}/missing-parent/prepared.json`)).rejects
+        .toBeInstanceOf(Deno.errors.NotFound);
+      const destination = `${directory}/prepared.json`;
+      const open = Deno.open.bind(Deno);
+      using _failure = stub(
+        Deno,
+        "open",
+        (path, options) =>
+          path === destination
+            ? Promise.reject(
+              new Deno.errors.PermissionDenied("request storage unavailable"),
+            )
+            : open(path, options),
+      );
+      await expect(run(destination)).rejects.toBeInstanceOf(
+        Deno.errors.PermissionDenied,
+      );
       expect(http.calls).toHaveLength(0);
       expect(
         (await Array.fromAsync(Deno.readDir(directory))).map((entry) =>

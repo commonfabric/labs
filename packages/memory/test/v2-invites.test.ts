@@ -108,18 +108,17 @@ async function processAttempt(
   let child: Deno.ChildProcess | undefined;
   let output: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let stderr: Promise<string> | undefined;
-  let cleaned = false;
-  const close = async () => {
-    if (cleaned) return;
-    cleaned = true;
-    try {
-      await child?.[Symbol.asyncDispose]();
-      await output?.cancel();
-      await stderr;
-    } finally {
-      await Deno.remove(directory, { recursive: true });
-    }
-  };
+  let closing: Promise<void> | undefined;
+  const close = () =>
+    closing ??= (async () => {
+      try {
+        await child?.[Symbol.asyncDispose]();
+        await output?.cancel();
+        await stderr;
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    })();
   try {
     const lock = `${directory}/deno.lock`;
     await Deno.copyFile(new URL("../../../deno.lock", import.meta.url), lock);
@@ -188,6 +187,50 @@ async function processAttempt(
 }
 
 describe("invites", () => {
+  it("awaits the same in-flight process cleanup for concurrent disposal", async () => {
+    const f = await fixture();
+    const directory = await Deno.makeTempDir();
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let first: Promise<void> | undefined;
+    let second: Promise<void> | undefined;
+    try {
+      const attempt = await (async () => {
+        using _directory = stub(
+          Deno,
+          "makeTempDir",
+          () => Promise.resolve(directory),
+        );
+        return await processAttempt(f, f.create(), f.guest);
+      })();
+      const remove = Deno.remove.bind(Deno);
+      using _remove = stub(Deno, "remove", async (path, options) => {
+        if (path === directory) {
+          entered.resolve();
+          await release.promise;
+        }
+        await remove(path, options);
+      });
+      first = attempt[Symbol.asyncDispose]();
+      await entered.promise;
+      let completed = false;
+      second = attempt[Symbol.asyncDispose]().then(() => {
+        completed = true;
+      });
+      await Promise.resolve();
+      expect(completed).toBe(false);
+      release.resolve();
+      await Promise.all([first, second]);
+      expect(completed).toBe(true);
+      await expect(Deno.stat(directory)).rejects.toBeInstanceOf(
+        Deno.errors.NotFound,
+      );
+    } finally {
+      release.resolve();
+      await Promise.all([first, second]);
+      await f.close();
+    }
+  });
   it("cleans up a child that exits before readiness and an unstarted attempt", async () => {
     const f = await fixture();
     try {

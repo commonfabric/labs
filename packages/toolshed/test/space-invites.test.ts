@@ -21,7 +21,7 @@ import {
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 import { createSpaceInviteRouter } from "@/routes/space-invites/router.ts";
 
-async function fixture(publicHost?: string) {
+async function fixture(publicHost?: string, captureErrors = true) {
   const directory = await Deno.makeTempDir();
   let closeEngine: (() => void) | undefined;
   let closeServer: (() => Promise<void>) | undefined;
@@ -81,10 +81,12 @@ async function fixture(publicHost?: string) {
       host: publicHost,
     });
     const errors: Error[] = [];
-    router.onError((error, c) => {
-      errors.push(error);
-      return c.json({ code: "service-error" }, 500);
-    });
+    if (captureErrors) {
+      router.onError((error, c) => {
+        errors.push(error);
+        return c.json({ code: "service-error" }, 500);
+      });
+    }
     const http = Deno.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -223,6 +225,23 @@ describe("space-invites", () => {
       }
       expect(await f.client(f.owner).list()).toEqual([]);
       expect(await f.client(f.owner).receipts()).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+  it("returns the service error envelope with the production error boundary", async () => {
+    const f = await fixture(undefined, false);
+    try {
+      await Deno.writeTextFile(
+        resolveSpaceStoreUrl(f.store, f.space),
+        "private storage failure",
+      );
+      const response = await f.raw("list", {});
+      expect(response.status).toBe(500);
+      expect(response.headers.get("content-type")).toContain(
+        "application/json",
+      );
+      expect(await response.json()).toEqual({ code: "service-error" });
     } finally {
       await f.close();
     }

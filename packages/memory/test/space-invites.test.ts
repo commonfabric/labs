@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
-import { hashStringOf } from "@commonfabric/data-model";
 import {
   buildInviteLink,
   createInviteCredentials,
@@ -113,13 +112,7 @@ describe("space-invites", () => {
       code: "A".repeat(43),
     };
     expect(inviteCodeVerifier(invite)).toBe(
-      hashStringOf([
-        "commonfabric-space-invite-v1",
-        "https://example.com",
-        space,
-        invite.inviteId,
-        invite.code,
-      ]),
+      "vkcDbR4COvg5bodlCDvy2marG9681d8fyX7UwZg01nA",
     );
     const baseline = inviteCodeVerifier(invite);
     for (
