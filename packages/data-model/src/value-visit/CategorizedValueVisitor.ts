@@ -31,20 +31,23 @@ import {
 } from "./interface.ts";
 
 /**
- * Visitor which implements `visitValue()` to dispatch to one of several
- * subclass-contract methods based on the type tag of the value it was passed.
- * Each `visit<tag>()` method is implemented to just call a category-specific
- * method, and each `visit<category>Value()` method is in turn implemented to
- * call a _wider_ category-specific method. The final roll-up method is
- * `visitAnyValue()`, which is implemented as a no-op. All `visited<item>()`
- * methods (container item post-visit methods) are also implemented as no-ops.
- * The one exception to the preceding is that the default implementation for
- * `visitUnrecognizedValue()` is to `throw`.
+ * `BaseValueVisitor` subclass which provides a convenient structure for some of
+ * the most commonly-needed visitor patterns. It provides tag-based dispatch to
+ * visitor methods for each recognized tag along with one for unrecognized
+ * values, along with (for most of them) default implementations which "roll up"
+ * to category-specific methods. See the documentation on each method for
+ * information about default implementations and category structure. This class
+ * also provides a default no-op implementation for all the `visited*()`
+ * methods.
  *
- * This arrangement is intended to make it easy, convenient, readable, and
- * understandable to make concrete visitor classes tailored to particular use
- * cases, by _just_ overriding what tags and/or categories are needed in those
- * use cases.
+ * As a general aim, the set of methods and implementations thereof is intended
+ * to make it easy to create a concrete subclass for a particular purpose by
+ * overriding minimally, leading to a readable, understandable, and
+ * mainatainable result.
+ *
+ * **Note:** This class is marked `abstract` not because it has any `abstract`
+ * methods, but rather as an indicator that without being subclassed it doesn't
+ * actually do anything useful.
  */
 export abstract class CategorizedValueVisitor<
   PlusType = never,
@@ -228,17 +231,6 @@ export abstract class CategorizedValueVisitor<
   }
 
   /**
-   * Visits an atomic value (that is, a non-container value). If not overridden,
-   * this calls `visitAnyValue()`.
-   */
-  visitAtomicValue(
-    value: FabricValuePlus<PlusType>,
-    tag: Exclude<FabricValuePlusTag, FabricContainerValueTag> | null,
-  ): LeafVisitorResult<PlusType, ResultType> {
-    return this.visitAnyValue(value, tag);
-  }
-
-  /**
    * Visits a container value. If not overridden, this calls `visitAnyValue()`.
    */
   visitFabricContainerValue(
@@ -371,7 +363,11 @@ export abstract class CategorizedValueVisitor<
     }
   }
 
-  /** @inheritDoc */
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this returns `undefined`.
+   */
   override visitedFabricArrayElement(
     _array: FabricArrayPlus<PlusType>,
     _index: number,
@@ -380,7 +376,11 @@ export abstract class CategorizedValueVisitor<
     return undefined;
   }
 
-  /** @inheritDoc */
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this returns `undefined`.
+   */
   override visitedFabricArrayGap(
     _array: FabricArrayPlus<PlusType>,
     _start: number,
@@ -389,7 +389,11 @@ export abstract class CategorizedValueVisitor<
     return undefined;
   }
 
-  /** @inheritDoc */
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this returns `undefined`.
+   */
   override visitedFabricInstance(
     _instance: FabricInstancePlus<PlusType>,
     _state: FabricValuePlus<PlusType>,
@@ -397,7 +401,11 @@ export abstract class CategorizedValueVisitor<
     return undefined;
   }
 
-  /** @inheritDoc */
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this returns `undefined`.
+   */
   override visitedFabricPlainObjectEntry(
     _container: FabricPlainObjectPlus<PlusType>,
     _key: FabricValuePlus<PlusType>,
