@@ -2,13 +2,11 @@
  * Shared doubles for the `value-visit` tests: a visitor that records every
  * call it receives, and builders for the result forms a test hands back.
  *
- * The recorder dispatches every value to its subtype method and recurses into
- * containers the way `RecursiveValueVisitor` does by default, so a
- * test that wants the default walk sets nothing, and one that wants a different
- * decision at one hook assigns the matching `on*` property.
+ * The recorder dispatches every value by tag and recurses into containers the
+ * way `DefaultValueVisitor` does, so a test that wants the default walk sets
+ * nothing, and one that wants a different decision at one hook assigns the
+ * matching `on*` property.
  */
-
-import type { Primitive } from "@commonfabric/utils/types";
 
 import type {
   FabricArrayPlus,
@@ -16,28 +14,32 @@ import type {
   FabricContainerValueTag,
   FabricInstancePlus,
   FabricPlainObjectPlus,
-  FabricPrimitive,
   FabricValuePlusTag,
   PrimitiveValueTag,
 } from "@";
 import {
   type BaselineVisitResult,
-  type DispatchingVisitorResult,
-  DO_VISIT_SUBTYPE,
+  DefaultValueVisitor,
   type LeafVisitorResult,
-  RecursiveValueVisitor,
 } from "@/value-visit";
+
+/**
+ * What an `onValue` hook returns to have the recorder dispatch the value by
+ * tag, which is what the recorder does when no hook is set. It is a value of
+ * its own because `undefined` is already a result, the one that ends the visit
+ * of a value.
+ */
+export const DO_DISPATCH = Symbol("DO_DISPATCH");
 
 /** One recorded call into a `Recorder`. */
 export type Event = [name: string, ...args: unknown[]];
 
 /**
- * Visitor that dispatches every value to its subtype method, recurses into
- * containers the way `RecursiveValueVisitor` does by default, and
- * records each call it receives. Each hook can be overridden per test by
- * assigning the matching `on*` property.
+ * Visitor that dispatches every value by tag, recurses into containers the way
+ * `DefaultValueVisitor` does, and records each call it receives. Each hook can
+ * be overridden per test by assigning the matching `on*` property.
  */
-export class Recorder extends RecursiveValueVisitor<unknown, unknown> {
+export class Recorder extends DefaultValueVisitor<unknown, unknown> {
   readonly events: Event[] = [];
 
   /**
@@ -50,7 +52,7 @@ export class Recorder extends RecursiveValueVisitor<unknown, unknown> {
   onValue?: (
     value: unknown,
     tag: FabricValuePlusTag | null,
-  ) => DispatchingVisitorResult<unknown, unknown>;
+  ) => LeafVisitorResult<unknown, unknown> | typeof DO_DISPATCH;
   onCycle?: (
     value: FabricContainerValuePlus<unknown>,
     tag: FabricContainerValueTag,
@@ -99,9 +101,12 @@ export class Recorder extends RecursiveValueVisitor<unknown, unknown> {
   override visitValue(
     value: unknown,
     tag: FabricValuePlusTag | null,
-  ): DispatchingVisitorResult<unknown, unknown> {
+  ): LeafVisitorResult<unknown, unknown> {
     this.events.push(["value", value, tag]);
-    return this.onValue ? this.onValue(value, tag) : DO_VISIT_SUBTYPE;
+
+    const result = this.onValue ? this.onValue(value, tag) : DO_DISPATCH;
+
+    return (result === DO_DISPATCH) ? super.visitValue(value, tag) : result;
   }
 
   override visitCycle(
@@ -114,14 +119,6 @@ export class Recorder extends RecursiveValueVisitor<unknown, unknown> {
     return this.onCycle
       ? this.onCycle(value, tag, originalDepth, thisDepth)
       : undefined;
-  }
-
-  override visitFabricContainer(
-    value: FabricContainerValuePlus<unknown>,
-    tag: FabricContainerValueTag,
-  ): DispatchingVisitorResult<unknown, unknown> {
-    this.events.push(["container", value, tag]);
-    return DO_VISIT_SUBTYPE;
   }
 
   override visitFabricArray(
@@ -149,8 +146,8 @@ export class Recorder extends RecursiveValueVisitor<unknown, unknown> {
       : super.visitFabricInstance(value);
   }
 
-  override visitPrimitive(
-    value: Primitive | FabricPrimitive,
+  override visitPrimitiveValue(
+    value: unknown,
     tag: PrimitiveValueTag,
   ): LeafVisitorResult<unknown, unknown> {
     this.events.push(["primitive", value, tag]);
