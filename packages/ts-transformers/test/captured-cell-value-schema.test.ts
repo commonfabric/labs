@@ -91,4 +91,63 @@ describe("captured-cell-value-schema", () => {
       asCell: ["readonly"],
     });
   });
+  describe("a generic type whose parameter declares a default", () => {
+    // `Contact<string>` of `Contact<T = number>`: a schema read from the
+    // declaration would describe `name` as a number and refuse the strings
+    // the author declared.
+
+    const GENERIC = "interface Contact<T = number> { name: T }";
+    const unread = { asCell: ["readonly"] };
+    const readAsDefault = {
+      type: "object",
+      properties: { name: { type: "number" } },
+      required: ["name"],
+      asCell: ["readonly"],
+    };
+
+    it("emits no value schema where an argument replaces the default of a type the module declares with `export`", async () => {
+      const schema = await capturedContactSchema({
+        "/test.tsx":
+          `import { computed, pattern, Writable } from "commonfabric";
+          export ${GENERIC}
+          ${readContact("Contact<string>")}`,
+      });
+
+      expect(schema).toEqual(unread);
+    });
+
+    it("emits no value schema where an argument replaces the default of a type the module imports", async () => {
+      const schema = await capturedContactSchema({
+        "/types.ts": `export ${GENERIC}`,
+        "/test.tsx":
+          `import { computed, pattern, Writable } from "commonfabric";
+          import type { Contact } from "./types.ts";
+          ${readContact("Contact<string>")}`,
+      });
+
+      expect(schema).toEqual(unread);
+    });
+
+    it("emits no value schema where an argument replaces the default of a type the module declares", async () => {
+      const schema = await capturedContactSchema({
+        "/test.tsx":
+          `import { computed, pattern, Writable } from "commonfabric";
+          ${GENERIC}
+          ${readContact("Contact<string>")}`,
+      });
+
+      expect(schema).toEqual(unread);
+    });
+
+    it("emits the default's value schema for a type the module declares with `export`, written without arguments", async () => {
+      const schema = await capturedContactSchema({
+        "/test.tsx":
+          `import { computed, pattern, Writable } from "commonfabric";
+          export ${GENERIC}
+          ${readContact("Contact")}`,
+      });
+
+      expect(schema).toEqual(readAsDefault);
+    });
+  });
 });

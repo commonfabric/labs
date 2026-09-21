@@ -101,9 +101,13 @@ authored or imported shadow of the name keeps the general path; then the
 general path, which resolves the name the same way — bound through the node,
 else lexically from the module's scope, an import followed to what it
 imports — and formats the declared type, so a name the module declares,
-exported or not, or imports is read, and a generic declaration is read
-uninstantiated — plus a `Date`-by-name special case), keyword types, and a
-final resolve-else-`true` fallback.
+exported or not, or imports is read. A generic declaration is read with its
+parameters unbound, each formatting as its constraint, else its default, else
+accepting anything; a constraint admits every argument, but a default does not,
+so a reference supplying an argument other than a parameter's default is left
+unread rather than read as that default (`Contact<string>` of
+`Contact<T = number>` would otherwise refuse strings) — plus a `Date`-by-name
+special case), keyword types, and a final resolve-else-`true` fallback.
 
 An intersection node is settled the way the checker settles the type, each
 constituent read through its reference, and what remains is merged as

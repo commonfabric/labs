@@ -2779,6 +2779,94 @@ type CalculatorRequest = {
 
       expect(schema).toBe(true);
     });
+
+    describe("a generic whose parameter declares a default", () => {
+      // The declaration is read with its parameters unbound, and an unbound
+      // parameter without a constraint reads as its default.
+
+      const BOX = "export interface Box<T = number> { value: T }";
+      const box = (argument: ts.TypeNode) =>
+        ts.factory.createTypeReferenceNode(
+          ts.factory.createIdentifier("Box"),
+          [argument],
+        );
+      const keyword = (kind: ts.KeywordTypeSyntaxKind) =>
+        ts.factory.createKeywordTypeNode(kind);
+      const readAsDefault = {
+        type: "object",
+        properties: { value: { type: "number" } },
+        required: ["value"],
+      };
+
+      it("returns `true` for an argument that replaces the default", async () => {
+        const schema = await generate(
+          { "/main.ts": BOX },
+          box(keyword(ts.SyntaxKind.StringKeyword)),
+        );
+
+        expect(schema).toBe(true);
+      });
+
+      it("returns `true` for an argument that replaces an imported default", async () => {
+        const schema = await generate(
+          {
+            "/types.ts": BOX,
+            "/main.ts": "import type { Box } from './types.ts';\n" +
+              "export type Keep = Box;",
+          },
+          box(keyword(ts.SyntaxKind.StringKeyword)),
+        );
+
+        expect(schema).toBe(true);
+      });
+
+      it("returns `true` for an `any` argument", async () => {
+        // `any` is assignable to the default, and still admits values the
+        // default refuses.
+        const schema = await generate(
+          { "/main.ts": BOX },
+          box(keyword(ts.SyntaxKind.AnyKeyword)),
+        );
+
+        expect(schema).toBe(true);
+      });
+
+      it("reads the declaration for an argument equal to the default", async () => {
+        const schema = await generate(
+          { "/main.ts": BOX },
+          box(keyword(ts.SyntaxKind.NumberKeyword)),
+        );
+
+        expect(schema).toEqual(readAsDefault);
+      });
+
+      it("reads the declaration for a reference with no arguments", async () => {
+        const schema = await generate(
+          { "/main.ts": BOX },
+          reference("Box"),
+        );
+
+        expect(schema).toEqual(readAsDefault);
+      });
+
+      it("reads the declaration for a named argument equal to a named default", async () => {
+        const schema = await generate(
+          {
+            "/main.ts": "export interface Profile { handle: string }\n" +
+              "export interface Card<T = Profile> { value: T }",
+          },
+          ts.factory.createTypeReferenceNode(
+            ts.factory.createIdentifier("Card"),
+            [reference("Profile")],
+          ),
+        );
+
+        expect(schema).toMatchObject({
+          type: "object",
+          properties: { value: { $ref: "#/$defs/Profile" } },
+        });
+      });
+    });
   });
 
   describe("synthetic type literals", () => {
