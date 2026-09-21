@@ -267,6 +267,65 @@ describe("cfc-share-snapshot", () => {
     }
   });
 
+  it("refuses append bindings from another runtime before granting consent", async () => {
+    const fixture = await setup();
+    try {
+      const foreign = fixture.runtimes[1].getCellFromLink(
+        fixture.source.getAsNormalizedFullLink(),
+      );
+      const audience = { user: fixture.recipient };
+      expect(() =>
+        prepareSnapshotShare(fixture.source, audience, {
+          recommended: foreign,
+          received: fixture.source,
+        })
+      ).toThrow(/append targets must use the source runtime/);
+      expect(() =>
+        prepareSnapshotShare(fixture.source, audience, {
+          recommended: fixture.source,
+          received: foreign,
+        })
+      ).toThrow(/append targets must use the source runtime/);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("refuses a space audience whose address is not a DID", async () => {
+    const fixture = await setup();
+    try {
+      const invalid = fixture.runtimes[0].getCell(
+        "not-a-did" as ReturnType<typeof visitor.did>,
+        "audience",
+      );
+      expect(() => prepareSnapshotShare(fixture.source, { space: invalid }))
+        .toThrow(/space DID/);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  it("refuses a preview when the transaction has no read journal", async () => {
+    const fixture = await setup();
+    const runtime = fixture.runtimes[0];
+    const edit = runtime.edit.bind(runtime);
+    try {
+      runtime.edit = (...args: Parameters<typeof runtime.edit>) => {
+        const tx = edit(...args);
+        Object.defineProperty(tx, "getReadActivities", { value: undefined });
+        return tx;
+      };
+      expect(() =>
+        prepareSnapshotShare(fixture.source, {
+          user: fixture.recipient,
+        })
+      ).toThrow(/verifiable read journal/);
+    } finally {
+      runtime.edit = edit;
+      await fixture.dispose();
+    }
+  });
+
   it("shares a new snapshot with the reader and originator while preserving the private source", async () => {
     const fixture = await setup();
     try {
