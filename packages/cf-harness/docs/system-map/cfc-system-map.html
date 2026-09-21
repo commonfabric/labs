@@ -671,7 +671,7 @@
     // map is re-verified; the stamp is drawn in the canvas's top-left corner.
     const SNAPSHOT = {
       date: "2026-09-21",
-      sha: "bd8534950d+agent-review-fixes",
+      sha: "0d95be8028+agent-review-fixes",
     };
     const W = 2760, H = 1840;
     const bands = [
@@ -2296,7 +2296,7 @@
       e_conn_sqlite:
         `<p>Today: rows stop in <code>source-records.db</code> and <code>msgvault.db</code>. Intended: <code>loom-daemon</code> injects a read-only <code>SqliteDb</code> handle cell and a freshness cell into the target space.</p>`,
       e_sqlite_spaces:
-        `<p>Once the handle cell exists it is an ordinary same-space cell, so <code>--input-cell</code> and <code>/api/task inputCells</code> carry it into a harness session with no new transport. A console launched with <code>--instance</code> also grants it to every session it runs, without a caller attaching anything: the launcher joins Loom's injection receipt with its declared table contracts by piece, connection, and companion key. Each grant is named by its connection/store identity, with the CFC class beside it: <code>gmail-work (email)</code> and <code>readwise (document)</code>. Connections sharing a class remain distinct; repeated receipts for the same store coalesce only when their references and classifications match. Conflicting references or classifications are refused.</p><p>An input on this path that does not read back as a handle settles as the query's own error rather than killing the reactive action, so the result carries the error for the pattern to render and a later pass can still succeed once the handle reads.</p>`,
+        `<p>Once the handle cell exists it is an ordinary same-space cell, so <code>--input-cell</code> and <code>/api/task inputCells</code> carry it into a harness session with no new transport. A console launched with <code>--instance</code> also grants it to every session it runs, without a caller attaching anything: the launcher joins Loom's injection receipt with its declared table contracts by piece, connection, and companion key. Each grant is named by its connection/store identity, with all declared CFC classes beside it: <code>gmail-work (email)</code> and a messaging store carrying both <code>message</code> and <code>call</code>. Connections sharing a class remain distinct; repeated receipts for the same store coalesce only when their references and class sets match. Conflicting references or classifications are refused. The session description also carries receipt account identity, physical row counts including metadata and history, and newest observation time when available. An unrecorded account identity, no account, and an empty store are distinct from unknown metadata; observation time is when Loom observed a record, not its content time.</p><p>An input on this path that does not read back as a handle settles as the query's own error rather than killing the reactive action, so the result carries the error for the pattern to render and a later pass can still succeed once the handle reads.</p>`,
       e_parent_child:
         `<p>Delegation seeds the child's handle table with the parent entries the brief names, and nothing else. The brief itself is prose.</p>`,
       e_child_parent:

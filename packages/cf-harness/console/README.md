@@ -935,9 +935,10 @@ caller attaching anything: a request that names no `inputCells` at all still
 opens holding them.
 
 A grant is named by its Loom connection, with `#companion_key` appended for a
-second store on that connection. Its declared CFC class is separate metadata:
+second store on that connection. All declared CFC classes are separate metadata:
 the prompt describes `gmail-work (email)` or `readwise (document)`, and a
-companion as `gmail-work / calendar (calendar)`. Connections sharing a class
+companion as `gmail-work / calendar (calendar)`. A store declaring both
+`message` and `call` is granted with both classes. Connections sharing a class
 remain separately reachable. Two of the instance's records decide that, and the
 launcher reads both. `sqlite-injection/handles.json` — the receipt loom's daemon
 writes, and what `loom connector handles` prints — says which handles exist and
@@ -945,10 +946,43 @@ what each one's reference is, and records no class. `pieces.json` declares each
 connector piece's `sqlite_sources`, whose table contract carries the per-column
 `ifc` the daemon seeded, and that is where the class is written down. They join
 on the piece, connection, and optional companion key Loom names in both.
-Repeated receipts for the same connection/store, reference, and class yield one
-grant. Conflicting references or classes for that store are reported and
-withheld. Persisted grants without a separate `cfcClass` retain their legacy
-class-as-name interpretation.
+Repeated receipts for the same connection/store, reference, and class set yield
+one grant. Conflicting references or classes for that store are reported and
+withheld. Grants carry the class list as `cfcClasses`; persisted grants with a
+singular `cfcClass` or a class as their name remain readable.
+
+The session description carries the receipt's account identity, physical row
+count, and newest record observation time. Counts come from linked `sources`
+rows joined by piece, connection, and companion key. They include metadata and
+history across the declared tables, so they are not a count of current events or
+query-visible rows. Missing, invalid, or conflicting counts remain unknown; zero
+means the count succeeded and found no rows.
+
+Account metadata comes from the source row's `viewer` object: `kind`,
+`source_id`, `email`, `label`, and `absent_reason`. An `account` identity
+prefers the provider's viewer ID, then its login address, then its display
+label; a null email means that account has no email address. The internal
+`account_id` is not included in the description. A `none` identity says "no
+account" with its reason; only an explicit `unknown` identity says "unknown". A
+null or absent viewer says the identity was not recorded in the receipt. When
+there is no source row, the launcher reads the handle's `viewer` object. It
+reads no connection configuration or authentication file.
+
+Repeated source or handle receipts must agree on each metadata field. A count
+disagreement leaves the count unknown; an account disagreement is described as
+conflicting receipts, distinct from an unrecorded or explicitly unknown
+identity. An observation disagreement reports `conflicting-receipts` rather than
+choosing one timestamp. Fields the receipts agree on remain available.
+
+The source row's `newest_observed_at` is when Loom observed the newest record,
+not the content's timestamp or the receipt's `written_at`. When no observation
+time is available, `newest_observed_at_reason` distinguishes `no-rows` (an empty
+store) from an unavailable measurement such as `no-observed-at-column`,
+`row-count-unsupported`, `query-failed`, or `not-linked`. Receipts without these
+additive fields describe the observation time as unknown. Timestamps require an
+ISO8601 date and time with an explicit zone and are displayed in UTC. This
+metadata survives launcher serialization, grant minting, and session
+restoration.
 
 What a grant does not do is decide anything a reference does not already decide.
 It discloses a token and a harness-authored sentence; the address stays
@@ -958,8 +992,8 @@ does for every other flow.
 
 Three cases the launch printout states rather than resolving silently:
 
-- A handle whose declared contract carries no CFC class, or more than one, is
-  printed as `grant <connection>  (none: <reason>)` and is not granted.
+- A handle whose declared contract carries no CFC class is printed as
+  `grant <connection>  (none: <reason>)` and is not granted.
 - An ambiguous store identity or invalid connection name, companion key, or
   class is reported with the deciding record and a remedy.
 - A receipt that does not parse refuses the launch. A console that came up
