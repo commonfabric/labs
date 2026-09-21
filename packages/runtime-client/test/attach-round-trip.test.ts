@@ -117,6 +117,25 @@ function joiningSide(clients: RuntimeClients) {
 }
 
 describe("attach-round-trip", () => {
+  it("reports the trust snapshot actor on an attached client", async () => {
+    const worker = await runningWorker();
+    const client = await RuntimeClient.attach(
+      joiningSide(worker.clients),
+      {
+        ...clientOptions(identity),
+        trustSnapshot: {
+          id: "delegated",
+          actingPrincipal: otherIdentity.did(),
+        },
+      },
+    );
+    try {
+      expect(client.actingPrincipalDid()).toBe(otherIdentity.did());
+    } finally {
+      await client.dispose();
+    }
+  });
+
   it("joins a running runtime over a port and carries the joining client", async () => {
     const worker = await runningWorker();
     const client = await RuntimeClient.attach(

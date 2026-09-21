@@ -53,6 +53,25 @@ class CapturingTransport extends EventEmitter<RuntimeTransportEvents>
 
 describe("initialize-init-data", () => {
   describe("RuntimeClient.initialize InitializationData wiring", () => {
+    it("reports the trust snapshot actor used by the worker", async () => {
+      const identity = await Identity.fromPassphrase("init-acting-signer");
+      const actor = await Identity.fromPassphrase("init-acting-actor");
+      const client = await RuntimeClient.initialize(
+        new CapturingTransport(),
+        {
+          apiUrl: new URL("http://toolshed.test"),
+          identity,
+          spaceDid: identity.did(),
+          trustSnapshot: { id: "delegated", actingPrincipal: actor.did() },
+        },
+      );
+      try {
+        expect(client.actingPrincipalDid()).toBe(actor.did());
+      } finally {
+        await client.dispose();
+      }
+    });
+
     it("captures a copy, leaving the sender's own message untouched", () => {
       // The clone in the middle of the round trip is load-bearing and easy to
       // drop: an encode and a decode alone hand back the sender's own object

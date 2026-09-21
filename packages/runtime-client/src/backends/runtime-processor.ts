@@ -1884,6 +1884,11 @@ export class RuntimeProcessor {
       throw new Error("Snapshot sharing is unavailable");
     }
     const source = this.#snapshotShareCell(request.source);
+    if (source.runtime.cfcReadMaxConfidentiality === undefined) {
+      throw new Error(
+        "Snapshot sharing requires a bounded runtime read ceiling",
+      );
+    }
     const audience = request.audience;
     if (
       !isObjectNotArray(audience) ||
@@ -1892,13 +1897,25 @@ export class RuntimeProcessor {
     const audienceCell = this.#snapshotShareCell(
       "user" in audience ? audience.user : audience.space,
     );
-    await Promise.all([source.sync(), audienceCell.sync()]);
+    const appendBooksTo = request.appendBooksTo && {
+      recommended: this.#snapshotShareCell(
+        request.appendBooksTo.recommended,
+      ),
+      received: this.#snapshotShareCell(request.appendBooksTo.received),
+    };
+    await Promise.all([
+      source.sync(),
+      audienceCell.sync(),
+      appendBooksTo?.recommended.sync(),
+      appendBooksTo?.received.sync(),
+    ]);
     if (this.#isDisposed || this.#snapshotShareDetachedClients.has(client)) {
       throw new Error("Snapshot sharing is unavailable");
     }
     const prepared = prepareSnapshotShare(
       source,
       "user" in audience ? { user: audienceCell } : { space: audienceCell },
+      appendBooksTo,
     );
     const id = crypto.randomUUID();
     this.#snapshotShares.set(clientScopedKey(client, id), prepared.consent);

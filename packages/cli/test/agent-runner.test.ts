@@ -1732,8 +1732,9 @@ describe("agent runner", () => {
           runState: { ...result.runState, handleTable: minted.table },
         };
       };
-      // A link is written only to a document that carries a label, so the
-      // input is labeled, and the request's ceiling admits that label.
+      // The input document is labeled for the requester so this case tests
+      // the asCell link shape. The separate observation-ceiling case tests
+      // how an explicit non-default request clause is folded into the run.
       const READING = { type: CFC_ATOM_TYPE.User, subject: home };
       const result = await submit(
         { resultSchema: schema, maxConfidentiality: [READING] },

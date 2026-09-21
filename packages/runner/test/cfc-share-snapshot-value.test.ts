@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { snapshotJsonValue } from "../src/cfc/share-snapshot-value.ts";
+import { LINK_V1_TAG } from "../src/sigil-types.ts";
 
 describe("cfc-share-snapshot-value", () => {
   it("copies and freezes the complete JSON payload for review", () => {
@@ -33,6 +34,13 @@ describe("cfc-share-snapshot-value", () => {
       expect(() => snapshotJsonValue(value))
         .toThrow(/JSON values without cell references/);
     }
+  });
+
+  it("refuses a primitive cell link inside the snapshot", () => {
+    const link = { "/": { [LINK_V1_TAG]: { id: "of:fid1:book", path: [] } } };
+    expect(() => snapshotJsonValue({ book: link })).toThrow(
+      /JSON values without cell references/,
+    );
   });
 
   it("refuses cyclic objects and arrays", () => {

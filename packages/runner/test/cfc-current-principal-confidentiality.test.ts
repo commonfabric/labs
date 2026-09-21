@@ -115,6 +115,57 @@ describe("cfc-current-principal-confidentiality", () => {
     );
   });
 
+  it("retains a recursive private external schema through public evolution", () => {
+    const node = {
+      type: "object",
+      ifc: { confidentiality: [cfcAtom.user(ownerIdentity.did())] },
+      properties: { next: { $ref: "#/$defs/Node" } },
+    } as const;
+    const oldDocument = { $defs: { Node: node } } as const;
+    const newDocument = {
+      $defs: {
+        Node: {
+          ...node,
+          properties: { ...node.properties, title: { type: "string" } },
+        },
+      },
+    } as const;
+    const oldHash = internSchema(oldDocument, true).taggedHashString;
+    const newHash = internSchema(newDocument, true).taggedHashString;
+    registerSchemaDocument(oldHash, oldDocument);
+    registerSchemaDocument(newHash, newDocument);
+    const stored = {
+      properties: { node: { $ref: `cid:${oldHash}#/$defs/Node` } },
+    };
+    const candidate = {
+      properties: { node: { $ref: `cid:${newHash}#/$defs/Node` } },
+    };
+
+    const merged = mergeCfcSchemaEnvelopes(stored, candidate);
+    expect(
+      (merged as { properties: { node: { $ref: string } } }).properties
+        .node.$ref,
+    ).toBe(`cid:${newHash}#/$defs/Node`);
+
+    const changedDocument = {
+      $defs: {
+        Node: {
+          ...node,
+          ifc: { confidentiality: [cfcAtom.user(visitorIdentity.did())] },
+        },
+      },
+    } as const;
+    const changedHash = internSchema(changedDocument, true).taggedHashString;
+    registerSchemaDocument(changedHash, changedDocument);
+    expect(() =>
+      mergeCfcSchemaEnvelopes(stored, {
+        properties: {
+          node: { $ref: `cid:${changedHash}#/$defs/Node` },
+        },
+      })
+    ).toThrow(/Recursive confidentiality schema merging is unsupported/);
+  });
+
   it("retains recursive schema references that carry no confidentiality", () => {
     const declared = {
       type: "object",

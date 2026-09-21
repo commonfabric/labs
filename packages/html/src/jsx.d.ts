@@ -4326,6 +4326,10 @@ interface CFShareSnapshotAttributes<T> extends CFHTMLAttributes<T> {
   "$recipient"?: CellLike<unknown>;
   /** Writable destination receiving the released cell link. */
   "$result"?: CellLike<unknown>;
+  /** Visitor history receiving references from the reviewed copy. */
+  "$recommended"?: CellLike<unknown>;
+  /** Creator inbox receiving references from the reviewed copy. */
+  "$received"?: CellLike<unknown>;
   "audience-kind"?: "user" | "space";
   "oncf-shared"?: EventHandler<{}>;
 }
@@ -4334,7 +4338,7 @@ interface CFOwnerViewAttributes<T> extends CFHTMLAttributes<T> {
   /** Persisted creator identity whose attested owner is checked by the host. */
   "$originator"?: CellLike<unknown>;
   /** Per-user presentation result. */
-  "$result"?: CellLike<boolean>;
+  "$result"?: CellLike<boolean | null>;
 }
 
 interface CFChipAttributes<T> extends CFHTMLAttributes<T> {

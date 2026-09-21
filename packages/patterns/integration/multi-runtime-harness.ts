@@ -32,11 +32,11 @@
  * event-append admission"), so every cross-session consequence silently
  * never happens (first observed on the first CI run of the ON pattern
  * lanes, 2026-08-21). So when the environment resolves the ON posture
- * (the canonical env mapping, else the first-party default) and no
- * explicit `apiUrl` was passed, the harness targets the integration
- * environment's toolshed (`env.API_URL`) — the real ON topology, serving
- * loop included — instead of self-hosting. The OFF arm is byte-identical
- * to before: flag unset or false keeps the in-process standalone server.
+ * (the first session's explicit override, then the canonical env mapping,
+ * then the first-party default) and no explicit `apiUrl` was passed, the
+ * harness targets the integration environment's toolshed (`env.API_URL`) —
+ * the real ON topology, serving loop included — instead of self-hosting.
+ * An explicitly OFF first session keeps the in-process standalone server.
  */
 
 import { fromFileUrl } from "@std/path/from-file-url";
@@ -567,9 +567,13 @@ export class MultiRuntimeHarness {
     // server does not have — see the header's POSTURE block. Resolve the
     // posture exactly like a deployed entry point (canonical env mapping,
     // else the first-party default) and pick the backend accordingly.
-    const serverExecutionOn =
+    const firstSession = options.sessions[0];
+    const explicitServerExecution = typeof firstSession === "string"
+      ? undefined
+      : firstSession.cfc?.experimental?.serverExecution;
+    const serverExecutionOn = explicitServerExecution ??
       experimentalOptionsFromEnv(Deno.env.get).serverExecution ??
-        SERVER_EXECUTION_DEFAULT_ENABLED;
+      SERVER_EXECUTION_DEFAULT_ENABLED;
     const targetUrl = options.apiUrl ??
       (serverExecutionOn ? new URL(env.API_URL) : undefined);
     const server = targetUrl ? undefined : StandaloneMemoryServer.start({

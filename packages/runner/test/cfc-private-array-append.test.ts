@@ -125,7 +125,7 @@ describe("cfc-private-array-append", () => {
       const result = await submit.commit();
       expect(result.error).toBeDefined();
       expect(JSON.stringify(result.error)).toMatch(
-        /confidentiality|writer.fit/i,
+        /writer-fit confidentiality misfit for .* \(canWrite, §8\.12\.4\)/,
       );
     } finally {
       await runtime.dispose();

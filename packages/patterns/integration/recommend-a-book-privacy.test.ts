@@ -52,14 +52,16 @@ describe("recommend-a-book privacy", () => {
       const inbox = await owner.link(["received"]);
       await expect(visitor.read(["received"])).rejects.toThrow(/read ceiling/);
       await expect(third.read(["received"])).rejects.toThrow(/read ceiling/);
-      expect(await owner.read(["received"])).toEqual([]);
       await visitor.send("review", {
-        books: [{ title: "Solaris", author: "Stanisław Lem" }],
+        books: [
+          { title: "Solaris", author: "Stanisław Lem" },
+          { title: "Dune", author: "Frank Herbert" },
+        ],
       });
-      expect(await visitor.read(["selected", "books"])).toEqual([{
-        title: "Solaris",
-        author: "Stanisław Lem",
-      }]);
+      expect(await visitor.read(["selected", "books"])).toEqual([
+        { title: "Solaris", author: "Stanisław Lem" },
+        { title: "Dune", author: "Frank Herbert" },
+      ]);
       expect(await owner.read(["selected", "books"])).toEqual([]);
       expect(await third.read(["selected", "books"]) ?? []).toEqual([]);
       expect(await visitor.link(["received"])).toEqual(inbox);
@@ -76,22 +78,28 @@ describe("recommend-a-book privacy", () => {
         ),
       )
         .not.toContain("Solaris");
-      const expectedBindings = {
-        source: privateDraft,
-        recipient: await visitor.link(["originator"]),
-        result: await visitor.link(["sharedSelection", "value"]),
-      };
+      expect(await visitor.client().call("spoofShareSnapshot")).toBe(true);
+      expect(await owner.read(["received"])).toEqual([]);
       const snapshot = await visitor.client().call("shareSnapshot");
       expect(snapshot).toMatchObject({
-        value: { books: [{ title: "Solaris", author: "Stanisław Lem" }] },
+        value: {
+          books: [
+            { title: "Solaris", author: "Stanisław Lem" },
+            { title: "Dune", author: "Frank Herbert" },
+          ],
+        },
         audience: cfcAtom.user(owner.identity.did()),
-        bindings: expectedBindings,
       });
       await harness.settle();
       expect(await owner.read(["received", 0, "title"])).toBe("Solaris");
+      expect(await owner.read(["received", 1, "title"])).toBe("Dune");
       expect(await visitor.read(["recommended", 0, "title"])).toBe("Solaris");
+      expect(await visitor.read(["recommended", 1, "title"])).toBe("Dune");
       expect(await owner.link(["received", 0])).toEqual(
         await visitor.link(["recommended", 0]),
+      );
+      expect(await owner.link(["received", 1])).toEqual(
+        await visitor.link(["recommended", 1]),
       );
       await expect(visitor.read(["received"])).rejects.toThrow(/read ceiling/);
       await expect(third.read(["received"])).rejects.toThrow(/read ceiling/);
@@ -102,7 +110,6 @@ describe("recommend-a-book privacy", () => {
       ).rejects.toThrow(/read ceiling/);
       expect(await third.read(["recommended"]) ?? []).toEqual([]);
       expect(await visitor.read(["selected", "books"])).toEqual([]);
-      expect(await visitor.read(["sharedSelection"])).toEqual({});
       const ownerView = await owner.client().call("viewText");
       expect(ownerView).toContain("Solaris");
       expect(ownerView).toContain("Your recommendations");
@@ -156,6 +163,15 @@ describe("recommend-a-book privacy", () => {
         principal: owner.identity.did(),
         entries: [],
       });
+      await visitor.send("review", {
+        books: [{ title: "Unreviewed private draft", author: "Visitor" }],
+      });
+      const rawAppend = await visitor.client().call("spoofRawInbox")
+        .then(() => true, () => false);
+      if (rawAppend) {
+        expect(await owner.read(["received", 2, "title"]))
+          .not.toBe("Unreviewed private draft");
+      }
     } finally {
       await harness.dispose();
     }

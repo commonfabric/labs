@@ -1161,6 +1161,7 @@ export type SnapshotSharePrepareRequest = BaseRequest & {
   type: RequestType.SnapshotSharePrepare;
   source: CellRef;
   audience: SnapshotShareAudienceRef;
+  appendBooksTo?: { recommended: CellRef; received: CellRef };
 };
 
 /** The {@link RequestType.SnapshotShareCommit} request. */

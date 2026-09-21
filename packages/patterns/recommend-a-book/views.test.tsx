@@ -98,6 +98,18 @@ export default pattern(() => {
     myRecommendations: [],
     recommend,
   });
+  const pending = InvitationView({
+    originator: profile,
+    isOwner: null,
+    originatorBooks: libraryBooks,
+    favoriteAuthors: authors,
+    candidates,
+    agentStatus: "",
+    agentError: "",
+    receivedRecommendations: [],
+    myRecommendations: [],
+    recommend,
+  });
   const owner = InvitationView({
     originator: profile,
     isOwner: true,
@@ -189,6 +201,21 @@ export default pattern(() => {
       },
       { assertion: assert(() => !hasText(visitor[UI], "Origin book")) },
       {
+        assertion: assert(() =>
+          propValue(
+            findElementByExactText(visitor[UI], "cf-button", "Show all books"),
+            "aria-expanded",
+          ) === false
+        ),
+      },
+      {
+        assertion: assert(() =>
+          hasText(pending[UI], "Checking invitation") &&
+          !hasText(pending[UI], "Review recommendation") &&
+          !hasText(pending[UI], "Origin book")
+        ),
+      },
+      {
         assertion: assert(() => !hasText(visitor[UI], "Hidden fourth author")),
       },
       {
@@ -212,6 +239,14 @@ export default pattern(() => {
       },
       { action: action_expand },
       { assertion: assert(() => hasText(visitor[UI], "Origin book")) },
+      {
+        assertion: assert(() =>
+          propValue(
+            findElementByExactText(visitor[UI], "cf-button", "Hide books"),
+            "aria-expanded",
+          ) === true
+        ),
+      },
       { action: action_choose },
       {
         assertion: assert(() =>

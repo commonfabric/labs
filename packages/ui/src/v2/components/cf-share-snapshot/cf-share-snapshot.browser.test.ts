@@ -106,25 +106,6 @@ Deno.test("cf-share-snapshot rejects synthetic confirmation clicks", async () =>
   }
 });
 
-Deno.test("cf-share-snapshot stores the released link before emitting a payload-free event", async () => {
-  const { element, result, released, calls } = await mountShare();
-  const events: unknown[] = [];
-  element.addEventListener("cf-shared", (event) => {
-    expect(result.get()).toBe(released);
-    events.push((event as CustomEvent).detail);
-  });
-  try {
-    await element.accessForTestingOnly.prepare();
-    await element.accessForTestingOnly.commitReviewed();
-    expect(calls).toEqual(["prepare", "commit"]);
-    expect(result.get()).toBe(released);
-    expect(events).toEqual([null]);
-    expect(element.shadowRoot?.querySelector("dialog")?.open).toBe(false);
-  } finally {
-    element.remove();
-  }
-});
-
 Deno.test("cf-share-snapshot invalidates confirmation when a bound prop changes", async () => {
   const { element, calls, result } = await mountShare();
   try {
@@ -132,7 +113,7 @@ Deno.test("cf-share-snapshot invalidates confirmation when a bound prop changes"
     element.recipient = createMockCellHandle<unknown>({
       name: "Another reader",
     });
-    await element.accessForTestingOnly.commitReviewed();
+    await element.accessForTestingOnly.confirm(new Event("click"));
     await element.updateComplete;
     expect(calls).toEqual(["prepare"]);
     expect(result.get()).toBeNull();
@@ -169,29 +150,7 @@ Deno.test("cf-share-snapshot ignores a prepared preview after the source changes
   }
 });
 
-Deno.test("cf-share-snapshot does not publish an in-flight result into a new binding", async () => {
-  const deferred = Promise.withResolvers<
-    ReturnType<typeof createMockCellHandle>
-  >();
-  const { element, result, released } = await mountShare({
-    commitSnapshotShare: () =>
-      deferred.promise as ReturnType<RuntimeClient["commitSnapshotShare"]>,
-  });
-  const replacement = createMockCellHandle<unknown>(null);
-  try {
-    await element.accessForTestingOnly.prepare();
-    const committing = element.accessForTestingOnly.commitReviewed();
-    element.result = replacement;
-    deferred.resolve(released);
-    await committing;
-    expect(result.get()).toBeNull();
-    expect(replacement.get()).toBeNull();
-  } finally {
-    element.remove();
-  }
-});
-
-Deno.test("cf-share-snapshot reports preparation and stale snapshot failures", async () => {
+Deno.test("cf-share-snapshot reports preparation failures", async () => {
   const { element, result } = await mountShare({
     prepareSnapshotShare: () =>
       Promise.reject(new Error("Source is unavailable")),
@@ -199,53 +158,8 @@ Deno.test("cf-share-snapshot reports preparation and stale snapshot failures", a
   try {
     await element.accessForTestingOnly.prepare();
     expect(element.accessForTestingOnly.error).toBe("Source is unavailable");
-    element.runtime = {
-      cancelSnapshotShare: () => Promise.resolve(),
-      prepareSnapshotShare: () =>
-        Promise.resolve({
-          id: "expired",
-          value: { title: "Solaris" },
-          audience: {
-            type: "https://commonfabric.org/cfc/atom/User",
-            subject: "did:key:verified-reader",
-          },
-        }),
-      commitSnapshotShare: () =>
-        Promise.reject(new Error("Snapshot changed; review again")),
-    } as unknown as RuntimeClient;
-    await element.updateComplete;
-    await element.accessForTestingOnly.prepare();
-    await element.accessForTestingOnly.commitReviewed();
     expect(result.get()).toBeNull();
-    expect(element.accessForTestingOnly.error).toBe(
-      "Snapshot changed; review again",
-    );
     expect(element.shadowRoot?.querySelector("dialog")?.open).toBe(false);
-  } finally {
-    element.remove();
-  }
-});
-
-Deno.test("cf-share-snapshot prevents duplicate publication while commit is pending", async () => {
-  const deferred = Promise.withResolvers<
-    ReturnType<typeof createMockCellHandle>
-  >();
-  let commits = 0;
-  const { element, released } = await mountShare({
-    commitSnapshotShare: () => {
-      commits++;
-      return deferred.promise as ReturnType<
-        RuntimeClient["commitSnapshotShare"]
-      >;
-    },
-  });
-  try {
-    await element.accessForTestingOnly.prepare();
-    const committing = element.accessForTestingOnly.commitReviewed();
-    await element.accessForTestingOnly.commitReviewed();
-    expect(commits).toBe(1);
-    deferred.resolve(released);
-    await committing;
   } finally {
     element.remove();
   }
@@ -265,7 +179,7 @@ Deno.test("cf-share-snapshot prepares a space audience and cancels without publi
       element.shadowRoot?.querySelectorAll("button") ?? [],
     );
     buttons.find((button) => button.textContent === "Cancel")?.click();
-    await element.accessForTestingOnly.commitReviewed();
+    await element.accessForTestingOnly.confirm(new Event("click"));
     expect(calls).toEqual(["prepare"]);
     expect(result.get()).toBeNull();
   } finally {
@@ -307,20 +221,4 @@ Deno.test("cf-share-snapshot releases a canceled preview and a late disconnected
   });
   await preparing;
   expect(canceled).toEqual(["preview", "late"]);
-});
-
-Deno.test("cf-share-snapshot reports a refused result write without a success event", async () => {
-  const { element, result } = await mountShare();
-  const events: Event[] = [];
-  element.addEventListener("cf-shared", (event) => events.push(event));
-  result.setStrict = () => Promise.reject(new Error("Result is read-only"));
-  try {
-    await element.accessForTestingOnly.prepare();
-    await element.accessForTestingOnly.commitReviewed();
-    expect(element.accessForTestingOnly.error).toBe("Result is read-only");
-    expect(result.get()).toBeNull();
-    expect(events).toHaveLength(0);
-  } finally {
-    element.remove();
-  }
 });

@@ -8,7 +8,7 @@ import { property } from "lit/decorators.js";
 import { BaseElement } from "../../core/base-element.ts";
 import { readCfcLabelView } from "../../core/cfc-label.ts";
 import { runtimeContext } from "../../runtime-context.ts";
-import { authenticatedOwnerFromLabel } from "./owner-predicate.ts";
+import { attestedOwnerPrincipal } from "./owner-predicate.ts";
 
 /** Publishes a presentation predicate after checking a runtime-attested owner. */
 export class CFOwnerView extends BaseElement {
@@ -20,9 +20,9 @@ export class CFOwnerView extends BaseElement {
   @property({ attribute: false })
   accessor originator: CellHandle | undefined;
 
-  /** Per-user presentation state, always reset to false before verification. */
+  /** Per-user presentation state; null means the owner is unverified. */
   @property({ attribute: false })
-  accessor result: CellHandle<boolean> | undefined;
+  accessor result: CellHandle<boolean | null> | undefined;
 
   #generation = 0;
 
@@ -46,7 +46,12 @@ export class CFOwnerView extends BaseElement {
     const generation = ++this.#generation;
     const { runtime, originator, result } = this;
     if (!result) return;
-    await result.set(false);
+    try {
+      await result.setStrict(null);
+    } catch {
+      // A refused reset cannot establish a fresh owner decision.
+      return;
+    }
     if (!runtime || !originator || !this.isConnected) return;
     try {
       const label = await readCfcLabelView(originator);
@@ -55,9 +60,9 @@ export class CFOwnerView extends BaseElement {
         runtime !== this.runtime || originator !== this.originator ||
         result !== this.result
       ) return;
-      if (authenticatedOwnerFromLabel(label, runtime.actingPrincipalDid())) {
-        await result.set(true);
-      }
+      const owner = attestedOwnerPrincipal(label);
+      const actor = runtime.actingPrincipalDid();
+      if (owner && actor) await result.setStrict(owner === actor);
     } catch {
       // Missing or unreadable attestation keeps the presentation closed.
     }

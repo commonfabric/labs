@@ -25,7 +25,7 @@ export default pattern(() => {
     invitation.recommended.get()?.length === 0 &&
     invitation.received.get().length === 0
   );
-  const noConfirmedSnapshot = action(() => invitation.acceptShared.send());
+  const noConfirmedSnapshot = action(() => invitation.clearSelection.send());
   const notSubmitted = assert(() =>
     invitation.recommended.get()?.length === 0 &&
     invitation.received.get().length === 0

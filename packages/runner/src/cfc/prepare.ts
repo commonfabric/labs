@@ -5291,6 +5291,18 @@ const setupResultSchemaFor = (
   });
 };
 
+/** Resolves carried reader placeholders against the authoritative link source. */
+function bindLinkCurrentPrincipalClauses<Clause>(
+  candidate: readonly Clause[],
+  stored: readonly Clause[],
+): readonly Clause[] | undefined {
+  const bound = bindCurrentPrincipalToStoredClauses(candidate, stored);
+  if (bound.some(isCurrentPrincipalUserClause)) {
+    return undefined;
+  }
+  return bound;
+}
+
 // `sourceMetadata` is returned alongside the derived label so the persist
 // loop can re-derive the source's sub-path entries from the same stored
 // state without a second store read (inv-12 Stage 0, see the loop).
@@ -5465,13 +5477,21 @@ const derivePersistedLinkLabel = (
     },
     authoringIdentity,
   ).integrity;
+  const boundLinkConfidentiality = bindLinkCurrentPrincipalClauses(
+    linkSchemaLabel.confidentiality ?? [],
+    sourceLabel.confidentiality ?? [],
+  );
+  if (boundLinkConfidentiality === undefined) {
+    return {
+      reason: verdictReason(
+        "Link CurrentPrincipal confidentiality requires a concrete stored reader",
+      ),
+    };
+  }
   const label: IFCLabel = {
     confidentiality: mergeLabelValues(
       sourceLabel.confidentiality,
-      bindCurrentPrincipalToStoredClauses(
-        linkSchemaLabel.confidentiality ?? [],
-        sourceLabel.confidentiality ?? [],
-      ),
+      boundLinkConfidentiality,
     ),
     integrity: mergeLabelValues(
       gatedIntegrity,
@@ -7570,10 +7590,17 @@ export const prepareBoundaryCommit = (
         }
         const entryPath = canonicalizeLogicalPath(entry.path);
         const cover = authoritativeCoverFor(entryPath);
-        gated.confidentiality = [...bindCurrentPrincipalToStoredClauses(
+        const bound = bindLinkCurrentPrincipalClauses(
           gated.confidentiality ?? [],
           cover?.confidentiality ?? [],
-        )];
+        );
+        if (bound === undefined) {
+          reasons.push(verdictReason(
+            "Link CurrentPrincipal confidentiality requires a concrete stored reader",
+          ));
+          continue;
+        }
+        gated.confidentiality = [...bound];
         persistedLabelEntries.push(markLinkEntry({
           path: [...targetPath, ...entryPath],
           label: cover !== undefined ? mergeLabels(cover, gated) : gated,

@@ -18,6 +18,7 @@ describe("authenticatedOwnerFromLabel", () => {
     };
     expect(authenticatedOwnerFromLabel(view, "did:key:alice")).toBe(true);
     expect(authenticatedOwnerFromLabel(view, "did:key:bob")).toBe(false);
+    expect(authenticatedOwnerFromLabel(view, undefined)).toBe(false);
   });
 
   it("fails closed for absent and conflicting attestations", () => {
@@ -60,5 +61,29 @@ describe("authenticatedOwnerFromLabel", () => {
         },
       }, child],
     }, "did:key:alice")).toBe(false);
+  });
+
+  it("ignores other integrity kinds and refuses malformed owner subjects", () => {
+    expect(authenticatedOwnerFromLabel({
+      version: 1,
+      entries: [{
+        path: [],
+        label: {
+          integrity: [{ kind: "authored-by", subject: "did:key:alice" }],
+        },
+      }],
+    }, "did:key:alice")).toBe(false);
+    for (const subject of ["   ", 42]) {
+      expect(authenticatedOwnerFromLabel(
+        {
+          version: 1,
+          entries: [{
+            path: [],
+            label: { integrity: [{ kind: "represents-principal", subject }] },
+          }],
+        } as unknown as Parameters<typeof authenticatedOwnerFromLabel>[0],
+        "did:key:alice",
+      )).toBe(false);
+    }
   });
 });

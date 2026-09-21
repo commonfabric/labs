@@ -597,58 +597,76 @@ const handlers: Record<
     const props = await elementProps(view, "cf-share-snapshot");
     const source = componentBinding(props, "$source");
     const audience = componentBinding(props, "$recipient");
-    const resultCell = componentBinding(props, "$result");
+    const recommended = componentBinding(props, "$recommended");
+    const received = componentBinding(props, "$received");
     const eventBinding = componentBinding(props, "oncf-shared");
     const onShared = isCell(eventBinding)
       ? eventBinding.resolveAsCell()
       : eventBinding;
     if (
-      !isCell(source) || !isCell(audience) || !isCell(resultCell) ||
+      !isCell(source) || !isCell(audience) || !isCell(recommended) ||
+      !isCell(received) ||
       !isCell(onShared)
     ) {
       throw new Error(
-        `The native sharing surface requires held source, recipient, result, and completion bindings: ${
+        `The native sharing surface requires held source, recipient, append targets, and completion bindings: ${
           JSON.stringify({
             found: props !== undefined,
             source: isCell(source),
             audience: isCell(audience),
-            result: isCell(resultCell),
+            recommended: isCell(recommended),
+            received: isCell(received),
             completion: isCell(onShared),
           })
         }`,
       );
     }
-    const bindings = Object.fromEntries([
-      ["source", source],
-      ["recipient", audience],
-      ["result", resultCell],
-    ].map(([name, cell]) => {
-      const link = (cell as Cell<unknown>).resolveAsCell()
-        .getAsNormalizedFullLink();
-      return [name as string, {
-        id: link.id,
-        space: link.space,
-        path: link.path,
-        scope: link.scope,
-      }];
-    }));
-    const prepared = prepareSnapshotShare(source, { user: audience });
+    const prepared = prepareSnapshotShare(source, { user: audience }, {
+      recommended,
+      received,
+    });
     const event = shareClick();
     const shared = await commitSnapshotShare(prepared.consent, event);
-    const { error } = await controller().runtime.commitUiCellWrite(
-      resultCell,
-      shared.getAsLink(),
-      { blind: true },
-    );
-    if (error) throw error;
     onShared.send({});
     await idle();
     return {
       value: prepared.value,
       audience: prepared.audience,
       link: shared.getAsNormalizedFullLink(),
-      bindings,
     };
+  },
+
+  /** Tries the removed authored acceptance path with an unreviewed draft. */
+  async spoofShareSnapshot() {
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    result().key("sharedSelection").withTx(tx).set({
+      value: result().key("selected"),
+    });
+    runtime.prepareTxForCommit(tx);
+    const written = await tx.commit();
+    if (written.error) throw written.error;
+    await idle();
+    const sent = await runtime.editWithRetry((eventTx) => {
+      result().key("acceptShared").withTx(eventTx).send({});
+    });
+    if (sent.error) throw sent.error;
+    await idle();
+    return true;
+  },
+
+  /** Tries a raw inbox append using an unreleased private draft book. */
+  async spoofRawInbox() {
+    const runtime = controller().runtime;
+    const tx = runtime.edit();
+    result().key("received").withTx(tx).push(
+      result().key("selected").key("books", 0),
+    );
+    runtime.prepareTxForCommit(tx);
+    const written = await tx.commit();
+    if (written.error) throw written.error;
+    await idle();
+    return true;
   },
 
   /** Mirrors the native owner's attested presentation check in this worker. */

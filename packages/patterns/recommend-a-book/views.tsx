@@ -45,7 +45,7 @@ export interface LibraryViewInput {
 /** The invitation supplies only the data this viewer may read. */
 export interface InvitationViewInput {
   originator: ReadonlyCell<Profile>;
-  isOwner: boolean;
+  isOwner: boolean | null;
   originatorBooks: Book[];
   favoriteAuthors: string[];
   candidates: Book[];
@@ -267,11 +267,17 @@ export const InvitationView = pattern<InvitationViewInput, ViewOutput>(
           <cf-screen>
             <cf-vstack slot="header" gap="2" padding="4">
               <cf-heading level={1}>
-                {isOwner ? "Your next chapter" : "Recommend me a book"}
+                {isOwner === true
+                  ? "Your next chapter"
+                  : isOwner === false
+                  ? "Recommend me a book"
+                  : "Checking invitation…"}
               </cf-heading>
               <cf-profile-badge $profile={originator} size="sm" />
             </cf-vstack>
-            {isOwner
+            {isOwner === null
+              ? <p role="status">Checking invitation…</p>
+              : isOwner
               ? (
                 <cf-vstack gap="4" padding="4">
                   <p>

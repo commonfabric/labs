@@ -4,7 +4,10 @@ import {
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
-import { formatExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
+import {
+  formatExternalSchemaRef,
+  parseExternalSchemaRef,
+} from "@commonfabric/data-model-schema/schema-refs";
 import {
   forEachSubschema,
   mapSubschemas,
@@ -822,11 +825,29 @@ interface SchemaPolicyGraph {
  * expanding reference cycles. Label-view paths alone omit rest-property claims
  * beside named fields, so they cannot establish that two policies are equal.
  */
-function schemaPolicyGraph(schema: JSONSchema): SchemaPolicyGraph | undefined {
+function schemaPolicyGraph(
+  schema: JSONSchema,
+  activeRefs: ReadonlySet<string> = new Set(),
+): SchemaPolicyGraph | undefined {
   if (!isObjectNotArray(schema)) return undefined;
+  if (
+    typeof schema.$ref === "string" &&
+    parseExternalSchemaRef(schema.$ref) !== undefined
+  ) {
+    if (activeRefs.has(schema.$ref)) {
+      return { ifc: schema.ifc, ref: "#recursive", children: [] };
+    }
+    const resolved = resolveCfcSchemaRefs(schema, schema);
+    if (resolved !== undefined && resolved !== schema) {
+      return schemaPolicyGraph(
+        resolved,
+        new Set([...activeRefs, schema.$ref]),
+      );
+    }
+  }
   const children: SchemaPolicyGraph["children"] = [];
   forEachSubschema(schema, (child, keyword, key, index) => {
-    const policy = schemaPolicyGraph(child);
+    const policy = schemaPolicyGraph(child, activeRefs);
     if (policy !== undefined) children.push({ keyword, key, index, policy });
   }, { includeDefs: true, includeUnused: true, visitBooleans: true });
   if (

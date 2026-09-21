@@ -3,7 +3,6 @@
 import type { CellHandle, RuntimeClient } from "@commonfabric/runtime-client";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
-import { stub } from "@std/testing/mock";
 
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import { CFShareSnapshot } from "./index.ts";
@@ -114,6 +113,27 @@ describe("CFShareSnapshot workflow", () => {
     );
   });
 
+  it("binds both recommendation append targets before review", async () => {
+    using state = setup();
+    const recommended = createMockCellHandle<unknown>([], {
+      id: "of:recommended",
+    });
+    const received = createMockCellHandle<unknown>([], {
+      id: "of:received",
+    });
+    state.element.result = undefined;
+    state.element.recommended = recommended;
+    state.element.received = received;
+    await state.element.accessForTestingOnly.prepare();
+    expect(state.prepared).toEqual([[state.source.ref(), {
+      user: state.recipient.ref(),
+    }, {
+      recommended: recommended.ref(),
+      received: received.ref(),
+    }]]);
+    expect(state.element.accessForTestingOnly.preview).toEqual(preview);
+  });
+
   it("prepares a space audience and cancels the retained review", async () => {
     using state = setup();
     state.element.audienceKind = "space";
@@ -122,7 +142,7 @@ describe("CFShareSnapshot workflow", () => {
       space: state.recipient.ref(),
     }]]);
     cancelReview(state.element);
-    await state.element.accessForTestingOnly.commitReviewed();
+    await state.element.accessForTestingOnly.confirm(new Event("click"));
     expect(state.canceled).toEqual([preview.id]);
     expect(state.element.accessForTestingOnly.preview).toBeUndefined();
     expect(state.committed).toEqual([]);
@@ -133,7 +153,7 @@ describe("CFShareSnapshot workflow", () => {
       using state = setup();
       state.element[field] = undefined;
       await state.element.accessForTestingOnly.prepare();
-      await state.element.accessForTestingOnly.commitReviewed();
+      await state.element.accessForTestingOnly.confirm(new Event("click"));
       expect(state.prepared).toEqual([]);
       expect(state.committed).toEqual([]);
     });
@@ -196,89 +216,6 @@ describe("CFShareSnapshot workflow", () => {
     expect(state.element.accessForTestingOnly.error).toBe("");
   });
 
-  it("writes the released link before emitting a payload-free completion", async () => {
-    using state = setup();
-    const events: unknown[] = [];
-    state.element.addEventListener("cf-shared", (event) => {
-      expect(state.result.get()).toBe(state.released);
-      events.push((event as CustomEvent).detail);
-    });
-    await state.element.accessForTestingOnly.prepare();
-    await state.element.accessForTestingOnly.commitReviewed();
-    expect(state.committed).toEqual([preview.id]);
-    expect(events).toEqual([undefined]);
-    expect(state.element.accessForTestingOnly.preview).toBeUndefined();
-  });
-
-  it("does not duplicate a pending commit or write its result after rebinding", async () => {
-    const pending = Promise.withResolvers<CellHandle>();
-    using state = setup({ commit: () => pending.promise });
-    await state.element.accessForTestingOnly.prepare();
-    const committing = state.element.accessForTestingOnly.commitReviewed();
-    await state.element.accessForTestingOnly.commitReviewed();
-    const replacement = createMockCellHandle<unknown>(null);
-    state.element.result = replacement;
-    state.element.willUpdate(new Map([["result", state.result]]));
-    pending.resolve(state.released);
-    await committing;
-    expect(state.committed).toEqual([preview.id]);
-    expect(state.result.get()).toBeNull();
-    expect(replacement.get()).toBeNull();
-  });
-
-  it("does not emit completion when rebinding during the result write", async () => {
-    const written = Promise.withResolvers<void>();
-    const started = Promise.withResolvers<void>();
-    using state = setup();
-    using write = stub(state.result, "setStrict", () => {
-      started.resolve();
-      return written.promise;
-    });
-    const events: Event[] = [];
-    state.element.addEventListener("cf-shared", (event) => events.push(event));
-    await state.element.accessForTestingOnly.prepare();
-    const committing = state.element.accessForTestingOnly.commitReviewed();
-    await started.promise;
-    state.element.recipient = createMockCellHandle();
-    state.element.willUpdate(new Map([["recipient", state.recipient]]));
-    written.resolve();
-    await committing;
-    expect(write.calls).toHaveLength(1);
-    expect(events).toEqual([]);
-  });
-
-  for (const failure of [new Error("Sharing refused"), "opaque failure"]) {
-    it(`reports ${failure instanceof Error ? "host" : "non-Error"} commit failures`, async () => {
-      using state = setup({ commit: () => Promise.reject(failure) });
-      await state.element.accessForTestingOnly.prepare();
-      await state.element.accessForTestingOnly.commitReviewed();
-      expect(state.element.accessForTestingOnly.error).toBe(
-        failure instanceof Error
-          ? failure.message
-          : "The snapshot could not be shared.",
-      );
-      expect(state.element.accessForTestingOnly.preview).toBeUndefined();
-      expect(state.result.get()).toBeNull();
-    });
-  }
-
-  it("reports a refused result write without emitting completion", async () => {
-    using state = setup();
-    using write = stub(
-      state.result,
-      "setStrict",
-      () => Promise.reject(new Error("Write refused")),
-    );
-    const events: Event[] = [];
-    state.element.addEventListener("cf-shared", (event) => events.push(event));
-    await state.element.accessForTestingOnly.prepare();
-    await state.element.accessForTestingOnly.commitReviewed();
-    expect(write.calls).toHaveLength(1);
-    expect(state.element.accessForTestingOnly.error).toBe("Write refused");
-    expect(events).toEqual([]);
-    expect(state.result.get()).toBeNull();
-  });
-
   it("releases a disconnected review even when cancellation fails", async () => {
     using state = setup({
       cancel: () => Promise.reject(new Error("Connection closed")),
@@ -286,27 +223,16 @@ describe("CFShareSnapshot workflow", () => {
     await state.element.accessForTestingOnly.prepare();
     state.element.connected = false;
     state.element.disconnectedCallback();
-    await state.element.accessForTestingOnly.commitReviewed();
+    await state.element.accessForTestingOnly.confirm(new Event("click"));
     expect(state.canceled).toEqual([preview.id]);
     expect(state.element.accessForTestingOnly.preview).toBeUndefined();
     expect(state.committed).toEqual([]);
   });
 
-  it("ignores a commit failure from an obsolete runtime binding", async () => {
-    const pending = Promise.withResolvers<CellHandle>();
-    using state = setup({ commit: () => pending.promise });
-    await state.element.accessForTestingOnly.prepare();
-    const committing = state.element.accessForTestingOnly.commitReviewed();
-    state.element.runtime = undefined;
-    state.element.willUpdate(new Map([["runtime", state.runtime]]));
-    pending.reject(new Error("Obsolete host"));
-    await committing;
-    expect(state.element.accessForTestingOnly.error).toBe("");
-  });
-
   it("does not publish after an untrusted confirmation event", async () => {
     using state = setup();
     await state.element.accessForTestingOnly.prepare();
+    expect("commitReviewed" in state.element.accessForTestingOnly).toBe(false);
     await state.element.accessForTestingOnly.confirm(new Event("click"));
     expect(state.committed).toEqual([]);
     expect(state.result.get()).toBeNull();

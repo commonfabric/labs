@@ -14,13 +14,13 @@ books they may have read and authors they may like. The shelf also accepts
 manual books and authors. These are suggestions to review, not verified reading
 history.
 
-**Create recommendation invitation** creates `main.tsx` in a new anonymous
-space. The native sharing dialog previews the exact shelf snapshot and its
-destination. Confirming publishes that copy to the invitation; the personal
-shelf stays private. Open the invitation and use the piece menu's Access panel
-to grant each visitor WRITE on that space. Visitors need WRITE to run their
-private state and agent requests there; the owner-only shelf and inbox rules
-still govern what those writes may change and read.
+**Ask for recommendations** creates `main.tsx` in a new anonymous space. The
+native sharing dialog previews the exact shelf snapshot and its destination.
+Confirming publishes that copy to the invitation; the personal shelf stays
+private. Open the invitation and use the piece menu's Access panel to grant each
+visitor WRITE on that space. Visitors need WRITE to run their private state and
+agent requests there; the owner-only shelf and inbox rules still govern what
+those writes may change and read.
 
 The invitation shows a few favorite authors and a collapsed list of the
 originator's books. The visitor's agent proposes books from that visitor's Loom
@@ -32,10 +32,25 @@ the verified recipient before the visitor confirms. Private agent explanations
 are not included in that selection.
 
 Confirmation creates a separate shared copy. References to its books are
-appended to the visitor's `PerUser` recommendation history and the originator's
-`PerSpace` inbox. The originator sees all received recommendations. Other
-visitors cannot read that inbox, another visitor's history, or their drafts.
-Each submitted book is readable by its sender and the originator.
+appended by the trusted host to the visitor's `PerUser` recommendation history
+and the originator's `PerSpace` inbox in the same transaction. The originator
+sees all received recommendations. Other visitors cannot read that inbox,
+another visitor's history, or their drafts. Each submitted book is readable by
+its sender and the originator.
+
+For a two-person demonstration:
+
+1. In the owner's home space, open `library.tsx`, add a book and favorite author
+   or run its agent, and click **Ask for recommendations**. Confirm the native
+   snapshot preview, then click **Open recommendation invitation**.
+2. In the invitation's Access panel, grant the visitor WRITE and share the
+   invitation link. The visitor opens that link under their own identity and
+   sees the collapsed shelf and favorite authors.
+3. The visitor selects a private suggestion or enters a title and author, clicks
+   **Review selected recommendations** or **Review recommendation**, and
+   confirms the native preview naming the owner.
+4. The visitor sees the book under **Books you have recommended**. When the
+   owner opens the invitation, it appears under **Your recommendations**.
 
 ## Privacy boundaries
 
@@ -60,10 +75,18 @@ presentation choice; stored labels enforce who can read the data. This demo does
 not claim protection against a malicious host controlling the trusted renderer
 or its runtime transport.
 
+A visitor with WRITE access can also write directly to shared invitation state.
+An inbox entry alone is not proof that its sender used the review dialog, and
+the inbox does not prevent spam or forged unreviewed entries. A raw reference to
+an unreleased private draft does not grant the originator read access to that
+draft under the bounded runtime. Treat the inbox as a demonstration feed, not as
+an authenticated submission record.
+
 The owner view uses `cf-owner-view` to compare the runtime's acting principal
 with the originator's stored root attestation. Changing the selected `#profile`
 does not change ownership. The component chooses the visible branch; the
-originator-only inbox label still controls its reads.
+originator-only inbox label still controls its reads. The invitation waits for a
+committed owner check before showing either branch or starting a visitor agent.
 
 ## Running and testing
 

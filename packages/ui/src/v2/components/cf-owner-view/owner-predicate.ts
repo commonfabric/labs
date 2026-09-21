@@ -1,12 +1,11 @@
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
-/** Matches the runtime principal only when the persisted origin has one owner. */
-export function authenticatedOwnerFromLabel(
+/** Returns the unique principal attested at the persisted origin. */
+export function attestedOwnerPrincipal(
   view: CfcLabelView | undefined,
-  actingPrincipal: string | undefined,
-): boolean {
-  if (!view || !actingPrincipal) return false;
+): string | undefined {
+  if (!view) return undefined;
   const subjects = new Set<string>();
   for (const entry of view.entries) {
     if (entry.path.length !== 0) continue;
@@ -15,10 +14,19 @@ export function authenticatedOwnerFromLabel(
         continue;
       }
       if (typeof atom.subject !== "string" || !atom.subject.trim()) {
-        return false;
+        return undefined;
       }
       subjects.add(atom.subject);
     }
   }
-  return subjects.size === 1 && subjects.has(actingPrincipal);
+  return subjects.size === 1 ? subjects.values().next().value : undefined;
+}
+
+/** Matches the runtime principal only when the persisted origin has one owner. */
+export function authenticatedOwnerFromLabel(
+  view: CfcLabelView | undefined,
+  actingPrincipal: string | undefined,
+): boolean {
+  return !!actingPrincipal &&
+    attestedOwnerPrincipal(view) === actingPrincipal;
 }

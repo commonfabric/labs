@@ -248,11 +248,13 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
   async prepareSnapshotShare(
     source: CellRef,
     audience: SnapshotShareAudienceRef,
+    appendBooksTo?: { recommended: CellRef; received: CellRef },
   ): Promise<SnapshotSharePreview> {
     return await this.#conn.request<RequestType.SnapshotSharePrepare>({
       type: RequestType.SnapshotSharePrepare,
       source,
       audience,
+      appendBooksTo,
     });
   }
 
@@ -442,7 +444,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     // port, so that failure has nothing to happen to.
     assertNoKeyMaterial(context);
     const attached = await (new RuntimeConnection(transport)).attach(context);
-    return new RuntimeClient(attached, options.identity);
+    return new RuntimeClient(
+      attached,
+      options.trustSnapshot?.actingPrincipal ?? options.identity,
+    );
   }
 
   static async initialize(
@@ -475,7 +480,10 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     const initialized = await (new RuntimeConnection(transport)).initialize(
       data,
     );
-    return new RuntimeClient(initialized, options.identity?.did());
+    return new RuntimeClient(
+      initialized,
+      options.trustSnapshot?.actingPrincipal ?? options.identity.did(),
+    );
   }
 
   getCellFromRef<T>(

@@ -100,6 +100,34 @@ describe("snapshot-share", () => {
     })).rejects.toThrow("Snapshot share confirmation is unavailable");
   });
 
+  it("refuses an unbounded prepare before synchronizing either handle", async () => {
+    let syncCount = 0;
+    const runtime = {
+      getCellFromLink: () => ({
+        runtime,
+        sync: () => {
+          syncCount++;
+          return Promise.resolve();
+        },
+      }),
+    };
+    const processor = buildProcessor({ runtime });
+    const ref: CellRef = {
+      space: identity.did(),
+      id: "of:fid1:unbounded",
+      scope: "space",
+      path: [],
+    };
+    await expect(processor.handleSnapshotSharePrepare({
+      type: RequestType.SnapshotSharePrepare,
+      source: ref,
+      audience: { space: ref },
+    })).rejects.toThrow(
+      "Snapshot sharing requires a bounded runtime read ceiling",
+    );
+    expect(syncCount).toBe(0);
+  });
+
   it("keeps consent in the backend and admits one confirmation from its client", async () => {
     await withFixture(
       async ({ processor, sourceRef, destinationRef, runtime }) => {
@@ -195,11 +223,11 @@ describe("snapshot-share", () => {
   });
   it("does not retain a preview when its client detaches during synchronization", async () => {
     const synchronized = Promise.withResolvers<void>();
-    const processor = buildProcessor({
-      runtime: {
-        getCellFromLink: () => ({ sync: () => synchronized.promise }),
-      },
-    });
+    const runtime = {
+      cfcReadMaxConfidentiality: [],
+      getCellFromLink: () => ({ runtime, sync: () => synchronized.promise }),
+    };
+    const processor = buildProcessor({ runtime });
     const ref: CellRef = {
       space: identity.did(),
       id: "of:fid1:pending",

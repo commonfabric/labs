@@ -18,7 +18,9 @@ type ReviewBinding = {
   runtime: RuntimeClient;
   source: CellHandle;
   recipient: CellHandle;
-  result: CellHandle;
+  result?: CellHandle;
+  recommended?: CellHandle;
+  received?: CellHandle;
   audienceKind: "user" | "space";
   generation: number;
 };
@@ -121,9 +123,17 @@ export class CFShareSnapshot extends BaseElement {
   @property({ attribute: false })
   accessor recipient: CellHandle | undefined;
 
-  /** Writable destination for the released cell link. */
+  /** Writable destination for the released cell link in single-result mode. */
   @property({ attribute: false })
   accessor result: CellHandle | undefined;
+
+  /** Visitor history appended with reviewed book references. */
+  @property({ attribute: false })
+  accessor recommended: CellHandle | undefined;
+
+  /** Creator inbox appended with reviewed book references. */
+  @property({ attribute: false })
+  accessor received: CellHandle | undefined;
 
   /** Whether the recipient represents a user or a space. */
   @property({ attribute: "audience-kind" })
@@ -138,7 +148,6 @@ export class CFShareSnapshot extends BaseElement {
   /** Exercises host workflow without manufacturing a trusted DOM event. */
   get accessForTestingOnly(): {
     prepare(): Promise<void>;
-    commitReviewed(): Promise<void>;
     confirm(event: Event): Promise<void>;
     readonly preview: SnapshotPreview | undefined;
     readonly error: string;
@@ -147,7 +156,6 @@ export class CFShareSnapshot extends BaseElement {
     const component = this;
     return {
       prepare: () => this.#prepare(),
-      commitReviewed: () => this.#commitReviewed(),
       confirm: (event) => this.#confirm(event),
       get preview() {
         return component.#preview;
@@ -161,9 +169,15 @@ export class CFShareSnapshot extends BaseElement {
   override willUpdate(changed: PropertyValues): void {
     super.willUpdate(changed);
     if (
-      ["source", "recipient", "result", "audienceKind", "runtime"].some((key) =>
-        changed.has(key)
-      )
+      [
+        "source",
+        "recipient",
+        "result",
+        "recommended",
+        "received",
+        "audienceKind",
+        "runtime",
+      ].some((key) => changed.has(key))
     ) {
       this.#invalidate();
     }
@@ -177,7 +191,8 @@ export class CFShareSnapshot extends BaseElement {
   override render() {
     return html`
       <button type="button" ?disabled=${this.#busy || !this.source ||
-        !this.recipient || !this.result || !this.runtime}
+        !this.recipient ||
+        !(this.result || (this.recommended && this.received)) || !this.runtime}
         @click=${this.#prepare}>Review sharing</button>
       ${this.#error ? html`<p role="alert">${this.#error}</p>` : nothing}
       <dialog aria-labelledby="share-title" @cancel=${this.#cancel}>
@@ -230,14 +245,27 @@ export class CFShareSnapshot extends BaseElement {
     return this.isConnected && binding.generation === this.#generation &&
       binding.runtime === this.runtime && binding.source === this.source &&
       binding.recipient === this.recipient && binding.result === this.result &&
+      binding.recommended === this.recommended &&
+      binding.received === this.received &&
       binding.audienceKind === this.audienceKind;
   }
 
   /** Fetches the authoritative snapshot and displays it without publishing. */
   #prepare = async (): Promise<void> => {
     if (this.#busy) return;
-    const { runtime, source, recipient, result, audienceKind } = this;
-    if (!runtime || !source || !recipient || !result || !this.isConnected) {
+    const {
+      runtime,
+      source,
+      recipient,
+      result,
+      recommended,
+      received,
+      audienceKind,
+    } = this;
+    if (
+      !runtime || !source || !recipient ||
+      !(result || (recommended && received)) || !this.isConnected
+    ) {
       return;
     }
     if (audienceKind !== "user" && audienceKind !== "space") {
@@ -251,6 +279,8 @@ export class CFShareSnapshot extends BaseElement {
       source,
       recipient,
       result,
+      recommended,
+      received,
       audienceKind,
       generation: this.#generation,
     };
@@ -264,6 +294,9 @@ export class CFShareSnapshot extends BaseElement {
         audienceKind === "user"
           ? { user: recipient.ref() }
           : { space: recipient.ref() },
+        recommended && received
+          ? { recommended: recommended.ref(), received: received.ref() }
+          : undefined,
       );
       if (!this.#current(binding)) {
         this.#releasePreview(runtime, preview.id);
@@ -288,15 +321,21 @@ export class CFShareSnapshot extends BaseElement {
 
   /** Admits only a real browser gesture on the open host confirmation. */
   #confirm = async (event: Event): Promise<void> => {
-    event.stopPropagation();
-    if (!event.isTrusted || !this.shadowRoot?.querySelector("dialog")?.open) {
-      return;
-    }
-    await this.#commitReviewed();
+    Event.prototype.stopPropagation.call(event);
+    await this.#commitReviewed(event);
   };
 
   /** Publishes the reviewed copy and then delivers its link to the bound result. */
-  async #commitReviewed(): Promise<void> {
+  async #commitReviewed(event: Event): Promise<void> {
+    if (
+      typeof MouseEvent === "undefined" || !(event instanceof MouseEvent) ||
+      !event.isTrusted ||
+      event.currentTarget !==
+        this.shadowRoot?.querySelector("button.confirm") ||
+      !this.shadowRoot?.querySelector("dialog")?.open
+    ) {
+      return;
+    }
     const binding = this.#binding;
     const preview = this.#preview;
     if (this.#busy || !binding || !preview || !this.#current(binding)) return;
@@ -306,7 +345,7 @@ export class CFShareSnapshot extends BaseElement {
     try {
       const shared = await binding.runtime.commitSnapshotShare(preview.id);
       if (!this.#current(binding)) return;
-      await binding.result.setStrict(shared);
+      if (binding.result) await binding.result.setStrict(shared);
       if (!this.#current(binding)) return;
       this.#invalidate();
       this.emit("cf-shared");

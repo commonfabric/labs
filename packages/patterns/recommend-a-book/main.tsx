@@ -38,11 +38,6 @@ export interface SelectedBooks {
   books: Book[];
 }
 
-/** A reviewed recommendation pointer retained without aliasing its cell. */
-export interface SelectionSlot {
-  value?: ReadonlyCell<SelectedBooks>;
-}
-
 /** Published library pointer; the creator alone may replace it. */
 export interface LibrarySlot {
   value?: ReadonlyCell<LibrarySeed>;
@@ -74,17 +69,14 @@ export interface InvitationOutput {
   received: PerSpace<Writable<ReadonlyCell<Book>[]>>;
   recommended: PerUser<Writable<ReadonlyCell<Book>[]>>;
   selected: PerUser<Writable<SelectedBooks>>;
-  sharedSelection: PerUser<Writable<SelectionSlot>>;
   review: Stream<SelectedBooks>;
-  acceptShared: Stream<void>;
+  clearSelection: Stream<void>;
 }
 
 /** Stages only the book fields the visitor has chosen to review. */
 const reviewSelection = handler<SelectedBooks, {
   selected: PerUser<Writable<SelectedBooks>>;
-  sharedSelection: PerUser<Writable<SelectionSlot>>;
-}>(({ books }, { selected, sharedSelection }) => {
-  sharedSelection.set({});
+}>(({ books }, { selected }) => {
   selected.set({
     books: books.map(({ title, author }) => ({
       title: title.trim(),
@@ -103,21 +95,10 @@ const publishReviewedLibrary = handler<void, {
   reviewedLibrary.set({});
 });
 
-/** Appends the shared book references without observing the private inbox. */
-const acceptSharedSelection = handler<void, {
-  sharedSelection: PerUser<Writable<SelectionSlot>>;
-  received: PerSpace<Writable<ReadonlyCell<Book>[]>>;
-  recommended: PerUser<Writable<ReadonlyCell<Book>[]>>;
+/** Clears the visitor's draft after the host commits its reviewed copy. */
+const clearSelection = handler<void, {
   selected: PerUser<Writable<SelectedBooks>>;
-}>((_, { sharedSelection, received, recommended, selected }) => {
-  if (!sharedSelection.get()?.value) return;
-  const shared = sharedSelection.get().value!;
-  shared.get().books.forEach((_, index) => {
-    const book = shared.key("books", index);
-    recommended.push(book);
-    received.push(book);
-  });
-  sharedSelection.set({});
+}>((_, { selected }) => {
   selected.set({ books: [] });
 });
 
@@ -130,9 +111,8 @@ const ReaderInvitation = pattern<
     received: PerUser<Writable<ReadonlyCell<Book>[]>>;
     recommended: PerUser<Writable<ReadonlyCell<Book>[]>>;
     selected: PerUser<Writable<SelectedBooks>>;
-    sharedSelection: PerUser<Writable<SelectionSlot>>;
     review: PerUser<Stream<SelectedBooks>>;
-    acceptShared: PerUser<Stream<void>>;
+    clearSelection: PerUser<Stream<void>>;
   },
   Pick<InvitationOutput, typeof UI>
 >(
@@ -144,14 +124,13 @@ const ReaderInvitation = pattern<
       received,
       recommended,
       selected,
-      sharedSelection,
       review,
-      acceptShared,
+      clearSelection,
     },
   ) => {
-    const ownerState = new Writable.perUser<boolean>(false);
-    const isOwner: PerUser<boolean> = computed((): PerUser<boolean> =>
-      ownerState.get() === true
+    const ownerState = new Writable.perUser<boolean | null>(null);
+    const isOwner: PerUser<boolean> | null = computed(
+      (): PerUser<boolean> | null => ownerState.get(),
     );
     const reading = computed((): PerUser<{ value?: LibrarySeed }> => ({
       value: library.get().value?.get(),
@@ -159,7 +138,7 @@ const ReaderInvitation = pattern<
     const suggestions = computed(
       (): PerUser<{ value?: CandidateAgentOutput }> => {
         const published = library.get().value;
-        if (!published || isOwner) return {};
+        if (!published || isOwner !== false) return {};
         return {
           value: SuggestBooks.asScope("user")({
             books: published.key("books"),
@@ -214,8 +193,9 @@ const ReaderInvitation = pattern<
                 $source={selected}
                 $recipient={originator}
                 audience-kind="user"
-                $result={sharedSelection.key("value")}
-                oncf-shared={acceptShared}
+                $recommended={recommended}
+                $received={received}
+                oncf-shared={clearSelection}
               />
             )
             : null}
@@ -241,17 +221,9 @@ export default pattern<InvitationInput, InvitationOutput>(
     const selected = new Writable.perUser<ReaderPrivate<SelectedBooks>>({
       books: [],
     });
-    const sharedSelection = new Writable.perUser<
-      SelectionSlot
-    >({});
     const publish = publishLibrary({ library });
-    const review = reviewSelection({ selected, sharedSelection });
-    const acceptShared = acceptSharedSelection({
-      sharedSelection,
-      received,
-      recommended,
-      selected,
-    });
+    const review = reviewSelection({ selected });
+    const clear = clearSelection({ selected });
     const publishReviewed = publishReviewedLibrary({
       reviewedLibrary,
       publish,
@@ -263,9 +235,8 @@ export default pattern<InvitationInput, InvitationOutput>(
       received,
       recommended,
       selected,
-      sharedSelection,
       review,
-      acceptShared,
+      clearSelection: clear,
     });
     return {
       [NAME]: "Recommend me a book",
@@ -279,9 +250,8 @@ export default pattern<InvitationInput, InvitationOutput>(
       received,
       recommended,
       selected,
-      sharedSelection,
       review,
-      acceptShared,
+      clearSelection: clear,
     };
   },
 );

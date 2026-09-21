@@ -14,6 +14,7 @@ import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import type { Cell } from "../cell.ts";
+import { parseLink } from "../link-utils.ts";
 import type { NormalizedFullLink } from "../link-utils.ts";
 import type {
   IExtendedStorageTransaction,
@@ -78,10 +79,35 @@ interface ConsentState {
 
   /** Unique host event identity used for the copy and receipt. */
   readonly eventId: string;
+
+  /** Host-bound recommendation lists updated with the reviewed copy. */
+  readonly appendBooksTo?: {
+    readonly recommended: Cell<unknown>;
+    readonly received: Cell<unknown>;
+    readonly recommendedLink: NormalizedFullLink;
+    readonly receivedLink: NormalizedFullLink;
+  };
 }
 
 const consents = new WeakMap<SnapshotShareConsent, ConsentState>();
 const SHARE_WRITER = "cfc-share-snapshot";
+
+/** Follows a host binding's one pointer without observing its private target. */
+function appendTarget(
+  cell: Cell<unknown>,
+  tx: IExtendedStorageTransaction,
+): Cell<unknown> {
+  const binding = cell.getAsNormalizedFullLink();
+  const pointer = tx.readValueOrThrow(binding, {
+    meta: internalVerifierRead,
+    nonRecursive: true,
+  });
+  const link = parseLink(pointer, binding);
+  if (!link?.id || !link.space) {
+    throw new Error("Snapshot recommendation binding is not a cell link");
+  }
+  return cell.runtime.getCellFromLink(link);
+}
 
 /** Resolves an audience from persisted identity evidence, never authored schema. */
 function resolveAudience(
@@ -193,14 +219,51 @@ function inspect(source: Cell<unknown>, requested: SnapshotShareAudience) {
 export function prepareSnapshotShare(
   source: Cell<unknown>,
   audience: SnapshotShareAudience,
+  appendBooksTo?: {
+    recommended: Cell<unknown>;
+    received: Cell<unknown>;
+  },
 ): PreparedSnapshotShare {
   const inspected = inspect(source, audience);
+  let boundAppendTargets: ConsentState["appendBooksTo"];
+  if (appendBooksTo) {
+    if (
+      appendBooksTo.recommended.runtime !== source.runtime ||
+      appendBooksTo.received.runtime !== source.runtime
+    ) throw new Error("Snapshot append targets must use the source runtime");
+    const tx = source.runtime.edit();
+    let recommendedLink: NormalizedFullLink;
+    let receivedLink: NormalizedFullLink;
+    try {
+      recommendedLink = appendTarget(appendBooksTo.recommended, tx)
+        .getAsNormalizedFullLink();
+      receivedLink = appendTarget(appendBooksTo.received, tx)
+        .getAsNormalizedFullLink();
+    } finally {
+      tx.abort();
+    }
+    if (
+      recommendedLink.scope !== "user" ||
+      recommendedLink.space !== inspected.destination.space ||
+      receivedLink.scope !== "space" ||
+      receivedLink.space !== inspected.destination.space ||
+      !isObjectNotArray(inspected.value) ||
+      !Array.isArray(inspected.value.books)
+    ) throw new Error("Snapshot recommendation targets are invalid");
+    boundAppendTargets = {
+      recommended: appendBooksTo.recommended.withTx(undefined),
+      received: appendBooksTo.received.withTx(undefined),
+      recommendedLink,
+      receivedLink,
+    };
+  }
   const consent = Object.freeze({}) as SnapshotShareConsent;
   consents.set(consent, {
     ...inspected,
     source: source.withTx(undefined),
     requestedAudience: audience,
     eventId: crypto.randomUUID(),
+    ...(boundAppendTargets && { appendBooksTo: boundAppendTargets }),
   });
   return Object.freeze({
     value: inspected.value,
@@ -274,6 +337,31 @@ export async function commitSnapshotShare(
       ifc: { confidentiality, writeAuthorizedBy: [SHARE_WRITER] },
     }, tx);
     shared.set(state.value);
+    if (state.appendBooksTo) {
+      const targets = state.appendBooksTo;
+      if (
+        !deepEqual(
+          appendTarget(targets.recommended, tx).getAsNormalizedFullLink(),
+          targets.recommendedLink,
+        ) ||
+        !deepEqual(
+          appendTarget(targets.received, tx).getAsNormalizedFullLink(),
+          targets.receivedLink,
+        )
+      ) throw new Error("Snapshot recommendation targets changed");
+      const books = (state.value as { books: JSONValue[] }).books;
+      for (let index = 0; index < books.length; index++) {
+        const book = shared.key("books", index);
+        (runtime.getCellFromLink(
+          targets.recommendedLink,
+          undefined,
+          tx,
+        ) as Cell<unknown[]>).push(book);
+        (runtime.getCellFromLink(targets.receivedLink, undefined, tx) as Cell<
+          unknown[]
+        >).push(book);
+      }
+    }
     const link = shared.getAsNormalizedFullLink();
     tx.markCreateOnly?.(link);
     const receipt = runtime.getCell(state.destination.space, {
