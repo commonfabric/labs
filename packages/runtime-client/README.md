@@ -28,6 +28,13 @@ delivered before the acknowledgment. `CellController` follows the commit with a
 fresh read of the current bound view; it does not require another subscription
 delivery to release the edit.
 
+`getCacheVersion()` exposes a handle-local cache revision. It advances on local
+publications, reads that update the cache, and worker value confirmations,
+including unchanged values that do not notify subscribers. A read whose stale
+result is declined does not advance it. Controls use it to expire temporary
+display snapshots; it is not a storage version or a commit acknowledgment, and
+versions from different handles cannot be compared.
+
 ## Refused event admission
 
 The `eventintentoutcome` event reports a refused event admission to every

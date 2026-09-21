@@ -103,6 +103,7 @@ export class CellHandle<T = unknown> {
   #nextCallbackId = 0;
   #schemaWarned = false;
   #updateGeneration = 0;
+  #cacheVersion = 0;
 
   /**
    * Monotonic invocation order for local value mutations on this handle. Async
@@ -170,6 +171,15 @@ export class CellHandle<T = unknown> {
   get(): Readonly<T> | undefined {
     this.#requireSchema("get");
     return this.#value !== undefined ? this.#value as Readonly<T> : undefined;
+  }
+
+  /**
+   * Handle-local revision of cached publications and worker confirmations,
+   * including unchanged values. Compare only on this handle to invalidate a
+   * display snapshot; this revision does not identify a storage commit.
+   */
+  getCacheVersion(): number {
+    return this.#cacheVersion;
   }
 
   /**
@@ -407,6 +417,7 @@ export class CellHandle<T = unknown> {
 
   #publishValue(value: T): void {
     this.#value = value;
+    this.#cacheVersion++;
     for (const callback of this.#callbacks.values()) {
       try {
         // A local update does not change the label; carry the current one.
@@ -672,6 +683,7 @@ export class CellHandle<T = unknown> {
       authoritative
     ) {
       this.#value = value;
+      this.#cacheVersion++;
     }
     return value;
   }
@@ -704,6 +716,7 @@ export class CellHandle<T = unknown> {
       authoritative
     ) {
       this.#value = value;
+      this.#cacheVersion++;
     }
     return value;
   }
@@ -890,6 +903,7 @@ export class CellHandle<T = unknown> {
       queue.value = applied;
       queue.hasValue = true;
     }
+    this.#cacheVersion++;
     const valueChanged = !valuesOrCellsEqual(applied, this.#value);
     // A label-only change (value identical) still fires label-aware subscribers.
     // `labelUpdate` is present only on notifications that carried a label, so a

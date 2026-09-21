@@ -157,6 +157,162 @@ function setup({ holdReads = false } = {}) {
 }
 
 describe("CellController commit acknowledgment", () => {
+  it("reads the current handle on reconnect", () => {
+    const f = setup();
+    const other = f.cell.subscribe(() => {});
+    try {
+      f.controller.hostDisconnected();
+      f.cell[$onCellUpdate]("remote");
+      f.controller.hostConnected();
+      expect(f.cell.get()).toBe("remote");
+      expect(f.controller.getValue()).toBe("remote");
+    } finally {
+      other();
+      f.controller.hostDisconnected();
+    }
+  });
+  it("reads an explicit sync refresh without a delivery", async () => {
+    const f = setup();
+    try {
+      f.store("remote");
+      await f.cell.sync();
+      expect(f.cell.get()).toBe("remote");
+      expect(f.controller.getValue()).toBe("remote");
+    } finally {
+      f.controller.hostDisconnected();
+    }
+  });
+  it("accepts a refreshed rebound handle after an equal worker delivery", () => {
+    const f = setup();
+    try {
+      f.store("remote");
+      const rebound = f.handle("remote", {
+        cfcLabelView: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: ["did:key:r"],
+            },
+          }],
+        },
+      });
+      f.controller.bind(rebound);
+      rebound[$onCellUpdate]("remote");
+      expect(rebound.get()).toBe("remote");
+      expect(f.controller.getValue()).toBe("remote");
+    } finally {
+      f.controller.hostDisconnected();
+    }
+  });
+  it("reads an explicit sync refresh after its own edit has reconciled", async () => {
+    const f = setup();
+    try {
+      f.controller.setValue("profile");
+      await f.started(0);
+      await f.finish(0);
+      f.store("remote");
+      await f.cell.sync();
+      expect(f.cell.get()).toBe("remote");
+      expect(f.controller.getValue()).toBe("remote");
+    } finally {
+      f.controller.hostDisconnected();
+    }
+  });
+
+  it("refreshes an idle rebound handle even without a changed delivery", async () => {
+    const f = setup({ holdReads: true });
+    try {
+      const rebound = f.handle("remote", {
+        cfcLabelView: {
+          version: 1,
+          entries: [{ path: [], label: { confidentiality: ["did:key:r"] } }],
+        },
+      });
+      f.controller.bind(rebound);
+      expect(f.controller.getValue()).toBe("spaces");
+      await f.readStarted(0);
+      f.answerRead(0, "remote");
+      await f.read();
+      expect(f.controller.getValue()).toBe("remote");
+      expect(f.changes.at(-1)).toBe("remote");
+    } finally {
+      f.answerRead(0, "remote");
+      await f.read();
+      f.controller.hostDisconnected();
+    }
+  });
+
+  it("keeps a new blur edit over an idle rebind's in-flight read", async () => {
+    const f = setup({ holdReads: true });
+    try {
+      f.controller.bind(f.handle("remote", {
+        cfcLabelView: {
+          version: 1,
+          entries: [{ path: [], label: { confidentiality: ["did:key:r"] } }],
+        },
+      }));
+      await f.readStarted(0);
+      f.controller.updateTimingOptions({ strategy: "blur" });
+      f.controller.setValue("new input");
+      f.answerRead(0, "remote");
+      await f.read();
+      expect(f.controller.getValue()).toBe("new input");
+    } finally {
+      f.answerRead(0, "remote");
+      await f.read();
+      f.controller.cancel();
+      f.controller.hostDisconnected();
+    }
+  });
+
+  it("expires a read override when an unchanged worker value confirms the cache", async () => {
+    const f = setup({ holdReads: true });
+    try {
+      f.controller.setValue("profile");
+      await f.started(0);
+      const finishing = f.finish(0);
+      await f.readStarted(0);
+      f.handle("spaces")[$onCellUpdate]("profile");
+      f.answerRead(0, "profile");
+      await finishing;
+      expect(f.cell.get()).toBe("spaces");
+      expect(f.controller.getValue()).toBe("profile");
+      // Equal-value notifications refresh the cache without a callback.
+      f.cell[$onCellUpdate]("spaces");
+      expect(f.controller.getValue()).toBe("spaces");
+    } finally {
+      f.answerRead(0, "profile");
+      await f.finish(0);
+      f.controller.hostDisconnected();
+    }
+  });
+
+  it("expires a read override when a later sync confirms the unchanged cache", async () => {
+    const f = setup({ holdReads: true });
+    try {
+      f.controller.setValue("profile");
+      await f.started(0);
+      const finishing = f.finish(0);
+      await f.readStarted(0);
+      f.handle("spaces")[$onCellUpdate]("profile");
+      f.answerRead(0, "profile");
+      await finishing;
+      expect(f.controller.getValue()).toBe("profile");
+      const refresh = f.cell.sync();
+      await f.readStarted(1);
+      f.answerRead(1, "spaces");
+      await refresh;
+      expect(f.cell.get()).toBe("spaces");
+      expect(f.controller.getValue()).toBe("spaces");
+    } finally {
+      f.answerRead(0, "profile");
+      f.answerRead(1, "spaces");
+      await f.finish(0);
+      f.controller.hostDisconnected();
+    }
+  });
+
   it("keeps the optimistic display through a matching echo and a stale delivery until commit", async () => {
     const f = setup();
     try {

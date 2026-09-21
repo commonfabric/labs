@@ -27,7 +27,14 @@ import {
 /** Commit promises started through each mock handle. */
 const mockWrites = new WeakMap<object, Promise<void>[]>();
 
-/** Constructs a mock handle whose UI-write completions tests can await. */
+/**
+ * Constructs a mock handle whose UI-write completions tests can await.
+ * `source` supplies a stale, read-through view of its mock network: writes and
+ * broadcasts belong to the registered source handle. Use that view only for
+ * rebinding and reads, and use `pushUpdate()` to deliver values explicitly.
+ * These synchronous mocks do not model pending or refused commits; those
+ * outcomes are controlled in `cell-controller-commit.test.ts`.
+ */
 function createMockCellHandle<T>(
   value?: T,
   ref?: Partial<CellRef>,
@@ -1086,6 +1093,32 @@ describe("CellController — pending local edits vs stale bound state", () => {
     // our edit (links compare by identity, not structure).
     pushUpdate(cell, linkB);
     expect(ctrl.getValue()).toBe(linkA);
+  });
+
+  it("keeps an unsent object edit across equal and different nested echoes", () => {
+    type Draft = { draft: { text: string } };
+    const changes: Draft[] = [];
+    const ctrl = new CellController<Draft>(createMockHost(), {
+      timing: { strategy: "blur" },
+      onChange: (value) => changes.push(value),
+    });
+    const cell = createMockCellHandle<Draft>({ draft: { text: "initial" } });
+    ctrl.bind(cell);
+    try {
+      ctrl.setValue({ draft: { text: "typed" } });
+      changes.length = 0;
+      // A fresh object can match structurally without confirming an unsent edit.
+      pushUpdate(cell, { draft: { text: "typed" } });
+      expect(changes).toEqual([{ draft: { text: "typed" } }]);
+      pushUpdate(cell, { draft: { text: "stale" } });
+      expect(ctrl.getValue()).toEqual({ draft: { text: "typed" } });
+      expect(changes).toEqual([{ draft: { text: "typed" } }]);
+      ctrl.cancel();
+      expect(ctrl.getValue()).toEqual({ draft: { text: "stale" } });
+    } finally {
+      ctrl.cancel();
+      ctrl.hostDisconnected();
+    }
   });
 
   it("does not confirm on structurally different partial echoes (array and object)", () => {
