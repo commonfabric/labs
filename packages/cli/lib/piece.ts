@@ -5336,15 +5336,17 @@ export async function getCellValue(
         () => targetCell.pull(),
       );
       await timeCliPhase(
-        "getCellValue.step.synced.beforeIdle",
+        "getCellValue.step.synced.beforeSettled",
         () => pieces.synced(),
       );
+      // Async query results and their reactive updates must arrive before
+      // the read; scheduler idle alone can leave their initial values visible.
       await timeCliPhase(
-        "getCellValue.step.runtime.idle",
-        () => pieces.runtime.idle(),
+        "getCellValue.step.runtime.settled",
+        () => pieces.runtime.settled(Infinity),
       );
       await timeCliPhase(
-        "getCellValue.step.synced.afterIdle",
+        "getCellValue.step.synced.afterSettled",
         () => pieces.synced(),
       );
     }

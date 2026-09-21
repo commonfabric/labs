@@ -1205,8 +1205,10 @@ cf cell get --cell ID items \
 A path read first resolves the piece's canonical result and metadata, then pulls
 the selected path. It does not first synchronize the producer's entire result
 schema. Reading the root still requests the whole result. `--step` also starts
-the piece, so its execution can demand inputs beyond the selected output.
-Missing-path diagnostics can require a broader root read.
+the piece and waits for asynchronous work, including session-scoped store
+queries and their reactive updates, to settle before reading. Its execution can
+demand inputs beyond the selected output. Missing-path diagnostics can require a
+broader root read.
 
 `cf piece call` writes them **past the `--` that closes the callable's
 section**. The callable name opens that section, so everything between the two

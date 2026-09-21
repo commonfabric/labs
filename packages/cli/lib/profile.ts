@@ -171,9 +171,9 @@ function sendCreate(
  * space, rather than through the home connection that sent the create: in
  * the runtime that ran the handler the piece's nodes do not run on demand —
  * a start there wires the scheduler and a pull materializes nothing — while
- * a fresh runtime resuming the piece from storage runs them. The shape of
- * the step is `cf cell get --step`'s (`getCellValue()`, lib/piece.ts): the
- * piece started through `getPieceCell()`, pulled, synced, settled, synced.
+ * a fresh runtime resuming the piece from storage runs them. The step starts
+ * the piece through `getPieceCell()`, pulls it, syncs storage, waits for
+ * scheduler idle, and syncs again.
  * The stop and dispose close the connection down the way a one-shot command
  * closes it.
  *
