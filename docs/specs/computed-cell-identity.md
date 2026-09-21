@@ -89,11 +89,14 @@ The pattern builder assigns each internal root cell a `partialCause` —
 the cell's declared name, or an anonymous `{ $generated: N }` counter, with
 `$kind: "stream"` mixed in for stream cells
 (`packages/runner/src/builder/pattern.ts`). At instantiation the runner
-mints the entity id from the piece's result cell and that partial cause:
+mints the entity id from the piece's result cell and the effective cause. For
+a versioned generated descriptor, the effective cause includes the accepted
+authored artifact; named and legacy descriptors keep their partial cause. See
+[Generated cell identity](generated-cell-identity.md).
 
 ```ts
 // Shown for illustration only.
-createRef({}, { parent, type: "internal", cause: descriptor.partialCause })
+createRef({}, { parent, type: "internal", cause: generatedInternalCellCause(descriptor) })
 ```
 
 (`packages/runner/src/link-utils.ts`, `getDerivedInternalCellLink`). The
@@ -107,7 +110,7 @@ a single chokepoint (`packages/data-model/src/value-hash.ts`). The URI layer
 scheme onto the tagged hash — historically always `of:`.
 
 The manifest of materialized internal cells is stored in result-cell
-metadata and matched by partial cause plus kind
+metadata and matched by partial cause, kind, and derived address
 (`packages/runner/src/runner.ts`, `materializeDerivedInternalCells`).
 
 ### Transaction provenance
@@ -422,8 +425,9 @@ contents are meaningless under the new kind, and the manifest's
 partial-cause matching materializes the new cell and drops the stale entry
 naturally.
 
-Internal-cell identity is already refactor-fragile — anonymous cells re-mint
-on reorder via the `$generated` counter, named cells on rename — so kind
+Anonymous cells re-mint when an authored update changes the accepted artifact;
+named cells re-mint on rename. A runtime deploy preserves unchanged legacy
+addresses. Kind
 flips add a trigger to an existing hazard class (durable cross-piece links
 pointing at an orphaned entity), not a new class. The flipped classifier
 polarity widens the set of cells that flip when a pattern edit adds or

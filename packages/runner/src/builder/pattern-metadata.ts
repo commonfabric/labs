@@ -1,5 +1,10 @@
+import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { RuntimeProgram } from "../harness/types.ts";
-import { isPattern, type Pattern } from "./types.ts";
+import {
+  type DerivedInternalCellDescriptor,
+  isPattern,
+  type Pattern,
+} from "./types.ts";
 
 /**
  * Side-table storage for pattern metadata that is associated *after* a pattern
@@ -106,6 +111,87 @@ const entryRefByValue = new WeakMap<
   { identity: string; symbol: string }
 >();
 
+/** The accepted addressing format for one piece's generated cells. */
+export type GeneratedCellIdentity = {
+  /** Zero preserves legacy addresses; one includes the authored entry ref. */
+  readonly version: 0 | 1;
+  /** The accepted, loadable authored artifact. */
+  readonly identity: string;
+  /** The artifact's registered entry symbol. */
+  readonly symbol: string;
+};
+
+const generatedIdentityByPattern = new WeakMap<
+  object,
+  GeneratedCellIdentity | null
+>();
+const generatedIdentityByDescriptor = new WeakMap<
+  object,
+  GeneratedCellIdentity | null
+>();
+
+/** Parse persisted addressing metadata, refusing formats this runtime cannot honor. */
+export function parseGeneratedCellIdentity(
+  value: unknown,
+): GeneratedCellIdentity | undefined {
+  if (value === undefined) return undefined;
+  if (
+    !isObjectNotArray(value) || (value.version !== 0 && value.version !== 1) ||
+    typeof value.identity !== "string" || typeof value.symbol !== "string" ||
+    isKeylessPatternIdentity(value.identity)
+  ) {
+    throw new Error("Unsupported generated cell identity metadata");
+  }
+  return {
+    version: value.version,
+    identity: value.identity,
+    symbol: value.symbol,
+  };
+}
+
+/** Prepare independent descriptors for a piece; null selects session-only legacy. */
+export function prepareGeneratedCellIdentity(
+  pattern: Pattern,
+  selection: GeneratedCellIdentity | null,
+): Pattern {
+  if (
+    selection !== null &&
+    (!isTrustedPattern(pattern) || isKeylessPatternIdentity(selection.identity))
+  ) {
+    throw new Error(
+      "Generated cell identity requires a trusted, loadable artifact",
+    );
+  }
+  selection = selection === null ? null : Object.freeze({ ...selection });
+  const copy = {
+    ...pattern,
+    derivedInternalCells: pattern.derivedInternalCells?.map((descriptor) => ({
+      ...descriptor,
+    })),
+  };
+  noteDerivedCopy(copy, pattern);
+  generatedIdentityByPattern.set(copy, selection);
+  for (const descriptor of copy.derivedInternalCells ?? []) {
+    generatedIdentityByDescriptor.set(descriptor, selection);
+  }
+  return copy;
+}
+
+/** The effective hash cause, using only the instance's prepared context. */
+export function generatedInternalCellCause(
+  descriptor: DerivedInternalCellDescriptor,
+): DerivedInternalCellDescriptor["partialCause"] {
+  const selection = generatedIdentityByDescriptor.get(descriptor);
+  return selection?.version === 1 &&
+      isObjectNotArray(descriptor.partialCause) &&
+      "$generated" in descriptor.partialCause
+    ? {
+      ...descriptor.partialCause,
+      $artifact: { identity: selection.identity, symbol: selection.symbol },
+    }
+    : descriptor.partialCause;
+}
+
 /**
  * Resolve a (possibly derived) value to its root original. Identity for
  * values that were never copied. Bounded: the chain is a tree toward the
@@ -147,6 +233,18 @@ export function noteDerivedCopy(copy: unknown, original: unknown): void {
   if (!c || !o || c === o) return;
   const root = resolveOriginal(o);
   derivedFrom.set(c, root);
+  // Instance context belongs to the exact copy, independently of artifact provenance.
+  if (generatedIdentityByPattern.has(o) && isPattern(copy)) {
+    const selection = generatedIdentityByPattern.get(o)!;
+    generatedIdentityByPattern.set(c, selection);
+    for (const descriptor of copy.derivedInternalCells ?? []) {
+      generatedIdentityByDescriptor.set(descriptor, selection);
+    }
+  }
+  if (generatedIdentityByDescriptor.has(o)) {
+    generatedIdentityByDescriptor.set(c, generatedIdentityByDescriptor.get(o)!);
+  }
+
   if (trustedPatterns.has(root)) trustedPatterns.add(c);
   if (trustedBuilderArtifacts().has(root)) trustedBuilderArtifacts().add(c);
   // Eager ref propagation is an optimization only — the lazy root walk in

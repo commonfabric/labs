@@ -1129,13 +1129,6 @@ export class SourceReconciler {
           tx,
         );
       }
-      applyPieceSourceTransition(
-        runtime,
-        resultCell,
-        tx,
-        candidateRef,
-        transition,
-      );
       // Staging the candidate belongs to this transaction whether or not the
       // piece is running, so a refusal costs nothing either way: setup that
       // cannot take the piece's data fails the transaction and the piece keeps
@@ -1144,6 +1137,7 @@ export class SourceReconciler {
       // second time.
       void runtime.setup(tx, candidate, undefined, resultCell.withTx(tx), {
         prepareForResume: true,
+        pieceSourceTransition: transition,
       });
       return true;
     }, sourceUpdate);

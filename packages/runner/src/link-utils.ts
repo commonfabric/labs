@@ -28,6 +28,7 @@ import {
   onSchemaRegistryClear,
   registerSchemaDocument,
 } from "./schema-registry.ts";
+import { generatedInternalCellCause } from "./builder/pattern-metadata.ts";
 import type { MetaLinkField } from "./meta-seam.ts";
 import type { IReadOptions } from "./storage/interface.ts";
 import { getContentAddressedSchemasConfig } from "./schema-doc-config.ts";
@@ -944,6 +945,7 @@ export function getMetaCell(
 export function getDerivedInternalCellLink(
   resultCell: AnyCell<unknown>,
   descriptor: DerivedInternalCellDescriptor,
+  options?: { omitKind?: boolean },
 ): NormalizedFullLink {
   const resultCellLink = resultCell.getAsNormalizedFullLink();
   const parent = resultCell.entityId ?? resultCell;
@@ -958,10 +960,10 @@ export function getDerivedInternalCellLink(
         {
           parent,
           type: "internal",
-          cause: descriptor.partialCause,
+          cause: generatedInternalCellCause(descriptor),
         },
       ),
-      descriptor.kind,
+      options?.omitKind ? undefined : descriptor.kind,
     ),
     path: [],
     scope: descriptor.scope ?? resultCellLink.scope,

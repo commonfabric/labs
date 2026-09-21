@@ -51,7 +51,11 @@ server refuses session admission without it, and the client refuses a server
 that does not enforce it. Existing incompatible tabs need a reload and CLI
 checkouts need an update. Backend replacement must disconnect existing sockets
 so they pass through admission again; document contents do not need migration.
-The [protocol specification](../../docs/specs/memory-v2/04-protocol.md)
+The independent `versionedGeneratedCellIds` marker requires runtimes to honor
+per-piece generated address formats and authored artifact namespaces. It uses
+the same terminal admission rules. Drain old backends and close their sockets
+before authored updates; the gate cannot reach connections an old backend still
+serves. The [protocol specification](../../docs/specs/memory-v2/04-protocol.md)
 describes the terminal refusal and its reconnect behavior.
 
 ## Client queries during reconnect

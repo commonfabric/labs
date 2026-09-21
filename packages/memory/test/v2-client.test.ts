@@ -785,6 +785,7 @@ Deno.test("memory v2 client fails closed without entity identifier capabilities"
       flags: {
         modernCellRep: getMemoryProtocolFlags().modernCellRep,
         stableExpressionResultIds: true,
+        versionedGeneratedCellIds: true,
       },
     }),
   });
@@ -3451,6 +3452,7 @@ Deno.test("memory v2 client rejects hello.ok when flags disagree", async () => {
           flags: {
             modernCellRep: !getMemoryProtocolFlags().modernCellRep,
             stableExpressionResultIds: true,
+            versionedGeneratedCellIds: true,
           },
         }));
       }
@@ -3513,6 +3515,7 @@ Deno.test("memory v2 client stores the server's advertised flags (capability han
     transport: transportWithFlags({
       modernCellRep: getMemoryProtocolFlags().modernCellRep,
       stableExpressionResultIds: true,
+      versionedGeneratedCellIds: true,
     }),
   });
   try {
@@ -3542,6 +3545,7 @@ Deno.test("memory v2 client keeps compression disabled when the server omits the
           flags: {
             modernCellRep: getMemoryProtocolFlags().modernCellRep,
             stableExpressionResultIds: true,
+            versionedGeneratedCellIds: true,
           },
           sessionOpen: {
             audience: TEST_SESSION_OPEN_AUDIENCE,

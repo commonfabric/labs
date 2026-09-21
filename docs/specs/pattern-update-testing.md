@@ -448,8 +448,8 @@ and emits a normal pinned fixture.
 Record the sub-pattern roots too, via `--child`. A manifest holding only the
 entry root leaves every child outside the gate's presence and state controls —
 and for a pattern like home, the children ARE the state whose survival is in
-question. A child's id is position-derived rather than cause-derived, so it
-cannot be re-derived at adopt time: enumerate the snapshot's
+question. A child's id follows its resolved output coordinate and any accepted
+generated namespace. Adoption therefore records the stored addresses: enumerate the snapshot's
 `patternIdentity`-carrying cells (a SQL query over `head`/`revision` suffices)
 and hand each one's id and source path to `--child`; the identity and symbol
 come from the child's own stored marker.

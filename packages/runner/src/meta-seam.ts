@@ -34,6 +34,7 @@ export const META_FIELDS = Object.freeze(
   [
     ...META_LINK_FIELDS,
     "patternIdentity", // content-addressed {identity, symbol} pattern reference
+    "generatedCellIdentity", // per-piece generated address format and accepted entry ref
     "patternSetupIdentity", // setup-completion {identity, symbol} marker
     "patternSource", // active web or `cf:` source origin
     "pieceSourceHistory", // append-only source revisions and retention roots

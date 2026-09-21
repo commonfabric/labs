@@ -842,6 +842,55 @@ describe("stage P2-F piece-start commit failure surfacing (F1)", () => {
     return cell;
   };
 
+  it("restages a cold-start repair after a stale-read refusal", async () => {
+    const cell = await brickedPiece();
+    const manifest = cell.getMetaRaw("internal");
+    const projection = cell.getRaw();
+    const setupMarker = cell.getMetaRaw("patternSetupIdentity");
+    const conflicted = cell.getAsNormalizedFullLink().id;
+    let repairSeals = 0;
+    const failures: unknown[] = [];
+    runtime.pieceStartCommitFailureObserver = ({ error }) =>
+      failures.push(error);
+    runtime.installSealDestination({
+      seal: (tx) => {
+        if (waveRunContextOf(tx)?.actionId.startsWith("piece-start-repair/")) {
+          repairSeals += 1;
+          if (repairSeals === 1) {
+            return Promise.resolve({
+              error: {
+                name: "ConflictError",
+                message:
+                  `stale confirmed read: ${conflicted} at seq 0 conflicted with seq 1`,
+                conflict: { space, the: "application/json", of: conflicted },
+                readyToRetry: () => Promise.resolve(),
+              } as never,
+            });
+          }
+        }
+        return tx.tx.commit();
+      },
+    }, {
+      runStamper: (tx, info) =>
+        stampWaveRunContext(tx, {
+          actionId: info.actionId,
+          kind: info.kind,
+        }),
+    });
+    try {
+      expect(await runtime.start(cell)).toBe(true);
+      await runtime.idle();
+      await runtime.runner.idlePieceInstantiationSettlements();
+      expect(repairSeals).toBe(2);
+      expect(failures).toEqual([]);
+      expect(cell.getMetaRaw("internal")).not.toEqual(manifest);
+      expect(cell.getRaw()).not.toEqual(projection);
+      expect(cell.getMetaRaw("patternSetupIdentity")).toEqual(setupMarker);
+    } finally {
+      runtime.clearSealDestination();
+    }
+  });
+
   it("surfaces a refused piece-start setup-repair commit through the observer instead of swallowing it", async () => {
     const cell = await brickedPiece();
 
