@@ -1,10 +1,12 @@
 /**
  * Reports the share of recent completed runs that passed on the first attempt,
  * which is the dashboard's signal for flakiness, with a history strip carrying
- * the newest runs in the trust window. A cancelled attempt is not a try: a
- * run's first attempt that was not cancelled decides it, and a run whose every
- * attempt was cancelled is left out of the share. One factory builds both the
- * labs and loom instances against their own repository and workflow.
+ * the newest runs in the trust window. An attempt cancelled before it started a
+ * job, as a queued run is when a newer push replaces it, is not a try: a run's
+ * first other attempt decides it, and a run with no other attempt is left out
+ * of the share. A cancelled attempt that ran jobs timed out or was stopped, and
+ * is a failed try. One factory builds both the labs and loom instances against
+ * their own repository and workflow.
  */
 
 import {
@@ -21,10 +23,12 @@ import { CI_WORKFLOW, LOOM_CI_WORKFLOW, LOOM_REPO, REPO, TRUST_GOOD, TRUST_RUNS_
 type TrustOutcome = "green" | "red" | "run" | "gray";
 
 /**
- * Scores `run` by its first attempt that was not cancelled: green when that
- * attempt succeeded, and red otherwise. A run that is unfinished, or whose
- * every attempt was cancelled, is left out of the share. Rejects when an
- * earlier attempt cannot be read from GitHub.
+ * Scores `run` by its first attempt that was not cancelled before it started a
+ * job: green when that attempt succeeded, and red otherwise, a cancelled
+ * attempt that ran jobs included. A run that is unfinished, or whose every
+ * attempt was cancelled before it started a job, is left out of the share.
+ * Rejects when an earlier attempt, or a cancelled attempt's job count, cannot
+ * be read from GitHub.
  */
 async function trustOutcome(
   run: Run,
@@ -34,7 +38,7 @@ async function trustOutcome(
   if (run.status !== "completed" || !run.conclusion) return "gray";
   for (let attempt = 1; attempt <= run.run_attempt; attempt++) {
     const tried = await attempts.get(run, attempt);
-    if (tried.conclusion !== "cancelled") {
+    if (!(await attempts.cancelledBeforeAnyJob(tried))) {
       return tried.conclusion === "success" ? "green" : "red";
     }
   }

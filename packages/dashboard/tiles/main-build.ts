@@ -1,10 +1,11 @@
 /**
- * Reports whether main builds. The last completed attempt on main that was not
- * cancelled drives the status, good or bad, and the tile is unknown until a
- * first such attempt is known. A newer in-flight run is a minor secondary
- * facet. The tile drills through to the commit history of main. One factory
- * builds both the labs and loom instances against their own repository and
- * workflow.
+ * Reports whether main builds. The last completed attempt on main drives the
+ * status, good or bad, passing over any attempt cancelled before it started a
+ * job, and the tile is unknown until a first attempt it does not pass over is
+ * known. A cancelled attempt that ran jobs drives the status like any other,
+ * as a failure. A newer in-flight run is a minor secondary facet. The tile
+ * drills through to the commit history of main. One factory builds both the
+ * labs and loom instances against their own repository and workflow.
  */
 
 import {
@@ -33,16 +34,20 @@ function makeBuildTile(opts: { id: string; label: string; repo: string; workflow
         : run.run_attempt - 1;
       while (attempt >= 1) {
         let prior: Run;
+        let neverStarted: boolean;
         try {
           prior = await attempts.get(run, attempt);
+          neverStarted = await attempts.cancelledBeforeAnyJob(prior);
         } catch (error) {
           if (completed.length === 0) throw error;
           break history;
         }
         attempt--;
-        // A cancelled attempt passed no judgment on its commit, so it neither
-        // sets the verdict nor ends a streak.
-        if (prior.conclusion === "cancelled") continue;
+        // An attempt cancelled before it started a job, as a queued run is when
+        // a newer push replaces it, passed no judgment on its commit, so it
+        // neither sets the verdict nor ends a streak. A cancelled attempt that
+        // ran jobs timed out or was stopped, and counts like any other failure.
+        if (neverStarted) continue;
         completed.push(prior);
         if (headConclusion === undefined) {
           headConclusion = prior.conclusion!;

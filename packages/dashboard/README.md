@@ -362,20 +362,34 @@ other host checks before that signal. The confirmation lasts for the process
 lifetime, so an unreachable host is then reported as an outage even when every
 host is unreachable together.
 
+GitHub concludes a workflow run as `cancelled` for three different reasons: a
+newer push replaced the run while it was still queued, a job ran past its
+`timeout-minutes`, or someone stopped the run while it ran. Only the first says
+nothing about the commit, and it is also the only one of the three that never
+starts a job, so the ci and ci trust tiles tell them apart by the attempt's job
+count. An attempt cancelled before it started a job is passed over. A cancelled
+attempt that ran jobs counts as a failure, as every conclusion other than
+success does. The run listing does not carry a job count, so each tile requests
+the count of every cancelled attempt it reaches, once, and holds it while the
+run stays in the tile's window. No other conclusion takes that request.
+
 The **labs ci** and **loom ci** headlines use the most recent completed workflow
-attempt that was not cancelled. A cancelled attempt neither sets the headline
-nor ends the streak beneath it, so a run cancelled by a newer push leaves the
-previous result showing. While GitHub reruns a workflow, the prior attempt's
+attempt that was not cancelled before it started a job. An attempt cancelled
+before it started one neither sets the headline nor ends the streak beneath it,
+so a queued run a newer push replaced leaves the previous result showing, while
+a timed-out run shows **cancelled** in red. While GitHub reruns a workflow, the prior attempt's
 conclusion remains visible and the tile marks the activity as **build
 rerunning**. A new workflow run still appears as **next build running**.
 
 The **labs ci trust** and **loom ci trust** percentages score each run by its
-first attempt that was not cancelled: the run is first-try green when that
-attempt succeeded. A run whose every attempt was cancelled is left out of the
+first attempt that was not cancelled before it started a job: the run is
+first-try green when that attempt succeeded, and red otherwise. A run whose
+every attempt was cancelled before it started a job is left out of the
 percentage. The run listing carries only a run's latest attempt, so the tile
 requests a rerun's earlier attempts from GitHub, once each, and holds them while
-the run stays in the trust window. An earlier attempt that cannot be read turns
-the tile gray, keeping its last value, until a later collection reads it.
+the run stays in the trust window. An earlier attempt or a job count that cannot
+be read turns the tile gray, keeping its last value, until a later collection
+reads it.
 
 The **labs ci duration** and **loom ci duration** tiles use successful main push
 runs. Each duration starts when GitHub creates the workflow run for the landed
@@ -1115,7 +1129,7 @@ Everything below is a tunable constant in `config.ts`:
 
 - **Status thresholds:** `TRUST_GOOD`/`TRUST_WARN` (first-try-green %), `DUR_GOOD`/`DUR_WARN` (median CI minutes).
 - **Data windows:** The shared fetch returns at most `CI_RUNS_MAX=200` workflow runs and stops at `CI_RUNS_MAX_AGE_DAYS=60` days. CI trust uses the newest `TRUST_RUNS_MAX=160` fetched runs. CI duration uses whichever is larger: `DUR_MIN_RUNS=20` passing runs or `DUR_MAX_AGE_HOURS=6` hours. The benchmark trend uses the same larger-of-the-two idea in days: `BENCH_TREND_MIN_RUNS=20` runs or `BENCH_TREND_MAX_AGE_DAYS=14` days. Recent runs shows `RECENT_DISPLAY=50` entries.
-- **ci-trust cell grid:** The grid has up to `TRUST_RUNS_MAX=160` square cells in rows of `TRUST_COLS=40`. On wide tiles, the squares stop growing and the columns spread out to keep the grid clear of the subheading while preserving its equal left, right, and bottom insets. First-try successes are green. In-progress runs are blue. Completed runs that lower the trust percentage are red. Ignored runs, a run cancelled on every attempt among them, are gray.
+- **ci-trust cell grid:** The grid has up to `TRUST_RUNS_MAX=160` square cells in rows of `TRUST_COLS=40`. On wide tiles, the squares stop growing and the columns spread out to keep the grid clear of the subheading while preserving its equal left, right, and bottom insets. First-try successes are green. In-progress runs are blue. Completed runs that lower the trust percentage are red, including a run decided by a cancelled attempt that ran jobs. Ignored runs are gray, including a run cancelled before it started a job on every attempt.
 
 ## Local development
 

@@ -36,7 +36,11 @@ import {
   trendStatus,
 } from "./tiles/benchmark.ts";
 import { TILES } from "./registry.ts";
-import { withGithubAttempt } from "./test/github-attempts.ts";
+import {
+  byUrl,
+  type GithubAnswer,
+  withGithubAttempt,
+} from "./test/github-attempts.ts";
 
 function ctx(
   runs: Run[],
@@ -77,8 +81,20 @@ function attemptOf(of: Run, attempt: number, conclusion: string): Run {
   return { ...of, run_attempt: attempt, conclusion };
 }
 
-function attemptUrl(attempt: Run): string {
-  return `https://api.github.com/repos/${REPO}/actions/runs/${attempt.id}/attempts/${attempt.run_attempt}`;
+function attemptUrl(attempt: Run, repo = REPO): string {
+  return `https://api.github.com/repos/${repo}/actions/runs/${attempt.id}/attempts/${attempt.run_attempt}`;
+}
+
+// Where the job count of `attempt` is requested.
+function jobsUrl(attempt: Run, repo = REPO): string {
+  return `${attemptUrl(attempt, repo)}/jobs?per_page=1`;
+}
+
+// The trust grid's cell colors, in the newest-first order the runs arrive in.
+function cellColors(extra: string | undefined): string[] {
+  return [...(extra ?? "").matchAll(/background:(var\(--[^)]+\))/g)]
+    .map((match) => match[1])
+    .reverse();
 }
 
 Deno.test("labs ci:passing tip -> good", async () => {
@@ -122,83 +138,178 @@ Deno.test("labs ci trust: only first-attempt success counts as green", async () 
   );
 });
 
-Deno.test("labs and loom ci trust: a cancelled run is left out of the share", async () => {
-  for (const tile of [labsCiTrust, loomCiTrust]) {
+Deno.test("labs and loom ci trust: a cancelled run that never started is left out of the share", async () => {
+  const cases = [
+    { tile: labsCiTrust, repo: REPO },
+    { tile: loomCiTrust, repo: LOOM_REPO },
+  ];
+  for (const { tile, repo } of cases) {
+    const cancelled = [
+      run({ conclusion: "cancelled" }),
+      run({ conclusion: "cancelled" }),
+    ];
     const runs = [
       run({ conclusion: "success" }),
-      run({ conclusion: "cancelled" }),
-      run({ conclusion: "cancelled" }),
+      cancelled[0],
+      cancelled[1],
       run({ conclusion: "failure" }),
     ];
+    const jobs = cancelled.map((attempt) => jobsUrl(attempt, repo));
     await withGithubAttempt(
-      new Error("no attempt is needed"),
+      byUrl(jobs.map((url) => [url, { total_count: 0 }])),
       async (urls) => {
         const v = await tile.collect(ctx(runs));
         assertEquals(v.value, "50.0%");
         assertEquals(v.sub, "first-try green · 2 of last 4 runs");
-        assertEquals(urls, []);
+        assertEquals(cellColors(v.extra), [
+          "var(--status-good)",
+          "var(--status-unknown)",
+          "var(--status-unknown)",
+          "var(--status-bad)",
+        ]);
+        assertEquals(urls.toSorted(), jobs.toSorted());
       },
     );
   }
 });
 
-Deno.test("labs ci trust: a rerun is scored by its first attempt that was not cancelled", async () => {
-  const afterCancelledGreen = run({ conclusion: "success", run_attempt: 2 });
-  const afterCancelledRed = run({ conclusion: "failure", run_attempt: 2 });
-  const redAfterCancelled = run({ conclusion: "success", run_attempt: 3 });
-  const rerunOfGreen = run({ conclusion: "success", run_attempt: 2 });
-  const neverTried = run({ conclusion: "cancelled", run_attempt: 2 });
-  const cancelledRetry = run({ conclusion: "cancelled", run_attempt: 2 });
-  const earlier = [
-    attemptOf(afterCancelledGreen, 1, "cancelled"),
-    attemptOf(afterCancelledRed, 1, "cancelled"),
-    attemptOf(redAfterCancelled, 1, "cancelled"),
-    attemptOf(redAfterCancelled, 2, "failure"),
-    attemptOf(rerunOfGreen, 1, "success"),
-    attemptOf(neverTried, 1, "cancelled"),
-    attemptOf(cancelledRetry, 1, "failure"),
+Deno.test("labs and loom ci trust: a cancelled run that ran jobs counts as a failure", async () => {
+  const cases = [
+    { tile: labsCiTrust, repo: REPO },
+    { tile: loomCiTrust, repo: LOOM_REPO },
   ];
-  const byUrl = new Map(earlier.map((a) => [attemptUrl(a), a]));
+  for (const { tile, repo } of cases) {
+    const timedOut = run({ conclusion: "cancelled" });
+    const runs = [
+      run({ conclusion: "success" }),
+      timedOut,
+      run({ conclusion: "success" }),
+      run({ conclusion: "failure" }),
+    ];
+    await withGithubAttempt(
+      byUrl([[jobsUrl(timedOut, repo), { total_count: 38 }]]),
+      async (urls) => {
+        const v = await tile.collect(ctx(runs));
+        assertEquals(v.value, "50.0%");
+        assertEquals(v.sub, "first-try green · last 4 runs");
+        assertEquals(cellColors(v.extra), [
+          "var(--status-good)",
+          "var(--status-bad)",
+          "var(--status-good)",
+          "var(--status-bad)",
+        ]);
+        assertEquals(urls, [jobsUrl(timedOut, repo)]);
+      },
+    );
+  }
+});
+
+Deno.test("labs ci trust: a rerun is scored by its first attempt not cancelled before it started", async () => {
+  const afterUnstartedGreen = run({ conclusion: "success", run_attempt: 2 });
+  const afterUnstartedRed = run({ conclusion: "failure", run_attempt: 2 });
+  const redAfterUnstarted = run({ conclusion: "success", run_attempt: 3 });
+  const rerunOfGreen = run({ conclusion: "success", run_attempt: 2 });
+  const neverStarted = run({ conclusion: "cancelled", run_attempt: 2 });
+  const cancelledRetry = run({ conclusion: "cancelled", run_attempt: 2 });
+  const greenAfterTimeout = run({ conclusion: "success", run_attempt: 2 });
+  const earlier = [
+    attemptOf(afterUnstartedGreen, 1, "cancelled"),
+    attemptOf(afterUnstartedRed, 1, "cancelled"),
+    attemptOf(redAfterUnstarted, 1, "cancelled"),
+    attemptOf(redAfterUnstarted, 2, "failure"),
+    attemptOf(rerunOfGreen, 1, "success"),
+    attemptOf(neverStarted, 1, "cancelled"),
+    attemptOf(cancelledRetry, 1, "failure"),
+    attemptOf(greenAfterTimeout, 1, "cancelled"),
+  ];
+  const unstarted = [
+    attemptOf(afterUnstartedGreen, 1, "cancelled"),
+    attemptOf(afterUnstartedRed, 1, "cancelled"),
+    attemptOf(redAfterUnstarted, 1, "cancelled"),
+    attemptOf(neverStarted, 1, "cancelled"),
+    neverStarted,
+  ];
+  const timedOut = attemptOf(greenAfterTimeout, 1, "cancelled");
 
   await withGithubAttempt(
-    (url) => byUrl.get(url) ?? new Error(`unexpected request ${url}`),
+    byUrl([
+      ...earlier.map((attempt) => [attemptUrl(attempt), attempt] as const),
+      ...unstarted.map((attempt) =>
+        [jobsUrl(attempt), { total_count: 0 }] as const
+      ),
+      [jobsUrl(timedOut), { total_count: 38 }],
+    ]),
     async (urls) => {
       const v = await labsCiTrust.collect(ctx([
-        afterCancelledGreen,
-        afterCancelledRed,
-        redAfterCancelled,
+        afterUnstartedGreen,
+        afterUnstartedRed,
+        redAfterUnstarted,
         rerunOfGreen,
-        neverTried,
+        neverStarted,
         cancelledRetry,
+        greenAfterTimeout,
       ]));
-      // Green: the first and fourth. Red: the second, third, and last. The
-      // fifth was cancelled on every attempt and is left out.
-      const colors = [
-        ...(v.extra ?? "").matchAll(/background:(var\(--[^)]+\))/g),
-      ].map((match) => match[1]);
-      assertEquals(colors.reverse(), [
+      // Green: the first and fourth. Red: the second, third, sixth, and last,
+      // whose first attempt ran jobs before it was cancelled. The fifth was
+      // cancelled before starting a job on every attempt and is left out.
+      assertEquals(cellColors(v.extra), [
         "var(--status-good)",
         "var(--status-bad)",
         "var(--status-bad)",
         "var(--status-good)",
         "var(--status-unknown)",
         "var(--status-bad)",
+        "var(--status-bad)",
       ]);
-      assertEquals(v.value, "40.0%");
-      assertEquals(v.sub, "first-try green · 5 of last 6 runs");
-      assertEquals(urls.toSorted(), earlier.map(attemptUrl).toSorted());
+      assertEquals(v.value, "33.3%");
+      assertEquals(v.sub, "first-try green · 6 of last 7 runs");
+      assertEquals(
+        urls.toSorted(),
+        [
+          ...earlier.map((attempt) => attemptUrl(attempt)),
+          ...[...unstarted, timedOut].map((attempt) => jobsUrl(attempt)),
+        ].toSorted(),
+      );
     },
   );
 });
 
 Deno.test("labs ci trust: an earlier attempt is requested once", async () => {
   const retried = run({ conclusion: "success", run_attempt: 2 });
+  const earlier = attemptOf(retried, 1, "cancelled");
   await withGithubAttempt(
-    attemptOf(retried, 1, "cancelled"),
+    byUrl([
+      [attemptUrl(earlier), earlier],
+      [jobsUrl(earlier), { total_count: 0 }],
+    ]),
     async (urls) => {
       assertEquals((await labsCiTrust.collect(ctx([retried]))).value, "100.0%");
       assertEquals((await labsCiTrust.collect(ctx([retried]))).value, "100.0%");
-      assertEquals(urls, [attemptUrl(attemptOf(retried, 1, "cancelled"))]);
+      assertEquals(urls, [attemptUrl(earlier), jobsUrl(earlier)]);
+    },
+  );
+});
+
+Deno.test("labs ci trust: the job count of a cancelled attempt is requested once, and no other attempt's is", async () => {
+  const neverStarted = run({ conclusion: "cancelled" });
+  const timedOut = run({ conclusion: "cancelled" });
+  const runs = [
+    run({ conclusion: "success" }),
+    neverStarted,
+    run({ conclusion: "failure" }),
+    timedOut,
+    run({ conclusion: "timed_out" }),
+  ];
+  const jobs = [jobsUrl(neverStarted), jobsUrl(timedOut)];
+  await withGithubAttempt(
+    byUrl([[jobs[0], { total_count: 0 }], [jobs[1], { total_count: 38 }]]),
+    async (urls) => {
+      for (let collection = 0; collection < 2; collection++) {
+        const v = await labsCiTrust.collect(ctx(runs));
+        assertEquals(v.value, "25.0%");
+        assertEquals(v.sub, "first-try green · 4 of last 5 runs");
+      }
+      assertEquals(urls.toSorted(), jobs.toSorted());
     },
   );
 });
@@ -215,6 +326,43 @@ Deno.test("labs ci trust: an earlier attempt GitHub does not return fails the co
       );
     },
   );
+});
+
+Deno.test("labs ci trust: a job count GitHub does not return fails the collection", async (t) => {
+  const cases: { name: string; answer: GithubAnswer; message: string }[] = [
+    {
+      name: "failed request",
+      answer: new Error("job listing unavailable"),
+      message: "job listing unavailable",
+    },
+    {
+      name: "count that is not a number",
+      answer: { total_count: "38" },
+      message: "did not include a numeric `total_count`",
+    },
+    {
+      name: "missing count",
+      answer: { total_count: undefined },
+      message: "did not include a numeric `total_count`",
+    },
+  ];
+  for (const { name, answer, message } of cases) {
+    await t.step(name, async () => {
+      const cancelled = run({ conclusion: "cancelled" });
+      await withGithubAttempt(answer, async (urls) => {
+        await assertRejects(
+          () =>
+            labsCiTrust.collect(ctx([
+              run({ conclusion: "success" }),
+              cancelled,
+            ])),
+          Error,
+          message,
+        );
+        assertEquals(urls, [jobsUrl(cancelled)]);
+      });
+    });
+  }
 });
 
 Deno.test(
@@ -254,25 +402,31 @@ Deno.test(
 
 Deno.test("labs ci trust grid: cell colors match trust scoring", async () => {
   const retried = run({ conclusion: "success", run_attempt: 2 });
+  const neverStarted = run({ conclusion: "cancelled" });
+  const timedOut = run({ conclusion: "cancelled" });
   const runs = [
     run({ conclusion: "success", run_attempt: 1 }),
     retried,
     run({ conclusion: "failure" }),
-    run({ conclusion: "cancelled" }),
+    neverStarted,
+    timedOut,
     run({ status: "in_progress", conclusion: null }),
     run({ status: "queued", conclusion: null }),
     run({ status: "completed", conclusion: null }),
   ];
+  const earlier = attemptOf(retried, 1, "failure");
   await withGithubAttempt(
-    attemptOf(retried, 1, "failure"),
+    byUrl([
+      [attemptUrl(earlier), earlier],
+      [jobsUrl(neverStarted), { total_count: 0 }],
+      [jobsUrl(timedOut), { total_count: 38 }],
+    ]),
     async () => {
       const view = await labsCiTrust.collect(ctx(runs));
-      const colors = [
-        ...(view.extra ?? "").matchAll(/background:(var\(--[^)]+\))/g),
-      ].map((match) => match[1]);
-      assertEquals(view.value, "33.3%");
+      const colors = cellColors(view.extra);
+      assertEquals(view.value, "25.0%");
       assertEquals(colors.filter((color) => color === "var(--status-good)").length, 1);
-      assertEquals(colors.filter((color) => color === "var(--status-bad)").length, 2);
+      assertEquals(colors.filter((color) => color === "var(--status-bad)").length, 3);
       assertEquals(colors.filter((color) => color === "var(--running)").length, 1);
       assertEquals(
         colors.filter((color) => color === "var(--status-unknown)").length,
