@@ -4,6 +4,7 @@ import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { DEFAULT_SCAN_LIMIT } from "@commonfabric/state-inspector";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { entityIdFrom, Runtime } from "@commonfabric/runner";
 import { StorageManager as WorkerStorageManager } from "@commonfabric/runner/storage/cache";
@@ -740,7 +741,6 @@ Deno.test("live candidates: the every-scope entity slot reconstructs one scan's 
   // store of many scopes reconstructs the cap once per scope — every entity in
   // the space, for one keystroke. The slot offers what one unscoped
   // `cf inspect entities` would: the scan cap, counted across every scope.
-  const { DEFAULT_SCAN_LIMIT } = await import("@commonfabric/state-inspector");
   const dir = await Deno.makeTempDir();
   try {
     const path = `${dir}/space.sqlite`;
