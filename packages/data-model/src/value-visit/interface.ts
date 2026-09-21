@@ -37,8 +37,8 @@ export type MainResultForm<ResultType> = {
  * recursed over. `doKeys` is ignored in a context where there is no key.
  *
  * If a visitor returns an instance of this type which (implicitly) references a
- * non-container, that situation is detected at runtime and results in a
- * `throw`n error.
+ * non-container, that situation is detected by the visitor engine at runtime
+ * and results in a `throw`n error.
  *
  * **Note:** The visit calls per-mapping are specifically in key-then-value
  * order, and if the result of visiting a key is a `mainResult`, then that ends
@@ -57,8 +57,8 @@ export type RecurseForm = {
 /**
  * A `replace` form. `value` is a value that is to be used in place of the value
  * originally received by the visitor method which returns this. This tells the
- * visitor engine to redo visitor dispatch with the replacement (as if the
- * replacement were the value in the same position as the original).
+ * visitor engine to redo a visit by calling `visitValue()` on the replacement
+ * (as if the replacement were the value in the same position as the original).
  */
 export type ReplaceForm<PlusType> = {
   readonly type: "replace";
@@ -117,15 +117,8 @@ export type BaselineVisitResult<ResultType = FabricValue> =
   | undefined;
 
 /**
- * Possible results from a `visit*()` method which accepts leaf (non-dispatched)
- * values. This includes the `recurse` form, which is only valid to return when
- * the value being visited is in fact a container; this constraint is checked at
- * runtime and results in a `throw`n error when violated.
- *
- * About the name: This is a "leaf" in the sense of visitor dispatch -- there is
- * not a more-specific subtype-based visitor method to call -- but that said,
- * the value being visited itself might or might not be a leaf in the sense of
- * the graph structure of the value.
+ * Possible results from `visitValue()`, `visitCycle()`, or one of the methods
+ * that `DefaultValueVisitor.visitValue()` can call (directly or indirectly).
  *
  * See the included result types for details on what they mean.
  */
