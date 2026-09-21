@@ -120,9 +120,12 @@ export const setPropDefault = <T>(target: T, key: string, value: unknown) => {
     return;
   }
 
-  // Handle data-* attributes specially - they need to be set as HTML attributes
-  // to populate the dataset property correctly
-  if (key.startsWith("data-") && target instanceof Element) {
+  // ARIA names and data-* keys are attributes; assigning a hyphenated
+  // property does not expose them to accessibility APIs or dataset.
+  if (
+    (key.startsWith("data-") || key.startsWith("aria-")) &&
+    target instanceof Element
+  ) {
     // If value is null or undefined, remove the attribute
     if (value == null) {
       if (target.hasAttribute(key)) {
