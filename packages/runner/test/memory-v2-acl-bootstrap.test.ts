@@ -1,3 +1,4 @@
+import { expect } from "@std/expect";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
 import { readGenesisRoot } from "@commonfabric/memory/v2/genesis-root";
 import {
@@ -1981,6 +1982,56 @@ Deno.test("concurrent custom-root sealers converge with an explicit management o
     for (const result of results) assert(!result.error, result.error?.message);
   } finally {
     await Promise.all(managers.map((manager) => manager.close()));
+    await server.close();
+  }
+});
+
+Deno.test("custom root bootstrap refuses an unadvertised capability before claiming the space", async () => {
+  const user = await Identity.fromPassphrase(
+    "unsupported genesis root manager",
+  );
+  const identity = await Identity.fromPassphrase(
+    "unsupported genesis root space",
+  );
+  const server = createServer("unsupported-genesis-root");
+  class UnadvertisedRootFactory extends RecordingLoopbackSessionFactory {
+    override async create(
+      space: MemorySpace,
+      signer?: Signer,
+      requested: MemoryV2Client.MountOptions = {},
+    ) {
+      const opened = await super.create(space, signer, requested);
+      Object.defineProperty(opened.client, "serverFlags", {
+        value: { ...opened.client.serverFlags, genesisRoot: false },
+      });
+      return opened;
+    }
+  }
+  const manager = TestStorageManager.overServer(
+    { as: user },
+    new UnadvertisedRootFactory(server),
+  );
+  try {
+    manager.registerSpaceIdentity(identity, {
+      genesisAcl: { [user.did()]: "OWNER" },
+      genesisRoot: {
+        source: "system:loom/main.tsx",
+        cause: "unsupported-root",
+      },
+    });
+    const result = await manager.open(identity.did()).sync(
+      `of:${identity.did()}` as URI,
+    );
+    expect(result.error?.message).toContain(
+      "Host does not support genesis root reservations",
+    );
+    const engine = await server.engineForSpace(identity.did());
+    expect(
+      selectDocHead(engine, { id: `of:${identity.did()}`, scopeKey: "space" }),
+    ).toBe(0);
+    expect(readGenesisRoot(engine)).toBeUndefined();
+  } finally {
+    await manager.close();
     await server.close();
   }
 });

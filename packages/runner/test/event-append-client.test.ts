@@ -357,6 +357,54 @@ describe("event-append queue (events.md §5, LT9)", () => {
     ]);
   });
 
+  it("recovers a failed persistence save without dropping or reordering pending events", async () => {
+    const durable = memoryEventAppendQueueStore();
+    const delivery = Promise.withResolvers<void>();
+    const arrivals = new ArrivalLog<string>();
+    let saves = 0;
+    let localSeq = 0;
+    const queue = new EventAppendQueue({
+      space,
+      pacing: false,
+      nextLocalSeq: () => ++localSeq,
+      store: {
+        load: (space) => durable.load(space),
+        save: async (space, entries) => {
+          if (++saves === 1) throw new Error("persistence adapter unavailable");
+          await durable.save(space, entries);
+        },
+      },
+      transact: async (commit) => {
+        expect(commit.eventAppends).toHaveLength(1);
+        arrivals.record(commit.eventAppends![0].eventId);
+        await delivery.promise;
+      },
+    });
+    try {
+      const first = queue.enqueue(appendOf("save-retry-first"));
+      await arrivals.reached(1);
+      await queue.persisted;
+      expect(await durable.load(space)).toEqual([]);
+      const second = queue.enqueue(appendOf("save-retry-second"));
+      await queue.loaded;
+      await queue.persisted;
+      expect((await durable.load(space)).map((entry) => entry.eventId))
+        .toEqual(["save-retry-first", "save-retry-second"]);
+      delivery.resolve();
+      expect(await first).toEqual({ delivered: true });
+      expect(await second).toEqual({ delivered: true });
+      expect(arrivals.entries).toEqual([
+        "save-retry-first",
+        "save-retry-second",
+      ]);
+      await queue.persisted;
+      expect(await durable.load(space)).toEqual([]);
+    } finally {
+      delivery.resolve();
+      queue.close();
+    }
+  });
+
   it("saves serialize behind the PREVIOUS save (review 2026-08-11 m6/LT9): an async adapter can never complete snapshots out of order", async () => {
     // Pre-fix, #persist chained each save on the LOAD only: two rapid
     // enqueues issued two store.save calls back to back, and an
