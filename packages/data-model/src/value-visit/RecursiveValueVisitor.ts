@@ -6,6 +6,10 @@ import {
   type FabricValue,
   type FabricValuePlus,
 } from "@/interface.ts";
+import {
+  type FabricContainerValueTag,
+  type PrimitiveValueTag,
+} from "@/types";
 
 import { BaseValueVisitor } from "./BaseValueVisitor.ts";
 import {
@@ -63,6 +67,7 @@ export abstract class RecursiveValueVisitor<
   /** @inheritDoc */
   override visitFabricContainer(
     _value: FabricContainerValuePlus<PlusType>,
+    _tag: FabricContainerValueTag,
   ): DispatchingVisitorResult<PlusType, ResultType> {
     return DO_RECURSE_VALUES;
   }

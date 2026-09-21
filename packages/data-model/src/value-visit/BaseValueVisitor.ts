@@ -9,8 +9,12 @@ import {
   type FabricValue,
   type FabricValuePlus,
 } from "@/interface.ts";
+import {
+  type FabricContainerValueTag,
+  type FabricValuePlusTag,
+  type PrimitiveValueTag,
+} from "@/types";
 import { debugStr } from "@/value-debug";
-import { type PrimitiveValueTag } from "@/types";
 
 import {
   type BaselineVisitResult,
@@ -57,7 +61,8 @@ export abstract class BaseValueVisitor<
 
   /** @inheritDoc */
   visitCycle(
-    value: FabricValuePlus<PlusType>,
+    value: FabricContainerValuePlus<PlusType>,
+    _tag: FabricContainerValueTag,
     _originalDepth: number,
     _thisDepth: number,
   ): LeafVisitorResult<PlusType, ResultType> {
@@ -88,6 +93,7 @@ export abstract class BaseValueVisitor<
   /** @inheritDoc */
   visitFabricContainer(
     _value: FabricContainerValuePlus<PlusType>,
+    _tag: FabricContainerValueTag,
   ): DispatchingVisitorResult<PlusType, ResultType> {
     return DO_VISIT_SUBTYPE;
   }
@@ -110,6 +116,7 @@ export abstract class BaseValueVisitor<
   /** @inheritDoc */
   visitValue(
     _value: FabricValuePlus<PlusType>,
+    _tag: FabricValuePlusTag,
   ): DispatchingVisitorResult<PlusType, ResultType> {
     return DO_VISIT_SUBTYPE;
   }

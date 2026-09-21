@@ -4,7 +4,11 @@
 
 import { type Primitive } from "@commonfabric/utils/types";
 
-import { type PrimitiveValueTag } from "@/types";
+import {
+  type FabricContainerValueTag,
+  type FabricValuePlusTag,
+  type PrimitiveValueTag,
+} from "@/types";
 
 import type {
   FabricArrayPlus,
@@ -202,14 +206,19 @@ export interface ValueVisitor<PlusType = never, ResultType = FabricValue> {
   isPlusType(value: unknown): value is PlusType;
 
   /**
-   * Visits a value which is already in the process of being visited. The
-   * visitor engine calls this method _before_ calling `visitValue()` when the
-   * value to be visited is already in the middle of being visited as a
-   * container.
+   * Visits a container value which is already in the process of being visited.
+   * The visitor engine calls this method _instead of_ calling `visitValue()`
+   * when the value to be visited is already in the middle of being visited. If
+   * the visitor returns `recurse`, then the visitor engine will recurse into it
+   * just as with a non-cyclic value. Likewise, any other return value is
+   * treated equivalently to `visitValue()`. A visitor which wants to _defer_ to
+   * `visitValue()` can just call that method.
    */
   visitCycle(
     /** Value to visit. */
-    value: FabricValuePlus<PlusType>,
+    value: FabricContainerValuePlus<PlusType>,
+    /** Tag of `value`. */
+    tag: FabricContainerValueTag,
     /** Depth at which `value` was originally encountered. */
     originalDepth: number,
     /** Depth of the current visit. */
@@ -245,6 +254,7 @@ export interface ValueVisitor<PlusType = never, ResultType = FabricValue> {
    */
   visitFabricContainer(
     value: FabricContainerValuePlus<PlusType>,
+    tag: FabricContainerValueTag,
   ): DispatchingVisitorResult<PlusType, ResultType>;
 
   /**
@@ -271,6 +281,7 @@ export interface ValueVisitor<PlusType = never, ResultType = FabricValue> {
    */
   visitValue(
     value: FabricValuePlus<PlusType>,
+    tag: FabricValuePlusTag | null,
   ): DispatchingVisitorResult<PlusType, ResultType>;
 
   /**
