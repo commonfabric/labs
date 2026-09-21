@@ -22,6 +22,7 @@ import {
   runBuildWithSignalCleanup,
 } from "./build-binaries.ts";
 import {
+  compileFingerprintGlobs,
   computeCompilerVersion,
   renderVersionModule,
   VERSION_NAMESPACE,
@@ -115,38 +116,24 @@ async function renderComputedVersionModule(root: string): Promise<string> {
 
 /**
  * Build a minimal tree holding the files `build-binaries` reads and writes: a
- * manifest with a frontend-only `compilerOptions.types`, a lockfile, the
- * fingerprint input paths, the committed version module, and the toolshed
- * and cli directories for the COMPILED build markers.
+ * manifest with a frontend-only `compilerOptions.types`, a lockfile, a file
+ * under every fingerprint input, the committed version module, and the
+ * toolshed and cli directories for the COMPILED build markers.
+ *
+ * The inputs come from `compileFingerprintGlobs()` rather than being listed
+ * here, because a fingerprint input this tree lacks fails every test in this
+ * file at the `stat` rather than at what the test is about. The manifest, the
+ * lockfile, and the version module are written after the loop, so the two of
+ * them that are themselves inputs carry the contents these tests need.
  */
 async function makeFakeRepo(): Promise<string> {
   const root = await Deno.makeTempDir({ prefix: "build-binaries-" });
+  for (const glob of compileFingerprintGlobs()) {
+    const path = glob.endsWith("/**") ? `${glob.slice(0, -2)}mod.ts` : glob;
+    await writeFile(`${root}/${path}`, "export const x = 1;\n");
+  }
   await writeFile(`${root}/deno.jsonc`, FAKE_MANIFEST);
   await writeFile(`${root}/deno.lock`, '{"version":"4"}\n');
-  for (
-    const pkg of ["ts-transformers", "js-compiler", "schema-generator", "api"]
-  ) {
-    await writeFile(
-      `${root}/packages/${pkg}/src/mod.ts`,
-      "export const x = 1;",
-    );
-  }
-  await writeFile(
-    `${root}/packages/runner/src/harness/pretransform.ts`,
-    "export const pretransform = 1;",
-  );
-  await writeFile(
-    `${root}/packages/runner/src/pattern-coverage.ts`,
-    "export const patternCoverage = 1;",
-  );
-  await writeFile(
-    `${root}/packages/runner/src/sandbox/module-record-verifier.ts`,
-    "export const verifier = 1;",
-  );
-  await writeFile(
-    `${root}/packages/static/assets/types/es2023.d.ts`,
-    "declare const es2023: unique symbol;",
-  );
   await writeFile(
     `${root}/packages/runner/src/compilation-cache/compile-cache-version.ts`,
     SOURCE_VERSION_MODULE,

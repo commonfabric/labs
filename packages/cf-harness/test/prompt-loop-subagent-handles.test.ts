@@ -834,6 +834,76 @@ describe("prompt-loop cross-agent address handles", () => {
     expect(engine.getRunState().researchRuns).toEqual([researchRun]);
   });
 
+  it("projects a delegated referent into the child's research bindings", async () => {
+    const runId = "run-subagent-referent-research-kit";
+    const minted = await mintReferentHandle(
+      createHarnessHandleTable(runId),
+      {
+        source: "loom_search",
+        value: { title: "Shared row" },
+        label: {},
+        labelSource: "query",
+      },
+    );
+    const researchRun: HarnessResearchRunSummary = {
+      type: "cf-harness.research-run",
+      researchRunId: `${runId}:research:1`,
+      outputId: `${runId}:research:1`,
+      completedAt: "2026-09-16T00:00:00.000Z",
+      kit: {
+        purpose: "orient",
+        status: "complete",
+        task: "Identify available rows.",
+        summary: "A Loom row is available.",
+        availableHandleTokens: [minted.token],
+        inputs: [{
+          name: "row",
+          token: minted.token,
+          purpose: "Read the admitted row",
+        }],
+        patterns: [],
+        leads: [],
+        questions: [],
+        rules: [],
+        sources: [],
+        missing: [],
+      },
+      confirmedPatterns: [],
+      describedHandles: [],
+    };
+    const engine = new CfHarnessEngine({
+      sandboxRuntime: new FakeSandboxRuntime(),
+      runId,
+      model: "gpt-5.4",
+      inheritedResearchRuns: [researchRun],
+    });
+    await engine.recordHandleTable(minted.table);
+    const requestBodies: unknown[] = [];
+    const loop = new CfHarnessPromptLoop({
+      apiKey: "test-key",
+      engine,
+      fetchFn: scriptedFetch([
+        delegateCallTurn("call-delegate", {
+          goal: "Use the available row.",
+        }),
+        finalTurn("Child done."),
+        finalTurn("Parent done."),
+      ], requestBodies),
+    });
+
+    await loop.runPrompt({
+      prompt: "Delegate the implementation.",
+      promptSlotBinding: directPromptSlotBinding,
+    });
+
+    const childMessages = chatViewOfRequest(requestBodies[1]).messages
+      .map((message) => message.content ?? "")
+      .join("\n");
+    expect(childMessages).toContain(
+      `"availableHandleTokens": [\n        "${minted.token}"`,
+    );
+  });
+
   for (const hasResearch of [true, false]) {
     it(`carries parent CFC context into a child with research ${hasResearch ? "present" : "absent"}`, async () => {
       const root = await Deno.makeTempDir({

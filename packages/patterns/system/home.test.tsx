@@ -99,6 +99,12 @@ export default pattern(() => {
   const action_remove_space = action(() => {
     home.removeSpace.send({ name: "Space One" });
   });
+  const assert_empty_space_notice = assert(() =>
+    hasText(home[UI], "No spaces yet. Add one below.")
+  );
+  const assert_space_notice_hidden = assert(() =>
+    !hasText(home[UI], "No spaces yet. Add one below.")
+  );
 
   return {
     [TESTS]: [
@@ -111,8 +117,11 @@ export default pattern(() => {
       { action: action_remove_favorite },
       { action: action_remove_favorite_again },
       { action: action_add_journal },
+      { assertion: assert_empty_space_notice },
       { action: action_add_space },
+      { assertion: assert_space_notice_hidden },
       { action: action_remove_space },
+      { assertion: assert_empty_space_notice },
       { assertion: assert_initial_profile_missing },
     ],
   };

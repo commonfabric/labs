@@ -175,6 +175,7 @@ import type {
   HarnessInputCellSpec,
 } from "./contracts/input-cells.ts";
 import { mintInputCellHandles } from "./input-cells.ts";
+import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
 import { resolvePieceAddress } from "@commonfabric/piece";
 import type {
   HarnessPatternRef,
@@ -482,9 +483,9 @@ export interface CreateHarnessEngineOptions
   structuredResult?: HarnessStructuredResultTarget;
 
   /**
-   * Operator input cells to mint handles for at run start; see
-   * `establishInputCells`. Requires a fabric session — the cells live in
-   * its space.
+   * Host-supplied attachments or session-retained targets to mint handles for
+   * at run start; see `establishInputCells`. Requires a fabric session — the
+   * cells live in its space.
    */
   inputCells?: readonly HarnessInputCellSpec[];
 
@@ -1702,13 +1703,13 @@ export class CfHarnessEngine {
   }
 
   /**
-   * Establishes the run's operator input cells: mints a token for each
-   * `--input-cell` reference into the handle table, records the cells in
-   * run state, and returns them. Idempotent across resume, like the
-   * well-known grants: cells already recorded are returned as they stand.
+   * Establishes the run's input cells: mints tokens for host-supplied attachments
+   * or session-retained targets, records them in run state, and returns them.
+   * Idempotent across resume, like the well-known grants: cells already recorded
+   * are returned as they stand.
    *
-   * Unlike a grant, an input cell is explicit operator configuration, so
-   * failure is closed and loud rather than tolerated: cells configured on a
+   * An input cell names a task target, so failure is closed and loud rather
+   * than tolerated: cells configured on a
    * run with no fabric session, a reference that does not parse, a reference
    * targeting another space, and a named piece address whose slug this space
    * does not hold all throw before anything is recorded.
@@ -2724,6 +2725,16 @@ export class CfHarnessEngine {
         : {}),
       patternRefs: this.#runState.patternRefs ?? [],
       inputCells: this.#runState.inputCells ?? [],
+      recordAssignedPiece: (piece: HarnessAssignedPiece) => {
+        this.#runState = patchHarnessRunState(this.#runState, {
+          assignedPieces: [
+            ...(this.#runState.assignedPieces ?? []).filter((existing) =>
+              existing.ref !== piece.ref
+            ),
+            structuredClone(piece),
+          ],
+        }, this.#now());
+      },
       recordResearchRun: (run: HarnessResearchRunSummary) => {
         this.recordResearchRun(run);
       },

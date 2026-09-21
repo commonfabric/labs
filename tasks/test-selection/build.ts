@@ -31,6 +31,7 @@ import {
   type FoldContext,
   foldObservations,
   type IdentityState,
+  mergeSamples,
   type Observation,
   parseContext,
   readCostsForward,
@@ -446,11 +447,6 @@ export interface Surface {
   fromFile: boolean;
 }
 
-/** Whether a surface names a file rather than falling back to a name. */
-function isFileBacked(surface: Surface): boolean {
-  return surface.fromFile;
-}
-
 /**
  * How an identity is grouped, until the topology says. A record's kind
  * and scope name the surface that produced it, and the file the
@@ -751,16 +747,106 @@ export function buildManifest(input: BuildInput): Manifest {
   };
 }
 
+/**
+ * What reading stored objects gives a fold beyond the observations they
+ * hold: where each identity runs, what the lanes in them measured, what
+ * their passing runs took, which objects they came from, and how many
+ * lane measurements had to be declined.
+ *
+ * A fold holds one of these. A read that has to land whole or not at all
+ * reads into a second and merges it in once every object has arrived,
+ * which is what leaves the fold as it was when such a read fails part
+ * way.
+ */
+interface Contributions {
+  /** Where each identity runs, by identity key. */
+  surfaces: Map<string, Surface>;
+
+  /** What the lanes in them measured about themselves. */
+  lanes: LaneObservation[];
+
+  /** The slowest passing runs of each identity, by key and then by day. */
+  samples: Map<string, Map<string, DaySamples>>;
+
+  /**
+   * The objects these came from, which is both what the aggregate
+   * persists and what says an object handed over again contributes
+   * nothing. A set rather than a list because the question is asked once
+   * per listed object per run and the answer grows without bound.
+   */
+  objects: Set<string>;
+
+  /** Lane measurements read inside the cost window and declined. */
+  declined: number;
+}
+
+/** What nothing read yet contributes. */
+function noContributions(): Contributions {
+  return {
+    surfaces: new Map(),
+    lanes: [],
+    samples: new Map(),
+    objects: new Set(),
+    declined: 0,
+  };
+}
+
+/**
+ * Records where one identity runs. A file names something a runner can be
+ * pointed at, and an identity's own name does not, so a surface with no
+ * file must not replace one that has it — whether the one with no file
+ * arrives in a later report or in a batch merged in afterwards.
+ */
+function rememberSurface(
+  into: Contributions,
+  key: string,
+  surface: Surface,
+): void {
+  if (!into.surfaces.has(key) || surface.fromFile) {
+    into.surfaces.set(key, surface);
+  }
+}
+
+/**
+ * Merges what one batch contributed into what a fold holds, giving what
+ * reading that batch's objects into the fold directly would have given.
+ * The duration samples are the part of that which has to be shown rather
+ * than assumed: a day's sample keeps only its slowest runs, and
+ * `mergeSamples` keeps of two parts what one accumulation of the whole
+ * would have kept, so a day read in parts costs what the day costs.
+ */
+function absorb(into: Contributions, batch: Contributions): void {
+  for (const [key, surface] of batch.surfaces) {
+    rememberSurface(into, key, surface);
+  }
+  // Appended one at a time rather than spread, for the reason a report's
+  // observations are: a batch holds a whole day, and spreading that many
+  // arguments onto the stack is past what a call can carry.
+  for (const lane of batch.lanes) into.lanes.push(lane);
+  for (const [key, byDay] of batch.samples) {
+    let known = into.samples.get(key);
+    if (known === undefined) {
+      known = new Map();
+      into.samples.set(key, known);
+    }
+    for (const [day, sampled] of byDay) {
+      const held = known.get(day);
+      known.set(
+        day,
+        held === undefined ? sampled : mergeSamples(held, sampled),
+      );
+    }
+  }
+  for (const object of batch.objects) into.objects.add(object);
+  into.declined += batch.declined;
+}
+
 /** A fold in progress, which the caller feeds reports to in time order. */
 export class Fold {
   readonly #states: Map<string, IdentityState>;
   readonly #context: FoldContext;
-  readonly #surfaces = new Map<string, Surface>();
-  readonly #samples = new Map<string, Map<string, DaySamples>>();
-  readonly #folded: string[];
-  readonly #foldedIndex: Set<string>;
+  readonly #held: Contributions;
   readonly #compacted: string[];
-  readonly #lanes: LaneObservation[];
 
   /**
    * The source-and-date pairs `folded` holds raw objects from, which is
@@ -770,7 +856,7 @@ export class Fold {
   readonly #resolver: AliasResolver;
   readonly #today: string;
   #observations = 0;
-  #declined = 0;
+  #intact = true;
 
   constructor(
     aggregate: AggregateState,
@@ -796,21 +882,18 @@ export class Fold {
     // not already say. Seeding these is what makes the manifest hold
     // every identity the aggregate scores rather than the ones whose
     // records this run happened to read.
+    this.#held = noContributions();
     for (const key of this.#states.keys()) {
       const test = testIdentityOfKey(key);
       if (test === undefined) continue;
-      this.#surfaces.set(key, recordSurface(test, aggregate.files[key]));
+      this.#held.surfaces.set(key, recordSurface(test, aggregate.files[key]));
     }
     this.#context = parseContext(aggregate.context);
-    this.#lanes = [...aggregate.lanes ?? []];
-    this.#folded = [...aggregate.folded];
-    // The array is what is persisted; membership is asked once per listed
-    // object per run, and the list grows without bound, so the question
-    // is answered against a set rather than by scanning.
-    this.#foldedIndex = new Set(this.#folded);
+    for (const lane of aggregate.lanes ?? []) this.#held.lanes.push(lane);
+    for (const name of aggregate.folded) this.#held.objects.add(name);
     this.#compacted = [...aggregate.compacted];
     this.#rawPairs = new Set(
-      this.#folded.map((name) =>
+      aggregate.folded.map((name) =>
         sourceDateKey(sourceOf(name), partitionOf(name))
       ),
     );
@@ -832,12 +915,27 @@ export class Fold {
    * different thing from a lane that has not run.
    */
   get declined(): number {
-    return this.#declined;
+    return this.#held.declined;
+  }
+
+  /**
+   * Whether this fold is everything it was before the batch that failed,
+   * which is what says whether those records may be read another way.
+   *
+   * A batch read through `addUnordered` gives what it reads to the batch
+   * rather than to the fold, so reports that fail to arrive leave this
+   * true. Merging a batch in is what makes it false, and a failure from
+   * there on leaves part of the batch counted, so reading the same
+   * records again would count that part twice. `add` folds as it reads,
+   * so this falls ahead of its first report.
+   */
+  get intact(): boolean {
+    return this.#intact;
   }
 
   /** Whether this object's records are already part of the aggregate. */
   knows(objectName: string): boolean {
-    return this.#foldedIndex.has(objectName);
+    return this.#held.objects.has(objectName);
   }
 
   /**
@@ -880,9 +978,10 @@ export class Fold {
    * replace, so folding one a second time would count all of it twice.
    */
   add(reports: readonly StoredReport[]): void {
+    this.#intact = false;
     const observations: Observation[] = [];
     for (const report of reports) {
-      if (this.#foldedIndex.has(report.objectName)) continue;
+      if (this.knows(report.objectName)) continue;
       const read = readReport(report, this.#resolver);
       // Appended one at a time rather than spread: a rollup shard holds a
       // whole day, and spreading that many arguments onto the stack is
@@ -890,10 +989,8 @@ export class Fold {
       for (const observation of read.observations) {
         observations.push(observation);
       }
-      this.#remember(read);
-      this.#countDeclined(read);
-      this.#folded.push(report.objectName);
-      this.#foldedIndex.add(report.objectName);
+      this.#remember(read, this.#held);
+      this.#held.objects.add(report.objectName);
     }
     // Sorted here rather than by object, because one object can hold many
     // reports — a rollup holds a whole day of them — and a batch can hold
@@ -916,6 +1013,7 @@ export class Fold {
     // through a bootstrap's whole read.
     const newest = observations.at(-1)?.day;
     if (newest !== undefined) trimContext(this.#context, newest);
+    this.#intact = true;
   }
 
   /**
@@ -923,27 +1021,47 @@ export class Fold {
    * Each run is spooled to disk, then replayed in time order for every
    * evidence pass and the final classification pass.
    *
+   * The batch lands whole or not at all: what the reports give is held
+   * aside until the last of them has arrived, and a read that fails part
+   * way leaves this fold as it was. That is what lets a caller read the
+   * same records another way — a rollup is a read optimization rather
+   * than the record of its day, and that day's raw objects are all still
+   * in the store — which it could not do if part of the day were already
+   * counted.
+   *
    * An object the aggregate already holds contributes nothing, the way
    * `add` passes over one.
    */
   async addUnordered(reports: AsyncIterable<StoredReport>): Promise<void> {
+    // The spool is released before the fold says it is whole again.
+    // Releasing it is a file being closed and removed and can fail on its
+    // own, and a fold that had folded the batch and then said it was
+    // untouched would offer those records to be read a second time.
+    await this.#foldBatch(reports);
+    this.#intact = true;
+  }
+
+  /** Reads a batch aside and folds it, holding the spool meanwhile. */
+  async #foldBatch(reports: AsyncIterable<StoredReport>): Promise<void> {
     using observations = new ObservationSpool();
+    const batch = noContributions();
     for await (const report of reports) {
-      if (this.#foldedIndex.has(report.objectName)) continue;
+      const name = report.objectName;
+      if (this.knows(name) || batch.objects.has(name)) continue;
       for (const group of report.reports) {
         const read = readReport({
-          objectName: report.objectName,
+          objectName: name,
           context: group.context,
           records: group.records,
           reports: [group],
         }, this.#resolver);
         observations.add(read.observations);
-        this.#remember(read);
-        this.#countDeclined(read);
+        this.#remember(read, batch);
       }
-      this.#folded.push(report.objectName);
-      this.#foldedIndex.add(report.objectName);
+      batch.objects.add(name);
     }
+    this.#intact = false;
+    absorb(this.#held, batch);
     this.#observations += observations.count;
     foldObservations(observations, {
       prior: this.#states,
@@ -964,23 +1082,9 @@ export class Fold {
     return daysBetween(lane.day, this.#today) <= COST_WINDOW_DAYS;
   }
 
-  /**
-   * Counts the declined measurements of one object that the cost model
-   * would have been fitted over. A run reading a window wider than the
-   * model's own — a bootstrap, or a window somebody asked for — reads
-   * declined measurements from days the model does not reach, and a
-   * count including those would offer a stale measurement as the reason
-   * a current model is empty.
-   */
-  #countDeclined(read: ReadReport): void {
-    for (const day of read.declinedDays) {
-      if (daysBetween(day, this.#today) <= COST_WINDOW_DAYS) this.#declined++;
-    }
-  }
-
   /** Closes the fold, sealing each day's cost and aging the counters. */
   finish(): FoldResult {
-    for (const [key, byDay] of this.#samples) {
+    for (const [key, byDay] of this.#held.samples) {
       const state = this.#states.get(key);
       if (state === undefined) continue;
       for (const [day, sampled] of byDay) sealDay(state, day, sampled);
@@ -990,47 +1094,51 @@ export class Fold {
     }
     // Aged the way every other window is, so what a lane cost a week ago
     // stops deciding what the packer charges today.
-    const lanes = this.#lanes.filter((lane) => this.#withinCostWindow(lane));
+    const lanes = this.#held.lanes.filter((lane) =>
+      this.#withinCostWindow(lane)
+    );
     return {
       aggregate: {
         schema: MANIFEST_SCHEMA_VERSION,
         day: this.#today,
-        folded: this.#folded,
+        folded: [...this.#held.objects],
         context: serializeContext(this.#context),
         compacted: this.#compacted,
         states: Object.fromEntries(this.#states),
         lanes,
         files: Object.fromEntries(
-          [...this.#surfaces]
+          [...this.#held.surfaces]
             .filter(([, surface]) => surface.fromFile)
             .map(([key, surface]) => [key, surface.unit]),
         ),
       },
       states: this.#states,
-      surfaces: this.#surfaces,
+      surfaces: this.#held.surfaces,
       observations: this.#observations,
     };
   }
 
-  /** Records invocation surfaces and bounded duration samples. */
-  #remember(read: ReadReport): void {
+  /**
+   * Records what one object gives beyond its observations: invocation
+   * surfaces, lane measurements, bounded duration samples, and the lane
+   * measurements inside the cost window that had to be declined. The
+   * declined ones are counted against that window rather than against
+   * everything read, because a run reading a wider window — a bootstrap,
+   * or a window somebody asked for — would otherwise offer a stale
+   * measurement as the reason a current model is empty.
+   */
+  #remember(read: ReadReport, into: Contributions): void {
     for (const [key, surface] of read.surfaces) {
-      // A file names something a runner can be pointed at, and an
-      // identity's own name does not. A record with no file arriving in
-      // a later report must not replace one that had it.
-      const known = this.#surfaces.get(key);
-      if (known === undefined || isFileBacked(surface)) {
-        this.#surfaces.set(key, surface);
-      }
+      rememberSurface(into, key, surface);
     }
     // A day past the cost window is dropped again by the same `finish`
     // that would keep it, so reading one buys nothing and a bootstrap
     // holds sixty days of them at once.
     for (const lane of read.lanes) {
-      if (this.#withinCostWindow(lane)) this.#lanes.push(lane);
+      if (this.#withinCostWindow(lane)) into.lanes.push(lane);
     }
     for (const [key, byDay] of read.durations) {
-      let known = this.#samples.get(key);
+      let known = into.samples.get(key);
       for (const [day, sampled] of byDay) {
         // A day past the cost window is sealed and then dropped again
         // by the same `finish` that sealed it, so sampling it buys
@@ -1038,12 +1146,15 @@ export class Fold {
         if (daysBetween(day, this.#today) > COST_WINDOW_DAYS) continue;
         if (known === undefined) {
           known = new Map();
-          this.#samples.set(key, known);
+          into.samples.set(key, known);
         }
-        const into = known.get(day) ?? emptySamples();
-        for (const durationMs of sampled) sampleDuration(into, durationMs);
-        known.set(day, into);
+        const samples = known.get(day) ?? emptySamples();
+        for (const durationMs of sampled) sampleDuration(samples, durationMs);
+        known.set(day, samples);
       }
+    }
+    for (const day of read.declinedDays) {
+      if (daysBetween(day, this.#today) <= COST_WINDOW_DAYS) into.declined++;
     }
   }
 }

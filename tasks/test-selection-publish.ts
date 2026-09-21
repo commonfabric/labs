@@ -125,6 +125,11 @@ export interface StoreAccess {
    * A rollup is a read optimization rather than the record of its day —
    * an object arriving after its shard is written stays in the raw area
    * alone — so a pair taken this way keeps only what the rollup held.
+   * That is also what makes a rollup safe to give up on: a day whose
+   * shards will not read is read from its raw objects instead, which is
+   * how a day with no rollup at all is read, and no record of that day
+   * is lost by it. What it costs is in
+   * `docs/development/test-selection.md`.
    */
   rollupShards(day: string): Promise<string[] | undefined>;
 
@@ -165,6 +170,16 @@ export function liveStore(bucket: string): StoreAccess {
     token: writeToken,
   };
 }
+
+/**
+ * What a run says where it has read part of its window and will not
+ * publish from that. A manifest going stale degrades selection slowly,
+ * where one built from part of a window scores every identity in the
+ * part it missed as though it had not run.
+ */
+const PARTIAL_WINDOW =
+  "test selection: refusing to publish from part of the window. The " +
+  "previous manifest is still the newest one.";
 
 /** How many objects are fetched at once. */
 const DEFAULT_CONCURRENCY = 24;
@@ -679,18 +694,33 @@ export async function publish(
       console.warn(
         `test selection: reading the rollup of ${date} failed: ${error}`,
       );
+      // A failure that left part of the day in the fold is the one this
+      // cannot read its way out of: reading the day again, by any route,
+      // would count that part twice.
+      if (!fold.intact) {
+        console.warn(PARTIAL_WINDOW);
+        return 1;
+      }
+      // Ending the run here would end every later one the same way: the
+      // store holds create and nothing else, so a shard that will not
+      // read stays where it is, and the day is never recorded as folded.
+      // The day's raw objects are all still there, so it is read the long
+      // way instead. The pair is left open rather than settled, so later
+      // runs read the day the same way.
       console.warn(
-        "test selection: refusing to publish from part of the window. " +
-          "The previous manifest is still the newest one.",
+        `test selection: reading ${date} from its raw objects instead, ` +
+          `as a day with no rollup is read`,
       );
-      return 1;
+      ciDays.push(date);
+      continue;
     }
     fold.markSettled(CI_SOURCE, date);
     settled++;
   }
   if (rollups.size > 0) {
     console.log(
-      `test selection: folded ${settled} day(s) from their rollups`,
+      `test selection: folded ${settled} of ${rollups.size} day(s) from ` +
+        `their rollups`,
     );
   }
 
@@ -701,10 +731,7 @@ export async function publish(
     listed = await listSubmissions(store, ciDays, partitions);
   } catch (error) {
     console.warn(`test selection: listing the submissions failed: ${error}`);
-    console.warn(
-      "test selection: refusing to publish from part of the window. The " +
-        "previous manifest is still the newest one.",
-    );
+    console.warn(PARTIAL_WINDOW);
     return 1;
   }
   const fresh = listed.filter((name) => !fold.knows(name));
@@ -736,10 +763,7 @@ export async function publish(
     }
   } catch (error) {
     console.warn(`test selection: reading a submission failed: ${error}`);
-    console.warn(
-      "test selection: refusing to publish from part of the window. The " +
-        "previous manifest is still the newest one.",
-    );
+    console.warn(PARTIAL_WINDOW);
     return 1;
   }
   const folded = fold.finish();

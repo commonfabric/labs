@@ -236,6 +236,46 @@ describe("external content observation", () => {
     });
   });
 
+  it("refuses when link-target load convergence exhausts its bound", async () => {
+    await withRuntime(async (runtime, storageManager) => {
+      let pendingChecks = 0;
+      let settled = 0;
+      using _pending = stub(
+        storageManager,
+        "pendingCrossSpacePromiseCount",
+        () => ++pendingChecks <= 101 ? 1 : 0,
+      );
+      using _settled = stub(
+        storageManager,
+        "crossSpaceSettled",
+        () => {
+          settled++;
+          return Promise.resolve();
+        },
+      );
+      const targetTx = runtime.edit();
+      identifyProducer(targetTx);
+
+      try {
+        await expect(runtime.prepareExternalContentObservation({
+          targetTx,
+          space,
+          cause: "nonconverging-external-content-row",
+          schema: ROW_SCHEMA,
+          value: { title: "private row" },
+          producer: PRODUCER,
+        })).rejects.toMatchObject({
+          name: "CfcCommitRefusalError",
+          message: expect.stringContaining("did not converge"),
+        });
+        expect(pendingChecks).toBe(100);
+        expect(settled).toBe(100);
+      } finally {
+        targetTx.abort("test complete");
+      }
+    });
+  });
+
   it("records canonical flow and egress evidence without persisting the observed value", async () => {
     await withRuntime(async (runtime, storageManager) => {
       const targetTx = runtime.edit();

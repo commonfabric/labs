@@ -2,7 +2,7 @@
 
 Status: current implementation reference\
 Last verified: 2026-09-21\
-Revision: `88a36fe0d3+resolve-piece`
+Revision: `e4bdd99340+agent-review-fixes`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -224,13 +224,14 @@ The current package provides:
   and resolves tokens in model-authored tool arguments before policy evaluation
   and dispatch, `delegate_task` arguments excepted;
 - cross-agent handles: a delegation seeds the child's own table with a verbatim
-  copy of every parent entry whose token the `goal` or `context` names, and
-  nothing else, so a child resolves exactly the references the delegation handed
-  it while the tokens stay identical across the hierarchy; a reference the child
-  produces is resolved through the child's table and minted through the parent's
-  boundary, reaching the parent as a parent-resolvable token, and any
-  token-shaped text still standing after that resolution is scrubbed to fixed
-  inert text so it cannot resolve later in the parent's own table;
+  copy of every parent address entry or non-cell referent whose token the `goal`
+  or `context` names or a selected current research kit declares as an input,
+  and nothing else, so a child resolves exactly the references the delegation
+  handed it while the tokens stay identical across the hierarchy; a reference
+  the child produces is resolved through the child's table and minted through
+  the parent's boundary, reaching the parent as a parent-resolvable token, and
+  any token-shaped text still standing after that resolution is scrubbed to
+  fixed inert text so it cannot resolve later in the parent's own table;
 - skill by handle: `delegate_task` takes an optional `skillHandle` naming a cell
   whose string value is skill text for the child, materialized trusted-side at
   child spawn under `resolveHandleValue`'s contract (table membership,
@@ -349,25 +350,34 @@ The current package provides:
   not evidence of failure; discloses beside a successful result, as
   `outputConcerns`, declared top-level outputs of the patterns the run
   materialized — composed ones included, so a reader whose failure the composing
-  source passed on nowhere is still named — that reports a failure or, on a
-  result declaring a read, holds no rows, naming the output and the pattern
-  under the identity a `cf:pattern:` import addresses while the failure's own
-  text stays in the artifact, and under-reporting rather than over-reporting
-  wherever it cannot read — an output reached through a `$ref` or a combinator,
-  a nested one, an instance the recorder's bounded buffer evicted, and an
-  instance that will not read back are each passed over; returns the result
-  cell's canonical reference plus an optionally schema-sanitized value, and
-  leaves the piece detached (no recorded origin) and out of the space's
-  registered piece list, with run→piece provenance carried by the run's
-  persisted artifacts. `assign_slug` names a piece afterwards, from any handle
-  token referring to one: it validates the slug, fails closed on an availability
-  question the space cannot answer, refuses a slug already naming another piece
-  (one already naming the same piece answers ok), refuses a token that names a
-  position inside a piece, another space, or a document with no pattern
-  identity, and otherwise registers the piece in the space's piece list and
-  points the slug at it, returning the slug and, when composable without a bare
-  fabric identifier, an openable URL. Without the session configuration both
-  tools are absent from the tool surface, for a `default`- or
+  source passed on nowhere is still named — that report a failure, declare a
+  pending read, or hold no rows on a settled result declaring a read. Pending
+  zeros and empty lists are placeholders, not data; the root's returned snapshot
+  is checked even if a later observation has settled. A minimal unnamed reader
+  pattern takes the held result reference as an input to verify the same piece.
+  Concerns name the output and the pattern under the identity a `cf:pattern:`
+  import addresses while the failure's own text stays in the artifact. Reporting
+  is best-effort wherever it cannot read: an output reached through a `$ref` or
+  a combinator, a nested one, an instance the recorder's bounded buffer evicted,
+  and an instance that will not read back are each passed over. `run_pattern`
+  returns the result cell's canonical reference plus an optionally
+  schema-sanitized value, and leaves the piece detached (no recorded origin) and
+  out of the space's registered piece list, with run→piece provenance carried by
+  the run's persisted artifacts. `assign_slug` names a piece afterwards, from
+  any handle token referring to one: it validates the slug, fails closed on an
+  availability question the space cannot answer, refuses a slug already naming
+  another piece (one already naming the same piece answers ok), refuses a token
+  that names a position inside a piece, another space, or a document with no
+  pattern identity, and refuses a declared top-level pending read or an
+  unestablished UI. Otherwise it registers the piece in the space's piece list
+  and points the slug at it, returning the slug and, when composable without a
+  bare fabric identifier, an openable URL. Successful naming records a host-only
+  reference. Completed interactive turns retain those references atomically with
+  history for bare follow-ups, including after restart, and remint them through
+  the existing input-cell path. Explicit attachments, including an empty list,
+  take precedence and clear the retained targets when that turn completes
+  without naming a piece; failed turns leave them unchanged. Without the session
+  configuration both tools are absent from the tool surface, for a `default`- or
   `pattern-author`-profile subagent as much as for the parent — a child shares
   the one session the parent built; `--fabric-cfc-enforcement-mode` (the
   enforcing rungs: `enforce-explicit` or `enforce-strict`) and
@@ -601,9 +611,10 @@ mode.
   model-authored tool arguments through the address handle table; denial-path
   tool messages are not swapped, and interactive restore does not persist the
   handle table.
-- The session-local handle table covers cell addresses only. Value handles
-  (`cfh:v:`) are reserved in the token grammar but not implemented, and there is
-  no explicit dereference/release mechanism.
+- The session-local handle table covers cell addresses and the held referents
+  that Loom retrieval admits under `cfh:v:` tokens. Those referent handles are
+  consumed when the agent result writer links or observes a retrieved row; there
+  is no general-purpose value-handle dereference or release mechanism.
 - `estimatedCostUsd` is available only for known GPT-5.6 gateway models when the
   response includes cache reads and writes. It uses public OpenAI pricing;
   gateway markup, subscription quota accounting, and provider invoices remain

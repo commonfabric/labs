@@ -722,13 +722,39 @@ describe("mergeSamples()", () => {
     expect(mergeSamples(a, b)).toEqual({ slowest: [10, 20, 30, 40], count: 4 });
   });
 
-  it("keeps what accumulating the whole would have kept", () => {
-    const whole = Array.from({ length: 3 * COST_SAMPLE_CAP }, (_, i) => i + 1);
-    const at = COST_SAMPLE_CAP + 7;
-    const merged = mergeSamples(
-      samplesOf(whole.slice(0, at)),
-      samplesOf(whole.slice(at)),
+  it("keeps what accumulating the whole would have kept, at every cut", () => {
+    // The property a fold reading a day in parts rests on, shown over a
+    // population rather than asserted: what the merge keeps cannot
+    // depend on where the day was divided. Four times the cap, drawn so
+    // every value appears twice, which puts duplicates on the boundary
+    // the cap falls at.
+    const whole = Array.from(
+      { length: 4 * COST_SAMPLE_CAP },
+      (_, i) => (i * 37) % (2 * COST_SAMPLE_CAP) + 1,
     );
+    const direct = samplesOf(whole);
+    for (let at = 0; at <= whole.length; at++) {
+      expect(
+        mergeSamples(samplesOf(whole.slice(0, at)), samplesOf(whole.slice(at))),
+      ).toEqual(direct);
+    }
+  });
+
+  it("keeps the same over any number of parts", () => {
+    // A fold merges each batch into what it holds, so the parts arrive
+    // one at a time and every merge but the first is against a merge.
+    const whole = Array.from(
+      { length: 4 * COST_SAMPLE_CAP },
+      (_, i) => (i * 37) % (2 * COST_SAMPLE_CAP) + 1,
+    );
+    const cuts = [0, 1, 13, COST_SAMPLE_CAP, COST_SAMPLE_CAP + 1, whole.length];
+    let merged = samplesOf([]);
+    for (let part = 1; part < cuts.length; part++) {
+      merged = mergeSamples(
+        merged,
+        samplesOf(whole.slice(cuts[part - 1], cuts[part])),
+      );
+    }
     expect(merged).toEqual(samplesOf(whole));
   });
 

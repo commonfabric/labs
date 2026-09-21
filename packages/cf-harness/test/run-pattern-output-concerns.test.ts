@@ -136,13 +136,13 @@ describe("run-pattern-output-concerns", () => {
       ).toEqual(["rows:no-rows", "errorMessage:error-branch"]);
     });
 
-    it("passes over an empty output of a read still in flight", () => {
+    it("marks an in-flight read as pending rather than empty data", () => {
       expect(
         positions(observedOutputsIn(
           readerResult({ rows: [], rowCount: 0, pending: true }),
           READER_SCHEMA,
         )),
-      ).toEqual([]);
+      ).toEqual(["pending:pending"]);
     });
 
     it("names the failure of a read still in flight", () => {
@@ -155,7 +155,7 @@ describe("run-pattern-output-concerns", () => {
           }),
           READER_SCHEMA,
         )),
-      ).toEqual(["errorMessage:error-branch"]);
+      ).toEqual(["pending:pending", "errorMessage:error-branch"]);
     });
 
     it("passes over an empty list on a result that reports no read", () => {

@@ -1,17 +1,16 @@
 /**
- * The record of an operator input cell: a cell the operator passed into the
- * run by reference, given a handle-table token at start so the run's inputs
- * reach the model as tokens from its first turn. `src/input-cells.ts`
- * documents the posture and does the parsing and minting; this contract is
- * what run state persists.
+ * Input cells supplied by the host: operator attachments or targets retained
+ * from a completed session turn that named a piece. Each receives a handle
+ * token at run start, so inputs reach the model as tokens from its first turn.
+ * `src/input-cells.ts` documents the posture and performs parsing and minting;
+ * this contract is what run state persists.
  */
 
-/** One input cell as the operator specified it, before any minting. */
+/** One host-supplied input cell, before minting its turn's handle. */
 export interface HarnessInputCellSpec {
   /**
-   * The operator's name for the input cell. Model-facing: it is the whole
-   * of what the model is told the token names, so it is operator-authored
-   * prose by construction — never text read from the fabric.
+   * The attachment's name, or a slug confirmed by this session's naming
+   * tool. Model-facing; the host supplies it rather than reading cell data.
    */
   name: string;
 
