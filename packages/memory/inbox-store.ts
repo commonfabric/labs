@@ -1,6 +1,7 @@
 /** SQLite-backed private inboxes with immutable, idempotent delivery receipts. */
 
 import { Database } from "@db/sqlite";
+import { basename, dirname, join } from "@std/path";
 import { hashStringOf } from "@commonfabric/data-model";
 import { isDIDKey } from "@commonfabric/identity/did";
 import {
@@ -13,7 +14,7 @@ import {
 } from "./inbox.ts";
 
 interface Row {
-  sequence: number;
+  sequence: string;
   recipient: string;
   sender: string;
   operation: string;
@@ -50,6 +51,23 @@ export class InboxStore {
 
   /** Opens durable storage, or an isolated in-memory database for a test server. */
   constructor(path: string) {
+    if (path !== ":memory:") {
+      try {
+        path = Deno.realPathSync(path);
+      } catch (error) {
+        if (!(error instanceof Deno.errors.NotFound)) throw error;
+        // A new database uses its resolved parent. A dangling file symlink must
+        // be repaired before opening, so it cannot split the writer lock.
+        let entry: Deno.FileInfo | undefined;
+        try {
+          entry = Deno.lstatSync(path);
+        } catch (entryError) {
+          if (!(entryError instanceof Deno.errors.NotFound)) throw entryError;
+        }
+        if (entry?.isSymlink) throw error;
+        path = join(Deno.realPathSync(dirname(path)), basename(path));
+      }
+    }
     this.#lockPath = path === ":memory:" ? undefined : `${path}.write.lock`;
     this.#database = this.#write(() => {
       let database: Database | undefined;
@@ -186,12 +204,12 @@ export class InboxStore {
     const cursor = options.cursor ?? "0";
     if (
       !Number.isInteger(limit) || limit < 1 || limit > 100 ||
-      !/^\d{1,16}$/.test(cursor) || !Number.isSafeInteger(Number(cursor))
+      !/^\d{1,19}$/.test(cursor) || BigInt(cursor) > 9223372036854775807n
     ) throw new InboxError("invalid-request");
     const rows = this.#database.prepare(
-      "SELECT CAST(sequence AS REAL) AS sequence, recipient, sender, operation, hash, received, payload FROM inbox_messages WHERE recipient=? AND payload IS NOT NULL AND sequence>? ORDER BY sequence LIMIT ?",
+      "SELECT CAST(sequence AS TEXT) AS sequence, recipient, sender, operation, hash, received, payload FROM inbox_messages WHERE recipient=? AND payload IS NOT NULL AND sequence>CAST(? AS INTEGER) ORDER BY inbox_messages.sequence LIMIT ?",
     )
-      .all<Row>(recipient, Number(cursor), limit + 1);
+      .all<Row>(recipient, cursor, limit + 1);
     return {
       messages: rows.slice(0, limit).map(message),
       nextCursor: rows.length > limit ? String(rows[limit - 1].sequence) : null,

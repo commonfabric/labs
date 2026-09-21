@@ -76,7 +76,10 @@ full synchronization make an acknowledged delivery durable across process
 termination. Schema initialization and all writes serialize through
 a retained advisory lock file beside the database, waiting for ownership without a
 wall-clock deadline. Closing its descriptor releases the lock, and the file remains
-so every writer locks the same inode. WAL readers do not take the write lock. Shutdown
+so every writer locks the same inode. Database paths resolve filesystem symlinks
+before deriving that lock; a new database uses its resolved parent directory.
+Dangling database symlinks are refused until their target exists. WAL readers do
+not take the write lock. Shutdown
 closes the inbox connection. Backups must include this
 service-private database and its WAL consistently; ordinary space exports do
 not contain inbox messages.

@@ -39,6 +39,8 @@ describe("InboxStore", () => {
       const root = fromFileUrl(new URL("../../../", import.meta.url));
       const lock = `${directory}/deno.lock`;
       await Deno.copyFile(`${root}/deno.lock`, lock);
+      const alias = `${directory}/alias.sqlite`;
+      await Deno.symlink(path, alias);
       const start = async (operation: string) => {
         const child = new Deno.Command(Deno.execPath(), {
           cwd: root,
@@ -50,7 +52,7 @@ describe("InboxStore", () => {
             fromFileUrl(
               new URL("./fixtures/inbox-write-lock.ts", import.meta.url),
             ),
-            path,
+            operation === "hold" ? path : alias,
             operation,
           ],
           stdin: "piped",
@@ -145,6 +147,32 @@ describe("InboxStore", () => {
       await Deno.remove(directory, { recursive: true });
     }
   });
+  it("creates databases through resolved parents and refuses dangling file aliases", async () => {
+    const directory = await Deno.makeTempDir();
+    try {
+      await Deno.mkdir(`${directory}/real`);
+      await Deno.symlink(`${directory}/real`, `${directory}/alias`);
+      const store = new InboxStore(`${directory}/alias/new.sqlite`);
+      try {
+        store.enable("did:key:recipient");
+        expect(store.status("did:key:recipient").enabled).toBe(true);
+        expect(Deno.statSync(`${directory}/real/new.sqlite.write.lock`).isFile)
+          .toBe(true);
+      } finally {
+        store.close();
+      }
+      await Deno.symlink(
+        `${directory}/missing.sqlite`,
+        `${directory}/dangling.sqlite`,
+      );
+      expect(() => new InboxStore(`${directory}/dangling.sqlite`)).toThrow();
+      expect(() => Deno.statSync(`${directory}/missing.sqlite`)).toThrow();
+      expect(() => Deno.statSync(`${directory}/dangling.sqlite.write.lock`))
+        .toThrow();
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
   it("refuses invalid identities and operation keys without committing deliveries", async () => {
     const recipient = (await Identity.fromPassphrase("validation-recipient"))
       .did();
@@ -204,7 +232,7 @@ describe("InboxStore", () => {
         );
       }
       for (
-        const cursor of ["", "-1", "1.5", "9007199254740992", "0".repeat(17)]
+        const cursor of ["", "-1", "1.5", "9223372036854775808", "0".repeat(20)]
       ) {
         expect(() => store.list(recipient, { cursor })).toThrow(
           "invalid-request",
@@ -515,7 +543,7 @@ describe("InboxStore", () => {
       const database = new Database(path);
       try {
         database.exec(
-          "INSERT INTO sqlite_sequence(name,seq) VALUES ('inbox_messages',2147483648)",
+          "INSERT INTO sqlite_sequence(name,seq) VALUES ('inbox_messages',9007199254740992)",
         );
       } finally {
         database.close();
@@ -531,7 +559,7 @@ describe("InboxStore", () => {
         payload: null,
       });
       const first = store.list(recipient, { limit: 1 });
-      expect(first.nextCursor).toBe("2147483649");
+      expect(first.nextCursor).toBe("9007199254740993");
       expect(
         store.list(recipient, { limit: 1, cursor: first.nextCursor! })
           .messages[0].receipt.operationId,
