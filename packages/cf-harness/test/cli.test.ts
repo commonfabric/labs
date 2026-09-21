@@ -7327,6 +7327,58 @@ Deno.test("parseCfHarnessCliArgs rejects --allow-tool search_skills without a sk
   );
 });
 
+Deno.test("parseCfHarnessCliArgs reads the Loom retrieval configuration from the flag or the environment", async () => {
+  const retrieval = {
+    cliPath: "/trusted/loom",
+    transport: { kind: "broker" as const, queuePath: "/trusted/queue" },
+  };
+  const readTextFile = (path: string) => {
+    assertEquals(path, "/trusted/retrieval.json");
+    return Promise.resolve(JSON.stringify(retrieval));
+  };
+  const flagged = await parseCfHarnessCliArgs(
+    [
+      "--prompt",
+      "hi",
+      "--loom-retrieval-config",
+      "/trusted/retrieval.json",
+      "--allow-tool",
+      "loom_search",
+    ],
+    { cwd: "/tmp/project", env: {}, readTextFile },
+  );
+  if ("help" in flagged) throw new Error("expected config result");
+  assertEquals(flagged.loomRetrieval, retrieval);
+  const fromEnvironment = await parseCfHarnessCliArgs(
+    ["--prompt", "hi"],
+    {
+      cwd: "/tmp/project",
+      env: { CF_HARNESS_LOOM_RETRIEVAL_CONFIG: "/trusted/retrieval.json" },
+      readTextFile,
+    },
+  );
+  if ("help" in fromEnvironment) throw new Error("expected config result");
+  assertEquals(fromEnvironment.loomRetrieval, retrieval);
+  const absent = await parseCfHarnessCliArgs(
+    ["--prompt", "hi"],
+    { cwd: "/tmp/project", env: {} },
+  );
+  if ("help" in absent) throw new Error("expected config result");
+  assertEquals(absent.loomRetrieval, undefined);
+});
+
+Deno.test("parseCfHarnessCliArgs rejects --allow-tool for a Loom retrieval tool without its configuration", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", "--allow-tool", "loom_people"],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    Error,
+    "--allow-tool loom_people requires a Loom retrieval configuration",
+  );
+});
+
 Deno.test("parseCfHarnessCliArgs rejects --allow-tool acquire_skill without both backings", async () => {
   await assertRejects(
     () =>

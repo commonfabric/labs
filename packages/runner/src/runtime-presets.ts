@@ -298,6 +298,17 @@ export const MAX_ENFORCEMENT_SINK_GOVERNANCE: SinkGovernanceRegistry = Object
     llmDialog: ungatedSink("llmDialog"),
     generateText: ungatedSink("generateText"),
     generateObject: ungatedSink("generateObject"),
+    // The `agent` sink's request carries references plus a task text, so an
+    // empty ceiling refuses only a task text built from labeled data. The
+    // registry admits a static clause list per sink and nothing per request,
+    // so the ceiling the design gives this sink — the request's own
+    // observation ceiling — is not expressible here; the builtin measures
+    // its request against the pattern's `maxConfidentiality` before staging
+    // (`builtins/agent.ts`), and this row is the deployment's static bound
+    // over that. A task text at the requester's own label is therefore
+    // refused under this posture until the gate reads a ceiling off the
+    // request.
+    agent: { ceiling: Object.freeze([]) },
   });
 
 /**

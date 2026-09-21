@@ -24,7 +24,15 @@ export type BuiltinToolId =
   | "research"
   | "loom_compose"
   | "loom_inspect"
-  | "loom_authoring_context";
+  | "loom_authoring_context"
+  | "loom_search"
+  | "loom_page_discover"
+  | "loom_page_inspect"
+  | "loom_page_read"
+  | "loom_people"
+  | "loom_calendar_list"
+  | "loom_context"
+  | "loom_profile";
 
 export const DEFAULT_PARENT_TOOL_IDS = [
   "bash",
@@ -135,6 +143,23 @@ export const LOOM_AUTHORING_TOOL_IDS: ReadonlySet<BuiltinToolId> = new Set([
   "loom_authoring_context",
 ]);
 
+/**
+ * The read-only Loom tools, backed only by an explicitly configured host
+ * Loom retrieval transport. Gated apart from the authoring three: a host may
+ * let a run read Loom without letting it compose collections, and the other
+ * way round.
+ */
+export const LOOM_RETRIEVAL_TOOL_IDS: ReadonlySet<BuiltinToolId> = new Set([
+  "loom_search",
+  "loom_page_discover",
+  "loom_page_inspect",
+  "loom_page_read",
+  "loom_people",
+  "loom_calendar_list",
+  "loom_context",
+  "loom_profile",
+]);
+
 /** What a run can back the gated tools with. */
 export interface HarnessToolBackingAvailability {
   fabricSessionAvailable: boolean;
@@ -154,6 +179,9 @@ export interface HarnessToolBackingAvailability {
 
   /** Whether the operator configured host Loom authoring for this run. */
   loomAuthoringAvailable?: boolean;
+
+  /** Whether the operator configured host Loom retrieval for this run. */
+  loomRetrievalAvailable?: boolean;
 }
 
 /** The gated tools this run cannot back, and so does not offer. */
@@ -177,6 +205,7 @@ export const withheldToolIds = (
       ? []
       : RESEARCH_TOOL_IDS),
     ...(availability.loomAuthoringAvailable ? [] : LOOM_AUTHORING_TOOL_IDS),
+    ...(availability.loomRetrievalAvailable ? [] : LOOM_RETRIEVAL_TOOL_IDS),
   ]);
 
 /**
@@ -205,6 +234,7 @@ export const parentToolIdsForBacking = (
       ? RESEARCH_TOOL_IDS
       : []),
     ...(availability.loomAuthoringAvailable ? LOOM_AUTHORING_TOOL_IDS : []),
+    ...(availability.loomRetrievalAvailable ? LOOM_RETRIEVAL_TOOL_IDS : []),
   ].filter((toolId, index, ids) =>
     !withheld.has(toolId) && ids.indexOf(toolId) === index
   );

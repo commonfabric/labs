@@ -3,6 +3,16 @@ import type {
   LoomComposeToolInput,
   LoomReadToolInput,
 } from "./tools/loom-authoring.ts";
+import type {
+  LoomCalendarListInput,
+  LoomContextInput,
+  LoomPageDiscoverInput,
+  LoomPageTargetInput,
+  LoomPeopleInput,
+  LoomProfileInput,
+  LoomSearchInput,
+} from "./loom-retrieval.ts";
+import type { LoomRetrievalToolOutput } from "./tools/loom-retrieval.ts";
 import {
   dirname,
   join as joinHostPath,
@@ -293,6 +303,14 @@ export interface BuiltinToolInputMap {
   loom_compose: LoomComposeToolInput;
   loom_inspect: LoomReadToolInput;
   loom_authoring_context: LoomReadToolInput;
+  loom_search: LoomSearchInput;
+  loom_page_discover: LoomPageDiscoverInput;
+  loom_page_inspect: LoomPageTargetInput;
+  loom_page_read: LoomPageTargetInput;
+  loom_people: LoomPeopleInput;
+  loom_calendar_list: LoomCalendarListInput;
+  loom_context: LoomContextInput;
+  loom_profile: LoomProfileInput;
 }
 
 export interface BuiltinToolOutputMap {
@@ -320,6 +338,14 @@ export interface BuiltinToolOutputMap {
   loom_compose: LoomAuthoringToolOutput;
   loom_inspect: LoomAuthoringToolOutput;
   loom_authoring_context: LoomAuthoringToolOutput;
+  loom_search: LoomRetrievalToolOutput;
+  loom_page_discover: LoomRetrievalToolOutput;
+  loom_page_inspect: LoomRetrievalToolOutput;
+  loom_page_read: LoomRetrievalToolOutput;
+  loom_people: LoomRetrievalToolOutput;
+  loom_calendar_list: LoomRetrievalToolOutput;
+  loom_context: LoomRetrievalToolOutput;
+  loom_profile: LoomRetrievalToolOutput;
 }
 
 interface ToolOutputWithId {
@@ -2607,7 +2633,14 @@ export class CfHarnessEngine {
         : {}),
       researchRuns: this.#runState.researchRuns ?? [],
       researchGoal: this.#runState.researchGoal,
-      ...(researchTaskCfcLabel !== undefined ? { researchTaskCfcLabel } : {}),
+      ...(researchTaskCfcLabel !== undefined
+        ? {
+          researchTaskCfcLabel,
+          // A research task and any other model-authored argument have the
+          // same provenance, so they carry the same label.
+          toolInputCfcLabel: researchTaskCfcLabel,
+        }
+        : {}),
       patternRefs: this.#runState.patternRefs ?? [],
       inputCells: this.#runState.inputCells ?? [],
       recordResearchRun: (run: HarnessResearchRunSummary) => {
@@ -2632,6 +2665,13 @@ export class CfHarnessEngine {
       sandbox: this.sandbox,
       hostProcessRunner: this.hostProcessRunner,
       loomAuthoring: this.config.loomAuthoring,
+      loomRetrieval: this.config.loomRetrieval,
+      ...(this.config.fabricSession?.cfcReadMaxConfidentiality !== undefined
+        ? {
+          cfcReadMaxConfidentiality:
+            this.config.fabricSession.cfcReadMaxConfidentiality,
+        }
+        : {}),
       resolvePath: (path: string) =>
         this.sandbox.resolvePath(path, this.#runState.currentDir),
       resolveHostPath: (path: string) => this.#resolveHostPath(path),

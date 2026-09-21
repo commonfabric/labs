@@ -73,6 +73,7 @@ reported rather than written into the conversation.
 | `llm` (`generateText` / `generateObject`) | model, messages/prompt, schema, params | settled result only (protocol.md §6 — no partial commits in v2); `requestHash` on the result cell selects the pending request and accompanies its settled result or error | broker-held provider keys; grant from handle | temperature etc. are inputs, so nondeterminism is memo-stable by construction |
 | `llm-dialog` | dialog state + params | settled turns | same | multi-turn = new key per turn |
 | `sqlite*` | database link, statement, params, reader principal, the run's effective read ceiling (the serving runtime's option met with the ceiling of the session the run acts as — `WaveRunContext.readCeiling`, serving-loop.md §3c) | one cleared result cell per (query, reader) | read served under the reader's clearance and the run's ceiling | clearance = per-reader materialization (RULED 2026-08-02) — see below; a ceiling applies to a session-scoped result only, so two sessions of different ceilings hold different cells and different hashes |
+| `agent` | task text, input links, result schema, `maxConfidentiality`, tool names | `{ pending, result?, error?, requestHash?, run?, host? }`; `result` and `run` are links, to the result document the run's harness wrote and to the `AgentRun` record | the requester's, held by the runner that claims the record | the outbox effect creates the `AgentRun` record (per user, in the requesting space) and indexes it in the requester's home space; the result cell derives from the record, so the memo is the record's existence; behind the `agentBuiltin` flag |
 
 The shared `fetch.ts` builtins retain independent request lifecycles for each
 served result instance. The requesting run's identity resolves the outbox key
@@ -152,6 +153,21 @@ Parent binding publication follows the selected target separately from request
 state, so a scope change can return to an existing target. Settled in-memory
 instance state retires once no staging or dispatched work owns it; durable
 result cells retain memoization.
+
+`agent` differs from the rest of the table in what its effect does: nothing is
+sent. The post-commit effect writes an `AgentRun` record — the request fields,
+`state: queued` — in the requesting space under the requester's user instance,
+re-reading the request under its own transaction so the record carries that
+read's labels, and appends a `{run, host}` entry to the home-space index a
+runner process subscribes to. The runner claims the record, runs the harness as
+the requester, and writes the terminal fields as an authored client; the
+builtin reads the record and never writes it again, which is what keeps the
+runner's authored writes and the effect's derived creation from ever
+overlapping. Inputs reach the record as links, so what the sink gate measures
+is the task text plus the pointer label of each reference. A request naming a
+tool the requester's registered runner does not offer settles with
+`INVALID_INPUT` before it is staged, and one whose consumed label exceeds its
+own `maxConfidentiality` settles the same way.
 
 Named queues retain their issued work when inputs are cleared. Queued
 `generateText` and `generateObject` publish each completion even when a later

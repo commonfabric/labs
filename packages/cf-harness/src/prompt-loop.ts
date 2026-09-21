@@ -117,6 +117,7 @@ import type {
 import {
   type HarnessToolBackingAvailability,
   isSubagentOnlyToolId,
+  LOOM_RETRIEVAL_TOOL_IDS,
   parentToolIdsForBacking,
   withheldToolIds,
 } from "./contracts/tool-descriptor.ts";
@@ -199,6 +200,7 @@ import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
 import { projectHarnessResearchKitForModel } from "./research/model-projection.ts";
 import { isEditFileToolSuccessOutput } from "./tools/edit-file.ts";
 import { isStructuredFileToolErrorOutput } from "./tools/file-errors.ts";
+import { loomRetrievalModelContextObservation } from "./tools/loom-retrieval.ts";
 import { isReadFileToolSuccessOutput } from "./tools/read-file.ts";
 import {
   bareFabricIdentifierPointers,
@@ -2999,6 +3001,7 @@ export class CfHarnessPromptLoop {
       ),
       docsCorpusAvailable: this.engine.docsCorpusAvailable,
       loomAuthoringAvailable: this.engine.config.loomAuthoring !== undefined,
+      loomRetrievalAvailable: this.engine.config.loomRetrieval !== undefined,
     };
   }
 
@@ -5111,6 +5114,38 @@ export class CfHarnessPromptLoop {
             "bare-fabric-identifier-scrub",
             resultRef,
             projection?.scrubbedPointers ?? [],
+          ),
+        ),
+      };
+    }
+    if (
+      LOOM_RETRIEVAL_TOOL_IDS.has(toolId as BuiltinToolId) &&
+      isObjectNotArray(output)
+    ) {
+      // The rows the model sees were measured by the tool; what stays on the
+      // artifact is the join of their labels, which is the observation the
+      // run's model context accumulates rather than text for the model.
+      const { cfc: _cfc, ...publicOutput } = output;
+      const observation = loomRetrievalModelContextObservation(
+        output,
+        resultRef,
+        toolCallId,
+      );
+      return {
+        output: stripInternalToolFields(publicOutput),
+        ...(observation !== undefined
+          ? { cfcModelContextObservations: [observation] }
+          : {}),
+        omissionRules: omissionRules(
+          createHarnessTranscriptOmissionRuleRecord(
+            "artifact-only",
+            resultRef,
+            presentFieldPointers(output, ["cfc"]),
+          ),
+          createHarnessTranscriptOmissionRuleRecord(
+            "model-context-truncation",
+            resultRef,
+            output.truncated === true ? ["/entries"] : [],
           ),
         ),
       };

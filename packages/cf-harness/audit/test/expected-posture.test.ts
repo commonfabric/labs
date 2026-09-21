@@ -258,8 +258,9 @@ describe("the expected-posture spec", () => {
 
     it("requires a deviation for every ungated sink when the spec asks", () => {
       const spec = parseExpectedPosture({ requireDeviationsPublished: true });
-      // The fleet posture leaves the six network-fetch sinks ungated with no
-      // recorded rationale, so nothing publishes them as deviations.
+      // The fleet posture leaves the six network-fetch sinks and the agent
+      // sink ungated with no recorded rationale, so nothing publishes them as
+      // deviations.
       expect(
         postureMismatches(spec, FLEET_RECORD)
           .map((mismatch) => mismatch.field),
@@ -270,6 +271,7 @@ describe("the expected-posture spec", () => {
         "deviations[fetchJsonUnchecked]",
         "deviations[fetchProgram]",
         "deviations[streamData]",
+        "deviations[agent]",
       ]);
     });
   });

@@ -147,6 +147,12 @@ export const COMMONFABRIC_RUNTIME_EXPORT_REGISTRY = [
     reactiveOrigin: true,
   },
   {
+    exportName: "agent",
+    category: "call",
+    callKind: "runtime-call",
+    reactiveOrigin: true,
+  },
+  {
     exportName: "patternTool",
     category: "call",
     callKind: "pattern-tool",

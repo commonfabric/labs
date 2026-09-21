@@ -18,6 +18,7 @@ describe("CFC sink inventory", () => {
       "llmDialog",
       "generateText",
       "generateObject",
+      "agent",
     ]);
     expect(isInitialSinkInventoryName("fetchJson")).toBe(true);
     expect(isInitialSinkInventoryName("generateObject")).toBe(true);

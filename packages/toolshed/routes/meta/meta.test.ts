@@ -89,7 +89,7 @@ Deno.test("meta routes", async (t) => {
         // The two properties the route exists to carry, stated here because a
         // reader of this file should not have to derive them: an ungated sink
         // is named rather than absent, and it is published as a deviation.
-        assertEquals(json.cfc.sinks.length, 10);
+        assertEquals(json.cfc.sinks.length, 11);
         assertEquals(json.cfc.deviations.length, 4);
       } finally {
         publishCfcPosture(null);
