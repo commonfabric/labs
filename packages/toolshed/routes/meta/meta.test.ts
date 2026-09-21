@@ -141,12 +141,13 @@ Deno.test("meta routes", async (t) => {
         fetch: async (input) =>
           await app.request(new URL(String(input)).pathname),
       });
-      // The published posture declares no readerSchemaPrecedence, so the
-      // client adopts the legacy strict `false` a pre-flag server runs.
+      // The published posture declares neither readerSchemaPrecedence nor
+      // agentBuiltin, so the client adopts both legacy `false` values.
       assertEquals(adopted, {
         modernCellRep: false,
         lazyMaterialization: false,
         readerSchemaPrecedence: false,
+        agentBuiltin: false,
       });
     } finally {
       publishExperimentalPosture(null);

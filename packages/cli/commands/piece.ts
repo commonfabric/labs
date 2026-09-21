@@ -2623,8 +2623,9 @@ command refuses, since the served update takes no origin.`,
   .option("-c,--cell, --piece <cell:string>", PIECE_OPTION_HELP)
   .option(
     "--dangerously-allow-incompatible-schema",
-    "Accept the reviewed schema incompatibility. Stored-input validation " +
-      "and source-transition protections still apply.",
+    "Accept the reviewed incompatibility, including a current pattern " +
+      "that cannot be loaded. Stored-input validation and " +
+      "source-transition protections still apply.",
   )
   .arguments("<origin:string>")
   .action(async (options, origin) => {

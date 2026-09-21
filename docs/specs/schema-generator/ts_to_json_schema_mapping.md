@@ -113,6 +113,15 @@ whole body references one, directly or through further such aliases, named with
 every argument, which it substitutes down the chain — plus a `Date`-by-name
 special case), keyword types, and a final resolve-else-`true` fallback.
 
+A `true` from that fallback is a guess rather than a reading, and is recorded
+as one (`uninterpretedTypeNodes`). A wrapper holding a resolved type recovers
+the value from it; a guess nothing recovers reaches the generation root, which
+reports it as the `schema-type:unread` warning (`unread-type-diagnostics.ts`),
+one per schema, naming each unread type once. An authored `any`, or a name
+declared as `any`, is a reading, not a guess, and is not reported; nor is a
+guess inside an intersection that accepts nothing, which leaves nothing of it in
+the schema.
+
 An intersection node is settled the way the checker settles the type, each
 constituent read through its reference, and what remains is merged as
 `IntersectionFormatter` merges: identical constituents fold; `never` leaves

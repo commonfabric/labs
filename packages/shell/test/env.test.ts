@@ -49,6 +49,24 @@ Deno.test({
 });
 
 Deno.test({
+  name: "shell env preserves the agent builtin rollback override",
+  permissions: { read: true },
+  async fn() {
+    const off = await withPatchedGlobals({
+      $API_URL: "http://shell.test/",
+      $EXPERIMENTAL_AGENT_BUILTIN: "false",
+    }, importFreshEnvModule);
+    expect(off.EXPERIMENTAL.agentBuiltin).toBe(false);
+
+    const unset = await withPatchedGlobals({
+      $API_URL: "http://shell.test/",
+      $EXPERIMENTAL_AGENT_BUILTIN: undefined,
+    }, importFreshEnvModule);
+    expect(unset.EXPERIMENTAL.agentBuiltin).toBeUndefined();
+  },
+});
+
+Deno.test({
   name: "shell env rejects a non-WebSocket presence service URL",
   permissions: { read: true },
   async fn() {

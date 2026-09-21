@@ -740,6 +740,9 @@ export type InitializationData = {
      */
     modernCellRep?: boolean;
 
+    /** Whether the `agent()` builtin stages requests. Defaults on. */
+    agentBuiltin?: boolean;
+
     /**
      * Whether server-execution v2 is on
      * (`docs/specs/server-side-execution/`). The host declares its posture

@@ -1,0 +1,1 @@
+{"date": "2026-09-21", "from": {"k": "unit", "s": "html", "n": "DomApplicator > removes an ARIA attribute when its property is dropped"}, "to": {"k": "unit", "s": "html", "n": "DomApplicator > instance members > applyBatch() > removes an ARIA attribute when its property is dropped"}}

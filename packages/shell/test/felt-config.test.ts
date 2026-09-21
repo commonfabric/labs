@@ -44,12 +44,14 @@ describe("shell felt config", () => {
     const config = await withEnv({
       PRESENCE_URL: "wss://presence.test",
       EXPERIMENTAL_MODERN_CELL_REP: "true",
+      EXPERIMENTAL_AGENT_BUILTIN: "false",
       EXPERIMENTAL_CONTENT_ADDRESSED_SCHEMAS: "true",
     }, importFreshConfig);
 
     expect(config.esbuild?.define).toMatchObject({
       $PRESENCE_URL: "wss://presence.test/",
       $EXPERIMENTAL_MODERN_CELL_REP: "true",
+      $EXPERIMENTAL_AGENT_BUILTIN: "false",
       $EXPERIMENTAL_CONTENT_ADDRESSED_SCHEMAS: "true",
     });
     const compileCacheVersion = config.esbuild?.define[

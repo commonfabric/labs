@@ -34,6 +34,7 @@ import {
 } from "./type-utils.ts";
 import { attachDocTags, extractDocFromType } from "./doc-utils.ts";
 import { unionFoldedFrom } from "./schema-origins.ts";
+import { reportUnreadTypes } from "./unread-type-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
 
@@ -977,6 +978,11 @@ export class SchemaGenerator {
   ): MutableJSONSchema {
     // Create unified context with all state
     const cycles = this.#getCycles(type, checker);
+
+    // A guess a wrapper recovers never reaches this list, so what arrives here
+    // is what the finished schema accepts without having read it.
+    const unread: ts.TypeNode[] = [];
+
     const context: GenerationContext = {
       // Immutable context
       typeChecker: checker,
@@ -987,6 +993,7 @@ export class SchemaGenerator {
       definitions: {},
       emittedRefs: new Set(),
       schemaOrigins: new WeakMap(),
+      uninterpretedTypeNodes: unread,
 
       // Stack state
       definitionStack: new Set(),
@@ -1037,6 +1044,8 @@ export class SchemaGenerator {
       // Build final schema with definitions if needed
       result = this.#buildFinalSchema(schema, type, context, typeNode);
     }
+
+    if (unread.length > 0) reportUnreadTypes(context, unread);
 
     assertScopeDeclarationsAreReachable(result);
     return result;
@@ -1685,12 +1694,18 @@ export class SchemaGenerator {
     // way IntersectionFormatter merges one (`intersectionOf`), each
     // constituent read through its reference.
     if (ts.isIntersectionTypeNode(typeNode)) {
-      return intersectionOf(
+      const unread = context.uninterpretedTypeNodes;
+      const unreadBefore = unread?.length ?? 0;
+      const schema = intersectionOf(
         typeNode.types.map((member) =>
           this.#analyzeChildNode(member, checker, context)
         ),
         context,
       );
+      // An intersection accepting nothing does so whatever a constituent
+      // accepts, so a constituent's guess leaves nothing in its schema.
+      if (schema === false) unread?.splice(unreadBefore);
+      return schema;
     }
 
     // Handle ArrayTypeNode (e.g., number[], string[])
@@ -1768,6 +1783,8 @@ export class SchemaGenerator {
         checker,
         context,
       );
+      // A name declared as `any` reads as `any` does, accepting any value.
+      if (resolved === checker.getAnyType()) return true;
       if (resolved) {
         return this.formatChildType(resolved, context, typeNode);
       }
@@ -2300,11 +2317,13 @@ export class SchemaGenerator {
       return undefined;
     }
 
+    // A declared type that is the checker's intrinsic `any` was declared as
+    // `any`; any other type flagged `Any` stands for a name it could not type.
     const declared = checker.getDeclaredTypeOfSymbol(symbol);
-    if (!declared || (declared.flags & ts.TypeFlags.Any)) {
-      return undefined;
-    }
-    return declared;
+    return !(declared.flags & ts.TypeFlags.Any) ||
+        declared === checker.getAnyType()
+      ? declared
+      : undefined;
   }
 
   /**

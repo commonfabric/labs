@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import type { PropertyValues } from "lit";
 
 import { $conn, type CellHandle } from "@commonfabric/runtime-client";
 import { defer } from "@commonfabric/utils/defer";
@@ -95,6 +96,23 @@ describe("CFRender variant handling", () => {
 });
 
 describe("CFRender render concurrency", () => {
+  it("does not resolve a cell after its runtime is disposed", async () => {
+    const element = new CFRender();
+    const cell = createMockCellHandle<unknown>({});
+    Object.assign(cell.runtime(), { signal: AbortSignal.abort() });
+    let resolutions = 0;
+    cell.resolveAsCell = () => {
+      resolutions++;
+      return Promise.resolve(cell);
+    };
+    element.cell = cell;
+    element.accessForTestingOnly.containerRef = {
+      value: {} as HTMLDivElement,
+    };
+    await element.accessForTestingOnly.renderCell();
+    expect(resolutions).toBe(0);
+  });
+
   it("cleans up the mounted render when its cell is cleared", async () => {
     const element = new CFRender();
     let cleanups = 0;
@@ -1135,6 +1153,43 @@ describe("CFRender tile navigation", () => {
 });
 
 describe("CFRender disconnectedCallback", () => {
+  it("rerenders once after reconnecting with an equal queued cell update", async () => {
+    class LifecycleRender extends CFRender {
+      /** Runs the update hook without requiring Lit's DOM pipeline. */
+      flushUpdated(changes: PropertyValues): void {
+        super.updated(changes);
+      }
+
+      protected override createRenderRoot(): HTMLElement | DocumentFragment {
+        return { adoptedStyleSheets: [] } as unknown as DocumentFragment;
+      }
+
+      protected override performUpdate(): void {}
+    }
+    const element = new LifecycleRender();
+    const cell = createMockCellHandle<unknown>({ name: "stable" });
+    let connected = true;
+    Object.defineProperty(element, "isConnected", { get: () => connected });
+    element.hasUpdated = true;
+    element.cell = cell;
+    element.flushUpdated(new Map([["cell", undefined]]));
+    expect(element.accessForTestingOnly.renderGeneration).toBe(1);
+
+    connected = false;
+    element.disconnectedCallback();
+    const equal = await cell.resolveAsCell();
+    element.cell = equal;
+    element.flushUpdated(new Map([["cell", cell]]));
+    expect(element.accessForTestingOnly.renderGeneration).toBe(2);
+    connected = true;
+    element.connectedCallback();
+    element.flushUpdated(new Map([["cell", cell]]));
+    expect(element.accessForTestingOnly.renderGeneration).toBe(3);
+    element.flushUpdated(new Map());
+    expect(element.accessForTestingOnly.renderGeneration).toBe(3);
+    element.disconnectedCallback();
+  });
+
   it("listens for right-clicks while connected, and stops when disconnected", () => {
     const element = new CFRender();
     const listened: string[] = [];
