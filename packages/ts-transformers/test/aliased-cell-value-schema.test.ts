@@ -273,6 +273,46 @@ describe("aliased-cell-value-schema", () => {
       });
     });
 
+    it("emits a recursive event type through a reference to itself", async () => {
+      const output = await transformBody(
+        `type EventNode = { value: string; child?: EventNode };
+         const h = handler<EventNode, Record<string, never>>((event) => {
+           console.log(event.value);
+         });`,
+      );
+
+      expect(callSchemas(parseModule(output), "handler")[0]).toEqual({
+        $ref: "#/$defs/EventNode",
+        $defs: {
+          EventNode: {
+            type: "object",
+            properties: {
+              value: { type: "string" },
+              child: { $ref: "#/$defs/EventNode" },
+            },
+            required: ["value"],
+          },
+        },
+      });
+    });
+
+    it("rewrites the cells of a recursive event type and emits its recursion as a reference", async () => {
+      const output = await transformBody(
+        `type EventNode = { value: Writable<string>; child?: EventNode };
+         const h = handler<EventNode, Record<string, never>>((event) => {
+           console.log(event.value.get());
+         });`,
+      );
+      const properties = callSchemas(parseModule(output), "handler")[0]
+        ?.properties as Record<string, unknown>;
+
+      expect(properties.value).toEqual({
+        type: "string",
+        asCell: ["readonly"],
+      });
+      expect(properties.child).toEqual({ $ref: "#/$defs/EventNode" });
+    });
+
     it("emits a reference to an alias whose type holds no cell", async () => {
       const output = await transformBody(
         `const h = handler<{ x: Profile }, Record<string, never>>((e) => {
@@ -284,6 +324,42 @@ describe("aliased-cell-value-schema", () => {
       expect((event?.properties as Record<string, unknown>).x).toEqual({
         $ref: "#/$defs/Profile",
       });
+    });
+  });
+
+  describe("a type of the author's own named like a wrapper", () => {
+    // A wrapper's name counts only where it resolves to `commonfabric`'s
+    // declaration, written in place and through an alias alike.
+
+    /** The input schema of a `lift()` taking `box` as `parameterType`. */
+    async function argumentSchema(
+      declarations: string,
+      parameterType: string,
+    ): Promise<unknown> {
+      const output = await transformSource(
+        `import { lift } from "commonfabric";
+         type Writable<T> = { value: T };
+         ${declarations}
+         const f = lift((box: ${parameterType}) => box.value);`,
+        { types: COMMONFABRIC_TYPES },
+      );
+      return callSchemas(parseModule(output), "lift")[0];
+    }
+
+    const OBJECT = {
+      type: "object",
+      properties: { value: { type: "string" } },
+      required: ["value"],
+    };
+
+    it("emits the object type it names, written in place", async () => {
+      expect(await argumentSchema("", "Writable<string>")).toEqual(OBJECT);
+    });
+
+    it("emits the object type it names, reached through an alias", async () => {
+      expect(
+        await argumentSchema("type Box = Writable<string>;", "Box"),
+      ).toEqual(OBJECT);
     });
   });
 

@@ -377,8 +377,9 @@ position), and an identity-only comparison of a plain-declared position adds
 the comparable marker the runtime materializes it through. A reference to a
 type alias that takes no type parameters is walked as the node the alias
 names, so a cell declared through an alias takes its capability the way the
-wrapper the alias names does. A named reference whose subtree holds no
-cell-like position passes through untouched; one
+wrapper the alias names does; an alias met again inside its own expansion — a
+recursive event type — stays the reference it is. A named reference whose
+subtree holds no cell-like position passes through untouched; one
 expands only when a capability inside it must change, and a self-referential
 type ends that expansion at the cycle with the node kept as authored — the
 accepted residual, since a literal cannot spell its own recursion. Observed
@@ -416,7 +417,11 @@ A cell declared as `type ProfileCell = Writable<...>`, or as
 `(Writable<...>)`, therefore emits the value schema the same wrapper emits
 written in place, under every inferred capability and for an alias imported
 from another module, and a `Default` the value type does not admit fails
-compilation the same way.
+compilation the same way. A wrapper's name counts only where it resolves to
+the declaration `commonfabric` exports (`namesCellWrapper`): a type of the
+author's own named `Writable`, written in place or reached through an alias,
+is that type and not a cell. A node the transformer builds, which the checker
+cannot resolve, is read by its spelling.
 
 A cell reached through a generic alias — `type MyCell<T> = Writable<...>` —
 has no authored node for its value, since the node the alias names is written

@@ -1159,10 +1159,13 @@ Deno.test("wrapTypeNodeWithCapability emits the expected cell wrappers", () => {
 });
 
 Deno.test("applyShrinkAndWrap preserves a parenthesized capture while narrowing cell capability", () => {
-  const { sourceFile, checker } = createProgram(`
-    interface Cell<T> { get(): T; }
-    type Input = ({ value: Cell<{ count: number }>; other: string });
-  `);
+  const { sourceFile, checker } = createProgramWithFiles({
+    "/commonfabric.d.ts": "export interface Cell<T> { get(): T; }",
+    "/test.ts": `
+      import type { Cell } from "commonfabric";
+      type Input = ({ value: Cell<{ count: number }>; other: string });
+    `,
+  });
   const alias = findTypeAlias(sourceFile, "Input");
   const result = applyShrinkAndWrap(
     createParamSummary({ wildcard: true, readPaths: [["value"]] }),

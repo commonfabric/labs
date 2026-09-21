@@ -1,11 +1,40 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import ts from "typescript";
 
 import { CELL_DECLARATION_POSITIONS } from "./cell-declaration-positions.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { collect, parseModule } from "./transformed-ast.ts";
 import { transformSource } from "./utils.ts";
 
 const CELL = 'Writable<string | Default<"">>';
+
+/**
+ * The members of the value type an emitted `c: __cfHelpers.ReadonlyCell<…>`
+ * holds in `output`, each named by its reference name or its keyword, or
+ * `undefined` when no such property is emitted or its value is not a union.
+ */
+function readonlyCellValueMembers(output: string): string[] | undefined {
+  const value = collect(parseModule(output), ts.isPropertySignature)
+    .map((signature) =>
+      ts.isIdentifier(signature.name) &&
+        signature.name.text === "c" &&
+        signature.type && ts.isTypeReferenceNode(signature.type) &&
+        ts.isQualifiedName(signature.type.typeName) &&
+        signature.type.typeName.right.text === "ReadonlyCell"
+        ? signature.type.typeArguments?.[0]
+        : undefined
+    )
+    .find((node) => node !== undefined);
+  if (!value || !ts.isUnionTypeNode(value)) return undefined;
+  return value.types.map((member) =>
+    ts.isTypeReferenceNode(member) && ts.isIdentifier(member.typeName)
+      ? member.typeName.text
+      : member.kind === ts.SyntaxKind.StringKeyword
+      ? "string"
+      : `other (${member.kind})`
+  );
+}
 
 /** Transforms `body`, with the builders it may call imported. */
 function transformBody(body: string): Promise<string> {
@@ -23,15 +52,14 @@ describe("parenthesized-cell-type", () => {
   for (const spelling of [`(${CELL})`, `((${CELL}))`]) {
     it(`emits the authored value type for a capture of a cell declared as \`${spelling}\``, async () => {
       // The capture's type is emitted as source, which shows the value node the
-      // shrinker produced, before schema generation reads it.
+      // shrinker produced, before schema generation reads it. A value printed
+      // from the cell's type instead holds the `Default` as the intersection
+      // with its brand.
 
       const { source } = CELL_DECLARATION_POSITIONS["a `computed()` capture"]!;
       const output = await transformBody(source(spelling));
 
-      expect(output).toContain(
-        'c: __cfHelpers.ReadonlyCell<string | Default<"">>',
-      );
-      expect(output).not.toContain("DEFAULT_MARKER");
+      expect(readonlyCellValueMembers(output)).toEqual(["string", "Default"]);
     });
   }
 
