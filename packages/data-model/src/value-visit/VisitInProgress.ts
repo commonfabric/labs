@@ -21,11 +21,11 @@ import {
 import { debugStr } from "@/value-debug";
 
 import {
-  type LeafVisitorResult,
   type MainVisitResult,
   type RecurseForm,
   type ReplaceForm,
   type ValueVisitor,
+  type VisitResult,
 } from "./interface.ts";
 
 /**
@@ -171,7 +171,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
   ):
     | RecurseOfForm<PlusType>
     | Exclude<
-      LeafVisitorResult<PlusType, ResultType>,
+      VisitResult<PlusType, ResultType>,
       ReplaceForm<PlusType> | RecurseForm
     > {
     const vis = this.#visitor;

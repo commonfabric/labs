@@ -10,9 +10,9 @@ import { type FabricContainerValueTag, type FabricValuePlusTag } from "@/types";
 import { debugStr } from "@/value-debug";
 
 import {
-  type LeafVisitorResult,
   ValueVisitor,
   type VisitedResult,
+  type VisitResult,
 } from "./interface.ts";
 
 /**
@@ -32,7 +32,7 @@ export abstract class BaseValueVisitor<
   abstract visitValue(
     value: FabricValuePlus<PlusType>,
     tag: FabricValuePlusTag | null,
-  ): LeafVisitorResult<PlusType, ResultType>;
+  ): VisitResult<PlusType, ResultType>;
 
   /** @inheritDoc */
   abstract visitedFabricArrayElement(
@@ -86,7 +86,7 @@ export abstract class BaseValueVisitor<
     _tag: FabricContainerValueTag,
     _originalDepth: number,
     _thisDepth: number,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     this.throwNoCycles(value);
   }
 

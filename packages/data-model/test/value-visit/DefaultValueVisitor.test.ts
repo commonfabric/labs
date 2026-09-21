@@ -13,7 +13,7 @@ import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@/for-testing-only.t
 import {
   DefaultValueVisitor,
   DO_RECURSE_VALUES,
-  type LeafVisitorResult,
+  type VisitResult,
   visitValue,
 } from "@/value-visit";
 
@@ -86,7 +86,7 @@ for (const name of TRACED_METHODS) {
 function trace(
   value: unknown,
   tag: FabricValuePlusTag | null,
-): { vis: Tracing; result: LeafVisitorResult<Date, unknown> } {
+): { vis: Tracing; result: VisitResult<Date, unknown> } {
   const vis = new Tracing();
   const result = vis.visitValue(value as Date, tag);
 
@@ -210,7 +210,7 @@ describe("DefaultValueVisitor", () => {
 
       it("returns what an overridden specific method returns, without reaching its category", () => {
         class Override extends Tracing {
-          override visitNumber(): LeafVisitorResult<Date, unknown> {
+          override visitNumber(): VisitResult<Date, unknown> {
             return mainResult("number!");
           }
         }
@@ -223,7 +223,7 @@ describe("DefaultValueVisitor", () => {
 
       it("returns what an overridden category method returns, for each tag in the category", () => {
         class Override extends Tracing {
-          override visitJsPrimitiveValue(): LeafVisitorResult<Date, unknown> {
+          override visitJsPrimitiveValue(): VisitResult<Date, unknown> {
             return mainResult("js");
           }
         }

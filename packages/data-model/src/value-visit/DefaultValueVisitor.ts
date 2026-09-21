@@ -31,8 +31,8 @@ import { debugStr } from "@/value-debug";
 import { BaseValueVisitor } from "./BaseValueVisitor.ts";
 import {
   DO_RECURSE_VALUES,
-  type LeafVisitorResult,
   type VisitedResult,
+  type VisitResult,
 } from "./interface.ts";
 
 /**
@@ -64,7 +64,7 @@ export abstract class DefaultValueVisitor<
    * Visits a value of type `bigint`. If not overridden, this calls
    * `visitJsPrimitiveValue()`.
    */
-  visitBigint(value: bigint): LeafVisitorResult<PlusType, ResultType> {
+  visitBigint(value: bigint): VisitResult<PlusType, ResultType> {
     return this.visitJsPrimitiveValue(value, VALUE_TAGS.bigint);
   }
 
@@ -72,7 +72,7 @@ export abstract class DefaultValueVisitor<
    * Visits a value of type `boolean`. If not overridden, this calls
    * `visitJsPrimitiveValue()`.
    */
-  visitBoolean(value: boolean): LeafVisitorResult<PlusType, ResultType> {
+  visitBoolean(value: boolean): VisitResult<PlusType, ResultType> {
     return this.visitJsPrimitiveValue(value, VALUE_TAGS.boolean);
   }
 
@@ -82,7 +82,7 @@ export abstract class DefaultValueVisitor<
    */
   visitFabricArray(
     value: FabricArrayPlus<PlusType>,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     return this.visitFabricContainerValue(value, VALUE_TAGS.Array);
   }
 
@@ -92,7 +92,7 @@ export abstract class DefaultValueVisitor<
    */
   visitFabricBytes(
     value: FabricBytes,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     return this.visitFabricPrimitiveValue(value, VALUE_TAGS.FabricBytes);
   }
 
@@ -102,7 +102,7 @@ export abstract class DefaultValueVisitor<
    */
   visitFabricEpochDay(
     value: FabricEpochDay,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     return this.visitFabricPrimitiveValue(value, VALUE_TAGS.FabricEpochDay);
   }
 
@@ -112,7 +112,7 @@ export abstract class DefaultValueVisitor<
    */
   visitFabricEpochNsec(
     value: FabricEpochNsec,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     return this.visitFabricPrimitiveValue(value, VALUE_TAGS.FabricEpochNsec);
   }
 
@@ -120,7 +120,7 @@ export abstract class DefaultValueVisitor<
    * Visits a value of type `FabricHash`. If not overridden, this calls
    * `visitFabricPrimitiveValue()`.
    */
-  visitFabricHash(value: FabricHash): LeafVisitorResult<PlusType, ResultType> {
+  visitFabricHash(value: FabricHash): VisitResult<PlusType, ResultType> {
     return this.visitFabricPrimitiveValue(value, VALUE_TAGS.FabricHash);
   }
 
@@ -130,7 +130,7 @@ export abstract class DefaultValueVisitor<
    */
   visitFabricInstance(
     value: FabricInstancePlus<PlusType>,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     return this.visitFabricContainerValue(value, VALUE_TAGS.FabricInstance);
   }
 
@@ -140,7 +140,7 @@ export abstract class DefaultValueVisitor<
    */
   visitFabricKeyPair(
     value: FabricKeyPair,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     return this.visitFabricPrimitiveValue(value, VALUE_TAGS.FabricKeyPair);
   }
 
@@ -150,7 +150,7 @@ export abstract class DefaultValueVisitor<
    */
   visitFabricPlainObject(
     value: FabricPlainObjectPlus<PlusType>,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     return this.visitFabricContainerValue(value, VALUE_TAGS.Object);
   }
 
@@ -160,7 +160,7 @@ export abstract class DefaultValueVisitor<
    */
   visitFabricRegExp(
     value: FabricRegExp,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     return this.visitFabricPrimitiveValue(value, VALUE_TAGS.FabricRegExp);
   }
 
@@ -170,7 +170,7 @@ export abstract class DefaultValueVisitor<
    */
   visitFabricUnavailable(
     value: FabricUnavailable,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     return this.visitFabricPrimitiveValue(value, VALUE_TAGS.FabricUnavailable);
   }
 
@@ -178,7 +178,7 @@ export abstract class DefaultValueVisitor<
    * Visits a value of type `null` (that is, the value `null` per se). If not
    * overridden, this calls `visitJsPrimitiveValue()`.
    */
-  visitNull(): LeafVisitorResult<PlusType, ResultType> {
+  visitNull(): VisitResult<PlusType, ResultType> {
     return this.visitJsPrimitiveValue(null, VALUE_TAGS.null);
   }
 
@@ -186,7 +186,7 @@ export abstract class DefaultValueVisitor<
    * Visits a value of type `number`. If not overridden, this calls
    * `visitJsPrimitiveValue()`.
    */
-  visitNumber(value: number): LeafVisitorResult<PlusType, ResultType> {
+  visitNumber(value: number): VisitResult<PlusType, ResultType> {
     return this.visitJsPrimitiveValue(value, VALUE_TAGS.number);
   }
 
@@ -197,7 +197,7 @@ export abstract class DefaultValueVisitor<
    */
   visitPlusType(
     value: PlusType,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     return this.visitAnyValue(value, VALUE_TAGS.PlusType);
   }
 
@@ -205,7 +205,7 @@ export abstract class DefaultValueVisitor<
    * Visits a value of type `string`. If not overridden, this calls
    * `visitJsPrimitiveValue()`.
    */
-  visitString(value: string): LeafVisitorResult<PlusType, ResultType> {
+  visitString(value: string): VisitResult<PlusType, ResultType> {
     return this.visitJsPrimitiveValue(value, VALUE_TAGS.string);
   }
 
@@ -213,7 +213,7 @@ export abstract class DefaultValueVisitor<
    * Visits a value of type `symbol`. If not overridden, this calls
    * `visitJsPrimitiveValue()`.
    */
-  visitSymbol(value: symbol): LeafVisitorResult<PlusType, ResultType> {
+  visitSymbol(value: symbol): VisitResult<PlusType, ResultType> {
     return this.visitJsPrimitiveValue(value, VALUE_TAGS.symbol);
   }
 
@@ -221,7 +221,7 @@ export abstract class DefaultValueVisitor<
    * Visits a value of type `undefined` (that is, the value `undefined` per se).
    * If not overridden, this calls `visitJsPrimitiveValue()`.
    */
-  visitUndefined(): LeafVisitorResult<PlusType, ResultType> {
+  visitUndefined(): VisitResult<PlusType, ResultType> {
     return this.visitJsPrimitiveValue(undefined, VALUE_TAGS.undefined);
   }
 
@@ -232,7 +232,7 @@ export abstract class DefaultValueVisitor<
    */
   visitUnrecognizedValue(
     value: unknown,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     const msg = debugStr`Cannot visit unrecognized value: $quote${value}`;
     throw new Error(msg);
   }
@@ -250,7 +250,7 @@ export abstract class DefaultValueVisitor<
   visitAnyValue(
     _value: FabricValuePlus<PlusType>,
     _tag: FabricValuePlusTag | null,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     return undefined;
   }
 
@@ -267,7 +267,7 @@ export abstract class DefaultValueVisitor<
   visitFabricContainerValue(
     _value: FabricContainerValuePlus<PlusType>,
     _tag: FabricContainerValueTag,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     return DO_RECURSE_VALUES;
   }
 
@@ -278,7 +278,7 @@ export abstract class DefaultValueVisitor<
   visitFabricPrimitiveValue(
     value: FabricPrimitive,
     tag: FabricPrimitiveValueTag,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     return this.visitPrimitiveValue(value, tag);
   }
 
@@ -289,7 +289,7 @@ export abstract class DefaultValueVisitor<
   visitJsPrimitiveValue(
     value: Primitive,
     tag: JsPrimitiveTypeValueTag,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     return this.visitPrimitiveValue(value, tag);
   }
 
@@ -300,7 +300,7 @@ export abstract class DefaultValueVisitor<
   visitPrimitiveValue(
     value: Primitive | FabricPrimitive,
     tag: PrimitiveValueTag,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     return this.visitAnyValue(value, tag);
   }
 
@@ -315,7 +315,7 @@ export abstract class DefaultValueVisitor<
   override visitValue(
     value: FabricValuePlus<PlusType>,
     tag: FabricValuePlusTag | null,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     // The casts in the following are all safe, assuming the visitor was called
     // with an honestly-derived `tag`.
 

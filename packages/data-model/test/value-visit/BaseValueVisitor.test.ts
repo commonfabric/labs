@@ -1,7 +1,7 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { BaseValueVisitor, type LeafVisitorResult } from "@/value-visit";
+import { BaseValueVisitor, type VisitResult } from "@/value-visit";
 import { VisitInProgress } from "@/value-visit/VisitInProgress.ts";
 
 import { Recorder } from "./Recorder.ts";
@@ -11,7 +11,7 @@ describe("BaseValueVisitor", () => {
   class Base extends BaseValueVisitor<unknown, unknown> {
     override visitValue(
       _value: unknown,
-    ): LeafVisitorResult<unknown, unknown> {
+    ): VisitResult<unknown, unknown> {
       return undefined;
     }
 
@@ -50,7 +50,7 @@ describe("BaseValueVisitor", () => {
         class Recursing extends Base {
           override visitValue(
             value: unknown,
-          ): LeafVisitorResult<unknown, unknown> {
+          ): VisitResult<unknown, unknown> {
             return Array.isArray(value)
               ? { type: "recurse", doKeys: false, doValues: true }
               : undefined;

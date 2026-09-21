@@ -20,7 +20,7 @@ import type {
 import {
   type BaselineVisitorMethodResult,
   DefaultValueVisitor,
-  type LeafVisitorResult,
+  type VisitResult,
 } from "@/value-visit";
 
 /**
@@ -52,27 +52,27 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
   onValue?: (
     value: unknown,
     tag: FabricValuePlusTag | null,
-  ) => LeafVisitorResult<unknown, unknown> | typeof DO_DISPATCH;
+  ) => VisitResult<unknown, unknown> | typeof DO_DISPATCH;
   onCycle?: (
     value: FabricContainerValuePlus<unknown>,
     tag: FabricContainerValueTag,
     originalDepth: number,
     thisDepth: number,
-  ) => LeafVisitorResult<unknown, unknown>;
+  ) => VisitResult<unknown, unknown>;
   onArray?: (
     value: FabricArrayPlus<unknown>,
-  ) => LeafVisitorResult<unknown, unknown>;
+  ) => VisitResult<unknown, unknown>;
   onPlainObject?: (
     value: FabricPlainObjectPlus<unknown>,
-  ) => LeafVisitorResult<unknown, unknown>;
+  ) => VisitResult<unknown, unknown>;
   onInstance?: (
     value: FabricInstancePlus<unknown>,
-  ) => LeafVisitorResult<unknown, unknown>;
+  ) => VisitResult<unknown, unknown>;
   onPrimitive?: (
     value: unknown,
     tag: PrimitiveValueTag,
-  ) => LeafVisitorResult<unknown, unknown>;
-  onPlusType?: (value: unknown) => LeafVisitorResult<unknown, unknown>;
+  ) => VisitResult<unknown, unknown>;
+  onPlusType?: (value: unknown) => VisitResult<unknown, unknown>;
   onVisitedElement?: (
     index: number,
     value: unknown,
@@ -104,7 +104,7 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
   override visitValue(
     value: unknown,
     tag: FabricValuePlusTag | null,
-  ): LeafVisitorResult<unknown, unknown> {
+  ): VisitResult<unknown, unknown> {
     this.events.push(["value", value, tag]);
 
     const result = this.onValue ? this.onValue(value, tag) : DO_DISPATCH;
@@ -117,7 +117,7 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
     tag: FabricContainerValueTag,
     originalDepth: number,
     thisDepth: number,
-  ): LeafVisitorResult<unknown, unknown> {
+  ): VisitResult<unknown, unknown> {
     this.events.push(["cycle", value, tag, originalDepth, thisDepth]);
     return this.onCycle
       ? this.onCycle(value, tag, originalDepth, thisDepth)
@@ -126,14 +126,14 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
 
   override visitFabricArray(
     value: FabricArrayPlus<unknown>,
-  ): LeafVisitorResult<unknown, unknown> {
+  ): VisitResult<unknown, unknown> {
     this.events.push(["array", value]);
     return this.onArray ? this.onArray(value) : super.visitFabricArray(value);
   }
 
   override visitFabricPlainObject(
     value: FabricPlainObjectPlus<unknown>,
-  ): LeafVisitorResult<unknown, unknown> {
+  ): VisitResult<unknown, unknown> {
     this.events.push(["object", value]);
     return this.onPlainObject
       ? this.onPlainObject(value)
@@ -142,7 +142,7 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
 
   override visitFabricInstance(
     value: FabricInstancePlus<unknown>,
-  ): LeafVisitorResult<unknown, unknown> {
+  ): VisitResult<unknown, unknown> {
     this.events.push(["instance", value]);
     return this.onInstance
       ? this.onInstance(value)
@@ -152,14 +152,14 @@ export class Recorder extends DefaultValueVisitor<unknown, unknown> {
   override visitPrimitiveValue(
     value: unknown,
     tag: PrimitiveValueTag,
-  ): LeafVisitorResult<unknown, unknown> {
+  ): VisitResult<unknown, unknown> {
     this.events.push(["primitive", value, tag]);
     return this.onPrimitive ? this.onPrimitive(value, tag) : undefined;
   }
 
   override visitPlusType(
     value: unknown,
-  ): LeafVisitorResult<unknown, unknown> {
+  ): VisitResult<unknown, unknown> {
     this.events.push(["plusType", value]);
     return this.onPlusType ? this.onPlusType(value) : undefined;
   }

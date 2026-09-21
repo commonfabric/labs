@@ -122,13 +122,14 @@ export type BaselineVisitorMethodResult<ResultType = FabricValue> =
  *
  * See the included result types for details on what they mean.
  */
-export type LeafVisitorResult<PlusType = never, ResultType = FabricValue> =
+export type VisitResult<PlusType = never, ResultType = FabricValue> =
   | BaselineVisitorMethodResult<ResultType>
   | RecurseForm
   | ReplaceForm<PlusType>;
 
 /**
- * Possible results from the `visitValue()` call and similar functions.
+ * Possible results from the `visitValue()` function and other similar
+ * functions.
  */
 export type MainVisitResult<ResultType = FabricValue> =
   BaselineVisitorMethodResult<
@@ -194,7 +195,7 @@ export interface ValueVisitor<PlusType = never, ResultType = FabricValue> {
     originalDepth: number,
     /** Depth of the current visit. */
     thisDepth: number,
-  ): LeafVisitorResult<PlusType, ResultType>;
+  ): VisitResult<PlusType, ResultType>;
 
   /**
    * Visits the given arbitrary value. The visitor engine calls this method for
@@ -206,7 +207,7 @@ export interface ValueVisitor<PlusType = never, ResultType = FabricValue> {
   visitValue(
     value: FabricValuePlus<PlusType>,
     tag: FabricValuePlusTag | null,
-  ): LeafVisitorResult<PlusType, ResultType>;
+  ): VisitResult<PlusType, ResultType>;
 
   /**
    * Indicates that an array element was just visited. This method is called as

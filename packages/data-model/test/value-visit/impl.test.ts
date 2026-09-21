@@ -4,8 +4,8 @@ import { expect } from "@std/expect";
 import {
   type BaselineVisitorMethodResult,
   DefaultValueVisitor,
-  type LeafVisitorResult,
   makeVisitValueFunction,
+  type VisitResult,
   visitValue,
 } from "@/value-visit";
 
@@ -32,7 +32,7 @@ describe("value-visit/impl", () => {
 
     it("returns a `mainResult` typed by the visitor's `ResultType`", () => {
       class FirstNumber extends DefaultValueVisitor<never, number> {
-        override visitNumber(value: number): LeafVisitorResult<never, number> {
+        override visitNumber(value: number): VisitResult<never, number> {
           return mainResult(value);
         }
       }
