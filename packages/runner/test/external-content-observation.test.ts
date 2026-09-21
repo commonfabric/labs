@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
@@ -54,13 +55,16 @@ const withRuntime = async (
     runtime: Runtime,
     storageManager: ReturnType<typeof StorageManager.emulate>,
   ) => void | Promise<void>,
-  options: { cfcWriteFloor?: "off" | "observe" | "enforce" } = {},
+  options: {
+    cfcWriteFloor?: "off" | "observe" | "enforce";
+    cfcEnforcementMode?: "disabled" | "enforce-explicit";
+  } = {},
 ): Promise<void> => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL("https://example.com"),
     storageManager,
-    cfcEnforcementMode: "enforce-explicit",
+    cfcEnforcementMode: options.cfcEnforcementMode ?? "enforce-explicit",
     cfcFlowLabels: "persist",
     cfcWriteFloor: options.cfcWriteFloor,
     cfcSinkMaxConfidentiality: { fetchJson: [] },
@@ -167,6 +171,68 @@ describe("external content observation", () => {
       runtime.prepareTxForCommit(tx);
       expect(tx.getCfcState().prepare.status).toBe("prepared");
       tx.abort("test complete");
+    });
+  });
+
+  it("admits a receipt when CFC enforcement is disabled", async () => {
+    await withRuntime(async (runtime) => {
+      const targetTx = runtime.edit();
+      identifyProducer(targetTx);
+
+      const receipt = await runtime.prepareExternalContentObservation({
+        targetTx,
+        space,
+        cause: "disabled-external-content-row",
+        schema: ROW_SCHEMA,
+        value: { title: "row outside CFC enforcement" },
+        producer: PRODUCER,
+      });
+
+      expect(() =>
+        runtime.recordExternalContentObservation(targetTx, receipt, {
+          space,
+          producer: PRODUCER,
+        })
+      ).not.toThrow();
+      targetTx.abort("test complete");
+    }, { cfcEnforcementMode: "disabled" });
+  });
+
+  it("awaits link-target loads before deriving the receipt", async () => {
+    await withRuntime(async (runtime, storageManager) => {
+      let pendingChecks = 0;
+      let settled = 0;
+      using _pending = stub(
+        storageManager,
+        "pendingCrossSpacePromiseCount",
+        () => pendingChecks++ === 0 ? 1 : 0,
+      );
+      using _settled = stub(
+        storageManager,
+        "crossSpaceSettled",
+        () => {
+          settled++;
+          return Promise.resolve();
+        },
+      );
+      const targetTx = runtime.edit();
+      identifyProducer(targetTx);
+
+      const receipt = await runtime.prepareExternalContentObservation({
+        targetTx,
+        space,
+        cause: "settled-external-content-row",
+        schema: ROW_SCHEMA,
+        value: { title: "private row" },
+        producer: PRODUCER,
+      });
+
+      expect(settled).toBe(1);
+      runtime.recordExternalContentObservation(targetTx, receipt, {
+        space,
+        producer: PRODUCER,
+      });
+      targetTx.abort("test complete");
     });
   });
 

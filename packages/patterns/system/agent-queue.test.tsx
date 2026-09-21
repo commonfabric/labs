@@ -11,7 +11,7 @@ const RUNNER = {
 
 export default pattern(() => {
   const queue = AgentQueue({});
-  const record = new Writable<AgentRun>({
+  const record = new Writable.perUser<AgentRun>({
     requestHash: "hash-1",
     request: {},
     piece: {},
@@ -64,7 +64,7 @@ export default pattern(() => {
   const assert_entry_links_the_record = assert(() =>
     queue.entries.get().length === 1 &&
     queue.entries.get()[0].host === "https://cloud.example" &&
-    queue.entries.get()[0].run.state === "queued"
+    queue.entries.get()[0].run.get()?.state === "queued"
   );
 
   const assert_rendered_record = assert(() =>

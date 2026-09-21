@@ -35,6 +35,7 @@ import {
   REFERENT_TOKEN_PATTERN,
 } from "./contracts/handle-table.ts";
 import type { HarnessSkillAcquisition } from "./contracts/skill.ts";
+import { isCfcLabelShape } from "./cfc-label-shape.ts";
 
 /** Acquisition fields every recorded provenance must carry as a non-empty string. */
 const ACQUISITION_STRING_FIELDS = [
@@ -279,6 +280,20 @@ export const mintAddressHandle = async (
  * content, label, and label source share one token, so a row a run retrieves
  * twice is held once. The suffix is derived the way an address handle's is.
  */
+const referentIdentityKey = (
+  referent: Pick<
+    HarnessHandleReferent,
+    "source" | "value" | "label" | "labelSource"
+  >,
+): string =>
+  hashStringOf([
+    "referent",
+    referent.source,
+    referent.value,
+    referent.label,
+    referent.labelSource,
+  ]);
+
 export const mintReferentHandle = async (
   table: HarnessHandleTable,
   referent: Omit<HarnessHandleReferent, "token" | "kind">,
@@ -286,22 +301,8 @@ export const mintReferentHandle = async (
 ): Promise<{ table: HarnessHandleTable; token: string }> => {
   const hasher = options.hasher ?? sha256Hasher;
   const referents = table.referents ?? [];
-  const key = hashStringOf([
-    "referent",
-    referent.source,
-    referent.value,
-    referent.label,
-    referent.labelSource,
-  ]);
-  const existing = referents.find((held) =>
-    hashStringOf([
-      "referent",
-      held.source,
-      held.value,
-      held.label,
-      held.labelSource,
-    ]) === key
-  );
+  const key = referentIdentityKey(referent);
+  const existing = referents.find((held) => referentIdentityKey(held) === key);
   if (existing !== undefined) return { table, token: existing.token };
   let attempt = 0;
   let suffix = await deriveTokenSuffix(table.salt, key, attempt, hasher);
@@ -555,6 +556,7 @@ const assertValidReferents = (referents: unknown): void => {
     throw new Error("invalid handle table: referents must be an array");
   }
   const tokens = new Set<string>();
+  const identities = new Set<string>();
   for (const referent of referents) {
     if (!isObjectNotArray(referent)) {
       throw new Error("invalid handle table: referent is not an object");
@@ -579,9 +581,9 @@ const assertValidReferents = (referents: unknown): void => {
         `invalid handle table: referent \`${token}\` has an empty source`,
       );
     }
-    if (!isObjectNotArray(label)) {
+    if (!isCfcLabelShape(label)) {
       throw new Error(
-        `invalid handle table: referent \`${token}\` has a label that is not an object`,
+        `invalid handle table: referent \`${token}\` has a malformed label`,
       );
     }
     if (labelSource !== "row" && labelSource !== "query") {
@@ -595,6 +597,15 @@ const assertValidReferents = (referents: unknown): void => {
       throw new Error(`invalid handle table: duplicate token \`${token}\``);
     }
     tokens.add(token);
+    const identity = referentIdentityKey(
+      referent as unknown as HarnessHandleReferent,
+    );
+    if (identities.has(identity)) {
+      throw new Error(
+        `invalid handle table: duplicate referent identity at \`${token}\``,
+      );
+    }
+    identities.add(identity);
   }
 };
 
