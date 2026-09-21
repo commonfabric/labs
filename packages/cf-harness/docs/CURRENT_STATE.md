@@ -2,7 +2,7 @@
 
 Status: current implementation reference\
 Last verified: 2026-09-21\
-Revision: `b0765e4f55+pending-captures`
+Revision: `3a315a91f6+pending-captures`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.

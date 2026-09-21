@@ -340,30 +340,24 @@ export const assignSlugTool: HarnessToolDefinition<
         "assign_slug token does not refer to a piece; only a piece can be named",
       );
     }
-    try {
-      const controller = new PieceController(pieces, cell);
-      const pattern = await controller.getPattern({ projectResult: false });
-      const result = pieces.getResult(cell);
-      const value = await controller.result.get();
-      if (
-        observedOutputsIn(value, pattern.resultSchema)
-          .some((output) => output.concern.concern === "pending")
-      ) {
-        return errorOutput(
-          "assign_slug cannot name a piece whose read is pending. Read the same piece again and verify its settled result before naming it.",
-        );
-      }
-      const ui = result.asSchema(uiSchema);
-      await ui.pull();
-      const rendered = ui.get();
-      if (!isObjectNotArray(rendered) || rendered[UI] == null) {
-        return errorOutput(
-          "assign_slug cannot confirm a UI on this piece. Keep data-only probes unnamed; name the user-facing page after verifying it.",
-        );
-      }
-    } catch {
+    const controller = new PieceController(pieces, cell);
+    const pattern = await controller.getPattern({ projectResult: false });
+    const result = pieces.getResult(cell);
+    const value = await controller.result.get();
+    if (
+      observedOutputsIn(value, pattern.resultSchema)
+        .some((output) => output.concern.concern === "pending")
+    ) {
       return errorOutput(
-        "assign_slug could not verify the piece's read state and UI; no name was assigned.",
+        "assign_slug cannot name a piece whose read is pending. Read the same piece again and verify its settled result before naming it.",
+      );
+    }
+    const ui = result.asSchema(uiSchema);
+    await ui.pull();
+    const rendered = ui.get();
+    if (!isObjectNotArray(rendered) || rendered[UI] == null) {
+      return errorOutput(
+        "assign_slug cannot confirm a UI on this piece. Keep data-only probes unnamed; name the user-facing page after verifying it.",
       );
     }
     const successOutput = (): AssignSlugToolSuccessOutput => {

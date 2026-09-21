@@ -2061,7 +2061,9 @@ still reports ok, since silence is not evidence of failure.
 read or an unestablished UI refuses naming with a fixed diagnostic. Data-only
 probes stay unnamed. UI presence is a structural check; it does not attest to
 rendered correctness or release any content. These checks share the output
-concern reader and the runtime's UI schema.
+concern reader and the runtime's UI schema. Unexpected pattern, result, or UI
+read failures retain their cause in the run's failure record and stop the call
+before registration or naming.
 
 A successful `assign_slug` returns `{ slug }`, plus `url` when the harness can
 compose one honestly. The URL is the session's API URL, the space, and the slug

@@ -482,7 +482,7 @@ describe("assign-slug", () => {
   });
 
   describe("assignSlugTool", () => {
-    it("refuses naming when the piece's read state cannot be established", async () => {
+    it("preserves an operational read failure without registering or naming the piece", async () => {
       await linkDefaultPattern();
       const engine = createEngine();
       const created = await createPiece(engine);
@@ -490,15 +490,17 @@ describe("assign-slug", () => {
         throw new Error("private result-read diagnostic");
       });
       try {
-        const result = await engine.invokeBuiltinTool("assign_slug", {
+        await expect(engine.invokeBuiltinTool("assign_slug", {
           token: created.resultRef,
           slug: "unverified-report",
-        });
-        expect(result.output).toMatchObject({
-          status: "error",
-          message:
-            "assign_slug could not verify the piece's read state and UI; no name was assigned.",
-        });
+        })).rejects.toThrow("private result-read diagnostic");
+        expect(engine.getRunState().failureRecords).toEqual([
+          expect.objectContaining({
+            source: "run_error",
+            toolId: "assign_slug",
+            detail: "private result-read diagnostic",
+          }),
+        ]);
         expect(engine.getRunState().assignedPieces).toBeUndefined();
       } finally {
         unreadable.restore();
