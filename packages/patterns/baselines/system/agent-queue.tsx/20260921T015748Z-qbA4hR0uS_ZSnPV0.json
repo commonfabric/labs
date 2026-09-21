@@ -1,0 +1,294 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "system/agent-queue.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AgentQueueEntry": {
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "run": {
+            "$ref": "#/$defs/AgentRunRecord"
+          }
+        },
+        "required": [
+          "run",
+          "host"
+        ],
+        "type": "object"
+      },
+      "AgentRun": {
+        "properties": {
+          "attempts": {
+            "type": "number"
+          },
+          "cancelRequestedAt": {
+            "type": "string"
+          },
+          "claim": {
+            "properties": {
+              "leaseUntil": {
+                "type": "string"
+              },
+              "runner": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "runner",
+              "leaseUntil"
+            ],
+            "type": "object"
+          },
+          "errorCode": {
+            "$ref": "#/$defs/AgentRunErrorCode"
+          },
+          "finishedAt": {
+            "type": "string"
+          },
+          "inputs": {
+            "additionalProperties": {
+              "type": "unknown"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "maxConfidentiality": {
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "modelTurns": {
+            "type": "number"
+          },
+          "outcome": {
+            "$ref": "#/$defs/AgentRunOutcome"
+          },
+          "piece": {
+            "type": "unknown"
+          },
+          "request": {
+            "type": "unknown"
+          },
+          "requestHash": {
+            "type": "string"
+          },
+          "result": {
+            "type": "unknown"
+          },
+          "resultSchema": {
+            "type": "unknown"
+          },
+          "runRef": {
+            "type": "string"
+          },
+          "space": {
+            "type": "unknown"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/$defs/AgentRunState"
+          },
+          "stateSince": {
+            "type": "string"
+          },
+          "submittedAt": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          },
+          "toolCalls": {
+            "type": "number"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "usage": {
+            "$ref": "#/$defs/AgentRunUsage"
+          },
+          "usageCoverage": {
+            "enum": [
+              "direct",
+              "including-descendants"
+            ]
+          }
+        },
+        "required": [
+          "requestHash",
+          "request",
+          "piece",
+          "space",
+          "task",
+          "inputs",
+          "resultSchema",
+          "submittedAt",
+          "state",
+          "stateSince"
+        ],
+        "type": "object"
+      },
+      "AgentRunErrorCode": {
+        "enum": [
+          "INVALID_INPUT",
+          "LIMIT_REACHED",
+          "PROVIDER_FAILURE",
+          "RUNNER_LOST",
+          "CANCELLED",
+          "REFUSED"
+        ]
+      },
+      "AgentRunOutcome": {
+        "enum": [
+          "completed",
+          "failed",
+          "refused",
+          "cancelled"
+        ]
+      },
+      "AgentRunRecord": {
+        "$ref": "#/$defs/AgentRun"
+      },
+      "AgentRunState": {
+        "enum": [
+          "queued",
+          "claimed",
+          "running",
+          "completed",
+          "failed",
+          "refused",
+          "cancelled"
+        ]
+      },
+      "AgentRunUsage": {
+        "properties": {
+          "cacheWriteTokens": {
+            "type": "number"
+          },
+          "cachedInputTokens": {
+            "type": "number"
+          },
+          "costUsd": {
+            "type": "number"
+          },
+          "estimateWithheldReason": {
+            "type": "string"
+          },
+          "estimatedCostUsd": {
+            "type": "number"
+          },
+          "inputTokens": {
+            "type": "number"
+          },
+          "outputTokens": {
+            "type": "number"
+          },
+          "reasoningTokens": {
+            "type": "number"
+          },
+          "totalTokens": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "AgentRunnerEntry": {
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "lastClaimAt": {
+            "type": "string"
+          },
+          "registeredAt": {
+            "type": "string"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "host",
+          "tools",
+          "registeredAt"
+        ],
+        "type": "object"
+      },
+      "SetAgentRunnerEvent": {
+        "properties": {
+          "runner": {
+            "$ref": "#/$defs/AgentRunnerEntry"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "agentRunner": {
+        "$ref": "#/$defs/AgentRunnerEntry",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "represents-principal",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "ownerPrincipal": {
+            "__ctCurrentPrincipal": true
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/system/agent-queue.tsx",
+              "moduleIdentity": "GyW1ZQt9wn7ELnBuIWSmeHXGDUBYAa6kUlgOphEpmm4",
+              "path": [
+                "setAgentRunner"
+              ]
+            }
+          }
+        }
+      },
+      "entries": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/AgentQueueEntry"
+        },
+        "type": "array"
+      },
+      "setAgentRunner": {
+        "$ref": "#/$defs/SetAgentRunnerEvent",
+        "asCell": [
+          "stream"
+        ]
+      }
+    },
+    "required": [
+      "entries",
+      "setAgentRunner",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}
