@@ -95,6 +95,25 @@ describe("CFRender variant handling", () => {
 });
 
 describe("CFRender render concurrency", () => {
+  it("does not resolve a cell after its runtime is disposed", async () => {
+    const element = new CFRender();
+    const cell = createMockCellHandle<unknown>({});
+    Object.assign(cell.runtime(), { signal: AbortSignal.abort() });
+    let resolutions = 0;
+    cell.resolveAsCell = () => {
+      resolutions++;
+      return Promise.resolve(cell);
+    };
+    element.cell = cell;
+    const internals = element as unknown as {
+      _containerRef: { value?: HTMLDivElement };
+      _renderCell(): Promise<void>;
+    };
+    internals._containerRef = { value: {} as HTMLDivElement };
+    await internals._renderCell();
+    expect(resolutions).toBe(0);
+  });
+
   it("cleans up the mounted render when its cell is cleared", async () => {
     const element = new CFRender();
     let cleanups = 0;
@@ -1135,6 +1154,44 @@ describe("CFRender tile navigation", () => {
 });
 
 describe("CFRender disconnectedCallback", () => {
+  it("rerenders once after reconnecting with an equal queued cell update", async () => {
+    const element = new CFRender();
+    const cell = createMockCellHandle<unknown>({ name: "stable" });
+    let connected = true;
+    let renders = 0;
+    const lifecycle = element as unknown as {
+      updated(changes: Map<string, unknown>): void;
+      _renderCell(): Promise<void>;
+      createRenderRoot(): unknown;
+      performUpdate(): void;
+    };
+    Object.defineProperty(element, "isConnected", { get: () => connected });
+    lifecycle.createRenderRoot = () => ({ adoptedStyleSheets: [] });
+    lifecycle.performUpdate = () => {};
+    lifecycle._renderCell = () => {
+      renders++;
+      return Promise.resolve();
+    };
+    element.hasUpdated = true;
+    element.cell = cell;
+    lifecycle.updated(new Map([["cell", undefined]]));
+    expect(renders).toBe(1);
+
+    connected = false;
+    element.disconnectedCallback();
+    const equal = await cell.resolveAsCell();
+    element.cell = equal;
+    lifecycle.updated(new Map([["cell", cell]]));
+    expect(renders).toBe(1);
+    connected = true;
+    element.connectedCallback();
+    lifecycle.updated(new Map([["cell", cell]]));
+    expect(renders).toBe(2);
+    lifecycle.updated(new Map());
+    expect(renders).toBe(2);
+    element.disconnectedCallback();
+  });
+
   it("listens for right-clicks while connected, and stops when disconnected", () => {
     const element = new CFRender();
     const listened: string[] = [];
