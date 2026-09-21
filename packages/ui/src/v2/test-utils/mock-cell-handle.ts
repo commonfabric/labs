@@ -18,6 +18,7 @@ import {
   $onCellUpdate,
   CellHandle,
   type CellRef,
+  type ClientCellValue,
   type InitializedRuntimeConnection,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
@@ -80,6 +81,16 @@ class MockCellNetwork {
     return ref;
   }
 
+  /** Reads the root or nested value a worker read would return. */
+  getValue(ref: CellRef): unknown {
+    let value: unknown = this.#roots.get(this.#rootKey(ref))?.get();
+    for (const segment of ref.path) {
+      if (!isObjectOrArray(value)) return undefined;
+      value = (value as Record<string, unknown>)[segment];
+    }
+    return value;
+  }
+
   /**
    * Handle a CellSet request: propagate child writes to the root handle.
    */
@@ -88,7 +99,11 @@ class MockCellNetwork {
     value: unknown,
   ): void {
     const root = this.#roots.get(this.#rootKey(cellRef));
-    if (!root || cellRef.path.length === 0) return;
+    if (!root) return;
+    if (cellRef.path.length === 0) {
+      root[$onCellUpdate](value);
+      return;
+    }
 
     // Reconstruct the root's full value with the nested path updated
     const rootValue = root.get();
@@ -132,7 +147,7 @@ function deepSet(
  * Create a mock InitializedRuntimeConnection backed by a MockCellNetwork.
  *
  * - `request()` intercepts CellSet to propagate child→parent writes,
- *   answers CellResolveAsCell by following a stored `$link` at the asked
+ *   answers CellGet from the current root value and CellResolveAsCell by following a stored `$link` at the asked
  *   path (echoing the asking ref when there is none to follow — already
  *   canonical), and resolves everything else with `{}`.
  * - `subscribe()` / `unsubscribe()` are no-ops.
@@ -142,9 +157,17 @@ function createMockConnection(
   network: MockCellNetwork,
 ): InitializedRuntimeConnection {
   return {
+    signal: new AbortController().signal,
     request: (data: { type: string; cell?: CellRef; value?: unknown }) => {
       if (data.type === "cell:set" && data.cell && data.value !== undefined) {
         network.handleCellSet(data.cell, data.value);
+      }
+      if (data.type === "cell:get" && data.cell) {
+        return Promise.resolve({
+          value: CellHandle.serialize(
+            network.getValue(data.cell) as ClientCellValue,
+          ),
+        });
       }
       if (data.type === "cell:resolveAsCell" && data.cell) {
         return Promise.resolve({ cell: network.resolveRef(data.cell) } as any);
@@ -171,7 +194,10 @@ function createMockConnection(
 function createMockRuntimeClient(
   conn: InitializedRuntimeConnection,
 ): RuntimeClient {
-  return { [$conn]: () => conn } as unknown as RuntimeClient;
+  return {
+    [$conn]: () => conn,
+    signal: conn.signal,
+  } as unknown as RuntimeClient;
 }
 
 /**

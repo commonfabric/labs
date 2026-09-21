@@ -10,7 +10,7 @@ import {
 import type { ReactiveControllerHost } from "lit";
 
 import {
-  createMockCellHandle,
+  createMockCellHandle as createUnobservedMockCellHandle,
   pushUpdate,
 } from "../test-utils/mock-cell-handle.ts";
 import {
@@ -23,6 +23,44 @@ import {
   createStringCellController,
   StringCellController,
 } from "./cell-controller.ts";
+
+/** Commit promises started through each mock handle. */
+const mockWrites = new WeakMap<object, Promise<void>[]>();
+
+/**
+ * Constructs a mock handle whose UI-write completions tests can await.
+ * `source` supplies a stale, read-through view of its mock network: writes and
+ * broadcasts belong to the registered source handle. Use that view only for
+ * rebinding and reads, and use `pushUpdate()` to deliver values explicitly.
+ * These synchronous mocks do not model pending or refused commits; those
+ * outcomes are controlled in `cell-controller-commit.test.ts`.
+ */
+function createMockCellHandle<T>(
+  value?: T,
+  ref?: Partial<CellRef>,
+  source?: CellHandle<T>,
+): CellHandle<T> {
+  const cell = source
+    ? new CellHandle<T>(source.runtime(), { ...source.ref(), ...ref }, value)
+    : createUnobservedMockCellHandle(value, ref);
+  const writes: Promise<void>[] = [];
+  mockWrites.set(cell, writes);
+  const setForUI = cell.setForUI.bind(cell);
+  cell.setForUI = (value) => {
+    const write = setForUI(value);
+    writes.push(write);
+    return write;
+  };
+  return cell;
+}
+
+/** Waits for writes already started on the supplied handles. */
+async function settleWrites(
+  ...cells: { sync(): Promise<unknown> }[]
+): Promise<void> {
+  await Promise.all(cells.flatMap((cell) => mockWrites.get(cell) ?? []));
+  await Promise.all(cells.map((cell) => cell.sync()));
+}
 
 /** Minimal mock host satisfying Lit's ReactiveControllerHost interface. */
 function createMockHost(): ReactiveControllerHost {
@@ -153,7 +191,7 @@ describe("CellController", () => {
     expect(ctrl.getCell()).toBeNull();
   });
 
-  it("setValue updates the underlying CellHandle", () => {
+  it("setValue updates the underlying CellHandle", async () => {
     const host = createMockHost();
     const ctrl = new CellController<string>(host, {
       timing: { strategy: "immediate" },
@@ -161,7 +199,8 @@ describe("CellController", () => {
     const cell = createMockCellHandle("before");
     ctrl.bind(cell);
     ctrl.setValue("after");
-    // CellHandle.set is async but updates local cache synchronously
+    expect(ctrl.getValue()).toBe("after");
+    await settleWrites(cell);
     expect(cell.get()).toBe("after");
   });
 
@@ -408,7 +447,7 @@ describe("CellController", () => {
 //
 
 describe("CellController — flush", () => {
-  it("runs a pending debounced write immediately", () => {
+  it("runs a pending debounced write immediately", async () => {
     const cell = createMockCellHandle("initial");
     const ctrl = new CellController<string>(createMockHost(), {
       timing: { strategy: "debounce", delay: 300 },
@@ -418,7 +457,8 @@ describe("CellController — flush", () => {
     // Debounced: the write has not landed yet.
     expect(cell.get()).toBe("initial");
     ctrl.flush();
-    // flush() drains the pending write to the cell.
+    expect(ctrl.getValue()).toBe("updated");
+    await settleWrites(cell);
     expect(cell.get()).toBe("updated");
   });
 
@@ -490,12 +530,14 @@ describe("BooleanCellController", () => {
     expect(ctrl.getValue()).toBe(true);
   });
 
-  it("toggle() flips the value", () => {
+  it("toggle() flips the value", async () => {
     const host = createMockHost();
     const ctrl = new BooleanCellController(host);
     const cell = createMockCellHandle(false);
     ctrl.bind(cell);
     ctrl.toggle();
+    expect(ctrl.getValue()).toBe(true);
+    await settleWrites(cell);
     expect(cell.get()).toBe(true);
   });
 });
@@ -530,16 +572,18 @@ describe("ArrayCellController", () => {
     expect(cell.get()).toEqual([1, 2, 3]);
   });
 
-  it("removeItem filters out the item", () => {
+  it("removeItem filters out the item", async () => {
     const host = createMockHost();
     const ctrl = new ArrayCellController<string>(host);
     const cell = createMockCellHandle(["a", "b", "c"]);
     ctrl.bind(cell);
     ctrl.removeItem("b");
+    expect(ctrl.getValue()).toEqual(["a", "c"]);
+    await settleWrites(cell);
     expect(cell.get()).toEqual(["a", "c"]);
   });
 
-  it("removeItem removes a NaN element and keeps -0 distinct from 0", () => {
+  it("removeItem removes a NaN element and keeps -0 distinct from 0", async () => {
     // `Object.is` matching: `NaN` is removable; removing `0` must not take a
     // stored `-0` with it.
     const host = createMockHost();
@@ -548,11 +592,13 @@ describe("ArrayCellController", () => {
     ctrl.bind(cell);
 
     ctrl.removeItem(NaN);
+    await settleWrites(cell);
     let result = cell.get() as number[];
     expect(result.length).toBe(2);
     expect(Object.is(result[0], -0)).toBe(true);
 
     ctrl.removeItem(0);
+    await settleWrites(cell);
     result = cell.get() as number[];
     expect(result.length).toBe(2);
     expect(Object.is(result[0], -0)).toBe(true);
@@ -618,7 +664,7 @@ describe("CellController — timing integration", () => {
     time.restore();
   });
 
-  it("setValue with debounce delays the cell update", () => {
+  it("setValue with debounce delays the cell update", async () => {
     const host = createMockHost();
     const ctrl = new CellController<string>(host, {
       timing: { strategy: "debounce", delay: 200 },
@@ -631,10 +677,11 @@ describe("CellController — timing integration", () => {
     expect(cell.get()).toBe("old");
 
     time.tick(200);
+    await settleWrites(cell);
     expect(cell.get()).toBe("new");
   });
 
-  it("setValue with blur strategy only commits on onBlur()", () => {
+  it("setValue with blur strategy only commits on onBlur()", async () => {
     const host = createMockHost();
     const ctrl = new CellController<string>(host, {
       timing: { strategy: "blur" },
@@ -646,10 +693,11 @@ describe("CellController — timing integration", () => {
     expect(cell.get()).toBe("before");
 
     ctrl.onBlur();
+    await settleWrites(cell);
     expect(cell.get()).toBe("pending");
   });
 
-  it("setValue with throttle fires immediately on leading edge", () => {
+  it("setValue with throttle fires immediately on leading edge", async () => {
     const host = createMockHost();
     const ctrl = new CellController<string>(host, {
       timing: { strategy: "throttle", delay: 100 },
@@ -658,7 +706,9 @@ describe("CellController — timing integration", () => {
     ctrl.bind(cell);
 
     ctrl.setValue("first");
-    expect(cell.get()).toBe("first"); // leading edge fires immediately
+    expect(ctrl.getValue()).toBe("first");
+    await settleWrites(cell);
+    expect(cell.get()).toBe("first");
   });
 
   it("cancel() prevents pending debounced update from firing", () => {
@@ -675,7 +725,7 @@ describe("CellController — timing integration", () => {
     expect(cell.get()).toBe("original");
   });
 
-  it("updateTimingOptions changes strategy at runtime", () => {
+  it("updateTimingOptions changes strategy at runtime", async () => {
     const host = createMockHost();
     const ctrl = new CellController<string>(host, {
       timing: { strategy: "debounce", delay: 100 },
@@ -685,6 +735,7 @@ describe("CellController — timing integration", () => {
 
     ctrl.updateTimingOptions({ strategy: "immediate" });
     ctrl.setValue("instant");
+    await settleWrites(cell);
     expect(cell.get()).toBe("instant");
   });
 });
@@ -714,9 +765,6 @@ const DRIFTED_LABEL_VIEW: CellRef["cfcLabelView"] = {
   entries: [{ path: [], label: { confidentiality: ["did:key:z-someone"] } }],
 };
 
-/** Let in-flight CellHandle.set() round-trips settle (mock resolves async). */
-const settleWrites = () => new Promise((resolve) => setTimeout(resolve, 0));
-
 describe("CellController — pending local edits vs stale bound state", () => {
   it("keeps a settled local edit when a same-cell rebind delivers a not-yet-hydrated handle", async () => {
     // The confirmed lunch-poll trace: commit() resolved (write durable), THEN
@@ -728,7 +776,7 @@ describe("CellController — pending local edits vs stale bound state", () => {
     ctrl.bind(initial);
 
     ctrl.setValue("Alice"); // user types; optimistic write
-    await settleWrites(); // the set() round-trip completes
+    await settleWrites(initial);
 
     const rebound = createMockCellHandle<string>(undefined, {
       cfcLabelView: DRIFTED_LABEL_VIEW,
@@ -747,7 +795,7 @@ describe("CellController — pending local edits vs stale bound state", () => {
     expect(ctrl.getValue()).toBe("");
   });
 
-  it("suppresses a stale pre-write value delivered by a same-cell rebind until the echo confirms", async () => {
+  it("suppresses a stale rebound cache until a post-commit read confirms the edit", async () => {
     const changes: Array<string | undefined> = [];
     const ctrl = new StringCellController(createMockHost(), {
       timing: { strategy: "immediate" },
@@ -763,16 +811,16 @@ describe("CellController — pending local edits vs stale bound state", () => {
     // pre-write snapshot.
     const rebound = createMockCellHandle<string>("", {
       cfcLabelView: DRIFTED_LABEL_VIEW,
-    });
+    }, initial);
     ctrl.bind(rebound);
     expect(ctrl.getValue()).toBe("Alice");
     // The stale "" must not be announced as a change either — the UI never
     // showed it.
     expect(changes).not.toContain("");
-    await settleWrites();
+    await settleWrites(initial);
     expect(ctrl.getValue()).toBe("Alice");
 
-    // Echo confirms; later remote edits apply normally.
+    // The read confirms the edit; later remote deliveries apply normally.
     pushUpdate(rebound, "Alice");
     expect(ctrl.getValue()).toBe("Alice");
     pushUpdate(rebound, "Bob");
@@ -811,15 +859,15 @@ describe("CellController — pending local edits vs stale bound state", () => {
       expect(ctrl.getValue()).toBe("Al");
 
       time.tick(300); // debounced write lands
+      await settleWrites(cell);
       expect(cell.get()).toBe("Al");
-      await time.runMicrotasks();
       expect(ctrl.getValue()).toBe("Al");
     } finally {
       time.restore();
     }
   });
 
-  it("keeps an uncommitted edit over a remote update while using the blur strategy", () => {
+  it("keeps an uncommitted edit over a remote update while using the blur strategy", async () => {
     const ctrl = new StringCellController(createMockHost(), {
       timing: { strategy: "blur" },
     });
@@ -833,6 +881,7 @@ describe("CellController — pending local edits vs stale bound state", () => {
     expect(ctrl.getValue()).toBe("Ali");
 
     ctrl.onBlur(); // commits the edit
+    await settleWrites(cell);
     expect(cell.get()).toBe("Ali");
   });
 
@@ -844,14 +893,14 @@ describe("CellController — pending local edits vs stale bound state", () => {
     ctrl.bind(cell);
 
     ctrl.setValue("Alice");
-    await settleWrites();
+    await settleWrites(cell);
 
     // A genuinely newer remote value must repaint...
     pushUpdate(cell, "Bob");
     expect(ctrl.getValue()).toBe("Bob");
 
     ctrl.setValue("Carol");
-    await settleWrites();
+    await settleWrites(cell);
 
     // ...and so must a remote clear that matches the pre-edit baseline.
     pushUpdate(cell, "Bob");
@@ -891,7 +940,7 @@ describe("CellController — pending local edits vs stale bound state", () => {
     expect(ctrl.getValue()).toBe("");
   });
 
-  it("releases a settled-but-unconverged edit when an authoritative clear arrives", async () => {
+  it("accepts an authoritative clear after reconciling a rebound handle", async () => {
     const ctrl = new StringCellController(createMockHost(), {
       timing: { strategy: "immediate" },
     });
@@ -899,17 +948,15 @@ describe("CellController — pending local edits vs stale bound state", () => {
     ctrl.bind(initial);
 
     ctrl.setValue("Alice");
-    // Rebind swaps in a pre-write snapshot, so the write settles unconverged.
+    // The rebound cache predates the edit; the post-commit read refreshes it.
     const rebound = createMockCellHandle<string>("", {
       cfcLabelView: DRIFTED_LABEL_VIEW,
-    });
+    }, initial);
     ctrl.bind(rebound);
-    await settleWrites();
+    await settleWrites(initial);
     expect(ctrl.getValue()).toBe("Alice");
 
-    // The write was lost and the cell cleared: the post-settle delivery is
-    // authoritative even when it is undefined — the edit must not be shown
-    // forever.
+    // A later clear is authoritative even when its value is undefined.
     pushUpdate(rebound, undefined as unknown as string);
     expect(ctrl.getValue()).toBe("");
   });
@@ -929,7 +976,7 @@ describe("CellController — pending local edits vs stale bound state", () => {
     expect(ctrl.getValue()).toBe("other");
   });
 
-  it("lets a genuinely newer remote value supersede a settled-but-unconverged edit", async () => {
+  it("accepts a remote edit after reconciling a rebound handle", async () => {
     const ctrl = new StringCellController(createMockHost(), {
       timing: { strategy: "immediate" },
     });
@@ -939,12 +986,11 @@ describe("CellController — pending local edits vs stale bound state", () => {
     ctrl.setValue("Alice");
     const rebound = createMockCellHandle<string>("", {
       cfcLabelView: DRIFTED_LABEL_VIEW,
-    });
+    }, initial);
     ctrl.bind(rebound);
-    await settleWrites();
+    await settleWrites(initial);
 
-    // Deliveries after settle reflect post-write state: a third value means a
-    // newer remote edit won and must repaint without waiting for our echo.
+    // A remote edit after reconciliation repaints without another local echo.
     pushUpdate(rebound, "Zed");
     expect(ctrl.getValue()).toBe("Zed");
   });
@@ -964,7 +1010,7 @@ describe("CellController — pending local edits vs stale bound state", () => {
     ctrl.setValue("fresh-edit"); // pending edit on cell B
 
     // Cell A's write settles now; it must not touch cell B's pending edit.
-    await settleWrites();
+    await settleWrites(cellA, cellB);
     expect(ctrl.getValue()).toBe("fresh-edit");
     pushUpdate(cellB, "fresh-edit"); // echo confirms on B
     expect(ctrl.getValue()).toBe("fresh-edit");
@@ -990,7 +1036,7 @@ describe("CellController — pending local edits vs stale bound state", () => {
     }
   });
 
-  it("confirms an array edit structurally when the echo arrives on a rebound handle", () => {
+  it("confirms an array edit structurally when the echo arrives on a rebound handle", async () => {
     const ctrl = new ArrayCellController<string | { k: string }>(
       createMockHost(),
     );
@@ -1004,6 +1050,7 @@ describe("CellController — pending local edits vs stale bound state", () => {
     );
     ctrl.bind(rebound);
     expect(ctrl.getValue()).toEqual(["x", { k: "v" }]);
+    await settleWrites(initial);
 
     // The echo is a fresh deserialized instance — equal by structure, not
     // identity — and must still confirm (and release) the edit.
@@ -1046,6 +1093,32 @@ describe("CellController — pending local edits vs stale bound state", () => {
     // our edit (links compare by identity, not structure).
     pushUpdate(cell, linkB);
     expect(ctrl.getValue()).toBe(linkA);
+  });
+
+  it("keeps an unsent object edit across equal and different nested echoes", () => {
+    type Draft = { draft: { text: string } };
+    const changes: Draft[] = [];
+    const ctrl = new CellController<Draft>(createMockHost(), {
+      timing: { strategy: "blur" },
+      onChange: (value) => changes.push(value),
+    });
+    const cell = createMockCellHandle<Draft>({ draft: { text: "initial" } });
+    ctrl.bind(cell);
+    try {
+      ctrl.setValue({ draft: { text: "typed" } });
+      changes.length = 0;
+      // A fresh object can match structurally without confirming an unsent edit.
+      pushUpdate(cell, { draft: { text: "typed" } });
+      expect(changes).toEqual([{ draft: { text: "typed" } }]);
+      pushUpdate(cell, { draft: { text: "stale" } });
+      expect(ctrl.getValue()).toEqual({ draft: { text: "typed" } });
+      expect(changes).toEqual([{ draft: { text: "typed" } }]);
+      ctrl.cancel();
+      expect(ctrl.getValue()).toEqual({ draft: { text: "stale" } });
+    } finally {
+      ctrl.cancel();
+      ctrl.hostDisconnected();
+    }
   });
 
   it("does not confirm on structurally different partial echoes (array and object)", () => {
