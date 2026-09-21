@@ -6,6 +6,27 @@ server holding one in-process interactive chat service, and two Lit pages
 reading its events over Server-Sent Events: the console itself, and the live
 pane a host embeds to show one session working.
 
+A completed turn that names a piece keeps its reference for a bare follow-up in
+the same session, including after restart. Explicit attachments select the new
+turn's inputs; `inputCells: []` attaches none and clears the retained target on
+successful completion without naming a piece. Omission or `null` keeps the bare
+follow-up behavior. A `pending: true` output declared by the piece's top-level
+result schema prevents naming it as a ready page, and data-only probes stay
+unnamed. Reread the same piece after its read settles and verify the result.
+
+A successful `run_pattern` result may carry `outputConcerns`: `error-branch`
+reports an observed failure, `pending` marks an unfinished read, and `no-rows`
+marks a settled empty read. Pending counts are placeholders. Reread the same
+piece through a minimal unnamed reader, passing its result reference in `inputs`
+and exposing pending, error, and counts in `resultSchema`. Repair observed
+failures; for a settled empty filtered result, compare the unfiltered count.
+
+An unnamed reader still creates a persisted, detached piece; `assign_slug` adds
+it to the registered list. Source-history revisions are storage-retention roots:
+unnamed pieces are not transient and are neither deleted nor garbage-collected.
+See
+[piece execution and retention](../README.md#running-patterns-against-a-fabric-space).
+
 The server binds `127.0.0.1` and asks one thing of a request: that it names this
 server's own host. A hostile name that resolves to `127.0.0.1` would otherwise
 make these routes same-origin to a browser, and that name is visible on the

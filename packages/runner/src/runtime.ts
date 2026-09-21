@@ -1107,6 +1107,9 @@ const externalObservationRefusal = (
     refusals: [...(state?.refusalDetails ?? [])],
   });
 
+/** Maximum load waves an external observation traversal may discover. */
+const EXTERNAL_OBSERVATION_LOAD_ROUNDS = 100;
+
 /**
  * Main Runtime class that orchestrates all services in the runner package.
  *
@@ -3517,7 +3520,8 @@ export class Runtime {
       // The storage manager deduplicates every document load for the session;
       // a finite observed value therefore reaches this fixed point without a
       // timer or retrying a failed request.
-      while (true) {
+      let loadRound = 0;
+      for (; loadRound < EXTERNAL_OBSERVATION_LOAD_ROUNDS; loadRound++) {
         cell.get({ traverseCells: true });
         // Link resolution can register its tracked sync in a promise
         // continuation. Let that continuation run before inspecting the
@@ -3529,6 +3533,12 @@ export class Runtime {
           break;
         }
         await (this.storageManager.crossSpaceSettled?.() ?? Promise.resolve());
+      }
+      if (loadRound === EXTERNAL_OBSERVATION_LOAD_ROUNDS) {
+        throw externalObservationRefusal(
+          "external content observation traversal did not converge",
+          tx.getCfcState(),
+        );
       }
       tx.prepareCfc();
       const finalPreparedState = tx.getCfcState();

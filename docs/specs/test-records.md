@@ -202,11 +202,12 @@ execution of one test, and every history built from records — flake rate,
 duration, and what a pull request selects — answers whether to run that
 test again. A check reading what the run around it produced exists only
 as part of that run, so there is nothing to select and no suite in the
-test topology to claim its identity. Two checks are of this shape: the
+test topology to claim its identity. Three checks are of this shape: the
 pull request coverage gate, which reads the coverage artifacts of every
-job in its own run, and the nightly audit over the CFC property corpus,
-which reads what the step before it wrote. A gate resolving a merge base
-against a base ref is not, and records normally.
+job in its own run; the store half of the test topology's drift guard,
+which reads those jobs' records; and the nightly audit over the CFC
+property corpus, which reads what the step before it wrote. A gate
+resolving a merge base against a base ref is not, and records normally.
 
 One thing that is not a test is recorded anyway: a lane measuring
 itself. A lane measures its own setup and each of its batches through
@@ -390,7 +391,12 @@ names the day's shards and is written after all of them, so a day counts
 as compacted when its manifest exists. This means that every named shard
 exists, not that the shards are one atomic snapshot or that no more objects
 can arrive for that source and date. A reader that finds no manifest reads
-the raw area for that source and date.
+the raw area for that source and date. So does a reader that cannot read a
+shard the manifest names, as long as it has folded nothing of that rollup:
+a rollup holds nothing its day's raw area does not, so giving that rollup
+up costs the reader the time of reading the day the long way. A reader
+that has already folded part of the rollup cannot go that way, because
+nothing in the rollup says which raw objects it has counted.
 
 The rollup manifest records neither the source object names it contains
 nor a point through which it is complete. A reader cannot combine one with

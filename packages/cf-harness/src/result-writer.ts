@@ -73,11 +73,12 @@ export interface AgentObservedCellHandle {
 /**
  * A referent the run observed that is not a cell: a Loom row, a SQLite row.
  * The host step that observed it recorded the content and the label the tool
- * reported, and the token it stood for in model context. The writer mints a
- * document for it under that label whether or not the result names it, so
- * that what entered model context through it joins the inline text's label
- * through a read of that document rather than through a label the runtime
- * would have to take on trust.
+ * reported, and the token it stood for in model context. When the result names
+ * the token, the writer mints a document under that label and links it from the
+ * result. When the result does not name the token, the writer admits the
+ * content through an isolated, aborted external-content observation and joins
+ * its opaque receipt into the result instead. In either case, the runtime does
+ * not have to take the host-reported label on trust.
  */
 export interface AgentObservedDocumentReferent {
   kind: "document";

@@ -142,6 +142,23 @@ describe("cf agent runner", () => {
     expect(started[0].model).toBeUndefined();
   });
 
+  it("treats an empty `CF_HARNESS_HOME` as unset", async () => {
+    const { deps, started } = stubDeps({
+      CF_HARNESS_HOME: "",
+      HOME: "/home/me",
+    });
+
+    await run(deps, [
+      "runner",
+      "-i",
+      "/keys/me.key",
+      "-a",
+      "http://localhost:8100",
+    ]);
+
+    expect(started[0].workRoot).toBe("/home/me/.cf-harness/agent-runs");
+  });
+
   it("reads the identity and API URL from `CF_IDENTITY` and `CF_API_URL`", async () => {
     const { deps, started } = stubDeps();
 
@@ -386,7 +403,7 @@ describe("cf agent runner", () => {
       await opened.close();
     });
 
-    it("opens a second toolshed for an entry that names one, with the harness executor by default", async () => {
+    it("opens a second toolshed for an entry that names one", async () => {
       const opened = await openHome({ queue: true });
       await opened.runtime.editWithRetry((tx) => {
         agentQueueIndexCell(opened.runtime, opened.config.home as never, tx)

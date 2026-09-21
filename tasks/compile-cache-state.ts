@@ -2,10 +2,10 @@
  * Compile-cache key state derivation for the coverage check.
  *
  * The pattern-test jobs restore a compile byte cache under keys whose PREFIX
- * hashes a transformer-adjacent path set (the `cc-*` cache keys in
- * .github/workflows/deno.yml). The restore-keys prefix includes that hash, so
- * a run whose commit changes any file in the set gets no cache fallback at
- * all: every pattern compiles cold. A cold run also covers cold-compile-only
+ * carries the compiler-input fingerprint (the `cc-*` cache keys in
+ * .github/workflows/deno.yml). The restore-keys prefix includes it, so a run
+ * whose commit changes any file the fingerprint hashes gets no cache fallback
+ * at all: every pattern compiles cold. A cold run also covers cold-compile-only
  * branches, which lowers its coverage debt. The coverage ratchet must not use
  * such a run as its baseline, or later warm PRs fail against a stricter,
  * unreachable bar — and the first main-branch run after a fingerprint-changing
@@ -15,13 +15,14 @@
  * pattern sources) still restores through the prefix restore-key when it
  * changes, so suffix churn recompiles incrementally rather than from scratch.
  *
- * A run is cold exactly when the hashFiles digest of the prefix set differs
- * from the commit whose cache it would restore — equivalently, when any file
- * in the set changed between the two commits. That makes the state derivable
+ * A run is cold exactly when the fingerprint differs from that of the commit
+ * whose cache it would restore — equivalently, when any file the fingerprint
+ * hashes changed between the two commits. That makes the state derivable
  * from changed-file lists alone (the PR's file list, or the compare API for
  * adjacent main pushes), with no cooperation needed from the pattern jobs.
  */
 
+import { compileFingerprintGlobs } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 import {
   COMPILE_CACHE_FAMILIES,
   type CompileCacheStates,
@@ -33,22 +34,12 @@ import {
 export type CacheKeyState = "cold" | "warm";
 
 /**
- * Mirror of the FIRST hashFiles(...) argument list of every `cc-*` compile
- * cache key in .github/workflows/deno.yml. compile-cache-state.test.ts parses
- * the workflow and asserts set equality, so the two cannot drift silently.
+ * The compiler inputs, as path globs. These are the inputs the fingerprint in
+ * every `cc-*` cache key hashes, rendered from the one list that defines them,
+ * so a changed file matching one here is a file that moves that fingerprint.
  */
-export const COMPILE_CACHE_KEY_GLOBS = [
-  "packages/ts-transformers/**",
-  "packages/js-compiler/**",
-  "packages/runner/src/harness/**",
-  "packages/runner/src/pattern-coverage.ts",
-  "packages/runner/src/sandbox/**",
-  "packages/schema-generator/**",
-  "packages/api/**",
-  "packages/static/assets/types/**",
-  "deno.jsonc",
-  "deno.lock",
-] as const;
+export const COMPILE_CACHE_KEY_GLOBS: readonly string[] =
+  compileFingerprintGlobs();
 
 type PathMatcher = (path: string) => boolean;
 

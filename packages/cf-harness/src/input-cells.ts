@@ -1,10 +1,10 @@
 /**
- * Operator input cells: cells the operator passes into a run by reference
- * with `--input-cell`, populated in the fabric before the run exists. Each
- * becomes a handle-table entry at run start — the handle is only how the
- * harness names a cell to a model that cannot hold addresses — so the run's
+ * Input cells: references supplied by the operator or retained from a
+ * completed session turn that named a piece. They exist in the fabric before
+ * the run starts. Each becomes a handle-table entry at run start. The handle
+ * names a cell to a model that cannot hold addresses, so the run's
  * inputs reach the model as tokens from its first turn. The values stay in
- * their cells; what the model receives is a token and the operator's own
+ * their cells; what the model receives is a token and the host-supplied
  * name for it. This is the calling convention the CT-2066 demonstration
  * rests on — a prompt that never holds a literal value cannot inline one by
  * accident, and cannot pass one on by accident either.
@@ -12,7 +12,7 @@
  * Like a well-known grant, an input cell discloses nothing by itself: the
  * address stays trusted-side in the handle table, `describe_handle` answers
  * shape, and reading anything behind the token means running a pattern over
- * it. Unlike a grant, an input cell is explicit operator configuration, so
+ * it. An input cell names a task target, so
  * one that cannot be minted — an unparseable reference, or one targeting
  * another space — fails the run out loud rather than proceeding without it.
  *
@@ -373,9 +373,9 @@ export const mintInputCellHandles = async (
 
 /**
  * The context message announcing `inputCells` to the model: one line per
- * input cell, pairing the token with the operator's name for it. An empty
- * list explicitly records that this run has no input-cell attachments; conversation
- * history may still identify a target.
+ * input cell, pairing the token with its host-supplied attachment name or
+ * session-confirmed slug. An empty list explicitly records that this run has
+ * no input-cell attachments; conversation history may still identify a target.
  */
 export const inputCellsContextMessage = (
   inputCells: readonly HarnessInputCell[],
@@ -384,7 +384,7 @@ export const inputCellsContextMessage = (
     return "No input cells are attached for this run. A piece unambiguously selected in the conversation can still be the target; granted registry or connector references are not attachments.";
   }
   return [
-    "Input cells for this run, named by the operator:",
+    "Input cells for this run:",
     ...inputCells.map((cell) => `- ${cell.token} — ${cell.name}`),
     "You cannot read what an input cell holds. Wire it into run_pattern `inputs` to compute over it, or into any other tool input that accepts a handle; use describe_handle to see its shape.",
   ].join("\n");

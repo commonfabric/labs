@@ -579,6 +579,9 @@ describe("loom-retrieval tools", () => {
             integrity: [{ name: "no type" }],
           }),
           hit("m-8", { confidentiality: [OWNER], integrity: [17] }),
+          hit("m-9", {
+            confidentiality: [{ anyOf: [OWNER], unexpected: true }],
+          }),
         ]),
       });
       const output = ok(
@@ -593,12 +596,13 @@ describe("loom-retrieval tools", () => {
         "withheld",
         "withheld",
         "withheld",
+        "withheld",
       ]);
       expect(
         output.entries.filter((entry) => entry.status === "withheld").map((
           entry,
         ) => entry.status === "withheld" && entry.reasonCode),
-      ).toEqual(Array(7).fill("cfc_label_read_failed"));
+      ).toEqual(Array(8).fill("cfc_label_read_failed"));
     });
 
     it("marks the observation truncated when the result bounded anything", async () => {
@@ -1036,17 +1040,27 @@ describe("loom-retrieval tools", () => {
     expect(referents).toEqual([
       {
         source: "loom_search",
-        value: output.entries[0].status === "admitted"
-          ? output.entries[0].value
-          : undefined,
+        value: {
+          sourceSystem: "google.gmail",
+          sourceRef: "m1",
+          collectionId: "google.gmail.message_summary",
+          title: "Mail m1",
+          snippet: "snippet for m1",
+          observedAt: "2026-09-18T10:00:00Z",
+        },
         label: { confidentiality: [WORK], integrity: [] },
         labelSource: "row",
       },
       {
         source: "loom_search",
-        value: output.entries[2].status === "admitted"
-          ? output.entries[2].value
-          : undefined,
+        value: {
+          sourceSystem: "google.gmail",
+          sourceRef: "m3",
+          collectionId: "google.gmail.message_summary",
+          title: "Mail m3",
+          snippet: "snippet for m3",
+          observedAt: "2026-09-18T10:00:00Z",
+        },
         label: { confidentiality: [OWNER], integrity: [] },
         labelSource: "query",
       },

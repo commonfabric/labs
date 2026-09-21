@@ -306,9 +306,9 @@ describe("prompt-loop run_pattern model boundary", () => {
       await fabricRuntime.idle();
       await pieces.synced();
       const doublingSource = [
-        "import { computed, pattern } from 'commonfabric';",
+        "import { computed, pattern, UI } from 'commonfabric';",
         "export default pattern<{ n: number }, { doubled: number }>(",
-        "  ({ n }) => ({ doubled: computed(() => n * 2) }),",
+        "  ({ n }) => ({ doubled: computed(() => n * 2), [UI]: <div>{n * 2}</div> }),",
         ");",
       ].join("\n");
       let calls = 0;

@@ -205,11 +205,12 @@ export interface RunPatternToolSuccessOutput {
 
   /**
    * What the outputs of the patterns this run materialized say about the
-   * reads behind them: a failure an output reports, and an output that holds
-   * no rows. Present only when there is something to say, and a DISCLOSURE
-   * rather than a refusal — the run succeeded, and this is the reason to
-   * look. `run-pattern-output-concerns.ts` carries why no text travels with
-   * one.
+   * reads behind them: a reported failure, a declared pending read, or a
+   * settled read with no rows. Pending counts and rows are placeholders;
+   * reread the same piece before treating them as data. Present only when
+   * there is something to say, and a disclosure rather than a refusal — the
+   * run succeeded, and this is the reason to look.
+   * `run-pattern-output-concerns.ts` carries why no text travels with one.
    */
   outputConcerns?: readonly RunPatternOutputConcern[];
 }
@@ -345,7 +346,7 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
   toolId: "run_pattern",
   title: "Run Pattern",
   description:
-    `Compile and run a Common Fabric pattern in the configured space, returning a reference to its live result cell. Give it either your own sourceText or the patternId of a pattern search_patterns found. Source you write imports the runtime from "${RUNTIME_MODULE_SPECIFIER}" and from no other module — every pattern opens with a line of the form ${RUNTIME_MODULE_IMPORT_LINE} — and no package named after the product resolves. When the run's session reads under a confidentiality ceiling, every db.query result must be declared per session (PerSession<> on the result type, or the query's { scope: "session" } option); a query left space-scoped is refused under a ceiling rather than read. Bound every query's rows with a LIMIT — a few hundred is a sensible ceiling for a view — because every result row is materialized as its own document in the space, so an unbounded query over a large store writes a document per row it returns, and a re-run writes again only the rows that changed, except that a labeled result keys its rows on position and so also rewrites the rows a change displaced, and re-keys every row when the query's projection or the handle's tables change; an aggregate returning one row per group — count(*), sum(), a GROUP BY — is bounded by its own shape and needs no LIMIT. A pattern composing another passes on what the composed one reports: expose its error branch and its row count under your own result and render them, or the run answers over figures derived from a read that failed, and the result carries an outputConcerns entry naming the output you did not read. A query over a served store is still in flight when this call answers, so a sound read returns no rows here and lands them on the piece; the absent error is what says it is sound. The piece stays out of the space's piece list; assign_slug names and lists it when it deserves a public address.`,
+    `Compile and run a Common Fabric pattern in the configured space, returning a reference to its live result cell. Give it either your own sourceText or the patternId of a pattern search_patterns found. Source you write imports the runtime from "${RUNTIME_MODULE_SPECIFIER}" and from no other module — every pattern opens with a line of the form ${RUNTIME_MODULE_IMPORT_LINE} — and no package named after the product resolves. When the run's session reads under a confidentiality ceiling, every db.query result must be declared per session (PerSession<> on the result type, or the query's { scope: "session" } option); a query left space-scoped is refused under a ceiling rather than read. Bound every query's rows with a LIMIT — a few hundred is a sensible ceiling for a view — because every result row is materialized as its own document in the space, so an unbounded query over a large store writes a document per row it returns, and a re-run writes again only the rows that changed, except that a labeled result keys its rows on position and so also rewrites the rows a change displaced, and re-keys every row when the query's projection or the handle's tables change; an aggregate returning one row per group — count(*), sum(), a GROUP BY — is bounded by its own shape and needs no LIMIT. A pattern composing another passes on what the composed one reports: expose its error branch and its row count under your own result and render them, or the run answers over figures derived from a read that failed, and the result carries an outputConcerns entry naming the output you did not read. A query over a served store may still be pending when this call answers. Pending counts and rows are placeholders, not data. Expose pending along with the error branch and counts; before reporting success or assigning a slug, pass the held resultRef as an inputs entry to a minimal unnamed reader pattern, with a resultSchema covering pending, error, and counts. This reads the existing piece; do not author a replacement page to wait for data. If a settled filtered result is empty, compare it with a count without the uncertain predicate and present both counts, naming the filter; an empty subset does not mean the source is empty. The piece stays out of the space's piece list; assign_slug names and lists it when it deserves a public address.`,
   effectClass: "side-effect",
   inputSchema: RUN_PATTERN_INPUT_SCHEMA,
   outputSchema: {
@@ -400,7 +401,7 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
             properties: {
               concern: {
                 type: "string",
-                enum: ["error-branch", "no-rows"],
+                enum: ["error-branch", "no-rows", "pending"],
               },
               key: { type: "string" },
               patternId: { type: "string" },
@@ -1747,10 +1748,10 @@ export const runPatternTool: HarnessToolDefinition<
         };
       }
     }
-    // What every pattern this run materialized says about its own reads,
-    // read off each one's result rather than off the single value this call
-    // answers with. A composed reader exposes its failure and its emptiness
-    // as outputs, and a pattern composing it need pass neither on — which is
+    // The run's exact captured result seeds the report alongside the
+    // materialized results retained in the instantiation window. A composed
+    // reader exposes its failure, pending state, and emptiness
+    // as outputs, and a pattern composing it need not pass them on — which is
     // how a run answers `ok` over a result of zeros. The reads are
     // host-side and nothing they find travels as text, so they are not part
     // of the release measurement above and are taken on a transaction of
@@ -1766,7 +1767,9 @@ export const runPatternTool: HarnessToolDefinition<
     // same output many times, and `dedupedObservedOutputs` states each once.
     const ownCellHash = comparableEntityHash(piece.id);
     const concernsTx = pieces.runtime.edit();
-    const found: ObservedOutput[] = [];
+    const found: ObservedOutput[] = [
+      ...observedOutputsIn(rawValue, pattern.resultSchema),
+    ];
     const scan = (async () => {
       for (
         const record of session.instantiations?.since(instantiationStart) ?? []

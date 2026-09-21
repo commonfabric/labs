@@ -191,8 +191,8 @@ export async function resolveAgentRunnerConfig(
     workRoot: absPath(
       options.workRoot ??
         join(
-          deps.env("CF_HARNESS_HOME") ??
-            join(deps.env("HOME") ?? ".", ".cf-harness"),
+          deps.env("CF_HARNESS_HOME") ||
+            join(deps.env("HOME") || ".", ".cf-harness"),
           "agent-runs",
         ),
     ),
