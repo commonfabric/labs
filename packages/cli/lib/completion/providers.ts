@@ -746,29 +746,56 @@ async function entityCandidates(
   if (namesRemote(line)) return NOTHING;
   const token = line.positionals[0];
   if (!token) return NOTHING;
-  const { listEntityModels, listScopes, openSpace, resolveSpace } =
-    await import("@commonfabric/state-inspector");
+  const {
+    DEFAULT_SCAN_LIMIT,
+    listEntityModels,
+    listScopes,
+    openSpace,
+    resolveSpace,
+    visibleEntityRowsByScope,
+  } = await import("@commonfabric/state-inspector");
   const space = openSpace(await resolveSpace(token));
   try {
     const view = entityListingView(line);
-    const scopes = view.allScopes
-      ? listScopes(space, { branch: view.branch }).map((scope) => scope.raw)
-      : [view.scope];
     // No limit of its own: the set is what `cf inspect entities` would list
     // with no `--limit`, so a completed id is one that command names too. The
     // listing reports its own extent, and a capped one is still every
     // candidate this slot can honestly offer.
+    if (!view.allScopes) {
+      return values(shapeEntityCandidates(
+        listEntityModels(space, { branch: view.branch, scope: view.scope })
+          .entities,
+      ));
+    }
+    // Every scope at once: one unscoped row pass rather than one query per
+    // scope, since a query filtered on a scope cannot seek and walks the whole
+    // branch. The scan cap is shared across scopes, so a store of many scopes
+    // reconstructs at most one listing's worth rather than the cap once per
+    // scope.
     //
-    // `listScopes` sorts the space scope first, so an entity written in more
-    // than one scope keeps the label its space-scope value reconstructs to.
+    // `listScopes` sorts the space scope first, and a row already offered from
+    // an earlier scope is dropped before it is reconstructed, so an entity
+    // written in more than one scope keeps the label its space-scope value
+    // reconstructs to.
+    const rowsByScope = visibleEntityRowsByScope(space, {
+      branch: view.branch,
+    });
     const seen = new Set<string>();
     const entities: EntityListingLike[] = [];
-    for (const scope of scopes) {
+    for (const scope of listScopes(space, { branch: view.branch })) {
+      const budget = DEFAULT_SCAN_LIMIT - entities.length;
+      if (budget <= 0) break;
+      const rows = (rowsByScope.get(scope.raw) ?? []).filter((row) =>
+        !seen.has(row.id)
+      );
       for (
-        const entity of listEntityModels(space, { branch: view.branch, scope })
-          .entities
+        const entity of listEntityModels(space, {
+          branch: view.branch,
+          scope: scope.raw,
+          limit: budget,
+          rows,
+        }).entities
       ) {
-        if (seen.has(entity.id)) continue;
         seen.add(entity.id);
         entities.push(entity);
       }

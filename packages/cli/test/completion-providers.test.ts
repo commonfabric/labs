@@ -616,10 +616,17 @@ Deno.test("an inspect entity slot reads the view its command will read", () => {
 });
 
 /**
- * A space DB holding one entity in the default scope and one in another, so a
- * listing taken from the wrong scope offers the wrong id rather than none.
+ * A space DB holding the given entities, each written once in its scope. The
+ * default is one entity in the default scope and one in another, so a listing
+ * taken from the wrong scope offers the wrong id rather than none.
  */
-function seedScopedSpace(path: string): void {
+function seedScopedSpace(
+  path: string,
+  entities: ReadonlyArray<readonly [id: string, scope: string]> = [
+    ["of:in-space", "space"],
+    ["of:in-other", "other"],
+  ],
+): void {
   const db = new Database(path, { create: true });
   db.exec(`
 CREATE TABLE "commit" (
@@ -640,7 +647,7 @@ CREATE TABLE branch (
   fork_seq INTEGER, created_seq INTEGER NOT NULL DEFAULT 0,
   head_seq INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'active'
 );
-INSERT INTO branch (name, head_seq, status) VALUES ('', 2, 'active');`);
+INSERT INTO branch (name, head_seq, status) VALUES ('', 0, 'active');`);
   const commit = db.prepare(
     `INSERT INTO "commit" (seq, session_id, local_seq, original, resolution)
      VALUES (?, 'session:did%3Akey%3AzAlice:s1', ?, '{}', '{"seq":0}')`,
@@ -649,15 +656,15 @@ INSERT INTO branch (name, head_seq, status) VALUES ('', 2, 'active');`);
     `INSERT INTO revision (id, scope_key, seq, op_index, op, data, commit_seq)
      VALUES (?, ?, ?, 0, 'set', ?, ?)`,
   );
-  const entities: Array<[string, string]> = [
-    ["of:in-space", "space"],
-    ["of:in-other", "other"],
-  ];
-  entities.forEach(([id, scope], index) => {
-    const seq = index + 1;
-    commit.run(seq, seq);
-    rev.run(id, scope, seq, JSON.stringify({ value: id }), seq);
-  });
+  db.transaction(() => {
+    entities.forEach(([id, scope], index) => {
+      const seq = index + 1;
+      commit.run(seq, seq);
+      rev.run(id, scope, seq, JSON.stringify({ value: id }), seq);
+    });
+    db.prepare(`UPDATE branch SET head_seq = ? WHERE name = ''`)
+      .run(entities.length);
+  })();
   db.close();
 }
 
@@ -687,6 +694,67 @@ Deno.test("live candidates: an entity slot lists the scope the line named", asyn
         .candidates.map((candidate) => candidate.value).sort(),
       ["of:in-other", "of:in-space"],
     );
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("live candidates: the every-scope entity slot enumerates rows in one pass", async () => {
+  // A row query filtered on one scope cannot seek (the revision index leads
+  // with `id`), so it walks the whole branch; one per scope made completing
+  // `inspect overlay` on a store of thousands of scopes take over an hour.
+  const dir = await Deno.makeTempDir();
+  const original = Database.prototype.prepare;
+  let perScopeQueries = 0;
+  const prepare = stub(
+    Database.prototype,
+    "prepare",
+    function (this: Database, sql: string) {
+      // The row enumeration, filtered to one scope. Reconstruction also
+      // filters on a scope, alongside an `id` the index can seek on.
+      if (/scope_key = \?/.test(sql) && /GROUP BY scope_key, id/.test(sql)) {
+        perScopeQueries++;
+      }
+      return original.call(this, sql);
+    },
+  );
+  try {
+    const path = `${dir}/space.sqlite`;
+    seedScopedSpace(
+      path,
+      Array.from({ length: 6 }, (_, i) => [`of:e${i}`, `scope-${i}`] as const),
+    );
+    const offered =
+      (await liveCandidates(lineFor(`cf inspect overlay ${path} `)))
+        .candidates.map((candidate) => candidate.value).sort();
+    assertEquals(offered, [0, 1, 2, 3, 4, 5].map((i) => `of:e${i}`));
+    assertEquals(perScopeQueries, 0);
+  } finally {
+    prepare.restore();
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("live candidates: the every-scope entity slot reconstructs one scan's worth in total", async () => {
+  // Each scope's listing is capped on its own, so without a shared budget a
+  // store of many scopes reconstructs the cap once per scope — every entity in
+  // the space, for one keystroke. The slot offers what one unscoped
+  // `cf inspect entities` would: the scan cap, counted across every scope.
+  const { DEFAULT_SCAN_LIMIT } = await import("@commonfabric/state-inspector");
+  const dir = await Deno.makeTempDir();
+  try {
+    const path = `${dir}/space.sqlite`;
+    const half = Math.ceil(DEFAULT_SCAN_LIMIT * 0.75);
+    seedScopedSpace(path, [
+      ...Array.from({ length: half }, (_, i) => [`of:s${i}`, "space"] as const),
+      ...Array.from({ length: half }, (_, i) => [`of:o${i}`, "other"] as const),
+    ]);
+    const offered =
+      (await liveCandidates(lineFor(`cf inspect overlay ${path} `)))
+        .candidates.map((candidate) => candidate.value);
+    assertEquals(offered.length, DEFAULT_SCAN_LIMIT);
+    // The space scope is read first, so its entities are the ones kept whole.
+    assert(offered.includes(`of:s${half - 1}`));
   } finally {
     await Deno.remove(dir, { recursive: true });
   }

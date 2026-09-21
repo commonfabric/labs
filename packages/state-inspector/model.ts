@@ -1009,10 +1009,12 @@ export function listEntityModels(
     kind?: EntityKind;
 
     /**
-     * This scope's rows, already fetched — exactly what
-     * `visibleEntityRows(space, { branch, scope, includeDeleted: true })`
-     * would return. A caller enumerating EVERY scope passes each scope's share
-     * of one {@link visibleEntityRowsByScope} pass rather than letting each call
+     * This scope's rows, already fetched, in place of
+     * `visibleEntityRows(space, { branch, scope, includeDeleted: true })`. The
+     * listing covers exactly these rows, and `extent.total` counts them, so a
+     * caller that passes a subset gets a listing of that subset. A caller
+     * enumerating EVERY scope passes each scope's share of one
+     * {@link visibleEntityRowsByScope} pass rather than letting each call
      * fetch its own: the per-scope query cannot seek on `scope_key` (the index
      * leads with `id`), so it walks the branch's whole revision set, and one of
      * those per scope is the cost of the listing rather than a part of it.
