@@ -256,14 +256,16 @@ describe("agent runner", () => {
 
   it("moves a record from `queued` through `claimed` and `running` to `completed`", async () => {
     const result = await submit();
+    const runtime = connect(CLOUD);
     const states: string[] = [];
-    const stop = recordOf(result).sink((value) => {
+    const stop = recordOf(result, runtime).sink((value) => {
       if (value?.state && states.at(-1) !== value.state) {
         states.push(value.state);
       }
     });
-    const runtime = connect(CLOUD);
-    await startRunner(completing(() => runtime));
+    await startRunner(completing(() => runtime), {
+      runtimeForHost: () => Promise.resolve(runtime),
+    });
 
     const record = await waitForState(result, "completed");
     stop();
