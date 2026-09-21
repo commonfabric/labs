@@ -78,11 +78,11 @@ describe("in-process-attributes", () => {
       globalThis,
       "Element",
     );
-    // The default setter uses the ambient DOM constructor to recognize nodes.
-    // Retain MockDoc's DOM methods while exercising the production setter.
+    // A supplied document may create nodes outside the ambient DOM realm.
+    // Its elements must still receive attributes through the default setter.
     Object.defineProperty(globalThis, "Element", {
       configurable: true,
-      value: container.constructor,
+      value: class AmbientElement {},
     });
     let render: ReturnType<typeof renderInProcess> | undefined;
     try {
