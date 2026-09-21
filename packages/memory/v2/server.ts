@@ -11,6 +11,8 @@ import { getLogger } from "@commonfabric/utils/logger";
 import { StagedMap } from "@commonfabric/utils/staged-map";
 import { metrics, SpanStatusCode, trace } from "@opentelemetry/api";
 
+import { InboxStore } from "../inbox-store.ts";
+
 import {
   aclDocId,
   ANYONE_USER,
@@ -177,7 +179,10 @@ import {
 import { assertReadOnly } from "./sqlite/guard.ts";
 import { ReadConnectionPool } from "./sqlite/read-pool.ts";
 import type { TableSchema } from "./sqlite/schema.ts";
-import { resolveSpaceStoreUrl } from "./storage-path.ts";
+import {
+  resolveSpaceStoreDirUrl,
+  resolveSpaceStoreUrl,
+} from "./storage-path.ts";
 import { compressServerMessageSchemas } from "./sync-schema-table.ts";
 import { type ArmedTurn, armTurn } from "./turn.ts";
 import {
@@ -1590,6 +1595,7 @@ export class Server {
   }>();
 
   #store?: URL;
+  #inboxStore?: Promise<InboxStore>;
   #operationCodecs: OperationCodecRegistry;
 
   /**
@@ -2334,6 +2340,21 @@ export class Server {
     }
   }
 
+  /** Opens this server's private DID inbox database under its owned store. */
+  inboxStore(): Promise<InboxStore> {
+    return this.#inboxStore ??= (async () => {
+      if (this.#store?.protocol !== "file:") return new InboxStore(":memory:");
+      const directory = new URL(
+        "./inbox/",
+        resolveSpaceStoreDirUrl(this.#store),
+      );
+      await FS.ensureDir(directory);
+      return new InboxStore(
+        Path.fromFileUrl(new URL("messages.sqlite", directory)),
+      );
+    })();
+  }
+
   async close(): Promise<void> {
     // Withdraw this server's health-route providers so a closed server is
     // neither reported nor kept alive by the route; synchronous, ahead of
@@ -2356,6 +2377,7 @@ export class Server {
     this.#resolvedEngines.clear();
     this.#connections.clear();
     this.#readPool.close();
+    if (this.#inboxStore) (await this.#inboxStore).close();
   }
 
   /**

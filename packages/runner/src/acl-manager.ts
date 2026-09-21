@@ -1,3 +1,5 @@
+import { cloneIfNecessary, type FabricValue } from "@commonfabric/data-model";
+import { isDIDKey } from "@commonfabric/identity/did";
 import {
   type ACL,
   aclDocId,
@@ -7,7 +9,6 @@ import {
   isACL,
 } from "@commonfabric/memory/acl";
 import type { Capability, URI } from "@commonfabric/memory/interface";
-import { cloneIfNecessary, type FabricValue } from "@commonfabric/data-model";
 import type { Cell } from "./cell.ts";
 import type { Runtime } from "./runtime.ts";
 import type { IMemorySpaceAddress } from "./storage/interface.ts";
@@ -55,6 +56,24 @@ export class ACLManager {
       ...(acl ?? {}),
       [user]: capability,
     }));
+  }
+
+  /** Adds READ or WRITE while retaining stronger access, including concurrent grants. */
+  async grant(user: DID, capability: "READ" | "WRITE"): Promise<ACL> {
+    if (!isDIDKey(user) || (capability !== "READ" && capability !== "WRITE")) {
+      throw new Error("A grant must be READ or WRITE.");
+    }
+    await this.get();
+    return await this.#write((current) => {
+      if (current === null) throw new Error("No ACL initialized for space.");
+      const existing = current[user] ?? current["*"];
+      return {
+        ...current,
+        [user]: existing === "OWNER" || existing === "WRITE"
+          ? existing
+          : capability,
+      };
+    });
   }
 
   async remove(user: ACLUser): Promise<ACL> {

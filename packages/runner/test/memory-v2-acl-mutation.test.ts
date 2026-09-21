@@ -694,3 +694,35 @@ Deno.test("ACLManager returns the committed ACL when an owner removes themself",
     await ctx.dispose();
   }
 });
+
+Deno.test("ACLManager monotonic grants preserve stronger concurrent access", async () => {
+  const harness = await withGenesisedSpace("monotonic-grant");
+  try {
+    const guest = (await Identity.fromPassphrase("monotonic-guest")).did();
+    await harness.acl.set("*", "WRITE");
+    await harness.acl.grant(guest, "READ");
+    assertEquals((await harness.acl.get())?.[guest], "WRITE");
+    await harness.acl.remove("*");
+
+    await harness.acl.set(guest, "OWNER");
+    await harness.acl.grant(guest, "READ");
+    assertEquals((await harness.acl.get())?.[guest], "OWNER");
+    await harness.acl.remove(guest);
+    const other = await harness.openSecondClient();
+    await Promise.all([
+      harness.acl.grant(guest, "WRITE"),
+      other.grant(guest, "READ"),
+    ]);
+    assertEquals(
+      (await harness.readStoredAcl() as Record<string, string>)[guest],
+      "WRITE",
+    );
+    await other.grant(guest, "READ");
+    assertEquals(
+      (await harness.readStoredAcl() as Record<string, string>)[guest],
+      "WRITE",
+    );
+  } finally {
+    await harness.dispose();
+  }
+});
