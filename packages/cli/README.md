@@ -1149,9 +1149,10 @@ queues it again when its `attempts` is 1 and ends it `failed` as `RUNNER_LOST`
 when its `attempts` is 2. If `cancelRequestedAt` is set, recovery ends the
 expired record as `cancelled` instead. A live lease stays with its runner.
 
-A runner connects to at most two deployments, and only the home one is a full
-connection; the other is read and written as storage. This is the one command
-that the next section's rule does not bound to a single deployment.
+A runner opens one full connection to its home deployment. For queued records,
+it opens a storage-only runtime for each distinct record host and reuses that
+runtime for later records from the same host. This is the one command that the
+next section's rule does not bound to a single deployment.
 
 ## One deployment per process
 

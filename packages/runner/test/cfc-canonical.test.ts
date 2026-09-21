@@ -97,6 +97,16 @@ describe("canonical", () => {
     }))).toBe(preparedDigestFor(baseInput({
       externalContentObservations: [second, first],
     })));
+    expect(
+      canonicalizePreparedDigestInput(baseInput({
+        externalContentObservations: [first, second],
+      })).externalContentObservations,
+    ).toHaveLength(2);
+    expect(preparedDigestFor(baseInput({
+      externalContentObservations: [first, second],
+    }))).not.toBe(preparedDigestFor(baseInput({
+      externalContentObservations: [first],
+    })));
   });
 
   describe("dereference traces in the prepared digest", () => {

@@ -117,6 +117,7 @@ export function agentQueueIndexCell(
 ): Cell<AgentQueueIndex> {
   return runtime.getCell(homeSpace, homeSpace, spaceCellSchema, tx)
     .key("defaultPattern")
+    .resolveAsCell()
     // The space cell's schema does not name the default pattern's fields.
     // deno-lint-ignore no-explicit-any
     .key("agentQueue" as any)
@@ -441,7 +442,18 @@ export function agent(
      */
     const createRecord = async (): Promise<void> => {
       const queue = agentQueueIndexCell(runtime, homeSpace);
-      await queue.sync();
+      try {
+        await queue.sync();
+      } catch (error) {
+        const cause = error instanceof Error ? error : new Error(String(error));
+        reportRejection("Loading the home agent queue failed.", hash, cause);
+        await settleAbandoned(
+          new Error(`${AGENT_SINK} request was refused before it started`, {
+            cause,
+          }),
+        );
+        return;
+      }
       if (tools !== undefined && tools.length > 0) {
         const runner = queue.key("agentRunner").get();
         if (runner !== undefined) {

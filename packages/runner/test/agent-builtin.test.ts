@@ -11,6 +11,7 @@
 
 import { expect } from "@std/expect";
 import { afterEach, describe, it } from "@std/testing/bdd";
+import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -258,6 +259,7 @@ describe("agent builtin", () => {
 
     await waitForRecord(result);
     const queue = runtime.getHomeSpaceCell().key("defaultPattern")
+      .resolveAsCell()
       // deno-lint-ignore no-explicit-any
       .key("agentQueue" as any) as Cell<{ entries?: { host: string }[] }>;
     const entries = await waitForCellValue<{ host: string }[]>(
@@ -286,6 +288,33 @@ describe("agent builtin", () => {
     expect(settled.error).toBe("REFUSED");
     expect(agentQueueIndexCell(runtime, space).get()).toBeUndefined();
     expect(runtime.getHomeSpaceCell().getRaw()).toBeUndefined();
+  });
+
+  it("settles with a refusal when loading the home queue fails", async () => {
+    setUp();
+    const result = runAgentPattern("agent-queue-load-failure");
+    const syncCell = storageManager.syncCell.bind(storageManager);
+    let rejected = false;
+    using _sync = stub(storageManager, "syncCell", (cell, options) => {
+      const link = cell.getAsNormalizedFullLink();
+      if (!rejected && link.path?.at(-1) === "agentQueue") {
+        rejected = true;
+        return Promise.reject(new Error("queue unavailable"));
+      }
+      return syncCell(cell, options);
+    });
+    await tx.commit();
+
+    const settled = await waitForCellValue<AgentResult>(
+      runtime,
+      result,
+      (value) => value?.pending === false,
+    );
+    await runtime.settled();
+
+    expect(settled.error).toBe("agent request was refused before it started");
+    expect(settled.run).toBeUndefined();
+    expect(rejected).toBe(true);
   });
 
   it("lists two requests staged together as two entries to two records", async () => {

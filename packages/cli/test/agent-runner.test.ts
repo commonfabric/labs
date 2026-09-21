@@ -785,6 +785,82 @@ describe("agent runner", () => {
     );
   });
 
+  it("reports a terminal write failure and recovers the held run", async () => {
+    const result = await submit();
+    const runnerSide = connect(CLOUD);
+    const original = runnerSide.editWithRetry.bind(runnerSide);
+    let failedTerminal = false;
+    runnerSide.editWithRetry = (async (fn, ...rest) => {
+      if (
+        !failedTerminal &&
+        recordOf(result, runnerSide).get()?.state === "running"
+      ) {
+        failedTerminal = true;
+        throw new Error("terminal write unavailable");
+      }
+      return await original(fn, ...rest);
+    }) as typeof runnerSide.editWithRetry;
+    const reports: string[] = [];
+    let executions = 0;
+    const runner = await startRunner(() => {
+      executions++;
+      return Promise.resolve({ outcome: "refused" });
+    }, {
+      runtimeForHost: () => Promise.resolve(runnerSide),
+      report: (message) => reports.push(message),
+    });
+    await runner.idle();
+
+    expect(recordOf(result, runnerSide).get()?.state).toBe("running");
+    expect(reports).toContain(
+      "agent runner: terminal write failed: terminal write unavailable",
+    );
+
+    clock = new Date("2026-09-18T12:02:00.000Z");
+    await patternSide.editWithRetry((tx) => {
+      recordOf(result).withTx(tx).key("stateSince").set(clock.toISOString());
+    });
+    await waitForState(result, "refused");
+    expect(executions).toBe(2);
+  });
+
+  it("lets a durable cancellation beat a completion already being written", async () => {
+    const result = await submit();
+    const runnerSide = connect(CLOUD);
+    const original = runnerSide.editWithRetry.bind(runnerSide);
+    let interceptedCompletion = false;
+    runnerSide.editWithRetry = ((fn, ...rest) =>
+      original((tx) => {
+        const value = fn(tx);
+        if (
+          !interceptedCompletion &&
+          recordOf(result, runnerSide).withTx(tx).key("state").get() ===
+            "completed"
+        ) {
+          interceptedCompletion = true;
+          const commit = tx.commit.bind(tx);
+          tx.commit = async (...args) => {
+            await patternSide.editWithRetry((competing) => {
+              recordOf(result).withTx(competing).key("cancelRequestedAt")
+                .set(clock.toISOString());
+            });
+            return await commit(...args);
+          };
+        }
+        return value;
+      }, ...rest)) as typeof runnerSide.editWithRetry;
+    await startRunner(
+      (run) => Promise.resolve({ outcome: "completed", result: run.link }),
+      { runtimeForHost: () => Promise.resolve(runnerSide) },
+    );
+
+    const record = await waitForState(result, "cancelled");
+    expect(interceptedCompletion).toBe(true);
+    expect(record.outcome).toBe("cancelled");
+    expect(record.errorCode).toBe("CANCELLED");
+    expect(record.result).toBeUndefined();
+  });
+
   for (
     const conflict of [
       "recovered",
@@ -1147,6 +1223,7 @@ describe("agent runner", () => {
     const subscriptionFailure = new Error("queue subscription failed");
     const queue = {
       key: () => queue,
+      resolveAsCell: () => queue,
       asSchema: () => queue,
       sync: () => Promise.resolve(),
       sink: () => {

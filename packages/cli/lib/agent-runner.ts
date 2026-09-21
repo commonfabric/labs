@@ -578,7 +578,15 @@ export class AgentRunner {
         execution !== undefined &&
         this.#active.get(key)?.token === active.token
       ) {
-        await this.#finish(followed, execution, abort);
+        try {
+          await this.#finish(followed, execution, abort);
+        } catch (error) {
+          this.#options.report?.(
+            `agent runner: terminal write failed: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
       }
     } finally {
       if (this.#active.get(key)?.token === active.token) {
@@ -595,20 +603,24 @@ export class AgentRunner {
     abort: AbortController,
   ): Promise<void> {
     const { record, runtime } = followed;
-    // A cancel wins over whatever the aborted run reported on its way out.
-    const execution: AgentRunExecution = abort.signal.aborted
-      ? { outcome: "cancelled", report: reported.report }
-      : reported;
     const finishedAt = this.#now().toISOString();
-    const report = execution.report ?? {};
-    const errorCode = execution.outcome === "failed"
-      ? execution.errorCode
-      : execution.outcome === "refused"
-      ? REFUSED
-      : execution.outcome === "cancelled"
-      ? CANCELLED
-      : undefined;
+    let outcome = reported.outcome;
     const held = await this.#writeHeld(followed, (current) => {
+      // A cancel wins over whatever the run reported, including one committed
+      // after execution returned but before this transaction reached storage.
+      const execution: AgentRunExecution = abort.signal.aborted ||
+          current.key("cancelRequestedAt").get() !== undefined
+        ? { outcome: "cancelled", report: reported.report }
+        : reported;
+      outcome = execution.outcome;
+      const report = execution.report ?? {};
+      const errorCode = execution.outcome === "failed"
+        ? execution.errorCode
+        : execution.outcome === "refused"
+        ? REFUSED
+        : execution.outcome === "cancelled"
+        ? CANCELLED
+        : undefined;
       if (execution.outcome === "completed") {
         current.key("result").set(runtime.getCellFromLink(execution.result));
       }
@@ -633,7 +645,7 @@ export class AgentRunner {
     const name = record.get()?.requestHash;
     this.#options.report?.(
       held
-        ? `agent runner: ${name} ended ${execution.outcome}`
+        ? `agent runner: ${name} ended ${outcome}`
         : `agent runner: ${name} was no longer held`,
     );
   }
