@@ -173,7 +173,6 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
       ReplaceForm<PlusType> | RecurseForm
     > {
     const vis = this.#visitor;
-    const origValue = value;
 
     for (;;) {
       let result;
