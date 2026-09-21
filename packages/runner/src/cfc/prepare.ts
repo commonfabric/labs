@@ -55,6 +55,12 @@ import {
 import { storedLabelMapEntries } from "./label-documents.ts";
 import { readStoredCfcMetadata, StoredCfcMetadataError } from "./metadata.ts";
 import {
+  assertStoredPrincipalConfidentialityBound,
+  bindCurrentPrincipalConfidentiality,
+  bindCurrentPrincipalToStoredClauses,
+  isCurrentPrincipalUserClause,
+} from "./current-principal-confidentiality.ts";
+import {
   isPrimitiveCellLink,
   isWriteRedirectLink,
   parseLink,
@@ -5310,8 +5316,37 @@ const derivePersistedLinkLabel = (
       input.source.scope,
       "application/json",
     );
+  if (sourceMetadata !== undefined) {
+    try {
+      assertStoredPrincipalConfidentialityBound(
+        loadEnvelopeSchema(tx, input.source.space, sourceMetadata),
+        sourceMetadata.labelMap.entries.map((entry) => entry.label),
+      );
+    } catch (error) {
+      return {
+        sourceMetadata,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
   let pendingSourceSchema = candidateSchemas.get(targetKey(input.source)) ??
     setupResultSchemaFor(tx, input.source);
+  if (
+    pendingSourceSchema !== undefined &&
+    cfcSchemaEntries(pendingSourceSchema).some((entry) =>
+      entry.label.confidentiality?.some(isCurrentPrincipalUserClause)
+    )
+  ) {
+    pendingSourceSchema = bindCurrentPrincipalConfidentiality(
+      sourceMetadata === undefined
+        ? pendingSourceSchema
+        : mergeCfcSchemaEnvelopes(
+          loadSchemaDocument(tx, input.source.space, sourceMetadata.schemaHash),
+          pendingSourceSchema,
+        ),
+      tx.getCfcState().trustSnapshot?.actingPrincipal,
+    );
+  }
   let pendingSourceLabel = pendingSourceSchema !== undefined
     ? persistedLabelFromSchemaAtPath(
       tx,
@@ -5340,10 +5375,13 @@ const derivePersistedLinkLabel = (
     if (sourceCreatedInThisTx) {
       const targetCandidate = candidateSchemas.get(targetKey(input.target));
       if (targetCandidate !== undefined) {
-        pendingSourceSchema = targetCandidate;
+        pendingSourceSchema = bindCurrentPrincipalConfidentiality(
+          targetCandidate,
+          tx.getCfcState().trustSnapshot?.actingPrincipal,
+        );
         pendingSourceLabel = persistedLabelFromSchemaAtPath(
           tx,
-          targetCandidate,
+          pendingSourceSchema,
           input.target.path,
           input.target.space,
         );
@@ -5430,7 +5468,10 @@ const derivePersistedLinkLabel = (
   const label: IFCLabel = {
     confidentiality: mergeLabelValues(
       sourceLabel.confidentiality,
-      linkSchemaLabel.confidentiality,
+      bindCurrentPrincipalToStoredClauses(
+        linkSchemaLabel.confidentiality ?? [],
+        sourceLabel.confidentiality ?? [],
+      ),
     ),
     integrity: mergeLabelValues(
       gatedIntegrity,
@@ -5736,8 +5777,9 @@ const loadEnvelopeSchema = (
  * - `loaded` — the metadata's `schemaHash` resolved to a content-verified
  *   schema document; `metadata` rides along for callers (the commit path) that
  *   also need the stored label map.
- * - `unreadable` — metadata EXISTS but its envelope cannot be loaded (missing
- *   cid document, content-hash mismatch). The commit path records `reason` and
+ * - `unreadable` — metadata EXISTS but its envelope cannot be loaded or carries
+ *   an unresolved stored creator (missing cid document, content-hash mismatch,
+ *   or persisted CurrentPrincipal confidentiality). The commit path records `reason` and
  *   rejects the write in enforcing modes, so a preflight must report it as a
  *   blocker and never as "nothing stored" — treating it as absent is exactly
  *   how a check green-lights an update the real commit then refuses.
@@ -5784,9 +5826,14 @@ export const loadStoredCfcEnvelope = (
   }
   if (metadata === undefined) return { status: "none" };
   try {
+    const schema = loadEnvelopeSchema(tx, target.space, metadata);
+    assertStoredPrincipalConfidentialityBound(
+      schema,
+      metadata.labelMap.entries.map((entry) => entry.label),
+    );
     return {
       status: "loaded",
-      schema: loadEnvelopeSchema(tx, target.space, metadata),
+      schema,
       metadata,
     };
   } catch (error) {
@@ -6879,6 +6926,18 @@ export const prepareBoundaryCommit = (
       }
     }
 
+    try {
+      mergedSchema = bindCurrentPrincipalConfidentiality(
+        mergedSchema,
+        state.trustSnapshot?.actingPrincipal,
+      );
+    } catch (error) {
+      reasons.push(verdictReason(
+        error instanceof Error ? error.message : String(error),
+      ));
+      continue;
+    }
+
     const linkWriteInputs = linkWrites.get(key) ?? [];
     // The full stored-to-candidate merge validates migrations above. Its
     // affected claims overlay the candidate for input verification; the
@@ -7511,6 +7570,10 @@ export const prepareBoundaryCommit = (
         }
         const entryPath = canonicalizeLogicalPath(entry.path);
         const cover = authoritativeCoverFor(entryPath);
+        gated.confidentiality = [...bindCurrentPrincipalToStoredClauses(
+          gated.confidentiality ?? [],
+          cover?.confidentiality ?? [],
+        )];
         persistedLabelEntries.push(markLinkEntry({
           path: [...targetPath, ...entryPath],
           label: cover !== undefined ? mergeLabels(cover, gated) : gated,

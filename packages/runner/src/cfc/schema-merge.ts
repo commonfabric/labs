@@ -1,15 +1,34 @@
 import type { CfcAtom } from "@commonfabric/api/cfc";
-import { isWalkableObjectOrArray } from "@commonfabric/data-model";
+import {
+  hashStringOf,
+  isWalkableObjectOrArray,
+} from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
-import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
+import { formatExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
+import {
+  forEachSubschema,
+  mapSubschemas,
+} from "@commonfabric/data-model-schema/schema-walk";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { utf8Compare } from "@commonfabric/utils/utf8";
 
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
+import { registerSchemaDocument } from "../schema-registry.ts";
 import type { CfcConfClause } from "./clause.ts";
 import { normalizeClause } from "./clause.ts";
+import {
+  bindCurrentPrincipalToStoredClauses,
+  isCurrentPrincipalUserClause,
+} from "./current-principal-confidentiality.ts";
 import { CfcSchemaMigrationError } from "./migration-reason.ts";
-import { hoistCfcSchemaDefs } from "./schema-refs.ts";
+import {
+  cfcSchemaResolvedRoot,
+  hoistCfcSchemaDefs,
+  localDefinitionName,
+  resolveCfcSchemaRefRoot,
+  resolveCfcSchemaRefs,
+} from "./schema-refs.ts";
 import { writerClaimFilesCorrespond } from "./writer-claim-correspondence.ts";
 
 /** Every `ifc` key the runtime understands. {@link IfcKey} names one of them. */
@@ -224,9 +243,20 @@ const mergeSetLikeIfcArray = (
         ? (existing as readonly CfcConfClause[]).map(normalizeClause)
         : existing as readonly unknown[];
       const candidateArray = key === "confidentiality"
-        ? (candidate as readonly CfcConfClause[]).map(normalizeClause)
+        ? (bindCurrentPrincipalToStoredClauses(
+          candidate,
+          existingArray,
+        ) as readonly CfcConfClause[]).map(normalizeClause)
         : candidate as readonly unknown[];
-      if (!arraySubsetOf(existingArray, candidateArray)) {
+      // A transaction may combine its symbolic declaration with a concrete
+      // label before creator binding. Retain both constraints until prepare
+      // binds the symbolic one; accepting the concrete clause cannot remove it.
+      const comparableExisting = key === "confidentiality"
+        ? existingArray.filter((clause) =>
+          !isCurrentPrincipalUserClause(clause)
+        )
+        : existingArray;
+      if (!arraySubsetOf(comparableExisting, candidateArray)) {
         throw new Error(`${key} cannot be weakened at ${path || "/"}`);
       }
       return mergeArraySet(existingArray, candidateArray);
@@ -685,11 +715,149 @@ const mergeSchemaNode = (
   };
 };
 
+/** Checks every reachable policy position without unfolding reference cycles. */
+function hasReachableConfidentiality(
+  schema: JSONSchema,
+  root: JSONSchema,
+): boolean {
+  const pending = [{ schema, root }];
+  const visited = new Map<object, Set<object>>();
+  while (pending.length > 0) {
+    const { schema, root } = pending.pop()!;
+    if (!isObjectNotArray(schema)) continue;
+    const rootKey = isObjectNotArray(root) ? root : schema;
+    let schemas = visited.get(rootKey);
+    if (schemas?.has(schema)) continue;
+    if (schemas === undefined) visited.set(rootKey, schemas = new Set());
+    schemas.add(schema);
+    const resolved = typeof schema.$ref === "string"
+      ? resolveCfcSchemaRefs(schema, root)
+      : schema;
+    // An unresolved reference cannot establish that its policy is public.
+    if (resolved === undefined) return true;
+    if (!isObjectNotArray(resolved)) continue;
+    if (
+      isObjectNotArray(resolved.ifc) &&
+      Array.isArray(resolved.ifc.confidentiality) &&
+      resolved.ifc.confidentiality.length > 0
+    ) return true;
+    const childRoot = resolved !== schema
+      ? cfcSchemaResolvedRoot(resolved, resolveCfcSchemaRefRoot(schema, root))
+      : root;
+    forEachSubschema(resolved, (child) => {
+      pending.push({ schema: child, root: childRoot });
+    }, { includeUnused: true, visitBooleans: true });
+  }
+  return false;
+}
+
+/**
+ * Exposes each referenced declaration at its use site before confidential
+ * schemas merge. Distinct stored readers of a reused definition then retain
+ * their own clauses instead of selecting the candidate's symbolic definition.
+ */
+function resolveConfidentialSchema(
+  schema: JSONSchema,
+  root: JSONSchema = schema,
+  active: readonly { schema: object; root: object }[] = [],
+  retainedRoot: JSONSchema = root,
+): JSONSchema {
+  if (!isObjectNotArray(schema)) return schema;
+  if (
+    typeof schema.$ref === "string" &&
+    !hasReachableConfidentiality(schema, root)
+  ) {
+    const definition = localDefinitionName(schema.$ref);
+    if (definition === undefined || root === retainedRoot) return schema;
+    // An expanded external body sits below a different document root. Keep
+    // its public references bound to their original definition namespace.
+    const { taggedHashString } = internSchema(root, true);
+    registerSchemaDocument(taggedHashString, root);
+    return {
+      ...schema,
+      $ref: formatExternalSchemaRef(taggedHashString, definition),
+    };
+  }
+  const rootObject = isObjectNotArray(root) ? root : schema;
+  if (
+    active.some((entry) => entry.schema === schema && entry.root === rootObject)
+  ) {
+    throw new Error("Recursive confidentiality schema merging is unsupported");
+  }
+  const resolved = typeof schema.$ref === "string"
+    ? resolveCfcSchemaRefs(schema, root)
+    : schema;
+  if (resolved === undefined) {
+    throw new Error("Confidentiality merging requires resolved schemas");
+  }
+  if (!isObjectNotArray(resolved)) return resolved;
+  const childRoot = resolved !== schema
+    ? cfcSchemaResolvedRoot(resolved, resolveCfcSchemaRefRoot(schema, root))
+    : root;
+  return mapSubschemas(
+    resolved,
+    (child) =>
+      resolveConfidentialSchema(child, childRoot, [
+        ...active,
+        { schema, root: rootObject },
+      ], retainedRoot),
+    { includeUnused: true, visitBooleans: true },
+  );
+}
+
+/** Policy declarations and reference edges, independent of public value shapes. */
+interface SchemaPolicyGraph {
+  ifc: JSONSchemaObj["ifc"];
+  ref: string | undefined;
+  children: {
+    keyword: string;
+    key: string | undefined;
+    index: number | undefined;
+    policy: SchemaPolicyGraph;
+  }[];
+}
+
+/**
+ * Retains every structural policy position and definition namespace without
+ * expanding reference cycles. Label-view paths alone omit rest-property claims
+ * beside named fields, so they cannot establish that two policies are equal.
+ */
+function schemaPolicyGraph(schema: JSONSchema): SchemaPolicyGraph | undefined {
+  if (!isObjectNotArray(schema)) return undefined;
+  const children: SchemaPolicyGraph["children"] = [];
+  forEachSubschema(schema, (child, keyword, key, index) => {
+    const policy = schemaPolicyGraph(child);
+    if (policy !== undefined) children.push({ keyword, key, index, policy });
+  }, { includeDefs: true, includeUnused: true, visitBooleans: true });
+  if (
+    schema.ifc === undefined && schema.$ref === undefined &&
+    children.length === 0
+  ) return undefined;
+  children.sort((left, right) =>
+    utf8Compare(left.keyword, right.keyword) ||
+    utf8Compare(left.key ?? "", right.key ?? "") ||
+    (left.index ?? -1) - (right.index ?? -1)
+  );
+  return { ifc: schema.ifc, ref: schema.$ref, children };
+}
+
 export const mergeCfcSchemaEnvelopes = (
   existing: JSONSchema,
   candidate: JSONSchema,
   options: MergeCfcSchemaEnvelopeOptions = {},
 ): JSONSchema => {
+  assertNoDivergentIfcBranches(existing);
+  assertNoDivergentIfcBranches(candidate);
+  // Equal policies keep their reference graphs, including recursive ones,
+  // through data-shape migrations. Public field shapes do not change the
+  // reader or writer declarations enforced at a logical path.
+  if (
+    hashStringOf(schemaPolicyGraph(existing)) !==
+      hashStringOf(schemaPolicyGraph(candidate))
+  ) {
+    existing = resolveConfidentialSchema(existing);
+    candidate = resolveConfidentialSchema(candidate);
+  }
   assertNoDivergentIfcBranches(existing);
   assertNoDivergentIfcBranches(candidate);
   // The merged envelope is one document, so the two maps become one: a name
