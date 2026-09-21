@@ -220,12 +220,15 @@ export interface RunPatternToolSuccessOutput {
  * applied. The tool returns before the session flush sends it to the index,
  * so this report records intent at tool return, never an acknowledgment.
  *
- * Every field is pinned to a fixed set — a status, a reason and a boolean, with
- * `message` drawn from `PATTERN_PUBLICATION_MESSAGES` and never composed. See
- * `pattern-index/publish-render-gate.ts` for why nothing derived from the
- * rendered DOM may join them.
+ * The identity comes from the compiled source. The verdict fields are pinned
+ * to fixed sets, with `message` drawn from `PATTERN_PUBLICATION_MESSAGES` and
+ * never composed. See `pattern-index/publish-render-gate.ts` for why nothing
+ * derived from the rendered DOM may join them.
  */
 export interface RunPatternPublicationReport {
+  /** The exact entry identity staged by this attempt, retained after revision. */
+  patternId: string;
+
   status: "queued";
   reason: PatternPublicationReason;
   message: string;
@@ -366,6 +369,7 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
         patternPublication: {
           type: "object",
           properties: {
+            patternId: { type: "string" },
             status: {
               type: "string",
               enum: ["queued"],
@@ -386,6 +390,7 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
             syntheticInputsComplete: { type: "boolean" },
           },
           required: [
+            "patternId",
             "status",
             "reason",
             "message",
@@ -2018,6 +2023,7 @@ export const runPatternTool: HarnessToolDefinition<
             reason: "recorded-automatically" as const,
           };
         publication = {
+          patternId: entryIdentity,
           status: "queued",
           reason: publicationVerdict.reason,
           message: PATTERN_PUBLICATION_MESSAGES[publicationVerdict.reason],

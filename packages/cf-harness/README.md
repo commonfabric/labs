@@ -2078,12 +2078,23 @@ read failures retain their cause in the run's failure record and stop the call
 before registration or naming.
 
 A successful `assign_slug` returns `{ slug }`, plus `url` when the harness can
-compose one honestly. The URL is the session's API URL, the space, and the slug
-— the address `cf piece new` prints — and it appears only when `--fabric-space`
-names the space. A space configured as a `did:key` has no URL that is not built
-from that DID, and a bare fabric identifier does not cross the model boundary,
-so the output carries the slug alone rather than a fabricated link. Nothing in
-that output is swapped for a handle token, because nothing in it is a fabric
+compose one honestly, to the model. Its on-disk tool-output artifact also
+records `pieceId`, the slug's actual target. Join that field to the `pieceId` in
+a `run_pattern` artifact, across the run family's directories when a child
+created the piece. That attempt's `outputId` identifies the source artifact, and
+its `patternPublication.patternId` records the exact index identity it queued. A
+later probe has its own piece and attempt; `revise_piece` does not publish and
+does not change the original publication record. A missing publication report
+means that attempt queued nothing, and `status: "queued"` records intent rather
+than index acceptance. This join needs no source hashing or live index lookup.
+
+The URL is the session's API URL, the space, and the slug — the address
+`cf piece new` prints — and it appears only when `--fabric-space` names the
+space. A space configured as a `did:key` has no URL that is not built from that
+DID, and a bare fabric identifier does not cross the model boundary, so the
+model-facing output carries the slug alone rather than a fabricated link. The
+prompt loop strips `pieceId` and records that omission. Nothing in the remaining
+output is swapped for a handle token, because nothing in it is a fabric
 reference: the slug is the model's own word and the URL is the operator's API
 URL and space name. Its error `message`, which can carry a DID from an
 authorization failure, is scrubbed for bare fabric identifiers like the other
