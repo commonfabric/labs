@@ -88,8 +88,9 @@ async function ensureProfileTabActive(page: any) {
 
 // deno-lint-ignore no-explicit-any
 async function createProfile(page: any, name: string) {
-  await ensureProfileTabActive(page);
+  // `activeTab` can revert during synchronization (CT-1666); check it afterward.
   await waitForRuntimeSynced(page);
+  await ensureProfileTabActive(page);
   await fillCfInput(page, "#wish-profile-picker-name-input", name);
   await clickTrustedAction(page, TRUSTED_PROFILE_CREATE_ACTION);
   await waitForRuntimeSynced(page);
