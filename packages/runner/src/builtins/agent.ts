@@ -40,6 +40,7 @@ import { type Runtime, spaceCellSchema } from "../runtime.ts";
 import type { Action } from "../scheduler.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import {
+  AGENT_INPUT_NAME_PATTERN,
   AGENT_RUN_TERMINAL_STATES,
   AgentParamsSchema,
   AgentQueueIndexSchema,
@@ -327,6 +328,17 @@ export function agent(
       return;
     }
 
+    const invalidInputName = Object.keys(rawInputs ?? {}).find((name) =>
+      !AGENT_INPUT_NAME_PATTERN.test(name)
+    );
+    if (invalidInputName !== undefined) {
+      settleWithoutRun(
+        fields,
+        `${INVALID_INPUT}: agent input name must match ${AGENT_INPUT_NAME_PATTERN}, got \`${invalidInputName}\``,
+        undefined,
+      );
+      return;
+    }
     const inputHandles = resolveInputHandles(rawInputs);
 
     const requestSnapshot = createFrozenRequestSnapshot({

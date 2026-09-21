@@ -105,7 +105,7 @@ describe("cf agent runner", () => {
       leaseMs: 60_000,
       workRoot: "/harness-home/agent-runs",
       loomRetrievalConfigPath: "/etc/loom/retrieval.json",
-      harnessArgs: ["--model", "scripted"],
+      model: "scripted",
     }]);
     expect(events.filter((event) => !event.startsWith("report:"))).toEqual([
       "identity:/keys/me.key",
@@ -132,10 +132,10 @@ describe("cf agent runner", () => {
       maxConcurrent: 1,
       leaseMs: 300_000,
       workRoot: "/home/me/.cf-harness/agent-runs",
-      tools: ["describe_handle", "web_fetch", "research"],
+      tools: ["describe_handle", "web_fetch"],
     });
     expect(started[0].loomRetrievalConfigPath).toBeUndefined();
-    expect(started[0].harnessArgs).toBeUndefined();
+    expect(started[0].model).toBeUndefined();
   });
 
   it("reads the identity and API URL from `CF_IDENTITY` and `CF_API_URL`", async () => {
@@ -154,6 +154,29 @@ describe("cf agent runner", () => {
       identityPath: "/keys/env.key",
       homeHost: "http://localhost:8200",
     });
+  });
+
+  it("reads the Loom retrieval configuration from its harness environment variable", async () => {
+    const { deps, started } = stubDeps();
+
+    await withEnv(
+      "CF_HARNESS_LOOM_RETRIEVAL_CONFIG",
+      "/etc/loom/retrieval.json",
+      async () => {
+        await run(deps, [
+          "runner",
+          "-i",
+          "/keys/me.key",
+          "-a",
+          "http://localhost:8100",
+        ]);
+      },
+    );
+
+    expect(started[0].loomRetrievalConfigPath).toBe(
+      "/etc/loom/retrieval.json",
+    );
+    expect(started[0].tools).toContain("loom_search");
   });
 
   it("takes `--tools` as the whole list and `--work-root` over the default", async () => {
@@ -236,7 +259,9 @@ describe("cf agent runner", () => {
 
   describe("startAgentRunner()", () => {
     /** A home runtime whose home pattern is seeded data with a live stream. */
-    const openHome = async (options: { queue: boolean }) => {
+    const openHome = async (
+      options: { queue: boolean; registrationError?: boolean },
+    ) => {
       const signer = await Identity.fromPassphrase(
         `agent command ${crypto.randomUUID()}`,
       );
@@ -261,6 +286,9 @@ describe("cf agent runner", () => {
       // Stands in for the queue piece's `setAgentRunner` handler.
       const cancel = runtime.scheduler.addEventHandler(
         (tx, event: { runner?: unknown }) => {
+          if (options.registrationError) {
+            throw new Error("registration rejected for the test");
+          }
           homePattern.withTx(tx).key("agentQueue").key("agentRunner")
             .set(event.runner);
         },
@@ -316,6 +344,10 @@ describe("cf agent runner", () => {
       });
 
       await running.stop();
+      expect(
+        agentQueueIndexCell(opened.runtime, opened.config.home as never)
+          .key("agentRunner").get(),
+      ).toBeUndefined();
       await opened.close();
     });
 
@@ -398,6 +430,30 @@ describe("cf agent runner", () => {
           openHost: () => Promise.reject(new Error("unused")),
         }),
       ).rejects.toThrow("holds no agent queue");
+      await opened.close();
+    });
+
+    it("rejects when the registration handling transaction fails", async () => {
+      const opened = await openHome({
+        queue: true,
+        registrationError: true,
+      });
+
+      await expect(
+        startAgentRunner(
+          opened.config,
+          () => {},
+          {
+            openHome: () =>
+              Promise.resolve({
+                runtime: opened.runtime,
+                homePattern: opened.homePattern,
+              }),
+            openHost: () => Promise.reject(new Error("unused")),
+          },
+          () => Promise.resolve({ outcome: "refused" }),
+        ),
+      ).rejects.toThrow();
       await opened.close();
     });
   });

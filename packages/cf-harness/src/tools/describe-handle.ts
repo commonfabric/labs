@@ -357,6 +357,16 @@ export const describeHandleToolDescriptor: HarnessToolDescriptor = {
         required: ["tables", "labels"],
         additionalProperties: false,
       },
+      referent: {
+        type: "object",
+        properties: {
+          kind: { type: "string" },
+          source: { type: "string" },
+          labelSource: { type: "string" },
+        },
+        required: ["kind", "source", "labelSource"],
+        additionalProperties: false,
+      },
       error: { type: "string" },
     },
     required: ["outputId", "token", "known", "hasSchema"],
