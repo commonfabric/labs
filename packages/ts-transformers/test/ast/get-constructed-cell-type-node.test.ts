@@ -2,11 +2,14 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
-import { getAuthoredCellTypeNode } from "../../src/ast/type-building.ts";
+import {
+  getConstructedCellTypeNode,
+  namesValueBinding,
+} from "../../src/ast/type-building.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { collect } from "../transformed-ast.ts";
 
-function programFor(source: string) {
+function programFor(source: string, declarations: Record<string, string> = {}) {
   const fileName = "/test.ts";
   const options: ts.CompilerOptions = {
     noLib: true,
@@ -22,7 +25,9 @@ function programFor(source: string) {
   const host = ts.createCompilerHost(options, true);
   const files = new Map<string, ts.SourceFile>([
     [fileName, sourceFile],
-    ...Object.entries(COMMONFABRIC_TYPES).map(([name, text]) =>
+    ...Object.entries({ ...COMMONFABRIC_TYPES, ...declarations }).map((
+      [name, text],
+    ) =>
       [
         `/${name}`,
         ts.createSourceFile(`/${name}`, text, options.target!, true),
@@ -35,8 +40,12 @@ function programFor(source: string) {
   host.readFile = (name) => files.get(name)?.text;
   host.resolveModuleNames = (names) =>
     names.map((name) => {
-      const path = name === "commonfabric" ? "/commonfabric.d.ts" : "/cfc.ts";
-      return name === "commonfabric" || name === "commonfabric/cfc"
+      const path = name === "commonfabric"
+        ? "/commonfabric.d.ts"
+        : name === "commonfabric/cfc"
+        ? "/cfc.ts"
+        : `/${name.replace(/^\.\//, "")}.d.ts`;
+      return files.has(path)
         ? { resolvedFileName: path, isExternalLibraryImport: false }
         : undefined;
     });
@@ -48,7 +57,7 @@ function programFor(source: string) {
   return { checker, result, sourceFile };
 }
 
-describe("getAuthoredCellTypeNode()", () => {
+describe("getConstructedCellTypeNode()", () => {
   it("preserves the writer binding through a named cell and const aliases", () => {
     const { checker, result, sourceFile } = programFor(`
       import { Writable } from "commonfabric";
@@ -58,7 +67,7 @@ describe("getAuthoredCellTypeNode()", () => {
       const result = alias;
     `);
     const registry = new WeakMap<ts.Node, ts.Type>();
-    const type = getAuthoredCellTypeNode(result, checker, registry);
+    const type = getConstructedCellTypeNode(result, checker, registry);
     expect(type && ts.isTypeReferenceNode(type)).toBe(true);
     const reference = type as ts.TypeReferenceNode;
     expect(ts.isQualifiedName(reference.typeName)).toBe(true);
@@ -92,7 +101,7 @@ describe("getAuthoredCellTypeNode()", () => {
       const second = first;
       const result = first;
     `);
-    expect(getAuthoredCellTypeNode(result, checker)).toBeUndefined();
+    expect(getConstructedCellTypeNode(result, checker)).toBeUndefined();
   });
 
   it("does not treat a foreign constructor with a writer type as a fabric cell", () => {
@@ -101,7 +110,7 @@ describe("getAuthoredCellTypeNode()", () => {
       const writer = () => {};
       const result = new Writable<typeof writer>(writer);
     `);
-    expect(getAuthoredCellTypeNode(result, checker)).toBeUndefined();
+    expect(getConstructedCellTypeNode(result, checker)).toBeUndefined();
   });
 
   it("leaves mutable and explicitly typed bindings to normal type inference", () => {
@@ -112,7 +121,92 @@ describe("getAuthoredCellTypeNode()", () => {
         ${binding} = new Writable<typeof writer>(writer);
         const result = name;
       `);
-      expect(getAuthoredCellTypeNode(result, checker)).toBeUndefined();
+      expect(getConstructedCellTypeNode(result, checker)).toBeUndefined();
     }
+  });
+});
+
+describe("namesValueBinding()", () => {
+  function constructorArgument(
+    source: string,
+    declarations?: Record<string, string>,
+  ) {
+    const { checker, sourceFile } = programFor(source, declarations);
+    const argument = collect(sourceFile, ts.isNewExpression)[0]
+      .typeArguments![0];
+    return { argument, checker };
+  }
+  const names = (source: string, declarations?: Record<string, string>) => {
+    const { argument, checker } = constructorArgument(source, declarations);
+    return namesValueBinding(argument, checker);
+  };
+  const prelude = `
+    import { Writable } from "commonfabric";
+    const writer = () => {};
+  `;
+
+  it("finds a binding written in place, under parentheses and type arguments", () => {
+    expect(names(`${prelude}
+      type Box<T> = { value: T };
+      const result = new Writable<(Box<typeof writer>)>({ value: writer });
+    `)).toBe(true);
+  });
+
+  it("finds a binding that a plain alias, or a chain of them, stands for", () => {
+    expect(names(`${prelude}
+      type Binding = typeof writer;
+      type Named = Binding;
+      const result = new Writable<Named>(writer);
+    `)).toBe(true);
+  });
+
+  it("finds a binding written in a generic alias's body", () => {
+    expect(names(`${prelude}
+      type Held<T> = { value: T; by: typeof writer };
+      const result = new Writable<Held<string>>({ value: "", by: writer });
+    `)).toBe(true);
+  });
+
+  it("finds a binding written in an interface member", () => {
+    expect(names(`${prelude}
+      interface Held { by: typeof writer }
+      const result = new Writable<Held>({ by: writer });
+    `)).toBe(true);
+  });
+
+  it("answers no for a shape that names no binding, through aliases too", () => {
+    expect(names(`${prelude}
+      type Text = { text: string };
+      type Named = Text;
+      const result = new Writable<Named>({ text: "" });
+    `)).toBe(false);
+  });
+
+  it("terminates on an alias that refers to itself", () => {
+    expect(names(`${prelude}
+      type Tree = { children: Tree[] };
+      const result = new Writable<Tree>({ children: [] });
+    `)).toBe(false);
+  });
+
+  it("does not follow a declaration file's own typeof", () => {
+    // A library spells a brand key with `typeof`. It names no writer, and the
+    // same alias written in the authored module is followed.
+    const branded = "{ readonly brand: typeof BRAND; text: string }";
+    expect(names(
+      `${prelude}
+      import type { Branded } from "./brand";
+      const result = new Writable<Branded>(undefined as never);
+    `,
+      {
+        "brand.d.ts":
+          `export declare const BRAND: unique symbol;\nexport type Branded = ${branded};`,
+      },
+    )).toBe(false);
+    expect(names(`${prelude}
+      declare const BRAND: unique symbol;
+      type Branded = ${branded};
+      const result = new Writable<Branded>(undefined as never);
+    `)).toBe(true);
   });
 });

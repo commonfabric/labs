@@ -2161,14 +2161,27 @@ carry a repeated source-metadata helper implementation.
 
 ## 12. Schema Generation
 
-Cell constructors whose authored type arguments include a `typeof` value binding
-retain those arguments when their result is lowered into a lift. Recovery follows
-`.for()` and unannotated `const` aliases, and also preserves the declaration in
-an inferred object-literal pattern result. This keeps `WriteAuthorizedBy` tied to
-the named writer instead of an inferred structural function type. Explicit
-variable annotations remain authoritative; mutable aliases are not followed.
+Cell constructors whose authored type arguments name a `typeof` value binding
+retain those arguments when their result is lowered into a lift
+(`getConstructedCellTypeNode`). Recovery follows `.for()` and unannotated
+`const` aliases, and also preserves the declaration in an inferred
+object-literal pattern result. This keeps `WriteAuthorizedBy` tied to the named
+writer instead of an inferred structural function type. Explicit variable
+annotations remain authoritative; mutable aliases are not followed.
 Pattern-local object value aliases retain their definitions in each generated
-schema. `protected-cell-policy.test.ts` pins both generated schemas.
+schema.
+
+An argument names a binding (`namesValueBinding`) when a `typeof` is written in
+it, in anything it holds, or in a type alias or interface it refers to by name,
+through any import binding and without substituting a generic alias's
+parameters. Only declarations in authored modules are followed: a declaration
+file's `typeof`, such as a brand key, names no writer. The schema generator
+reads a writer binding, and the type arguments of the reference that carries a
+policy, through parentheses and plain aliases (`readAuthoredTypeNode`), so
+`type Binding = typeof setName` and a pattern-local
+`type Name = Owned<string, typeof setName>` name the writer that the same
+syntax written in place names. `protected-cell-policy.test.ts` pins the
+generated schemas for each spelling.
 
 `SchemaGeneratorTransformer` replaces `toSchema<T>(options?)` calls with JSON
 schema literals.

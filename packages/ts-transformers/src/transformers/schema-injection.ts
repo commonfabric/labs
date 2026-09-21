@@ -29,10 +29,10 @@ import {
   widenLiteralType,
 } from "../ast/mod.ts";
 import {
-  containsTypeQuery,
   createRegisteredTypeLiteral,
-  getAuthoredCellTypeNode,
+  getConstructedCellTypeNode,
   getPreservedTypeForBindingElement,
+  namesValueBinding,
   type PreservedBindingType,
   reportUnknownReactiveType,
 } from "../ast/type-building.ts";
@@ -2002,7 +2002,7 @@ function getExplicitValueTypeNode(
   checker: ts.TypeChecker,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
 ): PreservedBindingType | undefined {
-  const cellType = getAuthoredCellTypeNode(valueExpr, checker, typeRegistry);
+  const cellType = getConstructedCellTypeNode(valueExpr, checker, typeRegistry);
   if (cellType) return { typeNode: cellType };
   if (!ts.isIdentifier(valueExpr)) {
     return undefined;
@@ -2049,7 +2049,7 @@ function objectLiteralHasPreservedValueTypeNodes(
     // structural function type. Authored syntax retains both declarations.
     if (
       explicit &&
-      (containsTypeQuery(explicit.typeNode) ||
+      (namesValueBinding(explicit.typeNode, checker) ||
         typeNodeContainsScopeWrapper(explicit.typeNode) ||
         (explicit.preservedTypeNode &&
           typeNodeContainsScopeWrapper(explicit.preservedTypeNode)))

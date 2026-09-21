@@ -27,6 +27,7 @@ import {
   extractLiteralValueOfSymbol,
   resolveAliasedSymbol,
 } from "../typescript/literal-value.ts";
+import { readAuthoredTypeNode } from "../typescript/type-node.ts";
 import {
   type CellWrapperKind,
   getCellBrand,
@@ -1099,7 +1100,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       throw new Error(`${aliasName}<T> requires type argument`);
     }
 
-    const baseTypeNode = this.#getAliasTypeArgumentNode(context.typeNode, 0);
+    const baseTypeNode = this.#getAliasTypeArgumentNode(context, 0);
     const baseSchema = this.#schemaGenerator.formatChildType(
       baseType,
       context,
@@ -1212,7 +1213,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     return this.#resolveCfcAliasFromDeclaration(
       aliasDeclaration,
       aliasArgs,
-      this.#getAliasTypeArgumentNodes(context.typeNode),
+      this.#getAliasTypeArgumentNodes(context),
       context,
       new Set([aliasName]),
     );
@@ -1418,7 +1419,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       return this.#extractLiteralLikeValue(
         aliasArgs[index],
         aliasArgNodes?.[index] ??
-          this.#getAliasTypeArgumentNode(context.typeNode, index),
+          this.#getAliasTypeArgumentNode(context, index),
         context,
       );
     };
@@ -1522,7 +1523,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     const readValue = (index: number): unknown => {
       return this.#extractLiteralLikeValue(
         aliasArgs[index],
-        this.#getAliasTypeArgumentNode(context.typeNode, index),
+        this.#getAliasTypeArgumentNode(context, index),
         context,
       );
     };
@@ -1541,7 +1542,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     const sourceRefType = aliasArgs[0] as TypeWithInternals | undefined;
-    const sourceRefNode = this.#getAliasTypeArgumentNode(context.typeNode, 0);
+    const sourceRefNode = this.#getAliasTypeArgumentNode(context, 0);
     const nestedPathType = sourceRefType?.aliasTypeArguments?.[1];
     const nestedPathNode =
       sourceRefNode && ts.isTypeReferenceNode(sourceRefNode)
@@ -1603,8 +1604,12 @@ export class CommonFabricFormatter implements TypeFormatter {
     aliasArgNodes: readonly ts.TypeNode[] | undefined,
     bindingIndex: number,
   ): Record<string, unknown> | undefined {
-    const bindingNode = aliasArgNodes?.[bindingIndex] ??
-      this.#getAliasTypeArgumentNode(context.typeNode, bindingIndex);
+    // The binding is read the way its author wrote it, so that
+    // `type Binding = typeof setName` names the writer `typeof setName` does.
+    const writtenBindingNode = aliasArgNodes?.[bindingIndex] ??
+      this.#getAliasTypeArgumentNode(context, bindingIndex);
+    const bindingNode = writtenBindingNode &&
+      readAuthoredTypeNode(writtenBindingNode, context.typeChecker);
     if (!bindingNode || !ts.isTypeQueryNode(bindingNode)) {
       return undefined;
     }
@@ -1664,18 +1669,24 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   #getAliasTypeArgumentNode(
-    typeNode: ts.TypeNode | undefined,
+    context: GenerationContext,
     index: number,
   ): ts.TypeNode | undefined {
-    if (!typeNode || !ts.isTypeReferenceNode(typeNode)) {
-      return undefined;
-    }
-    return typeNode.typeArguments?.[index];
+    return this.#getAliasTypeArgumentNodes(context)?.[index];
   }
 
+  /**
+   * The type arguments written on the reference being formatted. The
+   * reference is read through parentheses and plain aliases
+   * (`readAuthoredTypeNode()`): `type Name = Owned<string, typeof setName>`
+   * holds the arguments that `Name` stands for, and a policy read from the
+   * bare `Name` would find none and drop the writer binding without a word.
+   */
   #getAliasTypeArgumentNodes(
-    typeNode: ts.TypeNode | undefined,
+    context: GenerationContext,
   ): readonly ts.TypeNode[] | undefined {
+    const typeNode = context.typeNode &&
+      readAuthoredTypeNode(context.typeNode, context.typeChecker);
     if (!typeNode || !ts.isTypeReferenceNode(typeNode)) {
       return undefined;
     }
