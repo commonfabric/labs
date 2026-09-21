@@ -1654,6 +1654,14 @@ export const parseCfHarnessCliArgs = async (
     allowedHostRoots,
     readTextFile,
   });
+  if (
+    allowedToolIds?.includes("submit_result") === true &&
+    structuredResult === undefined
+  ) {
+    throw new Error(
+      "--allow-tool submit_result requires --structured-result-path and a schema",
+    );
+  }
   const prompt = await resolvePrompt(args, cwd, readTextFile);
   const imageAttachments = await Promise.all(
     imagePaths.map((path) => {

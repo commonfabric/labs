@@ -1540,6 +1540,18 @@ Deno.test("parseCfHarnessCliArgs rejects malformed structured result validation 
   );
 });
 
+Deno.test("parseCfHarnessCliArgs rejects submit_result without a structured result target", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", "--allow-tool", "submit_result"],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    Error,
+    "--allow-tool submit_result requires --structured-result-path and a schema",
+  );
+});
+
 Deno.test("parseCfHarnessCliArgs supports explicit subagent profile authorization", async () => {
   const parsed = await parseCfHarnessCliArgs(
     [

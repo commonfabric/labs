@@ -601,9 +601,10 @@ mode.
   model-authored tool arguments through the address handle table; denial-path
   tool messages are not swapped, and interactive restore does not persist the
   handle table.
-- The session-local handle table covers cell addresses only. Value handles
-  (`cfh:v:`) are reserved in the token grammar but not implemented, and there is
-  no explicit dereference/release mechanism.
+- The session-local handle table covers cell addresses and the held referents
+  that Loom retrieval admits under `cfh:v:` tokens. Those referent handles are
+  consumed when the agent result writer links or observes a retrieved row; there
+  is no general-purpose value-handle dereference or release mechanism.
 - `estimatedCostUsd` is available only for known GPT-5.6 gateway models when the
   response includes cache reads and writes. It uses public OpenAI pricing;
   gateway markup, subscription quota accounting, and provider invoices remain
