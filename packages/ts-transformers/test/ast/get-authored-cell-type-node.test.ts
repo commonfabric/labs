@@ -3,6 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { getAuthoredCellTypeNode } from "../../src/ast/type-building.ts";
+import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { collect } from "../transformed-ast.ts";
 
 function programFor(source: string) {
@@ -19,21 +20,37 @@ function programFor(source: string) {
     true,
   );
   const host = ts.createCompilerHost(options, true);
-  host.getSourceFile = (name) => name === fileName ? sourceFile : undefined;
+  const files = new Map<string, ts.SourceFile>([
+    [fileName, sourceFile],
+    ...Object.entries(COMMONFABRIC_TYPES).map(([name, text]) =>
+      [
+        `/${name}`,
+        ts.createSourceFile(`/${name}`, text, options.target!, true),
+      ] as const
+    ),
+  ]);
+  host.getSourceFile = (name) => files.get(name);
   host.getCurrentDirectory = () => "/";
-  host.fileExists = (name) => name === fileName;
-  host.readFile = (name) => name === fileName ? source : undefined;
+  host.fileExists = (name) => files.has(name);
+  host.readFile = (name) => files.get(name)?.text;
+  host.resolveModuleNames = (names) =>
+    names.map((name) => {
+      const path = name === "commonfabric" ? "/commonfabric.d.ts" : "/cfc.ts";
+      return name === "commonfabric" || name === "commonfabric/cfc"
+        ? { resolvedFileName: path, isExternalLibraryImport: false }
+        : undefined;
+    });
   const program = ts.createProgram([fileName], options, host);
   const checker = program.getTypeChecker();
   const result = collect(sourceFile, ts.isVariableDeclaration).find((node) =>
     ts.isIdentifier(node.name) && node.name.text === "result"
   )!.initializer!;
-  return { checker, result };
+  return { checker, result, sourceFile };
 }
 
 describe("getAuthoredCellTypeNode()", () => {
   it("preserves the writer binding through a named cell and const aliases", () => {
-    const { checker, result } = programFor(`
+    const { checker, result, sourceFile } = programFor(`
       import { Writable } from "commonfabric";
       const writer = () => {};
       const name = new Writable<typeof writer>(writer).for("name");
@@ -52,7 +69,21 @@ describe("getAuthoredCellTypeNode()", () => {
     const query = reference.typeArguments![0] as ts.TypeQueryNode;
     expect(ts.isTypeQueryNode(query)).toBe(true);
     expect((query.exprName as ts.Identifier).text).toBe("writer");
-    expect(registry.has(reference)).toBe(true);
+    const registered = registry.get(reference)!;
+    const constructor = collect(sourceFile, ts.isNewExpression)[0];
+    const writer = collect(sourceFile, ts.isVariableDeclaration).find((node) =>
+      ts.isIdentifier(node.name) && node.name.text === "writer"
+    )!;
+    expect(registered).toBe(checker.getTypeAtLocation(constructor));
+    expect(registered.flags & ts.TypeFlags.Any).toBe(0);
+    expect(registered.getSymbol()?.name).toBe("Cell");
+    expect(registered.getSymbol()?.declarations?.[0].getSourceFile().fileName)
+      .toBe("/commonfabric.d.ts");
+    const typeArguments = checker.getTypeArguments(
+      registered as ts.TypeReference,
+    );
+    expect(typeArguments).toHaveLength(1);
+    expect(typeArguments[0]).toBe(checker.getTypeAtLocation(writer.name));
   });
 
   it("terminates on circular const aliases without inventing a cell type", () => {
