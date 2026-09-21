@@ -91,15 +91,17 @@ export const PROVIDER_NAMES: Set<string> = new Set();
 
 export type TaskType = "coding" | "json" | "creative" | "vision";
 
-// Default model resolution: prefer the gateway-hosted Sonnet 4.6 when available,
-// fall back to the direct Anthropic Sonnet 4.6 (then Sonnet 4.5). Updated by
-// `registerDefaultModel` after providers (including the gateway) have finished
-// loading.
+/**
+ * Preferred defaults, in order. After provider discovery, the first registered
+ * candidate wins; without a candidate, the first registered language model wins.
+ */
 export const DEFAULT_MODEL_CANDIDATES = [
   "gateway:claude-sonnet-4-6",
   "anthropic:claude-sonnet-4-6",
   "anthropic:claude-sonnet-4-5",
+  "gateway:gpt-5.4-mini",
 ] as const;
+
 export const DEFAULT_MODEL_ALIAS = "default";
 
 export const TASK_MODELS: Record<TaskType, string> = {
@@ -495,7 +497,8 @@ export async function resolveModel(
 }
 
 const registerDefaultModel = () => {
-  const chosenName = DEFAULT_MODEL_CANDIDATES.find((name) => MODELS[name]);
+  const chosenName = DEFAULT_MODEL_CANDIDATES.find((name) => MODELS[name]) ??
+    Object.keys(MODELS).find((name) => MODELS[name].name === name);
   if (!chosenName) {
     console.warn(
       `[models] No default model available (tried ${

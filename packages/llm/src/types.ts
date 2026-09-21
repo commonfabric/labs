@@ -11,7 +11,8 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
  * The alias a request names to get whichever model the deployment considers
  * its default. The toolshed picks that model as it starts up, by walking
  * `DEFAULT_MODEL_CANDIDATES` in `packages/toolshed/routes/ai/llm/models.ts`
- * and taking the first candidate a provider registered.
+ * and taking the first candidate a provider registered, or the first registered
+ * language model when none of the candidates is available.
  *
  * Which models exist is decided there and not here. `README.md` in this
  * package says why, and `docs/features/llm-provider-boundary.md` describes the
