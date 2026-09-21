@@ -5,22 +5,20 @@ import { buildCfHarnessBaseSystemPrompt } from "../src/cli.ts";
 import { finishTaskTool } from "../src/tools/finish-task.ts";
 
 describe("orientation", () => {
-  for (const task of ["what's on my calendar", "show me my documents"]) {
-    it(`gives the parent an inspection path before asking for the source in ${JSON.stringify(task)}`, () => {
-      const prompt = buildCfHarnessBaseSystemPrompt();
-      expect(prompt).toContain(
-        "inspect unresolved relevant handles with describe_handle before asking the user to connect or attach that source",
-      );
-      expect(prompt).toContain("A grant's name is a lead, not its contents");
-      expect(prompt).toContain("not given does not mean absent");
-      expect(prompt).toContain(
-        "The parent can run an indexed pattern with run_pattern",
-      );
-      expect(finishTaskTool.descriptor.description).toContain(
-        "any applicable bounded discovery route over the granted scope",
-      );
-    });
-  }
+  it("gives the parent a shared inspection path for calendar and document requests before asking for the source", () => {
+    const prompt = buildCfHarnessBaseSystemPrompt();
+    expect(prompt).toContain(
+      "inspect unresolved relevant handles with describe_handle before asking the user to connect or attach that source",
+    );
+    expect(prompt).toContain("A grant's name is a lead, not its contents");
+    expect(prompt).toContain("not given does not mean absent");
+    expect(prompt).toContain(
+      "The parent can run an indexed pattern with run_pattern",
+    );
+    expect(finishTaskTool.descriptor.description).toContain(
+      "any applicable bounded discovery route over the granted scope",
+    );
+  });
 
   it("checks the send path before asking for a recipient in the landlord-email rehearsal", () => {
     const prompt = buildCfHarnessBaseSystemPrompt();
