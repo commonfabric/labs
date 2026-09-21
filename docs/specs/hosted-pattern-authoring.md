@@ -36,7 +36,7 @@ authored-program manifest still required by the piece source lifecycle.
 
 ## Last updated
 
-2026-09-18
+2026-09-20
 
 ## Goal
 
