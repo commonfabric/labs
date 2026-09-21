@@ -21,10 +21,11 @@ import {
   TypeWithInternals,
 } from "../type-utils.ts";
 import { hasDefaultMarker } from "../typescript/default-brand.ts";
+import { extractLiteralValueOfSymbol } from "../typescript/literal-value.ts";
 import {
-  extractLiteralValueOfSymbol,
-  resolveAliasedSymbol,
-} from "../typescript/literal-value.ts";
+  getTypeAliasDeclaration,
+  unwrapTypeParentheses,
+} from "../typescript/type-node.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 
 // Simple primitive schemas only have these keys (possibly just one)
@@ -431,55 +432,41 @@ export class UnionFormatter implements TypeFormatter {
     return false;
   }
 
+  /**
+   * The union node `typeNode` stands for, read through parentheses and through
+   * aliases without type parameters, or `undefined` when it stands for none.
+   * A circular alias throws.
+   */
   #getUnionTypeNode(
     typeNode: ts.TypeNode | undefined,
     checker: ts.TypeChecker,
-    visited = new Set<string>(),
+    followed = new Set<ts.TypeAliasDeclaration>(),
   ): ts.UnionTypeNode | undefined {
     if (!typeNode) {
       return undefined;
     }
 
-    const unwrapped = ts.isParenthesizedTypeNode(typeNode)
-      ? typeNode.type
-      : typeNode;
+    const unwrapped = unwrapTypeParentheses(typeNode);
     if (ts.isUnionTypeNode(unwrapped)) {
       return unwrapped;
     }
     if (
-      !ts.isTypeReferenceNode(unwrapped) ||
-      !ts.isIdentifier(unwrapped.typeName) ||
-      unwrapped.typeArguments?.length
+      !ts.isTypeReferenceNode(unwrapped) || unwrapped.typeArguments?.length
     ) {
       return undefined;
     }
 
-    const symbol = checker.getSymbolAtLocation(unwrapped.typeName);
-    const resolvedSymbol = symbol && resolveAliasedSymbol(symbol, checker);
-    const aliasDeclaration = resolvedSymbol?.declarations?.find((
-      declaration,
-    ): declaration is ts.TypeAliasDeclaration =>
-      ts.isTypeAliasDeclaration(declaration)
-    );
+    const aliasDeclaration = getTypeAliasDeclaration(unwrapped, checker);
     if (!aliasDeclaration || aliasDeclaration.typeParameters?.length) {
       return undefined;
     }
-
-    const aliasKey = this.#getTypeAliasDeclarationKey(aliasDeclaration);
-    if (visited.has(aliasKey)) {
+    if (followed.has(aliasDeclaration)) {
       throw new Error(
         `Circular type alias detected: ${aliasDeclaration.name.text}`,
       );
     }
-    visited.add(aliasKey);
-    return this.#getUnionTypeNode(aliasDeclaration.type, checker, visited);
-  }
-
-  #getTypeAliasDeclarationKey(
-    declaration: ts.TypeAliasDeclaration,
-  ): string {
-    const sourceFile = declaration.getSourceFile();
-    return `${sourceFile.fileName}:${declaration.pos}:${declaration.end}`;
+    followed.add(aliasDeclaration);
+    return this.#getUnionTypeNode(aliasDeclaration.type, checker, followed);
   }
 
   #getDefaultUnionEntry(

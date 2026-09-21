@@ -20,11 +20,11 @@ import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import { UnionFormatter } from "./formatters/union-formatter.ts";
 import { IntersectionFormatter } from "./formatters/intersection-formatter.ts";
 import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
+import { unwrapTypeParentheses } from "./typescript/type-node.ts";
 import {
   detectWrapperViaNode,
   getNamedTypeKey,
   getPropertyNameText,
-  isDefaultTypeRef,
   safeGetIndexTypeOfType,
   safeGetNodeText,
   safeGetTypeOfSymbolAtLocation,
@@ -457,17 +457,17 @@ function withoutTypes(
 }
 
 /**
- * `node` with parentheses and `readonly` operators stripped from the outside;
- * neither changes what a type denotes to these rules.
+ * `node` with parentheses and `readonly` operators stripped from the outside.
+ * Parentheses never change the type a node denotes; `readonly` does, but not
+ * to these rules, which have no counterpart for it in a schema.
  */
 function unwrapTypeNode(node: ts.TypeNode): ts.TypeNode {
-  let current = node;
+  let current = unwrapTypeParentheses(node);
   while (
-    ts.isParenthesizedTypeNode(current) ||
-    (ts.isTypeOperatorNode(current) &&
-      current.operator === ts.SyntaxKind.ReadonlyKeyword)
+    ts.isTypeOperatorNode(current) &&
+    current.operator === ts.SyntaxKind.ReadonlyKeyword
   ) {
-    current = current.type;
+    current = unwrapTypeParentheses(current.type);
   }
   return current;
 }
@@ -1119,43 +1119,26 @@ export class SchemaGenerator {
     typeNode?: ts.TypeNode,
     checker?: ts.TypeChecker,
   ): string | ts.Type {
-    if (typeNode && ts.isTypeReferenceNode(typeNode)) {
-      // Handle Default types (both direct and aliased) with enhanced keys to
-      // avoid false cycles
-      const isDirectDefault = ts.isIdentifier(typeNode.typeName) &&
-        typeNode.typeName.text === "Default";
-      const isAliasedDefault = checker && isDefaultTypeRef(typeNode, checker);
-
-      if (isDirectDefault || isAliasedDefault) {
-        // Create a more specific key that includes type argument info to
-        // avoid false cycles
+    if (typeNode && checker && ts.isTypeReferenceNode(typeNode)) {
+      // A wrapper reference — `Default` or a cell-like wrapper (Cell,
+      // Writable, Stream, OpaqueCell), written in place or reached through an
+      // alias — shares its ts.Type identity with the same instantiation at
+      // other positions. When a recursive type like TodoItem contains
+      // `Writable<TodoItem[]>`, TypeScript reuses the same Cell<TodoItem[]>
+      // type object, causing the cycle to be detected in wrapper context where
+      // it can't be properly stored. Give each wrapper occurrence a unique
+      // stack key, from its type arguments and its source location, so the
+      // cycle is instead detected at the inner type level where it can be
+      // handled.
+      const wrapperKind = detectWrapperViaNode(typeNode, checker);
+      if (wrapperKind) {
         const argTexts = typeNode.typeArguments
-          ? typeNode.typeArguments.map((arg) => safeGetNodeText(arg)).join(",")
+          ? typeNode.typeArguments.map((arg) => safeGetNodeText(arg))
+            .join(",")
           : "";
-        // Include a source location hash to further distinguish instances
         const locationHash = typeNode.getSourceFile?.()?.fileName || "";
         const position = typeNode.pos || 0;
-        return `Default_${type.flags}_${argTexts}_${locationHash}_${position}`;
-      }
-
-      // Cell-like wrappers (Cell, Writable, Stream, OpaqueCell) share their
-      // ts.Type identity with the same wrapper instantiation at other positions.
-      // When a recursive type like TodoItem contains `Writable<TodoItem[]>`,
-      // TypeScript reuses the same Cell<TodoItem[]> type object, causing the
-      // cycle to be detected in wrapper context where it can't be properly
-      // stored. Give each wrapper occurrence a unique stack key so the cycle
-      // is instead detected at the inner type level where it can be handled.
-      if (checker) {
-        const wrapperKind = detectWrapperViaNode(typeNode, checker);
-        if (wrapperKind) {
-          const argTexts = typeNode.typeArguments
-            ? typeNode.typeArguments.map((arg) => safeGetNodeText(arg))
-              .join(",")
-            : "";
-          const locationHash = typeNode.getSourceFile?.()?.fileName || "";
-          const position = typeNode.pos || 0;
-          return `${wrapperKind}_${type.flags}_${argTexts}_${locationHash}_${position}`;
-        }
+        return `${wrapperKind}_${type.flags}_${argTexts}_${locationHash}_${position}`;
       }
     }
     return type;
@@ -1659,7 +1642,11 @@ export class SchemaGenerator {
 
     // A parenthesized node carries exactly the shape it wraps.
     if (ts.isParenthesizedTypeNode(typeNode)) {
-      return this.#analyzeTypeNodeStructure(typeNode.type, checker, context);
+      return this.#analyzeTypeNodeStructure(
+        unwrapTypeParentheses(typeNode),
+        checker,
+        context,
+      );
     }
 
     // A tuple lowers the way the type-based path lowers one: an array whose

@@ -15,7 +15,9 @@
  * A reference to a generic alias is not in the set. The node such an alias
  * names is written in terms of its own type parameters, and denotes what the
  * reference denotes only once each is replaced by the reference's argument; a
- * reader that needs to see through one substitutes for itself. Nor is
+ * reader that needs to see through one substitutes for itself, and a reader
+ * that asks only which type an alias is built from, such as which wrapper it
+ * names, finds the alias with {@link getTypeAliasDeclaration}. Nor is
  * `readonly`, which changes the type a node denotes; a reader to which that
  * change is invisible strips it on top of these, and says so where it does.
  *
@@ -43,6 +45,28 @@ export function unwrapTypeParentheses(node: ts.TypeNode): ts.TypeNode {
 }
 
 /**
+ * Returns the declaration of the type alias that `reference` names, through
+ * any import binding, or `undefined` for a reference to anything else. The
+ * alias may be generic, in which case the node it declares is written in its
+ * own type parameters: enough to tell which type the alias is built from, and
+ * not what the reference denotes. A reference the checker cannot resolve, such
+ * as one built by the transformer, names no declaration here.
+ */
+export function getTypeAliasDeclaration(
+  reference: ts.TypeReferenceNode,
+  checker: ts.TypeChecker,
+): ts.TypeAliasDeclaration | undefined {
+  const name = ts.isIdentifier(reference.typeName)
+    ? reference.typeName
+    : reference.typeName.right;
+  const symbol = checker.getSymbolAtLocation(name);
+  return symbol &&
+    resolveAliasedSymbol(symbol, checker).declarations?.find(
+      ts.isTypeAliasDeclaration,
+    );
+}
+
+/**
  * Returns the type node that `node` stands for, one step in: the node a pair
  * of parentheses holds, or the node a type alias names where `node` refers to
  * that alias by name, through any import binding, and neither the reference
@@ -62,14 +86,7 @@ export function readAuthoredTypeNodeOnce(
   if (!ts.isTypeReferenceNode(node) || node.typeArguments?.length) {
     return undefined;
   }
-  const name = ts.isIdentifier(node.typeName)
-    ? node.typeName
-    : node.typeName.right;
-  const symbol = checker.getSymbolAtLocation(name);
-  const declaration = symbol &&
-    resolveAliasedSymbol(symbol, checker).declarations?.find(
-      ts.isTypeAliasDeclaration,
-    );
+  const declaration = getTypeAliasDeclaration(node, checker);
   return declaration && !declaration.typeParameters?.length
     ? declaration.type
     : undefined;

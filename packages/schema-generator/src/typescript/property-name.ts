@@ -1,5 +1,7 @@
 import ts from "typescript";
 
+import { isCommonFabricDeclaration } from "./common-fabric-symbols.ts";
+
 const COMMON_FABRIC_HELPERS_IDENTIFIER = "__cfHelpers";
 const COMMON_FABRIC_KEY_NAMES = ["NAME", "UI", "SELF", "FS"] as const;
 const COMMON_FABRIC_KEY_NAME_SET = new Set<CommonFabricKeyName>(
@@ -63,13 +65,6 @@ function resolveAliasedSymbol(
   return symbol;
 }
 
-function isCommonFabricDeclarationSource(fileName: string): boolean {
-  const normalized = fileName.replace(/\\/g, "/");
-  return normalized.endsWith("/packages/api/index.ts") ||
-    normalized.includes("@commonfabric/api") ||
-    normalized.endsWith("commonfabric.d.ts");
-}
-
 function isUniqueSymbolKeySymbol(
   symbol: ts.Symbol,
   checker: ts.TypeChecker,
@@ -121,7 +116,7 @@ function resolveCommonFabricComputedKeyName(
     return undefined;
   }
 
-  if (isCommonFabricDeclarationSource(declaration.getSourceFile().fileName)) {
+  if (isCommonFabricDeclaration(declaration)) {
     return resolvedName;
   }
 

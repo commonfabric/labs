@@ -1,5 +1,7 @@
 import ts from "typescript";
 
+import { isCommonFabricSymbol } from "./common-fabric-symbols.ts";
+
 /**
  * Check if a type is a union that includes undefined.
  * When a property type is `T | undefined`, it's considered optional for JSON/runtime semantics.
@@ -54,21 +56,11 @@ export function isOptionalSymbol(symbol: ts.Symbol): boolean {
 /**
  * Returns true if `symbol` is the `Default` type alias from `@commonfabric/api`.
  *
- * Checks both the symbol name AND its declaring source file so that any
- * user-defined type that happens to be named "Default" is not treated as the
- * framework's Default<T,V>.
+ * Checks both the symbol name AND where it is declared
+ * (`isCommonFabricSymbol()`), so that any user-defined type that happens to
+ * be named "Default" is not treated as the framework's Default<T,V>.
  */
 export function isDefaultAliasSymbol(symbol: ts.Symbol | undefined): boolean {
-  if (!symbol || symbol.getName() !== "Default") return false;
-  const decl = symbol.declarations?.[0];
-  if (!decl) return false;
-  const fileName = decl.getSourceFile().fileName;
-  // The canonical Default<T,V> is declared in @commonfabric/api (packages/api/index.ts).
-  // Cover both workspace-resolved paths (".../packages/api/index.ts") and any
-  // future npm-published form ("@commonfabric/api").
-  // Also accept "commonfabric.d.ts" which is the filename used in test environments
-  // where the types are registered under a synthetic path.
-  return fileName.endsWith("/packages/api/index.ts") ||
-    fileName.includes("@commonfabric/api") ||
-    fileName.endsWith("commonfabric.d.ts");
+  return !!symbol && symbol.getName() === "Default" &&
+    isCommonFabricSymbol(symbol);
 }

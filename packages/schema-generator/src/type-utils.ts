@@ -5,10 +5,15 @@ import type { MutableJSONSchema } from "@commonfabric/api";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import { getPropertyNameText } from "./typescript/property-name.ts";
 import type { CellWrapperKind } from "./typescript/cell-brand.ts";
+import { isCommonFabricSymbol } from "./typescript/common-fabric-symbols.ts";
 import {
   getDefaultMarkerPayload,
   hasDefaultMarker,
 } from "./typescript/default-brand.ts";
+import {
+  getTypeAliasDeclaration,
+  unwrapTypeParentheses,
+} from "./typescript/type-node.ts";
 import {
   isWrapperSpelling,
   spellingsWhere,
@@ -764,39 +769,6 @@ export function getArrayElementInfo(
 }
 
 /**
- * Check if a type reference node represents Default<T,V>
- */
-export function isDefaultTypeRef(
-  node: ts.TypeReferenceNode,
-  checker: ts.TypeChecker,
-  visited: Set<ts.Symbol> = new Set(),
-): boolean {
-  if (!node.typeName || !ts.isIdentifier(node.typeName)) return false;
-  // Fast path: identifier text says "Default" even if symbol is missing
-  if (node.typeName.text === "Default") return true;
-
-  const symbol = checker.getSymbolAtLocation(node.typeName);
-  if (!symbol) return false;
-
-  // Prevent infinite recursion from circular aliases
-  if (visited.has(symbol)) return false;
-  visited.add(symbol);
-
-  const symbolName = symbol.getName();
-  if (symbolName === "Default") return true;
-
-  // If this is an alias, resolve the alias target recursively
-  const decl = symbol.declarations?.[0];
-  if (decl && ts.isTypeAliasDeclaration(decl)) {
-    const aliased = decl.type;
-    if (ts.isTypeReferenceNode(aliased)) {
-      return isDefaultTypeRef(aliased, checker, visited); // Recursive call with visited set
-    }
-  }
-  return false;
-}
-
-/**
  * Checks if a type reference node (via literal name or alias chain) refers to a wrapper type.
  * Returns the wrapper kind if detected.
  *
@@ -818,6 +790,11 @@ export function detectWrapperViaNode(
 /**
  * Resolve a type node to a wrapper type, following alias chains.
  * Returns both the wrapper kind and the resolved type reference node with type arguments.
+ *
+ * The node is read through parentheses and through type aliases, an imported
+ * or generic one included (`getTypeAliasDeclaration()`): only the wrapper's
+ * kind is read through a generic alias, and the node returned for one is
+ * written in the alias's own type parameters. A circular alias throws.
  */
 export function resolveWrapperNode(
   typeNode: ts.TypeNode | undefined,
@@ -826,85 +803,72 @@ export function resolveWrapperNode(
   kind: NodeWrapperKind;
   node: ts.TypeReferenceNode;
 } | undefined {
-  if (!typeNode || !ts.isTypeReferenceNode(typeNode)) {
-    return undefined;
-  }
-
-  const literalName = getEntityNameText(typeNode.typeName);
-
-  // Fast path: direct wrapper reference
-  const directKind = wrapperKindForName(literalName);
-  if (directKind) {
-    return {
-      kind: directKind,
-      node: typeNode,
-    };
-  }
-
-  // Follow alias chain
-  if (!ts.isIdentifier(typeNode.typeName)) {
-    return undefined;
-  }
-  return followAliasToWrapperNode(typeNode, typeChecker, new Set());
+  return typeNode && followAliasToWrapperNode(typeNode, typeChecker, [], []);
 }
 
 /**
- * Follow alias chains to detect if a type alias resolves to a wrapper type.
- * Returns both the wrapper kind and the resolved node with type arguments.
+ * Helper for `followAliasToWrapperNode()`, which returns the kind of wrapper
+ * `reference` names, or `undefined` for a reference to anything else.
+ * `Default` is recognized by its spelling. A cell wrapper counts only where
+ * its name resolves, through its import binding, to the wrapper `commonfabric`
+ * declares, under whatever name it was imported as: a type of the author's own
+ * that shares a wrapper's name is something else. A reference the checker
+ * cannot resolve, as one the transformer builds, is read by its spelling.
+ */
+function wrapperKindOfReference(
+  reference: ts.TypeReferenceNode,
+  checker: ts.TypeChecker,
+): NodeWrapperKind | undefined {
+  const identifier = ts.isIdentifier(reference.typeName)
+    ? reference.typeName
+    : reference.typeName.right;
+  const spelled = wrapperKindForName(identifier.text);
+  if (spelled === "Default") return spelled;
+  const symbol = checker.getSymbolAtLocation(identifier);
+  if (!symbol) return spelled;
+  const declared = symbol.flags & ts.SymbolFlags.Alias
+    ? checker.getAliasedSymbol(symbol)
+    : symbol;
+  if (!isCommonFabricSymbol(declared)) return undefined;
+  const kind = wrapperKindForName(declared.getName());
+  return kind === "Default" ? undefined : kind;
+}
+
+/**
+ * Helper for `resolveWrapperNode()`, which follows `typeNode`, through
+ * parentheses and type aliases, to a reference that names a wrapper.
+ * `followed` holds the aliases already on this path and `names` their names,
+ * which spell the chain in the error a circular alias throws.
  */
 function followAliasToWrapperNode(
-  typeNode: ts.TypeReferenceNode,
+  typeNode: ts.TypeNode,
   typeChecker: ts.TypeChecker,
-  visited: Set<string>,
+  followed: readonly ts.TypeAliasDeclaration[],
+  names: readonly string[],
 ): {
   kind: NodeWrapperKind;
   node: ts.TypeReferenceNode;
 } | undefined {
-  // Caller must ensure typeNode.typeName is an Identifier.
-  if (!ts.isIdentifier(typeNode.typeName)) {
-    throw new Error("followAliasToWrapperNode requires an Identifier typeName");
-  }
+  const node = unwrapTypeParentheses(typeNode);
+  if (!ts.isTypeReferenceNode(node)) return undefined;
 
-  const typeName = typeNode.typeName.text;
+  const name = getEntityNameText(node.typeName);
+  const kind = wrapperKindOfReference(node, typeChecker);
+  if (kind) return { kind, node };
 
-  // Detect circular aliases and throw descriptive error
-  if (visited.has(typeName)) {
-    const aliasChain = Array.from(visited).join(" -> ");
+  const declaration = getTypeAliasDeclaration(node, typeChecker);
+  if (!declaration) return undefined;
+  if (followed.includes(declaration)) {
     throw new Error(
-      `Circular type alias detected: ${aliasChain} -> ${typeName}`,
+      `Circular type alias detected: ${[...names, name].join(" -> ")}`,
     );
   }
-  visited.add(typeName);
-
-  // Check if we've reached a wrapper type
-  const directKind = wrapperKindForName(typeName);
-  if (directKind) {
-    return {
-      kind: directKind,
-      node: typeNode,
-    };
-  }
-
-  // Look up the symbol for this type name
-  const symbol = typeChecker.getSymbolAtLocation(typeNode.typeName);
-  if (!symbol || !(symbol.flags & ts.SymbolFlags.TypeAlias)) {
-    return undefined;
-  }
-
-  const aliasDeclaration = symbol.valueDeclaration || symbol.declarations?.[0];
-  if (!aliasDeclaration || !ts.isTypeAliasDeclaration(aliasDeclaration)) {
-    return undefined;
-  }
-
-  const aliasedType = aliasDeclaration.type;
-  if (
-    ts.isTypeReferenceNode(aliasedType) && ts.isIdentifier(aliasedType.typeName)
-  ) {
-    // Recursively follow the alias chain, returning the final resolved node
-    return followAliasToWrapperNode(aliasedType, typeChecker, visited);
-  }
-
-  return undefined;
+  return followAliasToWrapperNode(
+    declaration.type,
+    typeChecker,
+    [...followed, declaration],
+    [...names, name],
+  );
 }
 
 /**
