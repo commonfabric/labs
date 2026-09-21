@@ -64,12 +64,14 @@ import { modalStyles } from "./styles.ts";
 const MODAL_Z_INDEX = 1000;
 
 /** Finds the focused control through open renderer and component shadow roots. */
-function activeControl(): HTMLElement | null {
+function activeControl(): HTMLElement | SVGElement | null {
   let active = document.activeElement;
   while (active?.shadowRoot?.activeElement) {
     active = active.shadowRoot.activeElement;
   }
-  return active instanceof HTMLElement ? active : null;
+  return active instanceof HTMLElement || active instanceof SVGElement
+    ? active
+    : null;
 }
 
 export class CFModal extends BaseElement {
@@ -123,7 +125,7 @@ export class CFModal extends BaseElement {
   private _previousBodyOverflow = "";
 
   /** Previously focused element for restoration */
-  private _previousActiveElement: HTMLElement | null = null;
+  private _previousActiveElement: HTMLElement | SVGElement | null = null;
 
   /** Boolean cell controller for open state */
   private _openCellController = createBooleanCellController(this, {
@@ -354,7 +356,8 @@ export class CFModal extends BaseElement {
     // A single-control host can forward focus into a native shadow control
     // with tabindex=-1. Its place in the tab order belongs to the host.
     const active = e.composedPath().find((target) =>
-      target instanceof HTMLElement && focusables.includes(target)
+      (target instanceof HTMLElement || target instanceof SVGElement) &&
+      focusables.includes(target)
     );
 
     if (e.shiftKey) {
@@ -379,18 +382,20 @@ export class CFModal extends BaseElement {
   /**
    * Get all focusable elements within the dialog
    */
-  private _getFocusableElements(): HTMLElement[] {
+  private _getFocusableElements(): (HTMLElement | SVGElement)[] {
     const dialog = this.shadowRoot?.querySelector(".dialog");
     if (!dialog) return [];
 
     const selector =
       'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
-    const focusables: HTMLElement[] = [];
+    const focusables: (HTMLElement | SVGElement)[] = [];
     const visit = (element: Element): void => {
-      if (element instanceof HTMLElement) {
+      if (element instanceof HTMLElement || element instanceof SVGElement) {
         const style = getComputedStyle(element);
         if (
-          element.hidden || element.inert || element.hasAttribute("disabled") ||
+          (element instanceof HTMLElement &&
+            (element.hidden || element.inert)) ||
+          element.hasAttribute("disabled") ||
           style.display === "none"
         ) return;
         if (

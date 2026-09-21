@@ -280,7 +280,10 @@ async function mountKeyboardModal() {
 }
 
 /** Dispatches the composed keyboard event that reaches a modal's focus trap. */
-function tabFrom(element: HTMLElement, shiftKey = false): KeyboardEvent {
+function tabFrom(
+  element: HTMLElement | SVGElement,
+  shiftKey = false,
+): KeyboardEvent {
   element.focus();
   const event = new KeyboardEvent("keydown", {
     key: "Tab",
@@ -360,6 +363,60 @@ Deno.test("dialog follows slotted shadow controls and excludes unavailable tab s
     expect(shadow.activeElement).toBe(last);
     expect(tabFrom(last).defaultPrevented).toBe(true);
     expect(mounted.modal.shadowRoot!.activeElement).toBe(close);
+  } finally {
+    mounted.fixture.remove();
+  }
+});
+
+/** Builds a natively tabbable SVG link with visible geometry. */
+function svgLink() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("width", "100");
+  svg.setAttribute("height", "30");
+  const link = document.createElementNS("http://www.w3.org/2000/svg", "a");
+  link.setAttribute("href", "#profile");
+  const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+  text.setAttribute("y", "20");
+  text.textContent = "Profile";
+  link.append(text);
+  svg.append(link);
+  return { svg, link };
+}
+
+Deno.test("dialog wraps focus from a slotted SVG link", async () => {
+  const mounted = await mountKeyboardModal();
+  try {
+    mounted.done.remove();
+    const { svg, link } = svgLink();
+    svg.slot = "footer";
+    mounted.modal.append(svg);
+    mounted.modal.open = true;
+    await settleLayout(mounted.modal);
+    const close = requiredElement(mounted.modal.shadowRoot!, ".close-button");
+    expect(tabFrom(close, true).defaultPrevented).toBe(true);
+    expect(mounted.root.activeElement).toBe(link);
+    expect(tabFrom(link).defaultPrevented).toBe(true);
+    expect(mounted.modal.shadowRoot!.activeElement).toBe(close);
+  } finally {
+    mounted.fixture.remove();
+  }
+});
+
+Deno.test("dialog restores focus to an SVG opener inside a shadow root", async () => {
+  const mounted = await mountKeyboardModal();
+  try {
+    const { svg, link } = svgLink();
+    mounted.root.prepend(svg);
+    link.focus();
+    expect(mounted.root.activeElement).toBe(link);
+    mounted.modal.open = true;
+    await settleLayout(mounted.modal);
+    const close = requiredElement(mounted.modal.shadowRoot!, ".close-button");
+    close.focus();
+    expect(mounted.modal.shadowRoot!.activeElement).toBe(close);
+    mounted.modal.open = false;
+    await mounted.modal.updateComplete;
+    expect(mounted.root.activeElement).toBe(link);
   } finally {
     mounted.fixture.remove();
   }
