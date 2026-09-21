@@ -127,6 +127,20 @@ export type LeafVisitorResult<PlusType = never, ResultType = FabricValue> =
   | RecurseForm
   | ReplaceForm<PlusType>;
 
+/**
+ * Possible results from `visited*()` calls (container iteration post-visit
+ * methods).
+ *
+ * See the included result types for details on what they mean. As for
+ * `undefined`, if a visitor returns it in the context of this type, it means
+ * that the visit of the given value was completed; the visitor engine will
+ * not process it further, and there is no specific value to return from (this
+ * part of) the visit.
+ */
+export type VisitedResult<ResultType = FabricValue> = BaselineVisitResult<
+  ResultType
+>;
+
 //
 // Visitor interface
 //
@@ -200,7 +214,7 @@ export interface ValueVisitor<PlusType = never, ResultType = FabricValue> {
     array: FabricArrayPlus<PlusType>,
     index: number,
     value: FabricValuePlus<PlusType>,
-  ): BaselineVisitResult<ResultType>;
+  ): VisitedResult<ResultType>;
 
   /**
    * Indicates that an array gap (one or more holes) was just nominally visited.
@@ -218,7 +232,7 @@ export interface ValueVisitor<PlusType = never, ResultType = FabricValue> {
     array: FabricArrayPlus<PlusType>,
     start: number,
     count: number,
-  ): BaselineVisitResult<ResultType>;
+  ): VisitedResult<ResultType>;
 
   /**
    * Indicates that the instance state of a `FabricInstance` was just visited.
@@ -229,7 +243,7 @@ export interface ValueVisitor<PlusType = never, ResultType = FabricValue> {
   visitedFabricInstance(
     instance: FabricInstancePlus<PlusType>,
     state: FabricValuePlus<PlusType>,
-  ): BaselineVisitResult<ResultType>;
+  ): VisitedResult<ResultType>;
 
   /**
    * Indicates that `FabricPlainObject` entry was just visited. This method is
@@ -241,5 +255,5 @@ export interface ValueVisitor<PlusType = never, ResultType = FabricValue> {
     container: FabricPlainObjectPlus<PlusType>,
     key: FabricValuePlus<PlusType>,
     value: FabricValuePlus<PlusType>,
-  ): BaselineVisitResult<ResultType>;
+  ): VisitedResult<ResultType>;
 }

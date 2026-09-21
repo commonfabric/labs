@@ -10,9 +10,9 @@ import { type FabricContainerValueTag, type FabricValuePlusTag } from "@/types";
 import { debugStr } from "@/value-debug";
 
 import {
-  type BaselineVisitResult,
   type LeafVisitorResult,
   ValueVisitor,
+  type VisitedResult,
 } from "./interface.ts";
 
 /**
@@ -39,27 +39,27 @@ export abstract class BaseValueVisitor<
     array: FabricArrayPlus<PlusType>,
     index: number,
     value: FabricValuePlus<PlusType>,
-  ): BaselineVisitResult<ResultType>;
+  ): VisitedResult<ResultType>;
 
   /** @inheritDoc */
   abstract visitedFabricArrayGap(
     array: FabricArrayPlus<PlusType>,
     start: number,
     count: number,
-  ): BaselineVisitResult<ResultType>;
+  ): VisitedResult<ResultType>;
 
   /** @inheritDoc */
   abstract visitedFabricInstance(
     instance: FabricInstancePlus<PlusType>,
     state: FabricValuePlus<PlusType>,
-  ): BaselineVisitResult<ResultType>;
+  ): VisitedResult<ResultType>;
 
   /** @inheritDoc */
   abstract visitedFabricPlainObjectEntry(
     container: FabricPlainObjectPlus<PlusType>,
     key: FabricValuePlus<PlusType>,
     value: FabricValuePlus<PlusType>,
-  ): BaselineVisitResult<ResultType>;
+  ): VisitedResult<ResultType>;
 
   //
   // Instance methods
