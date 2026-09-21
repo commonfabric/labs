@@ -1,10 +1,20 @@
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { hashOf } from "@commonfabric/data-model";
 
-export interface SlugCause {
+/**
+ * What a slug's id is derived from: the space that holds the slug, and the
+ * slug.
+ *
+ * This is a type alias, not an `interface`, because `slugIdForSpace()` hashes
+ * one, and what gets hashed is a `FabricValue`. An `interface` is never
+ * assignable to `FabricPlainObject`, however plain its members: TypeScript
+ * gives an anonymous object type the implicit index signature which that
+ * requires, and does not give one to an interface.
+ */
+export type SlugCause = {
   space: MemorySpace;
   slug: string;
-}
+};
 
 const SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_SLUG_LENGTH = 80;
