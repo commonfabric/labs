@@ -339,14 +339,11 @@ describe("aliased-cell-value-schema", () => {
       ]
     ) {
       for (
-        const position of [
-          "a `lift()` property",
-          "a `handler()` event property",
-          "a `handler()` state",
-        ]
+        const [position, { source, schemaOf }] of Object.entries(
+          CELL_DECLARATION_POSITIONS,
+        )
       ) {
         it(`emits for \`${imported}\` in ${position} what \`Writable\` emits`, async () => {
-          const { source, schemaOf } = CELL_DECLARATION_POSITIONS[position]!;
           const transformWith = (specifier: string, cellType: string) =>
             transformSource(
               `import { computed, handler, lift, pattern, ${specifier} } from "commonfabric";
