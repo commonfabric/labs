@@ -35,13 +35,15 @@ export const isClosedResearchTask = (
   );
   for (
     const match of task.matchAll(
-      /\b(?:use|using|run|instantiate|compose|acquire|follow)\s+(?:the\s+)?(?:(pattern(?:\s+id)?|patternId|skill)(?:\s+(?:named|called))?\s+)?[`"']?([A-Za-z0-9_:/.-]+)/gi,
+      /\b(?:use|using|run|instantiate|compose|acquire|follow)\s+(?:the\s+)?(?:(named\s+)?(pattern(?:\s+id)?|patternId|skill)(?:\s+(named|called))?\s+)?([`"']?)([A-Za-z0-9_:/.-]+)/gi,
     )
   ) {
-    const kind = match[1]?.toLowerCase();
-    const token = match[2].replace(/[.:]+$/, "");
+    const kind = match[2]?.toLowerCase().replace(/\s+/, " ");
+    const token = match[5].replace(/[.:]+$/, "");
     const after = task.slice(match.index + match[0].length);
     const skillNamed = kind === "skill" || /^[`"']?\s+skill\b/i.test(after);
+    const patternNamed = kind === "pattern id" || kind === "patternid" ||
+      (kind === "pattern" && Boolean(match[1] || match[3] || match[4]));
     if (skillNames.has(token) && !kind?.startsWith("pattern")) return true;
     if (skillNamed) {
       try {
@@ -53,7 +55,7 @@ export const isClosedResearchTask = (
     } else if (
       // Length distinguishes an unmarked content hash from ordinary prose;
       // explicitly labeled pattern ids use the full grammar without this bound.
-      (kind?.startsWith("pattern") || token.length === 43) &&
+      (patternNamed || token.length === 43) &&
       isPatternRefId(token)
     ) {
       return true;
