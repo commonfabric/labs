@@ -281,9 +281,8 @@ export interface ConsoleStep {
 
   /**
    * The CFC invocation context recorded for this call. Under a posture that
-   * propagates flow labels, its `cfcInputLabels` are the labels the runtime
-   * computed for each input position — which is where a confidentiality atom
-   * such as `PromptSlotInfluence` becomes visible.
+   * propagates flow labels, its `cfcInputLabels` are the confidentiality
+   * labels the runtime computed for each input position.
    */
   invocation?: HarnessCfcInvocationContext;
 }

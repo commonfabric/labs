@@ -121,7 +121,7 @@ Deno.test("createHarnessCfcInvocationContext summarizes measured invocation inpu
   }
 });
 
-Deno.test("createHarnessCfcInvocationContext derives prompt-slot influence labels for selected invocation inputs", async () => {
+Deno.test("createHarnessCfcInvocationContext derives integrity prompt-slot influence labels for selected invocation inputs", async () => {
   const promptSlot = {
     type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
     source: { type: "cf-harness.test-input", surface: "cli" },
@@ -176,22 +176,22 @@ Deno.test("createHarnessCfcInvocationContext derives prompt-slot influence label
     },
   };
 
-  assertEquals(context.cfcInputLabels, {
+  assertEquals(context.promptSlotInfluenceLabels, {
     version: 1,
     entries: [
       {
         path: ["command"],
-        label: { confidentiality: [expectedAtom] },
+        label: { integrity: [expectedAtom] },
       },
       {
         path: ["stdin"],
-        label: { confidentiality: [expectedAtom] },
+        label: { integrity: [expectedAtom] },
       },
     ],
   });
-  for (const entry of context.cfcInputLabels?.entries ?? []) {
-    assertEquals(entry.label.integrity, undefined);
-  }
+  // The sandbox reads `cfcInputLabels` as startup taint and refuses integrity
+  // claims there, so the influence labels must not reach it.
+  assertEquals(context.cfcInputLabels, undefined);
 });
 
 Deno.test("createHarnessCfcInvocationContext can label prompt-slot and model-context inputs separately", async () => {
@@ -235,28 +235,29 @@ Deno.test("createHarnessCfcInvocationContext can label prompt-slot and model-con
 
   assertEquals(context.cfcInputLabels, {
     version: 1,
-    entries: [
-      {
-        path: ["args"],
-        label: { confidentiality: [observedSecret] },
+    entries: [{
+      path: ["args"],
+      label: { confidentiality: [observedSecret] },
+    }],
+  });
+  assertEquals(context.promptSlotInfluenceLabels, {
+    version: 1,
+    entries: [{
+      path: ["command"],
+      label: {
+        integrity: [{
+          type: CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE,
+          version: 1,
+          role: "direct-command",
+          kernelName: "cf-harness",
+          surface: "cli",
+        }],
       },
-      {
-        path: ["command"],
-        label: {
-          confidentiality: [{
-            type: CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE,
-            version: 1,
-            role: "direct-command",
-            kernelName: "cf-harness",
-            surface: "cli",
-          }],
-        },
-      },
-    ],
+    }],
   });
 });
 
-Deno.test("createHarnessCfcInvocationContext merges explicit trusted labels with derived prompt-slot labels", async () => {
+Deno.test("createHarnessCfcInvocationContext keeps explicit trusted labels apart from derived prompt-slot labels", async () => {
   const explicitAtom = {
     type: "test.cfc/ExplicitTrustedInput",
     subject: "trusted-sidecar",
@@ -294,17 +295,21 @@ Deno.test("createHarnessCfcInvocationContext merges explicit trusted labels with
     version: 1,
     entries: [{
       path: ["args"],
+      label: { confidentiality: [explicitAtom] },
+    }],
+  });
+  assertEquals(context.promptSlotInfluenceLabels, {
+    version: 1,
+    entries: [{
+      path: ["args"],
       label: {
-        confidentiality: [
-          explicitAtom,
-          {
-            type: CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE,
-            version: 1,
-            role: "context",
-            kernelName: "cf-harness",
-            surface: "cli",
-          },
-        ],
+        integrity: [{
+          type: CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE,
+          version: 1,
+          role: "context",
+          kernelName: "cf-harness",
+          surface: "cli",
+        }],
       },
     }],
   });

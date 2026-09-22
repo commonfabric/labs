@@ -70,12 +70,13 @@ field holding a `confidentiality` clause list. Four outcomes:
 
 The pinned loom checkout emits no `ifc` on search hits, nor on the page, people,
 calendar, context, and profile payloads, so today every real row takes the
-second path. The label it is given is the label of the tool call's input, as the
-harness already tracks it for `research`: the prompt slot's influence label
-joined with the run's accumulated model-context label
-(`HarnessToolContext.toolInputCfcLabel`). That is the only notion of "the
-query's label" the harness has, since a query is a model-authored argument. A
-run that has observed nothing labeled therefore labels such a row public.
+second path. The label it is given is the confidentiality of the tool call's
+input label, as the harness already tracks it for `research`
+(`HarnessToolContext.toolInputCfcLabel`). That confidentiality is the run's
+accumulated model-context label; the prompt slot's influence is carried in the
+same label as integrity and does not reach a row. That is the only notion of
+"the query's label" the harness has, since a query is a model-authored argument.
+A run that has observed nothing labeled therefore labels such a row public.
 
 This is a placeholder assumption and it is not sound: what a row holds is
 decided by the store it came from, not by who asked for it, so a row can be

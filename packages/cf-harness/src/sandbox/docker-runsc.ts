@@ -288,8 +288,8 @@ export const resolveDockerRunscSandboxConfig = (
  *
  *  - `cfcInvocationContextDir` — the harness writes the initial-taint
  *    invocation context the sandbox reads in. Without it the sandbox starts
- *    untainted, so input labels (prompt-slot influence, prior observed labels)
- *    are silently dropped.
+ *    untainted, so input labels (explicit trusted labels, prior observed
+ *    labels) are silently dropped.
  *  - `cfcResultDir` — runsc writes the final-taint result the harness reads
  *    back to mediate output. Without it every command's CFC result is absent
  *    and enforce-mode mediation fail-closes every observation.
