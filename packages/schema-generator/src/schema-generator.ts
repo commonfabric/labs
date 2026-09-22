@@ -18,6 +18,7 @@ import { ArrayFormatter } from "./formatters/array-formatter.ts";
 import {
   CommonFabricFormatter,
   lowersFromReferenceArguments,
+  resolveScopeWrapperNode,
 } from "./formatters/common-fabric-formatter.ts";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import { UnionFormatter } from "./formatters/union-formatter.ts";
@@ -1176,7 +1177,12 @@ export class SchemaGenerator {
     context: GenerationContext,
     isRootType: boolean = false,
   ): MutableJSONSchema {
-    if ((type.flags & ts.TypeFlags.TypeParameter) !== 0) {
+    // A scope wrapper reads its payload from the reference's argument, even
+    // when its declaration erases to an unbound type parameter.
+    if (
+      (type.flags & ts.TypeFlags.TypeParameter) !== 0 &&
+      resolveScopeWrapperNode(context.typeNode) === undefined
+    ) {
       const checker = context.typeChecker;
       const baseConstraint = checker.getBaseConstraintOfType(type);
       if (baseConstraint && baseConstraint !== type) {

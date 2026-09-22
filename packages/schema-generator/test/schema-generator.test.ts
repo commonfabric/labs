@@ -2923,6 +2923,29 @@ type CalculatorRequest = {
         expect(schema).toEqual({ type: "string", scope: "user" });
       });
 
+      it("keeps the supplied scope payload beyond its parameter constraint", async () => {
+        const schema = await generate(
+          {
+            "/main.ts":
+              "export type PerSession<T extends { name: string }> = T;",
+          },
+          generic(
+            "PerSession",
+            objectOf({
+              name: keyword(ts.SyntaxKind.StringKeyword),
+              count: keyword(ts.SyntaxKind.NumberKeyword),
+            }),
+          ),
+        );
+
+        expect(schema).toEqual({
+          type: "object",
+          properties: { name: { type: "string" }, count: { type: "number" } },
+          required: ["name", "count"],
+          scope: "session",
+        });
+      });
+
       describe("an alias whose CFC lowering substitutes the arguments", () => {
         // The lowering substitutes a reference's own arguments down the
         // alias chain to the CFC alias, so no parameter is read unbound.
