@@ -36,7 +36,11 @@ established that the cap is real. Where an entry's runs overlapped, it says so.
 - **PIECE PRODUCED (n/n), INTERACTION UNVERIFIED** — every run returned a named
   piece, and nobody opened it. A run finishing is not the page working, and this
   status exists because that distinction was learned the hard way.
-- **NOT PROVEN (m/n)** — did not, with the evidence named.
+- **NOT PROVEN (m pass, n fail)** — a run did not produce a working page. The
+  count is kept beside the cause, because the two are different claims: several
+  entries here fail on a defect that has nothing to do with the demo, and an
+  entry read as "this does not work" when it means "this worked twice and once
+  hit a known runtime fault" is misleading in the direction that matters.
 - **NEEDS <X>** — cannot run without a grant or connection the runner must
   supply. Not a failure; a prerequisite.
 
@@ -299,6 +303,47 @@ rendered as dollars. The wording is corrected in the tree; the published index
 entry carries the old text until it is republished, so a run can still read the
 wrong contract.
 
+## 2a. A checklist and a running total, composed by id
+
+The same job as §2, with the two parts named outright instead of discovered, and
+staying clear of the one control that does not work. **It needs no connectors at
+all**, which makes it the demo that cannot be broken by a grant going stale.
+
+**Preflight:** common only. No connectors. The two published parts must be
+discoverable — `dZt8I5yIWD2g6NeftbKv-3ZouzZ2LGCSEhT8ij7wGV0` (CheckList) and
+`DRCFljoU1NSWQ8pt8dvVa-mG5cld1tj5J46iq7L7-VE` (AmountLedger).
+
+**Prompt:** name both ids, ask for a preparation checklist beside a running
+total of what the ingredients cost against a budget, and **state that amounts
+are in whole dollars.** That last clause is not optional: AmountLedger's
+_published_ description says it sums "in integer cents" while its field is in
+whole currency units, so a run that trusts the description passes cents and the
+page renders 100× the intended figure. The tree is corrected; the published
+entry is not until it is republished.
+
+**Done when:** you can add a task, check one, add an expense, watch the total
+move — and reload, and find it all still there.
+
+**Typical wall time:** ~5 minutes.
+
+**Proof status: PROVEN (3/3).** Three runs of an identical request. Each added a
+task, checked one, added a $5 expense to reach $25 of a $50 budget, and **kept
+all of it across a reload.** Source inspected every time: both published parts
+imported by id, and the wrapper renders their own UI rather than reimplementing
+them.
+
+**"Clear completed" works** — one click takes exactly the checked items, keeps
+the rest, corrects the counts and hides itself, and the expenses are untouched.
+It survives a reload. That matters because it is the gesture a viewer actually
+makes after ticking things off.
+
+**The per-row Remove control does not work, and the page shows it anyway.** The
+published `CheckList` still carries the defect fixed in the tree but not yet in
+the index, so the control is rendered on every run and the closing summary
+mentions removal on some of them. **Do not click it**, and do not let the
+summary lead you there. Publishing the corrected parts is what retires this
+caveat.
+
 ## 3. This month's bank transactions as a table
 
 **Preflight:** common, **plus a finance grant**. The launch printout must carry
@@ -325,11 +370,16 @@ pass.
 **Likely failure:** an empty table on first paint is a pending read, not an
 empty month — reopen the piece rather than re-running.
 
-**Proof status: 1 of 3 on this wording.** The prompt above asks for a table; two
-earlier clean runs asked for a _sortable_ table, and this document counts runs
-of **identical** text, so they do not count toward this entry. They are worth
-recording as evidence about the done condition rather than as proof of it: both
-asked for more than this prompt does and still delivered correct rows.
+**Proof status: NOT PROVEN — 2 pass, 1 fail on this wording.** The piece is
+produced every time and the rows are right whenever they render; one run in
+three rendered every amount as `[object Object]`, which is the reactive-coercion
+family described in the preflight rather than a fault of this demo.
+
+The prompt above asks for a table; two earlier clean runs asked for a _sortable_
+table, and this document counts runs of **identical** text, so they do not count
+toward this entry. They are worth recording as evidence about the done condition
+rather than as proof of it: both asked for more than this prompt does and still
+delivered correct rows.
 
 The run against this wording — `monthly-bank-transactions-2` — was verified
 against the store rather than by eye. All seven rows were diffed read-only
@@ -441,8 +491,8 @@ Compose these two library patterns into one page: cf:pattern:-xx1hxtvAbY7AL6FeYu
 **Likely failure:** the pairings are wrong, or absent, while the counts look
 consistent. Also expect several `run_pattern` attempts before one compiles.
 
-**Proof status: NOT PROVEN.** Three runs, three different matchers, three
-different outcomes — same prompt, same readers, same build, same store:
+**Proof status: NOT PROVEN — 1 correct in 5.** Five runs, five different
+matchers — same prompt, same readers, same build, same store:
 
 | Run                    | What the model wrote                                                                   | Result                  |
 | ---------------------- | -------------------------------------------------------------------------------------- | ----------------------- |
