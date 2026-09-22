@@ -1597,6 +1597,21 @@ export class HarnessInteractiveChatService {
         model: session.model,
         promptSlotBinding: policy.promptSlot,
         signal,
+        onOpeningResearch: async (research) => {
+          if (record.canceledTurnIds.has(turnId)) return;
+          const tool = {
+            toolCallId: research.toolCallId,
+            toolId: "research",
+            title: "Orienting: working out what is already available",
+          };
+          await this.#emit(
+            session.sessionId,
+            turnId,
+            research.status === "pending"
+              ? { kind: "tool_started", tool }
+              : { kind: "tool_completed", tool, status: research.status },
+          );
+        },
         onCheckpoint: (checkpoint) => {
           if (
             !this.#basePromptLoopOptions.finalizeOnTurnLimit ||

@@ -6,6 +6,9 @@ server holding one in-process interactive chat service, and two Lit pages
 reading its events over Server-Sent Events: the console itself, and the live
 pane a host embeds to show one session working.
 
+Opening research appears in the live pane as “Orienting: working out what is
+already available,” with elapsed time until it completes, fails, or is canceled.
+
 A completed turn that names a piece keeps its reference for a bare follow-up in
 the same session, including after restart. Explicit attachments select the new
 turn's inputs; `inputCells: []` attaches none and clears the retained target on

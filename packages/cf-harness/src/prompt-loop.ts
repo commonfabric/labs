@@ -300,6 +300,11 @@ export interface RunHarnessTranscriptOptions {
   promptSlotBinding?: PromptSlotBinding;
   signal?: AbortSignal;
 
+  /** Host research activity, independent of the model's transcript. */
+  onOpeningResearch?: (
+    research: Pick<HarnessOpeningResearch, "toolCallId" | "status">,
+  ) => void | Promise<void>;
+
   /**
    * Completed tool batch or opening handoff with matching research and model
    * influence, excluding turn-local budget notices. Message and run-state
@@ -3374,6 +3379,7 @@ export class CfHarnessPromptLoop {
     onTranscriptEvent?: (
       event: HarnessTranscriptEvent,
     ) => void | Promise<void>;
+    onOpeningResearch?: RunHarnessTranscriptOptions["onOpeningResearch"];
   }): Promise<
     {
       marker: HarnessOpeningResearch;
@@ -3406,6 +3412,7 @@ export class CfHarnessPromptLoop {
     };
     await this.engine.recordOpeningResearch(marker);
     try {
+      await options.onOpeningResearch?.(marker);
       const invoked = await this.#invokeToolCall(
         {
           id: marker.toolCallId,
@@ -3454,6 +3461,7 @@ export class CfHarnessPromptLoop {
         handoffMessage: message,
       };
       await this.engine.recordOpeningResearch(settled);
+      await options.onOpeningResearch?.(settled);
       return {
         marker: settled,
         message: this.#openingResearchHandoffUserMessage(
@@ -3468,6 +3476,10 @@ export class CfHarnessPromptLoop {
       try {
         await this.engine.recordOpeningResearch({
           ...marker,
+          status: "failed",
+        });
+        await options.onOpeningResearch?.({
+          toolCallId: marker.toolCallId,
           status: "failed",
         });
       } catch {
@@ -3720,6 +3732,7 @@ export class CfHarnessPromptLoop {
         sequence: toolActivity.length + 1,
         recordActivity: (activity) => toolActivity.push(activity),
         recordDescendantUsage: (usage) => descendantUsage.push(usage),
+        onOpeningResearch: options.onOpeningResearch,
         ...(options.onTranscriptEvent !== undefined
           ? { onTranscriptEvent: options.onTranscriptEvent }
           : {}),
