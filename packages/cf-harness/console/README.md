@@ -975,6 +975,11 @@ establish that a cloud deployment implements them.
 
 ## Retracting an owned generation
 
+This route consumes the external index service contract described below for
+ownership, successor eligibility, discovery, receipts, and error statuses. The
+console forwards those decisions; verifying the deployed service requires an
+index-side check.
+
 `POST /api/index/retract` retires a pattern in favor of an existing same-owner
 direct successor. It does not delete a standalone entry: a successor is
 required, including for a non-discoverable probe. The request names both index
