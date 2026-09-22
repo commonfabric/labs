@@ -627,13 +627,13 @@ describe("run-pattern over the pattern index", () => {
       expect(output.value).toEqual({ doubled: 42 });
     });
 
-    it("returns a compile error for a malformed Fabric import during the reuse check", async () => {
+    it("returns an error for a malformed Fabric import during the reuse check", async () => {
       const result = await createEngine(undefined, {
         researchRuns: REUSE_RESEARCH_RUNS,
       }).invokeBuiltinTool("run_pattern", {
         sourceText: 'import Mailbox from "cf:pattern:invalid";',
       });
-      expect(result.output).toMatchObject({ status: "compile-error" });
+      expect(result.output).toMatchObject({ status: "error" });
     });
 
     it("runs an indexed pattern and returns its result", async () => {

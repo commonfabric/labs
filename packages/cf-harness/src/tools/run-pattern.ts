@@ -1012,7 +1012,7 @@ export const runPatternTool: HarnessToolDefinition<
           input.reuseReasons,
         );
       } catch (error) {
-        return errorOutput("compile-error", errorMessage(error));
+        return errorOutput("error", errorMessage(error));
       }
       if (unexplained.length > 0) {
         return errorOutput(
