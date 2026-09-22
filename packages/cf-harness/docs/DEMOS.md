@@ -89,11 +89,14 @@ route answered while the fabric routes behind it were dead, and later the
 process exited on a heap out-of-memory with no record of it anywhere an operator
 would look.
 
-**`/api/health` answering does not mean the fabric is answering.** It was
-observed returning `200` in under a millisecond while `/api/status` and
-`/api/turns` on the same console had stopped responding entirely, because the
-toolshed behind them had stopped serving HTTP — still accepting TCP connections,
-still with a normal load average, and recovering unaided about a minute later.
+**`/api/health` answering does not mean the fabric is answering, and the reason
+is structural.** That route answers from the console's own process and makes no
+round trip to the fabric, so it reports on the process rather than on the
+system. It was observed returning `200` in under a millisecond while
+`/api/status` and `/api/turns` on the same console had stopped responding
+entirely, because the toolshed behind them had stopped serving HTTP — still
+accepting TCP connections, still with a normal load average, and recovering
+unaided about a minute later.
 
 So health is a static route and a stall hides behind it. If a run seems to hang,
 check a **fabric-dependent** route before concluding anything:
@@ -137,6 +140,33 @@ a page usually takes several `run_pattern` attempts before one compiles — two 
 five in a day of runs. That is the loop working, not a fault. A run that revises
 its finished piece more than once is a different matter: it is not a clean demo,
 and it should be re-run rather than shown.
+
+**How much a run has to author predicts whether it works — and discovery is not
+the variable.** Ordered by how much each demo left the run to write:
+
+| Demo                    | What the run had to write                  | Result         |
+| ----------------------- | ------------------------------------------ | -------------- |
+| §1 pomodoro             | nothing; one published part does the job   | proven 4/4     |
+| Readwise "never opened" | nothing; one published part does the job   | 2 of 2         |
+| §2a checklist and total | two published parts, minimal glue          | proven 3/3     |
+| §3 bank table           | a published reader plus an authored table  | 2 pass, 1 fail |
+| §5 bills                | published readers plus an authored matcher | 1 correct in 5 |
+
+**The control for this is a pair of Readwise runs** from prompts identical but
+for one sentence naming the pattern's id. The run told nothing **found the same
+published pattern unaided**, and the two pages agree to the digit — same totals,
+same category and source breakdowns. Discovery cost 144 seconds and two extra
+compile attempts. It cost nothing in the answer.
+
+So where the index holds a pattern whose description closely matches the ask,
+naming its id buys **speed and determinism, not capability**. On a goal the
+index does not already cover, there is no evidence either way.
+
+Two things this ordering does _not_ promise. A demo's position is not fixed —
+the same prompt has produced both a direct call and a delegated wrapper on
+different runs. And it predicts _mechanical_ reliability only: a run at the very
+top of it produced a page correct in every figure whose headline asserted the
+one claim its prompt forbade.
 
 **A reactive value touched by ordinary JavaScript produces a page that is
 silently wrong.** Two confirmed instances in one evening, from different authors
