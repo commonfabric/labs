@@ -339,24 +339,50 @@ const isDisplayedIdentityType = (type: string): boolean =>
 const identityProvider = (type: string): string =>
   DISPLAYED_IDENTITY_TYPES[type]?.provider ?? type;
 
+/** How long after `verifiedAt` an assertion still counts as verified, the
+ * consumer freshness window of the shared profile space spec. */
+const VERIFIED_IDENTITY_FRESHNESS_MS = 48 * 60 * 60 * 1000;
+
+/** Whether an assertion verified at `verifiedAt` is inside the freshness
+ * window at `nowMs`. An unknown clock or an unreadable timestamp is not
+ * fresh, so the profile shows nothing it cannot date. */
+const isFreshIdentity = (
+  verifiedAt: string | undefined,
+  nowMs: number | undefined,
+): boolean => {
+  if (typeof nowMs !== "number" || typeof verifiedAt !== "string") {
+    return false;
+  }
+  const verifiedMs = Date.parse(verifiedAt);
+  return Number.isFinite(verifiedMs) &&
+    nowMs - verifiedMs <= VERIFIED_IDENTITY_FRESHNESS_MS;
+};
+
+const isShownIdentity = (
+  identity: Partial<ExternalIdentityAssertion> | undefined,
+  nowMs: number | undefined,
+): boolean =>
+  isDisplayedIdentityType(identity?.type ?? "") &&
+  isFreshIdentity(identity?.verifiedAt, nowMs);
+
 const identityProfileUrl = (type: string, value: string): string => {
   const prefix = DISPLAYED_IDENTITY_TYPES[type]?.profileUrlPrefix;
   return prefix === undefined ? "" : prefix + encodeURIComponent(value);
 };
 
 // One verified account in the profile presentation, or nothing for a type the
-// profile does not display. The account name and the badge both bind the
+// profile does not display or an assertion outside the freshness window. The account name and the badge both bind the
 // stored assertion's own `value` field, so the badge reports the Loom
 // integrity label the runtime holds for the text shown beside it. The input
 // takes the plain assertion type. Requiring the integrity atom here would put
 // a write floor on the row's input that the `map` writing each list item into
 // it cannot meet; the badge reports the atom instead.
 const VerifiedIdentityRow = pattern<
-  { assertion: ExternalIdentityAssertion },
+  { assertion: ExternalIdentityAssertion; nowMs: number | undefined },
   { [UI]: VNode }
 >(
-  ({ assertion }) => {
-    const displayed = computed(() => isDisplayedIdentityType(assertion.type));
+  ({ assertion, nowMs }) => {
+    const displayed = computed(() => isShownIdentity(assertion, nowMs));
     const provider = computed(() => identityProvider(assertion.type));
     const profileUrl = computed(() =>
       identityProfileUrl(assertion.type, assertion.value)
@@ -371,7 +397,7 @@ const VerifiedIdentityRow = pattern<
               align="center"
               data-ui-region="profile-verified-identity"
             >
-              <cf-text variant="caption" tone="muted">{provider}</cf-text>
+              <cf-text variant="caption" tone="muted">{provider} ·</cf-text>
               <a href={profileUrl} target="_blank" rel="noopener noreferrer">
                 {assertion.value}
               </a>
@@ -854,9 +880,11 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
     // bio block (CT-1648).
     const hasBio = computed(() => (bio.get() ?? "").trim().length > 0);
     const hasExternalLinks = computed(() => externalLinks.get().length > 0);
+    // Five-minute ticks are fine enough for a 48-hour freshness window.
+    const now = wish<number>({ query: "#now/300" });
     const hasDisplayedIdentities = computed(() =>
       verifiedIdentities.get().some((identity) =>
-        isDisplayedIdentityType(identity.get()?.type ?? "")
+        isShownIdentity(identity.get(), now.result)
       )
     );
     const parsedUserTags = computed(() =>
@@ -1006,7 +1034,10 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
                     data-ui-region="profile-verified-identities"
                   >
                     {verifiedIdentities.map((identity) => (
-                      <VerifiedIdentityRow assertion={identity} />
+                      <VerifiedIdentityRow
+                        assertion={identity}
+                        nowMs={now.result}
+                      />
                     ))}
                   </cf-vstack>,
                   null,

@@ -202,6 +202,24 @@ describe("cf-cfc-label badge variant", () => {
     expect(text).not.toContain("Verified");
   });
 
+  it("renders an absent badge when the atom is only a confidentiality atom", () => {
+    const element = new CFCFCLabel();
+    element.variant = "badge";
+    element.atom = "loom-verified-external-identity";
+    element.cfcLabel = {
+      version: 1,
+      entries: [{
+        path: [],
+        label: { confidentiality: ["loom-verified-external-identity"] },
+      }],
+    };
+
+    const text = templateText(element.render());
+
+    expect(text).toContain('data-state="absent"');
+    expect(text).not.toContain("Verified<");
+  });
+
   it("renders an absent badge before any label arrives", () => {
     const element = new CFCFCLabel();
     element.variant = "badge";

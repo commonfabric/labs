@@ -2,7 +2,8 @@
  * Renders the system profile pattern through the worker reconciler after Loom
  * assertions are published to it, and checks what reaches the document: the
  * human-facing assertion is shown with a badge bound to the assertion's own
- * integrity-bearing `value`, and a stable machine identifier is not shown.
+ * integrity-bearing `value`, while a stable machine identifier and an
+ * assertion outside the 48-hour freshness window are not shown.
  */
 
 import { expect } from "@std/expect";
@@ -66,6 +67,7 @@ Deno.test("profile-home shows a human-facing verified identity with a badge boun
     runtime.prepareTxForCommit(tx);
     expect((await tx.commit()).error).toBeUndefined();
 
+    const freshVerifiedAt = new Date().toISOString();
     const assertionTx = runtime.edit();
     const login = runtime.getCell(
       space,
@@ -76,7 +78,7 @@ Deno.test("profile-home shows a human-facing verified identity with a badge boun
     login.set({
       type: "github.login",
       value: "ada",
-      verifiedAt: "2026-07-15T20:00:00.000Z",
+      verifiedAt: freshVerifiedAt,
     });
     const nodeId = runtime.getCell(
       space,
@@ -87,14 +89,29 @@ Deno.test("profile-home shows a human-facing verified identity with a badge boun
     nodeId.set({
       type: "github.node_id",
       value: "MDQ6VXNlcjE=",
-      verifiedAt: "2026-07-15T20:00:00.000Z",
+      verifiedAt: freshVerifiedAt,
+    });
+    const staleLogin = runtime.getCell(
+      space,
+      "loom stale github login",
+      labeledAssertionSchema,
+      assertionTx,
+    );
+    staleLogin.set({
+      type: "github.login",
+      value: "stale-ada",
+      verifiedAt: "2020-01-01T00:00:00.000Z",
     });
     runtime.prepareTxForCommit(assertionTx);
     expect((await assertionTx.commit()).error).toBeUndefined();
 
     const publishTx = runtime.edit();
     result.withTx(publishTx).key("publishVerifiedIdentities").send({
-      identities: [login.withTx(publishTx), nodeId.withTx(publishTx)],
+      identities: [
+        login.withTx(publishTx),
+        nodeId.withTx(publishTx),
+        staleLogin.withTx(publishTx),
+      ],
     });
     runtime.prepareTxForCommit(publishTx);
     expect((await publishTx.commit()).error).toBeUndefined();
@@ -117,6 +134,7 @@ Deno.test("profile-home shows a human-facing verified identity with a badge boun
       expect(texts).toContain("GitHub");
       expect(texts).toContain("ada");
       expect(texts).not.toContain("MDQ6VXNlcjE=");
+      expect(texts).not.toContain("stale-ada");
 
       // The presentation renders more than once while the profile settles,
       // so each render's badge is checked rather than a count of them.

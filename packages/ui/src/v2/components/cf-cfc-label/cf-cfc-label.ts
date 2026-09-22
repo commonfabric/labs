@@ -138,9 +138,10 @@ const formatPath = (path: readonly string[]): string =>
  * Renders the CFC label associated with a bound CellHandle value.
  *
  * The `full` variant lists every label entry that passes the filter. The
- * `badge` variant renders a single pill that reads as present when any entry
- * passes the filter, which makes it the compact way to show that a displayed
- * value carries a particular integrity atom.
+ * `badge` variant renders a single pill that reads as present when an
+ * integrity atom passes the filter, which makes it the compact way to show
+ * that a displayed value carries a particular integrity atom. Confidentiality
+ * atoms never make the badge present.
  *
  * @element cf-cfc-label
  *
@@ -403,14 +404,16 @@ export class CFCFCLabel extends BaseElement {
   }
 
   private renderBadge(view: CfcLabelView | undefined) {
-    if (!view) {
+    // Only integrity atoms are claims about where a value came from, so only
+    // they can make the badge read as present.
+    const atoms = (view?.entries ?? []).flatMap((entry) =>
+      entry.label.integrity ?? []
+    );
+    if (atoms.length === 0) {
       return html`
         <span class="badge" part="badge" data-state="absent">Unverified</span>
       `;
     }
-    const atoms = view.entries.flatMap((entry) =>
-      LABEL_KEYS.flatMap((key) => entry.label[key] ?? [])
-    );
     const title = [...new Set(atoms.map(formatCfcLabelAtom))].join(", ");
     return html`
       <span class="badge" part="badge" data-state="present" title="${title}">
