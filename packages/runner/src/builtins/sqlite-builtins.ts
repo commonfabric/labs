@@ -1263,15 +1263,15 @@ export function sqliteQuery(
     // a staged request never goes out. Either ending leaves a reader of the
     // claim waiting on a query nobody is running, so both settle it here.
     //
-    // `claimed` says which ending this is, and the test below needs it: an
-    // abandoned transaction left the store as this request found it, while a
-    // release check refuses AFTER the claim committed, so the claim is what
-    // the store holds. Reading the second as somebody else's write leaves
-    // the cell pending for good.
-    const settleUnsent = (claimed: boolean) => {
-      const asStaged: QueryState | undefined = claimed
-        ? { pending: true, requestHash: hash }
-        : storedBeforeClaim;
+    // The two endings leave the store in different states and the test
+    // below has to admit both: an abandoned transaction left it as this
+    // request found it, while a release check refuses AFTER the claim
+    // committed, so the claim is what it holds. Reading the second as
+    // somebody else's write leaves the cell pending for good. Asking which
+    // ending fired would take a flag nothing can test; asking whether the
+    // store holds either of the two states this request could have left is
+    // the same question with one answer.
+    const settleUnsent = () => {
       runtime.trackAsyncWork(
         settleAbandonedRequest(
           runtime,
@@ -1314,9 +1314,13 @@ export function sqliteQuery(
             // that such a walk cannot see, and every distinct instance of one
             // compares equal to every other.
             const writtenSinceStaged = !valueEqual(
-              asStaged as FabricValue,
+              storedBeforeClaim as FabricValue,
               stored as FabricValue,
-            );
+            ) &&
+              !valueEqual(
+                { pending: true, requestHash: hash } as FabricValue,
+                stored as FabricValue,
+              );
             if (running || writtenSinceStaged) {
               return;
             }
@@ -1764,8 +1768,8 @@ export function sqliteQuery(
       },
       {
         idempotencyKey: effectKey,
-        onRejected: () => settleUnsent(false),
-        onReleaseRejected: () => settleUnsent(true),
+        onRejected: settleUnsent,
+        onReleaseRejected: settleUnsent,
       },
     );
   };
