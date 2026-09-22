@@ -446,12 +446,12 @@ when present, came from the provider; `estimatedCostUsd` is an estimate based on
 the public OpenAI GPT-5.6 price schedule and is not an invoice or a subscription
 quota conversion.
 
-For a task with a configured Fabric session, the parent completes only after
-`assign_slug` successfully names a UI piece in that run. A text answer becomes a
-small pattern that renders the answer, created through the ordinary authoring
-and tool policy path. Data-only probes stay unnamed. An existing piece can keep
-its address: after a revision, `assign_slug` confirms the same piece under its
-existing slug. Its pending-read and UI checks apply in either case.
+For an ordinary task with a configured Fabric session, the parent completes only
+after `assign_slug` successfully names a UI piece in that run. A text answer
+becomes a small pattern that renders the answer, created through the ordinary
+authoring and tool policy path. Data-only probes stay unnamed. An existing piece
+can keep its address: after a revision, `assign_slug` confirms the same piece
+under its existing slug. Its pending-read and UI checks apply in either case.
 
 A plain-text final answer without that receipt gets a host correction within the
 existing model-turn bound. The host does not create a replacement piece on the
@@ -459,8 +459,10 @@ model's behalf. Same-run resume retains naming receipts and the requirement from
 its recorded Fabric session even when connection flags are omitted; conversation
 history alone does not satisfy a new turn. Generic library runs without a
 configured Fabric session keep their text return contract; factory-only library
-callers can enable `requirePieceOutput`. Child return contracts are unchanged. A
-budget-finalized give-up can still report partial findings without a piece.
+callers can enable `requirePieceOutput`. Host-configured structured-result
+requests keep their schema-based document return contract, including on resume.
+Child return contracts are unchanged. A budget-finalized give-up can still
+report partial findings without a piece.
 
 When a missing input or choice blocks the goal, the parent calls `finish_task`
 with `{ "outcome": "question", "message": "…" }`; when it cannot proceed, it

@@ -253,8 +253,9 @@ export interface CreateHarnessPromptLoopOptions
   finalizeOnTurnLimit?: boolean;
 
   /**
-   * Requires a factory-only library parent to name a UI piece before completing.
-   * Configured or recorded Fabric sessions always require it.
+   * Requires a library parent to name a UI piece before completing.
+   * Ordinary configured or recorded Fabric sessions require it automatically.
+   * Host-configured structured results use their document contract by default.
    * Children retain their profile's return contract.
    */
   requirePieceOutput?: true;
@@ -3037,8 +3038,9 @@ export class CfHarnessPromptLoop {
     const isSubagent = this.engine.getRunState().lineage !== undefined;
     this.#requirePieceOutput = !isSubagent &&
       (options.requirePieceOutput === true ||
-        this.engine.config.fabricSession !== undefined ||
-        this.engine.getRunState().fabricSessionCfc !== undefined);
+        (!this.engine.structuredResultAvailable &&
+          (this.engine.config.fabricSession !== undefined ||
+            this.engine.getRunState().fabricSessionCfc !== undefined)));
     this.#allowedToolIds = new Set(
       requestedToolIds.filter((toolId) =>
         !withheld.has(toolId) &&

@@ -329,6 +329,89 @@ describe("piece-output", () => {
     });
   }
 
+  for (const resumed of [false, true]) {
+    it(`returns a structured document from a ${resumed ? "resumed" : "fresh"} Fabric agent request without requiring a UI piece`, async () => {
+      const directory = await Deno.makeTempDir();
+      const path = join(directory, "result.json");
+      const requests: HarnessModelTurnRequest[] = [];
+      let fabricOpens = 0;
+      try {
+        const configured = new CfHarnessEngine({
+          sandboxRuntime: sandbox,
+          model: "test-model",
+          fabricSession,
+          structuredResult: {
+            path,
+            schema: {
+              type: "object",
+              properties: { total: { type: "number" } },
+              required: ["total"],
+              additionalProperties: false,
+            },
+          },
+          fabricSessionFactory: () => {
+            fabricOpens += 1;
+            throw new Error("Submitting a document does not open Fabric");
+          },
+        });
+        const engine = resumed
+          ? new CfHarnessEngine({
+            sandboxRuntime: sandbox,
+            model: "test-model",
+            runState: configured.getRunState(),
+          })
+          : configured;
+        const loop = new CfHarnessPromptLoop({
+          engine,
+          allowedToolIds: ["submit_result"],
+          modelClient: {
+            providerId: "test-provider",
+            complete: (request) => {
+              requests.push({
+                ...request,
+                transcript: [...request.transcript],
+              });
+              return Promise.resolve({
+                assistant: requests.length === 1
+                  ? toolCall(
+                    "submit_result",
+                    { result: { total: 12 } },
+                    "result",
+                  )
+                  : {
+                    role: "assistant" as const,
+                    content: "Result submitted.",
+                  },
+              });
+            },
+          },
+        });
+        const result = await loop.runPrompt({
+          prompt: "Return the total as a structured result.",
+          maxModelTurns: 2,
+          promptSlotBinding: {
+            ...directPromptSlotBindingFor("agent-result"),
+            role: "context",
+          },
+        });
+        expect(result.taskOutcome?.outcome).toBe("completed");
+        expect(JSON.parse(await Deno.readTextFile(path))).toEqual({
+          total: 12,
+        });
+        expect(requests).toHaveLength(2);
+        expect(result.runState.assignedPieces).toBeUndefined();
+        expect(
+          requests[0].transcript.some((message) =>
+            message.content.startsWith("Host completion")
+          ),
+        ).toBe(false);
+        expect(fabricOpens).toBe(0);
+      } finally {
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+  }
+
   for (
     const mode of [
       "resume",

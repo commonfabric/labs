@@ -2,7 +2,7 @@
 
 Status: current implementation reference\
 Last verified: 2026-09-22\
-Revision: `7827662012`
+Revision: `80a1c12c1c`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -216,7 +216,7 @@ The current package provides:
 - CFC modes `disabled`, `observe`, `enforce-explicit`, and `enforce-strict`,
   plus prompt-slot, invocation-context, policy-event, and model-influence
   evidence;
-- configured Fabric parent tasks require a successful `assign_slug` in their own
+- ordinary Fabric parent tasks require a successful `assign_slug` in their own
   run before completing; text answers become UI pieces through ordinary tools,
   while questions, give-ups, and child return contracts remain distinct
 - parent-only `finish_task` for a question or a give-up reason, admitted through
