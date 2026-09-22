@@ -282,20 +282,31 @@ callback body — tracked as CT-2403.
 
 **Proof status: PARTLY PROVEN (1 of 3), and NEEDS an email grant and a finance
 grant.** One clean run, browser-verified — short of the three-run bar, so it is
-not yet proven. Browser-verified (`proof/bills.png`): `monthly-bills-mail-bank`
-shows **Paid · 4** with each row an email paired to a bank transaction, **Needs
-attention · 1**, and **Unmatched payments · 0**. Its source line reads "Email:
-100 headers · Bank: 7 live transactions", and the page states "No message bodies
-or snippets are used. No AI model is used." This is the only entry here whose
-done condition has been exercised end to end. One run delivered
-`monthly-bills-mail-bank` in 427 s, 61 s of it the opening pass, importing both
-indexed readers into an authored wrapper. Its first submission failed on a
-`cf-alert` prop and the repaired version ran; its first naming attempt collided
-and the second succeeded, which is the slug sentence working. The run's own
-final text says its counts and matches were not independently verified, because
-policy withheld the results from the model — so this establishes a named piece
-and indexed composition, not that the bills it lists are the right ones. Whether
-the pairings are right is the subject of
+not yet proven.
+
+**Treat that one run as a sample, not as a result.** This demo asks for the
+bills to be shown together where an email and a transaction "look like the same
+bill", and says nothing about how strongly they must look alike. That is the
+same freedom §5 leaves, and §5's four runs show what it costs: four different
+pairing rules and three different answers. This entry's successful run is one
+draw from that distribution rather than evidence the demo is reliable, and on a
+store whose merchants share a common word it is the wrong draw that is likely.
+[§5a](#5a-the-same-composition-with-the-pairing-rule-stated) states the property
+that separates a run that pairs correctly from one that does not; the same
+sentence would apply here. Browser-verified (`proof/bills.png`):
+`monthly-bills-mail-bank` shows **Paid · 4** with each row an email paired to a
+bank transaction, **Needs attention · 1**, and **Unmatched payments · 0**. Its
+source line reads "Email: 100 headers · Bank: 7 live transactions", and the page
+states "No message bodies or snippets are used. No AI model is used." This is
+the only entry here whose done condition has been exercised end to end. One run
+delivered `monthly-bills-mail-bank` in 427 s, 61 s of it the opening pass,
+importing both indexed readers into an authored wrapper. Its first submission
+failed on a `cf-alert` prop and the repaired version ran; its first naming
+attempt collided and the second succeeded, which is the slug sentence working.
+The run's own final text says its counts and matches were not independently
+verified, because policy withheld the results from the model — so this
+establishes a named piece and indexed composition, not that the bills it lists
+are the right ones. Whether the pairings are right is the subject of
 [§5](#5-bills-from-gmail-and-plaid-composing-two-library-patterns-by-id), which
 runs the same job with the readers named and records what varies between runs.
 
