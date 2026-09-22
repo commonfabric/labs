@@ -61,7 +61,7 @@ import {
   joinCfcObservedConfidentiality,
   meetCfcObservationCeilings,
 } from "../cfc/observation.ts";
-import { collectConsumedLabel } from "../cfc/prepare.ts";
+import { deriveFlowJoin } from "../cfc/prepare.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../cfc/sink-request.ts";
 import {
   ignoreReadForScheduling,
@@ -1157,16 +1157,32 @@ export function sqliteQuery(
       return;
     }
     if (decision === "dedupe") return;
+    // The confidentiality THIS request carries: the transaction's flow join,
+    // which is what a write here would be measured against.
+    //
+    // Not `collectConsumedLabel`, which the sink ceilings read: that one is
+    // transaction-global and counts the reads the write machinery makes of
+    // its own destination (`docs/specs/cfc-write-destination-reads.md`
+    // scopes the exclusion to the flow join and says so). This node reads
+    // its own settled result to decide whether a writeback is stale, and
+    // that result carries the labels of the columns it projected — so the
+    // wider set answers "labeled" on every issue after the first, whatever
+    // the parameters are, which would refuse a query permanently over a
+    // label that is not in its request. Derived after the memo decision, so
+    // a hit pays nothing.
+    const requestConfidentiality = crossSpace || scope !== "session"
+      ? deriveFlowJoin(tx).confidentiality
+      : [];
     // The bound a sqlite read's egress has, applied where the sink registry
     // cannot hold it (`cfc/sink-inventory.ts`). A query whose database lies
     // in another space hands its statement and parameters to whoever holds
     // THAT space's replicas, who are not the audience this result document's
     // residency names; a same-space query reaches only the provider that
     // already holds every byte of that document. So the refusal is the pair
-    // — another space, and a transaction carrying confidentiality — and it
-    // runs before the claim is written and before the request is staged,
-    // which are the two things that would carry the parameters out.
-    if (crossSpace && collectConsumedLabel(tx).confidentiality.length > 0) {
+    // — another space, and a request carrying confidentiality — and it runs
+    // before the claim is written and before the request is staged, which
+    // are the two things that would carry the parameters out.
+    if (crossSpace && requestConfidentiality.length > 0) {
       // No request hash goes with it: recording this one's would make the
       // next evaluation of the same inputs a memo hit, so a later pass whose
       // reads carry nothing would never ask again. What the pattern reads is

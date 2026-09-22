@@ -574,6 +574,99 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       expect(String(refused.error)).toContain("another space");
       expect(refused.pending).toBe(false);
       expect(refused.result ?? []).toEqual([]);
+      // No request hash goes with the refusal, so an evaluation whose reads
+      // carry nothing asks again rather than finding a memo hit. A refusal
+      // folded into the ordinary settled shape would be permanent.
+      expect(refused.requestHash).toBeUndefined();
+    });
+
+    it("issues again once its own result has carried a label", async () => {
+      // What the refusal must measure is the label THIS request's inputs
+      // carry, not everything the transaction has touched. A cross-space
+      // query's own settled result carries the labels of the columns it
+      // projected, and the next issue reads that result to decide whether
+      // its writeback is stale — so a check over the transaction's whole
+      // consumed set refuses every issue after the first, whatever the
+      // parameters are, and the node is dead with a message about a label
+      // that is not in its request.
+
+      const db = labeledDb();
+      await seedMessages(db, elsewhere);
+
+      const handleTx = runtime.edit();
+      const handle = runtime.getCell<SqliteDbRef>(
+        elsewhere,
+        "foreign handle for re-issue",
+        undefined,
+        handleTx,
+      );
+      handle.set(db);
+      expect((await handleTx.commit()).error).toBeUndefined();
+
+      // Its own transaction: one transaction holds a writer for one space.
+      const choiceTx = runtime.edit();
+      const container = runtime.getCell<string>(
+        space,
+        "container choice",
+        { type: "string" },
+        choiceTx,
+      );
+      container.set("c-alpha");
+      expect((await choiceTx.commit()).error).toBeUndefined();
+
+      const { commonfabric: cf } = createTrustedBuilder(runtime);
+      const testPattern = cf.pattern<{ db: unknown; container: string }>((
+        { db: handleInput, container: chosen },
+      ) =>
+        cf.sqliteQuery(
+          {
+            db: handleInput,
+            sql: "SELECT container_id FROM messages WHERE container_id = ?1",
+            params: [chosen],
+            // deno-lint-ignore no-explicit-any -- the input is untyped
+          } as any,
+        )
+      );
+
+      const tx = runtime.edit();
+      const resultCell = runtime.getCell(
+        space,
+        "foreign-reissue",
+        testPattern.resultSchema,
+        tx,
+      );
+      const result = runtime.run(
+        tx,
+        testPattern,
+        // deno-lint-ignore no-explicit-any -- cells stand in for the arguments
+        { db: handle, container: container as any },
+        resultCell,
+      );
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit()).error).toBeUndefined();
+
+      // deno-lint-ignore no-explicit-any -- the builtin's state
+      const rows = result as Cell<any>;
+      const first = await waitForCellValue<QueryState<KeyRow>>(
+        runtime,
+        rows,
+        (value) => (value?.result ?? []).length === 2,
+      );
+      expect(first.error).toBeUndefined();
+
+      // The parameter is a plain string this test writes: nothing labeled is
+      // read on the way to the second request.
+      const again = runtime.edit();
+      container.withTx(again).set("c-beta");
+      expect((await again.commit()).error).toBeUndefined();
+
+      const second = await waitForCellValue<QueryState<KeyRow>>(
+        runtime,
+        rows,
+        (value) => (value?.result ?? []).length === 1,
+      );
+      expect(second.error).toBeUndefined();
+      expect(second.result).toEqual([{ container_id: "c-beta" }]);
     });
   });
 });
