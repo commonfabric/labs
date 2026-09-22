@@ -577,6 +577,13 @@ function createViewProxy<T>(
         // `undefined` for it, which is what a live one returns for a value
         // with no `then`; every other property still refuses.
         if (prop === "then" && pinned && !isReadable(viewTx)) return undefined;
+        // The back-pointer to the cell is not an answer from the document, and
+        // reads nothing: it comes ahead of the kind check, so a view whose
+        // transaction has finished still names its cell.
+        if (prop === toCell) {
+          return () =>
+            createCell(runtime, link, tx, false, undefined, cfcLabelView);
+        }
 
         verifyKind();
         if (boundKind === "array" && prop === "length") {
@@ -597,17 +604,17 @@ function createViewProxy<T>(
         }
 
         if (typeof prop === "symbol") {
-          if (prop === toCell) {
-            return () =>
-              createCell(runtime, link, tx, false, undefined, cfcLabelView);
-          } else if (prop === Symbol.iterator && boundKind === "array") {
+          if (prop === Symbol.iterator && boundKind === "array") {
             return function () {
               let index = 0;
               return {
                 // Pulled after the trap returned, so it steps into the
                 // instant itself rather than inheriting the trap's scope.
+                // An iterator can be held across a rewrite, so each step
+                // checks the kind again before it reads.
                 next: () =>
                   atEpoch(() => {
+                    verifyKind();
                     const length = readTx().readValueOrThrow({
                       ...link,
                       path: [...link.path, "length"],

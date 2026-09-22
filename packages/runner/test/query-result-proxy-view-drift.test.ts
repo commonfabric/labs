@@ -15,11 +15,11 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { Identity } from "@commonfabric/identity";
 
 import {
   createQueryResultProxy,
+  getCellOrThrow,
   ViewDriftError,
 } from "../src/query-result-proxy.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -184,6 +184,59 @@ describe("query-result-proxy view drift", () => {
     seed.set([1]);
     expect(view.a).toBe(1);
     expect(Object.keys(view)).toEqual(["a"]);
+  });
+
+  it("refuses from an iterator held across the rewrite", () => {
+    const cell = runtime.getCell<unknown>(
+      space,
+      "iterator-drift",
+      undefined,
+      tx,
+    );
+    cell.set([1, 2, 3]);
+    const view = cell.get() as number[];
+    const iterator = view[Symbol.iterator]();
+    expect(iterator.next().value).toBe(1);
+
+    cell.set({ a: 1 });
+
+    expect(() => iterator.next()).toThrow(ViewDriftError);
+  });
+
+  it("still names its cell after the document changed kind", () => {
+    // The back-pointer reads nothing and answers for the view, not the
+    // document, so it is not subject to drift.
+    const cell = runtime.getCell<unknown>(space, "tocell-drift", undefined, tx);
+    cell.set({ a: 1 });
+    const view = cell.get() as object;
+    cell.set([1]);
+    expect(getCellOrThrow(view).getAsNormalizedFullLink()).toEqual(
+      cell.getAsNormalizedFullLink(),
+    );
+  });
+
+  it("still names its cell from a pinned view whose transaction has finished", async () => {
+    const seed = runtime.getCell<unknown>(
+      space,
+      "tocell-finished",
+      undefined,
+      tx,
+    );
+    seed.set({ a: 1 });
+    await tx.commit();
+    const readTx = runtime.edit();
+    readTx.markLazyMaterialize(true);
+    const view = createQueryResultProxy<{ a: number }>(
+      runtime,
+      readTx,
+      seed.getAsNormalizedFullLink(),
+    );
+    await readTx.commit();
+    expect(() => view.a).toThrow("Transaction is complete");
+    expect(getCellOrThrow(view).getAsNormalizedFullLink()).toEqual(
+      seed.getAsNormalizedFullLink(),
+    );
+    tx = runtime.edit();
   });
 
   it("refuses on a standing handle once a later commit changed the kind", async () => {
