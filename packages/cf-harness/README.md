@@ -3319,14 +3319,17 @@ reading as `cfc.invocationContextTransportReadiness` — `registered`,
 `unregistered`, `unsafe-runtime-arguments`, `indeterminate`, or `unverified`
 before any enforcing invocation has probed.
 
-When a trusted prompt-slot binding is present, `cf-harness` also derives
-confidentiality-only prompt influence labels for model-authored invocation
-inputs such as shell commands, structured file-tool arguments, and stdin
-payloads. These labels are taint evidence, not integrity or authorization
-claims. When CFC-mediated bash output is released to the model, `cf-harness`
-records the observed output labels in run state and merges those confidentiality
-labels into later model-authored invocation inputs. Opaque and denied outputs
-are not added to this model-context accumulator.
+When a trusted prompt-slot binding is present, `cf-harness` also records which
+model-authored invocation inputs the bound prompt shaped — shell commands,
+structured file-tool arguments, and stdin payloads — as `PromptSlotInfluence`
+atoms in the invocation context's `promptSlotInfluenceLabels`. The atom is
+provenance-class integrity (CFC spec §15.4): it is evidence for influence
+accounting, not taint and not authority. It is kept out of `cfcInputLabels`, so
+it never seeds the sandbox's taint and never withholds a command's output from
+the model that wrote it. When CFC-mediated bash output is released to the model,
+`cf-harness` records the observed output labels in run state and merges those
+confidentiality labels into later model-authored invocation inputs. Opaque and
+denied outputs are not added to this model-context accumulator.
 
 The persisted model-context accumulator is sensitive retained run metadata. It
 does not store raw stdout/stderr bytes, but its labels and observation refs can

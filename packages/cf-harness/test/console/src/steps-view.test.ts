@@ -66,6 +66,43 @@ describe("console/src/steps-view", () => {
       expect(text).toContain("side-effect");
       expect(text).toContain("cfc_enforce_explicit_direct_command");
     });
+
+    it("lists the prompt slot's influence as integrity on the path it names", () => {
+      const text = templateText(stepPolicyView({
+        ...step(),
+        invocation: {
+          type: "cf-harness.cfc-invocation-context",
+          version: 1,
+          sequence: 1,
+          runId: "r",
+          createdAt: "2026-01-01T00:00:00.000Z",
+          toolId: "bash",
+          operation: "shell",
+          cfcEnforcementMode: "enforce-strict",
+          cwd: "/workspace",
+          runManifest: { present: false },
+          inputs: {},
+          promptSlotInfluenceLabels: {
+            version: 1,
+            entries: [{
+              path: ["command"],
+              label: {
+                integrity: [{
+                  type: "https://commonfabric.org/cfc/atom/PromptSlotInfluence",
+                  version: 1,
+                }],
+              },
+            }],
+          },
+        },
+      }));
+
+      expect(text).toContain("command");
+      expect(text).toContain("PromptSlotInfluence");
+      // An integrity-only row carries no taint and says nothing about its
+      // absence.
+      expect(text).not.toContain("no confidentiality atom");
+    });
   });
 
   describe("withheldSummary", () => {

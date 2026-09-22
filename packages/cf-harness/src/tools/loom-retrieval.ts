@@ -176,10 +176,11 @@ const pick = (
 type LoomRowLabel = Required<Pick<IFCLabel, "confidentiality" | "integrity">>;
 
 /**
- * The label a row with no `ifc` field is given: the label of the query that
- * produced it, which is the label of the tool call's input — the prompt
- * slot's influence joined with everything the run's model context has
- * observed. A query with no label makes the row public.
+ * The label a row with no `ifc` field is given: the confidentiality of the
+ * query that produced it, which is the confidentiality of the tool call's
+ * input label — everything the run's model context has observed. The prompt
+ * slot's influence is integrity on that label and does not reach the row. A
+ * query with no confidentiality makes the row public.
  *
  * This is a placeholder assumption, and it is not sound: what a row holds
  * is decided by the store it came from, not by who asked. It is the single
