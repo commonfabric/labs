@@ -3,7 +3,11 @@ import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 import type { JSONSchemaObj } from "@commonfabric/api";
 import { SchemaGenerator } from "../src/schema-generator.ts";
-import { createTestProgram, getTypeFromCode } from "./utils.ts";
+import {
+  createTestProgram,
+  getTypeFromCode,
+  getTypeFromFiles,
+} from "./utils.ts";
 
 describe("Scope wrappers", () => {
   it("rejects nested scope wrappers without a cell boundary", async () => {
@@ -270,6 +274,80 @@ interface SchemaRoot { draft: Draft; }
       });
     });
 
+    /** The schema of `SchemaRoot.run` in `/main.ts` of `files`. */
+    async function runSchema(files: Record<string, string>) {
+      const { type, checker, typeNode } = await getTypeFromFiles(
+        files,
+        "/main.ts",
+        "SchemaRoot",
+      );
+      const schema = new SchemaGenerator().generateSchema(
+        type,
+        checker,
+        typeNode,
+      ) as JSONSchemaObj;
+      return schema.properties?.run;
+    }
+
+    it("follows an alias to a same-named alias in another module", async () => {
+      expect(
+        await runSchema({
+          "/records.ts": "export type Scoped<T> = PerUser<T>;",
+          "/main.ts": 'import type { Scoped as Base } from "./records.ts";\n' +
+            "export type Scoped<T> = Base<T>;\n" +
+            "export interface SchemaRoot { run: Scoped<{ a: string }> }",
+        }),
+      ).toEqual({
+        type: "object",
+        properties: { a: { type: "string" } },
+        required: ["a"],
+        scope: "user",
+      });
+    });
+
+    it("follows an alias to a namespace-qualified scope wrapper", async () => {
+      expect(
+        await runSchema({
+          "/main.ts": 'import type * as cf from "commonfabric";\n' +
+            "type Rec = cf.PerSession<{ a: string }>;\n" +
+            "export interface SchemaRoot { run: Rec }",
+        }),
+      ).toEqual({
+        type: "object",
+        properties: { a: { type: "string" } },
+        required: ["a"],
+        scope: "session",
+      });
+    });
+
+    it("keeps the scope on each reference to a recursive alias", async () => {
+      // A recursive type is written once under `$defs`; the scope is each
+      // slot's own declaration, so it stays with the reference.
+
+      const schemas = await propertySchemas(`
+type Node = PerUser<{ label: string; next?: Cell<Node> }>;
+interface SchemaRoot { head: Node; }
+`);
+
+      const defs = schemas.$defs as Record<string, unknown>;
+      const [name] = Object.keys(defs);
+      expect(schemas.head).toEqual({ $ref: `#/$defs/${name}`, scope: "user" });
+      expect(defs).toEqual({
+        [name!]: {
+          type: "object",
+          properties: {
+            label: { type: "string" },
+            next: {
+              $ref: `#/$defs/${name}`,
+              scope: "user",
+              asCell: ["cell"],
+            },
+          },
+          required: ["label"],
+        },
+      });
+    });
+
     it("throws for an alias of a scope wrapper that is a union member", async () => {
       const { type, checker, typeNode } = await getTypeFromCode(
         `
@@ -351,6 +429,36 @@ interface SchemaRoot { draft: Draft | undefined; }
           Stored: { type: "object", properties: { name: { type: "string" } } },
         },
       });
+    });
+
+    it("emits the resolved payload for a wrapper printed without its default argument", async () => {
+      // The printer leaves out an argument equal to the parameter's default,
+      // writing `SqliteDb` for `SqliteDb<SqliteDatabase>`, and the printed
+      // name resolves to nothing, so the node names no payload for it.
+      const printed = await printedSchema(
+        "{ db: SqliteDb }",
+        ts.factory.createTypeLiteralNode([
+          ts.factory.createPropertySignature(
+            undefined,
+            "db",
+            undefined,
+            ts.factory.createTypeReferenceNode(
+              ts.factory.createQualifiedName(
+                ts.factory.createIdentifier("__cfHelpers"),
+                ts.factory.createIdentifier("SqliteDb"),
+              ),
+            ),
+          ),
+        ]),
+      );
+      const { type, checker, typeNode } = await getTypeFromCode(
+        "type Authored = PerUser<{ db: SqliteDb }>;",
+        "Authored",
+      );
+
+      expect(printed).toEqual(
+        new SchemaGenerator().generateSchema(type, checker, typeNode),
+      );
     });
 
     it("emits the resolved payload and its default when only the computed brand cannot be read", async () => {

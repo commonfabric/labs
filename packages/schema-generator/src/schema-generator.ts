@@ -1222,9 +1222,11 @@ export class SchemaGenerator {
 
     // A scope wrapper reached through an alias formats inline, as the wrapper
     // itself does, so that its scope stays at the top level of the slot's own
-    // schema, the only place the write path reads it.
-    const isScopeWrapperAlias =
-      scopeOfAliasChain(type, context.typeChecker) !== undefined;
+    // schema, the only place the write path reads it. A recursive one is
+    // written once under `$defs` without its scope, and each reference to it
+    // carries the scope instead.
+    const aliasScope = scopeOfAliasChain(type, context.typeChecker);
+    const isScopeWrapperAlias = aliasScope !== undefined;
 
     let namedKey = isScopeWrapperAlias
       ? undefined
@@ -1263,7 +1265,9 @@ export class SchemaGenerator {
       const syntheticKey = this.#ensureSyntheticName(type);
       context.inProgressNames.add(syntheticKey);
       context.emittedRefs.add(syntheticKey);
-      return { "$ref": `#/$defs/${syntheticKey}` };
+      return aliasScope === undefined
+        ? { "$ref": `#/$defs/${syntheticKey}` }
+        : { "$ref": `#/$defs/${syntheticKey}`, scope: aliasScope };
     }
 
     // Push current type onto the stack
@@ -1283,14 +1287,28 @@ export class SchemaGenerator {
         const keyForDef = namedKey ??
           (isWrapperContext ? undefined : this.#anonymousNames.get(type));
         if (keyForDef) {
-          context.definitions[keyForDef] = result;
+          const scopeOnReference = aliasScope !== undefined &&
+              isObjectOrArray(result) && result.scope === aliasScope
+            ? aliasScope
+            : undefined;
+          if (scopeOnReference === undefined) {
+            context.definitions[keyForDef] = result;
+          } else {
+            const { scope: _scope, ...payload } = result as Record<
+              string,
+              unknown
+            >;
+            context.definitions[keyForDef] = payload as MutableJSONSchema;
+          }
           context.inProgressNames.delete(keyForDef);
           context.definitionStack.delete(
             this.#createStackKey(type, context.typeNode, context.typeChecker),
           );
           if (!isRootType) {
             context.emittedRefs.add(keyForDef);
-            return { "$ref": `#/$defs/${keyForDef}` };
+            return scopeOnReference === undefined
+              ? { "$ref": `#/$defs/${keyForDef}` }
+              : { "$ref": `#/$defs/${keyForDef}`, scope: scopeOnReference };
           }
           // For root, keep inline; buildFinalSchema may promote if we choose
         }

@@ -2,7 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { getScopeBrand } from "../../src/typescript/scope-brand.ts";
-import { getTypeFromCode } from "../utils.ts";
+import { getTypeFromCode, getTypeFromFiles } from "../utils.ts";
 
 describe("scope-brand", () => {
   /** The brand `getScopeBrand` reads on the type `Subject` in `code`. */
@@ -11,7 +11,9 @@ describe("scope-brand", () => {
     const brand = getScopeBrand(type, checker);
     return brand && {
       scope: brand.scope,
-      payload: brand.payload.map((part) => checker.typeToString(part)),
+      payload: brand.payload.map((alternative) =>
+        alternative.map((part) => checker.typeToString(part))
+      ),
     };
   }
 
@@ -21,7 +23,7 @@ describe("scope-brand", () => {
 type Inner = { a: string };
 type Subject = PerSession<Inner>;
 `),
-    ).toEqual({ scope: "session", payload: ["Inner"] });
+    ).toEqual({ scope: "session", payload: [["Inner"]] });
   });
 
   it("returns the scope of a scope wrapper reached through an alias", async () => {
@@ -31,7 +33,7 @@ type Inner = { a: string };
 type Rec = PerUser<Inner>;
 type Subject = Rec;
 `),
-    ).toEqual({ scope: "user", payload: ["Inner"] });
+    ).toEqual({ scope: "user", payload: [["Inner"]] });
   });
 
   it("returns every member of an intersection payload", async () => {
@@ -41,7 +43,22 @@ type A = { a: string };
 type B = { b: number };
 type Subject = PerSpace<A & B>;
 `),
-    ).toEqual({ scope: "space", payload: ["A", "B"] });
+    ).toEqual({ scope: "space", payload: [["A", "B"]] });
+  });
+
+  it("returns the scope of a brand keyed by an imported `SCOPE_BRAND`", async () => {
+    const { type, checker } = await getTypeFromFiles(
+      {
+        "/api/commonfabric.d.ts":
+          "export declare const SCOPE_BRAND: unique symbol;",
+        "/main.ts": 'import { SCOPE_BRAND } from "./api/commonfabric";\n' +
+          'type Subject = { a: string } & { readonly [SCOPE_BRAND]?: "user" };',
+      },
+      "/main.ts",
+      "Subject",
+    );
+
+    expect(getScopeBrand(type, checker)?.scope).toBe("user");
   });
 
   it("returns `undefined` for a type that carries no scope brand", async () => {
@@ -49,11 +66,29 @@ type Subject = PerSpace<A & B>;
       .toBeUndefined();
   });
 
-  it("returns `undefined` for a scope wrapper around a union", async () => {
+  it("returns each alternative of a scope wrapper around a union", async () => {
     // The checker distributes the brand over the union's members.
 
-    expect(await brandOf(`type Subject = PerAny<string | number>;`))
+    expect(
+      await brandOf(`
+type A = { a: string };
+type B = { b: number };
+type Subject = PerAny<A | B>;
+`),
+    ).toEqual({ scope: "any", payload: [["A"], ["B"]] });
+  });
+
+  it("returns `undefined` for a union with an unbranded member", async () => {
+    expect(await brandOf(`type Subject = PerUser<{ a: string }> | number;`))
       .toBeUndefined();
+  });
+
+  it("returns `undefined` for a union of members with different scopes", async () => {
+    expect(
+      await brandOf(
+        `type Subject = PerUser<{ a: string }> | PerSession<{ b: number }>;`,
+      ),
+    ).toBeUndefined();
   });
 
   it("returns `undefined` for two different scopes intersected", async () => {

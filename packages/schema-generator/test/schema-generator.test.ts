@@ -2914,6 +2914,18 @@ type CalculatorRequest = {
         expect(schema).toBe(true);
       });
 
+      it("returns `true` for an alias of a scope wrapper naming no payload", async () => {
+        const schema = await generate(
+          {
+            "/main.ts": "export type PerUser<T = string> = T;\n" +
+              "export type Bare<U> = PerUser;",
+          },
+          generic("Bare", keyword(ts.SyntaxKind.NumberKeyword)),
+        );
+
+        expect(schema).toBe(true);
+      });
+
       it("leaves a registered scope parameter unread without a payload", async () => {
         const { type, checker } = await getTypeFromCode(
           "export type PerUser<T> = T;",

@@ -2721,7 +2721,8 @@ function extractCellLikeInnerTypeNode(
  * recognizes it, and names its payload. Otherwise the value's type is read,
  * from the cell's type or, for a value node printed from a type, which the
  * checker reads as `any`, by resolving the name it prints in `sourceFile`, and
- * the payload is printed from the types the scope brand is intersected with.
+ * the payload is printed from the types the scope brand is intersected with,
+ * one alternative per member of a union the brand was distributed over.
  */
 function moveNullishIntoScopeWrapper(
   value: ts.TypeNode,
@@ -2742,7 +2743,7 @@ function moveNullishIntoScopeWrapper(
   const spelledScope = name && scopeForWrapperName(name.text);
   if (spelledScope) {
     const payload = (written as ts.TypeReferenceNode).typeArguments?.[0];
-    return payload && wrapInScope(payload, spelledScope, nullish, factory);
+    return payload && wrapInScope([payload], spelledScope, nullish, factory);
   }
 
   const valueType = cellValueType ??
@@ -2752,19 +2753,22 @@ function moveNullishIntoScopeWrapper(
       : undefined);
   const brand = valueType && getScopeBrand(valueType, checker);
   if (!brand) return undefined;
-  const parts: ts.TypeNode[] = [];
-  for (const part of brand.payload) {
-    const partNode = typeToSchemaTypeNode(part, checker, sourceFile);
-    if (!partNode) return undefined;
-    typeRegistry?.set(partNode, part);
-    parts.push(partNode);
+  const alternatives: ts.TypeNode[] = [];
+  for (const alternative of brand.payload) {
+    const parts: ts.TypeNode[] = [];
+    for (const part of alternative) {
+      const partNode = typeToSchemaTypeNode(part, checker, sourceFile);
+      if (!partNode) return undefined;
+      typeRegistry?.set(partNode, part);
+      parts.push(partNode);
+    }
+    alternatives.push(
+      parts.length === 1
+        ? parts[0]!
+        : factory.createIntersectionTypeNode(parts),
+    );
   }
-  return wrapInScope(
-    parts.length === 1 ? parts[0]! : factory.createIntersectionTypeNode(parts),
-    brand.scope,
-    nullish,
-    factory,
-  );
+  return wrapInScope(alternatives, brand.scope, nullish, factory);
 }
 
 /** The scope the wrapper spelled `name` declares, if `name` spells one. */
@@ -2774,15 +2778,15 @@ function scopeForWrapperName(name: string): SchemaScope | undefined {
   );
 }
 
-/** `__cfHelpers.PerUser<payload | ...nullish>` for the scope `user`. */
+/** `__cfHelpers.PerUser<A | B | ...nullish>` for the scope `user`. */
 function wrapInScope(
-  payload: ts.TypeNode,
+  alternatives: readonly ts.TypeNode[],
   scope: SchemaScope,
   nullish: readonly ts.TypeNode[],
   factory: ts.NodeFactory,
 ): ts.TypeNode {
   return createHelperWrapperTypeNode(
-    factory.createUnionTypeNode([payload, ...nullish]),
+    factory.createUnionTypeNode([...alternatives, ...nullish]),
     SCOPE_WRAPPER_FOR_SCOPE[scope],
     factory,
   );

@@ -23,21 +23,49 @@ export const SCOPE_WRAPPER_FOR_SCOPE: Readonly<Record<SchemaScope, string>> = {
 export interface ScopeBrand {
   readonly scope: SchemaScope;
   /**
-   * The members of the intersection other than the brand, which intersect to
-   * the wrapper's payload.
+   * The payload's alternatives, one per member of a union the brand was
+   * distributed over, and one for any other payload. Each lists the members
+   * the brand is intersected with, which intersect to that alternative.
    */
-  readonly payload: readonly ts.Type[];
+  readonly payload: readonly (readonly ts.Type[])[];
 }
 
 /**
  * The scope wrapper `type` resolves to, or `undefined` for a type that carries
  * no `commonfabric` `SCOPE_BRAND`. A wrapper around a union resolves to a union
- * of branded members rather than to one intersection, and is not read here.
+ * of branded members, which is read as one wrapper when every member carries
+ * the same scope.
  */
 export function getScopeBrand(
   type: ts.Type,
   checker: ts.TypeChecker,
 ): ScopeBrand | undefined {
+  if (!type.isUnion()) {
+    const brand = brandOfIntersection(type, checker);
+    return brand && { scope: brand.scope, payload: [brand.members] };
+  }
+  const payload: (readonly ts.Type[])[] = [];
+  let scope: SchemaScope | undefined;
+  for (const member of type.types) {
+    const brand = brandOfIntersection(member, checker);
+    if (!brand || (scope !== undefined && brand.scope !== scope)) {
+      return undefined;
+    }
+    scope = brand.scope;
+    payload.push(brand.members);
+  }
+  return scope === undefined ? undefined : { scope, payload };
+}
+
+/**
+ * Helper for `getScopeBrand()`, which returns the scope an intersection's
+ * brand member declares and the members intersected with it, or `undefined`
+ * for a type that is not such an intersection.
+ */
+function brandOfIntersection(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): { scope: SchemaScope; members: readonly ts.Type[] } | undefined {
   if ((type.flags & ts.TypeFlags.Intersection) === 0) return undefined;
   const payload: ts.Type[] = [];
   let scope: SchemaScope | undefined;
@@ -51,7 +79,7 @@ export function getScopeBrand(
       return undefined;
     }
   }
-  return scope === undefined ? undefined : { scope, payload };
+  return scope === undefined ? undefined : { scope, members: payload };
 }
 
 /**
@@ -84,7 +112,10 @@ function isScopeBrandProperty(
     const name = ts.getNameOfDeclaration(declaration);
     if (!name || !ts.isComputedPropertyName(name)) return false;
     const key = checker.getSymbolAtLocation(name.expression);
-    return key !== undefined && key.getName() === "SCOPE_BRAND" &&
-      isCommonFabricSymbol(key);
+    const declared = key && key.flags & ts.SymbolFlags.Alias
+      ? checker.getAliasedSymbol(key)
+      : key;
+    return declared !== undefined && declared.getName() === "SCOPE_BRAND" &&
+      isCommonFabricSymbol(declared);
   });
 }

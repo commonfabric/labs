@@ -76,6 +76,10 @@ type ResolvedScopeWrapper = {
   readonly node: ts.TypeReferenceNode;
 };
 
+/** The last identifier of `name`: `PerUser` for both `PerUser` and `cf.PerUser`. */
+const entityNameRight = (name: ts.EntityName): ts.Identifier =>
+  ts.isIdentifier(name) ? name : name.right;
+
 const scopeForWrapperName = (
   name: string | undefined,
 ): SchemaScope | undefined =>
@@ -119,10 +123,7 @@ export const resolveScopeWrapperNode = (
   if (!typeNode || !ts.isTypeReferenceNode(typeNode)) {
     return undefined;
   }
-  const name = ts.isIdentifier(typeNode.typeName)
-    ? typeNode.typeName.text
-    : typeNode.typeName.right.text;
-  const scope = scopeForWrapperName(name);
+  const scope = scopeForWrapperName(entityNameRight(typeNode.typeName).text);
   return scope === undefined ? undefined : { scope, node: typeNode };
 };
 
@@ -276,11 +277,14 @@ const lowersDownAliasChain = (
   checker: ts.TypeChecker,
   visited: ReadonlySet<string>,
 ): boolean => {
-  if (CHAIN_LOWERED_ALIAS_NAMES.has(declaration.name.text)) return true;
+  if (CFC_ALIAS_NAMES.has(declaration.name.text)) return true;
+  // A scope wrapper reads its payload from its argument, so one reached with
+  // none is not lowered.
+  if (SCOPE_WRAPPER_NAMES.has(declaration.name.text)) return args.length > 0;
   const aliased = declaration.type;
   if (
-    !ts.isTypeReferenceNode(aliased) || !ts.isIdentifier(aliased.typeName) ||
-    visited.has(aliased.typeName.text)
+    !ts.isTypeReferenceNode(aliased) ||
+    visited.has(entityNameRight(aliased.typeName).text)
   ) {
     return false;
   }
@@ -357,17 +361,13 @@ export function scopeOfAliasChain(
     resolveAliasedSymbol(aliasSymbol, checker).declarations?.find(
       ts.isTypeAliasDeclaration,
     );
-  const visited = new Set<string>();
-  while (declaration && !visited.has(declaration.name.text)) {
+  const visited = new Set<ts.TypeAliasDeclaration>();
+  while (declaration && !visited.has(declaration)) {
     const scope = scopeForWrapperName(declaration.name.text);
     if (scope !== undefined) return scope;
-    visited.add(declaration.name.text);
+    visited.add(declaration);
     const aliased = declaration.type;
-    if (
-      !ts.isTypeReferenceNode(aliased) || !ts.isIdentifier(aliased.typeName)
-    ) {
-      return undefined;
-    }
+    if (!ts.isTypeReferenceNode(aliased)) return undefined;
     const symbol = checker.getSymbolAtLocation(aliased.typeName);
     declaration = symbol &&
       resolveAliasedSymbol(symbol, checker).declarations?.find(
@@ -378,10 +378,12 @@ export function scopeOfAliasChain(
 }
 
 /**
- * Formatter for Common Fabric-specific types (Cell<T>, Stream<T>, Reactive<T>, Default<T,V>)
+ * Formatter for Common Fabric-specific types (Cell<T>, Stream<T>, Reactive<T>,
+ * Default<T,V>), scope wrappers, and CFC aliases.
  *
- * TypeScript handles alias resolution automatically and we don't need to
- * manually traverse alias chains.
+ * The checker reports a type's outermost alias, so a scope wrapper or a CFC
+ * alias reached through further aliases is found by following the alias
+ * declarations (`scopeOfAliasChain()`, `#resolveAliasChainInstantiation()`).
  */
 export class CommonFabricFormatter implements TypeFormatter {
   #schemaGenerator: SchemaGenerator;
@@ -699,7 +701,23 @@ export class CommonFabricFormatter implements TypeFormatter {
   ): MutableJSONSchema {
     const innerTypeNode = typeRefNode.typeArguments?.[0];
     if (!innerTypeNode) {
-      throw new Error(`${wrapperKind}<T> requires type argument`);
+      // The printer leaves out an argument equal to the parameter's default,
+      // writing `SqliteDb` for `SqliteDb<SqliteDatabase>`, so a printed node
+      // can name no payload. The resolved wrapper supplies it where there is
+      // one; otherwise it is left unread, for a wrapper around it to recover.
+      if (!this.#isSyntheticWrapperNode(typeRefNode)) {
+        throw new Error(`${wrapperKind}<T> requires type argument`);
+      }
+      if (fallbackInnerTypeRef) {
+        return this.#formatWrapperType(
+          fallbackInnerTypeRef,
+          undefined,
+          context,
+          wrapperKind,
+        );
+      }
+      context.uninterpretedTypeNodes?.push(typeRefNode);
+      return true;
     }
 
     const registeredWrapperType = context.typeRegistry?.get(typeRefNode);
@@ -1535,13 +1553,11 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     const aliased = aliasDeclaration.type;
-    if (
-      !ts.isTypeReferenceNode(aliased) || !ts.isIdentifier(aliased.typeName)
-    ) {
+    if (!ts.isTypeReferenceNode(aliased)) {
       return undefined;
     }
 
-    const targetName = aliased.typeName.text;
+    const targetName = entityNameRight(aliased.typeName).text;
     if (visited.has(targetName)) {
       return undefined;
     }

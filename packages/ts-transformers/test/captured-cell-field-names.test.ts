@@ -103,6 +103,11 @@ describe("captured cell value fields", () => {
     const { spelling, declarations } of [
       { spelling: "PerUser<Data>", declarations: "" },
       { spelling: "Scoped", declarations: "type Scoped = PerUser<Data>;" },
+      {
+        spelling: "Either",
+        declarations:
+          "type Other = { count: number; label: string };\ntype Either = PerUser<Data | Other>;",
+      },
     ]
   ) {
     it(`keeps the scope of an optional ${spelling} cell at the capture's top level`, async () => {
@@ -129,11 +134,14 @@ describe("captured cell value fields", () => {
             : [];
         },
       );
+      const alternatives = spelling === "Either"
+        ? [{ $ref: "#/$defs/Data" }, { $ref: "#/$defs/Other" }]
+        : [{ $ref: "#/$defs/Data" }];
       expect(resolvedSchemas).toEqual([{
         type: "object",
         properties: {
           cell: {
-            anyOf: [{ $ref: "#/$defs/Data" }, { type: "undefined" }],
+            anyOf: [...alternatives, { type: "undefined" }],
             scope: "user",
             asCell: ["readonly"],
           },
