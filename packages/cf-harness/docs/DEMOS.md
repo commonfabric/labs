@@ -110,21 +110,20 @@ its finished piece more than once is a different matter: it is not a clean demo,
 and it should be re-run rather than shown.
 
 **A reactive value touched by ordinary JavaScript produces a page that is
-silently wrong.** Three instances in one evening, from three different authors
-writing against three different prompts:
+silently wrong.** Two confirmed instances in one evening, from different authors
+writing against different prompts:
 
-| What the source did                                 | What the page showed                       |
-| --------------------------------------------------- | ------------------------------------------ |
-| `.length` on a derived array inside a plain ternary | lists latched empty beneath correct counts |
-| `rows ?? []` passing the cell wrapper on            | the totals could not work at all           |
-| `` `${transaction.signed_amount}` ``                | every amount read `[object Object]`        |
+| What the source did                         | What the page showed                       |
+| ------------------------------------------- | ------------------------------------------ |
+| `.length` on a mapped array inside a branch | lists latched empty beneath correct counts |
+| `` `${transaction.signed_amount}` ``        | every amount read `[object Object]`        |
 
-**Every one of them compiles, type-checks, runs, and produces a page.** Nothing
-in the tree catches them. A compile error is visible and cheap — a run simply
-tries again, which is why these tasks take two to five attempts and still
-succeed. These are silent, and the page looks finished.
+**Both compile, type-check, run, and produce a page.** Nothing in the tree
+catches them. A compile error is visible and cheap — a run simply tries again,
+which is why these tasks take two to five attempts and still succeed. These are
+silent, and the page looks finished.
 
-The third is the clearest illustration: every other cell in that table passed
+The second is the clearest illustration: every other cell in that table passed
 its value straight through and rendered correctly. The author reached for
 stringification on exactly one field, the numeric one, and that was the only
 field that broke.
