@@ -428,13 +428,16 @@ prompts each returned a named piece composing CheckList and AmountLedger by
   recorded take.
 
 So the page is half-live: the part's own checkbox writes back and its removal
-control does not. The same holds for the newer published parts — see
-[§2a](#2a-a-checklist-and-a-running-total-composed-by-id), where the fix is in
-the published source and removal still does not work in a composed page. The
-cause is under investigation and is **not** what an earlier revision of this
-document claimed — the parents do pass real writable cells, so "wired with
-literal values" is withdrawn. What remains suspected is the hydration or
-event-write path for the removal control specifically.
+control does not. **The newer published parts fix this** — see
+[§2a](#2a-a-checklist-and-a-running-total-composed-by-id), where removal is
+demonstrated working across four checks. This entry's failures predate them, and
+its runs were judged before the viewport hazard described there was known, so
+they should be re-checked with visible targets before being relied on.
+
+The runtime cause behind the original defect is CT-2407: `Cell.remove` never
+matched a row of a constructor-seeded inline array, because reads of such an
+array are represented as immutable data-URI cells and identity never matched.
+The primitives work around it in authored source.
 
 Prompt text does not reach it: a run whose prompt says "I need to add and remove
 items and have the total update" produced the same behaviour.
@@ -486,28 +489,31 @@ the rest, corrects the counts and hides itself, and the expenses are untouched.
 It survives a reload. That matters because it is the gesture a viewer actually
 makes after ticking things off.
 
-**What these ids fix, and what they do not.**
+**These ids carry both fixes, and both are demonstrated.**
 
 The **unit description is fixed**: the published entry no longer says the ledger
 sums "in integer cents", so a run that trusts it does not render a hundred times
 the intended figure.
 
-**Per-row Remove is not resolved.** The fix is present in the published _source_
-— both comparison arms — and a composed page still leaves the row and the counts
-unchanged when Remove is clicked, with imports source-confirmed and including
-rows the run added interactively. A checkbox click on the same page works, so
-the page is live and the control is not. The control is rendered on every run
-and the closing summary mentions removal on some of them.
+**Per-row Remove works.** Verified on the corrected parts across two runs and
+four checks — a seeded task, a seeded expense, and a task and an expense the run
+had added itself — each removing the right row, correcting the counts, and
+surviving a reload.
 
-**So do not click per-row Remove, on either pair of ids**, and do not let the
-summary lead you there. Everything else holds: add, tick, total, reload, and
-"Clear completed", which takes exactly the checked items and leaves the rest.
+That result took a retraction to reach, and the reason is worth carrying into
+every browser check:
 
-Two differences between the passing tests and the failing page are unisolated
-and neither is preferred: the tests invoke the click stream directly where a
-browser click takes its own path, and the tests import the module locally where
-a demo fetches a published program by id. An array-constructor explanation was
-tested and ruled out.
+> A click reported as successful is not a click that happened. `agent-browser`
+> returns success for a target outside the viewport, having done nothing —
+> silently, with no error, leaving a page indistinguishable from one whose
+> control is dead. One control here sat at y≈573 in a 577-high viewport, its
+> centre just below the fold. It was reported broken twice. Brought into view,
+> the identical click removed the row.
+
+**Confirm the target is in the viewport before clicking, and hold a no-op to the
+evidence a success would need** — it is a claim that something did not happen.
+An off-screen click produces only false negatives, which are the ones nobody
+re-checks.
 
 ## 3. This month's bank transactions as a table
 
