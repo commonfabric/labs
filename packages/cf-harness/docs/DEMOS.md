@@ -42,7 +42,7 @@ A console proxied behind a loom daemon answers the same routes under
 console you meant: an acceptance instance does not start one of its own, and its
 `/harness-console` prefix resolves to the primary instance's console.
 
-**Every demo pays an opening research pass** — 35–70 seconds at the start of any
+**Every demo pays an opening research pass** — 35–90 seconds at the start of any
 fresh session, during which the console draws nothing. It is not a hang. The
 pass is what establishes which data and composable pieces the session has, and
 it is why these demos reuse indexed patterns instead of authoring from scratch.
@@ -52,7 +52,7 @@ live pane is CT-2402.
 **Slugs.** `assign_slug` requires a slug, never makes one unique itself, and
 refuses one that already names another piece — and pieces are never deleted. A
 prompt naming a fixed slug therefore works once and stops to ask on every later
-run. Every prompt below ends with the sentence that authorises the retry, which
+run. Every prompt below ends with the sentence that authorizes the retry, which
 is what makes the same text work repeatedly and on someone else's console.
 
 ## Checking an index entry is discoverable
@@ -97,7 +97,8 @@ start/pause/reset, focus and break modes, and cycle progress.
 carries on. A second `assign_slug` in the timeline is the retry working, not a
 fault.
 
-**Proof status: PROVEN (2/2)** — `pomodoro-timer-2`, `pomodoro-focus-timer`.
+**Proof status: PROVEN (3/3)** — `pomodoro-timer-2`, `pomodoro-focus-timer`,
+`pomodoro-focus-clock`.
 
 ## 2. A dinner party page, composed from two library parts
 
