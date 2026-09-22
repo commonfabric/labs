@@ -117,6 +117,11 @@ describe("space-invites", () => {
     });
     expect(link.searchParams.get("inviter")).toBe(inviter);
     expect(parseInviteLink(link)).toEqual({ ...invite, inviter });
+    // The parsed link verifies against the same code as the issued one: the
+    // inviter a link carries never enters the verifier.
+    expect(inviteCodeVerifier(parseInviteLink(link)!)).toBe(
+      inviteCodeVerifier(invite),
+    );
     expect(inviteCodeVerifier({ ...invite, inviter })).toBe(
       inviteCodeVerifier(invite),
     );

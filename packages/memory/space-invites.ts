@@ -55,10 +55,12 @@ export interface RedeemReceipt {
 /**
  * The non-secret destination and fragment secret in an invitation link.
  *
- * `inviter` is an unverified claim of who issued the invitation, carried for
- * display. Anyone who holds the link can change it, and it is not bound into
- * the code verifier, so a recipient checks it against the space ACL before
- * trusting it; nothing in this module does.
+ * `inviter` is a display hint naming who issued the invitation. Anyone who
+ * holds the link can change it, it is not bound into the code verifier, and it
+ * is checked only syntactically here. A recipient cannot read the space ACL
+ * before redeeming, and after redeeming an ACL check shows only that the DID
+ * holds access, not that it issued this link (the issuer, `issuedBy`, is
+ * visible only to owners). Treat it as a hint bounded by that access check.
  */
 export interface InviteLink {
   host: string;
@@ -117,7 +119,10 @@ export function isInviteId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9_-]{22,64}$/.test(value);
 }
 
-/** Whether a space or inviter has the DID key encoding accepted by invite routes. */
+/**
+ * Whether a space or inviter has the DID key encoding accepted by invite
+ * routes. The check is syntactic only.
+ */
 function isInviteDIDKey(value: unknown): value is DIDKey {
   return isDIDKey(value) &&
     /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,120}$/.test(value);
