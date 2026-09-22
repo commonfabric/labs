@@ -1188,6 +1188,62 @@ there.
 
 ---
 
+## Every demo re-run on `edd1f71108`
+
+The four demos on [DEMOS.md](DEMOS.md) were run again on labs `edd1f71108`,
+which `loom-stable-2026-09-22-7` vendors, from the page's own prompt text.
+
+| Demo                          | Result on `edd1f71108`   |
+| ----------------------------- | ------------------------ |
+| §1 pomodoro                   | 1 of 1, browser-verified |
+| §2a checklist + running total | 1 of 1, browser-verified |
+| §3 bank table                 | 1 of 1, browser-verified |
+| §5c three-id bills            | 1 of 1, browser-verified |
+
+Each is **one run, one working page**, confirmed in a browser. One run is not
+the three this document's own bar asks for, so none of these counts promotes an
+entry to proven on this build; they say the demo still works here.
+
+**No wall time from this set is a measurement.** Two sessions shared the console
+throughout, by instruction. The runs establish that the demos work, which
+concurrency does not affect, and establish nothing about how long they take.
+
+§5c met a `cfc_release_withheld` refusal on `run_pattern` — a sink-ceiling
+refusal on mail-derived values carrying a `prompt-injection-risk-unscreened`
+caveat. The pattern ran, the result stayed in the space, `resultRef` still named
+it, and the page works. That demo's prompt asks for exactly this, so the refusal
+is the advertised behaviour rather than a fault.
+
+## What the prompts' hints are actually for
+
+Each demo was then run a second time **with every hint stripped** — no slug
+sentence, no pattern ids, no unit sentence, and with "sortable" restored where a
+person would say it. The question was which hints cover a real gap.
+
+**Four hints cover nothing, because the harness already does the work.**
+
+| Hint                                         | What happens without it                                                                                      |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| the slug-retry sentence                      | a taken slug is retried unprompted — observed three times, including two collisions recovered inside one run |
+| "use a pattern from the library if one fits" | the same indexed pattern is found anyway                                                                     |
+| naming the three bills parts by id           | all three are found from ordinary prose                                                                      |
+| leaving "sortable" out                       | asking for a sortable table reaches a published sortable part that the hinted wording never looks for        |
+
+The slug sentence is the clearest: `assign_slug`'s own error says _"Choose
+another"_, and the run does.
+
+**One hint covers a real defect.** Told to compose a checklist and a running
+total with no ids, a run imports the **superseded** generation of both parts —
+the one predating the removal fix. The corrected generations carry
+`priorPatternId` pointing at their predecessors, so the index holds the
+successor link; discovery does not follow it, and the older entry outranks its
+own successor because it is classified `proven` while the correction is
+`unproven`. **Publishing a fix ranks it below the version it fixes.**
+
+So a prompt that names those two ids is not stylistic. Until discovery serves
+the newest generation of a chain, it is the only thing standing between a reader
+and the defect.
+
 ## Where the evidence is
 
 Run artifacts sit under the console's own artifact root. The proof runs behind
