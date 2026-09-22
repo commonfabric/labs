@@ -273,27 +273,38 @@ export interface ResetResult {
   manifest: CloneManifest;
 
   /**
-   * Space DIDs whose stores the reset removed from beside the working copy.
+   * DIDs of the other spaces whose stores the reset removed from beside the
+   * working copy.
    *
    * The engine directory holds the cloned space alone when a clone is taken, so
    * any other store in it was created by the attempt being discarded: a link
-   * into another space makes the server create an empty store for that space on
+   * into another space makes the server create a store for that space on
    * demand, and the pass then writes into it. Left in place, the next pass
    * starts from the last one's state there while `verify` — which reads only
    * the cloned space — reports the clone pristine.
    */
   removedStores: string[];
+
+  /**
+   * File names of the cell-derived databases the reset removed.
+   *
+   * The memory server keeps these beside a file store (`#cellDbPath` in
+   * `packages/memory/v2/server.ts`), for the cloned space as much as for any
+   * other. A snapshot is the space's store alone, so a clone starts with none,
+   * and any present at reset time were written by the attempt.
+   */
+  removedCellDatabases: string[];
 }
 
 /**
  * Restore the working copy from the pristine snapshot, and remove every other
- * store the attempt created beside it (see {@link ResetResult.removedStores}).
+ * database the attempt created beside it (see {@link ResetResult}).
  *
  * Deletes the `-wal`/`-shm` companions the engine creates on open. Leaving them
  * behind would let a checkpoint replay part of the discarded attempt over the
  * fresh copy — a reset that silently isn't one.
  *
- * REFUSES while a server still has any of those stores open, because unlinking
+ * REFUSES while a server still has any of those databases open, because unlinking
  * a file does not disturb a process that already holds it: the server keeps
  * reading and writing the unlinked inode while every new reader — including the
  * `verify` this function's caller runs next — sees the restored one. Pass two of
@@ -314,54 +325,62 @@ export interface ResetResult {
 export async function resetClone(dir: string): Promise<ResetResult> {
   const manifest = await readManifest(dir);
   const paths = clonePaths(await canonicalPath(dir), manifest.space);
-  const sideStores = await otherStores(paths.workingPath);
-  // Every store is probed before any is removed, so a refusal leaves the clone
-  // exactly as it was rather than half cleared.
-  for (const store of [paths.workingPath, ...sideStores]) {
-    await assertNotInUse(store);
-  }
-  // The companions are absent on a store no engine has opened yet — the normal
-  // case at the start of a rehearsal — so their absence is not an error, while
-  // any OTHER failure must surface rather than leave a half-reset clone.
-  for (const store of [paths.workingPath, ...sideStores]) {
+  const { stores, cellDatabases } = await attemptDatabases(paths.workingPath);
+  const databases = [paths.workingPath, ...stores, ...cellDatabases];
+  // Every database is probed before any is removed, so a refusal leaves the
+  // clone exactly as it was rather than half cleared.
+  for (const database of databases) await assertNotInUse(database);
+  // The companions are absent on a database no engine has opened yet — the
+  // normal case at the start of a rehearsal — so their absence is not an error,
+  // while any OTHER failure must surface rather than leave a half-reset clone.
+  for (const database of databases) {
     for (const suffix of ["", "-wal", "-shm"]) {
-      const path = `${store}${suffix}`;
+      const path = `${database}${suffix}`;
       if (await pathExists(path)) await Deno.remove(path);
     }
   }
   await Deno.copyFile(paths.pristinePath, paths.workingPath);
   return {
     manifest,
-    removedStores: sideStores.map((store) => Path.basename(store, ".sqlite")),
+    removedStores: stores.map((path) => Path.basename(path, ".sqlite")),
+    removedCellDatabases: cellDatabases.map((path) => Path.basename(path)),
   };
 }
 
 /**
- * The stores beside `workingPath` other than itself, sorted.
+ * The databases beside `workingPath` that a server created during an attempt,
+ * each kind sorted: other spaces' stores, and cell-derived databases.
  *
- * Only `.sqlite` files count: that is the one name the memory server gives a
- * space's store, so anything else in the directory was put there by someone
- * other than a server, and is left alone.
+ * Both are recognized by the names the memory server gives them — a space's
+ * store is `<did>.sqlite`, a cell-derived database `cell-<tag>.sqlite` — so
+ * anything else in the directory was put there by someone other than a server,
+ * and is left alone.
  */
-async function otherStores(workingPath: string): Promise<string[]> {
+async function attemptDatabases(
+  workingPath: string,
+): Promise<{ stores: string[]; cellDatabases: string[] }> {
   const dir = Path.dirname(workingPath);
   const own = Path.basename(workingPath);
   const stores: string[] = [];
+  const cellDatabases: string[] = [];
   try {
     for await (const entry of Deno.readDir(dir)) {
-      if (
-        entry.isFile && entry.name.endsWith(".sqlite") && entry.name !== own
-      ) {
+      if (!entry.isFile || entry.name === own) continue;
+      if (/^did:[^/]+\.sqlite$/.test(entry.name)) {
         stores.push(`${dir}/${entry.name}`);
+      } else if (/^cell-[^/]+\.sqlite$/.test(entry.name)) {
+        cellDatabases.push(`${dir}/${entry.name}`);
       }
     }
   } catch (error) {
     // A clone whose engine directory was deleted outright has nothing beside
     // the working copy; the restore below reports the missing directory itself.
-    if (error instanceof Deno.errors.NotFound) return [];
+    if (error instanceof Deno.errors.NotFound) {
+      return { stores: [], cellDatabases: [] };
+    }
     throw error;
   }
-  return stores.sort();
+  return { stores: stores.sort(), cellDatabases: cellDatabases.sort() };
 }
 
 /**

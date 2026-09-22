@@ -433,7 +433,7 @@ Deno.test("reset refuses while a server still holds the working copy", async () 
   });
 });
 
-Deno.test("reset removes the stores an attempt created for other spaces", async () => {
+Deno.test("reset removes the databases an attempt created beside the working copy", async () => {
   // A link into another space makes the server create an empty store for that
   // space on demand, beside the working copy, and the pass writes into it.
   // `verify` reads only the cloned space, so a reset that left these behind
@@ -448,12 +448,26 @@ Deno.test("reset removes the stores an attempt created for other spaces", async 
     db.exec("CREATE TABLE t (x)");
     db.close();
     await Deno.writeTextFile(`${engineDir}/${other}.sqlite-wal`, "");
-    // Not a name the server gives a store, so not the reset's to remove.
+    // A cell-derived database, which the server keeps beside a file store: the
+    // attempt's too, but not a space, so it is reported apart from the stores.
+    const cellDb = "cell-deadbeef-cafe.sqlite";
+    await Deno.writeTextFile(`${engineDir}/${cellDb}`, "");
+    // Neither name the server gives a database, so not the reset's to remove.
     await Deno.writeTextFile(`${engineDir}/operator-notes.txt`, "keep me");
+    await Deno.writeTextFile(`${engineDir}/scratch.sqlite`, "keep me too");
 
     const result = await resetClone(clone);
 
     assertEquals(result.removedStores, [other]);
+    assertEquals(result.removedCellDatabases, [cellDb]);
+    await assertRejects(
+      () => Deno.stat(`${engineDir}/${cellDb}`),
+      Deno.errors.NotFound,
+    );
+    assertEquals(
+      await Deno.readTextFile(`${engineDir}/scratch.sqlite`),
+      "keep me too",
+    );
     for (const suffix of ["", "-wal", "-shm"]) {
       await assertRejects(
         () => Deno.stat(`${engineDir}/${other}.sqlite${suffix}`),

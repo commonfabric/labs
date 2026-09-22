@@ -399,11 +399,12 @@ export const space = new Command()
     "Restore the working copy from the pristine snapshot, discarding the attempt.",
   )
   .action(async (options, dir) => {
-    const { manifest: before, removedStores } = await resetClone(dir);
+    const { manifest: before, removedStores, removedCellDatabases } =
+      await resetClone(dir);
     const after = await verifyClone(dir);
     out(
       !!options.json,
-      { manifest: before, removedStores, verify: after },
+      { manifest: before, removedStores, removedCellDatabases, verify: after },
       () => {
         console.log(
           `reset ${before.space} to its baseline (${before.createdAt})\n` +
@@ -414,7 +415,12 @@ export const space = new Command()
             (removedStores.length === 0
               ? ""
               : `\n  removed  ${removedStores.length} store(s) the attempt created for other spaces:\n` +
-                removedStores.map((space) => `           ${space}`).join("\n")),
+                removedStores.map((space) => `           ${space}`).join(
+                  "\n",
+                )) +
+            (removedCellDatabases.length === 0
+              ? ""
+              : `\n  removed  ${removedCellDatabases.length} cell database(s) the attempt created`),
         );
       },
     );

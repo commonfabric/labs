@@ -156,6 +156,31 @@ describe("cf space", () => {
     });
   });
 
+  it("names what a reset removed, apart from the space it restored", async () => {
+    // A pass that follows a link into another space leaves that space's store
+    // beside the working copy, and cell-derived databases sit there too. Both
+    // are the attempt's; `--json` keeps a store's DID and a cell database's file
+    // name in separate fields, so a script reading the DIDs reads only spaces.
+    await withFixture(async ({ snapshot, clone }) => {
+      expect(
+        (await cf(`space clone ${SPACE} --from ${snapshot} --to ${clone}`))
+          .code,
+      ).toBe(0);
+      const engineDir = workingCopy(clone).replace(/\/[^/]*$/, "");
+      const other = "did:key:z6MkCliOtherSpace";
+      new Database(`${engineDir}/${other}.sqlite`).close();
+      await Deno.writeTextFile(`${engineDir}/cell-abc123.sqlite`, "");
+
+      const reset = await cf(`space reset ${clone} --json`);
+      expect(reset.code).toBe(0);
+      const report = JSON.parse(reset.stdout.join("\n"));
+      expect(report.removedStores).toEqual([other]);
+      expect(report.removedCellDatabases).toEqual(["cell-abc123.sqlite"]);
+      expect(await exists(`${engineDir}/${other}.sqlite`)).toBe(false);
+      expect(await exists(`${engineDir}/cell-abc123.sqlite`)).toBe(false);
+    });
+  });
+
   it("passes verification when only generated cells were rewritten", async () => {
     // A clean pattern update rotates generated cells and adds commits. If that
     // failed verification, every legitimate migration would look like data loss.

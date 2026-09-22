@@ -1911,11 +1911,12 @@ use `cf exec <mounted-file> --help --json` or
 The supported output switches are:
 
 - `cf space ... --json` serializes the clone manifest, verify result, or
-  fingerprint; `cf space reset --json` also names the stores it removed.
-  `cf space verify` and `cf space reset` exit nonzero when the clone does not
-  match its baseline, so a rehearsal script can gate on them; the printed
-  report, not usage help, is the output in that case. The procedure these
-  commands serve is `docs/development/space-clone-rehearsal.md`.
+  fingerprint; `cf space reset --json` also names the other spaces' stores and
+  the cell-derived databases it removed, in separate fields. `cf space verify`
+  and `cf space reset` exit nonzero when the clone does not match its baseline,
+  so a rehearsal script can gate on them; the printed report, not usage help, is
+  the output in that case. The procedure these commands serve is
+  `docs/development/space-clone-rehearsal.md`.
 - `cf inspect ... --json` serializes an inspector result. `inspect html` does
   not have a JSON representation, so `html` and `--json` are mutually exclusive.
   `inspect graph --dot` and `--json` are also mutually exclusive.

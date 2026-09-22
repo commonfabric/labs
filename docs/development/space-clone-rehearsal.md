@@ -141,11 +141,19 @@ immediately afterwards — sees the restored one. Pass two would run against pas
 one's state while `cf space verify` reported the clone pristine, which is
 exactly what the two-pass procedure exists to rule out.
 
-A reset also removes every other store the pass created beside the working copy
-— the stores the server manufactures for spaces the clone links into (see
-[Things that will mislead you](#things-that-will-mislead-you)) — and names them.
-`verify` reads only the cloned space, so a store left behind there would carry
-pass one's writes into pass two without anything reporting it.
+A reset also removes every other database the pass created beside the working
+copy, and names them: the stores the server manufactures for spaces the clone
+links into (see [Things that will mislead you](#things-that-will-mislead-you)),
+and the cell-derived databases it keeps beside a store. `verify` reads only the
+cloned space, so anything left behind there would carry pass one's writes into
+pass two without anything reporting it.
+
+That includes a store you created on purpose. A participant profile made through
+the UI against the clone lives in that participant's home space, and the reset
+removes it with the rest. So a fixture like that is a step of every pass, not a
+one-time setup: create it after each reset and before the pass, the same way
+each time, or the two passes do not start from the same state and cannot be
+compared.
 
 `cf space reset` refuses while anything still holds the working copy or one of
 those stores, so forgetting is loud rather than silent. Treat that as a tripwire, not a
@@ -325,7 +333,9 @@ These are all failures that actually happened, not hypotheticals:
   this shape `--check` vouches for nothing. Nor can the CLI plant the missing
   link by hand — `cf cell set` of a link into a profile is refused with "source
   has no durable schema contract" — so a rehearsal that needs a participant
-  with a profile creates one through the UI against the clone.
+  with a profile creates one through the UI against the clone — after every
+  reset, since the reset removes it (see
+  [Stop the server before resetting](#stop-the-server-before-resetting)).
 - **A clone tests the store and the runtime, not the deployment.** CDN and shell
   versions, and concurrent human traffic, are all absent.
   [`staging-space-copy.md`](staging-space-copy.md) is what covers that gap, at
