@@ -127,32 +127,25 @@ curl -sS <your-toolshed>/api/meta
 ```
 
 **On the toolshed, not the console** — the console has no `/api/meta` and
-answers 404. `gitSha` should open `a77e958513`. Your console reports the same
-build as its store path in `/api/health/detail`.
+answers 404. Your console reports the same build as its store path in
+`/api/health/detail`.
 
-**This sha is what the proofs below were measured on, and it moves only when a
-build has been re-proven against it** — not when a newer one exists. Every proof
-here is a statement about a console, a corpus and a build together, and the
-build is the part that moves without anyone touching the demo.
+**Record the sha you ran on; do not hold your console to the one named here.**
+The demos are run on whatever the current `loom update` lands, and a build newer
+than `a77e958513` is the expected case rather than a problem.
 
-**If it matches, change nothing before demonstrating.**
+**What the sha buys is attribution, not permission.** A proof status is a claim
+about a console, a corpus and a build together, and the build is the part that
+moves without anyone touching the demo. So when a demo behaves unlike its entry
+here, the sha in the run notes is what separates two very different readings: a
+demo that never worked as described, and a demo whose build moved underneath it.
+Without it, neither can be told from the other afterwards, and the entry gets
+edited on a guess.
 
-**A demo runs only on the sha this document names.** A `loom update` that would
-move you off it is not preparation — it is a build change, and nobody runs one
-before a demo unless this document names the new sha. Loom's own pin moves ahead
-of the build these demos were proven against, so updating to be current is the
-careful-seeming action that lands you somewhere nothing here describes.
-
-Update deliberately, to the sha named above, and never speculatively before a
-session. The fastest way to turn a working demo into an unknown one is to update
-it and not re-run it.
-
-**If it does not match**, the proof statuses and timings below do not apply to
-you. The demos may well work — most are not sensitive to the difference — but
-either go back to the pinned bump, or treat every entry as unproven and run it
-once yourself before showing it to anybody. A proof status is a claim about a
-console, a corpus and a build together, and the build is the part that moves
-without anyone touching the demo.
+**The counts in this document were measured on `a77e958513`. A newer build is
+not claimed to be proven**, and nothing here should be read as saying it is.
+That is not a reason to avoid a newer build — it is the reason to write down
+which one you were on.
 
 Read these off the console's launch printout and `GET /api/health/detail`. Loom
 writes the printout to `packages/cf-harness/local-dev-console.log` under the

@@ -1,8 +1,8 @@
 # Running the cf-harness demos
 
-Four demos, in the order to run them. Each was run to a working page on the
-build named below — three times for demos 2, 3 and 4, twice for demo 1 — with
-the page checked in a browser every time.
+Four demos, in the order to run them. Each was run to a working page on labs
+`a77e958513` — three times for demos 2, 3 and 4, twice for demo 1 — with the
+page checked in a browser every time.
 
 Everything else — the counts, the findings behind them, the demos that are not
 on this page and why — is in [DEMOS-EVIDENCE.md](DEMOS-EVIDENCE.md). Read this
@@ -12,18 +12,10 @@ page to run them; read that one to understand them.
 
 1. **Start a fresh console.** Not one that has been running all day: a console a
    few hours old can exit on a heap out-of-memory, and nothing announces it.
-2. Pin this session to the proven build:
-   `loom vendor sync labs --ref a77e958513`, then
-   `loom restart loom --include-toolshed`.
-
-   **Do not run `loom update`.** It pulls loom's main and takes no ref, and
-   loom's main now pins a labs newer than the one these demos are proven on. It
-   is the one command here that will silently move you off it. The pin above
-   does not persist either — it leaves `vendors.json` alone — so a later
-   `loom update` undoes it and step 3 is what catches that.
-3. Confirm the build: `curl -sS <your-toolshed>/api/meta` should report `gitSha`
-   opening `a77e958513`. **On the toolshed, not the console** — the console has
-   no `/api/meta` and answers 404.
+2. `loom update`, then `loom restart loom --include-toolshed`.
+3. Note the build you landed on: `curl -sS <your-toolshed>/api/meta`, and put
+   the `gitSha` it reports in your run notes. **On the toolshed, not the
+   console** — the console has no `/api/meta` and answers 404.
 4. Run one search from the command pill — `pomodoro` will do — and let it
    finish. The first search of a session is slower than the rest.
 5. **Set the browser to a light color surface.** One proven page renders correct
@@ -31,8 +23,12 @@ page to run them; read that one to understand them.
 6. Check your grants. Demos 1 and 2 need none. Demo 3 needs a finance grant.
    Demo 4 needs a finance grant and an email grant.
 
-If the build does not match, these demos may still work, but nothing on this
-page is a claim about your console. Run each one yourself before showing it.
+**Why note the sha rather than match it.** These counts were measured on
+`a77e958513`, and `loom update` may land you on something newer. That is the
+intended way to run these, and the newer build is not claimed to be proven. So a
+demo that misbehaves on a build these were not measured on is a new observation
+rather than a contradiction of the count — and the sha in your run notes is the
+only thing that lets anyone tell those two apart afterwards.
 
 Every prompt below ends with a sentence authorizing a slug retry. Keep it: slugs
 are never reused, so without it the second run of a demo stops to ask.
