@@ -109,6 +109,33 @@ five in a day of runs. That is the loop working, not a fault. A run that revises
 its finished piece more than once is a different matter: it is not a clean demo,
 and it should be re-run rather than shown.
 
+**An ambiguous instruction is not queried. It is resolved silently, and
+differently from one run to the next.** This is the single most useful thing
+learned from running these demos repeatedly, and it applies to every prompt
+below.
+
+Two instances, from different prompts on the same evening:
+
+- _"settled, successful rows"_ is ambiguous between **the reader having
+  completed** and **the transaction's own status**. One run took the second
+  reading, invented a status vocabulary to express it, and filtered every row
+  away. The page rendered empty with no error anywhere.
+- _"a single short or numeric token is not a match"_ is ambiguous between **a
+  single token that is short or numeric** and **a single token, which is short
+  or numeric**. One run honoured the qualifiers and correctly paired a bill on
+  the one word `rent`. Another dropped them, required two overlapping words, and
+  left three correct pairs unmatched with the email and the payment carrying the
+  _same merchant name_, on screen at the same time.
+
+Same sentence, two readings, opposite failures — and **nothing on either page
+says which reading it took** without going to the source.
+
+The consequence for anyone adding a clause to one of these prompts: an ambiguity
+cannot be closed by adding another sentence, only by writing one that has a
+single reading. Adding clauses addresses the model's freedom where the prompt is
+_silent_; it does nothing about its freedom where the prompt is _ambiguous_, and
+the two look identical from a pass-fail count.
+
 **A word that names two things will be resolved to one of them, silently.** A
 request asking for "settled, successful rows" is ambiguous between _the reader
 having completed_ — `pending: false`, no error — and _the transaction's own
@@ -593,10 +620,28 @@ is paired that should not be.
 
 **Typical wall time:** ~12 minutes.
 
-**Proof status: 1 pass so far, of three runs.** `monthly-bills-match`
-(`d524ea4a`): Email headers 101 · Bank payments 7 · Matched bills 4 · Needs
-attention 1. All four pairings correct, matched on `insurance, group`,
-`internet`, `phone` and `rent` respectively.
+**Proof status: 1 pass, 1 fail, a third run in progress.**
+
+**Run 2 failed by reading the same sentence the other way.** It required _two_
+overlapping identifying words — its page says so outright, "at least two
+identifying words must overlap", and its source carries `shared.length >= 2`. It
+had dropped the qualifiers: "a single short or numeric token is not a match"
+became "a single token is not a match". Once the majority-shared `sim` is
+discounted, `Sim Internet` has exactly one identifying word left and cannot
+clear a two-word bar however good the match is.
+
+The result is three pairs missed where the email and the payment carry the
+**same merchant name**, both on the page at once: Insurance Group, Phone Co and
+Internet all sat unpaid beside their own unmatched payments. Only `Sim Rent LLC`
+paired, on three words.
+
+**That is precisely the overcorrection run 1 avoided**, from identical text —
+see the preflight note on ambiguity above. It is why the next set reworded the
+sentence rather than adding another one.
+
+**Run 1 — pass.** `monthly-bills-match` (`d524ea4a`): Email headers 101 · Bank
+payments 7 · Matched bills 4 · Needs attention 1. All four pairings correct,
+matched on `insurance, group`, `internet`, `phone` and `rent` respectively.
 
 **The floor did what it was added for.** §5a's failing run paired five, the
 fifth being recruitment spam matched to `SIM GROCERY MARKET #12` on the shared
