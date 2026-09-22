@@ -534,6 +534,22 @@ Deno.test("reset restores a working copy that was deleted outright", async () =>
   });
 });
 
+Deno.test("reset recreates an engine directory that was deleted outright", async () => {
+  // The same remedy as a deleted working copy, one level up: nothing is beside
+  // the working copy to clear, and the restore puts the directory back.
+  await withDirs(async ({ source, clone }) => {
+    await createClone({ source, space: SPACE, targetDir: clone, now: NOW });
+    const engineDir = Path.dirname(clonePaths(clone, SPACE).workingPath);
+    await Deno.remove(engineDir, { recursive: true });
+
+    const result = await resetClone(clone);
+
+    assertEquals(result.removedStores, []);
+    assertEquals(result.removedCellDatabases, []);
+    assert((await verifyClone(clone)).ok, "restored from pristine");
+  });
+});
+
 Deno.test("reset works when the working path cannot be opened at all", async () => {
   // The probe fails at open rather than at lock — a different branch from a
   // file that opens and turns out not to be a database, and the same verdict:
@@ -779,8 +795,8 @@ Deno.test("a corrupt baseline sidecar fails loudly rather than recomputing", asy
 });
 
 Deno.test("an IO error while clearing the working set is surfaced", async () => {
-  // reset probes for `-wal`/`-shm` companions; only "absent" is an ordinary
-  // answer. A component that is not a directory yields NotADirectory, which
+  // reset probes the working copy and its `-wal`/`-shm` companions; only
+  // "absent" is an ordinary answer. A component that is not a directory yields NotADirectory, which
   // must propagate rather than be read as "nothing there" — treating it as
   // absent would skip a file it failed to delete and call the clone pristine.
   await withDirs(async ({ source, clone }) => {

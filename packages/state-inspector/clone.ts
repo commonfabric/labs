@@ -326,11 +326,16 @@ export interface ResetResult {
 export async function resetClone(dir: string): Promise<ResetResult> {
   const manifest = await readManifest(dir);
   const paths = clonePaths(await canonicalPath(dir), manifest.space);
-  const { stores, cellDatabases } = await attemptDatabases(paths.workingPath);
-  const databases = [paths.workingPath, ...stores, ...cellDatabases];
   // Every database is probed before any is removed, so a refusal leaves the
-  // clone exactly as it was rather than half cleared.
-  for (const database of databases) await assertNotInUse(database);
+  // clone exactly as it was rather than half cleared. The working copy goes
+  // first: it is the store a forgotten server is most likely to hold, and the
+  // one a reset exists for.
+  await assertNotInUse(paths.workingPath);
+  const { stores, cellDatabases } = await attemptDatabases(paths.workingPath);
+  for (const database of [...stores, ...cellDatabases]) {
+    await assertNotInUse(database);
+  }
+  const databases = [paths.workingPath, ...stores, ...cellDatabases];
   // The companions are absent on a database no engine has opened yet — the
   // normal case at the start of a rehearsal — so their absence is not an error,
   // while any OTHER failure must surface rather than leave a half-reset clone.
@@ -340,6 +345,7 @@ export async function resetClone(dir: string): Promise<ResetResult> {
       if (await pathExists(path)) await Deno.remove(path);
     }
   }
+  await Deno.mkdir(Path.dirname(paths.workingPath), { recursive: true });
   await Deno.copyFile(paths.pristinePath, paths.workingPath);
   return {
     manifest,
@@ -366,24 +372,18 @@ async function attemptDatabases(
   const own = Path.basename(workingPath);
   const stores: string[] = [];
   const cellDatabases: string[] = [];
-  try {
-    for await (const entry of Deno.readDir(dir)) {
-      if (!entry.isFile || entry.name === own) continue;
-      if (!entry.name.endsWith(".sqlite")) continue;
-      const stem = entry.name.slice(0, -".sqlite".length);
-      if (isDID(stem)) {
-        stores.push(`${dir}/${entry.name}`);
-      } else if (stem.startsWith("cell-")) {
-        cellDatabases.push(`${dir}/${entry.name}`);
-      }
+  // A clone whose engine directory was deleted outright has nothing beside the
+  // working copy, and the restore recreates the directory.
+  if (!(await pathExists(dir))) return { stores, cellDatabases };
+  for await (const entry of Deno.readDir(dir)) {
+    if (!entry.isFile || entry.name === own) continue;
+    if (!entry.name.endsWith(".sqlite")) continue;
+    const stem = entry.name.slice(0, -".sqlite".length);
+    if (isDID(stem)) {
+      stores.push(`${dir}/${entry.name}`);
+    } else if (stem.startsWith("cell-")) {
+      cellDatabases.push(`${dir}/${entry.name}`);
     }
-  } catch (error) {
-    // A clone whose engine directory was deleted outright has nothing beside
-    // the working copy; the restore below reports the missing directory itself.
-    if (error instanceof Deno.errors.NotFound) {
-      return { stores: [], cellDatabases: [] };
-    }
-    throw error;
   }
   return { stores: stores.sort(), cellDatabases: cellDatabases.sort() };
 }
