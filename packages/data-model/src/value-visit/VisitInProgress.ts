@@ -451,14 +451,4 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
   ): FabricValuePlusTag | null {
     return tagOfFabricValueElseNull(value, this.#isPlusType);
   }
-
-  /**
-   * Throws an error indicating that a given value is not a member of the
-   * visitor's `ResultType`.
-   */
-  #throwNotResultType(value: unknown) {
-    throw new Error(
-      debugStr`Not a \`ResultType\` value: $quote${value}`,
-    );
-  }
 }
