@@ -194,9 +194,16 @@ the hydration or event-write path for the removal control specifically.
 Prompt text does not reach it: a run whose prompt says "I need to add and remove
 items and have the total update" produced the same behaviour.
 
-One defect there was prompt-sensitive: the first piece rendered `$12950.00` for
-entries stored as 12950 cents, and the amended run got the units right
-(`$18.50`, `$34.75`, `$16.25`).
+One defect there looked prompt-sensitive and was not. The first piece rendered
+`$12950.00` for entries stored as 12950 cents, and a later run got the units
+right (`$18.50`, `$34.75`, `$16.25`). The cause is that AmountLedger's amounts
+are in whole currency units while its header comment described the internal
+rounding step as though the input were cents — and that header is what the
+pattern index serves as the part's description, so it is what an agent reads
+when composing it. The run believed the header, stored cents, and had them
+rendered as dollars. The wording is corrected in the tree; the published index
+entry carries the old text until it is republished, so a run can still read the
+wrong contract.
 
 ## 3. This month's bank transactions as a sortable table
 
