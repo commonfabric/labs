@@ -4178,7 +4178,7 @@ const delegateThenFinishFetch = (
           arguments: JSON.stringify({
             outcome: "gave-up",
             message:
-              "No running counter was created, so there is no piece to open.",
+              "The counter was created, but it has no confirmed slug in this run.",
           }),
         },
       }],
@@ -4256,7 +4256,7 @@ Deno.test("CfHarnessPromptLoop delegates in a run configured with a pattern inde
                 arguments: JSON.stringify({
                   outcome: "gave-up",
                   message:
-                    "No running counter was created, so there is no piece to open.",
+                    "The counter was created, but it has no confirmed slug in this run.",
                 }),
               },
             }],

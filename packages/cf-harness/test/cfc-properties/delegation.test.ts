@@ -190,8 +190,7 @@ const runDelegationEpisode = async (
         assistantText("Child done."),
         assistantToolCall("call-finish", "finish_task", {
           outcome: "gave-up",
-          message:
-            "I could not inspect the data because the observation was refused.",
+          message: "This inspection did not produce a user-facing piece.",
         }),
       ]),
     });
