@@ -77,9 +77,9 @@ runs alongside the server binding its port. That leaves two ways to ask:
   waits only when the name is not registered yet — a `gateway:` name, the
   `default` alias, or a name that is no model at all, while discovery is still
   out. There is one such wait per process: once discovery finishes, every name
-  returns immediately. The `default` alias selects an available preferred model
-  or the first registered language model; it remains unavailable when no
-  language model was registered.
+  returns immediately. The `default` alias selects the first registered model
+  from `DEFAULT_MODEL_CANDIDATES`; it remains unavailable when none of those
+  candidates is registered, even when other language models are available.
 - `whenModelsReady()` waits for the whole list, which is what
   `GET /api/ai/llm/models` needs: a list quietly missing the gateway's models
   is a wrong answer rather than an early one.

@@ -92,15 +92,13 @@ export const PROVIDER_NAMES: Set<string> = new Set();
 export type TaskType = "coding" | "json" | "creative" | "vision";
 
 /**
- * Preferred defaults, in order. After provider discovery, the first registered
- * candidate wins; without a candidate, the first registered language model wins.
+ * Allowed defaults, in order. After provider discovery, the first registered
+ * candidate wins; the default remains unavailable when none is registered.
  */
 export const DEFAULT_MODEL_CANDIDATES = [
-  "gateway:claude-sonnet-4-6",
-  "anthropic:claude-sonnet-4-6",
-  "anthropic:claude-sonnet-4-5",
+  "gateway:claude-sonnet-5",
   "gateway:gpt-5.6-luna",
-  "gateway:gpt-5.4-mini",
+  "gateway:gemini-3.5-flash",
 ] as const;
 
 export const DEFAULT_MODEL_ALIAS = "default";
@@ -498,8 +496,7 @@ export async function resolveModel(
 }
 
 const registerDefaultModel = () => {
-  const chosenName = DEFAULT_MODEL_CANDIDATES.find((name) => MODELS[name]) ??
-    Object.keys(MODELS).find((name) => MODELS[name].name === name);
+  const chosenName = DEFAULT_MODEL_CANDIDATES.find((name) => MODELS[name]);
   if (!chosenName) {
     console.warn(
       `[models] No default model available (tried ${

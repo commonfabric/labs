@@ -24,25 +24,36 @@ describe("default-model", () => {
         expected: "gpt-5.6-luna",
       },
       {
-        description: "uses gateway GPT-5.4 mini without Sonnet or Luna",
-        models: ["gpt-5.4", "gpt-5.4-mini"],
-        expected: "gpt-5.4-mini",
+        description:
+          "refuses default when only older preferred models are registered",
+        models: ["claude-sonnet-4-6", "claude-sonnet-4-5", "gpt-5.4-mini"],
+        expected: null,
       },
       {
-        description: "uses gateway GPT-5.4 mini as the only language model",
+        description: "refuses default when only GPT-5.4 mini is available",
         models: ["gpt-5.4-mini"],
-        expected: "gpt-5.4-mini",
+        expected: null,
       },
       {
         description: "prefers gateway Sonnet over other registered models",
-        models: ["gpt-5.4-mini", "gpt-5.6-luna", "claude-sonnet-4-6"],
-        expected: "claude-sonnet-4-6",
+        models: ["gemini-3.5-flash", "gpt-5.6-luna", "claude-sonnet-5"],
+        expected: "claude-sonnet-5",
       },
       {
         description:
-          "uses the first registered language model without a preferred model",
+          "refuses default when only other language models are registered",
         models: ["gpt-5.4", "123", "gpt-5"],
-        expected: "gpt-5.4",
+        expected: null,
+      },
+      {
+        description: "prefers gateway GPT-5.6 Luna over Gemini Flash",
+        models: ["gemini-3.5-flash", "gpt-5.6-luna"],
+        expected: "gpt-5.6-luna",
+      },
+      {
+        description: "uses gateway Gemini Flash without Sonnet or Luna",
+        models: ["gpt-5.4-mini", "gemini-3.5-flash"],
+        expected: "gemini-3.5-flash",
       },
       {
         description: "refuses default when only image models are available",
