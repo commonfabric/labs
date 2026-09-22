@@ -212,6 +212,7 @@ function createPatternCallWithParams(
             checker,
             factory,
             sourceFile: context.sourceFile,
+            state: context.state,
           },
           typeRegistry,
         );

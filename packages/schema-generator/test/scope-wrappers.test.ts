@@ -185,13 +185,18 @@ interface SchemaRoot {
     `;
     const named = (name: string) => ts.factory.createTypeReferenceNode(name);
 
-    /** The schema for a resolved `PerUser<valueType>` printed as `innerNode`. */
+    /**
+     * The schema for a resolved `PerUser<valueType>` printed as `innerNode`, in
+     * a module holding `declarations`. With `resolveNames`, a name the node
+     * spells resolves in that module, as it does where the transformer emits it.
+     */
     async function printedSchema(
       valueType: string,
       innerNode: ts.TypeNode,
+      { declarations = PRELUDE, resolveNames = false } = {},
     ): Promise<unknown> {
       const { checker, sourceFile } = await createTestProgram(
-        `${PRELUDE} interface X { authored: PerUser<${valueType}>; }`,
+        `${declarations} interface X { authored: PerUser<${valueType}>; }`,
       );
       const symbol = checker.getSymbolsInScope(
         sourceFile,
@@ -212,6 +217,9 @@ interface SchemaRoot {
           ),
           [innerNode],
         ),
+        undefined,
+        undefined,
+        resolveNames ? sourceFile : undefined,
       );
     }
 
@@ -321,35 +329,14 @@ interface SchemaRoot {
         // `Box<number>` resolves by name, in the module it is emitted into, to
         // `Box<T>`, which binds no argument, so node analysis would read its
         // `value` as the bare type parameter.
-        const { checker, sourceFile } = await createTestProgram(
-          `${declaration} interface X { authored: PerUser<Box<number>[]>; }`,
-        );
-        const symbol = checker.getSymbolsInScope(
-          sourceFile,
-          ts.SymbolFlags.Interface,
-        ).find((candidate) => candidate.name === "X");
-        if (!symbol) throw new Error("Interface X not found");
-        const authored = checker.getDeclaredTypeOfSymbol(symbol)
-          .getProperty("authored");
-        if (!authored) throw new Error("Property X.authored not found");
-
-        const schema = new SchemaGenerator().generateSchema(
-          checker.getTypeOfSymbolAtLocation(authored, sourceFile),
-          checker,
-          ts.factory.createTypeReferenceNode(
-            ts.factory.createQualifiedName(
-              ts.factory.createIdentifier("__cfHelpers"),
-              ts.factory.createIdentifier("PerUser"),
-            ),
-            [ts.factory.createArrayTypeNode(
-              ts.factory.createTypeReferenceNode("Box", [
-                ts.factory.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword),
-              ]),
-            )],
+        const schema = await printedSchema(
+          "Box<number>[]",
+          ts.factory.createArrayTypeNode(
+            ts.factory.createTypeReferenceNode("Box", [
+              ts.factory.createKeywordTypeNode(ts.SyntaxKind.NumberKeyword),
+            ]),
           ),
-          undefined,
-          undefined,
-          sourceFile,
+          { declarations: declaration, resolveNames: true },
         );
 
         expect(schema).toEqual({

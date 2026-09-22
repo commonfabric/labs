@@ -109,7 +109,6 @@ export {
   widenLiteralType,
 } from "./type-inference.ts";
 export {
-  isPrintedFrom,
   qualifyCommonFabricTypeRefs,
   typeToTypeNodeWithRegistry,
 } from "./type-building.ts";

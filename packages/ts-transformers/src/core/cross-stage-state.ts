@@ -49,6 +49,14 @@ export interface NodeTypeLinks {
    * or a nested claim.
    */
   patternResultAnchor?: ts.Node;
+
+  /**
+   * For a type node `typeToTypeNodeWithRegistry()` printed from a type, that
+   * type. The node says what the type says and nothing more, so an `any` in it
+   * is one the type holds. The `unknown` put in place of a type the checker
+   * would not print records nothing.
+   */
+  printedFrom?: ts.Type;
 }
 
 /**
@@ -265,6 +273,23 @@ export class CrossStageState {
     // on the synthetic call SchemaInjection built, and that node reaches
     // SchemaGeneration as the same object.
     return this.nodeLinks.get(schemaCall)?.patternResultAnchor;
+  }
+
+  //
+  // printedFrom (nodeLinks-backed)
+  //
+
+  recordPrintedFrom(node: ts.TypeNode, type: ts.Type): void {
+    this.#linksFor(node).printedFrom = type;
+  }
+
+  /**
+   * Returns `true` for a node recorded as printed from `type`. Plain identity
+   * lookup with NO getOriginalNode fallback: a node derived from a printed one
+   * says whatever its deriving changed, and is no longer that print.
+   */
+  isPrintedFrom(node: ts.TypeNode, type: ts.Type): boolean {
+    return this.nodeLinks.get(node)?.printedFrom === type;
   }
 
   //

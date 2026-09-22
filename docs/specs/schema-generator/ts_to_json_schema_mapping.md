@@ -79,9 +79,10 @@ no child node is supplied to avoid mismatched type/node pairs.
 The consumer adds a second trigger of its own: `SchemaGeneratorTransformer`
 routes to `generateSchemaFromSyntheticTypeNode` when (a) the type arg is
 synthetic (`pos === -1 && end === -1`) and resolved to `any`, or (b) the
-real-position type arg *contains* an `unknown` keyword anywhere, or an `any`
-keyword in a node other than one the transformer printed from the resolved
-type (`isPrintedFrom`), "so the checker does not recover a wider semantic type"
+type arg, synthetic or not, *contains* an `unknown` keyword anywhere, or an
+`any` keyword in a node other than one the transformer printed from the
+resolved type (`CrossStageState.isPrintedFrom()` in ts-transformers), "so the
+checker does not recover a wider semantic type"
 (`ts-transformers/src/transformers/schema-generator.ts`). A printed node holds
 an `any` only where the type does, and the type path reads it. Both
 triggers are documented in the ts-transformers behavior spec §12.

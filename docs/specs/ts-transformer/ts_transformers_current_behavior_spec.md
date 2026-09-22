@@ -137,6 +137,13 @@ present; no stage handles a missing one.
      is a plain identity lookup with **no** `getOriginalNode` fallback: the
      marker sits on the synthetic call SchemaInjection built, and that node
      reaches SchemaGeneration as the same object.
+   - `printedFrom` — for a type node `typeToTypeNodeWithRegistry()` printed
+     from a type, that type. SchemaGeneration reads it to decide whether an
+     `any` in a type argument is one the resolved type holds (§12). It is a
+     plain identity lookup with **no** `getOriginalNode` fallback, since a node
+     derived from a printed one no longer says only what the type says, and the
+     `unknown` node put in place of a type the checker would not print records
+     nothing.
 3. **Marker family** — node/symbol-keyed `WeakSet`s whose membership checks fall
    back through `getOriginalNode`, and whose mutators are coupled to the
    context's reactive-analysis cache invalidation (invalidation is a
@@ -2211,15 +2218,15 @@ Behavior:
 Special path:
 
 - the generator uses its node-based path when the resolved type is `any` and
-  the type-argument node is synthetic (`pos=-1,end=-1`), or when a
-  real-position type argument contains an `unknown` keyword, or an `any`
-  keyword in a node other than one printed from the resolved type. The latter
-  avoids letting the checker recover a wider semantic type and erase the
-  authored unknown boundary. A node `typeToTypeNodeWithRegistry()` printed from
-  the resolved type (`isPrintedFrom` in `ast/type-building.ts`) holds an `any`
-  only where the type does, so the type path reads it, including the names it
-  spells that the emitting module imports
-  (`test/printed-type-node-schema.test.ts`).
+  the type-argument node is synthetic (`pos=-1,end=-1`), or when a type
+  argument, synthetic or not, contains an `unknown` keyword, or an `any`
+  keyword in a node other than one printed from the resolved type. The two
+  keyword cases keep the checker from recovering a wider semantic type, and
+  the `unknown` case keeps the authored unknown boundary. A node
+  `typeToTypeNodeWithRegistry()` printed from the resolved type
+  (`CrossStageState.isPrintedFrom()`) holds an `any` only where the type does,
+  so the type path reads it, including the names it spells that the emitting
+  module imports (`test/printed-type-node-schema.test.ts`).
 - synthetic union handling preserves `undefined` members (for example
   `string | undefined` retains an explicit `undefined` branch in generated
   schema).

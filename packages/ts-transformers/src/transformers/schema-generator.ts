@@ -9,7 +9,6 @@ import ts from "typescript";
 import {
   getNodeText,
   getTypeFromTypeNodeWithFallback,
-  isPrintedFrom,
   recoverAuthoredPosition,
   visitEachChildWithJsx,
 } from "../ast/mod.ts";
@@ -152,7 +151,7 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
             (type.flags & ts.TypeFlags.Any)) ||
             containsTypeNodeOfKind(typeArg, ts.SyntaxKind.UnknownKeyword) ||
             (containsTypeNodeOfKind(typeArg, ts.SyntaxKind.AnyKeyword) &&
-              !isPrintedFrom(typeArg, type)))
+              !context.state.isPrintedFrom(typeArg, type)))
         ) {
           // Synthetic TypeNode path - use new method that shares context properly
           schema = schemaGenerator.generateSchemaFromSyntheticTypeNode(

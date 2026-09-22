@@ -4,7 +4,7 @@ import {
   readAuthoredTypeNodeOnce,
   unwrapTypeParentheses,
 } from "@commonfabric/schema-generator/type-node";
-import type { TransformationContext } from "../core/mod.ts";
+import type { CrossStageState, TransformationContext } from "../core/mod.ts";
 import type { CaptureTreeNode } from "../utils/capture-tree.ts";
 import { createPropertyName } from "../utils/identifiers.ts";
 import { getCallArgumentPosition } from "./call-arguments.ts";
@@ -381,6 +381,8 @@ export interface TypeLiteralRegistrationContext {
 /**
  * Converts a Type to a TypeNode, optionally registering it in the type registry.
  * Provides a central place for type-to-typenode conversion with consistent flags.
+ * Given `context.state`, a node the checker printed is recorded there as
+ * printed from `type` (`CrossStageState.isPrintedFrom()`).
  */
 export function typeToTypeNodeWithRegistry(
   type: ts.Type,
@@ -388,6 +390,7 @@ export function typeToTypeNodeWithRegistry(
     checker: ts.TypeChecker;
     factory: ts.NodeFactory;
     sourceFile: ts.SourceFile;
+    state?: CrossStageState;
   },
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
   flags = DEFAULT_TYPE_NODE_FLAGS,
@@ -424,23 +427,10 @@ export function typeToTypeNodeWithRegistry(
     typeRegistry.set(node, type);
   }
   if (printed) {
-    PRINTED_FROM.set(node, type);
+    context.state?.recordPrintedFrom(node, type);
   }
 
   return node;
-}
-
-/** The nodes `typeToTypeNodeWithRegistry()` printed, with their types. */
-const PRINTED_FROM = new WeakMap<ts.TypeNode, ts.Type>();
-
-/**
- * Returns `true` for a node `typeToTypeNodeWithRegistry()` printed from
- * `type`. Such a node says what `type` says and nothing more: an `any` or
- * `unknown` in it is one that `type` holds. The `unknown` put in place of a
- * type the checker would not print is not one.
- */
-export function isPrintedFrom(node: ts.TypeNode, type: ts.Type): boolean {
-  return PRINTED_FROM.get(node) === type;
 }
 
 export function createRegisteredTypeLiteral(

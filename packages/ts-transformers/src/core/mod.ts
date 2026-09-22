@@ -15,8 +15,9 @@
  *      table (mirroring the TS compiler's internal NodeLinks: one struct of
  *      optional derived facts per node, lazily populated) holding the
  *      transformer-internal, non-cache-invalidating per-node channels:
- *      `capabilitySummary` and `schemaInjected`. Reached only through the
- *      record/lookup/mark/is methods on CrossStageState.
+ *      `capabilitySummary`, `schemaInjected`, `patternResultAnchor` and
+ *      `printedFrom`. Reached only through the record/lookup/mark/is methods
+ *      on CrossStageState.
  *   3. The marker family — node/symbol-keyed WeakSets whose context-level
  *      mutators are coupled to reactive-analysis cache invalidation
  *      (mapCallbackRegistry, syntheticComputeCallbackRegistry,
@@ -120,6 +121,17 @@
  *   Writers: context.markSchemaInjected() (SchemaInjection producer sites)
  *   Readers: context.isSchemaInjected() (SchemaInjection top-of-visit guard)
  *
+ * nodeLinks.printedFrom (NodeTypeLinks field)
+ *   Marks a type node the checker printed, with the type it was printed from.
+ *   Such a node says what that type says and nothing more, so an `any` in it
+ *   is one the type holds; the `unknown` put in place of a type the checker
+ *   would not print is not marked. Plain identity lookup, no getOriginalNode
+ *   fallback: a node derived from a printed one is no longer that print.
+ *   Writers: state.recordPrintedFrom() (typeToTypeNodeWithRegistry, given a
+ *            state)
+ *   Readers: state.isPrintedFrom() (SchemaGeneratorTransformer's choice of
+ *            the node-based path)
+ *
  * --- schema-generator boundary ---
  *
  * `typeRegistry` and `schemaHints` are the ONLY channels read by the separate
@@ -146,10 +158,11 @@
  * (createDataFlowAnalyzer's `analysisCache`) lives inside its closure and
  * would otherwise return stale pre-mutation verdicts after a registry write.
  *
- * schemaHints and the nodeLinks fields (capabilitySummary, schemaInjected) are
- * accessed through record/lookup/mark/is methods (recordSchemaHint/
- * lookupSchemaHint, recordCapabilitySummary/lookupCapabilitySummary,
- * markSchemaInjected/isSchemaInjected) but do not invalidate caches (no analysis
+ * schemaHints and the nodeLinks fields (capabilitySummary, schemaInjected,
+ * printedFrom) are accessed through record/lookup/mark/is methods
+ * (recordSchemaHint/lookupSchemaHint, recordCapabilitySummary/
+ * lookupCapabilitySummary, markSchemaInjected/isSchemaInjected,
+ * recordPrintedFrom/isPrintedFrom) but do not invalidate caches (no analysis
  * cache depends on them). typeRegistry is still mutated via direct .set() at call
  * sites; same caveat applies. If you add a cache that depends on any of these,
  * route the mutation through a method that invalidates it (or extend
