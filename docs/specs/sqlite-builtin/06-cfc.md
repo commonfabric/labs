@@ -34,7 +34,9 @@ subsumption restricted to singletons) — the clause-aware migration path is CFC
 spec §18.5. Async effects already declare a **write policy**
 before committing side effects via the sink-request mechanism
 ([`packages/runner/src/cfc/sink-request.ts`](../../../packages/runner/src/cfc/sink-request.ts)),
-which is the seam SQLite writes will use.
+which is the seam SQLite writes use — and, under the `sqliteQuery` sink, the
+seam a query's READ request stages through as well ("The query's control
+state" below, for what that gate governs and what it leaves to the builtin).
 
 ## Per-column labels (implemented)
 

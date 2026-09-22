@@ -107,6 +107,20 @@ const errMsg = (error: unknown): string =>
 export const SQLITE_QUERY_SINK = "sqliteQuery";
 
 /**
+ * What a query reads whose request carries confidentiality and whose database
+ * lies in another space. The rule and nothing more: which atoms did not fit
+ * names the principals that introduced them, and that detail faces the
+ * operator rather than the pattern.
+ */
+export const SQLITE_FOREIGN_SPACE_REFUSAL =
+  "sqlite: a query whose request carries confidentiality cannot read a " +
+  "database in another space";
+
+/** What a query reads whose request was staged and never sent. */
+export const SQLITE_UNSENT_REFUSAL =
+  "sqliteQuery request was refused before it started";
+
+/**
  * The read ceiling a query issued on `tx` reads under: the runtime's own
  * `cfcReadMaxConfidentiality` met with the ceiling the run's session
  * carries (`WaveRunContext.readCeiling` — the client's declared ceiling,
@@ -1143,6 +1157,58 @@ export function sqliteQuery(
     const storedBeforeClaim = result.withTx(tx).getRaw({
       meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
     }) as QueryState | undefined;
+    // The confidentiality THIS request carries: the transaction's flow join,
+    // which is what a write here would be measured against.
+    //
+    // Not `collectConsumedLabel`, which the sink ceilings read: that one is
+    // transaction-global and counts the reads the write machinery makes of
+    // its own destination (`docs/specs/cfc-write-destination-reads.md`
+    // scopes the exclusion to the flow join and says so). This node reads
+    // its own settled result to decide whether a writeback is stale, and
+    // that result carries the labels of the columns it projected — so the
+    // wider set answers "labeled" on every issue after the first, whatever
+    // the parameters are, which would refuse a query permanently over a
+    // label that is not in its request.
+    //
+    // Derived at most once per run, and only where an answer could differ
+    // from the empty one: a runtime deriving no flow labels has an empty
+    // join by construction, so asking would buy the same answer and pay a
+    // walk of every read for it.
+    let derivedRequestLabel: readonly CfcConfClause[] | undefined;
+    const requestConfidentiality = (): readonly CfcConfClause[] =>
+      derivedRequestLabel ??= tx.getCfcState().flowLabelsMode === "off"
+        ? []
+        : deriveFlowJoin(tx).confidentiality;
+    // The bound a sqlite read's egress has, applied where the sink registry
+    // cannot hold it (`cfc/sink-inventory.ts`). A query whose database lies
+    // in another space hands its statement and parameters to whoever holds
+    // THAT space's replicas, who are not the audience this result document's
+    // residency names; a same-space query reaches only the provider that
+    // already holds every byte of that document.
+    //
+    // Ahead of the memo decision, so a labeled request for a foreign
+    // database is refused whether or not an earlier unlabeled one left a
+    // result standing here. A hit sends nothing, so the rule could have been
+    // read as satisfied either way; answering a labeled request out of what
+    // an unlabeled one fetched is the reading that would have to be argued
+    // for, and nobody has argued for it.
+    //
+    // Not gated on the enforcement rung, because it is an egress bound
+    // rather than a writer fit: a sink ceiling refuses a request at every
+    // rung too. A deployment that labels nothing derives an empty join and
+    // never meets it.
+    if (crossSpace && requestConfidentiality().length > 0) {
+      // No request hash goes with it: recording this one's would make the
+      // next evaluation of the same inputs a memo hit, so a later pass whose
+      // reads carry nothing would never ask again. What the pattern reads is
+      // the rule and nothing more — which atoms did not fit names the
+      // principals that introduced them, and that detail faces the operator.
+      result.withTx(tx).set({
+        pending: false,
+        error: SQLITE_FOREIGN_SPACE_REFUSAL,
+      });
+      return;
+    }
     const decision = sqliteQueryMemoDecision({
       stored: storedBeforeClaim,
       hash,
@@ -1157,50 +1223,10 @@ export function sqliteQuery(
       return;
     }
     if (decision === "dedupe") return;
-    // The confidentiality THIS request carries: the transaction's flow join,
-    // which is what a write here would be measured against.
-    //
-    // Not `collectConsumedLabel`, which the sink ceilings read: that one is
-    // transaction-global and counts the reads the write machinery makes of
-    // its own destination (`docs/specs/cfc-write-destination-reads.md`
-    // scopes the exclusion to the flow join and says so). This node reads
-    // its own settled result to decide whether a writeback is stale, and
-    // that result carries the labels of the columns it projected — so the
-    // wider set answers "labeled" on every issue after the first, whatever
-    // the parameters are, which would refuse a query permanently over a
-    // label that is not in its request. Derived after the memo decision, so
-    // a hit pays nothing.
-    const requestConfidentiality = crossSpace || scope !== "session"
-      ? deriveFlowJoin(tx).confidentiality
-      : [];
-    // The bound a sqlite read's egress has, applied where the sink registry
-    // cannot hold it (`cfc/sink-inventory.ts`). A query whose database lies
-    // in another space hands its statement and parameters to whoever holds
-    // THAT space's replicas, who are not the audience this result document's
-    // residency names; a same-space query reaches only the provider that
-    // already holds every byte of that document. So the refusal is the pair
-    // — another space, and a request carrying confidentiality — and it runs
-    // before the claim is written and before the request is staged, which
-    // are the two things that would carry the parameters out.
-    //
-    // Not gated on the enforcement rung, because it is an egress bound
-    // rather than a writer fit: a sink ceiling refuses a request at every
-    // rung too. A deployment that labels nothing derives an empty join and
-    // never meets it.
-    if (crossSpace && requestConfidentiality.length > 0) {
-      // No request hash goes with it: recording this one's would make the
-      // next evaluation of the same inputs a memo hit, so a later pass whose
-      // reads carry nothing would never ask again. What the pattern reads is
-      // the rule and nothing more — which atoms did not fit names the
-      // principals that introduced them, and that detail faces the operator.
-      result.withTx(tx).set({
-        pending: false,
-        error:
-          "sqlite: a query whose request carries confidentiality cannot read " +
-          "a database in another space",
-      });
-      return;
-    }
+    // Forced here, where the request is going out: the flush settles on a
+    // transaction of its own, so a label read then would be read from a
+    // transaction that has already committed.
+    const requestLabel = scope === "session" ? [] : requestConfidentiality();
     // Diffing the pending publication likewise observes only its destination.
     // The query's inputs, read above, are what schedule another request.
     result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set({
@@ -1215,7 +1241,16 @@ export function sqliteQuery(
     // coming; a release check that refuses after the commit is the other way
     // a staged request never goes out. Either ending leaves a reader of the
     // claim waiting on a query nobody is running, so both settle it here.
-    const settleUnsent = () => {
+    //
+    // `claimed` says which ending this is, and the test below needs it: an
+    // abandoned transaction left the store as this request found it, while a
+    // release check refuses AFTER the claim committed, so the claim is what
+    // the store holds. Reading the second as somebody else's write leaves
+    // the cell pending for good.
+    const settleUnsent = (claimed: boolean) => {
+      const asStaged: QueryState | undefined = claimed
+        ? { pending: true, requestHash: hash }
+        : storedBeforeClaim;
       runtime.trackAsyncWork(
         settleAbandonedRequest(
           runtime,
@@ -1260,7 +1295,7 @@ export function sqliteQuery(
             // that such a walk cannot see, and every distinct instance of one
             // compares equal to every other.
             const writtenSinceStaged = !valueEqual(
-              storedBeforeClaim as FabricValue,
+              asStaged as FabricValue,
               stored as FabricValue,
             );
             if (running || writtenSinceStaged) {
@@ -1272,10 +1307,16 @@ export function sqliteQuery(
             // introduced it — which is what the pattern-facing surface
             // withholds. That detail reaches the operator through the
             // scheduler's report of the dropped write.
+            // No request hash, for the reason the foreign-space refusal
+            // records none: an ending that means the request never went out
+            // is not an answer to it, and a hash here would make the next
+            // evaluation of the same inputs a memo hit that never asks
+            // again. Nothing spins on it either — this node reads its own
+            // result as a write destination, so writing one schedules no
+            // re-run of the action that wrote it.
             result.withTx(settleTx).set({
               pending: false,
-              error: "sqliteQuery request was refused before it started",
-              requestHash: hash,
+              error: SQLITE_UNSENT_REFUSAL,
             });
           },
         ).finally(releaseStaging),
@@ -1556,7 +1597,7 @@ export function sqliteQuery(
               : joinCfcObservedConfidentiality([
                 staticConfidentialityOf(labelSchema),
                 ...rowLabels.labels.map((label) => label?.confidentiality),
-                requestConfidentiality,
+                requestLabel,
               ]);
             const rowWriteSchema = needsEntryRowSchema
               ? {
@@ -1697,8 +1738,8 @@ export function sqliteQuery(
       },
       {
         idempotencyKey: effectKey,
-        onRejected: settleUnsent,
-        onReleaseRejected: settleUnsent,
+        onRejected: () => settleUnsent(false),
+        onReleaseRejected: () => settleUnsent(true),
       },
     );
   };
