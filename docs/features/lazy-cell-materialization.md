@@ -283,6 +283,48 @@ reads skip the machinery outright on that check.
   reads for the same reason.
 - **An absent or `true` schema.** That is the schema-less query-result proxy's
   job, and `validateAndTransform` dispatches to it before a view is considered.
+  [Where a schema-less read takes over](#where-a-schema-less-read-takes-over)
+  below has what that costs and where the boundary falls.
+
+## Where a schema-less read takes over
+
+A schema that says nothing once resolved — absent, `true`, `{}`, or a `$ref`
+resolving to one of those — selects the schema-less query-result proxy in
+[`query-result-proxy.ts`](../../packages/runner/src/query-result-proxy.ts),
+which `validateAndTransform` dispatches to before a view is considered.
+
+That dispatch is not the root's alone. An eager read hands back a proxy for any
+subtree whose narrowed schema says nothing
+(`TransformObjectCreator.createObject` in
+[`schema.ts`](../../packages/runner/src/schema.ts)), and a view's children go
+back through the same front door, so they reach it the same way. One
+`cell.get()` is therefore schema-checked at the top and schema-less wherever
+the schema runs out below, and nothing in the value marks where that changes.
+
+What stops at that boundary is everything a schema decides. A proxy observes
+none, so it applies no `default`, mints no handle from an `asCell`, and cannot
+tell a reader that the data stopped matching — the divergences above have
+nothing to act on below it. One thing is decided by the value instead of by a
+schema and so survives: a stored stream marker still mints a stream-kind cell,
+which is what keeps `.send()` reaching a stream whose schema was lost.
+
+What the proxy keeps is the per-access machinery. Links resolve as the reader
+descends, `toCell` names the position the value was read from, and every access
+registers a read — a container's shape as a shape-only read, a value
+recursively.
+
+Pinning follows the transaction's mark rather than the path that reached the
+proxy. On a marked transaction it keeps that transaction and describes its
+instant, as a view does; unmarked it is the standing handle described under
+[A view is a read](#a-view-is-a-read). So a proxy reached from inside an eager
+read on an unmarked transaction stands, and one reached from inside a view is
+pinned.
+
+Two further differences are the proxy's own. It refuses to nest past 100 levels
+of child proxy, where the schema paths bound their descent with cycle trackers
+instead. And it is read-only in its own right: assignment, deletion, `freeze`
+and `defineProperty` each throw, and `snapshotQueryResult` is how a caller
+takes a value it owns.
 
 ## A view is a read
 

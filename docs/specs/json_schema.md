@@ -150,14 +150,26 @@ crossed schema that declares one, so a link's top-level `default` overrides
 earlier links' and the reader's own, and the reader's stands where no link
 declares one.
 
-The strict pseudo-intersection (`combineSchema`) remains in use for merging
-a compound schema's base keywords with its own `anyOf`/`oneOf` branches.
-There, properties and `required` fields from either side survive, shared
-properties combine recursively, and the three `additionalProperties` states
-above stay distinct: an absent `additionalProperties` does not prohibit a
-property declared only by the other side, an explicit
+The strict pseudo-intersection (`combineSchema`) remains in use where a
+compound schema's base keywords are merged with its own `anyOf`/`oneOf`
+branches to narrow it against a concrete value — `resolveSchemaForValue`, and
+the `asCell` candidates behind `asCellCompoundSchemaForValue`, both in
+`schema.ts`. There, properties and `required` fields from either side survive,
+shared properties combine recursively, and the three `additionalProperties`
+states above stay distinct: an absent `additionalProperties` does not prohibit
+a property declared only by the other side, an explicit
 `additionalProperties: false` rejects such one-sided properties, and `true`
 permits them.
+
+Traversal composes the same two parts differently. It merges the keywords
+beside a combinator into each branch shallowly, letting the branch's own
+keywords win, and that applies to `allOf` as much as to `anyOf` and `oneOf`.
+The difference shows where both sides name properties, since the branch's
+`properties` map replaces the sibling one rather than combining with it, and
+where a sibling `additionalProperties: false` rides into a branch that does
+not restate it. See
+[Logical schema operators](space-model/8-traversal.md#logical-schema-operators)
+for that composition and for how the surviving branches' results are merged.
 
 See [Link-schema precedence](link-schema-precedence.md) for the
 consolidated specification, and
@@ -181,7 +193,8 @@ those reads back unchanged. It does not follow `patternProperties` either: a
 property whose only description is a pattern is neither shaped by that pattern
 nor admitted by it through a closed object.
 [Traversal](space-model/8-traversal.md) is the specification, including how
-`anyOf`, `oneOf` and `allOf` branch results are merged, which is
+the keywords beside a combinator reach its branches and how the surviving
+branches' results are merged — a union of what each produced, which is
 runtime-specific rather than standard. Narrowing a schema across a path
 boundary can be more permissive than standard semantics, for the reason
 [Schema Narrowing](#schema-narrowing) gives below.

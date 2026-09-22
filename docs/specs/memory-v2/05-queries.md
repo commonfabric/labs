@@ -203,11 +203,14 @@ function traverseWithSchema(value, schema):
     return mergeAnyOfMatches(matches)
 
   if schema.allOf:
-    // All must match
+    // All must match, and their results merge the same way
+    matches = []
     for each option in schema.allOf:
-      if traverseWithSchema(value, merge(schema, option)) == undefined:
+      match = traverseWithSchema(value, merge(schema, option))
+      if match == undefined:
         return undefined  // mismatch
-    return last successful result
+      matches.push(match)
+    return mergeAnyOfMatches(matches)
 
   // Primitive types: validate and return
   if typeMatches(value, schema.type):
@@ -216,7 +219,10 @@ function traverseWithSchema(value, schema):
 ```
 
 This mirrors the `SchemaObjectTraverser.traverseWithSchema` method from
-`traverse.ts`.
+`traverse.ts`. `merge(schema, option)` there is shallow, and
+`mergeAnyOfMatches` unions the properties of the surviving branches; both are
+specified under
+[Logical schema operators](../space-model/8-traversal.md#logical-schema-operators).
 
 #### Reference Resolution
 
