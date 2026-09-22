@@ -346,7 +346,7 @@ const VERIFIED_IDENTITY_FRESHNESS_MS = 48 * 60 * 60 * 1000;
 /** Whether an assertion verified at `verifiedAt` is inside the freshness
  * window at `nowMs`. An unknown clock or an unreadable timestamp is not
  * fresh, so the profile shows nothing it cannot date. */
-const isFreshIdentity = (
+export const isFreshIdentity = (
   verifiedAt: string | undefined,
   nowMs: number | undefined,
 ): boolean => {
@@ -358,14 +358,14 @@ const isFreshIdentity = (
     nowMs - verifiedMs <= VERIFIED_IDENTITY_FRESHNESS_MS;
 };
 
-const isShownIdentity = (
+export const isShownIdentity = (
   identity: Partial<ExternalIdentityAssertion> | undefined,
   nowMs: number | undefined,
 ): boolean =>
   isDisplayedIdentityType(identity?.type ?? "") &&
   isFreshIdentity(identity?.verifiedAt, nowMs);
 
-const identityProfileUrl = (type: string, value: string): string => {
+export const identityProfileUrl = (type: string, value: string): string => {
   const prefix = DISPLAYED_IDENTITY_TYPES[type]?.profileUrlPrefix;
   return prefix === undefined ? "" : prefix + encodeURIComponent(value);
 };
@@ -377,9 +377,9 @@ const identityProfileUrl = (type: string, value: string): string => {
 // takes the plain assertion type. Requiring the integrity atom here would put
 // a write floor on the row's input that the `map` writing each list item into
 // it cannot meet; the badge reports the atom instead.
-const VerifiedIdentityRow = pattern<
+export const VerifiedIdentityRow = pattern<
   { assertion: ExternalIdentityAssertion; nowMs: number | undefined },
-  { [UI]: VNode }
+  { [UI]: VNode; profileUrl: string }
 >(
   ({ assertion, nowMs }) => {
     const displayed = computed(() => isShownIdentity(assertion, nowMs));
@@ -388,6 +388,7 @@ const VerifiedIdentityRow = pattern<
       identityProfileUrl(assertion.type, assertion.value)
     );
     return {
+      profileUrl,
       [UI]: (
         <cf-fragment>
           {ifElse(
