@@ -234,6 +234,32 @@ const newId = () =>
 For reactive time in a computed, read the live clock with the `#now` wish rather
 than calling `Date.now()`.
 
+## 8. `Writable<PerUser<T>>` and `PerUser<Writable<T>>` scope different things
+
+**Symptom:** None at runtime; the choice decides what happens to a plain value
+written into the slot.
+
+`Writable<PerUser<T>>` puts the scope on the value (`scope: "user"` beside
+`asCell: ["cell"]`). `PerUser<Writable<T>>` puts it on the handle
+(`asCell: [{ kind: "cell", scope: "user" }]`). Both cap which link a read may
+follow, and both read a cell the caller passes in: the binding reads the
+argument slot at its base scope, where the passed link is stored. The value
+spelling also narrows a plain value written into the slot, so each user gets
+their own copy behind a base-slot redirect.
+
+```typescript
+// Shown for illustration only.
+// A handle to a record the caller owns: scope the handle.
+type RunRecord = PerUser<Writable<AgentRun>>;
+
+// A per-user value the pattern keeps for itself: scope the value.
+type Draft = Writable<PerUser<string>>;
+```
+
+When the slot exists to receive a reference to an existing cell, scope the
+handle. `packages/runner/test/pattern-scope.test.ts` pins both reads ("child
+reads a … cell passed into a value-scoped argument slot").
+
 ## See Also
 
 - `docs/specs/scoped-cell-instances.md` — the underlying scope model

@@ -601,7 +601,8 @@ describe("pattern-binding", () => {
       expect({ ...parsed, schema: resolvedSchema(parsed.schema) }).toEqual({
         ...argumentCell.getAsNormalizedFullLink(),
         path: ["profile"],
-        scope: "user",
+        // The link keeps the argument cell's scope; the declared scope stays
+        // in the schema, realized when the link is read or written.
         schema: profileSchema,
         overwrite: "redirect",
         // parseLink of a sigil stamps the read-side data-derived mark (OW51).

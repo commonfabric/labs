@@ -10,7 +10,7 @@ import {
 import { deepFrozenCloneAndInternSchema } from "@commonfabric/data-model-schema";
 import { getServerExecutionConfig } from "@commonfabric/memory/v2";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
-import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { isAliasBinding } from "./alias-binding.ts";
 import { noteDerivedCopy } from "./builder/pattern-metadata.ts";
@@ -26,10 +26,7 @@ import {
   type JSONValue,
 } from "./builder/types.ts";
 import { type AnyCell, internCellLinkSchema } from "./cell.ts";
-import {
-  ContextualFlowControl,
-  resolveExternalRootRefForStructure,
-} from "./cfc.ts";
+import { ContextualFlowControl } from "./cfc.ts";
 import { diffAndUpdate } from "./data-updating.ts";
 import { readMaybeLink, resolveLink } from "./link-resolution.ts";
 import { toMemorySpaceAddress } from "./link-types.ts";
@@ -145,39 +142,27 @@ const foldDeclaredScopeIntoLinkSchema = (
   };
 };
 
-const scopedLinkForPath = (
+/**
+ * Returns `link` navigated to `path`, carrying the slot's schema. The link
+ * keeps its own scope: a scope the slot's schema declares is realized when
+ * the link is read (as a follow cap) or written (content narrows into the
+ * scoped instance behind a base-slot redirect). The base slot is where a
+ * passed-in reference is stored and where that redirect lives, so a binding
+ * that addressed the scoped instance directly would miss a passed reference.
+ */
+const linkForPath = (
   link: NormalizedFullLink,
   path: readonly string[],
   schemaOverride?: JSONSchema,
 ): NormalizedFullLink => {
-  let scope = link.scope;
-  let schema = link.schema;
-  let childSchema: JSONSchema | undefined;
-
-  // The link keeps whatever schema form it carries; only the scope READS
-  // resolve a reference-form schema — a structural use, like the cap
-  // readers in cfc.ts.
-  const declaredScope = (candidate: JSONSchema | undefined) => {
-    if (!isObjectNotArray(candidate)) return undefined;
-    const structural = resolveExternalRootRefForStructure(candidate);
-    return isCellScope(structural.scope) ? structural.scope : undefined;
-  };
-
-  for (const key of path) {
-    childSchema = ContextualFlowControl.getSchemaAtPath(schema, [key]);
-    scope = declaredScope(childSchema) ?? scope;
-    schema = childSchema;
-  }
-
-  const finalSchema = schemaOverride ?? childSchema;
-  const linkSchema = finalSchema;
-  scope = declaredScope(linkSchema) ?? scope;
-
+  const schema = schemaOverride ??
+    (path.length > 0
+      ? ContextualFlowControl.getSchemaAtPath(link.schema, [...path])
+      : undefined);
   return {
     ...link,
     path: [...path],
-    scope,
-    ...(linkSchema !== undefined && { schema: linkSchema }),
+    ...(schema !== undefined && { schema }),
   };
 };
 
@@ -280,7 +265,7 @@ function sendValueToBindingInner<T>(
           options.derivedInternalCells,
         )!;
         binding = createSigilLinkFromParsedLink(
-          scopedLinkForPath(
+          linkForPath(
             getDerivedInternalCellLink(cell as any, descriptor),
             alias.path,
             alias.schema,
@@ -303,7 +288,7 @@ function sendValueToBindingInner<T>(
         }
         const path = alias.path;
         binding = createSigilLinkFromParsedLink(
-          scopedLinkForPath(link, path, alias.schema),
+          linkForPath(link, path, alias.schema),
           { includeSchema: true, overwrite: "redirect" },
         );
       }
@@ -673,7 +658,7 @@ export function unwrapOneLevelAndBindToDoc<T extends FabricExecValue>(
           ? ContextualFlowControl.schemaAtPath(link.schema, path)
           : undefined;
         return createSigilLinkFromParsedLink(
-          scopedLinkForPath(link, path, targetSchema ?? sourceSchema),
+          linkForPath(link, path, targetSchema ?? sourceSchema),
           { includeSchema: true, overwrite: "redirect" },
         );
       } else {
@@ -700,7 +685,7 @@ export function unwrapOneLevelAndBindToDoc<T extends FabricExecValue>(
           : undefined;
         return createSigilLinkFromParsedLink(
           foldDeclaredScopeIntoLinkSchema(
-            scopedLinkForPath(link, path, targetSchema ?? sourceSchema),
+            linkForPath(link, path, targetSchema ?? sourceSchema),
             authoredRootSchema,
             path,
           ),

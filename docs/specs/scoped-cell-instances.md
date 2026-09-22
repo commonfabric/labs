@@ -362,6 +362,23 @@ including a reference to the same input field at a narrower scope. The reads
 that authorize initialization remain commit dependencies, so a concurrent
 explicit write cannot be overwritten silently.
 
+A pattern binding addresses an argument slot at the argument cell's own scope,
+whether the slot's scope is declared on the value (`Writable<PerUser<T>>`
+emits `scope: "user"` beside `asCell: ["cell"]`) or on the cell wrapper
+(`PerUser<Writable<T>>` emits `asCell: [{ kind: "cell", scope: "user" }]`).
+The declared scope travels in the binding's schema and is realized when the
+binding is read or written, as for any other schema-scoped slot. The base slot
+is the one place that holds both kinds of content: a reference the caller
+passed in is stored there unchanged, and a plain value is narrowed into the
+scoped instance with a redirect left in the base slot. A binding that addressed
+the scoped instance directly would find a passed reference missing.
+
+The two spellings differ in what they constrain. A scope on the cell wrapper
+caps which link the handle may follow. A scope on the value does that too, and
+additionally narrows a plain value written into the slot into the scoped
+instance. When the slot receives a reference to an existing cell, such as a
+record handle, the cell-wrapper spelling states the intent directly.
+
 With server execution enabled, an automatically created space-to-user link for
 `PerSession` storage carries `scopeInitialization: "session"` in its link
 payload. This declaration permits argument setup to fill a missing user-to-session
