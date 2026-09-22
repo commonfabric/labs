@@ -9,7 +9,7 @@
  */
 
 import { constructorOfObject } from "@commonfabric/utils/objects";
-import { isPlainObject, typeOfIncludingNull } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/utils/types";
 
 import {
   BaseFabricPrimitive,
