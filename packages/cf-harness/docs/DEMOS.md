@@ -208,8 +208,16 @@ will not guess.
 **Likely failure:** a digest of zeros, which is a failed run rather than an
 empty month.
 
-**Proof status: NEEDS a finance grant and skill scripts enabled.** Not yet run
-to three clean runs on the pinned build.
+**Proof status: NOT PROVEN (0/2 within an eight-minute cap), and NEEDS a finance
+grant with skill scripts enabled.** Both runs acquired the skill and ran its
+script, and both authored a wrapper importing the indexed bank reader, but
+neither assigned a slug before the cap: 480.7 s and 481.5 s wall, 88.6 s and
+63.5 s in the opening pass. The first hit a compile error; the second submitted
+six times — two compile errors, then four accepted results carrying pending
+concerns and a withheld value. Acquisition and sandboxed execution work; the
+demo reaching a named piece does not yet. Both ran with five sessions in flight
+on one console, so the cap may be a property of that load; a solo run is
+untested.
 
 ## 6. Revise a piece in place
 
@@ -221,6 +229,14 @@ there.
 **Proof status: NEEDS CT-2344.**
 
 ---
+
+## Where the evidence is
+
+Run artifacts sit under the console's own artifact root. The proof runs behind
+the counts above are recorded at
+`/Users/ben/.bb/thread-storage/thr_udpzyv6iqn/demo-proof-2026-09-22/` on the
+machine they ran on: per-run request, events, result, and measurement files,
+with the ordered tool sequence and source paths for each.
 
 ## What these numbers are
 
