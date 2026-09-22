@@ -402,6 +402,13 @@ therefore retains its value type and cell capability when captured by `computed`
 or `assert`, even when the wrapper has a method with the same name. Inline
 object values in optional cell handles and optional stored values retain their
 requested fields and read-only capability while preserving nullish alternatives.
+Those alternatives join the cell's value, so where the value is a scope wrapper
+they go inside it: an optional `Writable<PerUser<T>>` read as `cell?.get()` is
+captured as `ReadonlyCell<PerUser<T | undefined>>`, and a scope wrapper reached
+through an alias is printed as the wrapper around its payload. A scope wrapper
+may not be a union member, since the write path reads a slot's scope only from
+the top level of its schema (`type-shrinking.ts`,
+`moveNullishIntoScopeWrapper()`; `captured-cell-field-names.test.ts`).
 A `.get()` whose result is not resolved to a specific member path retains the
 receiver's complete stored shape, including when the result passes through a
 helper. Optional member reads retain the receiver without imposing a full-shape
