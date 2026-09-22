@@ -68,6 +68,7 @@ import {
   recordStart,
   sessionDotColor,
   type SessionIndexView,
+  type SessionPairing,
   type SessionRow,
   sessionRowsOf,
   type SessionStart,
@@ -330,13 +331,24 @@ const detachFromRow = handler<void, {
   nativeSessionId: string;
   /** The id the start that made the session named, or "". */
   startedAs: string;
-}>((_, { attached, starts, sourceId, nativeSessionId, startedAs }) => {
-  // A confirmed start is attached through its own record; detaching drops
-  // whichever record the session has, under the session's own id or the
-  // id its desktop start named.
-  dropAttachment(attached, sourceId, nativeSessionId);
-  dropStart(starts, sourceId, nativeSessionId, startedAs);
-});
+  /** The pairings the complete index carries: a row the index has dropped
+   * shows from its record, naming no start, and the start's id comes from
+   * here instead. */
+  pairings: SessionPairing[];
+}>(
+  (_, { attached, starts, sourceId, nativeSessionId, startedAs, pairings }) => {
+    // A confirmed start is attached through its own record; detaching drops
+    // whichever record the session has, under the session's own id or the
+    // id its desktop start named.
+    dropAttachment(attached, sourceId, nativeSessionId);
+    dropStart(
+      starts,
+      sourceId,
+      nativeSessionId,
+      startedAs || startedAsOf(pairings, sourceId, nativeSessionId),
+    );
+  },
+);
 
 const useDefaultPrompt = handler<void, {
   spawnPrompt: Writable<string>;
@@ -752,6 +764,7 @@ export default pattern<WorkbenchInput, WorkbenchOutput>(
                                     sourceId: row.sourceId,
                                     nativeSessionId: row.nativeSessionId,
                                     startedAs: row.startedAs,
+                                    pairings,
                                   })}
                                 >
                                   Detach

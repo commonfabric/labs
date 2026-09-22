@@ -4,6 +4,7 @@ import {
   ClaudeAgentSdkDriver,
   type ClaudeSdkAdapter,
   desktopAppInstalled,
+  directoryExists,
   openWithCommand,
 } from "../../src/drivers/claude-agent-sdk.ts";
 
@@ -1369,6 +1370,7 @@ Deno.test("Claude driver starts a session on the desktop: opens the app's link w
       opened.push(url);
       return Promise.resolve(true);
     },
+    isDirectory: () => Promise.resolve(true),
     os: "darwin",
     now: () => now,
   };
@@ -1390,12 +1392,39 @@ Deno.test("Claude driver starts a session on the desktop: opens the app's link w
     "begins: a topic filed on the local board so the topic workbench has " +
     "something to read, with links to the two pull requests it tracks " +
     "and the rig\n\nLinks:\n- labs #7383\n- labs #7384";
+  // A session listed before the start is sent is never the one the app
+  // makes for it, however well it fits; nor is one in another directory.
+  const before = "00000000-0000-4000-8000-000000000000";
+  const elsewhere = "00000000-0000-4000-8000-000000000001";
+  const listedPrompt = text.replace(/\n/g, " ").slice(0, 200).trim() + "…";
+  listed.push(
+    {
+      sessionId: before,
+      summary: listedPrompt,
+      firstPrompt: listedPrompt,
+      cwd: "/work/labs",
+      lastModified: now,
+      createdAt: now,
+    },
+    {
+      sessionId: elsewhere,
+      summary: listedPrompt,
+      firstPrompt: listedPrompt,
+      cwd: "/work/other",
+      lastModified: now,
+      createdAt: now,
+    },
+  );
+  assertEquals((await driver.listSessions()).sessions.length, 2);
+  let readiness = 0;
   const outcome = await driver.startSession(NEW_SESSION_ID, {
     text,
     title: "topic #7: the workbench",
     surface: "desktop",
-  });
+  }, { onCancellationReady: () => readiness++ });
   assertEquals(outcome.status, "succeeded");
+  // Nothing runs here for a desktop start, so no readiness is signalled.
+  assertEquals(readiness, 0);
   // No session exists yet, so there is nothing for the worker to refresh.
   assertEquals(outcome.affectedSession, null);
   assertEquals(outcome.result, {
@@ -1413,8 +1442,39 @@ Deno.test("Claude driver starts a session on the desktop: opens the app's link w
   assertEquals(link.searchParams.get("folder"), "/work/labs");
   assertEquals(link.searchParams.get("q"), text);
 
-  // Until the person sends the prompt, nothing pairs.
-  assertEquals((await driver.listSessions()).sessions, []);
+  // Until the person sends the prompt, nothing pairs: the sessions listed
+  // before the start stay unpaired.
+  assertEquals(
+    (await driver.listSessions()).sessions.map((s) => s.startedAs),
+    [undefined, undefined],
+  );
+
+  // Nor does a session first listed after the start that is in another
+  // directory, or one created well before the start was sent.
+  const otherDir = "00000000-0000-4000-8000-000000000002";
+  const tooEarly = "00000000-0000-4000-8000-000000000003";
+  listed.push(
+    {
+      sessionId: otherDir,
+      summary: listedPrompt,
+      firstPrompt: listedPrompt,
+      cwd: "/work/other",
+      lastModified: now,
+      createdAt: now,
+    },
+    {
+      sessionId: tooEarly,
+      summary: listedPrompt,
+      firstPrompt: listedPrompt,
+      cwd: "/work/labs",
+      lastModified: now,
+      createdAt: now - 60_000,
+    },
+  );
+  assertEquals(
+    (await driver.listSessions()).sessions.map((s) => s.startedAs),
+    [undefined, undefined, undefined, undefined],
+  );
 
   // The app makes the session: the start's directory, after the start,
   // opening with the start's text. The SDK lists the first prompt with its
@@ -1425,7 +1485,6 @@ Deno.test("Claude driver starts a session on the desktop: opens the app's link w
   const made = "11111111-1111-4111-8111-111111111111";
   const other = "22222222-2222-4222-8222-222222222222";
   assertEquals(text.replace(/\n/g, " ")[199], " ");
-  const listedPrompt = text.replace(/\n/g, " ").slice(0, 200).trim() + "…";
   assertEquals(listedPrompt.length, 200);
   listed.push(
     {
@@ -1455,7 +1514,8 @@ Deno.test("Claude driver starts a session on the desktop: opens the app's link w
 
   // The pairing holds on later listings and reads; a title the person gives
   // the session wins over the start's.
-  listed[0] = { ...listed[0], customTitle: "my own title" };
+  const madeAt = listed.findIndex((s) => s.sessionId === made);
+  listed[madeAt] = { ...listed[madeAt], customTitle: "my own title" };
   const again = (await driver.listSessions()).sessions.find((s) =>
     s.nativeSessionId === made
   );
@@ -1501,6 +1561,37 @@ Deno.test("Claude driver starts a session on the desktop: opens the app's link w
   );
   assertEquals(afterResend?.startedAs, latest);
 
+  // Two pending starts whose texts share the prefix the SDK lists but differ
+  // after it: a session opening with that prefix could be either, so it
+  // stays unpaired rather than go to the wrong one.
+  now += 60_000;
+  const alpha = "77777777-7777-4777-8777-777777777777";
+  const beta = "88888888-8888-4888-8888-888888888888";
+  const sameHead = text.replace(/\n/g, " ").slice(0, 200);
+  for (const [id, tail] of [[alpha, " alpha"], [beta, " beta"]]) {
+    assertEquals(
+      (await driver.startSession(id, {
+        text: sameHead + tail,
+        surface: "desktop",
+      })).status,
+      "succeeded",
+    );
+    now += 1_000;
+  }
+  const ambiguous = "99999999-9999-4999-8999-999999999999";
+  listed.push({
+    sessionId: ambiguous,
+    summary: listedPrompt,
+    firstPrompt: listedPrompt,
+    cwd: "/work/labs",
+    lastModified: now,
+    createdAt: now,
+  });
+  const unpaired = (await driver.listSessions()).sessions.find((s) =>
+    s.nativeSessionId === ambiguous
+  );
+  assertEquals(unpaired?.startedAs, undefined);
+
   // A start the person never sends is forgotten after a day: a matching
   // session made later is not paired with it.
   const stale = "3f1a3c0e-9d2b-4c7a-8e5f-0123456789ab";
@@ -1524,10 +1615,11 @@ Deno.test("Claude driver starts a session on the desktop: opens the app's link w
   assertEquals(late?.startedAs, undefined);
 });
 
-Deno.test("Claude driver refuses a desktop start it cannot make: off macOS, with a mode, a prompt the app would cut, an app that is not installed, a link the app did not open, or a surface it does not offer", async () => {
+Deno.test("Claude driver refuses a desktop start it cannot make: off macOS, with a mode, a prompt the app would cut, a folder that is not a directory, an app that is not installed, a link the app did not open, or a surface it does not offer", async () => {
   const ok = {
     installed: () => Promise.resolve(true),
     openUrl: () => Promise.resolve(true),
+    isDirectory: () => Promise.resolve(true),
     os: "darwin",
     now: () => 0,
   };
@@ -1568,6 +1660,12 @@ Deno.test("Claude driver refuses a desktop start it cannot make: off macOS, with
     "claude-desktop-prompt-too-long",
   );
   assertEquals(
+    (await make({ ...ok, isDirectory: () => Promise.resolve(false) })
+      .startSession(NEW_SESSION_ID, { text: "Hi", surface: "desktop" })).error
+      ?.code,
+    "claude-desktop-cwd-not-directory",
+  );
+  assertEquals(
     (await make({ ...ok, installed: () => Promise.resolve(false) })
       .startSession(NEW_SESSION_ID, { text: "Hi", surface: "desktop" })).error
       ?.code,
@@ -1588,9 +1686,12 @@ Deno.test("Claude driver refuses a desktop start it cannot make: off macOS, with
   );
 });
 
-Deno.test("the desktop helpers answer false for an app that is not there and an opener that is missing or refuses, without opening anything", async () => {
+Deno.test("the desktop helpers answer false for an app that is not there, a folder that is not a directory, and an opener that is missing or refuses, without opening anything", async () => {
   assertEquals(await desktopAppInstalled("/nonexistent/Claude.app"), false);
   assertEquals(await desktopAppInstalled(Deno.cwd()), true);
+  assertEquals(await directoryExists(Deno.cwd()), true);
+  assertEquals(await directoryExists("/nonexistent/folder"), false);
+  assertEquals(await directoryExists(import.meta.filename ?? ""), false);
   assertEquals(
     await openWithCommand("/nonexistent/opener", "claude://code/new"),
     false,

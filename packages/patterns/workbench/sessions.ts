@@ -77,6 +77,11 @@ export interface StartableSourcesView {
  * confirmed by its row, so only the `all` bucket keeps a started session
  * attached. Read through a lift, apart from the argument contract, for the
  * reason `StartableSourcesView` gives. */
+export interface IndexBucketView {
+  ownerDid?: string;
+  bucket?: string;
+}
+
 /** A session entry with the desktop start that made it, as the lifts that
  * confirm starts read the index. The argument contract's `SessionEntry` sits
  * in `SessionEntry | undefined` alternatives, where the update-compatibility
@@ -108,11 +113,6 @@ export interface PairedSessionIndexView {
   sources?: Array<SourceEntry | undefined>;
   sessions: Array<PairedSessionEntry | undefined>;
   checkouts?: Array<CheckoutEntry | undefined>;
-}
-
-export interface IndexBucketView {
-  ownerDid?: string;
-  bucket?: string;
 }
 
 /** A harness shown in the picker that no configured source backs. */
@@ -214,10 +214,6 @@ export interface DetachEvent {
 
 export { sessionKey };
 
-/** Whether the index carries a session in any state. A row the connector
- * has since marked deleted still confirms that the session existed, so a
- * confirmed start stays attached, showing from its own record the way a
- * manually attached session does once the index drops it. */
 /** The index row carrying a session: the row under that id, or the row of
  * a session the app made for a desktop start under an id of its own, which
  * names the start's id as `startedAs`. A plain copy of the fields read, made
@@ -245,6 +241,10 @@ const indexRowFor = (
   return undefined;
 };
 
+/** Whether the index carries a session in any state. A row the connector
+ * has since marked deleted still confirms that the session existed, so a
+ * confirmed start stays attached, showing from its own record the way a
+ * manually attached session does once the index drops it. */
 const indexCarries = (
   index: PairedSessionIndexView | undefined,
   sourceId: string,

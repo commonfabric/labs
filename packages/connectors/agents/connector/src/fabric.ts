@@ -112,7 +112,8 @@ interface IndexEntry {
   archived: boolean | null;
   active: boolean | null;
   /** The id a `start` command named, when this session is the one that
-   * start produced under another id (a desktop start). */
+   * start produced under another id (a desktop start). Once published, a
+   * later publication of the row keeps it. */
   startedAs?: string;
   capabilities: Record<string, unknown>;
   recentMessages?: NormalizedMessage[];
@@ -303,6 +304,13 @@ function isDriverCapabilities(value: unknown): value is DriverCapabilities {
     value.modes !== undefined &&
     (!Array.isArray(value.modes) ||
       !value.modes.every((mode) => typeof mode === "string"))
+  ) {
+    return false;
+  }
+  if (
+    value.surfaces !== undefined &&
+    (!Array.isArray(value.surfaces) ||
+      !value.surfaces.every((surface) => typeof surface === "string"))
   ) {
     return false;
   }
@@ -1315,6 +1323,13 @@ export class AgentFabricTarget implements CommandTarget {
           continue;
         }
         const entry = publication.indexEntry;
+        // The driver pairs a session with the desktop start that made it in
+        // its own memory, which a host restart empties; the pairing the row
+        // was published with is kept across that, so a session the
+        // workbench attached through its start stays attached.
+        if (entry.startedAs === undefined && previousEntry?.startedAs) {
+          entry.startedAs = previousEntry.startedAs;
+        }
         entry.manifest = sessionManifestCell(this.conn, entry);
         entry.capabilities = { ...capabilities };
         entriesByKey.set(entry.key, entry);

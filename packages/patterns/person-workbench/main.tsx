@@ -62,6 +62,7 @@ import {
   sessionDotColor,
   type SessionIndexView,
   sessionKey,
+  type SessionPairing,
   type SessionRow,
   sessionRowsOf,
   type SessionStart,
@@ -430,13 +431,24 @@ const detachRow = handler<void, {
   nativeSessionId: string;
   /** The id the start that made the session named, or "". */
   startedAs: string;
-}>((_, { attached, starts, sourceId, nativeSessionId, startedAs }) => {
-  // A confirmed start is attached through its own record; detaching drops
-  // whichever record the session has, under the session's own id or the
-  // id its desktop start named.
-  dropAttachment(attached, sourceId, nativeSessionId);
-  dropStart(starts, sourceId, nativeSessionId, startedAs);
-});
+  /** The pairings the complete index carries: a row the index has dropped
+   * shows from its record, naming no start, and the start's id comes from
+   * here instead. */
+  pairings: SessionPairing[];
+}>(
+  (_, { attached, starts, sourceId, nativeSessionId, startedAs, pairings }) => {
+    // A confirmed start is attached through its own record; detaching drops
+    // whichever record the session has, under the session's own id or the
+    // id its desktop start named.
+    dropAttachment(attached, sourceId, nativeSessionId);
+    dropStart(
+      starts,
+      sourceId,
+      nativeSessionId,
+      startedAs || startedAsOf(pairings, sourceId, nativeSessionId),
+    );
+  },
+);
 
 /**
  * Sends the connector a `start` command for the picked workstream and records
@@ -796,6 +808,7 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
                                 sourceId: row.sourceId,
                                 nativeSessionId: row.nativeSessionId,
                                 startedAs: row.startedAs,
+                                pairings,
                               })}
                             >
                               Detach
@@ -847,6 +860,7 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
                                   sourceId: row.sourceId,
                                   nativeSessionId: row.nativeSessionId,
                                   startedAs: row.startedAs,
+                                  pairings,
                                 })}
                               >
                                 Detach

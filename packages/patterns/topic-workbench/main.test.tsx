@@ -246,7 +246,6 @@ export default pattern(() => {
     }),
     attached: keysAttached,
   });
-  // A start mode for the first turn, and a harness shown that no source runs.
   // A desktop start: the connector opens Claude Code on this Mac with the
   // kickoff ready to send; the session the app makes carries the start's id
   // as `startedAs` and its own id everywhere else.
@@ -274,6 +273,7 @@ export default pattern(() => {
     sessions: index,
     startSurface: "desktop",
   });
+  // A start mode for the first turn, and a harness shown that no source runs.
   const shownCommands = new Writable<CommandValue[] | Default<[]>>([]);
   const shown = Workbench({
     topic,
@@ -774,8 +774,59 @@ export default pattern(() => {
     desk.attachedSessions.length === 1 &&
     desk.attachedSessions[0]?.nativeSessionId === "app-made-2"
   );
+  // The index marks the app's session deleted: the row shows from the
+  // start's record, naming no start of its own, and Detach on it still finds
+  // the start through the index's pairings and drops the record, so the
+  // session does not come straight back as a confirmed start.
+  const action_desktop_delete_row = action(() => {
+    // The deleted row is built from plain data: spreading the stored row
+    // would carry only the fields its view had materialized.
+    const started = lastCommand(deskCommands.get())?.nativeSessionId ?? "";
+    const current = desktopIndex.get();
+    desktopIndex.set({
+      ...current,
+      sessions: current.sessions.map((s) =>
+        s && s.nativeSessionId === "app-made-2"
+          ? {
+            ...appMade("app-made-2", started),
+            syncStatus: "deleted" as const,
+          }
+          : s
+      ),
+    });
+  });
+  const assert_desktop_deleted_still_attached = assert(() =>
+    desk.attachedSessions.length === 1 &&
+    desk.attachedSessions[0]?.nativeSessionId === "app-made-2" &&
+    desk.attachedSessions[0]?.startedAs === ""
+  );
+  const action_desktop_detach_deleted = action(() => {
+    clickInRow(desk[UI], "topic #7: Workbench topic", "Detach");
+  });
+  const assert_desktop_deleted_detached = assert(() =>
+    desk.attachedSessions.length === 0 && deskStarts.get().length === 0
+  );
+  // A third start, confirmed, is dropped by the detach verb given the
+  // session's own id.
+  const action_desktop_start_third = action(() => {
+    desk.spawnPrompt.set("A third time.");
+    desk.startSession.send();
+  });
+  const action_desktop_confirm_third = action(() => {
+    const started = lastCommand(deskCommands.get())?.nativeSessionId ?? "";
+    const current = desktopIndex.get();
+    desktopIndex.set({
+      ...current,
+      sessions: [...current.sessions, appMade("app-made-3", started)],
+    });
+  });
+  const assert_desktop_confirmed_third = assert(() =>
+    desk.startingSessions.length === 0 &&
+    desk.attachedSessions.length === 1 &&
+    desk.attachedSessions[0]?.nativeSessionId === "app-made-3"
+  );
   const action_desktop_detach_verb = action(() => {
-    desk.detach.send({ sourceId: "claude", nativeSessionId: "app-made-2" });
+    desk.detach.send({ sourceId: "claude", nativeSessionId: "app-made-3" });
   });
   const assert_desktop_verb_detached = assert(() =>
     desk.attachedSessions.length === 0 && deskStarts.get().length === 0
@@ -911,6 +962,14 @@ export default pattern(() => {
       { assertion: assert_desktop_started_again },
       { action: action_desktop_confirm_again },
       { assertion: assert_desktop_confirmed_again },
+      { action: action_desktop_delete_row },
+      { assertion: assert_desktop_deleted_still_attached },
+      { render: desk[UI] },
+      { action: action_desktop_detach_deleted },
+      { assertion: assert_desktop_deleted_detached },
+      { action: action_desktop_start_third },
+      { action: action_desktop_confirm_third },
+      { assertion: assert_desktop_confirmed_third },
       { action: action_desktop_detach_verb },
       { assertion: assert_desktop_verb_detached },
       { render: deskBlocked[UI] },

@@ -2630,6 +2630,157 @@ Deno.test("newer session refresh wins over an older retained inventory", async (
   }
 });
 
+Deno.test("a published pairing with a desktop start survives a driver that no longer knows it", async () => {
+  const signer = await Identity.fromPassphrase(
+    "agent connector desktop pairing persistence test",
+  );
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const space = signer.did();
+  const connection = { runtime, spaceDid: space, ownerDid: space };
+  try {
+    const target = await AgentFabricTarget.open(connection);
+    const source: SourceDescriptor = {
+      id: "claude-code:test",
+      driver: "claude-agent-sdk",
+      capabilities: {
+        inventory: true,
+        read: true,
+        prompt: true,
+        cancel: true,
+        rename: true,
+        setMode: true,
+        setConfigOption: true,
+        startSession: true,
+        surfaces: ["headless", "desktop"],
+      },
+    };
+    const snapshot = (
+      revision: string,
+      startedAs?: string,
+    ): NativeSessionSnapshot => ({
+      summary: {
+        nativeSessionId: "app-made",
+        title: "topic #7: the workbench",
+        cwd: "/work/labs",
+        createdAt: "2026-09-22T20:00:00.000Z",
+        updatedAt: `2026-09-22T20:0${revision}:00.000Z`,
+        archived: false,
+        active: null,
+        ...(startedAs ? { startedAs } : {}),
+        raw: { id: "app-made", revision },
+      },
+      events: [],
+      normalizedMessages: [],
+      complete: true,
+      revision,
+    });
+    const rowOf = async () => {
+      const index = await readStableCellGraphValue(
+        connection,
+        target.cells.allIndex,
+      ) as Record<string, unknown>;
+      return (index.sessions as Array<Record<string, unknown>>)[0];
+    };
+
+    // The driver that opened the desktop start pairs the session it made.
+    await target.publish([{
+      source,
+      sessions: [snapshot("1", "the-start-id")],
+      errors: [],
+      complete: true,
+    }], { observationSequence: target.beginSessionObservation() });
+    assertEquals((await rowOf()).startedAs, "the-start-id");
+
+    // After a host restart the driver reads the session without the pairing
+    // it no longer holds; the row keeps the one it was published with, so
+    // the workbench that attached the session through its start keeps it.
+    await target.publish([{
+      source,
+      sessions: [snapshot("2")],
+      errors: [],
+      complete: true,
+    }], { observationSequence: target.beginSessionObservation() });
+    const republished = await rowOf();
+    assertEquals(republished.startedAs, "the-start-id");
+    assertEquals(republished.updatedAt, "2026-09-22T20:02:00.000Z");
+
+    // A post-command refresh reads the session the same way.
+    const driver = {
+      source,
+      readSession: () => Promise.resolve(snapshot("3")),
+    } as unknown as AgentDriver;
+    await target.refreshSession(driver, "app-made");
+    const refreshed = await rowOf();
+    assertEquals(refreshed.startedAs, "the-start-id");
+    assertEquals(refreshed.updatedAt, "2026-09-22T20:03:00.000Z");
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
+Deno.test("publication refuses a stored index whose source surfaces are malformed", async () => {
+  const signer = await Identity.fromPassphrase(
+    "agent connector malformed surfaces test",
+  );
+  const storageManager = StorageManager.emulate({ as: signer });
+  const runtime = new Runtime({
+    apiUrl: new URL(import.meta.url),
+    storageManager,
+  });
+  const space = signer.did();
+  const connection = { runtime, spaceDid: space, ownerDid: space };
+  try {
+    const target = await AgentFabricTarget.open(connection);
+    const source: SourceDescriptor = {
+      id: "claude-code:test",
+      driver: "claude-agent-sdk",
+      capabilities: {
+        inventory: true,
+        read: true,
+        prompt: true,
+        cancel: true,
+        rename: true,
+        setMode: true,
+        setConfigOption: true,
+        startSession: true,
+        surfaces: ["headless", "desktop"],
+      },
+    };
+    await target.publish(
+      [{ source, sessions: [], errors: [], complete: true }],
+      { observationSequence: target.beginSessionObservation() },
+    );
+    // A surface that is not a string, written into the stored row past the
+    // connector; a pattern reading `surfaces` would otherwise throw on it.
+    const tx = runtime.edit();
+    tx.setCfcImplementationIdentity({
+      kind: "builtin",
+      builtinId: AGENT_CONNECTOR_WRITER_ID,
+    });
+    target.cells.allIndex.key("sources").key(0).key("capabilities").withTx(tx)
+      .set({ ...source.capabilities, surfaces: "desktop" });
+    tx.prepareCfc();
+    const commit = await tx.commit();
+    if (commit.error) throw commit.error;
+    await assertRejects(
+      () =>
+        target.publish([], {
+          observationSequence: target.beginSessionObservation(),
+        }),
+      Error,
+      "has an invalid shape",
+    );
+  } finally {
+    await runtime.dispose();
+    await storageManager.close();
+  }
+});
+
 Deno.test("publication refuses a stored index whose source capabilities are malformed", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector malformed capabilities test",

@@ -63,6 +63,9 @@ interface DesktopStart {
   cwd: string;
   title: string | null;
   sentAt: number;
+  /** The sessions this driver had listed when the start was sent; none of
+   * them is the one the app makes for it. */
+  knownSessionIds: ReadonlySet<string>;
 }
 
 /** What a desktop start needs from the machine; injectable for tests. */
@@ -71,6 +74,9 @@ export interface ClaudeDesktopDeps {
   installed(): Promise<boolean>;
   /** Opens a `claude://` link in the app; false when the open failed. */
   openUrl(url: string): Promise<boolean>;
+  /** Whether `path` is a directory here: the app opens a session only in
+   * one. */
+  isDirectory(path: string): Promise<boolean>;
   /** The platform, as `Deno.build.os` spells it. */
   os: string;
   now(): number;
@@ -108,11 +114,21 @@ export const openWithCommand = async (
   }
 };
 
+/** Whether `path` names a directory; false when it is missing or a file. */
+export const directoryExists = async (path: string): Promise<boolean> => {
+  try {
+    return (await Deno.stat(path)).isDirectory;
+  } catch {
+    return false;
+  }
+};
+
 const defaultDesktopDeps: ClaudeDesktopDeps = {
   installed: () => desktopAppInstalled(),
   openUrl: (url) => openWithCommand("open", url),
+  isDirectory: directoryExists,
   os: Deno.build.os,
-  now: () => Date.now(),
+  now: Date.now,
 };
 
 // The app reads at most this much of a `claude://code/new` prompt.
@@ -130,15 +146,25 @@ const promptKey = (text: string): string =>
 const listedPromptKey = (text: string): string =>
   promptKey(text.replace(/\s*…$/, ""));
 
-/** Whether a listed session is the one a desktop start produced: the
- * start's directory, made after the start was sent, opening with the
- * start's text (the SDK may list a prefix of the first prompt). */
+/** How much earlier than the start's sending a session may be created and
+ * still be the one the app made for it: the app and the host share this
+ * Mac's clock, so only a small skew between their timestamps is allowed. */
+const DESKTOP_START_CLOCK_SKEW_MS = 5_000;
+
+/** Whether a listed session could be the one a desktop start produced: not
+ * one this driver had listed before the start was sent, in the start's
+ * directory, made after the start was sent, opening with the start's text
+ * (the SDK may list a prefix of the first prompt). */
 const desktopStartMatches = (
   start: DesktopStart,
   info: ClaudeSessionInfo,
 ): boolean => {
+  if (start.knownSessionIds.has(info.sessionId)) return false;
   if (!info.cwd || resolve(info.cwd) !== resolve(start.cwd)) return false;
-  if (info.createdAt !== undefined && info.createdAt < start.sentAt - 60_000) {
+  if (
+    info.createdAt !== undefined &&
+    info.createdAt < start.sentAt - DESKTOP_START_CLOCK_SKEW_MS
+  ) {
     return false;
   }
   const first = listedPromptKey(info.firstPrompt ?? "");
@@ -545,7 +571,8 @@ export class ClaudeAgentSdkDriver implements AgentDriver {
       if (input.surface !== "desktop") {
         return unsupported(`unsupported start surface: ${input.surface}`);
       }
-      options.onCancellationReady?.();
+      // Nothing runs in this process for a desktop start, so there is
+      // nothing a cancel could reach; readiness is not signalled early.
       return await this.#startOnDesktop(nativeSessionId, input, cwd);
     }
     const pending: PendingClaudePrompt = { cancellation: null };
@@ -656,6 +683,16 @@ export class ClaudeAgentSdkDriver implements AgentDriver {
         },
       };
     }
+    if (!await this.#desktop.isDirectory(cwd)) {
+      return {
+        status: "failed",
+        error: {
+          code: "claude-desktop-cwd-not-directory",
+          message: `${cwd} is not a directory the app can open a session in`,
+          retryable: false,
+        },
+      };
+    }
     if (!await this.#desktop.installed()) {
       return {
         status: "failed",
@@ -684,6 +721,7 @@ export class ClaudeAgentSdkDriver implements AgentDriver {
       cwd,
       title: input.title ?? null,
       sentAt: this.#desktop.now(),
+      knownSessionIds: new Set(this.#sessionCwds.keys()),
     });
     return {
       status: "succeeded",
@@ -698,32 +736,38 @@ export class ClaudeAgentSdkDriver implements AgentDriver {
   }
 
   /**
-   * Pairs each desktop start with the session the app made for it: one in
-   * the start's directory, created after the start was sent, opening with
-   * the start's text. The latest start claims a session first: a person who
-   * sends the same start again (after closing the app's New session UI, or
-   * declining its folder) is waiting on the newest one, and the workbench
-   * may have withdrawn the earlier record. Known to this process only: a
-   * host restarted before the person sent the prompt no longer pairs them,
-   * and the session then shows as one the person started by hand.
+   * Pairs a session the app made with the desktop start it was made for:
+   * the session is in the start's directory, was not listed before the
+   * start was sent, was created after it, and opens with the start's text.
+   * When several pending starts fit one session, the newest claims it if
+   * they all sent the same text (the person sent the same start again after
+   * closing the app's New session UI, or declining its folder, and the
+   * workbench may have withdrawn the earlier record); starts that sent
+   * different texts sharing the prefix the SDK lists leave the session
+   * unpaired rather than guess. A pairing made here reaches the published
+   * row, which keeps it afterwards; only a start the person has not sent
+   * yet is forgotten when the host restarts.
    */
   #reconcileDesktopStarts(sessions: ClaudeSessionInfo[]): void {
     if (this.#desktopStarts.size === 0) return;
     const now = this.#desktop.now();
-    const newestFirst = [...this.#desktopStarts].sort(
-      ([, a], [, b]) => b.sentAt - a.sentAt,
-    );
-    for (const [startedAs, start] of newestFirst) {
+    for (const [startedAs, start] of this.#desktopStarts) {
       if (now - start.sentAt > DESKTOP_START_WINDOW_MS) {
         this.#desktopStarts.delete(startedAs);
-        continue;
       }
-      const match = sessions.find((info) =>
-        !this.#reconciled.has(info.sessionId) &&
+    }
+    for (const info of sessions) {
+      if (this.#reconciled.has(info.sessionId)) continue;
+      const fitting = [...this.#desktopStarts].filter(([, start]) =>
         desktopStartMatches(start, info)
       );
-      if (!match) continue;
-      this.#reconciled.set(match.sessionId, {
+      if (fitting.length === 0) continue;
+      const [, first] = fitting[0];
+      if (fitting.some(([, start]) => start.text !== first.text)) continue;
+      const [startedAs, start] = fitting.reduce((newest, candidate) =>
+        candidate[1].sentAt > newest[1].sentAt ? candidate : newest
+      );
+      this.#reconciled.set(info.sessionId, {
         startedAs,
         title: start.title,
       });

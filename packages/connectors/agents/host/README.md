@@ -289,9 +289,14 @@ its next listing the Claude driver pairs the session the app made (that
 directory, made after the start, opening with the start's text) and publishes
 its index row with `startedAs`, the id the command named, and the start's title
 unless the person has titled it since, so the workbench that sent the start
-confirms it. The pairing lives in the host's memory: a host restarted before the
-person sends no longer pairs them, and the session then shows as one started by
-hand. A desktop start takes no `mode`; the app's own permission setting applies.
+confirms it. The driver pairs them in its memory, and once the row is published
+with `startedAs` later publications keep it; a host restarted before the person
+sends no longer pairs them, and the session then shows as one started by hand.
+The session the app makes is one the driver had not listed before the start was
+sent; two pending starts that sent different texts sharing the prefix the SDK
+lists leave a session unpaired rather than guess. A desktop start takes no
+`mode`; the app's own permission setting applies, and the app asks the person to
+trust the folder each time.
 The Claude driver offers the surface on macOS only, in `capabilities.surfaces`.
 
 The command cell is a shallow action array. A valid element is either a command
