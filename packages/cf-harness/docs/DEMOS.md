@@ -339,16 +339,17 @@ different outcomes — same prompt, same readers, same build, same store:
 | `ba249e85`, 2026-09-22 | any **one** shared token, 3-character floor, first unused row                          | 2 of 4 wrong            |
 | `0fe142a5`, 2026-09-22 | **two** shared tokens required, 4-character floor                                      | 0 of 4 — nothing paired |
 | `e4aa6b1f`, 2026-09-22 | any shared token, but refuses a pair unless each side has exactly one candidate        | 0 of 4 — nothing paired |
+| `a834e7e1`, 2026-09-22 | shared-word count **plus a bonus when the whole merchant name appears**, best-first    | **4 of 4 correct**      |
 
 The 09-17 piece was reopened on this build and still renders all four pairings
 correctly, so **nothing regressed**: the readers, the data and the build are not
 the variable. The matcher is.
 
-**All four fail the same way and differ only in what they do next.** In this
-store every merchant reads `Sim <x>` and every subject reads
-`Your Sim <x> bill is ready`, so `sim` is shared by every possible pair and
-carries no information. No run excludes it. What separates them is how each then
-tries to disambiguate, and three of the four approaches cannot work at all:
+**They differ only in how they rank candidates, and three of the five cannot
+rank at all.** In this store every merchant reads `Sim <x>` and every subject
+reads `Your Sim <x> bill is ready`, so `sim` is shared by every possible pair
+and carries no information. No run excludes it. What separates them is how each
+then tries to disambiguate, and three of the four approaches cannot work at all:
 
 - keep `sim` and take the first unused row — everything matches, so the pairing
   is decided by row order;
@@ -358,9 +359,20 @@ tries to disambiguate, and three of the four approaches cannot work at all:
   candidates, so nothing matches.
 
 Counting shared words cannot succeed here at any threshold: one admits
-everything, two admits nothing. The only run that worked **weighted by how long
-the shared words are**, which is the one property that separates `insurance`
-from `sim`.
+everything, two admits nothing — which is why three of the five runs paired
+badly or not at all.
+
+**Two different mechanisms have been observed to work, and they share a property
+rather than a technique.** One weighted by how long the shared words are, so
+`insurance` outweighs `sim`. The other counted shared words but added a bonus
+when the whole merchant name appeared in the email text, so
+`Sim Insurance Group` scored 6 against `Sim Fuel Stop`'s 1 — a tie that counting
+alone would not have broken. Neither is the rule; both are instances of the same
+one: **rank candidates best-first on a signal that distinguishes the specific
+merchant from the word every merchant shares.**
+
+That is worth stating precisely, because a rule named too narrowly steers a run
+toward the weaker instance of it.
 
 **So this demo's correctness is a property of the code the model writes on the
 day, not of the prompt, the parts or the build.** Running it more times samples
@@ -377,7 +389,7 @@ the compiler, so guidance that reduces compile attempts buys a few percent here.
 
 ## 5a. The same composition, with the pairing rule stated
 
-§5 leaves the pairing rule to the run, and four runs wrote four different ones.
+§5 leaves the pairing rule to the run, and five runs wrote five different ones.
 This entry is §5 with the one property that worked stated in the prompt. It
 exists so the difference between constraining the rule and leaving it open can
 be measured rather than argued about.
@@ -399,6 +411,21 @@ rather than first-fit, consuming each side _at most once_, and discounting a
 word every merchant carries. The last clause is what would have excluded `sim`.
 
 **Proof status: PENDING.** Being run three times solo, browser-verified.
+
+**A known weakness in this wording, recorded before it is measured.** "Total
+length of the words they share" names _one_ of the two mechanisms observed to
+work. The other — a bonus when the whole merchant name appears — is not length
+at all, and on this store it is the stronger signal. A run that would have
+written the containment rule may read this sentence as an instruction to count
+characters instead, narrowing toward the weaker mechanism. The candidate
+revision, if these runs come back mixed:
+
+```text
+Rank candidate pairs by how specifically the shared text identifies that merchant — a whole-name match counts for more than a single shared word — and pair the best-scoring candidates first, each email and each payment at most once; a word shared by most merchants counts for nothing.
+```
+
+The three runs are being made against the wording above rather than this one, so
+that what is measured is what is written.
 
 **What it is not.** A prompt clause narrows the spread; it does not collapse it,
 because the model still writes the code. A published pairing part named by id is
