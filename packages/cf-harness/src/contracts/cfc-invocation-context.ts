@@ -96,7 +96,20 @@ export interface HarnessCfcInvocationContext {
   promptSlot?: PromptSlotBinding;
   runManifest: HarnessCfcInvocationRunManifestSummary;
   inputs: HarnessCfcInvocationInputSummary;
+
+  /**
+   * Confidentiality labels on the invocation's startup inputs. The sandbox
+   * seeds the process taint from these, and refuses a view carrying
+   * integrity claims.
+   */
   cfcInputLabels?: CfcLabelView;
+
+  /**
+   * Integrity labels recording which inputs the run's prompt slot shaped, one
+   * `PromptSlotInfluence` atom per path. They are provenance for influence
+   * accounting, not taint, and so stay out of `cfcInputLabels`.
+   */
+  promptSlotInfluenceLabels?: CfcLabelView;
 }
 
 export interface CreateHarnessCfcInvocationContextOptions {
@@ -248,6 +261,11 @@ const createPromptSlotInfluenceAtom = (
     : {}),
 });
 
+/**
+ * Labels each of `paths` with a `PromptSlotInfluence` integrity atom minted
+ * from the run's prompt-slot binding, per the atom registry's integrity kind
+ * (CFC spec §15.4). Returns `undefined` when there is no binding or no path.
+ */
 export const createHarnessPromptSlotInfluenceLabels = (options: {
   promptSlot?: PromptSlotBinding;
   runManifest: HarnessCfcInvocationRunManifestSummary;
@@ -267,7 +285,7 @@ export const createHarnessPromptSlotInfluenceLabels = (options: {
     version: 1,
     entries: options.paths.map((path) => ({
       path: [...path],
-      label: { confidentiality: [atom] },
+      label: { integrity: [atom] },
     })),
   };
 };
@@ -294,16 +312,16 @@ export const createHarnessCfcInvocationContext = async (
     options.cfcInputLabelPaths;
   const cfcInputLabels = mergeCfcLabelViews([
     options.cfcInputLabels,
-    createHarnessPromptSlotInfluenceLabels({
-      promptSlot: options.promptSlot,
-      runManifest: options.runManifest,
-      paths: promptSlotInputLabelPaths,
-    }),
     createHarnessCfcModelContextInputLabels({
       modelContext: options.cfcModelContext,
       paths: modelContextInputLabelPaths,
     }),
   ]);
+  const promptSlotInfluenceLabels = createHarnessPromptSlotInfluenceLabels({
+    promptSlot: options.promptSlot,
+    runManifest: options.runManifest,
+    paths: promptSlotInputLabelPaths,
+  });
 
   return {
     type: "cf-harness.cfc-invocation-context",
@@ -330,5 +348,8 @@ export const createHarnessCfcInvocationContext = async (
       ...(env !== undefined ? { env } : {}),
     },
     ...(cfcInputLabels !== undefined ? { cfcInputLabels } : {}),
+    ...(promptSlotInfluenceLabels !== undefined
+      ? { promptSlotInfluenceLabels }
+      : {}),
   };
 };

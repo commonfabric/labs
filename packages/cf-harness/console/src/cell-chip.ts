@@ -27,6 +27,12 @@ export interface ConsoleCellFacts {
    */
   confidentiality?: readonly string[];
 
+  /**
+   * The integrity atoms that invocation context recorded on those arguments:
+   * the prompt slot's influence.
+   */
+  integrity?: readonly string[];
+
   schema?: unknown;
 
   /** What the space stores for the cell itself, where the run read it. */
@@ -36,13 +42,17 @@ export interface ConsoleCellFacts {
 /**
  * The label facts a chip draws, held apart.
  *
- * `onCall` is what one call's invocation context recorded; the rest is what
- * the space stores for the cell itself. They answer different questions — what
- * a sandbox saw crossing into a call, and what the cell is — so the card names
+ * `onCall` and `onCallIntegrity` are what one call's invocation context
+ * recorded, on its confidentiality and integrity axes; the rest is what the
+ * space stores for the cell itself. They answer different questions — what a
+ * sandbox saw crossing into a call, and what the cell is — so the card names
  * them apart and joins them into no single list.
  */
 export interface ConsoleCellLabelView {
   onCall: readonly string[];
+
+  /** The integrity atoms the call recorded, held apart from `onCall`. */
+  onCallIntegrity: readonly string[];
 
   /** Every confidentiality atom the space holds at any path of the cell. */
   confidentiality: readonly string[];
@@ -105,6 +115,7 @@ export const cellLabelView = (cell: ConsoleCellFacts): ConsoleCellLabelView => {
   const unfinished = labels?.truncationReason !== undefined;
   return {
     onCall: cell.confidentiality ?? [],
+    onCallIntegrity: cell.integrity ?? [],
     confidentiality: labels?.confidentiality ?? [],
     integrity: labels?.integrity ?? [],
     derived: labels?.derived ?? false,
@@ -141,8 +152,8 @@ export const spaceHoldsNoLabel = (view: ConsoleCellLabelView): boolean =>
  */
 export const cellChipClasses = (cell: ConsoleCellFacts): string => {
   const view = cellLabelView(cell);
-  const labelled = view.onCall.length > 0 || view.confidentiality.length > 0 ||
-    view.integrity.length > 0;
+  const labelled = view.onCall.length > 0 || view.onCallIntegrity.length > 0 ||
+    view.confidentiality.length > 0 || view.integrity.length > 0;
   return ["cell", labelled ? "labelled" : "", view.derived ? "derived" : ""]
     .filter((name) => name !== "")
     .join(" ");
@@ -309,11 +320,16 @@ export class ConsoleCell extends LitElement {
       <span class="cell-row">
         <span class="cell-label">cfc</span>
         <span class="label-atoms" title="atoms recorded on this call">
-          ${view.onCall.length === 0
+          ${view.onCall.length === 0 && view.onCallIntegrity.length === 0
             ? html`<span class="cell-none">no atom on this call</span>`
-            : view.onCall.map((name) =>
-              html`<span class="atom conf">${name}</span>`
-            )}
+            : html`
+              ${view.onCall.map((name) =>
+                html`<span class="atom conf">${name}</span>`
+              )}
+              ${view.onCallIntegrity.map((name) =>
+                html`<span class="atom integ">${name}</span>`
+              )}
+            `}
         </span>
       </span>
       <span class="cell-row">
@@ -434,9 +450,12 @@ export class ConsoleCell extends LitElement {
       >
         <span class="cell-dot"></span>
         <span class="cell-name">${cellName(cell)}</span>
-        ${view.onCall.length === 0
+        ${view.onCall.length + view.onCallIntegrity.length === 0
           ? nothing
-          : html`<span class="cell-atoms">${view.onCall.length}</span>`}
+          : html`<span class="cell-atoms">${
+            view.onCall.length +
+            view.onCallIntegrity.length
+          }</span>`}
         <span class="cell-card" id=${this.#cardId} role="tooltip">
           ${cell.slug === undefined ? nothing : html`
             <span class="cell-row">

@@ -1494,9 +1494,13 @@ describe("CfHarnessPromptLoop research handoff", () => {
       expect(modelOutput.guidance).toContain("Do not present or implement");
       expect(modelOutput.researchRecord).toBeUndefined();
       expect(modelOutput.cfc.coverage).toBe("incomplete");
-      expect(modelOutput.cfc.outputLabel.integrity).toBeUndefined();
-      expect(modelOutput.cfc.outputLabel.confidentiality).toHaveLength(1);
-      expect(modelOutput.cfc.sourceLabel.integrity).toHaveLength(1);
+      expect(modelOutput.cfc.outputLabel).toEqual({});
+      expect(modelOutput.cfc.sourceLabel.integrity).toHaveLength(2);
+      expect(modelOutput.cfc.sourceLabel.integrity).toContainEqual(
+        expect.objectContaining({
+          type: CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE,
+        }),
+      );
       expect(modelOutput.cfc.missingLabels).toEqual([{
         source: "handle-description",
         detail: `handle ${minted.token} metadata returned by describe_handle`,
@@ -1506,15 +1510,8 @@ describe("CfHarnessPromptLoop research handoff", () => {
         result.runState.researchRuns?.[0]?.kit.inputs[0]?.token,
       ).toBe(minted.token);
       expect(result.runState.researchRuns?.[0]?.cfc).toEqual(modelOutput.cfc);
-      expect(result.runState.cfcModelContext?.observations).toEqual([
-        expect.objectContaining({
-          toolCallId: "research-task",
-          toolId: "research",
-          outputId: toolMessage.resultRef?.outputId,
-          channels: ["output"],
-          label: modelOutput.cfc.outputLabel,
-        }),
-      ]);
+      // An output with no confidentiality adds nothing to the model context.
+      expect(result.runState.cfcModelContext).toBeUndefined();
       expect(result.totalUsage?.totalTokens).toBe(37);
 
       const outputRef = result.runState.toolOutputs.find((entry) =>
@@ -2294,6 +2291,10 @@ describe("CfHarnessPromptLoop opening research", () => {
       expect(openingCfc?.missingLabels).toEqual([]);
       expect(openingCfc?.sourceLabel.integrity).toEqual([
         expect.objectContaining({
+          type: CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE,
+          role: "direct-command",
+        }),
+        expect.objectContaining({
           class: "CommonFabricHarnessOperatorProvisionedReference",
           subject: expect.stringMatching(/\/docs\/common$/),
         }),
@@ -2302,23 +2303,9 @@ describe("CfHarnessPromptLoop opening research", () => {
           subject: expect.stringMatching(/\/skills$/),
         }),
       ]);
-      expect(openingCfc?.sourceLabel.confidentiality).toHaveLength(1);
-      expect(
-        (openingCfc?.sourceLabel.confidentiality?.[0] as { type?: string })
-          ?.type,
-      ).toBe(CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE);
-      expect(openingCfc?.outputLabel).toEqual({
-        confidentiality: openingCfc?.sourceLabel.confidentiality,
-      });
-      expect(result.runState.cfcModelContext?.observations).toEqual([
-        expect.objectContaining({
-          toolCallId: `opening-research:${runId}`,
-          toolId: "research",
-          outputId: openingOutputId,
-          channels: ["output"],
-          label: openingCfc?.outputLabel,
-        }),
-      ]);
+      expect(openingCfc?.sourceLabel.confidentiality).toBeUndefined();
+      expect(openingCfc?.outputLabel).toEqual({});
+      expect(result.runState.cfcModelContext).toBeUndefined();
       expect(result.usage?.totalTokens).toBe(7);
       expect(result.totalUsage?.totalTokens).toBe(18);
 
@@ -2469,16 +2456,8 @@ describe("CfHarnessPromptLoop opening research", () => {
       expect(artifactOutput.rawCauseMessage).toBe("test corpus unavailable");
       expect(artifactOutput.cfc?.coverage).toBe("complete");
       expect(artifactOutput.cfc?.missingLabels).toEqual([]);
-      expect(artifactOutput.cfc?.outputLabel.confidentiality).toHaveLength(1);
-      expect(result.runState.cfcModelContext?.observations).toEqual([
-        expect.objectContaining({
-          toolCallId: `opening-research:${runId}`,
-          toolId: "research",
-          outputId: outputRef.outputId,
-          channels: ["output"],
-          label: artifactOutput.cfc?.outputLabel,
-        }),
-      ]);
+      expect(artifactOutput.cfc?.outputLabel).toEqual({});
+      expect(result.runState.cfcModelContext).toBeUndefined();
 
       const handoff = result.transcript.find((message) =>
         message.role === "user" &&
@@ -3306,15 +3285,22 @@ Deno.test("CfHarnessPromptLoop strips trusted-only CFC input labels from model t
   assert(toolRequest !== undefined);
   // The loop labels the command from the prompt slot it was given. The entry
   // the model wrote reaches neither the sandbox nor the recorded context.
-  const sandboxLabels = toolRequest.cfcInvocationContext?.cfcInputLabels;
-  assertEquals(sandboxLabels?.entries.map((entry) => entry.path), [[
-    "command",
-  ]]);
-  assertEquals(JSON.stringify(sandboxLabels).includes("did:key:forged"), false);
+  const sandboxContext = toolRequest.cfcInvocationContext;
+  assertEquals(sandboxContext?.cfcInputLabels, undefined);
   assertEquals(
-    JSON.stringify(
-      result.runState.cfcInvocationContexts?.[0]?.cfcInputLabels ?? null,
-    ).includes("did:key:forged"),
+    sandboxContext?.promptSlotInfluenceLabels?.entries.map((entry) =>
+      entry.path
+    ),
+    [["command"]],
+  );
+  assertEquals(
+    JSON.stringify(sandboxContext).includes("did:key:forged"),
+    false,
+  );
+  assertEquals(
+    JSON.stringify(result.runState.cfcInvocationContexts ?? null).includes(
+      "did:key:forged",
+    ),
     false,
   );
 });

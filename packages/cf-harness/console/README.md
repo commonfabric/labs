@@ -753,8 +753,10 @@ A chip holds two label facts, and the card names them apart because they answer
 different questions:
 
 - **cfc** — the atoms the sandbox's invocation context recorded on the arguments
-  of the call this sighting belongs to. What one call saw crossing into it. The
-  count on the chip is this one.
+  of the call this sighting belongs to: confidentiality taint from
+  `cfcInputLabels`, and the prompt slot's influence as integrity from
+  `promptSlotInfluenceLabels`. What one call saw crossing into it. The count on
+  the chip is this one.
 - **space** — the confidentiality and integrity atoms the space stores for the
   cell itself, read from the space the run wrote into, with the labelled paths
   read path by path and the origin of each beside it.
@@ -814,7 +816,8 @@ record of what the run recorded rather than a cell with nothing to hide.
     decided. A policy event appears beside the decision, which is how a call CFC
     _allowed_ but whose _observation_ it refused reads as the two separate facts
     it is. The flow labels the runtime computed for each input position appear
-    here too.
+    here too, and beside them the prompt slot's influence on each input it
+    shaped, as integrity.
   - **disclosure** — how many bytes the result let across as a plain value, how
     many positions it sealed behind a reference, and the longest run of numbers
     it carried. A long numeric run is called out, in the rail as well: the
