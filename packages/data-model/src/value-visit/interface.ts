@@ -113,7 +113,7 @@ export const DO_RECURSE_VALUES: RecurseForm = Object.freeze(
  * process it further, and there is no specific value to return from (this part
  * of) the visit.
  */
-export type BaselineVisitorMethodResult<ResultType = FabricValue> =
+export type BaselineVisitorMethodResult<ResultType> =
   | MainResultForm<ResultType>
   | undefined;
 
@@ -123,7 +123,7 @@ export type BaselineVisitorMethodResult<ResultType = FabricValue> =
  *
  * See the included result types for details on what they mean.
  */
-export type VisitResult<PlusType = never, ResultType = FabricValue> =
+export type VisitResult<PlusType, ResultType> =
   | BaselineVisitorMethodResult<ResultType>
   | RecurseForm
   | ReplaceForm<PlusType>;
@@ -132,14 +132,14 @@ export type VisitResult<PlusType = never, ResultType = FabricValue> =
  * Possible results from the `visitValue()` function and other similar
  * functions.
  */
-export type MainVisitResult<ResultType = FabricValue> =
+export type MainVisitResult<ResultType> =
   BaselineVisitorMethodResult<ResultType>;
 
 /**
  * Possible results from `visited*()` calls (container iteration post-visit
  * methods).
  */
-export type VisitedResult<ResultType = FabricValue> =
+export type VisitedResult<ResultType> =
   BaselineVisitorMethodResult<ResultType>;
 
 //
