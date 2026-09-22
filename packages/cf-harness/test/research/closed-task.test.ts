@@ -14,18 +14,13 @@ describe("isClosedResearchTask()", () => {
 
   for (
     const task of [
-      `Run ${patternId} and give it a slug.`,
+      `Run cf:pattern:${patternId} and give it a slug.`,
       `Compose \`cf:pattern:${patternId}\`.`,
-      "Run pattern id pat-expenses.",
-      "Use pattern id pat_Expenses-1.",
-      "Use the named pattern pat-expenses.",
-      "Run pattern named pat-expenses.",
-      'Run pattern "pat-expenses".',
       "Instantiate cf:pattern:pat-expenses.",
-      "Use the skill commonfabric/labs/cf-spend-digest: run its budget script.",
-      "Use the named skill commonfabric/labs/cf-spend-digest.",
-      "Follow the `commonfabric/labs/cf-spend-digest` skill.",
-      "Use https://skills.sh/commonfabric/labs/cf-spend-digest.",
+      "Use cf:pattern:pat_Expenses-1.",
+      "Revise pattern:demo-space/monthly-bills.",
+      "Use the named skill skill:commonfabric/labs/cf-spend-digest.",
+      "Follow `skill:commonfabric/labs/cf-spend-digest`.",
     ]
   ) {
     it(`returns true for the explicit selection ${JSON.stringify(task)}`, () => {
@@ -38,6 +33,14 @@ describe("isClosedResearchTask()", () => {
       "Build a dinner planner from reusable pieces.",
       "Find a skill for comparing monthly spending.",
       "Use pattern matching to build a counter.",
+      `Run ${patternId} and give it a slug.`,
+      "Run pattern id pat-expenses.",
+      "Use the named pattern pat-expenses.",
+      "Run pattern named pat-expenses.",
+      'Run pattern "pat-expenses".',
+      "Use the named skill commonfabric/labs/cf-spend-digest.",
+      "Follow the `commonfabric/labs/cf-spend-digest` skill.",
+      "Use https://skills.sh/commonfabric/labs/cf-spend-digest.",
       "Read docs/common/README.md to build a counter.",
       "Use docs/common/README.md to build a counter.",
       "Use docs/common/example to build a counter.",
@@ -48,6 +51,16 @@ describe("isClosedResearchTask()", () => {
       `Revise the piece fid1:${patternId}.`,
       `Use the handle cfh:a:${patternId}.`,
       "Use cf:pattern:bad/id.",
+      "Use cf:pattern:bad+id.",
+      "Use cf:pattern:.",
+      "Revise pattern:demo-space.",
+      "Revise pattern:/monthly-bills.",
+      "Revise pattern:demo-space/.",
+      "Revise pattern:demo-space/folder/monthly-bills.",
+      "Use skill:owner/../digest.",
+      "Use skill:owner/repo.",
+      "Use skill:unknown-skill.",
+      "Read https://example.com/cf:pattern:pat-expenses.",
       "Use pattern id bad/id.",
       `Build a page that displays identifier ${patternId}.`,
       `Find a pattern matching ${patternId.slice(0, -1)}.`,
@@ -60,7 +73,7 @@ describe("isClosedResearchTask()", () => {
     });
   }
 
-  it("uses a registered skill only when the task selects it", () => {
+  it("recognizes a registered skill only with its explicit marker", () => {
     const skillRegistry: HarnessSkillRegistry = {
       type: "cf-harness.skill-registry",
       version: 1,
@@ -81,14 +94,23 @@ describe("isClosedResearchTask()", () => {
       }],
       diagnostics: [],
     };
-    expect(isClosedResearchTask("Use cf-spend-digest.", { skillRegistry }))
+    expect(
+      isClosedResearchTask("Use skill:cf-spend-digest.", { skillRegistry }),
+    )
       .toBe(true);
+    expect(isClosedResearchTask("Use the named skill skill:cf-spend-digest.", {
+      skillRegistry,
+    })).toBe(true);
+    expect(isClosedResearchTask("Use cf-spend-digest.", { skillRegistry }))
+      .toBe(false);
     expect(isClosedResearchTask("Use the named skill cf-spend-digest.", {
       skillRegistry,
-    })).toBe(true);
+    })).toBe(false);
     expect(isClosedResearchTask("Use the cf-spend-digest skill.", {
       skillRegistry,
-    })).toBe(true);
+    })).toBe(false);
+    expect(isClosedResearchTask("Use skill:unknown-skill.", { skillRegistry }))
+      .toBe(false);
     expect(
       isClosedResearchTask("Read cf-spend-digest docs.", { skillRegistry }),
     )

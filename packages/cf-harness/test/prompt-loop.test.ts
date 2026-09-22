@@ -2142,14 +2142,23 @@ describe("CfHarnessPromptLoop opening research", () => {
     missing: ["an exact implementation contract"],
   });
 
-  for (const selection of ["pattern id", "registry skill", "local skill"]) {
+  for (
+    const selection of [
+      "pattern id",
+      "piece slug",
+      "registry skill",
+      "local skill",
+    ]
+  ) {
     it(`starts the parent immediately for a task naming an exact ${selection}`, async () => {
       await using skills = await createPatternSkillsFixture();
       const task = selection === "pattern id"
-        ? "Run v6_KSFHs9AmTg9PKwMmPdZyEHxZ9Oykhno4HBOfUo5s."
+        ? "Run cf:pattern:v6_KSFHs9AmTg9PKwMmPdZyEHxZ9Oykhno4HBOfUo5s."
+        : selection === "piece slug"
+        ? "Revise pattern:demo-space/monthly-bills."
         : selection === "registry skill"
-        ? "Use the skill commonfabric/labs/cf-spend-digest: run its script."
-        : "Use the pattern-dev skill to build a counter.";
+        ? "Use the named skill skill:commonfabric/labs/cf-spend-digest: run its script."
+        : "Use skill:pattern-dev to build a counter.";
       const runId = `closed-task-${selection}`;
       const requests: HarnessModelTurnRequest[] = [];
       const engine = new CfHarnessEngine({
