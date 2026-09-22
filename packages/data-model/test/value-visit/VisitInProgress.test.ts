@@ -75,11 +75,11 @@ describe("VisitInProgress", () => {
           });
         }
 
-        it("returns a `mainResult` from `visitValue()`, visiting nothing beneath the value", () => {
+        it("returns the value of a `mainResult` from `visitValue()`, visiting nothing beneath the value", () => {
           const rec = new Recorder();
           rec.onValue = () => mainResult("done");
 
-          expect(visit([1], rec)).toEqual(mainResult("done"));
+          expect(visit([1], rec)).toBe("done");
           expect(rec.names).toEqual(["value"]);
         });
       });
@@ -243,7 +243,7 @@ describe("VisitInProgress", () => {
           const rec = new Recorder();
           rec.onCycle = () => mainResult("cycle!");
 
-          expect(visit(a, rec)).toEqual(mainResult("cycle!"));
+          expect(visit(a, rec)).toBe("cycle!");
         });
 
         it("honors a `recurse` from `visitCycle()`, re-entering the value at the next depth", () => {
@@ -270,7 +270,7 @@ describe("VisitInProgress", () => {
             (i === 1) ? mainResult("at 1") : undefined;
           const array = [10, 20, 30];
 
-          expect(visit(array, rec)).toEqual(mainResult("at 1"));
+          expect(visit(array, rec)).toBe("at 1");
           expect(rec.events.filter((e) => e[0] === "visitedElement")).toEqual([
             ["visitedElement", array, 0, 10],
             ["visitedElement", array, 1, 20],
@@ -283,7 +283,7 @@ describe("VisitInProgress", () => {
           rec.onVisitedMapping = () => mainResult("first");
           const object = { a: 1, b: 2 };
 
-          expect(visit(object, rec)).toEqual(mainResult("first"));
+          expect(visit(object, rec)).toBe("first");
           expect(
             rec.events.filter((e) => e[0] === "visitedFabricPlainObjectEntry"),
           )
@@ -298,7 +298,7 @@ describe("VisitInProgress", () => {
           rec.onPlainObject = () => DO_RECURSE_KEYS_VALUES;
           rec.onPrimitive = (v) => (v === "a") ? mainResult("key") : undefined;
 
-          expect(visit({ a: 1 }, rec)).toEqual(mainResult("key"));
+          expect(visit({ a: 1 }, rec)).toBe("key");
           expect(rec.events.filter((e) => e[0] === "primitive")).toEqual([
             ["primitive", "a", "string"],
           ]);
@@ -310,7 +310,7 @@ describe("VisitInProgress", () => {
           rec.onVisitedGap = () => mainResult("gap");
 
           // deno-lint-ignore no-sparse-arrays
-          expect(visit([, 1], rec)).toEqual(mainResult("gap"));
+          expect(visit([, 1], rec)).toBe("gap");
           expect(rec.names).not.toContain("visitedElement");
         });
 
@@ -319,7 +319,7 @@ describe("VisitInProgress", () => {
           rec.onVisitedGap = () => mainResult("gap");
 
           // deno-lint-ignore no-sparse-arrays
-          expect(visit([[1, ,], 2], rec)).toEqual(mainResult("gap"));
+          expect(visit([[1, ,], 2], rec)).toBe("gap");
           expect(rec.events.map((e) => e[1])).not.toContain(2);
         });
 
@@ -328,9 +328,7 @@ describe("VisitInProgress", () => {
           rec.onPrimitive = (v) =>
             (v === "stop") ? mainResult("deep") : undefined;
 
-          expect(visit({ p: [1, "stop", 3], q: 4 }, rec)).toEqual(
-            mainResult("deep"),
-          );
+          expect(visit({ p: [1, "stop", 3], q: 4 }, rec)).toBe("deep");
           expect(rec.events.map((e) => e[1])).not.toContain(3);
           expect(rec.events.map((e) => e[1])).not.toContain(4);
         });
@@ -542,7 +540,7 @@ describe("VisitInProgress", () => {
             cause: undefined,
           });
 
-          expect(visit(error, rec)).toEqual(mainResult("found"));
+          expect(visit(error, rec)).toBe("found");
           expect(rec.names).not.toContain("visitedInstance");
         });
 
@@ -551,7 +549,7 @@ describe("VisitInProgress", () => {
           rec.onVisitedInstance = () => mainResult("after");
           const link = new FabricLink({ id: "fid1:abc" });
 
-          expect(visit([link, 1], rec)).toEqual(mainResult("after"));
+          expect(visit([link, 1], rec)).toBe("after");
           expect(rec.events.map((e) => e[1])).not.toContain(1);
         });
 
@@ -798,7 +796,7 @@ describe("VisitInProgress", () => {
           rec.onValue = (_v, tag) =>
             (tag === null) ? mainResult("untagged") : DO_DISPATCH;
 
-          expect(visit([new Date(0)], rec)).toEqual(mainResult("untagged"));
+          expect(visit([new Date(0)], rec)).toBe("untagged");
         });
 
         it("throws for a non-fabric replacement under a valid root, on `false`", () => {
@@ -832,12 +830,38 @@ describe("VisitInProgress", () => {
           expect(visit({ a: [1] }, new Recorder())).toBeUndefined();
         });
 
-        it("returns the first `mainResult` a visitor produces", () => {
+        it("returns the value of the first `mainResult` a visitor produces", () => {
           const rec = new Recorder();
           rec.onPrimitive = (v, tag) =>
             (tag === "number") ? mainResult(v) : undefined;
 
-          expect(visit(["x", 7, 8], rec)).toEqual(mainResult(7));
+          expect(visit(["x", 7, 8], rec)).toBe(7);
+        });
+
+        it("puts `undefined` to `isResultType()` when no visitor produces a `mainResult`", () => {
+          const rec = new Recorder();
+
+          expect(visit([1], rec)).toBeUndefined();
+          expect(rec.resultTypeChecks).toStrictEqual([undefined]);
+        });
+
+        it("throws when no visitor produces a `mainResult` and `isResultType()` returns `false`", () => {
+          const rec = new Recorder();
+          rec.onIsResultType = () => false;
+
+          expect(() => visit([1], rec)).toThrow(
+            /Not a `ResultType` value: `undefined`/,
+          );
+          expect(rec.resultTypeChecks).toStrictEqual([undefined]);
+        });
+
+        it("does not put a `mainResult`'s value to `isResultType()`", () => {
+          const rec = new Recorder();
+          rec.onIsResultType = () => false;
+          rec.onPrimitive = () => mainResult(undefined);
+
+          expect(visit([1], rec)).toBeUndefined();
+          expect(rec.resultTypeChecks).toStrictEqual([]);
         });
       });
 
