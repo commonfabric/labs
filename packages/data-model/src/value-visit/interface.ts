@@ -132,15 +132,15 @@ export type VisitResult<PlusType, ResultType> =
  * Possible results from the `visitValue()` function and other similar
  * functions.
  */
-export type MainVisitResult<ResultType> =
-  BaselineVisitorMethodResult<ResultType>;
+export type MainVisitResult<ResultType> = BaselineVisitorMethodResult<
+  ResultType
+>;
 
 /**
  * Possible results from `visited*()` calls (container iteration post-visit
  * methods).
  */
-export type VisitedResult<ResultType> =
-  BaselineVisitorMethodResult<ResultType>;
+export type VisitedResult<ResultType> = BaselineVisitorMethodResult<ResultType>;
 
 //
 // Visitor interface
