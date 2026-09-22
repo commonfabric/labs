@@ -1,8 +1,17 @@
-import { action, assert, equals, NAME, pattern, TESTS } from "commonfabric";
+import {
+  action,
+  assert,
+  equals,
+  NAME,
+  pattern,
+  TESTS,
+  Writable,
+} from "commonfabric";
 import ProfileHome, {
   identityProfileUrl,
   isFreshIdentity,
   isShownIdentity,
+  VerifiedIdentitiesSection,
   VerifiedIdentityRow,
 } from "./profile-home.tsx";
 
@@ -45,6 +54,29 @@ export default pattern(() => {
     identityProfileUrl("github.node_id", "MDQ6VXNlcjE=") === ""
   );
   const freshRow = VerifiedIdentityRow({ assertion: freshLogin, nowMs });
+  const staleLogin = Writable.of({
+    ...freshLogin,
+    verifiedAt: "2026-07-14T20:00:00.000Z",
+  });
+  const nodeId = Writable.of({
+    ...freshLogin,
+    type: "github.node_id",
+    value: "MDQ6VXNlcjE=",
+  });
+  const sectionWithFreshLogin = VerifiedIdentitiesSection({
+    identities: [nodeId, Writable.of(freshLogin), staleLogin],
+    nowMs,
+  });
+  const sectionWithoutShownIdentity = VerifiedIdentitiesSection({
+    identities: [nodeId, staleLogin],
+    nowMs,
+  });
+  const assert_section_shown_for_a_fresh_login = assert(() =>
+    sectionWithFreshLogin.shown === true
+  );
+  const assert_section_hidden_without_a_shown_identity = assert(() =>
+    sectionWithoutShownIdentity.shown === false
+  );
   const assert_row_links_the_profile = assert(() =>
     freshRow.profileUrl === "https://github.com/ada%20lovelace"
   );
@@ -245,6 +277,8 @@ export default pattern(() => {
       { assertion: assert_unreadable_date_or_clock_hides_identity },
       { assertion: assert_profile_url_encodes_the_login },
       { assertion: assert_row_links_the_profile },
+      { assertion: assert_section_shown_for_a_fresh_login },
+      { assertion: assert_section_hidden_without_a_shown_identity },
       { assertion: assert_inbox_absent_at_birth },
       { assertion: assert_initial_state },
       // CT-1748: a freshly-visited profile starts in the read-only

@@ -416,6 +416,38 @@ export const VerifiedIdentityRow = pattern<
   },
 );
 
+// The verified accounts in the profile presentation: one row per shown
+// assertion, and nothing at all when none is shown, so an empty section adds
+// no gap to the presentation. The input takes plain assertion cells for the
+// same reason `VerifiedIdentityRow` takes a plain assertion.
+export const VerifiedIdentitiesSection = pattern<
+  {
+    identities: Cell<ExternalIdentityAssertion>[];
+    nowMs: number | undefined;
+  },
+  { [UI]: VNode; shown: boolean }
+>(({ identities, nowMs }) => {
+  const shown = computed(() =>
+    identities.some((identity) => isShownIdentity(identity.get(), nowMs))
+  );
+  return {
+    shown,
+    [UI]: (
+      <cf-fragment>
+        {ifElse(
+          shown,
+          <cf-vstack gap="1" data-ui-region="profile-verified-identities">
+            {identities.map((identity) => (
+              <VerifiedIdentityRow assertion={identity} nowMs={nowMs} />
+            ))}
+          </cf-vstack>,
+          null,
+        )}
+      </cf-fragment>
+    ),
+  };
+});
+
 const ProfileCatalogCard = pattern<{ title: string }, ProfileElementCell>(
   ({ title }) => ({
     [NAME]: title,
@@ -883,11 +915,6 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
     const hasExternalLinks = computed(() => externalLinks.get().length > 0);
     // Five-minute ticks are fine enough for a 48-hour freshness window.
     const now = wish<number>({ query: "#now/300" });
-    const hasDisplayedIdentities = computed(() =>
-      verifiedIdentities.get().some((identity) =>
-        isShownIdentity(identity.get(), now.result)
-      )
-    );
     const parsedUserTags = computed(() =>
       userTagsText.get().split(",").map((tag) => tag.trim()).filter((tag) =>
         tag.length > 0
@@ -1028,21 +1055,10 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
                   null,
                 )}
 
-                {ifElse(
-                  hasDisplayedIdentities,
-                  <cf-vstack
-                    gap="1"
-                    data-ui-region="profile-verified-identities"
-                  >
-                    {verifiedIdentities.map((identity) => (
-                      <VerifiedIdentityRow
-                        assertion={identity}
-                        nowMs={now.result}
-                      />
-                    ))}
-                  </cf-vstack>,
-                  null,
-                )}
+                <VerifiedIdentitiesSection
+                  identities={verifiedIdentities}
+                  nowMs={now.result}
+                />
 
                 {
                   /* Pinned patterns render as tile variants (clickable,
