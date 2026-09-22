@@ -2664,7 +2664,6 @@ function extractCellLikeInnerTypeNode(
           : undefined,
       });
     }
-    if (!hasCell) return undefined;
     const scoped = values.length === 1 && nullish.length > 0
       ? moveNullishIntoScopeWrapper(
         values[0]!.node,
@@ -2676,7 +2675,7 @@ function extractCellLikeInnerTypeNode(
         typeRegistry,
       )
       : undefined;
-    return scoped ?? factory.createUnionTypeNode(members);
+    return hasCell ? scoped ?? factory.createUnionTypeNode(members) : undefined;
   }
 
   const semanticType = getTypeFromTypeNodeWithFallback(
@@ -2755,13 +2754,13 @@ function moveNullishIntoScopeWrapper(
   if (!brand) return undefined;
   const alternatives: ts.TypeNode[] = [];
   for (const alternative of brand.payload) {
-    const parts: ts.TypeNode[] = [];
-    for (const part of alternative) {
-      const partNode = typeToSchemaTypeNode(part, checker, sourceFile);
-      if (!partNode) return undefined;
-      typeRegistry?.set(partNode, part);
-      parts.push(partNode);
-    }
+    const parts = alternative.map((part) =>
+      typeToTypeNodeWithRegistry(
+        part,
+        { checker, factory, sourceFile },
+        typeRegistry,
+      )
+    );
     alternatives.push(
       parts.length === 1
         ? parts[0]!
