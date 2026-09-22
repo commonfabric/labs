@@ -44,7 +44,8 @@ Every browser automation follows this pattern:
 1. Navigate: `agent-browser open <url>`
 2. Snapshot: `agent-browser snapshot -i`
 3. Interact: use refs to click, fill, select, or inspect
-4. Re-snapshot before the next interaction — refs are renumbered by every snapshot
+4. Re-snapshot before the next interaction — refs are renumbered by every
+   snapshot
 
 ```bash
 agent-browser open https://example.com/form

@@ -85,8 +85,8 @@ agent-browser click @e12
 
 **IMPORTANT**: Refs are invalidated by the next snapshot — whether or not the
 page changed. A page change is the obvious case; a snapshot taken for any other
-reason renumbers them just the same, and the snapshot modes number
-independently of one another.
+reason renumbers them just the same, and the snapshot modes number independently
+of one another.
 
 ```bash
 # Get initial snapshot
