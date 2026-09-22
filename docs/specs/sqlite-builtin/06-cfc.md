@@ -803,13 +803,16 @@ carries its owner and the condition that retires it, like every other ungated
 sink. A deployment that wants a confidentiality gate on sqlite reads declares
 a ceiling for the sink, and the seam is where it applies.
 
-One thing outside this builtin decides whether a pattern can use any of it.
-A `lift` whose output document has acquired stored CFC label metadata cannot
-be written again unless the lift declares a RESULT SCHEMA: without one the
-write carries no schema write-policy input, the commit is refused, and the
-scheduler retries and gives up. A pattern whose query parameter reaches the
-builtin through a lift therefore lands its first labeled parameter and never
-its second. Declare the result schema on every lift on that path.
+One thing outside this builtin decides whether a caller can use any of it. A
+`lift` whose output document has acquired stored CFC label metadata cannot be
+written again unless the lift declares a RESULT SCHEMA: without one the write
+carries no schema write-policy input, the commit is refused, and the scheduler
+retries and gives up. So a caller whose query parameter reaches the builtin
+through such a lift lands its first labeled parameter and never its second.
+An authored pattern is normally covered — `ts-transformers` injects both
+schemas into a `lift` from its TypeScript types — and what is not is a lift
+built directly against the builder, as a runner test does, or one whose return
+type the injector cannot read.
 
 > Implementation: `makeResultCell` plus `recordRuntimeOwnedStore` /
 > `enrollRuntimeOwnedStore`, the `crossSpace` refusal over `deriveFlowJoin`,
