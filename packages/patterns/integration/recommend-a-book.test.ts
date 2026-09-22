@@ -234,6 +234,10 @@ describe("personalized book invitation", () => {
       const shareProps = await elementProps(view, "cf-share-snapshot");
       expect(shareProps).toBeDefined();
       if (!shareProps) throw new Error("The native sharing surface is absent");
+      const rawShareProps = shareProps.getRawUntyped({
+        frozen: false,
+      }) as Record<string, unknown>;
+      expect(rawShareProps.audienceKind).toBe("space");
       const source = binding(shareProps, "$source");
       const recipient = binding(shareProps, "$recipient");
       const sharedResult = binding(shareProps, "$result");

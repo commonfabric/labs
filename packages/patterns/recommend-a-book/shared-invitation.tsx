@@ -163,7 +163,7 @@ const ReaderInvitation = pattern<
               <cf-share-snapshot
                 $source={selected}
                 $recipient={originator}
-                audience-kind="user"
+                audienceKind="user"
                 $recommended={recommended}
                 $received={received}
                 oncf-shared={clearSelection}

@@ -145,12 +145,21 @@ describe("cfc-share-snapshot", () => {
     });
     try {
       const author = fixture.runtimes[1];
+      const linkedTx = author.edit();
+      const linked = author.getCell(visitor.did(), "unshared-book", {
+        ifc: { confidentiality: [cfcAtom.user(owner.did())] },
+      }, linkedTx);
+      linked.set("The linked title");
+      expect((await linkedTx.commit()).error).toBeUndefined();
       const tx = author.edit();
       const privateBook = author.getCell(visitor.did(), "author-private-book", {
-        type: "string",
+        type: "object",
+        properties: { reference: { asCell: ["readonly"] } },
         ifc: { confidentiality: [cfcAtom.user(owner.did())] },
       }, tx);
-      privateBook.set("A title the visitor must never preview");
+      privateBook.set({
+        reference: linked,
+      });
       expect((await tx.commit()).error).toBeUndefined();
       await privateBook.sync();
       expect(() =>

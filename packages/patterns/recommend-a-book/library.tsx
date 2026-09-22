@@ -122,7 +122,7 @@ export default pattern<Record<string, never>, LibraryOutput>(() => {
               <cf-share-snapshot
                 $source={reading}
                 $recipient={invitation}
-                audience-kind="space"
+                audienceKind="space"
                 $result={publishedLibrary.key("value")}
               />
               <cf-button onClick={openInvitation({ invitation })}>

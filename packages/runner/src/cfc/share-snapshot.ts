@@ -161,7 +161,7 @@ function inspect(source: Cell<unknown>, requested: SnapshotShareAudience) {
     }
     const sourceLink = source.withTx(tx).resolveAsCell()
       .getAsNormalizedFullLink();
-    const value = snapshotJsonValue(source.withTx(tx).get());
+    const sourceValue = source.withTx(tx).get();
     const consumed = collectConsumedLabel(tx);
     const actorAtom = cfcAtom.user(actor);
     if (
@@ -172,6 +172,7 @@ function inspect(source: Cell<unknown>, requested: SnapshotShareAudience) {
         "Snapshot source exceeds the authenticated actor's read ceiling",
       );
     }
+    const value = snapshotJsonValue(sourceValue);
     const resolved = resolveAudience(requested, tx);
     const audience = snapshotJsonValue(resolved.audience) as CfcAtom;
     const retained: CfcConfClause[] = [];

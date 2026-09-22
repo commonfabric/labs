@@ -1050,8 +1050,8 @@ different persona. The predicate selects presentation; CFC labels govern reads.
 `cf-share-snapshot` reviews a copy of a source cell before releasing that copy
 to another user or space. Bind `$source` to the JSON value to review,
 `$recipient` to a live profile or space cell, and `$result` to a writable cell
-that will receive the released cell link. Set `audience-kind` to `user` (the
-default) or `space`.
+that will receive the released cell link. In pattern JSX, set `audienceKind` to
+`user` (the default) or `space`. The native HTML attribute is `audience-kind`.
 
 The authenticated host checks the source against its runtime read ceiling. When
 the host has no runtime-wide ceiling, the source must fit the confirming user's
