@@ -78,6 +78,14 @@ type UnwrapOneLevelOptions = {
   sourceSchemas?: {
     argument?: JSONSchema;
   };
+
+  /**
+   * The containing pattern's authored argument schema, read only for the
+   * follow caps an argument binding's path passes through (see
+   * `linkForPath`). Unlike `sourceSchemas`, it does not fold the slot's own
+   * declared scope into the binding.
+   */
+  argumentCapSchema?: JSONSchema;
 };
 
 /**
@@ -160,8 +168,10 @@ const declaredScopeCap = (
  * that addressed the scoped instance directly would miss a passed reference.
  *
  * A cap declared on a slot the path passes through governs a link stored at
- * that slot. The serialized binding has only the leaf schema to carry it, so
- * when the leaf declares no scope of its own, the narrowest such cap is folded
+ * that slot. A link schema drops cell wrappers and the caps they declare, so
+ * the caps are read from `authoredRootSchema` as well when the caller has it.
+ * The serialized binding has only the leaf schema to carry them, so when the
+ * leaf declares no scope of its own, the narrowest such cap is folded
  * into the leaf schema's `scope`, which link resolution applies to links found
  * above the leaf as well.
  */
@@ -169,12 +179,18 @@ const linkForPath = (
   link: NormalizedFullLink,
   path: readonly string[],
   schemaOverride?: JSONSchema,
+  authoredRootSchema?: JSONSchema,
 ): NormalizedFullLink => {
   let ancestorCap: SchemaScope | undefined;
   let walked = link.schema;
+  let authored = authoredRootSchema;
   for (const key of path) {
-    ancestorCap = narrowerScopeCap(ancestorCap, declaredScopeCap(walked));
+    ancestorCap = narrowerScopeCap(
+      ancestorCap,
+      narrowerScopeCap(declaredScopeCap(walked), declaredScopeCap(authored)),
+    );
     walked = ContextualFlowControl.getSchemaAtPath(walked, [key]);
+    authored = ContextualFlowControl.getSchemaAtPath(authored, [key]);
   }
   let schema = schemaOverride ?? (path.length > 0 ? walked : undefined);
   if (
@@ -709,7 +725,14 @@ export function unwrapOneLevelAndBindToDoc<T extends FabricExecValue>(
           : undefined;
         return createSigilLinkFromParsedLink(
           foldDeclaredScopeIntoLinkSchema(
-            linkForPath(link, path, targetSchema ?? sourceSchema),
+            linkForPath(
+              link,
+              path,
+              targetSchema ?? sourceSchema,
+              alias.cell === "argument"
+                ? authoredRootSchema ?? options?.argumentCapSchema
+                : undefined,
+            ),
             authoredRootSchema,
             path,
           ),

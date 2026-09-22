@@ -380,7 +380,7 @@ the leaf schema, and a link stored at the scoped slot is held to it.
 
 The two spellings differ in what they constrain. A scope on the cell wrapper
 caps which link the handle may follow: a passed reference to a narrower cell is
-not followed. A scope on the value places the slot's own content: a plain
+not followed. A scope on the value scopes the slot's own content: a plain
 value written into the slot narrows into the scoped instance. It does not cap
 the handle, so a passed reference to a narrower cell is followed. A handle
 minted by following a passed reference addresses the referenced cell and does

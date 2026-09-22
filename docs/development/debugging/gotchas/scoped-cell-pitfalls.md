@@ -248,7 +248,7 @@ instance. They differ in what the scope constrains:
 - The handle spelling caps which link the handle may follow. A passed cell
   narrower than the cap, such as a session cell in a `PerUser` slot, reads as
   missing.
-- The value spelling places the slot's own content. A plain value written into
+- The value spelling scopes the slot's own content. A plain value written into
   the slot narrows into the user instance, so each user gets their own copy
   behind a base-slot redirect. It does not cap the handle, so a narrower passed
   cell is followed.

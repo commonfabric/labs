@@ -610,6 +610,58 @@ describe("pattern-binding", () => {
       });
     });
 
+    it("carries a handle cap an argument path passes through onto a nested binding", () => {
+      const binding = {
+        name: { $alias: { cell: "argument", path: ["profile", "name"] } },
+      };
+      const resultCell = runtime.getCell(
+        space,
+        "nested handle cap result cell",
+        undefined,
+        tx,
+      );
+      // A link schema drops cell wrappers, so the argument link does not show
+      // the handle's cap; the authored argument schema does.
+      const argumentCell = runtime.getCell(
+        space,
+        "nested handle cap argument cell",
+        {
+          type: "object",
+          properties: {
+            profile: {
+              type: "object",
+              properties: { name: { type: "string" } },
+            },
+          },
+        },
+        tx,
+      );
+      const result = unwrapOneLevelAndBindToDoc(
+        binding,
+        argumentCell.getAsNormalizedFullLink(),
+        resultCell,
+        {
+          argumentCapSchema: {
+            type: "object",
+            properties: {
+              profile: {
+                type: "object",
+                properties: { name: { type: "string" } },
+                asCell: [{ kind: "cell", scope: "user" }],
+              },
+            },
+          },
+        },
+      ) as { name: unknown };
+
+      const parsed = parseLink(result.name, resultCell)!;
+      expect(parsed.scope).toBe("space");
+      expect(resolvedSchema(parsed.schema)).toEqual({
+        type: "string",
+        scope: "user",
+      });
+    });
+
     it("binds aliases from a caller-owned circular schema", () => {
       const circularSchema: JSONSchema & {
         properties: Record<string, JSONSchema>;
