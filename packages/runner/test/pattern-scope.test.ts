@@ -1,5 +1,9 @@
 import { assertEquals } from "@std/assert";
 import { createSession, Identity } from "@commonfabric/identity";
+import {
+  getServerExecutionConfig,
+  setServerExecutionConfig,
+} from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -3484,3 +3488,87 @@ Deno.test("a handle-scoped argument slot does not follow a narrower cell passed 
     await storageManager.close();
   }
 });
+
+for (const serverExecution of [false, true]) {
+  for (const passed of ["a plain value", "a space-scoped cell"] as const) {
+    Deno.test(
+      `a session-scoped argument slot reads ${passed} passed into it${
+        serverExecution ? " with server execution" : ""
+      }`,
+      async () => {
+        const prior = getServerExecutionConfig();
+        setServerExecutionConfig(serverExecution);
+        const storageManager = StorageManager.emulate({ as: signer });
+        const runtime = new Runtime({
+          apiUrl: new URL(import.meta.url),
+          storageManager,
+        });
+        const tx = runtime.edit();
+
+        try {
+          const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+          const name = `session slot ${passed} ${serverExecution}`;
+          const draftSchema = {
+            type: "object",
+            properties: { text: { type: "string" } },
+            asCell: ["cell"],
+            scope: "session",
+          } as const;
+          const readText = lift(
+            ({ draft }: { draft: Cell<{ text?: string }> }) =>
+              draft.get()?.text ?? "missing",
+            {
+              type: "object",
+              properties: { draft: draftSchema },
+              required: ["draft"],
+            },
+            { type: "string" },
+          );
+          const Child = pattern<{ draft: Cell<{ text: string }> }>(
+            ({ draft }) => ({ text: readText({ draft }) }),
+            {
+              type: "object",
+              properties: { draft: draftSchema },
+              required: ["draft"],
+            },
+          );
+
+          let draft: unknown = { text: "hello" };
+          if (passed === "a space-scoped cell") {
+            const cell = runtime.getCell<{ text: string }>(
+              space,
+              `${name} draft`,
+              undefined,
+              tx,
+            );
+            cell.set({ text: "hello" });
+            draft = cell;
+          }
+          const resultCell = runtime.getCell(
+            space,
+            `${name} result`,
+            undefined,
+            tx,
+          );
+          const result = runtime.run(
+            tx,
+            Child,
+            { draft } as never,
+            resultCell,
+          );
+          runtime.prepareTxForCommit(tx);
+          await tx.commit();
+          await runtime.idle();
+          await runtime.storageManager.synced();
+          await result.pull();
+
+          assertEquals(result.key("text").get() as unknown, "hello");
+        } finally {
+          await runtime.dispose();
+          await storageManager.close();
+          setServerExecutionConfig(prior);
+        }
+      },
+    );
+  }
+}
