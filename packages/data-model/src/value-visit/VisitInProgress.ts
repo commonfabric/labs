@@ -80,7 +80,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   visit(
     value: FabricValuePlus<PlusType>,
-  ): MainVisitResult<ResultType> {
+  ): ResultType {
     if (this.#inProgress) {
       // This is a defense-in-depth protection against bugs in this submodule,
       // and also serves as documentation for the intended use of this class.
@@ -91,7 +91,18 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
 
     this.#inProgress = true;
     try {
-      return this.#visitValue(value);
+      const result = this.#visitValue(value);
+      switch (result?.type) {
+        case undefined: {
+          // `ResultType` might or might not include `undefined`, so we have to
+          // check.
+          return this.#assertResultType(undefined);
+        }
+
+        case "mainResult": {
+          return result.value;
+        }
+      }
     } finally {
       this.#inProgress = false;
     }
@@ -416,6 +427,22 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
   }
 
   /**
+   * Asserts that the given value is a member of the visitor's `ResultType`,
+   * returning it or `throw`ing if the assertion doesn't hold.
+   */
+  #assertResultType(
+    value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>,
+  ): ResultType {
+    if (this.#visitor.isResultType(value)) {
+      return value;
+    }
+
+    throw new Error(
+      debugStr`Not a \`ResultType\` value: $quote${value}`,
+    );
+  }
+
+  /**
    * Gets the tag for the given value, consulting the visitor's `isPlusType()`
    * only where the value cannot be a `FabricValue`.
    */
@@ -423,5 +450,15 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
     value: FabricValuePlus<PlusType>,
   ): FabricValuePlusTag | null {
     return tagOfFabricValueElseNull(value, this.#isPlusType);
+  }
+
+  /**
+   * Throws an error indicating that a given value is not a member of the
+   * visitor's `ResultType`.
+   */
+  #throwNotResultType(value: unknown) {
+    throw new Error(
+      debugStr`Not a \`ResultType\` value: $quote${value}`,
+    );
   }
 }

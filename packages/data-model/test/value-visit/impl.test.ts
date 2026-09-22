@@ -30,19 +30,19 @@ describe("value-visit/impl", () => {
       expect(visitValue({ a: [1] }, new Recorder())).toBeUndefined();
     });
 
-    it("returns a `mainResult` typed by the visitor's `ResultType`", () => {
+    it("returns a value of the visitor's `ResultType`", () => {
       class FirstNumber extends DefaultValueVisitor<never, number> {
         override visitNumber(value: number): VisitResult<never, number> {
           return mainResult(value);
         }
       }
 
-      const result: MainVisitResult<number> = visitValue(
+      const result: number = visitValue(
         ["x", 7, 8],
         new FirstNumber(),
       );
 
-      expect(result).toEqual(mainResult(7));
+      expect(result).toBe(7);
     });
 
     it("refuses, at compile time, a value outside the visitor's domain, and throws at runtime", () => {
