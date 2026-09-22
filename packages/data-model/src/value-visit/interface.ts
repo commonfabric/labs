@@ -128,14 +128,6 @@ export type VisitResult<PlusType, ResultType> =
   | ReplaceForm<PlusType>;
 
 /**
- * Possible results from the `visitValue()` function and other similar
- * functions.
- */
-export type MainVisitResult<ResultType> = BaselineVisitorMethodResult<
-  ResultType
->;
-
-/**
  * Possible results from `visited*()` calls (container iteration post-visit
  * methods).
  */

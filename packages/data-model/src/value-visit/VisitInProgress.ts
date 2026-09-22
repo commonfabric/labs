@@ -21,7 +21,7 @@ import {
 import { debugStr } from "@/value-debug";
 
 import {
-  type MainVisitResult,
+  type BaselineVisitorMethodResult,
   type RecurseForm,
   type ReplaceForm,
   type ValueVisitor,
@@ -41,6 +41,15 @@ type RecurseOfForm<PlusType> = {
   readonly doKeys: boolean;
   readonly doValues: boolean;
 };
+
+/**
+ * Possible results from the top `#visitValue()` method, and some of the
+ * methods that effectively feed into it.
+ */
+type MainVisitResult<ResultType> = BaselineVisitorMethodResult<
+  ResultType
+>;
+
 
 /**
  * State of a visit currently in progress, along with most of the visit
