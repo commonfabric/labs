@@ -1252,6 +1252,9 @@ async (request) => {
       transcript.push(result.assistant);
       const calls = result.assistant.toolCalls ?? [];
       if (calls.length === 0) {
+        if (runWasAborted(request.signal)) {
+          throw abortError(request.signal);
+        }
         finalAssistant = result.assistant;
         break;
       }
@@ -1360,6 +1363,9 @@ async (request) => {
         transcript.push(toolResultMessage(call.id, call.function.name, {
           error: "private tools are withheld on the citation repair turn",
         }));
+      }
+      if (runWasAborted(request.signal)) {
+        throw abortError(request.signal);
       }
       if (repairCalls.length === 0) {
         try {

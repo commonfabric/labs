@@ -2219,13 +2219,10 @@ export class HarnessInteractiveChatService {
     try {
       await this.#onEvent?.(envelope);
     } catch (error) {
-      // The event is committed by this point, and the record already carries
-      // the state it announced. Callers that asked for this emit still hear
-      // about the failure, so it is reported and rethrown rather than caught
-      // here — what must not happen is further up, where a turn's outcome is
-      // decided.
+      // The event is committed. Usage delivery is advisory and cannot decide
+      // the turn's outcome; other emit callers still receive delivery errors.
       this.#reportEventDeliveryError(envelope, error);
-      throw error;
+      if (event.kind !== "turn_usage") throw error;
     }
   }
 

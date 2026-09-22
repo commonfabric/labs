@@ -63,6 +63,9 @@ const nextEvent = async (
       if (data === undefined) continue;
       const envelope: ConsoleChatEventEnvelope = JSON.parse(data.slice(6));
       if (envelope.event.kind === kind) return envelope;
+      if (envelope.event.kind === "turn_completed") {
+        throw new Error(`turn completed before ${kind}`);
+      }
     }
   }
 };
@@ -232,19 +235,30 @@ describe("turn-usage", () => {
         const stream = await server.handle(
           new Request(
             `http://127.0.0.1:8100/api/events?sessionId=${sessionId}&afterSequence=${
-              progress.at(-2)!.sequence
+              progress.at(-1)!.sequence
             }`,
           ),
         );
         reader = stream.body!.pipeThrough(new TextDecoderStream()).getReader();
-        const live = await nextEvent(reader, "turn_usage");
-        expect(live).toEqual(progress.at(-1));
+        const nextUsage = nextEvent(reader, "turn_usage");
         const running = await server.handle(
           new Request(`http://127.0.0.1:8100/api/turns/${turnId}/result`),
         );
         expect(running.status).toBe(409);
 
         releaseChild.resolve();
+        const live = await nextUsage;
+        expect(live).toMatchObject({
+          sessionId,
+          turnId,
+          event: {
+            kind: "turn_usage",
+            turnId,
+            usage: { totalTokens: childFails ? 176 : 165 },
+            elapsedMs: 5000,
+          },
+        });
+        expect(live.sequence).toBeGreaterThan(progress.at(-1)!.sequence);
         await done;
         const terminal = await nextEvent(reader, "turn_completed");
         const polled = await (await server.handle(
@@ -307,6 +321,76 @@ describe("turn-usage", () => {
       }
     });
   }
+
+  it("retains usage and completes when the usage listener rejects", async () => {
+    const root = await Deno.makeTempDir();
+    const deliveryError = new Error("usage subscriber disconnected");
+    const deliveryFailures: unknown[] = [];
+    const service = new HarnessInteractiveChatService({
+      basePromptLoopOptions: {
+        artifactRoot: root,
+        sandboxRuntime: sandbox,
+        model: "test",
+      },
+      runIdForTurn: (_sessionId, turnId) => turnId,
+      onEvent: (envelope) => {
+        if (envelope.event.kind === "turn_usage") {
+          return Promise.reject(deliveryError);
+        }
+      },
+      onEventDeliveryError: (envelope, error) => {
+        deliveryFailures.push({ kind: envelope.event.kind, error });
+      },
+      createPromptLoop: (options) =>
+        new CfHarnessPromptLoop({
+          ...options,
+          modelClient: {
+            providerId: "test-provider",
+            complete: () =>
+              Promise.resolve({
+                assistant: {
+                  role: "assistant",
+                  content: "The repository note is ready.",
+                },
+                usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+              }),
+          },
+        }),
+    });
+    try {
+      await service.startSession("session", {
+        sessionId: "conversation",
+        workspace: { hostPath: "/workspace" },
+      });
+      await service.startTurn("start", {
+        sessionId: "conversation",
+        turnId: "usage-listener",
+        input: { text: "Summarize the repository note." },
+      });
+      await service.waitForTurn("conversation", "usage-listener");
+      const events = service.events("conversation");
+      expect(deliveryFailures).toEqual([{
+        kind: "turn_usage",
+        error: deliveryError,
+      }]);
+      expect(events.filter((entry) => entry.event.kind === "turn_usage"))
+        .toHaveLength(1);
+      expect(events.at(-1)?.event.kind).toBe("turn_completed");
+      expect(events.some((entry) => entry.event.kind === "turn_failed")).toBe(
+        false,
+      );
+      const report = JSON.parse(
+        await Deno.readTextFile(
+          join(root, "usage-listener", "run-report.json"),
+        ),
+      );
+      expect(report.status).toBe("completed");
+      expect(report.totalUsage.totalTokens).toBe(12);
+    } finally {
+      await service.waitForTurn("conversation", "usage-listener");
+      await Deno.remove(root, { recursive: true });
+    }
+  });
 
   it("stops stream updates on cancellation while retaining usage returned during unwind", async () => {
     const root = await Deno.makeTempDir();
