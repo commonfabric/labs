@@ -2,7 +2,7 @@
 
 Status: current implementation reference\
 Last verified: 2026-09-22\
-Revision: `688cd617a6`
+Revision: `7827662012`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
