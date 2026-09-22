@@ -381,8 +381,9 @@ export interface TypeLiteralRegistrationContext {
 /**
  * Converts a Type to a TypeNode, optionally registering it in the type registry.
  * Provides a central place for type-to-typenode conversion with consistent flags.
- * Given `context.state`, a node the checker printed is recorded there as
- * printed from `type` (`CrossStageState.isPrintedFrom()`).
+ * `context.state` records a node the checker printed as printed from `type`
+ * (`CrossStageState.isPrintedFrom()`). The key is required, so a caller passes
+ * `undefined` only by saying so, where it has no state to hand.
  */
 export function typeToTypeNodeWithRegistry(
   type: ts.Type,
@@ -390,7 +391,7 @@ export function typeToTypeNodeWithRegistry(
     checker: ts.TypeChecker;
     factory: ts.NodeFactory;
     sourceFile: ts.SourceFile;
-    state?: CrossStageState;
+    state: CrossStageState | undefined;
   },
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
   flags = DEFAULT_TYPE_NODE_FLAGS,
@@ -470,6 +471,7 @@ export function expressionToTypeNode(
       declaration,
       context.checker,
       context.state.typeRegistry,
+      context.state,
     )
     : undefined;
   if (preserved) {
@@ -611,6 +613,7 @@ export function getPreservedTypeForBindingElement(
   declaration: ts.BindingElement,
   checker: ts.TypeChecker,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  state?: CrossStageState,
 ): PreservedBindingType | undefined {
   const declared = getDeclaredTypeNodeForBindingElement(declaration, checker);
   const preserved = declared && getPreservedBindingTypeNode(declared, checker);
@@ -659,6 +662,7 @@ export function getPreservedTypeForBindingElement(
       declaration,
       checker,
       typeRegistry,
+      state,
     )
     : undefined;
   if (substituted) {
@@ -671,7 +675,12 @@ export function getPreservedTypeForBindingElement(
   // would emit a value type without `T`.
   const typeNode = typeToTypeNodeWithRegistry(
     instantiated.type,
-    { checker, factory: ts.factory, sourceFile: declaration.getSourceFile() },
+    {
+      checker,
+      factory: ts.factory,
+      sourceFile: declaration.getSourceFile(),
+      state,
+    },
     typeRegistry,
   );
   return {
@@ -732,6 +741,7 @@ function substituteTypeParameters(
   declaration: ts.BindingElement,
   checker: ts.TypeChecker,
   typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
 ): ts.TypeNode | undefined {
   const replacements = new Map<ts.Type, ts.TypeNode>();
   for (const parameter of parameters) {
@@ -739,7 +749,12 @@ function substituteTypeParameters(
     if (!argument) return undefined;
     const replacement = typeToTypeNodeWithRegistry(
       argument,
-      { checker, factory: ts.factory, sourceFile: declaration.getSourceFile() },
+      {
+        checker,
+        factory: ts.factory,
+        sourceFile: declaration.getSourceFile(),
+        state,
+      },
       typeRegistry,
       DEFAULT_TYPE_NODE_FLAGS | ts.NodeBuilderFlags.InTypeAlias,
     );

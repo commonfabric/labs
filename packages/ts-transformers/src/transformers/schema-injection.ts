@@ -38,6 +38,7 @@ import {
 } from "../ast/type-building.ts";
 import {
   type CapabilityParamSummary,
+  type CrossStageState,
   type FunctionCapabilitySummary,
   HelpersOnlyTransformer,
   type SchemaHint,
@@ -324,6 +325,7 @@ function applyCapabilitySummaryToArgument(
       factory,
       sourceFile,
       context?.state.typeRegistry,
+      context?.state,
     );
     if (context) {
       validateShrinkCoverage(
@@ -425,6 +427,7 @@ function applyCapabilitySummaryToParameter(
       factory,
       sourceFile,
       context?.state.typeRegistry,
+      context?.state,
     );
     if (context) {
       validateShrinkCoverage(
@@ -668,7 +671,11 @@ function collectFunctionSchemaTypeNodes(
     context &&
     unwrappedReturnExpr &&
     ts.isObjectLiteralExpression(unwrappedReturnExpr) &&
-    objectLiteralHasPreservedValueTypeNodes(unwrappedReturnExpr, checker)
+    objectLiteralHasPreservedValueTypeNodes(
+      unwrappedReturnExpr,
+      checker,
+      context.state,
+    )
   ) {
     const scopedResult = buildObjectLiteralReturnTypeNode(
       unwrappedReturnExpr,
@@ -1963,7 +1970,12 @@ function buildObjectLiteralReturnTypeNode(
       return undefined;
     }
 
-    const explicit = getExplicitValueTypeNode(valueExpr, checker, typeRegistry);
+    const explicit = getExplicitValueTypeNode(
+      valueExpr,
+      checker,
+      typeRegistry,
+      context?.state,
+    );
     const valueTypeNode = explicit?.typeNode ??
       typeToSchemaTypeNode(valueType, checker, sourceFile);
     if (!valueTypeNode) {
@@ -2001,6 +2013,7 @@ function getExplicitValueTypeNode(
   valueExpr: ts.Expression,
   checker: ts.TypeChecker,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  state?: CrossStageState,
 ): PreservedBindingType | undefined {
   const cellType = getAuthoredCellTypeNode(valueExpr, checker, typeRegistry);
   if (cellType) return { typeNode: cellType };
@@ -2024,6 +2037,7 @@ function getExplicitValueTypeNode(
       declaration,
       checker,
       typeRegistry,
+      state,
     );
   }
   return undefined;
@@ -2032,6 +2046,7 @@ function getExplicitValueTypeNode(
 function objectLiteralHasPreservedValueTypeNodes(
   expr: ts.ObjectLiteralExpression,
   checker: ts.TypeChecker,
+  state: CrossStageState,
 ): boolean {
   for (const property of expr.properties) {
     if (
@@ -2044,7 +2059,12 @@ function objectLiteralHasPreservedValueTypeNodes(
     const valueExpr = ts.isPropertyAssignment(property)
       ? unwrapExpression(property.initializer)
       : property.name;
-    const explicit = getExplicitValueTypeNode(valueExpr, checker);
+    const explicit = getExplicitValueTypeNode(
+      valueExpr,
+      checker,
+      undefined,
+      state,
+    );
     // Inference can erase a scope wrapper or print a writer binding as a
     // structural function type. Authored syntax retains both declarations.
     if (

@@ -159,9 +159,10 @@
  * would otherwise return stale pre-mutation verdicts after a registry write.
  *
  * schemaHints and the nodeLinks fields (capabilitySummary, schemaInjected,
- * printedFrom) are accessed through record/lookup/mark/is methods
- * (recordSchemaHint/lookupSchemaHint, recordCapabilitySummary/
+ * patternResultAnchor, printedFrom) are accessed through record/lookup/mark/is
+ * methods (recordSchemaHint/lookupSchemaHint, recordCapabilitySummary/
  * lookupCapabilitySummary, markSchemaInjected/isSchemaInjected,
+ * recordPatternResultSchemaCall/lookupPatternResultSchemaAnchor,
  * recordPrintedFrom/isPrintedFrom) but do not invalidate caches (no analysis
  * cache depends on them). typeRegistry is still mutated via direct .set() at call
  * sites; same caveat applies. If you add a cache that depends on any of these,
