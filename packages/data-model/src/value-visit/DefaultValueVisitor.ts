@@ -54,7 +54,7 @@ import {
  */
 export abstract class DefaultValueVisitor<
   PlusType = never,
-  ResultType = FabricValue,
+  ResultType = FabricValuePlus<PlusType>,
 > extends BaseValueVisitor<PlusType, ResultType> {
   //
   // Instance methods: Specific type tags

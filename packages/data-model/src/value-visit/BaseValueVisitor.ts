@@ -22,7 +22,7 @@ import {
  */
 export abstract class BaseValueVisitor<
   PlusType = never,
-  ResultType = FabricValue,
+  ResultType = FabricValuePlus<PlusType>,
 > implements ValueVisitor<PlusType, ResultType> {
   //
   // Subclass contract
@@ -93,7 +93,7 @@ export abstract class BaseValueVisitor<
    */
   isResultType(
     _value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>,
-  ): value is ResultType {
+  ): _value is ResultType {
     return true;
   }
 
