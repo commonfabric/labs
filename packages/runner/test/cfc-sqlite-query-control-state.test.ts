@@ -8,16 +8,19 @@
  * the requesting run's own commit, so there is no transaction in which such a
  * parameter is untainted, and an author cannot know which atoms a given
  * transaction will carry. The control paths therefore take §8.12.5 route 2:
- * the runtime declares their policy from the transaction's join. The refusal
- * the store's own empty ceiling was carrying by accident moves to the builtin,
- * which refuses a labeled parameter bound for a database in another space
- * before the request is staged.
+ * the runtime declares their policy from the transaction's join. What that
+ * store's own empty ceiling was refusing by accident goes to the builtin,
+ * which refuses a request carrying confidentiality bound for a database in
+ * another space before it is staged, and declares the membership of a shared
+ * result.
  *
  * The fixture labels the column a parameter is read OUT of differently from
  * the column the second query projects, so an implementation that widened the
  * projected column's declared ceiling from the transaction, or that declared
  * the control paths from the query's own columns, disagrees with what these
- * cases expect.
+ * cases expect. The membership case goes further and projects a column that
+ * declares nothing, so the parameter's clause is the only one that can reach
+ * the path it is about.
  *
  * Every case runs at `enforce-strict` with flow labels persisting, the rung
  * where a writer-fit misfit rejects rather than flags.
