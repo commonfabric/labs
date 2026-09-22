@@ -869,21 +869,16 @@ export class ContextualFlowControl {
   }
 
   /**
-   * The scope a schema declares for its position: the outermost `asCell`
-   * entry's scope if present, otherwise the top-level `scope`. The outermost
-   * `asCell` entry describes the immediate cell/slot (the addressing scope of
-   * the link to it, and the read follow-cap for that immediate hop); the
-   * top-level `scope` applies only when there is no `asCell` wrapper.
+   * The scope a schema declares at this level: the outermost `asCell` entry's
+   * scope if present, otherwise the top-level `scope`. The outermost `asCell`
+   * entry describes the immediate cell/slot (the addressing scope of the link
+   * to it, and the read follow-cap for that immediate hop); the top-level
+   * `scope` applies only when there is no `asCell` wrapper.
    *
-   * A position that declares neither is the definition its `$ref` names, read
-   * through the reference the way {@link declaredHandleKind} reads one: a
-   * definition states what every position of that type holds, and whether the
-   * reference is local or external is a fact about how the schema travels
-   * rather than about what it declares. A scope written beside the `$ref`
-   * belongs to the position itself, so it wins over the definition's. Local
-   * references resolve against `schema` itself, which a link's schema is
-   * self-contained enough for (`schemaAtPath` keeps the reachable `$defs`
-   * closure on it).
+   * The level is the schema with its root `$ref` resolved, whether that
+   * reference is local or external ({@link resolveRootRefForScope}): a
+   * definition declares what every position of its type holds, and which of
+   * the two forms the reference takes is a fact about how the schema travels.
    *
    * This single precedence is used both for the read follow-cap (which link
    * scopes a read may follow — see link-resolution.ts / traverse.ts) and for
@@ -894,7 +889,14 @@ export class ContextualFlowControl {
   static getSchemaScopeCap(
     schema: JSONSchema | undefined,
   ): SchemaScope | undefined {
-    return declaredScopeThroughRefs(schema, schema, scopeDeclaredAtLevel);
+    if (!isObjectOrArray(schema)) return undefined;
+    schema = resolveRootRefForScope(schema);
+    const entryScope = ContextualFlowControl.getAsCellScope(
+      ContextualFlowControl.getAsCellValues(schema).at(0),
+    );
+    if (isSchemaScope(entryScope)) return entryScope;
+    if (isSchemaScope(schema.scope)) return schema.scope;
+    return undefined;
   }
 
   /**
@@ -913,134 +915,85 @@ export class ContextualFlowControl {
    *   alternative) are not handles and are skipped; among those that do, the
    *   NARROWEST wins, since the runtime value may be any of them.
    *
-   * Like {@link getSchemaScopeCap}, it reads a position that declares no entry
-   * of its own through the reference it is written over, local or external.
+   * Like {@link getSchemaScopeCap}, it reads the schema with its root `$ref`
+   * resolved, local or external, and a branch's against the same document.
    */
   static getAsCellFollowScopeCap(
     schema: JSONSchema | undefined,
   ): SchemaScope | undefined {
-    return followScopeCapThroughRefs(schema, schema, new Set());
+    return asCellFollowScopeCap(schema, schema);
   }
 }
 
-/** The scope an `asCell` ENTRY declares at its own level. */
-const asCellEntryScopeAtLevel = (
+/**
+ * The schema a scope declaration is read from: `schema` with its root `$ref`
+ * resolved the way every reference is, local or external, with the keywords
+ * written beside the `$ref` merged over the definition's. Where the reference
+ * resolves to no object, `schema` itself. Local references resolve against
+ * `root`, which defaults to `schema`: a link's schema is self-contained enough
+ * for that (`schemaAtPath` keeps the reachable `$defs` closure on it).
+ *
+ * A position carrying a local reference without the definition it names reads
+ * as itself without consulting the resolver, which would log the miss: the
+ * scope readers ask this of every position a read passes, and many carry no
+ * `$defs` closure at all.
+ */
+const resolveRootRefForScope = (
   schema: JSONSchemaObj,
-): SchemaScope | undefined => {
-  const entryScope = ContextualFlowControl.getAsCellScope(
-    ContextualFlowControl.getAsCellValues(schema).at(0),
-  );
-  return isSchemaScope(entryScope) ? entryScope : undefined;
+  root: JSONSchema = schema,
+): JSONSchemaObj => {
+  const ref = schema.$ref;
+  if (typeof ref !== "string") return schema;
+  if (!isExternalSchemaRef(ref) && localDefinition(root, ref) === undefined) {
+    return schema;
+  }
+  const resolved = ContextualFlowControl.resolveSchemaRefs(schema, root);
+  return isObjectNotArray(resolved) ? resolved : schema;
 };
 
-/** The `scope` keyword a position carries at its own level. */
-const scopeKeywordAtLevel = (
-  schema: JSONSchemaObj,
-): SchemaScope | undefined =>
-  isSchemaScope(schema.scope) ? schema.scope : undefined;
-
-/** The scope a position declares at its own level, cap precedence. */
-const scopeDeclaredAtLevel = (
-  schema: JSONSchemaObj,
-): SchemaScope | undefined =>
-  asCellEntryScopeAtLevel(schema) ?? scopeKeywordAtLevel(schema);
+/**
+ * Helper for {@link ContextualFlowControl.getAsCellFollowScopeCap}. A branch
+ * resolves against the document its compound was read from, which is the
+ * resolved schema itself: resolution carries the definitions along.
+ */
+const asCellFollowScopeCap = (
+  schema: JSONSchema | undefined,
+  root: JSONSchema | undefined,
+): SchemaScope | undefined => {
+  if (!isObjectOrArray(schema)) return undefined;
+  const declaring = resolveRootRefForScope(schema, root ?? schema);
+  const entryScope = ContextualFlowControl.getAsCellScope(
+    ContextualFlowControl.getAsCellValues(declaring).at(0),
+  );
+  if (isSchemaScope(entryScope)) return entryScope;
+  const branchRoot = isObjectOrArray(declaring.$defs) ? declaring : root;
+  let cap: SchemaScope | undefined;
+  for (const branches of [declaring.anyOf, declaring.oneOf]) {
+    if (!Array.isArray(branches)) continue;
+    for (const branch of branches) {
+      cap = narrowerScopeCap(
+        cap,
+        asCellFollowScopeCap(branch as JSONSchema, branchRoot),
+      );
+    }
+  }
+  return cap;
+};
 
 /**
- * The `scope` a schema declares for its own position, read through the
- * references the position is written over, as
- * {@link ContextualFlowControl.getSchemaScopeCap} reads a cap. It reads no
+ * The `scope` keyword a schema declares for its own position, read from the
+ * schema with its root `$ref` resolved as
+ * {@link ContextualFlowControl.getSchemaScopeCap} reads it. It reads no
  * `asCell` entry: an entry's scope describes the handle that entry declares
  * rather than the position holding it, which is what the callers creating a
  * cell from a schema ask about.
  */
 export const declaredSchemaScope = (
   schema: JSONSchema | undefined,
-): SchemaScope | undefined =>
-  declaredScopeThroughRefs(schema, schema, scopeKeywordAtLevel);
-
-/**
- * The definition `schema`'s root `$ref` names, together with the document
- * that definition's own local references resolve against: the referenced
- * document for an external reference, and the document in hand for a local
- * one. `undefined` where the position names nothing, or names a reference the
- * reader cannot follow.
- */
-const referencedDeclaration = (
-  schema: JSONSchemaObj,
-  root: JSONSchema | undefined,
-): { schema: JSONSchema | undefined; root: JSONSchema | undefined } => {
-  if (typeof schema.$ref !== "string") return { schema: undefined, root };
-  const resolved = resolveExternalRootRefForStructure(schema);
-  return resolved !== schema
-    ? { schema: resolved, root: resolved }
-    : { schema: localDefinition(root, schema.$ref), root };
-};
-
-/**
- * What `read` finds for a position, through the references the position is
- * written over. `active` holds the positions on the way down, so a definition
- * naming itself declares nothing rather than looping.
- */
-const declaredScopeThroughRefs = (
-  schema: JSONSchema | undefined,
-  root: JSONSchema | undefined,
-  read: (schema: JSONSchemaObj) => SchemaScope | undefined,
-  active: Set<object> = new Set(),
 ): SchemaScope | undefined => {
-  if (!isObjectOrArray(schema) || active.has(schema)) return undefined;
-  const own = read(schema);
-  if (own !== undefined) return own;
-  active.add(schema);
-  try {
-    const referenced = referencedDeclaration(schema, root);
-    return declaredScopeThroughRefs(
-      referenced.schema,
-      referenced.root,
-      read,
-      active,
-    );
-  } finally {
-    active.delete(schema);
-  }
-};
-
-/**
- * Helper for {@link ContextualFlowControl.getAsCellFollowScopeCap}: the cap a
- * position declares, through the references it is written over and the
- * compound branches it offers. A reference that declares no cap leaves the
- * branches written beside it to answer.
- */
-const followScopeCapThroughRefs = (
-  schema: JSONSchema | undefined,
-  root: JSONSchema | undefined,
-  active: Set<object>,
-): SchemaScope | undefined => {
-  if (!isObjectOrArray(schema) || active.has(schema)) return undefined;
-  const own = asCellEntryScopeAtLevel(schema);
-  if (own !== undefined) return own;
-  active.add(schema);
-  try {
-    const referenced = referencedDeclaration(schema, root);
-    const throughRef = followScopeCapThroughRefs(
-      referenced.schema,
-      referenced.root,
-      active,
-    );
-    if (throughRef !== undefined) return throughRef;
-    let cap: SchemaScope | undefined;
-    for (const branches of [schema.anyOf, schema.oneOf]) {
-      if (!Array.isArray(branches)) continue;
-      for (const branch of branches) {
-        cap = narrowerScopeCap(
-          cap,
-          followScopeCapThroughRefs(branch as JSONSchema, root, active),
-        );
-      }
-    }
-    return cap;
-  } finally {
-    active.delete(schema);
-  }
+  if (!isObjectOrArray(schema)) return undefined;
+  const declaring = resolveRootRefForScope(schema);
+  return isSchemaScope(declaring.scope) ? declaring.scope : undefined;
 };
 
 /**

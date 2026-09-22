@@ -42,6 +42,30 @@ describe("scope-cap-through-refs", () => {
       expect(capAt(schema, "nickname")).toBe("session");
     });
 
+    it("returns the definition's `asCell` entry scope over a `scope` beside the `$ref`", () => {
+      // Keywords beside a `$ref` merge over the definition's one by one, so
+      // the slot reads `{ asCell: [{ kind: "cell", scope: "user" }], scope:
+      // "session" }`, the shape `PerUser<Cell<PerSession<T>>>` emits written
+      // in place. There the entry scopes the slot and `scope` its value.
+
+      const schema: JSONSchemaObj = {
+        type: "object",
+        properties: {
+          draft: { $ref: "#/$defs/Draft", scope: "session" },
+        },
+        $defs: {
+          Draft: {
+            type: "string",
+            asCell: [{ kind: "cell", scope: "user" }],
+          },
+        },
+      };
+
+      expect(capAt(schema, "draft")).toBe("user");
+      expect(capAt(externalizeSchema(structuredClone(schema)), "draft"))
+        .toBe("user");
+    });
+
     it("returns the scope declared at the end of a chain of definitions", () => {
       const schema: JSONSchemaObj = {
         type: "object",
@@ -93,6 +117,21 @@ describe("scope-cap-through-refs", () => {
       };
 
       expect(capAt(schema, "node")).toBeUndefined();
+    });
+
+    it("returns `undefined` in either form for a scoped definition that names only itself", () => {
+      // A reference chain that never reaches a schema resolves to nothing, so
+      // the scope written on its definition is never reached in either form.
+
+      const schema: JSONSchemaObj = {
+        type: "object",
+        properties: { never: { $ref: "#/$defs/Never" } },
+        $defs: { Never: { $ref: "#/$defs/Never", scope: "user" } },
+      };
+
+      expect(capAt(schema, "never")).toBeUndefined();
+      expect(capAt(externalizeSchema(structuredClone(schema)), "never"))
+        .toBeUndefined();
     });
 
     it("returns `undefined` for a `$ref` the document defines nothing for", () => {
