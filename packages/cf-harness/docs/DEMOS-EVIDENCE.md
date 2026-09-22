@@ -11,6 +11,17 @@ that is not on that page.
 [Driving the console from Weaver](WEAVER.md) owns the arrangement these are
 typed into, and its §7 holds the demo tasks this document measures.
 
+**This is a live document, not a record of a past exercise.** When a demo is
+re-proven on a new build, when a published part is corrected, or when a defect
+named here is fixed, this document is edited — the counts, the build they were
+measured on, and the entries themselves. That is the test
+[docs/README.md](../../../docs/README.md) sets for live against historical, and
+it decides this one: nobody writes a second copy and leaves this one alone.
+
+So every statement here describes the system as it stands. A count is a standing
+claim about a demo on a named build, and it is removed or replaced when it stops
+being true rather than annotated with what it used to say.
+
 ## What is on the run page, and what is not
 
 [DEMOS.md](DEMOS.md) carries four demos. They are the ones proven on
@@ -156,10 +167,9 @@ labs checkout it vendors.
 | Posture        | **not on this route** — read it from your toolshed, below                                                                            |
 
 **A healthy signal from this console means very little, and its absence is
-announced by nothing.** Two separate observations on one evening: the health
-route answered while the fabric routes behind it were dead, and later the
-process exited on a heap out-of-memory with no record of it anywhere an operator
-would look.
+announced by nothing.** Two ways it fails: the health route answers while the
+fabric routes behind it are dead, and the process can exit on a heap
+out-of-memory leaving no record anywhere an operator would look.
 
 **`/api/health` answering does not mean the fabric is answering, and the reason
 is structural.** That route answers from the console's own process and makes no
@@ -259,9 +269,9 @@ top of it produced a page correct in every figure whose headline asserted the
 one claim its prompt forbade.
 
 **A reactive value touched by ordinary JavaScript produces a page that is
-silently wrong.** Two instances in one evening, from different authors against
-different prompts. The first is **documented behaviour an author missed**; the
-second is an open defect:
+silently wrong.** Two instances, from different authors against different
+prompts. The first is **documented behaviour an author missed**; the second is
+an open defect:
 
 | What the source did                         | What the page showed                       |
 | ------------------------------------------- | ------------------------------------------ |
@@ -454,8 +464,8 @@ prompts each returned a named piece composing CheckList and AmountLedger by
   `5 left, 0
   done` to `4 left, 1 done`.
 - **Removal does not.** Clicking Remove leaves five checkboxes on the page and
-  the counts unchanged — and removal is what Ben reported broken from the
-  recorded take.
+  the counts unchanged. It is the control a viewer reaches for after ticking
+  items off, so this is the defect most likely to be seen.
 
 So the page is half-live: the part's own checkbox writes back and its removal
 control does not. **The newer published parts fix this** — see
@@ -495,13 +505,15 @@ discoverable — `vAx2Uy1C64duK47NIl9a0fb0UtfnHrXRrxM8giA1hWM` (CheckList) and
 than the older pair**, which they supersede — and read what they do and do not
 fix, below.
 
-**Prompt:** name both ids, ask for a preparation checklist beside a running
-total of what the ingredients cost against a budget, and **state that amounts
-are in whole dollars.** That last clause is not optional: AmountLedger's
-_published_ description says it sums "in integer cents" while its field is in
-whole currency units, so a run that trusts the description passes cents and the
-page renders 100× the intended figure. The tree is corrected; the published
-entry is not until it is republished.
+**Prompt:** [DEMOS.md](DEMOS.md) carries the text verbatim. It names both ids,
+asks for a preparation checklist beside a running total against a budget, and
+**states that amounts are in whole dollars.**
+
+That last clause is belt-and-braces on these ids rather than a requirement: the
+entry they publish describes the amounts correctly. It is kept because it costs
+a sentence and it is what the proven runs were measured against, and because a
+run reaching an older generation of the part reads a description that calls the
+field integer cents and renders 100× the intended figure.
 
 **Done when:** you can add a task, check one, add an expense, watch the total
 move — and reload, and find it all still there.
@@ -521,24 +533,24 @@ makes after ticking things off.
 
 **These ids carry both fixes, and both are demonstrated.**
 
-The **unit description is fixed**: the published entry no longer says the ledger
-sums "in integer cents", so a run that trusts it does not render a hundred times
-the intended figure.
+The **unit description is right**: the entry they publish describes
+AmountLedger's amounts as whole currency units, which is what the field holds,
+so a run that trusts the description passes the right figures.
 
 **Per-row Remove works.** Verified on the corrected parts across two runs and
 four checks — a seeded task, a seeded expense, and a task and an expense the run
 had added itself — each removing the right row, correcting the counts, and
 surviving a reload.
 
-That result took a retraction to reach, and the reason is worth carrying into
-every browser check:
+**A browser check of this control is only as good as its instrument**, which is
+worth stating wherever one is made:
 
 > A click reported as successful is not a click that happened. `agent-browser`
 > returns success for a target outside the viewport, having done nothing
 > (CT-2415) — silently, with no error, leaving a page indistinguishable from one
-> whose control is dead. One control here sat at y≈573 in a 577-high viewport,
-> its centre just below the fold. It was reported broken twice. Brought into
-> view, the identical click removed the row.
+> whose control is dead. One control here sits at y≈573 in a 577-high viewport,
+> its centre just below the fold, and a click on it reports success and does
+> nothing. Brought into view, the identical click removed the row.
 
 **Confirm the target is in the viewport before clicking, and hold a no-op to the
 evidence a success would need** — it is a claim that something did not happen.
@@ -578,18 +590,18 @@ right whenever they render; one run on the pin rendered every amount as
 preflight rather than a fault of this demo. Every passing run was diffed against
 the ledger on every field rather than judged by eye.
 
-**How this entry became reliable is the most transferable finding here, and it
-is not a better prompt.** The prompt stopped asking for sorting — the one thing
-the demo could not do — and that single removal is the whole of the change
-between 2-pass-1-fail and three clean runs. Three rounds of _adding_ clauses
-produced nothing. When a demo half-works, the first question is not what to say
-to it; it is what it is being asked for that it cannot deliver.
+**What makes this entry reliable is the most transferable finding here, and it
+is not a well-chosen prompt.** The prompt does not ask for sorting, which is the
+one thing the demo cannot deliver, and that alone separates three clean runs
+from a wording that fails one run in three. Adding clauses does not close the
+gap: a clause constrains what a run writes and cannot supply a behaviour that is
+not there. **When a demo half-works, ask what it is being asked for that it
+cannot deliver before asking what else to say to it.**
 
-The prompt above asks for a table; two earlier clean runs asked for a _sortable_
-table, and this document counts runs of **identical** text, so they do not count
-toward this entry. They are worth recording as evidence about the done condition
-rather than as proof of it: both asked for more than this prompt does and still
-delivered correct rows.
+This document counts runs of **identical** text, so runs against a wording that
+asks for a _sortable_ table count toward no entry here. Two such runs delivered
+correct rows, which is evidence about the done condition rather than proof of
+it: they asked for more than this prompt does and still produced the table.
 
 The run against this wording — `monthly-bank-transactions-2` — was verified
 against the store rather than by eye. All seven rows were diffed read-only
@@ -627,11 +639,11 @@ ways: the published sortable part has headers that _do_ sort and are equally
 invisible to the tree (CT-2411). A check leaning on accessibility output alone
 will call a working control dead and a dead one harmless.
 
-**The prompt no longer asks for sorting, because sorting does not work.** An
-earlier wording asked for a _sortable_ table and got a table: clicking a column
-header reordered nothing, the row order was byte-identical before and after
-(`proof/bank-after.png`), and six `columnheader` nodes carried no interaction at
-all while the only interactive element on the page was the title button. A demo
+**The prompt does not ask for sorting, because sorting does not work.** A
+wording that asks for a _sortable_ table gets a table: clicking a column header
+reorders nothing, the row order is byte-identical before and after
+(`proof/bank-after.png`), and six `columnheader` nodes carry no interaction at
+all while the only interactive element on the page is the title button. A demo
 should not ask on camera for behaviour that will not appear, so it asks for what
 it reliably gets.
 
