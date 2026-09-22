@@ -9,6 +9,7 @@
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { internSchema } from "@commonfabric/data-model-schema";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { getLogger } from "@commonfabric/utils/logger";
 import { Runtime } from "../src/runtime.ts";
@@ -17,6 +18,7 @@ import { type JSONSchema } from "../src/builder/types.ts";
 import { getTransactionReadActivities } from "../src/storage/transaction-inspection.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { toCell } from "../src/back-to-cell.ts";
+import { ensureSchemaDocument } from "../src/cfc/prepare.ts";
 
 const signer = await Identity.fromPassphrase("schema-view");
 const space = signer.did();
@@ -1751,6 +1753,29 @@ describe("schema-view", () => {
       }
     });
 
+    it("matches nothing where the definition it names is `false`", async () => {
+      // The other boolean target. Reaching it through a local `$ref` is a
+      // resolution, and the `$defs` the ref resolves against merge into that
+      // target, so what comes back is the object form of `false` — a schema
+      // selecting nothing — and the read is nothing, as it is for the same
+      // `false` written as the whole schema (below).
+      const read = await seeded(
+        "rejecting-ref",
+        { a: 1 },
+        { $ref: "#/$defs/Nothing", $defs: { Nothing: false } } as const,
+      );
+
+      const eager = read(false);
+      const lazy = read(true);
+      try {
+        expect(eager.get()).toBeUndefined();
+        expect(lazy.get()).toBeUndefined();
+      } finally {
+        await eager.tx.commit();
+        await lazy.tx.commit();
+      }
+    });
+
     it("matches nothing where it is the whole schema", async () => {
       const read = await seeded(
         "unresolvable-root",
@@ -1769,6 +1794,66 @@ describe("schema-view", () => {
         await eager.tx.commit();
         await lazy.tx.commit();
       }
+    });
+  });
+
+  describe("a boolean as the whole schema", () => {
+    // `true` admits every value and `false` none, and the entry point keeps
+    // the two apart: `true` hands the read to the schema-less query-result
+    // proxy, and `false` reaches traversal, which matches nothing. Both hold
+    // whether the boolean is written in place or reached through a `cid:` ref,
+    // whose site carries nothing to merge into the target. A local
+    // `#/$defs/...` ref does carry its `$defs`, and that merge gives a `false`
+    // target back as an object — pinned above, under the `$ref` cases.
+
+    /** Read `{ a: 1 }` under `schema` in both modes. */
+    const readBoth = async (
+      cause: string,
+      schema: JSONSchema,
+      check: (value: unknown) => void,
+    ) => {
+      const read = await seeded(cause, { a: 1 }, schema);
+      const eager = read(false);
+      const lazy = read(true);
+      try {
+        check(eager.get());
+        check(lazy.get());
+      } finally {
+        await eager.tx.commit();
+        await lazy.tx.commit();
+      }
+    };
+    const untouched = (value: unknown) => {
+      const record = value as Record<string, unknown>;
+      expect(Object.keys(record)).toEqual(["a"]);
+      expect(record.a).toBe(1);
+    };
+    const nothing = (value: unknown) => {
+      expect(value).toBeUndefined();
+    };
+    /** Install a schema document holding `target` and return its ref. */
+    const installed = async (target: JSONSchema): Promise<JSONSchema> => {
+      const { taggedHashString } = internSchema(target, true);
+      const install = runtime.edit();
+      ensureSchemaDocument(install, space, taggedHashString, target);
+      await install.commit();
+      return { $ref: `cid:${taggedHashString}` } as JSONSchema;
+    };
+
+    it("hands back the value untouched where `true` is the whole schema", async () => {
+      await readBoth("true-root", true as JSONSchema, untouched);
+    });
+
+    it("reads nothing where `false` is the whole schema", async () => {
+      await readBoth("false-root", false as JSONSchema, nothing);
+    });
+
+    it("hands back the value untouched where a `cid:` ref names a `true` document", async () => {
+      await readBoth("cid-true-doc", await installed(true), untouched);
+    });
+
+    it("reads nothing where a `cid:` ref names a `false` document", async () => {
+      await readBoth("cid-false-doc", await installed(false), nothing);
     });
   });
 

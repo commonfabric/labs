@@ -22,6 +22,7 @@ import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { getLogger } from "@commonfabric/utils/logger";
 import { stringTupleKey } from "@commonfabric/utils/string-tuple-key";
 import { isObjectOrArray } from "@commonfabric/utils/types";
+import { isNontrivialSchema } from "@commonfabric/data-model-schema";
 import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
 
 import { type CellScope, type JSONSchema } from "./builder/types.ts";
@@ -787,12 +788,16 @@ function anchorValueAsEntity(
     context,
   });
 
+  // This link is persisted, so it carries a schema only where the schema
+  // constrains something: a `true` or `{}` on the parent is left off rather
+  // than written into the stored link.
+  const entrySchema = resolveSchemaForValue(link.schema, content);
   const newEntryLink: NormalizedFullLink = {
     id: toURI(entityId),
     space: link.space,
     scope: link.scope,
     path: [],
-    schema: resolveSchemaForValue(link.schema, content),
+    schema: isNontrivialSchema(entrySchema) ? entrySchema : undefined,
   };
 
   state.seen.set(registerKey, newEntryLink);

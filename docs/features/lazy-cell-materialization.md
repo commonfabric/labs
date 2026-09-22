@@ -288,10 +288,12 @@ reads skip the machinery outright on that check.
 
 ## Where a schema-less read takes over
 
-A schema that says nothing once resolved — absent, `true`, `{}`, or a `$ref`
-resolving to one of those — selects the schema-less query-result proxy in
+A schema that constrains nothing — absent, `true`, `{}`, or a `$ref` resolving
+to one of those — selects the schema-less query-result proxy in
 [`query-result-proxy.ts`](../../packages/runner/src/query-result-proxy.ts),
-which `validateAndTransform` dispatches to before a view is considered.
+which `validateAndTransform` dispatches to before a view is considered. `false`
+is not among them: it constrains everything, so it reaches traversal, and the
+read is nothing.
 
 That dispatch is not the root's alone. An eager read hands back a proxy for any
 subtree whose narrowed schema says nothing

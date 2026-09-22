@@ -349,8 +349,9 @@ const matchesConcreteValue = (
  */
 
 /**
- * Resolve a schema to its canonical interned form, or `undefined` when the
- * input carries no usable information.
+ * Resolve a schema to its canonical interned form. `undefined` is returned for
+ * `undefined` alone — no schema was given — and every schema, a boolean or
+ * `{}` included, comes back as a schema.
  *
  * The return value is the **canonical interned reference** for the resolved
  * schema's structural content — produced by `internSchema()`. Concrete
@@ -368,9 +369,16 @@ const matchesConcreteValue = (
  * - When the caller supplies a schema that **is** itself the canonical
  *   interned instance, the same reference is returned (because
  *   `internSchema()` short-circuits on WeakMap hit).
- * - `undefined` is returned for trivial inputs (`undefined`, `null`, `{}`,
- *   non-object) and for `$ref`-chains that resolve to a boolean or
- *   trivial schema.
+ * - A boolean is returned as itself, whether written in place or reached
+ *   through a `$ref` chain, and so is `{}` (interned). `true` and `{}` admit
+ *   every value and `false` none; none of the three is the absence of a
+ *   schema, and a caller deciding "was a schema given" tests for `undefined`
+ *   alone. A `$ref` reaches a boolean only from a bare ref site: a local
+ *   `#/$defs/...` ref carries the `$defs` it resolves against, and merging
+ *   those siblings in returns an object instead (`{ not: true }` for a `false`
+ *   target, which likewise matches nothing).
+ * - `false` is also returned for a `$ref` naming a definition the schema does
+ *   not carry: a schema the runtime cannot read is one nothing matches.
  *
  * Callers that need a stable reference across calls should therefore rely
  * on structural canonicalization (same content yields same reference)
@@ -380,14 +388,18 @@ const matchesConcreteValue = (
 export function resolveSchema(
   schema: JSONSchema | undefined,
 ): JSONSchema | undefined {
-  // Treat undefined/null/{} or any other non-object as no schema
-  // We don't use ContextualFlowControl.isTrueSchema here, since we want to
-  // handle flags like default or ifc
-  if (!isNontrivialSchema(schema)) {
+  if (schema === undefined || schema === null) {
+    return undefined;
+  }
+  // A boolean is a complete schema: `true` admits every value, `false` none.
+  if (typeof schema === "boolean") {
+    return schema;
+  }
+  if (!isObjectOrArray(schema)) {
     return undefined;
   }
 
-  let resolvedSchema = schema;
+  let resolvedSchema: JSONSchema = schema;
   if (typeof schema.$ref === "string") {
     const resolved = ContextualFlowControl.resolveSchemaRefs(schema);
     if (resolved === undefined) {
@@ -403,21 +415,17 @@ export function resolveSchema(
       );
       return false;
     }
-    if (!isObjectOrArray(resolved)) {
-      // For boolean schema or the default `{}` schema, we don't have any
-      // meaningful information in the schema, so just return undefined.
-      return undefined;
+    if (typeof resolved === "boolean") {
+      return resolved;
     }
     resolvedSchema = resolved;
   }
 
-  // Return no schema if all it said is that this was a reference or an
-  // object without properties. Intern here (rather than just
-  // deep-freezing) so structurally-equal schemas collapse to a single
-  // canonical reference across calls — see the contract above.
-  return isNontrivialSchema(resolvedSchema)
-    ? internSchema(resolvedSchema)
-    : undefined;
+  // Intern rather than just deep-freeze, so structurally-equal schemas
+  // collapse to a single canonical reference across calls — see the contract
+  // above. `{}` is a schema like any other here: it constrains nothing, and it
+  // is not the absence of one.
+  return internSchema(resolvedSchema);
 }
 
 const selectMatchingCompoundBranch = (
@@ -1099,13 +1107,16 @@ export function validateAndTransform(
     ...resolvedLink,
     ...(effectiveSchema !== undefined && { schema: effectiveSchema }),
   };
-  // If we don't have a schema, and we aren't asCell/asStream, use a proxy
+  // A schema that constrains nothing — absent, `true`, or `{}` — and carries
+  // no asCell/asStream hands the read to the schema-less proxy. `false` is
+  // not one of those: it constrains everything, and traversal below is what
+  // honors it.
   if (
     (
       effectiveSchema === undefined ||
       !SchemaObjectTraverser.hasAsCell(effectiveSchema)
     ) &&
-    filteredSchema === undefined
+    filteredSchema !== false && !isNontrivialSchema(filteredSchema)
   ) {
     return createQueryResultProxy(runtime, tx, link, 0, cfcLabelView);
   }
