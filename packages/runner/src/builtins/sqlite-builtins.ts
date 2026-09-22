@@ -1202,22 +1202,6 @@ export function sqliteQuery(
     // rung too. A deployment that labels nothing derives an empty join and
     // never meets it.
     if (crossSpace && requestConfidentiality().length > 0) {
-      // On a transaction of its own, whose only read is the destination it
-      // is about to write. The issuing transaction is the one carrying the
-      // clause that caused the refusal — that is the condition this fires on
-      // — so writing the refusal there would put that clause on `/pending`
-      // and `/error` through route 2, permanently, and a pattern rendering
-      // "this query was refused" would inherit exactly the atoms it was
-      // refused over. The whole point of the control state's policy is that
-      // a pane reading it is not poisoned by it, and the refusal path is
-      // where that is easiest to lose.
-      //
-      // No request hash goes with it: recording this one's would make the
-      // next evaluation of the same inputs a memo hit, so a later pass whose
-      // request carries nothing would never ask again. What the pattern
-      // reads is the rule and nothing more — which atoms did not fit names
-      // the principals that introduced them, and that detail faces the
-      // operator.
       // On the issuing transaction, whose flow join is non-empty by
       // construction — that is the condition this fires on — so route 2
       // declares that clause on `/pending` and `/error` here. The refusal
