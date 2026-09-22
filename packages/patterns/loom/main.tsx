@@ -16,6 +16,7 @@ import type {
   Presentation,
   ViewerState,
 } from "./schemas.tsx";
+import { addParticipant, participantEntries } from "./participants.tsx";
 
 type State = {
   panels: Writable<Writable<Panel>[]>;
@@ -279,13 +280,14 @@ const selectPanel = handler<
 });
 
 export default pattern<LoomInput, LoomOutput>(
-  ({ title, panels, presentation }) => {
+  ({ title, panels, presentation, participants }) => {
     const pieceRegistry = computed(() =>
       panels.get().flatMap((panel) => {
         const value = panel.get();
         return value.kind === "piece" ? [value.piece] : [];
       })
     );
+    const roster = computed(() => participantEntries(participants));
     const state = { panels, presentation };
     const viewerState = new Writable.perSession<ViewerState>({});
     const remove = removePanel(state);
@@ -300,6 +302,9 @@ export default pattern<LoomInput, LoomOutput>(
             <cf-toolbar slot="header">
               <h1 slot="start">{title}</h1>
               <cf-hstack slot="end" gap="2" wrap>
+                {roster.map((profile) => (
+                  <cf-profile-badge $profile={profile} variant="circle" />
+                ))}
                 <cf-button
                   onClick={() =>
                     present.send({ stagedPanels: [...panels.get()] })}
@@ -387,6 +392,8 @@ export default pattern<LoomInput, LoomOutput>(
       movePanel: move,
       duplicatePanel: duplicate,
       setPresentation: present,
+      participants: roster,
+      addParticipant: addParticipant({ roster: participants }),
     };
   },
 );
