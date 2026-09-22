@@ -14,13 +14,14 @@ books they may have read and authors they may like. The shelf also accepts
 manual books and authors. These are suggestions to review, not verified reading
 history.
 
-**Ask for recommendations** creates `main.tsx` in a new anonymous space. The
+The shelf and its one invitation live in the same dedicated space. **Ask for
+recommendations** makes the invitation and its sharing controls available. The
 native sharing dialog previews the exact shelf snapshot and its destination.
-Confirming publishes that copy to the invitation; the personal shelf stays
-private. Open the invitation and use the piece menu's Access panel to grant each
-visitor WRITE on that space. Visitors need WRITE to run their private state and
-agent requests there; the owner-only shelf and inbox rules still govern what
-those writes may change and read.
+Confirming publishes that copy to the invitation's shared library slot; the
+personal shelf remains a separate `PerUser` value. Grant each visitor WRITE in
+the space's Access panel so their private state and agent requests can run.
+Because WRITE covers the whole space, use disposable demo data. Another member
+with WRITE can replace the published library slot directly.
 
 The invitation shows a few favorite authors and a collapsed list of the
 originator's books. The visitor's agent proposes books from that visitor's Loom
@@ -40,9 +41,10 @@ its sender and the originator.
 
 For a two-person demonstration:
 
-1. In the owner's home space, open `library.tsx`, add a book and favorite author
+1. In a dedicated demo space, open `library.tsx`, add a book and favorite author
    or run its agent, and click **Ask for recommendations**. Confirm the native
-   snapshot preview, then click **Open recommendation invitation**.
+   snapshot preview, then click **Open recommendation invitation**. The shelf
+   and invitation stay in that space.
 2. In the invitation's Access panel, grant the visitor WRITE and share the
    invitation link. The visitor opens that link under their own identity and
    sees the collapsed shelf and favorite authors.
@@ -61,7 +63,8 @@ Scopes select state; confidentiality labels restrict reads. Fresh private stores
 bind `User(CurrentPrincipal)` to their authenticated creator and retain that
 identity on later writes. The inbox supports appending references without
 reading its existing entries. The invitation's originator descriptor carries a
-persisted principal attestation, and the published shelf slot is owner-writable.
+persisted principal attestation. The published shelf slot has space-wide WRITE
+authority, so it does not enforce owner-only updates.
 
 `cf-share-snapshot` is a trusted host component. Its own modal displays the full
 JSON snapshot and verified audience and requires a genuine user confirmation.
@@ -107,6 +110,24 @@ servers. The existing harness retrieval enforcement limits apply: the default
 strict harness mode refuses retrieval by a task in the `context` role. A demo
 using Loom retrieval needs the documented explicit override. Fabric clients can
 still enforce strict CFC with persisted flow labels.
+
+The current Estuary shell supplies a render ceiling but no runtime-wide read
+ceiling. Its native snapshot dialog therefore reports “Snapshot sharing requires
+a bounded runtime read ceiling.” The same-space integration test configures that
+ceiling and verifies publication. A hosted two-person demo needs a bounded shell
+runtime or a pre-published disposable shelf copy before opening the invitation.
+
+For a disposable hosted fixture,
+`cf cell get --url "$SHELF_URL" --select
+'publishedLibrary@'` returns the shared
+slot's `/of:fid1:…` address. Write a JSON object with `books` and
+`favoriteAuthors` directly to that cell's `value` path using
+`cf cell set --api-url "$CF_API_URL" --space "$CF_SPACE" --cell
+<returned-address> value`,
+then run `cf piece step --url "$SHELF_URL"`. The set command reads JSON from
+standard input. This direct fixture write is not a native reviewed share;
+writing through the shelf result path can carry the private shelf's label into
+the transaction and fail writer-fit. Use only disposable book data.
 
 The authored tests exercise manual entry, private selection, rendering, and
 selection changes without a live model:

@@ -1,21 +1,17 @@
 /** A shared invitation with private visitor drafts and an originator-only inbox. */
 
 import {
-  type Cfc,
   computed,
-  type CurrentPrincipal,
   handler,
   NAME,
   pattern,
   type PerSpace,
   type PerUser,
   type ReadonlyCell,
-  type RepresentsCurrentUser,
   type Stream,
   UI,
   type VNode,
   Writable,
-  type WriteAuthorizedBy,
 } from "commonfabric";
 import {
   type Book,
@@ -28,9 +24,10 @@ import {
 import { type OriginatorIdentity, type ReaderPrivate } from "./privacy.tsx";
 import { InvitationView, type Profile } from "./views.tsx";
 
-/** Published library and creator profile carried into the invitation. */
+/** The invitation reads a published shelf in its own space. */
 export interface InvitationInput {
   originatorProfile: ReadonlyCell<Profile>;
+  library: ReadonlyCell<LibrarySlot>;
 }
 
 /** A title and author snapshot chosen by the visitor for explicit sharing. */
@@ -38,23 +35,10 @@ export interface SelectedBooks {
   books: Book[];
 }
 
-/** Published library pointer; the creator alone may replace it. */
+/** A shelf snapshot released for readers in the invitation's space. */
 export interface LibrarySlot {
-  value?: ReadonlyCell<LibrarySeed>;
+  value?: LibrarySeed;
 }
-
-/** Binds a host-approved library snapshot to this invitation. */
-export const publishLibrary = handler<{ library: ReadonlyCell<LibrarySeed> }, {
-  library: Writable<LibrarySlot>;
-}>((event, { library }) => library.set({ value: event.library }));
-
-/** Library pointer whose authenticated creator alone may publish a snapshot. */
-export type PublishedLibrary = RepresentsCurrentUser<
-  Cfc<
-    WriteAuthorizedBy<LibrarySlot, typeof publishLibrary>,
-    { ownerPrincipal: CurrentPrincipal }
-  >
->;
 
 /** Private state is scoped independently from the shared invitation. */
 export interface InvitationOutput {
@@ -62,10 +46,7 @@ export interface InvitationOutput {
   [UI]: PerUser<VNode>;
   originator: OriginatorIdentity;
   originatorProfile: ReadonlyCell<Profile>;
-  library: PublishedLibrary;
-  publish: Stream<{ library: ReadonlyCell<LibrarySeed> }>;
-  reviewedLibrary: PerUser<Writable<LibrarySlot>>;
-  publishReviewed: Stream<void>;
+  library: ReadonlyCell<LibrarySlot>;
   received: PerSpace<Writable<ReadonlyCell<Book>[]>>;
   recommended: PerUser<Writable<ReadonlyCell<Book>[]>>;
   selected: PerUser<Writable<SelectedBooks>>;
@@ -85,16 +66,6 @@ const reviewSelection = handler<SelectedBooks, {
   });
 });
 
-/** Publishes a reviewed shelf within the invitation's transaction space. */
-const publishReviewedLibrary = handler<void, {
-  reviewedLibrary: PerUser<Writable<LibrarySlot>>;
-  publish: Stream<{ library: ReadonlyCell<LibrarySeed> }>;
-}>((_, { reviewedLibrary, publish }) => {
-  if (!reviewedLibrary.get()?.value) return;
-  publish.send({ library: reviewedLibrary.get().value! });
-  reviewedLibrary.set({});
-});
-
 /** Clears the visitor's draft after the host commits its reviewed copy. */
 const clearSelection = handler<void, {
   selected: PerUser<Writable<SelectedBooks>>;
@@ -107,7 +78,7 @@ const ReaderInvitation = pattern<
   {
     originatorProfile: PerUser<ReadonlyCell<Profile>>;
     originator: PerUser<ReadonlyCell<Record<string, never>>>;
-    library: PerUser<Writable<LibrarySlot>>;
+    libraryCell: PerUser<ReadonlyCell<LibrarySlot>>;
     received: PerUser<Writable<ReadonlyCell<Book>[]>>;
     recommended: PerUser<Writable<ReadonlyCell<Book>[]>>;
     selected: PerUser<Writable<SelectedBooks>>;
@@ -120,7 +91,7 @@ const ReaderInvitation = pattern<
     {
       originatorProfile,
       originator,
-      library,
+      libraryCell,
       received,
       recommended,
       selected,
@@ -133,16 +104,16 @@ const ReaderInvitation = pattern<
       (): PerUser<boolean> | null => ownerState.get(),
     );
     const reading = computed((): PerUser<{ value?: LibrarySeed }> => ({
-      value: library.get().value?.get(),
+      value: libraryCell.key("value").get(),
     }));
     const suggestions = computed(
       (): PerUser<{ value?: CandidateAgentOutput }> => {
-        const published = library.get().value;
+        const published = libraryCell.key("value").get();
         if (!published || isOwner !== false) return {};
         return {
           value: SuggestBooks.asScope("user")({
-            books: published.key("books"),
-            favoriteAuthors: published.key("favoriteAuthors"),
+            books: libraryCell.key("value", "books"),
+            favoriteAuthors: libraryCell.key("value", "favoriteAuthors"),
           }),
         };
       },
@@ -206,32 +177,23 @@ const ReaderInvitation = pattern<
 );
 
 export default pattern<InvitationInput, InvitationOutput>(
-  ({ originatorProfile }) => {
+  ({ originatorProfile, library }) => {
     const originator = new Writable.perSpace<OriginatorIdentity>({});
-    const library = new Writable.perSpace<PublishedLibrary>({});
     const received = new Writable.perSpace<ReaderPrivate<ReadonlyCell<Book>[]>>(
       [],
     );
-    const reviewedLibrary = new Writable.perUser<
-      LibrarySlot
-    >({});
     const recommended = new Writable.perUser<
       ReaderPrivate<ReadonlyCell<Book>[]>
     >([]);
     const selected = new Writable.perUser<ReaderPrivate<SelectedBooks>>({
       books: [],
     });
-    const publish = publishLibrary({ library });
     const review = reviewSelection({ selected });
     const clear = clearSelection({ selected });
-    const publishReviewed = publishReviewedLibrary({
-      reviewedLibrary,
-      publish,
-    });
     const reader = ReaderInvitation.asScope("user")({
       originatorProfile,
       originator,
-      library,
+      libraryCell: library,
       received,
       recommended,
       selected,
@@ -244,9 +206,6 @@ export default pattern<InvitationInput, InvitationOutput>(
       originator,
       originatorProfile,
       library,
-      publish,
-      reviewedLibrary,
-      publishReviewed,
       received,
       recommended,
       selected,

@@ -7,7 +7,8 @@ import type { Profile } from "./views.tsx";
 
 export default pattern(() => {
   const originator = new Writable<Profile>({ name: "Book lover" });
-  const invitation = Invitation({ originatorProfile: originator });
+  const library = new Writable({});
+  const invitation = Invitation({ originatorProfile: originator, library });
   const empty = assert(() =>
     invitation.selected.get()?.books.length === 0 &&
     invitation.recommended.get()?.length === 0 &&

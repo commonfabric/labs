@@ -1,11 +1,10 @@
-/** A personal reading shelf that publishes a reviewed invitation in a new space. */
+/** A personal reading shelf that publishes a reviewed invitation. */
 
 import {
   type BuiltInAgentState,
   type Cell,
   computed,
   handler,
-  type JSXElement,
   NAME,
   navigateTo,
   pattern,
@@ -17,7 +16,10 @@ import {
   Writable,
 } from "commonfabric";
 import { type Book, type LibrarySeed, SeedLibrary } from "./agents.tsx";
-import Invitation, { type InvitationOutput } from "./main.tsx";
+import Invitation, {
+  type InvitationOutput,
+  type LibrarySlot,
+} from "./main.tsx";
 import { type ReaderPrivate } from "./privacy.tsx";
 import { LibraryView, type Profile } from "./views.tsx";
 
@@ -29,7 +31,9 @@ export interface LibraryOutput {
   seeding: PerUser<BuiltInAgentState<LibrarySeed>>;
   addedBooks: PerUser<Writable<Book[]>>;
   addedAuthors: PerUser<Writable<string[]>>;
-  invitations: PerUser<Writable<InvitationOutput[]>>;
+  invitation: InvitationOutput;
+  publishedLibrary: Writable<LibrarySlot>;
+  invitationReady: PerUser<Writable<boolean>>;
   createInvitation: Stream<void>;
   addBook: Stream<Book>;
   addAuthor: Stream<{ name: string }>;
@@ -50,18 +54,13 @@ const addAuthor = handler<{ name: string }, { authors: Writable<string[]> }>(
   },
 );
 
-/** Creates an invitation with a fresh anonymous space identity. */
+/** Makes the shelf's invitation available after its profile resolves. */
 const createInvitation = handler<void, {
   profile: Cell<Profile> | undefined;
-  invitations: Writable<InvitationOutput[]>;
-  active: PerUser<Writable<InvitationOutput | undefined>>;
-}>((_, { profile, invitations, active }) => {
+  ready: Writable<boolean>;
+}>((_, { profile, ready }) => {
   if (profile === undefined || profile.get() === undefined) return;
-  const invitation = Invitation.inSpace()({
-    originatorProfile: profile.resolveAsCell(),
-  });
-  invitations.push(invitation);
-  active.set(invitation);
+  ready.set(true);
 });
 
 /** Opens an invitation that the reader can share through the space controls. */
@@ -74,10 +73,8 @@ export default pattern<Record<string, never>, LibraryOutput>(() => {
   const seed = SeedLibrary.asScope("user")({});
   const addedBooks = new Writable.perUser<ReaderPrivate<Book[]>>([]);
   const addedAuthors = new Writable.perUser<ReaderPrivate<string[]>>([]);
-  const invitations = new Writable.perUser<InvitationOutput[]>([]);
-  const active = new Writable.perUser<InvitationOutput | undefined>(
-    undefined,
-  );
+  const invitationReady = new Writable.perUser(false);
+  const publishedLibrary = new Writable.perSpace<LibrarySlot>({});
   const reading = computed((): LibrarySeed => ({
     books: [...(seed.state.result?.books ?? []), ...addedBooks.get()],
     favoriteAuthors: [
@@ -87,10 +84,13 @@ export default pattern<Record<string, never>, LibraryOutput>(() => {
       ]),
     ],
   }));
+  const invitation = Invitation({
+    originatorProfile: profile.result!,
+    library: publishedLibrary,
+  });
   const create = createInvitation({
     profile: profile.result,
-    invitations,
-    active,
+    ready: invitationReady,
   });
   const appendBook = addBook({ books: addedBooks });
   const appendAuthor = addAuthor({ authors: addedAuthors });
@@ -107,41 +107,36 @@ export default pattern<Record<string, never>, LibraryOutput>(() => {
     createInvitation: create,
     canCreateInvitation: computed(() => profile.result?.get() !== undefined),
   });
-  const sharing = computed((): PerUser<{ view: JSXElement | null }> => {
-    if (active.get() === undefined) return { view: null };
-    const invitation = active.resolveAsCell();
-    const reviewed = invitation.key("reviewedLibrary").get();
-    return {
-      view: (
-        <cf-share-snapshot
-          $source={reading}
-          $recipient={invitation}
-          audience-kind="space"
-          $result={reviewed.key("value")}
-          oncf-shared={invitation.key("publishReviewed").get()}
-        />
-      ),
-    };
-  });
   return {
     [NAME]: "My reading shelf",
     [UI]: (
       <cf-vstack>
         {profile[UI]}
         {view}
-        {sharing.view}
-        {invitations.map((invitation) => (
-          <cf-button onClick={openInvitation({ invitation })}>
-            Open recommendation invitation
-          </cf-button>
-        ))}
+        {invitationReady.get()
+          ? (
+            <cf-vstack>
+              <cf-share-snapshot
+                $source={reading}
+                $recipient={invitation}
+                audience-kind="space"
+                $result={publishedLibrary.key("value")}
+              />
+              <cf-button onClick={openInvitation({ invitation })}>
+                Open recommendation invitation
+              </cf-button>
+            </cf-vstack>
+          )
+          : null}
       </cf-vstack>
     ),
     reading,
     seeding: seed.state,
     addedBooks,
     addedAuthors,
-    invitations,
+    invitation,
+    publishedLibrary,
+    invitationReady,
     createInvitation: create,
     addBook: appendBook,
     addAuthor: appendAuthor,

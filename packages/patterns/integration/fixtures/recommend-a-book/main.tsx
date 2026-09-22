@@ -8,5 +8,6 @@ import Invitation, {
 
 export default pattern<Record<string, never>, InvitationOutput>(() => {
   const profile = new Writable({ name: "Originator" });
-  return Invitation({ originatorProfile: profile });
+  const library = new Writable.perSpace({});
+  return Invitation({ originatorProfile: profile, library });
 });

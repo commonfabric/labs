@@ -572,7 +572,12 @@ const handlers: Record<
       space: result().key("originator"),
     });
     const shared = await commitSnapshotShare(prepared.consent, shareClick());
-    result().key("publish").send({ library: shared });
+    const published = await runtime.commitUiCellWrite(
+      result().key("library", "value"),
+      shared.getAsLink(),
+      { blind: true },
+    );
+    if (published.error) throw published.error;
     await idle();
     return { value: prepared.value, audience: prepared.audience };
   },
