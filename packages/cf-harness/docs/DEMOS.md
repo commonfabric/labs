@@ -86,10 +86,15 @@ curl -sS <your-toolshed>/api/meta
 answers 404. `gitSha` should open `e5b9f57c6c`. Your console reports the same
 build as its store path in `/api/health/detail`.
 
-**If it matches, change nothing.** Do not run `loom vendor sync`, and do not
-take a newer bump before demonstrating. Every proof below is a statement about
-this build and no other, and the fastest way to turn a working demo into an
-unknown one is to update it the night before.
+**This sha is what the proofs below were measured on, and it moves only when a
+build has been re-proven against it** — not when a newer one exists. Every proof
+here is a statement about a console, a corpus and a build together, and the
+build is the part that moves without anyone touching the demo.
+
+**If it matches, change nothing before demonstrating.** Do not run
+`loom vendor sync` on the morning of a demo to pick up something newer; the
+fastest way to turn a working demo into an unknown one is to update it and not
+re-run it.
 
 **If it does not match**, the proof statuses and timings below do not apply to
 you. The demos may well work — most are not sensitive to the difference — but
@@ -416,8 +421,10 @@ staying clear of the one control that does not work. **It needs no connectors at
 all**, which makes it the demo that cannot be broken by a grant going stale.
 
 **Preflight:** common only. No connectors. The two published parts must be
-discoverable — `dZt8I5yIWD2g6NeftbKv-3ZouzZ2LGCSEhT8ij7wGV0` (CheckList) and
-`DRCFljoU1NSWQ8pt8dvVa-mG5cld1tj5J46iq7L7-VE` (AmountLedger).
+discoverable — `vAx2Uy1C64duK47NIl9a0fb0UtfnHrXRrxM8giA1hWM` (CheckList) and
+`BEf5ZMjTIzX9J5HE6wec1s3zcQNqTAg-lFoD6W7pBHs` (AmountLedger). **Use these ids,
+not the older pair**: these carry the removal fix and the corrected unit
+description, and each supersedes its predecessor.
 
 **Prompt:** name both ids, ask for a preparation checklist beside a running
 total of what the ingredients cost against a budget, and **state that amounts
@@ -892,6 +899,36 @@ opposite failure.
 same call §5a's first run made — neither §5a run 3's near-zero nor run 4's
 ninety-six headers. The spread is live and no version of this prompt addresses
 it; see §5a.
+
+## 5c. The same page, with the pairing part named by id
+
+§5 names the two readers and leaves the pairing to the run, and five runs wrote
+five matchers. §5a and §5b tried to constrain it with sentences; both closed
+short. **This entry names a published pairing part instead**, which is what the
+evidence says actually removes the variance.
+
+**Preflight:** as §5, **plus** the pairing part discoverable —
+`d_z9mtdCBUwBpG0A6nBwOy5_2fxqySuk2zNxeIdXAYA`.
+
+**Prompt:** §5's text, with the pairing part added as a third id to the compose
+sentence and nothing else changed. **No ranking clause and no admission floor**
+— those were attempts to do in a prompt what a reviewed part does properly, and
+carrying them here would confuse which one worked.
+
+**Done when:** every pairing on the page is one a person would make.
+
+**Proof status: PENDING.** Being run three times with fresh-ref browser checks.
+
+**What each outcome would mean**, stated before the runs so the result cannot be
+read to taste:
+
+- **It imports the part and pairs correctly** — the ordering above holds, and a
+  reviewed part does what no wording could.
+- **It imports the part and still mispairs** — the part has a defect its tests
+  missed, and the ordering is not the whole story.
+- **It ignores the part and authors a matcher anyway** — the most interesting of
+  the three: naming an id would not stop a run authoring, and the ordering needs
+  a term for that.
 
 ## 6. A skill's script, run in the sandbox, folded into a piece
 
