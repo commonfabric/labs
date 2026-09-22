@@ -546,11 +546,11 @@ is hashed into the id (`createRef({}, { parent, type: "internal", cause })`
 at `link-utils.ts:856`) but cannot be read back out.
 [Streams as positions on their owner](streams-as-positions.md) is the next
 plan, and this plan is written on the assumption that it happens. It goes
-further than recovering the owner from the id: a stream in the result is
-addressed as a path on its owner's result document, one that is not keeps its
-id, neither has a document of its own, every stream in a result
-re-materializes under its new address, and the owner walk stage 3 adds is
-deleted with it. Its stage 2 withdraws the wiring of that walk into
+further than recovering the owner from the id: a stream its owner exposes in
+its result is addressed as a path on the owner's result document, one it does
+not is addressed by a `stream:` id over the owner's hash, neither has a
+document of its own, every stream re-materializes under its new address, and
+the owner walk stage 3 adds is deleted with it. Its stage 2 withdraws the wiring of that walk into
 `Cell.isStream` and the proxy, so stage 3 here lands without that item.
 
 What this plan does in anticipation: stream-ness decisions key on the link
