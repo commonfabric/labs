@@ -1,9 +1,9 @@
 import {
+  FabricInstance,
   FabricPrimitive,
   isWalkableObjectOrArray,
 } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/utils/types";
-import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { readStatsActive, recordProxyAccess } from "./read-stats.ts";
 import { isStreamValue } from "./builder/types.ts";
 import { type BackToCellInternals, toCell } from "./back-to-cell.ts";
@@ -85,6 +85,73 @@ const getProxyCache = (
   return txCache;
 };
 
+/**
+ * The kind of container a view is built over. A view's shape is bound to it:
+ * the proxy target is a stub of that kind, `Array.isArray` on the view answers
+ * for it, and the traps' array-specific paths are keyed on it.
+ */
+type ViewKind = "array" | "record" | "instance";
+
+/** The kind of container `value` is, or `undefined` for anything else. */
+function viewKindOf(value: unknown): ViewKind | undefined {
+  if (Array.isArray(value)) return "array";
+  if (value instanceof FabricInstance) return "instance";
+  if (isObjectOrArray(value) && !(value instanceof FabricPrimitive)) {
+    return "record";
+  }
+  return undefined;
+}
+
+/** Names a kind for a message. */
+const KIND_NAMES: Record<ViewKind, string> = {
+  array: "an array",
+  record: "a plain object",
+  instance: "a `FabricInstance`",
+};
+
+/** Names a value for a message: "an array", "a `FabricError`", "nothing". */
+function describeValue(value: unknown): string {
+  const kind = viewKindOf(value);
+  if (kind === "instance" || value instanceof FabricPrimitive) {
+    return `a \`${(value as object).constructor.name}\``;
+  }
+  if (kind !== undefined) return KIND_NAMES[kind];
+  if (value === undefined) return "nothing";
+  if (value === null) return "null";
+  return `a ${typeof value}`;
+}
+
+/**
+ * A view was read after the document it describes changed to hold a
+ * container of another kind, or no container at all.
+ *
+ * A view's shape is fixed when it is built (see {@link ViewKind}), and a
+ * cached view is handed back for as long as its transaction lives. When the
+ * document changes kind under it, the view cannot describe the new value: its
+ * `Array.isArray` would answer for the old kind, an array's `length` and
+ * methods would read a record, and a record's keys would read an array. Rather
+ * than answer inconsistently, the view refuses, so the mismatch surfaces where
+ * it is read instead of as a wrong answer downstream. A fresh read of the cell
+ * builds a view over the current value; the view cache is keyed on the kind,
+ * so the fresh read is never handed this view again.
+ */
+export class ViewDriftError extends Error {
+  /** The kind of container the view was built over. */
+  readonly boundKind: ViewKind;
+
+  constructor(link: NormalizedFullLink, boundKind: ViewKind, current: unknown) {
+    super(
+      `This view was built over ${KIND_NAMES[boundKind]} and the document ` +
+        `at ${link.id}${
+          link.path.length > 0 ? "/" + link.path.join("/") : ""
+        } now holds ${describeValue(current)}, which the view cannot ` +
+        "describe. Read the cell again for a view over the current value.",
+    );
+    this.name = "ViewDriftError";
+    this.boundKind = boundKind;
+  }
+}
+
 const proxyCacheKey = (
   link: NormalizedFullLink,
   cfcLabelView: CfcLabelView | undefined,
@@ -93,6 +160,10 @@ const proxyCacheKey = (
   // them the same view. An unpinned handle has none and shares as it always
   // has.
   epoch: number | undefined,
+  // A view's shape is bound to the kind of container it was built over, so a
+  // document that changes kind gets a new view on its next read, while the
+  // one built over the old kind refuses (`ViewDriftError`).
+  kind: ViewKind,
 ): string =>
   JSON.stringify([
     link.space,
@@ -100,6 +171,7 @@ const proxyCacheKey = (
     link.path,
     cfcLabelView ?? null,
     epoch ?? null,
+    kind,
   ]);
 
 /** Whether a transaction can still answer a read. */
@@ -227,6 +299,12 @@ export function createQueryResultProxy<T>(
  * when they supplied none. Every write trap refuses. The proxy cache is keyed
  * on `viewTx`, the transaction the proxies in it actually read through, so a
  * cached proxy is never handed to a caller reading through a different one.
+ *
+ * Every trap that answers for the document first reads the current value
+ * through `currentValue()`, which also checks that the document still holds
+ * a container of the kind the view was built over, and throws
+ * {@link ViewDriftError} when it does not. The branches below then decide by
+ * that value, never by the one the view was built over.
  */
 function createViewProxy<T>(
   runtime: Runtime,
@@ -424,9 +502,47 @@ function createViewProxy<T>(
   // Sparse arrays (new Array(n)) are used for array stubs -- JS engines
   // represent these as holey arrays with no element allocation until writes,
   // and we never write to the stub.
+  //
+  // The kind of the stub is the one thing about the value that the view
+  // cannot follow: `Array.isArray` on a proxy answers for its target, and the
+  // JS spec offers no trap for it. So the view is bound to the kind it was
+  // built over, and `currentValue()` below refuses once the document holds
+  // another. The cache key carries the kind, so a document that changes kind
+  // is served a fresh view on its next read.
   const proxyTarget = Object.isFrozen(value)
     ? (Array.isArray(value) ? new Array(value.length) : {})
     : value;
+  const boundKind = viewKindOf(value)!;
+
+  // The value the document holds now, read through the transaction, with the
+  // kind check every trap starts from. The read is the one the caller was
+  // making anyway: a shape read, or the recursive read a branch needs for its
+  // own reactivity, so the check adds no read of its own there.
+  const currentValue = (recursive = false): unknown => {
+    const current = readTx().readValueOrThrow(
+      link,
+      recursive ? undefined : SHAPE_READ,
+    );
+    if (viewKindOf(current) !== boundKind) {
+      throw new ViewDriftError(link, boundKind, current);
+    }
+    return current;
+  };
+  // The kind check for a branch that makes no read of its own -- a property
+  // get that builds a child view, a prototype member reflected from the
+  // container. The transaction's snapshot memo vouches for the kind at no
+  // cost: it is dropped on any write, so while this view's entry is still in
+  // the memo the document cannot have changed since the view was derived at
+  // this snapshot. Otherwise one shape read checks the kind and re-enters the
+  // view, so the rest of this snapshot is vouched for. The memo tests pin
+  // that a repeat read in one transaction issues no further storage reads,
+  // and this is what keeps the check inside that.
+  const verifyKind = (): void => {
+    const memo = viewKey === "" ? undefined : readTx().getSnapshotMemo?.();
+    if (memo?.has(viewKey)) return;
+    currentValue();
+    memo?.set(viewKey, { view: proxy });
+  };
 
   // Index by the CALLER's transaction, not by the one reads resolve through.
   // A standing handle is created without a transaction and resolves a fresh one
@@ -441,7 +557,7 @@ function createViewProxy<T>(
   // one cache per transaction — which is right, because it describes the instant
   // that transaction saw.
   const txCache = getProxyCache(tx, runtime);
-  const cacheKey = proxyCacheKey(link, cfcLabelView, epoch);
+  const cacheKey = proxyCacheKey(link, cfcLabelView, epoch, boundKind);
 
   // Check if we already have a proxy for this target in the cache.
   // The cache key is the original `value` (not the stub), ensuring that
@@ -461,11 +577,16 @@ function createViewProxy<T>(
         // `undefined` for it, which is what a live one returns for a value
         // with no `then`; every other property still refuses.
         if (prop === "then" && pinned && !isReadable(viewTx)) return undefined;
-        if (Array.isArray(value) && prop === "length") {
+
+        verifyKind();
+        if (boundKind === "array" && prop === "length") {
           const accessTx = readTx();
           if (readStatsActive) recordProxyAccess(accessTx);
-          const current = accessTx.readValueOrThrow(link) as typeof value;
-          return Array.isArray(current) ? current.length : 0;
+          // Read the array fully (not SHAPE_READ) so `length` tracks element
+          // add/remove; the kind was checked above at the same instant. This
+          // comes ahead of the invariant guard below: `length` is the array
+          // stub's one non-configurable property, and the stub's is stale.
+          return (accessTx.readValueOrThrow(link) as unknown[]).length;
         }
 
         // When encountering a frozen property, we just return the value to
@@ -479,7 +600,7 @@ function createViewProxy<T>(
           if (prop === toCell) {
             return () =>
               createCell(runtime, link, tx, false, undefined, cfcLabelView);
-          } else if (prop === Symbol.iterator && Array.isArray(value)) {
+          } else if (prop === Symbol.iterator && boundKind === "array") {
             return function () {
               let index = 0;
               return {
@@ -517,18 +638,20 @@ function createViewProxy<T>(
               };
             };
           }
-          const current = readTx().readValueOrThrow(link) as typeof value;
-
-          const returnValue = Reflect.get(current, prop, current);
+          // A recursive read, so a change inside the value re-triggers; the
+          // kind was checked above at the same instant.
+          const full = readTx().readValueOrThrow(link) as object;
+          const returnValue = Reflect.get(full, prop, full);
           if (typeof returnValue === "function") {
-            return returnValue.bind(current);
+            return returnValue.bind(full);
           } else return returnValue;
         }
 
         if (
-          Array.isArray(value) &&
+          boundKind === "array" &&
           Object.prototype.hasOwnProperty.call(arrayMethods, prop) &&
-          typeof (value[prop as keyof typeof value]) === "function"
+          typeof Array.prototype[prop as keyof typeof Array.prototype] ===
+            "function"
         ) {
           const method = Array.prototype[prop as keyof typeof Array.prototype];
           const isReadWrite = arrayMethods[prop as keyof typeof arrayMethods];
@@ -557,10 +680,10 @@ function createViewProxy<T>(
                   );
                 }
 
-                const current = readTx().readValueOrThrow(link) as typeof value;
+                const elements = currentValue(true) as unknown[];
                 const copy = new Array(length);
                 for (let i = 0; i < length; i++) {
-                  if (!(i in current)) {
+                  if (!(i in elements)) {
                     continue;
                   }
                   const accessTx = childViewTx();
@@ -596,7 +719,9 @@ function createViewProxy<T>(
         // storage read for an inherited path such as `constructor` or
         // `toString`. Storage traversal deliberately considers own properties
         // only; keeping the same boundary here also avoids recording spurious
-        // reactive dependencies for prototype members.
+        // reactive dependencies for prototype members. The kind was verified
+        // above, so the value the view was built over has the prototype the
+        // document's value has.
         //
         // The receiver is the container, not this proxy: a prototype accessor
         // has to run against the object that actually holds the state. Every
@@ -631,31 +756,14 @@ function createViewProxy<T>(
     },
     ownKeys: () =>
       atEpoch(() => {
-        const current = readTx().readValueOrThrow(link, SHAPE_READ);
-        const keys = isObjectOrArray(current) || Array.isArray(current)
-          ? Reflect.ownKeys(current)
-          : Reflect.ownKeys(value);
-        if (Array.isArray(proxyTarget)) {
-          if (!keys.includes("length")) {
-            // Insert `length` where a real array carries it -- after the index
-            // keys, ahead of any other name -- rather than appending it.
-            // Own-key order is load-bearing: a consumer can tell an index-only
-            // array from one carrying named properties by asking whether
-            // `length` comes last, and appending would make a named property
-            // look like an index-only one. `isInertArray()` reads exactly that,
-            // and fabric membership (`isValidFabricValue()`) is decided by it
-            // for every array, so the order here is what makes a proxied array
-            // carrying a named property fail membership instead of passing as
-            // index-only.
-            const firstNonIndex = keys.findIndex((key) =>
-              !((typeof key === "string") && isArrayIndexPropertyName(key))
-            );
-            keys.splice(
-              (firstNonIndex === -1) ? keys.length : firstNonIndex,
-              0,
-              "length",
-            );
-          }
+        // The kind check above is what satisfies the proxy invariant here: an
+        // array target's `length` is non-configurable and must be among the
+        // keys reported, and a real array's own keys always carry it, in the
+        // array's own order -- indices first, then `length`, then any name --
+        // which `isArrayWithOnlyIndexProperties()` reads. A value that is not
+        // an array never reaches this line for an array-bound view.
+        const keys = Reflect.ownKeys(currentValue() as object);
+        if (boundKind === "array") {
           // Enumerating an array's keys (`Object.keys`/`values`/`entries`, a spread,
           // `for...in`) observes which index keys are present. For a dense array
           // that is its `length`, but an array here can be sparse (holes below
@@ -675,17 +783,16 @@ function createViewProxy<T>(
       }),
     getOwnPropertyDescriptor: (target, prop) =>
       atEpoch(() => {
-        if (Array.isArray(target) && prop === "length") {
+        if (boundKind === "array" && prop === "length") {
           const accessTx = readTx();
           if (readStatsActive) recordProxyAccess(accessTx);
           // Read the array fully (not SHAPE_READ) so the length descriptor tracks
           // element add/remove, matching the `length` get trap above. [review: ubik2]
-          const current = accessTx.readValueOrThrow(link);
           return {
             configurable: false,
             enumerable: false,
             writable: true,
-            value: Array.isArray(current) ? current.length : 0,
+            value: (currentValue(true) as unknown[]).length,
           };
         }
 
@@ -697,12 +804,10 @@ function createViewProxy<T>(
           return targetDesc;
         }
         if (typeof prop === "symbol") {
+          verifyKind();
           return Object.getOwnPropertyDescriptor(value, prop);
         }
-        const current = readTx().readValueOrThrow(
-          link,
-          SHAPE_READ,
-        ) as typeof value;
+        const current = currentValue() as object;
         // `Object.hasOwn`, not `in`: this trap reports on OWN properties, and
         // `in` walks the prototype chain. Because the underlying value is an
         // ordinary `Object.prototype`-rooted record, `in` reported every member of
@@ -718,10 +823,7 @@ function createViewProxy<T>(
         // record never had, and every read-modify-write against a cell failed
         // (loom CT-1949). The `has` trap below keeps `in` -- there it is correct,
         // being the `in` operator's own trap.
-        if (
-          (isObjectOrArray(current) || Array.isArray(current)) &&
-          Object.hasOwn(current, prop)
-        ) {
+        if (Object.hasOwn(current, prop)) {
           const accessTx = childViewTx();
           if (readStatsActive) recordProxyAccess(accessTx);
           return {
@@ -744,23 +846,21 @@ function createViewProxy<T>(
     has: (_target, prop) =>
       atEpoch(() => {
         if (typeof prop === "symbol") {
+          verifyKind();
           return prop in value;
         }
-        const current = readTx().readValueOrThrow(link, SHAPE_READ);
-        if (isObjectOrArray(current) || Array.isArray(current)) {
-          // Probing whether a numeric index is present (`n in arr`) observes the
-          // array's key set: for a dense array the answer is `n < length`, but a
-          // sparse array has holes, so the answer depends on whether index `n` is
-          // specifically present — which a same-length hole fill or punch changes
-          // with no `length` write. Record a recursive read of the array (marked
-          // conflict-only, like ownKeys above) so an `n in arr`-derived mergeable
-          // write conflicts and retries instead of merging on a stale key set.
-          if (Array.isArray(current) && /^\d+$/.test(prop)) {
-            readTx().readValueOrThrow(link, { meta: ignoreReadForScheduling });
-          }
-          return prop in current;
+        const current = currentValue() as object;
+        // Probing whether a numeric index is present (`n in arr`) observes the
+        // array's key set: for a dense array the answer is `n < length`, but a
+        // sparse array has holes, so the answer depends on whether index `n` is
+        // specifically present — which a same-length hole fill or punch changes
+        // with no `length` write. Record a recursive read of the array (marked
+        // conflict-only, like ownKeys above) so an `n in arr`-derived mergeable
+        // write conflicts and retries instead of merging on a stale key set.
+        if (boundKind === "array" && /^\d+$/.test(prop)) {
+          readTx().readValueOrThrow(link, { meta: ignoreReadForScheduling });
         }
-        return prop in value;
+        return prop in current;
       }),
     // A query-result proxy is a live, transaction-backed view: reads resolve
     // through the get trap on every access. Structural mutations (freeze, seal,
