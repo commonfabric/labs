@@ -3,7 +3,6 @@ import { expect } from "@std/expect";
 
 import {
   DefaultValueVisitor,
-  type MainVisitResult,
   makeVisitValueFunction,
   type VisitResult,
   visitValue,
