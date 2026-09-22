@@ -17,11 +17,22 @@ the **prompt verbatim**, the **done condition**, a **typical wall time**, the
 **likely failure**, and a **proof status**.
 
 Proof status is a count of clean runs with identical prompt text on one console.
-A demo earns a place on a recording sheet once it has produced its piece on
-every run; the count says how many those were, and two is not three.
 
-- **PROVEN (n/n)** — produced the expected piece on every run **and** the done
-  condition was exercised in a browser.
+**PROVEN means three.** Three clean runs with the piece produced every time, and
+the done condition exercised in a browser on at least one. An entry short of
+three says so and carries the runs it has.
+
+A timing is a separate claim from a count, and it carries one extra condition:
+**a wall time is only meaningful from a run that had the console to itself.**
+Concurrent runs still establish whether a demo works and whether its output is
+right — load does not change what a matcher matches — but they establish nothing
+about how long it takes, and a run that hits a time cap under load has not
+established that the cap is real. Where an entry's runs overlapped, it says so.
+
+- **PROVEN (n/n)** — three or more clean runs, the expected piece on every one
+  **and** the done condition exercised in a browser.
+- **PARTLY PROVEN (m of n)** — clean so far, but short of three. It works; the
+  count is not yet a claim about reliability.
 - **PIECE PRODUCED (n/n), INTERACTION UNVERIFIED** — every run returned a named
   piece, and nobody opened it. A run finishing is not the page working, and this
   status exists because that distinction was learned the hard way.
@@ -30,6 +41,30 @@ every run; the count says how many those were, and two is not three.
   supply. Not a failure; a prerequisite.
 
 ## Preflight common to every demo
+
+### Which build you are on
+
+Every timing, count and proof status here was measured on one build: labs
+`e5b9f57c6c`, which is what `loom-stable-2026-09-22-2` vendors. Check yours:
+
+```sh
+curl -sS <your-toolshed>/api/meta
+```
+
+`gitSha` should open `e5b9f57c6c`. Your console reports the same build as its
+store path in `/api/health/detail`.
+
+**If it matches, change nothing.** Do not run `loom vendor sync`, and do not
+take a newer bump before demonstrating. Every proof below is a statement about
+this build and no other, and the fastest way to turn a working demo into an
+unknown one is to update it the night before.
+
+**If it does not match**, the proof statuses and timings below do not apply to
+you. The demos may well work — most are not sensitive to the difference — but
+either go back to the pinned bump, or treat every entry as unproven and run it
+once yourself before showing it to anybody. A proof status is a claim about a
+console, a corpus and a build together, and the build is the part that moves
+without anyone touching the demo.
 
 Read these off the console's launch printout and `GET /api/health/detail`. Loom
 writes the printout to `packages/cf-harness/local-dev-console.log` under the
@@ -221,20 +256,21 @@ produced no piece. The rejections cluster into a handful of recurring authoring
 mistakes — a nonexistent `cf-alert` prop, a `Set` in pattern inputs, a loop in a
 callback body — tracked as CT-2403.
 
-**Proof status: PROVEN (1/1), and NEEDS an email grant and a finance grant.**
-Browser-verified (`proof/bills.png`): `monthly-bills-mail-bank` shows **Paid ·
-4** with each row an email paired to a bank transaction, **Needs attention ·
-1**, and **Unmatched payments · 0**. Its source line reads "Email: 100 headers ·
-Bank: 7 live transactions", and the page states "No message bodies or snippets
-are used. No AI model is used." This is the only entry here whose done condition
-has been exercised end to end. One run delivered `monthly-bills-mail-bank` in
-427 s, 61 s of it the opening pass, importing both indexed readers into an
-authored wrapper. Its first submission failed on a `cf-alert` prop and the
-repaired version ran; its first naming attempt collided and the second
-succeeded, which is the slug sentence working. The run's own final text says its
-counts and matches were not independently verified, because policy withheld the
-results from the model — so this establishes a named piece and indexed
-composition, not that the bills it lists are the right ones.
+**Proof status: PARTLY PROVEN (1 of 3), and NEEDS an email grant and a finance
+grant.** One clean run, browser-verified — short of the three-run bar, so it is
+not yet proven. Browser-verified (`proof/bills.png`): `monthly-bills-mail-bank`
+shows **Paid · 4** with each row an email paired to a bank transaction, **Needs
+attention · 1**, and **Unmatched payments · 0**. Its source line reads "Email:
+100 headers · Bank: 7 live transactions", and the page states "No message bodies
+or snippets are used. No AI model is used." This is the only entry here whose
+done condition has been exercised end to end. One run delivered
+`monthly-bills-mail-bank` in 427 s, 61 s of it the opening pass, importing both
+indexed readers into an authored wrapper. Its first submission failed on a
+`cf-alert` prop and the repaired version ran; its first naming attempt collided
+and the second succeeded, which is the slug sentence working. The run's own
+final text says its counts and matches were not independently verified, because
+policy withheld the results from the model — so this establishes a named piece
+and indexed composition, not that the bills it lists are the right ones.
 
 ## 5. A skill's script, run in the sandbox, folded into a piece
 
@@ -257,20 +293,20 @@ will not guess.
 **Done when:** the budgets from the script stand beside non-zero spend.
 
 **Likely failure:** a digest of zeros, which is a failed run rather than an
-empty month. Failing that, the compiler rejections in CT-2403: both recorded
-runs hit them before reaching a slug.
+empty month. Failing that, the compiler rejections in CT-2403: all three
+recorded runs hit them before reaching a slug.
 
 **Proof status: NOT PROVEN (0/3 within an eight-minute cap), and NEEDS a finance
-grant with skill scripts enabled.** Both runs acquired the skill and ran its
-script, and both authored a wrapper importing the indexed bank reader, but none
-assigned a slug before the cap: 480.7 s, 481.5 s and 481.2 s wall, with 88.6 s,
-63.5 s and 105.1 s in the opening pass. The first hit a compile error; the
-second submitted six times — two compile errors, then four accepted results
-carrying pending concerns and a withheld value; the third reached one accepted
-result after two compile errors. Acquisition and sandboxed execution work; the
-demo reaching a named piece does not yet. All three ran with other sessions in
-flight on one console, so the cap may be a property of that load; a solo run is
-untested.
+grant with skill scripts enabled.** The two runs examined in detail acquired the
+skill, ran its script, and authored a wrapper importing the indexed bank reader;
+no run of the three assigned a slug before the cap: 480.7 s, 481.5 s and 481.2 s
+wall, with 88.6 s, 63.5 s and 105.1 s in the opening pass. The first hit a
+compile error; the second submitted six times — two compile errors, then four
+accepted results carrying pending concerns and a withheld value; the third
+reached one accepted result after two compile errors. Acquisition and sandboxed
+execution work; the demo reaching a named piece does not yet. All three ran with
+other sessions in flight on one console, so the cap may be a property of that
+load; a solo run is untested.
 
 ## 6. Revise a piece in place
 
@@ -286,10 +322,10 @@ there.
 ## Where the evidence is
 
 Run artifacts sit under the console's own artifact root. The proof runs behind
-the counts above are recorded at
-`/Users/ben/.bb/thread-storage/thr_udpzyv6iqn/demo-proof-2026-09-22/` on the
+the counts above are recorded there in a `demo-proof-<date>/` directory on the
 machine they ran on: per-run request, events, result, and measurement files,
-with the ordered tool sequence and source paths for each.
+with the ordered tool sequence and source paths for each. Your own runs land in
+the same place under your console's root.
 
 ## What these numbers are
 
