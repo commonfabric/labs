@@ -189,6 +189,13 @@ Signed POST CORS permits the CF1 headers without cookies; deploy the service at
 a host reachable by the intended shell. Request logging records no bodies. Codes
 belong only in POST bodies and browser fragments, never URL queries.
 
+The server prints that origin as its configured first-party authority at
+startup, and a refused proof is logged at `warn` with the request path, its
+method, that authority, and the verification failure — enough to tell a
+misconfigured origin from a bad signature without recording the proof, the
+signature, or any code. The signed inbox routes under `/api/inbox/` take the
+same origin and log the same way.
+
 The reusable client is `SpaceInviteClient` from
 `@commonfabric/runner/space-invites`. The same export provides
 `createInviteCredentials`, `inviteCodeVerifier`, `buildInviteLink`, and

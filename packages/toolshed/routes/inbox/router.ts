@@ -79,7 +79,20 @@ export function createInboxRouter(
           c.req.raw.clone(),
         );
         principal = (await verifyFirstPartyHttpRequest({ request })).userDid;
-      } catch {
+      } catch (error) {
+        // The audience is the configured public origin rather than the dialed
+        // host, so a deployment carrying the wrong `API_URL` refuses every
+        // correctly signed client. Name the authority the proof was checked
+        // against; the proof, its signature, and the body stay out of the log.
+        c.get("logger")?.warn(
+          {
+            path: c.req.path,
+            method: c.req.method,
+            authority: host ?? new URL(c.req.url).origin,
+            error: error instanceof Error ? error.message : String(error),
+          },
+          "Rejected unauthenticated first-party HTTP request",
+        );
         return c.json({ code: "invalid-proof" }, 401);
       }
       let body: unknown;

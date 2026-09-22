@@ -108,6 +108,10 @@ function startServer(onListening?: () => void) {
   // A rehearsal clone keeps the source space's DID, so nothing else in this
   // log distinguishes it from production. Announce it before anything else.
   announceCloneIfServed({ memoryDir: env.MEMORY_DIR, dbPath: env.DB_PATH });
+  // The signed routes check every first-party proof against this origin rather
+  // than the host the client dialed, so a wrong API_URL refuses every
+  // correctly signed client. Say it before anyone signs anything.
+  console.log("Configured first-party authority:", env.API_URL);
   initializeRuntime();
   // Server-execution v2 (stage F): under EXPERIMENTAL_SERVER_EXECUTION
   // this process hosts the serving loop; OFF (the default) this is a

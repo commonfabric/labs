@@ -93,7 +93,7 @@ async function fixture(publicHost?: string, captureErrors = true) {
       });
     }
     const diagnostics: Record<string, unknown>[] = [];
-    const logger = pino({ level: "error" }, {
+    const logger = pino({ level: "warn" }, {
       write(message) {
         diagnostics.push(JSON.parse(message));
       },
@@ -104,7 +104,7 @@ async function fixture(publicHost?: string, captureErrors = true) {
       await next();
     });
     mounted.route("/", router);
-    const app = captureErrors ? router : createTestApp(mounted);
+    const app = captureErrors ? mounted : createTestApp(mounted);
     const http = Deno.serve({
       hostname: "127.0.0.1",
       port: 0,
@@ -559,6 +559,27 @@ describe("space-invites", () => {
       const wrong = await f.raw("list", {}, f.owner);
       expect(wrong.status).toBe(401);
       await wrong.body?.cancel();
+    } finally {
+      await f.close();
+    }
+  });
+  it("logs the configured authority and no secret when it refuses a proof", async () => {
+    const f = await fixture("https://public.example");
+    try {
+      const invite = await f.client(f.owner).create({
+        access: "READ",
+        ttlSeconds: 60,
+      });
+      const refused = await f.raw("revoke", { inviteId: invite.inviteId });
+      expect(refused.status).toBe(401);
+      await refused.body?.cancel();
+      expect(f.diagnostics.at(-1)).toMatchObject({
+        path: `/api/spaces/${f.space}/invites/revoke`,
+        method: "POST",
+        authority: "https://public.example",
+        msg: "Rejected unauthenticated first-party HTTP request",
+      });
+      expect(JSON.stringify(f.diagnostics)).not.toContain(invite.code);
     } finally {
       await f.close();
     }
