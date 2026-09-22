@@ -73,8 +73,13 @@ export default pattern(() => {
     [TESTS]: [
       { action: join },
       { action: directWrite },
-      { assertion: assert(() => loom.participants.length === 1) },
-      { assertion: assert(() => loom.participants[0].equals(member)) },
+      // A replacing write would also leave one entry; only its identity
+      // tells a refused write from an accepted one.
+      {
+        assertion: assert(() =>
+          loom.participants.length === 1 && loom.participants[0].equals(member)
+        ),
+      },
       { action: addFirst },
       { action: addSecond },
       { action: stage },
