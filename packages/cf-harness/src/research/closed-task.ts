@@ -18,9 +18,10 @@ export const isClosedResearchTask = (
     context.skillRegistry?.skills.map((skill) => skill.name),
   );
   for (
-    const match of task.matchAll(/[^\s`"'()[\]{},;!?<>*“”‘’。、，！？]+/gu)
+    const match of task.matchAll(/[^\s`"'()[\]{},;!?<>“”‘’。、，！？]+/gu)
   ) {
-    const token = match[0].replace(/[.:]+$/, "");
+    const token = match[0].replace(/[.:]+$/, "")
+      .replace(/^(\*{1,3})(.+)\1$/u, "$2");
     if (
       token.startsWith("cf:pattern:") &&
       isPatternRefId(token.slice("cf:pattern:".length))
