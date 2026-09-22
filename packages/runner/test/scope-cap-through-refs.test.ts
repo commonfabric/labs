@@ -12,6 +12,17 @@ import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { ContextualFlowControl } from "../src/cfc.ts";
 import { externalizeSchema } from "../src/link-utils.ts";
 
+/**
+ * `schema` in its content-addressed form. `externalizeSchema` hands back its
+ * input unchanged when the schema cannot be decomposed, so the form is checked
+ * rather than assumed.
+ */
+const storedForm = (schema: JSONSchemaObj): JSONSchema => {
+  const stored = externalizeSchema(structuredClone(schema));
+  expect((stored as JSONSchemaObj).$ref).toMatch(/^cid:/);
+  return stored;
+};
+
 /** The cap the slot at `key` declares, as the write path reads it. */
 const capAt = (schema: JSONSchema, key: string): string | undefined =>
   ContextualFlowControl.getSchemaScopeCap(
@@ -62,7 +73,7 @@ describe("scope-cap-through-refs", () => {
       };
 
       expect(capAt(schema, "draft")).toBe("user");
-      expect(capAt(externalizeSchema(structuredClone(schema)), "draft"))
+      expect(capAt(storedForm(schema), "draft"))
         .toBe("user");
     });
 
@@ -103,7 +114,7 @@ describe("scope-cap-through-refs", () => {
         $defs: { Nickname: { type: "string", scope: "user" } },
       };
 
-      const stored = externalizeSchema(structuredClone(schema));
+      const stored = storedForm(schema);
 
       expect(capAt(stored, "nickname")).toBe(capAt(schema, "nickname"));
       expect(capAt(stored, "nickname")).toBe("user");
@@ -130,7 +141,7 @@ describe("scope-cap-through-refs", () => {
       };
 
       expect(capAt(schema, "never")).toBeUndefined();
-      expect(capAt(externalizeSchema(structuredClone(schema)), "never"))
+      expect(capAt(storedForm(schema), "never"))
         .toBeUndefined();
     });
 
@@ -173,6 +184,55 @@ describe("scope-cap-through-refs", () => {
               { type: "string", asCell: [{ kind: "cell", scope: "session" }] },
               { type: "string", asCell: [{ kind: "cell", scope: "user" }] },
             ],
+          },
+        },
+      };
+
+      expect(ContextualFlowControl.getAsCellFollowScopeCap(schema))
+        .toBe("user");
+    });
+
+    it("returns `undefined` for a handle whose definition names itself through a branch", () => {
+      // The shape `type Recursive = Cell<Recursive> | null` generates: the
+      // branch's `$ref` resolves to the union holding that same branch.
+
+      const schema: JSONSchemaObj = {
+        type: "object",
+        properties: { node: { $ref: "#/$defs/Recursive" } },
+        $defs: {
+          Recursive: {
+            anyOf: [
+              { type: "null" },
+              { $ref: "#/$defs/Recursive", asCell: ["cell"] },
+            ],
+          },
+        },
+      };
+      const node = ContextualFlowControl.getSchemaAtPath(schema, ["node"]);
+
+      expect(ContextualFlowControl.getAsCellFollowScopeCap(node))
+        .toBeUndefined();
+      expect(ContextualFlowControl.getSchemaScopeCap(node)).toBeUndefined();
+    });
+
+    it("returns the owning document's definition for a branch that carries a `$defs` of its own", () => {
+      // A `$defs` below the root is inert: `#/$defs/Handle` names the root's
+      // definition wherever the reference sits.
+
+      const schema: JSONSchemaObj = {
+        anyOf: [{
+          anyOf: [{ $ref: "#/$defs/Handle" }, { type: "null" }],
+          $defs: {
+            Handle: {
+              type: "string",
+              asCell: [{ kind: "cell", scope: "session" }],
+            },
+          },
+        }],
+        $defs: {
+          Handle: {
+            type: "string",
+            asCell: [{ kind: "cell", scope: "user" }],
           },
         },
       };

@@ -586,3 +586,90 @@ describe("asCell scope cap, positional and compound", () => {
     expect(capped.key("myProfile", "profile", "field").get()).toBe("secret");
   });
 });
+
+describe("asCell scope cap, through definitions", () => {
+  let runtime: Runtime;
+  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let tx: IExtendedStorageTransaction;
+
+  beforeEach(() => {
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    tx = runtime.edit();
+  });
+
+  afterEach(async () => {
+    await tx.commit();
+    await runtime?.dispose();
+    await storageManager?.close();
+  });
+
+  it("writes and dereferences a handle whose definition names itself", () => {
+    // What `type Recursive = Cell<Recursive> | null` generates: resolving the
+    // handle branch leads back to the union that holds it.
+    const recursive = {
+      type: "object",
+      properties: { node: { $ref: "#/$defs/Recursive" } },
+      required: ["node"],
+      $defs: {
+        Recursive: {
+          anyOf: [
+            { type: "null" },
+            { $ref: "#/$defs/Recursive", asCell: ["cell"] },
+          ],
+        },
+      },
+    } as const satisfies JSONSchema;
+    const holder = runtime.getCell(space, "recursive-holder", undefined, tx)
+      .asSchema(recursive);
+
+    holder.key("node").set(null);
+
+    // Read raw: projecting a value through this schema is a separate question
+    // from where the write lands and what dereferencing it reaches.
+    expect(
+      tx.readValueOrThrow(holder.key("node").getAsNormalizedFullLink()),
+    ).toBeNull();
+    expect(isCell(holder.key("node").resolveAsCell())).toBe(true);
+  });
+
+  it("caps a branch's handle by the owning document's definition, not one nested in the branch", () => {
+    // A `$defs` below the root is inert, so the nested `session` entry does
+    // not loosen the `user` cap the root's `Handle` declares.
+    const secret = runtime.getCell(
+      space,
+      "nested-defs-secret",
+      { type: "string" },
+      tx,
+      "session",
+    );
+    secret.set("session value");
+    const holder = runtime.getCell(space, "nested-defs-holder", undefined, tx);
+    holder.set(secret as never);
+
+    const capped = holder.asSchema(
+      {
+        anyOf: [{
+          anyOf: [{ $ref: "#/$defs/Handle" }, { type: "null" }],
+          $defs: {
+            Handle: {
+              type: "string",
+              asCell: [{ kind: "cell", scope: "session" }],
+            },
+          },
+        }],
+        $defs: {
+          Handle: {
+            type: "string",
+            asCell: [{ kind: "cell", scope: "user" }],
+          },
+        },
+      } as JSONSchema,
+    );
+
+    expect(capped.resolveAsCell().get()).toBeUndefined();
+  });
+});

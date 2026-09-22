@@ -890,7 +890,7 @@ export class ContextualFlowControl {
     schema: JSONSchema | undefined,
   ): SchemaScope | undefined {
     if (!isObjectOrArray(schema)) return undefined;
-    schema = resolveRootRefForScope(schema);
+    schema = resolveRootRefForScope(schema).schema;
     const entryScope = ContextualFlowControl.getAsCellScope(
       ContextualFlowControl.getAsCellValues(schema).at(0),
     );
@@ -921,17 +921,30 @@ export class ContextualFlowControl {
   static getAsCellFollowScopeCap(
     schema: JSONSchema | undefined,
   ): SchemaScope | undefined {
-    return asCellFollowScopeCap(schema, schema);
+    return isObjectOrArray(schema)
+      ? asCellFollowScopeCap(schema, schema)
+      : undefined;
   }
+}
+
+/**
+ * A scope declaration together with the document its local references name
+ * definitions of.
+ */
+interface ScopeDeclaration {
+  readonly schema: JSONSchemaObj;
+  readonly root: JSONSchema;
 }
 
 /**
  * The schema a scope declaration is read from: `schema` with its root `$ref`
  * resolved the way every reference is, local or external, with the keywords
- * written beside the `$ref` merged over the definition's. Where the reference
- * resolves to no object, `schema` itself. Local references resolve against
- * `root`, which defaults to `schema`: a link's schema is self-contained enough
- * for that (`schemaAtPath` keeps the reachable `$defs` closure on it).
+ * written beside the `$ref` merged over the definition's, and the document the
+ * result's own references resolve against. Where no reference resolves to an
+ * object, `schema` itself in `root`. Local references resolve against `root`,
+ * which defaults to `schema`: a link's schema is self-contained enough for
+ * that (`schemaAtPath` keeps the reachable `$defs` closure on it). A `$defs`
+ * below that root is inert, as it is to the resolver.
  *
  * A position carrying a local reference without the definition it names reads
  * as itself without consulting the resolver, which would log the miss: the
@@ -941,43 +954,73 @@ export class ContextualFlowControl {
 const resolveRootRefForScope = (
   schema: JSONSchemaObj,
   root: JSONSchema = schema,
-): JSONSchemaObj => {
+): ScopeDeclaration => {
   const ref = schema.$ref;
-  if (typeof ref !== "string") return schema;
+  if (typeof ref !== "string") return { schema, root };
   if (!isExternalSchemaRef(ref) && localDefinition(root, ref) === undefined) {
-    return schema;
+    return { schema, root };
   }
   const resolved = ContextualFlowControl.resolveSchemaRefs(schema, root);
-  return isObjectNotArray(resolved) ? resolved : schema;
+  if (!isObjectNotArray(resolved)) return { schema, root };
+  return {
+    schema: resolved,
+    root: cfcSchemaResolvedRoot(
+      resolved,
+      resolveCfcSchemaRefRoot(schema, root),
+    ),
+  };
 };
 
 /**
  * Helper for {@link ContextualFlowControl.getAsCellFollowScopeCap}. A branch
- * resolves against the document its compound was read from, which is the
- * resolved schema itself: resolution carries the definitions along.
+ * sits in the document its compound was read from, which changes only where a
+ * reference resolved into another one.
+ *
+ * `following` holds, per document, the references followed on the way down, as
+ * the resolver guards a single chain: a reference already being followed
+ * declares nothing further, so a definition that reaches itself through a
+ * branch ends there rather than recursing without end.
  */
 const asCellFollowScopeCap = (
   schema: JSONSchema | undefined,
-  root: JSONSchema | undefined,
+  root: JSONSchema,
+  following?: Map<JSONSchema, Set<string>>,
 ): SchemaScope | undefined => {
   if (!isObjectOrArray(schema)) return undefined;
-  const declaring = resolveRootRefForScope(schema, root ?? schema);
-  const entryScope = ContextualFlowControl.getAsCellScope(
-    ContextualFlowControl.getAsCellValues(declaring).at(0),
-  );
-  if (isSchemaScope(entryScope)) return entryScope;
-  const branchRoot = isObjectOrArray(declaring.$defs) ? declaring : root;
-  let cap: SchemaScope | undefined;
-  for (const branches of [declaring.anyOf, declaring.oneOf]) {
-    if (!Array.isArray(branches)) continue;
-    for (const branch of branches) {
-      cap = narrowerScopeCap(
-        cap,
-        asCellFollowScopeCap(branch as JSONSchema, branchRoot),
-      );
+  const ref = typeof schema.$ref === "string" ? schema.$ref : undefined;
+  let followed: Set<string> | undefined;
+  if (ref !== undefined) {
+    // Allocated on the first reference: most positions carry none, and this
+    // runs for every key a cell is narrowed through.
+    following ??= new Map();
+    followed = following.get(root);
+    if (followed?.has(ref)) return undefined;
+    if (followed === undefined) {
+      followed = new Set();
+      following.set(root, followed);
     }
+    followed.add(ref);
   }
-  return cap;
+  try {
+    const declaring = resolveRootRefForScope(schema, root);
+    const entryScope = ContextualFlowControl.getAsCellScope(
+      ContextualFlowControl.getAsCellValues(declaring.schema).at(0),
+    );
+    if (isSchemaScope(entryScope)) return entryScope;
+    let cap: SchemaScope | undefined;
+    for (const branches of [declaring.schema.anyOf, declaring.schema.oneOf]) {
+      if (!Array.isArray(branches)) continue;
+      for (const branch of branches) {
+        cap = narrowerScopeCap(
+          cap,
+          asCellFollowScopeCap(branch as JSONSchema, declaring.root, following),
+        );
+      }
+    }
+    return cap;
+  } finally {
+    if (ref !== undefined) followed?.delete(ref);
+  }
 };
 
 /**
@@ -992,7 +1035,7 @@ export const declaredSchemaScope = (
   schema: JSONSchema | undefined,
 ): SchemaScope | undefined => {
   if (!isObjectOrArray(schema)) return undefined;
-  const declaring = resolveRootRefForScope(schema);
+  const declaring = resolveRootRefForScope(schema).schema;
   return isSchemaScope(declaring.scope) ? declaring.scope : undefined;
 };
 
