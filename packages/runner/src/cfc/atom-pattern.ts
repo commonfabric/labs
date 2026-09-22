@@ -4,6 +4,7 @@ import {
   type FabricValue,
   isFabricPlainObject,
   isValidFabricValue,
+  valueEqual,
 } from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
@@ -137,8 +138,8 @@ const matchPatternValue = (
       // (inv-12 Stage 1 same-form matching): a variable bound to plaintext
       // from one atom digest-compares against another atom's committed
       // field — the binding comparison evidence correlation relies on,
-      // extended across representation forms. Plain values reduce to the
-      // previous deepEqual.
+      // extended across representation forms. Plain values reduce to
+      // `valueEqual()`.
       return commitmentAwareEquals(bindings[pattern.var], value)
         ? bindings
         : null;
@@ -185,10 +186,10 @@ const matchPatternValue = (
     }
     return current;
   }
-  if (isObjectOrArray(pattern)) {
-    // A record pattern constrains records only. Arrays are records to
-    // `isObjectOrArray`, so exclude them explicitly — an array atom never matches a
-    // record pattern.
+  if (isFabricPlainObject(pattern)) {
+    // A record pattern constrains records only: an array atom never matches
+    // one. A `FabricSpecialObject` pattern is not a record pattern, having no
+    // fields to name; it is a leaf, compared below.
     if (!isObjectNotArray(value)) {
       return null;
     }
@@ -209,7 +210,7 @@ const matchPatternValue = (
     }
     return current;
   }
-  return deepEqual(pattern, value) ? bindings : null;
+  return valueEqual(pattern, value) ? bindings : null;
 };
 
 /**
@@ -411,7 +412,7 @@ type ExpiresAtom = { type: string; timestamp: number };
 // Only the CANONICAL two-field `Expires` shape participates in timestamp
 // ordering. A record carrying extra fields (`{type, timestamp, scope: "x"}`)
 // is non-canonical: applying the `<=` order to it would let a ceiling
-// `Expires(1000)` admit that atom even though `deepEqual` correctly rejects
+// `Expires(1000)` admit that atom even though equality correctly rejects
 // it — silently bypassing the fail-closed intent. Non-canonical Expires
 // records therefore fall through to structural equality only (below).
 const isOrderedExpiresAtom = (value: unknown): value is ExpiresAtom =>
@@ -438,10 +439,10 @@ const isOrderedExpiresAtom = (value: unknown): value is ExpiresAtom =>
  * across the marker — the plaintext side is digested and compared. This is
  * what lets read gating satisfy a committed `User.subject` clause by
  * digesting the acting reader. Guarded by a containment pre-check so the
- * dominant all-plaintext mismatch path stays a single deepEqual.
+ * dominant all-plaintext mismatch path stays a single `valueEqual()`.
  */
 export const atomEntails = (a: FabricValue, b: FabricValue): boolean => {
-  if (deepEqual(a, b)) return true;
+  if (valueEqual(a, b)) return true;
   if (isOrderedExpiresAtom(a) && isOrderedExpiresAtom(b)) {
     return a.timestamp <= b.timestamp;
   }

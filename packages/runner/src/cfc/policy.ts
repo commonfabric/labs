@@ -362,10 +362,10 @@ const collectPatternVariables = (
  * policyState guard that names no grant pattern gates nothing — an authoring
  * error a policy author must see, not a vacuously-satisfied guard.
  */
-const validatePolicyStateGuards = (value: unknown, where: string): void => {
-  if (!Array.isArray(value)) {
-    throw new Error(`cfcPolicyRecords: ${where} must be an array`);
-  }
+const validatePolicyStateGuards = (
+  value: readonly AtomPattern[],
+  where: string,
+): void => {
   if (value.length === 0) {
     throw new Error(
       `cfcPolicyRecords: ${where} must name at least one grant pattern`,
@@ -442,8 +442,10 @@ const validateExchangeRule = (
     const policyState = (preCondition as Record<string, unknown>).policyState;
     if (policyState !== undefined) {
       const guardWhere = `${ruleWhere} preCondition.policyState`;
-      validatePatternArray(policyState, guardWhere);
-      validatePolicyStateGuards(policyState, guardWhere);
+      validatePolicyStateGuards(
+        validatePatternArray(policyState, guardWhere),
+        guardWhere,
+      );
     }
   }
   if (
