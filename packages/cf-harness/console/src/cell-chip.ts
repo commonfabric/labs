@@ -42,9 +42,10 @@ export interface ConsoleCellFacts {
 /**
  * The label facts a chip draws, held apart.
  *
- * `onCall` is what one call's invocation context recorded; the rest is what
- * the space stores for the cell itself. They answer different questions — what
- * a sandbox saw crossing into a call, and what the cell is — so the card names
+ * `onCall` and `onCallIntegrity` are what one call's invocation context
+ * recorded, on its confidentiality and integrity axes; the rest is what the
+ * space stores for the cell itself. They answer different questions — what a
+ * sandbox saw crossing into a call, and what the cell is — so the card names
  * them apart and joins them into no single list.
  */
 export interface ConsoleCellLabelView {
