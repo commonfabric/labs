@@ -261,9 +261,10 @@ Deno.test("RunscSandboxRuntime omits the CFC flags and reports no result without
 
 Deno.test("RunscSandboxRuntime denies the call's CFC result when runsc delivered none on fd 4", async () => {
   const runner = new FakeRunscRunner();
-  runner.run = async function (this: FakeRunscRunner, request) {
+  runner.run = function (this: FakeRunscRunner, request) {
     this.requests.push(request);
-    return { stdout: "", stderr: "", exitCode: 0 }; // never writes the result file
+    // Never writes the result file.
+    return Promise.resolve({ stdout: "", stderr: "", exitCode: 0 });
   };
   const runtime = new RunscSandboxRuntime(config(), runner);
   const result = await runtime.run({ argv: ["/bin/true"] });
