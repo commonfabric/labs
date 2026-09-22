@@ -563,11 +563,16 @@ category**:
 
 Count on top reads 7. Nothing missing and nothing invented.
 
-**Nothing on the page invites a click that does nothing.** The only interactive
-element is the title button; the five column headers are `columnheader` nodes
-and are not exposed as interactive at all. So the table lists and does not sort,
-and nothing on it looks as though it should — which is a description rather than
-a warning, and is the reason the prompt no longer asks for sorting.
+**The headers do not sort. They are styled as clickable — the cursor changes
+over them — so a viewer will try, and nothing will happen.** Say so before
+someone finds out.
+
+They are also not exposed in the accessibility tree as interactive, which is why
+a snapshot reports the only interactive element as the title button. **That is a
+gap between what a snapshot can find and what a person sees**, and it runs both
+ways: the published sortable part has headers that _do_ sort and are equally
+invisible to the tree (CT-2411). A check leaning on accessibility output alone
+will call a working control dead and a dead one harmless.
 
 **The prompt no longer asks for sorting, because sorting does not work.** An
 earlier wording asked for a _sortable_ table and got a table: clicking a column
