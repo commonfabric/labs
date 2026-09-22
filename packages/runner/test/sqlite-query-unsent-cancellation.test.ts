@@ -117,8 +117,10 @@ describe("sqlite-query-unsent-cancellation", () => {
   });
 
   it("writes the ending for a node that is still running", async () => {
-    // The control the two cases above rest on: without it, a builtin that
-    // never settles an abandoned request at all would pass both.
+    // What the case above rests on. Its assertion is an ABSENCE, which a
+    // builtin that settled nothing at all would satisfy too; this one fails
+    // in that world, so the pair together says the ending is skipped for a
+    // cancelled node rather than never written.
     const state = await drive({});
     expect(String(state?.error)).toContain("refused before it started");
     expect(state?.pending).toBe(false);
