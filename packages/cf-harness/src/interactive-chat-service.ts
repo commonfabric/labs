@@ -1591,9 +1591,14 @@ export class HarnessInteractiveChatService {
       observedTranscriptLength = transcript.length;
       const result = await loop.runTranscript({
         transcript,
-        ...(record.researchContext?.runs.length
-          ? {}
-          : { openingResearchTask: params.input.text }),
+        // TEMPORARY RECORDING BUILD — not for main. Assigning no opening
+        // research task withholds the automatic `orient` pass a fresh session
+        // takes before its first parent model turn, which costs about forty
+        // seconds of a turn that shows nothing while it runs. The prompt
+        // loop's own gate returns early on an undefined task, so nothing else
+        // has to change, and the `research` tool stays on the model's surface
+        // for a turn that asks for it. The durable change this stands in for
+        // is to withhold the pass only where the task is closed.
         model: session.model,
         promptSlotBinding: policy.promptSlot,
         signal,
