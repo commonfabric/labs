@@ -383,7 +383,7 @@ await input.pressSequentially("user@example.com");
 
 **Purpose**: Alert message display **Tag**: `<cf-alert>` **Attributes**:
 
-- `variant` - "default" | "destructive"
+- `status` - "info" | "error" | "warning" | "success"
 - `dismissible` - boolean **Events**:
 - `cf-dismiss` - Fired when dismissed **Slots**:
 - `icon` - Alert icon
@@ -392,7 +392,7 @@ await input.pressSequentially("user@example.com");
 - Default slot - Alert content **Example**:
 
 ```html
-<cf-alert variant="destructive" dismissible>
+<cf-alert status="error" dismissible>
   <span slot="icon">⚠️</span>
   <h4 slot="title">Error</h4>
   <p slot="description">Something went wrong</p>
