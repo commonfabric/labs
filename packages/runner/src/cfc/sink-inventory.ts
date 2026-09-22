@@ -190,7 +190,7 @@ const SQLITE_QUERY_SINK_UNGATED: SinkUngatedRationale = Object.freeze({
     "the bound a sqlite read wants is the database's own space rather than a clause list, and a per-sink ceiling cannot express it",
   owner: "CFC runtime (sink governance) with the sqlite builtin",
   retirement:
-    "the gate reads a per-request bound off the request, so the residency check the builtin applies before staging moves to the ceiling",
+    "the gate reads a per-request bound off the request — measured on the transaction's flow join rather than the consumed set, which counts a query's reads of its own settled result — so the residency check the builtin applies before staging moves to the ceiling",
 });
 
 /** One posture's decision about every known sink. */

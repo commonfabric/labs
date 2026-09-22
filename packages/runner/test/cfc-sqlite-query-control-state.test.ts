@@ -100,6 +100,16 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       storageManager,
       cfcEnforcementMode: "enforce-strict",
       cfcFlowLabels: "persist",
+      // The dials every preset deployment pins, rather than the constructor
+      // defaults. `cfcDeclaredMonotonicity` is the one this file is about:
+      // it judges whether a DECLARED entry may be replaced at a path, and
+      // re-declaring the control state on every issue is the whole mechanism
+      // under review — asserting a ratchet with the ratchet's own gate off
+      // would be asserting it against nothing.
+      cfcWriteFloor: "enforce",
+      cfcPolicyEvaluation: "enforce",
+      cfcLabelMetadataProtection: "enforce",
+      cfcDeclaredMonotonicity: "enforce",
     });
   });
 
@@ -733,6 +743,14 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       expect(refused.error).toBe(SQLITE_FOREIGN_SPACE_REFUSAL);
       expect(refused.pending).toBe(false);
       expect(refused.result ?? []).toEqual([]);
+      // The refusal is written by the issuing transaction, which carries the
+      // clause it is refusing over, so route 2 declares that clause here.
+      // This is the one path on which a reader of the control state carries
+      // the parameter's label — the success path's `pending` carries nothing,
+      // which the reader cases above assert — and a pattern that renders
+      // "this query was refused" inherits it.
+      expect(hasClause(declaredAt(bodies, ["error"]), KEY_CLAUSE)).toBe(true);
+      expect(hasClause(declaredAt(bodies, ["pending"]), KEY_CLAUSE)).toBe(true);
       // No request hash goes with the refusal, so an evaluation whose reads
       // carry nothing asks again rather than finding a memo hit. A refusal
       // folded into the ordinary settled shape would be permanent.

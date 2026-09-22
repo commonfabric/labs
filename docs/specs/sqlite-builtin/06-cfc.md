@@ -763,6 +763,16 @@ does not change between the two writes, so nothing re-derives it. A reader of
 says about the routing bit still holds of the request that set it; what is
 recorded durably is the hash.
 
+The foreign-space refusal below is the exception, and the only one. It is
+written by the ISSUING transaction — the one carrying the clause it refuses
+over, since that is the condition it fires on — so the route declares that
+clause on `/pending` and `/error` there, and it stays: no settle follows to
+re-derive it. A pattern that renders "this query was refused" therefore
+inherits the atoms the refusal was about, and a store it writes them into has
+to admit them. That is the ratchet landing where the refusal did rather than
+an accident, and it is worth knowing before rendering a refusal into a store
+whose policy an author wrote.
+
 `/result`'s per-column entries are untouched — the route declines at a path a
 schema declares — and so are the row documents, because that settle
 transaction carries no clause of its own. What the settle DOES declare, for a
@@ -783,7 +793,10 @@ stable reason and no request hash — a later evaluation whose request carries
 nothing asks again rather than finding a memo hit.
 
 The measure there is the transaction's flow join, not the transaction-global
-consumed set the sink ceilings read. The difference is the reads the write
+consumed set the sink ceilings read — which is also what a per-sink ceiling
+for this sink would have to measure, if a deployment ever declares one: the
+consumed set counts this node's reads of its own settled result, so a ceiling
+reading it would refuse every issue after the first. The difference is the reads the write
 machinery makes of its own destination, which the flow join excludes
 (§18.6.2): this node reads its own settled result to decide whether a
 writeback is stale, and that result carries the labels of the columns it
@@ -803,7 +816,14 @@ ungated, because the bound it wants is the database's space rather than a
 clause list, and a per-sink registry ceiling holds only the latter; the gap
 carries its owner and the condition that retires it, like every other ungated
 sink. A deployment that wants a confidentiality gate on sqlite reads declares
-a ceiling for the sink, and the seam is where it applies.
+a ceiling for the sink, and the seam is where it applies — with the caveat
+above about which set such a ceiling must measure.
+
+The refusal is gated on the flow dial rather than on the enforcement ladder: a
+runtime deriving no flow labels has an empty join by construction, so nothing
+is labeled and the refusal never fires. The default flow mode is `off`, so a
+deployment that has not opted into flow labels gets no cross-space bound —
+and nothing for one to protect.
 
 One thing outside this builtin decides whether a caller can use any of it. A
 `lift` whose output document has acquired stored CFC label metadata cannot be

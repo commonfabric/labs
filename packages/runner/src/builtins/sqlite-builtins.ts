@@ -1154,9 +1154,13 @@ export function sqliteQuery(
     // replace this exact record. Its values never enter the query or an output.
     // A destination comparison must not make the previous rows a dependency
     // whose next invalidation would taint this request's public pending flag.
-    const storedBeforeClaim = result.withTx(tx).getRaw({
-      meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
-    }) as QueryState | undefined;
+    const storedQueryState = (
+      readTx: IExtendedStorageTransaction,
+    ): QueryState | undefined =>
+      result.withTx(readTx).getRaw({
+        meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
+      }) as QueryState | undefined;
+    const storedBeforeClaim = storedQueryState(tx);
     // The confidentiality THIS request carries: the transaction's flow join,
     // which is what a write here would be measured against.
     //
@@ -1198,12 +1202,41 @@ export function sqliteQuery(
     // rung too. A deployment that labels nothing derives an empty join and
     // never meets it.
     if (crossSpace && requestConfidentiality().length > 0) {
+      // On a transaction of its own, whose only read is the destination it
+      // is about to write. The issuing transaction is the one carrying the
+      // clause that caused the refusal — that is the condition this fires on
+      // — so writing the refusal there would put that clause on `/pending`
+      // and `/error` through route 2, permanently, and a pattern rendering
+      // "this query was refused" would inherit exactly the atoms it was
+      // refused over. The whole point of the control state's policy is that
+      // a pane reading it is not poisoned by it, and the refusal path is
+      // where that is easiest to lose.
+      //
       // No request hash goes with it: recording this one's would make the
       // next evaluation of the same inputs a memo hit, so a later pass whose
-      // reads carry nothing would never ask again. What the pattern reads is
-      // the rule and nothing more — which atoms did not fit names the
-      // principals that introduced them, and that detail faces the operator.
-      result.withTx(tx).set({
+      // request carries nothing would never ask again. What the pattern
+      // reads is the rule and nothing more — which atoms did not fit names
+      // the principals that introduced them, and that detail faces the
+      // operator.
+      // On the issuing transaction, whose flow join is non-empty by
+      // construction — that is the condition this fires on — so route 2
+      // declares that clause on `/pending` and `/error` here. The refusal
+      // path is the one place a reader of the control state carries the
+      // parameter's label, and a pattern rendering "this query was refused"
+      // inherits it; the suite pins that beside the success path, where such
+      // a reader carries nothing.
+      //
+      // `nonReactive`, like the claim below: the write machinery's read of
+      // the region it is about to write must not make this action depend on
+      // its own result document.
+      //
+      // No request hash goes with it: recording this one's would make the
+      // next evaluation of the same inputs a memo hit, so a later pass whose
+      // request carries nothing would never ask again. What the pattern
+      // reads is the rule and nothing more — which atoms did not fit names
+      // the principals that introduced them, and that detail faces the
+      // operator.
+      result.withTx(new TransactionWrapper(tx, { nonReactive: true })).set({
         pending: false,
         error: SQLITE_FOREIGN_SPACE_REFUSAL,
       });
@@ -1278,9 +1311,7 @@ export function sqliteQuery(
             // belongs to nobody, and reading that as a takeover would leave
             // the pattern holding the finished query's rows under a statement
             // it no longer runs.
-            const stored = result.withTx(settleTx).getRaw({
-              meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
-            }) as QueryState | undefined;
+            const stored = storedQueryState(settleTx);
             // A newer accepted action can select a memo without changing
             // its stored value. Publication ownership permits this binding
             // to link that result; field ownership preserves the memo.
@@ -1383,12 +1414,16 @@ export function sqliteQuery(
         // there. The rows are labeled by the columns they came from; the
         // parameters that selected them are the issuing transaction's to
         // declare, and it does.
+        //
+        // One path, not the document: a root read is recursive, so it would
+        // materialize every row link and its metadata to answer a question
+        // about one string — on the transaction that then writes the rows.
         const storedRequestHash = (
           wtx: IExtendedStorageTransaction,
         ): string | undefined =>
-          (result.withTx(wtx).getRaw({
+          result.withTx(wtx).key("requestHash").getRaw({
             meta: { ...writeDestinationRead, ...ignoreReadForScheduling },
-          }) as QueryState | undefined)?.requestHash;
+          }) as string | undefined;
         // The acting reader at flush time: the CAPTURED run principal for
         // a served request (the flush's own ambient is the service); the
         // ambient provider read for an unstamped one (the client/OFF
@@ -1642,7 +1677,22 @@ export function sqliteQuery(
               }
               const base = result.getAsNormalizedFullLink();
               let writeSchema = rowWriteSchema;
-              if (shapeConfidentiality.length > 0) {
+              // The store's declaration is grow-only, so the prior is read
+              // whether or not THIS settle carries anything: a refresh whose
+              // rows lost their labels, or whose parameter did, would
+              // otherwise re-mint the path empty and take the declaration
+              // back. A parameter's label is the one that moves.
+              const priorShape = cfcConfidentialityForObservationNode({
+                labelView: cfcLabelViewFromMetadata(
+                  readStoredCfcMetadata(wtx, base),
+                  [...base.path, "result"],
+                ),
+              });
+              const shapeIfcAtoms = joinCfcObservedConfidentiality([
+                priorShape,
+                shapeConfidentiality,
+              ]);
+              if (shapeIfcAtoms.length > 0) {
                 // A shared array's length and membership reveal its rows even
                 // without dereferencing them. The complete row-label join also
                 // protects a count of rows a query contract deliberately skips.
@@ -1650,22 +1700,10 @@ export function sqliteQuery(
                   string,
                   Record<string, unknown>
                 >;
-                // The store's declaration is grow-only, including across
-                // refreshes that remove a row or change its label. Known row
-                // payloads keep their own labels; only membership and the
-                // withheld count inherit this cumulative floor.
-                const priorShape = cfcConfidentialityForObservationNode({
-                  labelView: cfcLabelViewFromMetadata(
-                    readStoredCfcMetadata(wtx, base),
-                    [...base.path, "result"],
-                  ),
-                });
-                const shapeIfc = {
-                  confidentiality: joinCfcObservedConfidentiality([
-                    priorShape,
-                    shapeConfidentiality,
-                  ]),
-                };
+                // Known row payloads keep their own labels; only
+                // membership and the withheld count inherit this cumulative
+                // floor.
+                const shapeIfc = { confidentiality: shapeIfcAtoms };
                 writeSchema = {
                   ...writeSchema,
                   type: "object",
