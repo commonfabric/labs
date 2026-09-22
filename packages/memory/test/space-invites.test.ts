@@ -144,7 +144,13 @@ describe("space-invites", () => {
     };
     const link = buildInviteLink("https://shell.example", invite);
     for (
-      const inviter of ["", "someone", "did:key:z0invalid", "did:web:x.test"]
+      const inviter of [
+        "",
+        "someone",
+        "did:key:z0invalid",
+        "did:web:x.test",
+        `did:key:z${"1".repeat(121)}`,
+      ]
     ) {
       expect(() =>
         buildInviteLink("https://shell.example", { ...invite, inviter })
@@ -161,6 +167,11 @@ describe("space-invites", () => {
     unknown.searchParams.set("inviter", space);
     unknown.searchParams.set("note", "hello");
     expect(() => parseInviteLink(unknown)).toThrow("invalid-link");
+    // The inviter belongs in the query; in the fragment beside the code it
+    // is an unknown fragment key.
+    const inFragment = new URL(link);
+    inFragment.hash = `${inFragment.hash.slice(1)}&inviter=${space}`;
+    expect(() => parseInviteLink(inFragment)).toThrow("invalid-link");
   });
   it("binds the verifier to its version, normalized origin, space, invite ID, and full secret", () => {
     const invite = {

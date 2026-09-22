@@ -58,9 +58,10 @@ export interface RedeemReceipt {
  * `inviter` is a display hint naming who issued the invitation. Anyone who
  * holds the link can change it, it is not bound into the code verifier, and it
  * is checked only syntactically here. A recipient cannot read the space ACL
- * before redeeming, and after redeeming an ACL check shows only that the DID
- * holds access, not that it issued this link (the issuer, `issuedBy`, is
- * visible only to owners). Treat it as a hint bounded by that access check.
+ * before redeeming, and after redeeming an ACL check can show at most that the
+ * DID is an owner (the issuer must still own the space at first redemption),
+ * not that it issued this link (the issuer, `issuedBy`, is visible only to
+ * owners). Treat it as a hint bounded by that access check.
  */
 export interface InviteLink {
   host: string;
