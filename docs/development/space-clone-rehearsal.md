@@ -141,8 +141,14 @@ immediately afterwards — sees the restored one. Pass two would run against pas
 one's state while `cf space verify` reported the clone pristine, which is
 exactly what the two-pass procedure exists to rule out.
 
-`cf space reset` refuses while anything still holds the working copy, so
-forgetting is loud rather than silent. Treat that as a tripwire, not a
+A reset also removes every other store the pass created beside the working copy
+— the stores the server manufactures for spaces the clone links into (see
+[Things that will mislead you](#things-that-will-mislead-you)) — and names them.
+`verify` reads only the cloned space, so a store left behind there would carry
+pass one's writes into pass two without anything reporting it.
+
+`cf space reset` refuses while anything still holds the working copy or one of
+those stores, so forgetting is loud rather than silent. Treat that as a tripwire, not a
 guarantee: it cannot stop a server that opens the store in the instant between
 the check and the restore, and no external check can. **Stopping the server is
 what makes the reset correct.** Restart it (step 2) before the next pass.
@@ -304,7 +310,11 @@ These are all failures that actually happened, not hypotheticals:
 - **Cross-space links resolve to empty, not to an error.** The memory server
   creates space stores on demand, so a link to another space silently
   manufactures an empty local one. A pattern with cross-space reads will look
-  cleaner on a clone than in production.
+  cleaner on a clone than in production. A profile lookup is the usual case:
+  your home space is not in the snapshot, so a board that shows its reader's
+  name recomputes as though you had no profile, and the per-user cells holding
+  that name change in the authored-content check. Start the piece on its current
+  source on a freshly reset clone before blaming the update for them.
 - **`setsrc --check` and `piece restore` refuse a clone whose links leave the
   space.** A voter or member link into a home space the snapshot does not
   carry reads as absent on the clone (the point above), and the review those two

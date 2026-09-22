@@ -433,6 +433,78 @@ Deno.test("reset refuses while a server still holds the working copy", async () 
   });
 });
 
+Deno.test("reset removes the stores an attempt created for other spaces", async () => {
+  // A link into another space makes the server create an empty store for that
+  // space on demand, beside the working copy, and the pass writes into it.
+  // `verify` reads only the cloned space, so a reset that left these behind
+  // would report the clone pristine while pass two started from pass one's
+  // state in them.
+  await withDirs(async ({ source, clone }) => {
+    await createClone({ source, space: SPACE, targetDir: clone, now: NOW });
+    const engineDir = Path.dirname(clonePaths(clone, SPACE).workingPath);
+    const other = "did:key:z6MkOtherSpace";
+    const db = new Database(`${engineDir}/${other}.sqlite`);
+    db.exec("PRAGMA journal_mode = WAL");
+    db.exec("CREATE TABLE t (x)");
+    db.close();
+    await Deno.writeTextFile(`${engineDir}/${other}.sqlite-wal`, "");
+    // Not a name the server gives a store, so not the reset's to remove.
+    await Deno.writeTextFile(`${engineDir}/operator-notes.txt`, "keep me");
+
+    const result = await resetClone(clone);
+
+    assertEquals(result.removedStores, [other]);
+    for (const suffix of ["", "-wal", "-shm"]) {
+      await assertRejects(
+        () => Deno.stat(`${engineDir}/${other}.sqlite${suffix}`),
+        Deno.errors.NotFound,
+        undefined,
+        `${other}.sqlite${suffix} must not survive a reset`,
+      );
+    }
+    assertEquals(
+      await Deno.readTextFile(`${engineDir}/operator-notes.txt`),
+      "keep me",
+    );
+    assert((await verifyClone(clone)).ok, "and the clone is back to baseline");
+  });
+});
+
+Deno.test("reset refuses while a server still holds another space's store", async () => {
+  // The same stale-inode hazard as the working copy: removing a store a server
+  // still has open would not reach the server. And nothing is removed before
+  // every store has been probed, so the refusal leaves the clone as it was.
+  await withDirs(async ({ source, clone }) => {
+    await createClone({ source, space: SPACE, targetDir: clone, now: NOW });
+    const paths = clonePaths(clone, SPACE);
+    const otherPath = `${
+      Path.dirname(paths.workingPath)
+    }/did:key:z6MkOther.sqlite`;
+    mutate(paths.workingPath, [["of:input", { value: { title: "ATTEMPT" } }]]);
+
+    const server = new Database(otherPath);
+    server.exec("PRAGMA journal_mode = WAL");
+    server.exec("CREATE TABLE t (x)");
+    try {
+      await assertRejects(
+        () => resetClone(clone),
+        Error,
+        "still has it open",
+      );
+      assert(
+        !(await verifyClone(clone)).ok,
+        "the working copy was not restored by the refused reset",
+      );
+    } finally {
+      server.close();
+    }
+
+    const result = await resetClone(clone);
+    assertEquals(result.removedStores, ["did:key:z6MkOther"]);
+    assert((await verifyClone(clone)).ok, "reset works once the server stops");
+  });
+});
+
 Deno.test("reset restores a working copy that was deleted outright", async () => {
   // Nothing to hold open, and nothing to unlink. The probe must not treat an
   // absent file as a reason to fail — and must not create one just to ask.

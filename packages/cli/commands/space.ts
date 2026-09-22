@@ -34,7 +34,6 @@ import {
   contentFingerprint,
   createClone,
   openSpace,
-  readManifest,
   resetClone,
   resolveSpace,
   verifyClone,
@@ -400,18 +399,25 @@ export const space = new Command()
     "Restore the working copy from the pristine snapshot, discarding the attempt.",
   )
   .action(async (options, dir) => {
-    const before = await readManifest(dir);
-    await resetClone(dir);
+    const { manifest: before, removedStores } = await resetClone(dir);
     const after = await verifyClone(dir);
-    out(!!options.json, { manifest: before, verify: after }, () => {
-      console.log(
-        `reset ${before.space} to its baseline (${before.createdAt})\n` +
-          `  commits back to ${after.counts.working.commits}\n` +
-          `  content  ${
-            after.fingerprint.match ? "matches baseline" : "STILL DIFFERS"
-          }`,
-      );
-    });
+    out(
+      !!options.json,
+      { manifest: before, removedStores, verify: after },
+      () => {
+        console.log(
+          `reset ${before.space} to its baseline (${before.createdAt})\n` +
+            `  commits back to ${after.counts.working.commits}\n` +
+            `  content  ${
+              after.fingerprint.match ? "matches baseline" : "STILL DIFFERS"
+            }` +
+            (removedStores.length === 0
+              ? ""
+              : `\n  removed  ${removedStores.length} store(s) the attempt created for other spaces:\n` +
+                removedStores.map((space) => `           ${space}`).join("\n")),
+        );
+      },
+    );
     if (!after.ok) Deno.exit(1);
   })
   /* space fingerprint */
