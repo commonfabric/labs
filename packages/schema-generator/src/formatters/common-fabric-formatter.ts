@@ -259,18 +259,11 @@ export class CommonFabricFormatter implements TypeFormatter {
       ? resolveWrapperNode(n, context.typeChecker)
       : undefined;
 
-    // Handle Default via node (direct or alias)
+    // Handle Default via node, written in place or reached through
+    // parentheses or an alias without type parameters: the resolved reference
+    // is the `Default<T, V>` its author wrote, arguments and all.
     if (resolvedWrapper?.kind === "Default") {
-      // For Default, we need the node with concrete type arguments.
-      // If the original node has type arguments, use it.
-      // Otherwise, use the resolved node (for direct Default references).
-      const nodeForDefault = n && ts.isTypeReferenceNode(n) && n.typeArguments
-        ? n // Original has type args, use it for concrete types
-        : resolvedWrapper.node; // Direct reference or fallback
-
-      if (nodeForDefault && ts.isTypeReferenceNode(nodeForDefault)) {
-        return this.#formatDefaultType(nodeForDefault, context, type);
-      }
+      return this.#formatDefaultType(resolvedWrapper.node, context, type);
     }
 
     // Fallback: handle Default<T> detected via aliasSymbol when no type node is available.
@@ -326,7 +319,6 @@ export class CommonFabricFormatter implements TypeFormatter {
     const wrapperInfo = getCellWrapperInfo(type, context.typeChecker);
     if (
       resolvedWrapper &&
-      resolvedWrapper.kind !== "Default" &&
       wrapperInfo &&
       wrapperInfo.kind !== resolvedWrapper.kind &&
       this.#isSyntheticWrapperNode(resolvedWrapper.node)
@@ -363,11 +355,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     // Synthetic wrapper nodes (for example __cfHelpers.ReadonlyCell<...>) may
     // resolve to `any` in checker contexts created before helper injection.
     // In that case, fall back to node-driven wrapper formatting.
-    if (
-      resolvedWrapper &&
-      resolvedWrapper.kind !== "Default" &&
-      !wrapperInfo
-    ) {
+    if (resolvedWrapper && !wrapperInfo) {
       return this.#formatWrapperTypeFromNode(
         resolvedWrapper.node,
         context,

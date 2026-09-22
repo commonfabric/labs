@@ -501,8 +501,7 @@ export class UnionFormatter implements TypeFormatter {
     if (resolved?.kind !== "Default") {
       return undefined;
     }
-    const defaultNode = memberNode.typeArguments ? memberNode : resolved.node;
-    const typeArgs = defaultNode.typeArguments;
+    const typeArgs = resolved.node.typeArguments;
     if (!typeArgs || typeArgs.length < 1 || typeArgs.length > 2) {
       throw new Error("Default<T,V> requires 1 or 2 type arguments");
     }

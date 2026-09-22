@@ -4,7 +4,10 @@ type Default<T, V = T> = T;
 
 // Define wrapper aliases
 type RecursiveItemArray = RecursiveItem[];
-type DefaultRecursiveArray<T extends RecursiveItem[] = RecursiveItem[]> = Default<T, []>;
+type DefaultRecursiveArray<
+  T extends RecursiveItem[] = RecursiveItem[],
+  V extends T = T,
+> = Default<T, V>;
 type CellRecursiveArray<T extends RecursiveItem[] = RecursiveItem[]> = Cell<T>;
 type StreamRecursiveArray<T extends RecursiveItem[] = RecursiveItem[]> = Stream<
   T
@@ -22,7 +25,7 @@ interface SchemaRoot {
   directStream: Stream<RecursiveItem[]>;
 
   // Aliased wrapper usage
-  aliasedDefault: DefaultRecursiveArray;
+  aliasedDefault: DefaultRecursiveArray<RecursiveItem[], []>;
   aliasedCell: CellRecursiveArray;
   aliasedStream: StreamRecursiveArray;
 }

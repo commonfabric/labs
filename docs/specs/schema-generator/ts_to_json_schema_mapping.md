@@ -453,8 +453,17 @@ traversal (apparent type, reference targets, base types —
 detection (`detectWrapperViaNode`/`resolveWrapperNode`,
 `type-utils.ts`) reads a node through parentheses and follows alias chains
 syntactically — local, imported, and namespace-qualified aliases, generic
-ones included, since only the wrapper's kind is read through them
-(`getTypeAliasDeclaration`, `src/typescript/type-node.ts`). A cell wrapper's
+ones included (`getTypeAliasDeclaration`, `src/typescript/type-node.ts`). The
+node it resolves to is one whose type arguments are the wrapper's own at the
+reference: the wrapper reference itself; the reference an alias declares,
+where none of its type arguments mentions the alias's type parameters; or,
+through an alias that passes its parameters to the wrapper unchanged and in
+order (`type UserDefault<T, V> = Default<T, V>`), the reference as written.
+An alias that does more with its parameters (`Default<T[], []>`,
+`Default<string, V>`) leaves no such node, so its reference is not a wrapper
+reference to node-level detection and is read from the type it instantiates
+(§6.3); the chain is still followed, so a circular one throws. A cell
+wrapper's
 name counts only where it resolves, through its import binding, to the
 wrapper `commonfabric` declares (`isCommonFabricSymbol`,
 `src/typescript/common-fabric-symbols.ts`), under whatever name it was
@@ -464,7 +473,8 @@ by its spelling, and `Default` is recognized by its spelling (§7).
 **Circular alias chains throw** (`Circular type alias detected: A -> B ->
 …`; a second detection in union alias resolution, `union-formatter.ts`; both
 tested by `circular-alias-error.test.ts`). `wrapper-reference.test.ts` pins
-the parentheses, the imported aliases, and the identity rule.
+the parentheses, the imported aliases, the identity rule, and both kinds of
+generic alias.
 
 ### 6.2 Emission
 
@@ -497,9 +507,12 @@ pre-cleanup schemas.
 
 ### 6.3 Node/type interplay
 
-- A generic alias whose resolved type is a Cell uses that resolved wrapper's
-  payload. The alias's own first argument need not be the payload; source
-  type arguments supply an inner node only for direct Cell wrapper syntax.
+- A generic alias whose resolved type is a Cell or a `Default`, and that
+  leaves no node carrying the wrapper's arguments (§6.1), uses that resolved
+  wrapper's payload. The alias's own first argument need not be the payload;
+  source type arguments supply an inner node only where they are the
+  wrapper's own: direct wrapper syntax, and an alias that passes its
+  parameters through.
   Non-generic aliases retain their resolved declaration node so payload
   defaults remain available to schema generation.
 - Capability re-wrap fidelity: when a **synthetic** node narrows a capability

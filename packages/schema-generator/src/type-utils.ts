@@ -792,9 +792,15 @@ export function detectWrapperViaNode(
  * Returns both the wrapper kind and the resolved type reference node with type arguments.
  *
  * The node is read through parentheses and through type aliases, an imported
- * or generic one included (`getTypeAliasDeclaration()`): only the wrapper's
- * kind is read through a generic alias, and the node returned for one is
- * written in the alias's own type parameters. A circular alias throws.
+ * one included (`getTypeAliasDeclaration()`). The node returned is one whose
+ * type arguments are the wrapper's own, at the reference: the wrapper
+ * reference itself, the reference an alias declares where nothing in its type
+ * arguments depends on the alias's type parameters, or, through a generic
+ * alias that passes its parameters to the wrapper unchanged and in order, the
+ * reference as written. A generic alias that does more with its parameters
+ * (`Default<T[], []>`, `Default<string, V>`) leaves no such node, so its
+ * reference names no wrapper here and is read from the type it instantiates.
+ * A circular alias throws.
  */
 export function resolveWrapperNode(
   typeNode: ts.TypeNode | undefined,
@@ -803,7 +809,10 @@ export function resolveWrapperNode(
   kind: NodeWrapperKind;
   node: ts.TypeReferenceNode;
 } | undefined {
-  return typeNode && followAliasToWrapperNode(typeNode, typeChecker, [], []);
+  const node = typeNode && unwrapTypeParentheses(typeNode);
+  return node && ts.isTypeReferenceNode(node)
+    ? followAliasToWrapperNode(node, node, typeChecker, [], [])
+    : undefined;
 }
 
 /**
@@ -835,13 +844,18 @@ function wrapperKindOfReference(
 }
 
 /**
- * Helper for `resolveWrapperNode()`, which follows `typeNode`, through
- * parentheses and type aliases, to a reference that names a wrapper.
- * `followed` holds the aliases already on this path and `names` their names,
- * which spell the chain in the error a circular alias throws.
+ * Helper for `resolveWrapperNode()`, which follows `reference`, through
+ * parentheses and type aliases, to a reference that names a wrapper, and
+ * returns that wrapper's kind with `binding` as it stands there. `binding` is
+ * the reference whose type arguments are those of `reference` at the use
+ * site, or `undefined` once an alias has left none (`bindAliasTarget()`); the
+ * walk goes on without one, so that a circular alias still throws. `followed`
+ * holds the aliases already on this path and `names` their names, which spell
+ * the chain in the error a circular alias throws.
  */
 function followAliasToWrapperNode(
-  typeNode: ts.TypeNode,
+  reference: ts.TypeReferenceNode,
+  binding: ts.TypeReferenceNode | undefined,
   typeChecker: ts.TypeChecker,
   followed: readonly ts.TypeAliasDeclaration[],
   names: readonly string[],
@@ -849,26 +863,84 @@ function followAliasToWrapperNode(
   kind: NodeWrapperKind;
   node: ts.TypeReferenceNode;
 } | undefined {
-  const node = unwrapTypeParentheses(typeNode);
-  if (!ts.isTypeReferenceNode(node)) return undefined;
+  const kind = wrapperKindOfReference(reference, typeChecker);
+  if (kind) return binding && { kind, node: binding };
 
-  const name = getEntityNameText(node.typeName);
-  const kind = wrapperKindOfReference(node, typeChecker);
-  if (kind) return { kind, node };
-
-  const declaration = getTypeAliasDeclaration(node, typeChecker);
+  const declaration = getTypeAliasDeclaration(reference, typeChecker);
   if (!declaration) return undefined;
+  const name = getEntityNameText(reference.typeName);
   if (followed.includes(declaration)) {
     throw new Error(
       `Circular type alias detected: ${[...names, name].join(" -> ")}`,
     );
   }
+  const target = unwrapTypeParentheses(declaration.type);
+  if (!ts.isTypeReferenceNode(target)) return undefined;
   return followAliasToWrapperNode(
-    declaration.type,
+    target,
+    bindAliasTarget(binding, declaration, target, typeChecker),
     typeChecker,
     [...followed, declaration],
     [...names, name],
   );
+}
+
+/**
+ * Helper for `followAliasToWrapperNode()`, which returns the reference whose
+ * type arguments are those of `target`, the reference `declaration` declares,
+ * where the alias is reached through `binding`. Without type parameters, and
+ * where none of its type arguments mentions one, `target` means the same
+ * wherever it is reached, and is its own binding. Where the alias passes its
+ * parameters to `target` unchanged and in order, and `binding` supplies an
+ * argument for each, `target`'s arguments are `binding`'s. Otherwise
+ * `target`'s arguments exist only once the alias's parameters are replaced,
+ * which no authored node shows, and the result is `undefined`.
+ */
+function bindAliasTarget(
+  binding: ts.TypeReferenceNode | undefined,
+  declaration: ts.TypeAliasDeclaration,
+  target: ts.TypeReferenceNode,
+  checker: ts.TypeChecker,
+): ts.TypeReferenceNode | undefined {
+  const parameters = (declaration.typeParameters ?? []).map((parameter) =>
+    checker.getSymbolAtLocation(parameter.name)
+  );
+  const parameterSet = new Set(parameters);
+  const targetArguments = target.typeArguments ?? [];
+  if (
+    !targetArguments.some((argument) =>
+      mentionsSymbol(argument, parameterSet, checker)
+    )
+  ) {
+    return target;
+  }
+  const passesThrough = binding?.typeArguments?.length === parameters.length &&
+    targetArguments.length === parameters.length &&
+    targetArguments.every((argument, index) => {
+      const node = unwrapTypeParentheses(argument);
+      return ts.isTypeReferenceNode(node) && !node.typeArguments &&
+        ts.isIdentifier(node.typeName) &&
+        checker.getSymbolAtLocation(node.typeName) === parameters[index];
+    });
+  return passesThrough ? binding : undefined;
+}
+
+/**
+ * Helper for `bindAliasTarget()`, which returns `true` where `node` holds a
+ * reference to one of `symbols`.
+ */
+function mentionsSymbol(
+  node: ts.Node,
+  symbols: ReadonlySet<ts.Symbol | undefined>,
+  checker: ts.TypeChecker,
+): boolean {
+  if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) {
+    if (symbols.has(checker.getSymbolAtLocation(node.typeName))) return true;
+  }
+  return ts.forEachChild(
+    node,
+    (child) => mentionsSymbol(child, symbols, checker) || undefined,
+  ) ?? false;
 }
 
 /**

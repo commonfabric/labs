@@ -1119,25 +1119,26 @@ export class SchemaGenerator {
     typeNode?: ts.TypeNode,
     checker?: ts.TypeChecker,
   ): string | ts.Type {
-    if (typeNode && checker && ts.isTypeReferenceNode(typeNode)) {
+    const reference = typeNode && unwrapTypeParentheses(typeNode);
+    if (reference && checker && ts.isTypeReferenceNode(reference)) {
       // A wrapper reference — `Default` or a cell-like wrapper (Cell,
-      // Writable, Stream, OpaqueCell), written in place or reached through an
-      // alias — shares its ts.Type identity with the same instantiation at
-      // other positions. When a recursive type like TodoItem contains
-      // `Writable<TodoItem[]>`, TypeScript reuses the same Cell<TodoItem[]>
-      // type object, causing the cycle to be detected in wrapper context where
-      // it can't be properly stored. Give each wrapper occurrence a unique
-      // stack key, from its type arguments and its source location, so the
-      // cycle is instead detected at the inner type level where it can be
-      // handled.
-      const wrapperKind = detectWrapperViaNode(typeNode, checker);
+      // Writable, Stream, OpaqueCell), written in place, in parentheses, or
+      // reached through an alias — shares its ts.Type identity with the same
+      // instantiation at other positions. When a recursive type like TodoItem
+      // contains `Writable<TodoItem[]>`, TypeScript reuses the same
+      // Cell<TodoItem[]> type object, causing the cycle to be detected in
+      // wrapper context where it can't be properly stored. Give each wrapper
+      // occurrence a unique stack key, from its type arguments and its source
+      // location, so the cycle is instead detected at the inner type level
+      // where it can be handled.
+      const wrapperKind = detectWrapperViaNode(reference, checker);
       if (wrapperKind) {
-        const argTexts = typeNode.typeArguments
-          ? typeNode.typeArguments.map((arg) => safeGetNodeText(arg))
+        const argTexts = reference.typeArguments
+          ? reference.typeArguments.map((arg) => safeGetNodeText(arg))
             .join(",")
           : "";
-        const locationHash = typeNode.getSourceFile?.()?.fileName || "";
-        const position = typeNode.pos || 0;
+        const locationHash = reference.getSourceFile?.()?.fileName || "";
+        const position = reference.pos || 0;
         return `${wrapperKind}_${type.flags}_${argTexts}_${locationHash}_${position}`;
       }
     }

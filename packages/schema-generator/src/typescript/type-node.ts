@@ -15,9 +15,7 @@
  * A reference to a generic alias is not in the set. The node such an alias
  * names is written in terms of its own type parameters, and denotes what the
  * reference denotes only once each is replaced by the reference's argument; a
- * reader that needs to see through one substitutes for itself, and a reader
- * that asks only which type an alias is built from, such as which wrapper it
- * names, finds the alias with {@link getTypeAliasDeclaration}. Nor is
+ * reader that needs to see through one substitutes for itself. Nor is
  * `readonly`, which changes the type a node denotes; a reader to which that
  * change is invisible strips it on top of these, and says so where it does.
  *
@@ -48,9 +46,11 @@ export function unwrapTypeParentheses(node: ts.TypeNode): ts.TypeNode {
  * Returns the declaration of the type alias that `reference` names, through
  * any import binding, or `undefined` for a reference to anything else. The
  * alias may be generic, in which case the node it declares is written in its
- * own type parameters: enough to tell which type the alias is built from, and
- * not what the reference denotes. A reference the checker cannot resolve, such
- * as one built by the transformer, names no declaration here.
+ * own type parameters and does not denote what the reference denotes until
+ * each is replaced by the reference's argument, which a caller that reads
+ * through the alias does for itself. A
+ * reference the checker cannot resolve, such as one built by the transformer,
+ * names no declaration here.
  */
 export function getTypeAliasDeclaration(
   reference: ts.TypeReferenceNode,
