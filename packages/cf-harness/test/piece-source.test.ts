@@ -254,8 +254,7 @@ describe("piece-source", () => {
     });
 
     it("refuses a reference to another space without naming what it found", async () => {
-      // The session's authority ends at its space, the same boundary
-      // run_pattern draws over its inputs.
+      // Source reads are bounded to the session's own space.
       const engine = createEngine();
       const created = await createPiece(engine);
       const foreign =

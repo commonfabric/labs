@@ -1023,10 +1023,10 @@ piece. A bare slug is unaffected: it names no space to disagree about.
 
 An input cell names a task target, so failure is closed and loud rather than
 tolerated: a malformed argument is a usage error, and a reference that does not
-parse, targets another space, names a piece the space does not hold, or arrives
-on a run without a fabric session fails the run before the model is involved.
-The cells are recorded in run state (`inputCells`), replayed rather than
-re-minted on resume, and reported in the operator summary as `inputCells:`.
+parse, targets an unadmitted space, names a piece the space does not hold, or
+arrives on a run without a fabric session fails the run before the model is
+involved. The cells are recorded in run state (`inputCells`), replayed rather
+than re-minted on resume, and reported in the operator summary as `inputCells:`.
 
 #### Inspecting a handle's shape
 
@@ -1175,17 +1175,16 @@ document whose schema names a field with a DID or a bare tagged hash would
 otherwise put that identifier into model context through the one channel that
 crosses.
 
-Disclosing shape is permissive and fixed rather than configurable: a run that
-holds a token gets an answer for any address in the session's own space, and
-there is no setting that says otherwise. The handle's own address is checked
-against the session's space, and an address outside it is not read at all — the
-session's authority ends at its space. That check is on the address, not on
-everything reachable from it: reading the document's declared schema resolves
-whatever links the document itself carries, and link resolution is not
-space-bounded. What bounds it in practice is that the model chooses the handle
-and never the path taken from it, and that whatever comes back is reduced to
-structure before any of it crosses. An address the session can state no shape
-for is reported as shapeless rather than as a failed call.
+Disclosing shape follows the session's reference admission: a run holding a
+token can describe an address in its own space or a foreign space the operator
+admitted with `--fabric-foreign-spaces`. An unadmitted foreign address is not
+read. That check is on the address, not on everything reachable from it: reading
+the document's declared schema resolves whatever links the document itself
+carries, and link resolution is not space-bounded. What bounds it in practice is
+that the model chooses the handle and never the path taken from it, and that
+whatever comes back is reduced to structure before any of it crosses. An address
+the session can state no shape for is reported as shapeless rather than as a
+failed call.
 
 `describe_handle` is declared `effectClass: "read"`. It reads no value except a
 database handle's own table declaration, and — where that handle names a
@@ -1780,6 +1779,22 @@ space's authorization, and only a healthy session is cached for the run. A
 session that fails to build surfaces as an ordinary tool-output error rather
 than a run failure, and the next tool call retries the construction.
 
+`--fabric-foreign-spaces` (`CF_HARNESS_FABRIC_FOREIGN_SPACES`) admits foreign
+references with a JSON map from space DIDs to HTTP(S) origins, for example
+`{"did:key:zForeign":"https://foreign.example/"}`. Names, credentials, paths,
+queries, and fragments are refused. The default admits no foreign spaces; `{}`
+explicitly clears an environment default. The session registers these host
+routes before returning to its callers and refuses a route that conflicts with
+its own space or an established runtime route. The same admission predicate
+governs input-cell minting, `describe_handle`, and `run_pattern` link inputs.
+Named piece attachments continue to resolve in the session's own space.
+
+This is trusted startup configuration, unavailable to model tool arguments and
+console task bodies. Reads use the session's configured identity and existing
+access rights. Admission supplies neither a read-only authority nor
+declassification: foreign reads retain their confidentiality and integrity
+labels, and derived results pass through the ordinary CFC release checks.
+
 Three further flags set the session runtime's CFC dials, and each needs the
 three session flags present. `--fabric-cfc-enforcement-mode`
 (`CF_HARNESS_FABRIC_CFC_ENFORCEMENT_MODE`) accepts `enforce-explicit` or
@@ -1868,7 +1883,7 @@ over-cap source is a structured tool error), an optional `inputs` object, and an
 optional `resultSchema`. An `inputs` string value that is a whole-string
 LLM-friendly link (`/of:fid1:.../path`) is passed to the pattern as a live cell
 reference; everything else passes through as plain JSON. A link that resolves
-into a space other than the configured session space is refused with a
+into a foreign space absent from the operator's admission map is refused with a
 structured error before anything is created, and an input whose value does not
 match the compiled pattern's argument schema for its key is refused the same way
 — named after the offending key, with no piece persisted. What supplies the

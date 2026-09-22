@@ -235,3 +235,12 @@ private verifiers and must receive the same protection as the live store.
 Deletion of an active row does not erase retained backups, WAL pages, or old
 filesystem bytes. Expiry and revocation stop admission; removing a member is a
 separate ACL operation.
+
+## DID inbox delivery
+
+`GET /api/inbox` advertises the generic private inbox protocol. Signed POSTs
+under `/api/inbox/` enable, inspect readiness, send, list, get, and acknowledge
+inert messages. The verified signer owns recipient operations and identifies the
+sender; delivery grants no space access. See
+[DID inboxes](../../docs/features/did-inboxes.md) for limits, retry receipts,
+storage, and the `@commonfabric/runner/inbox` SDK.

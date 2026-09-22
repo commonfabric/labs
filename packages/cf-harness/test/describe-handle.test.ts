@@ -999,10 +999,9 @@ describe("describe_handle", () => {
     });
 
     it("reports an address in another space as shapeless even though the runtime could read it", async () => {
-      // The session's authority ends at its own space. The neighbouring space
-      // is on this very runtime and its piece declares a shape, so an answer
-      // here would be a shape read across the boundary rather than a shape the
-      // session could not find.
+      // Without operator admission, a foreign handle remains shapeless. The
+      // neighboring space is on this runtime and its piece declares a shape,
+      // so this exercises admission rather than an unavailable referent.
       const neighbourRef = await runPatternTool.invoke(
         contextWith(undefined, { pieces: neighbour }),
         { sourceText: SPENDING_PATTERN_SOURCE, inputs: { n: 21 } },
@@ -1023,6 +1022,29 @@ describe("describe_handle", () => {
       expect(output.known).toBe(true);
       expect(output.hasSchema).toBe(false);
       expect(output.schema).toBeUndefined();
+    });
+
+    it("describes a foreign referent when its DID is admitted", async () => {
+      const created = await runPatternTool.invoke(
+        contextWith(undefined, { pieces: neighbour }),
+        { sourceText: SPENDING_PATTERN_SOURCE, inputs: { n: 21 } },
+      ) as RunPatternToolSuccessOutput;
+      expect(created.status).toBe("ok");
+      const minted = await mintAddressHandle(
+        createHarnessHandleTable("foreign-description"),
+        `/@${neighbour.getSpace()}${created.resultRef}`,
+      );
+      const output = await describeHandleTool.invoke(
+        contextWith(minted.table, {
+          ...session,
+          foreignSpaces: { [neighbour.getSpace()]: "https://foreign.example/" },
+        }),
+        { token: minted.token },
+      );
+      expect(output.known).toBe(true);
+      expect(output.hasSchema).toBe(true);
+      expect(output.schema).toBeDefined();
+      expect(output.labels).toEqual([]);
     });
 
     it("reports an entry whose reference does not parse from the recorded schema instead", async () => {
@@ -1054,9 +1076,7 @@ describe("describe_handle", () => {
     });
 
     it("reports an address the session's space does not hold as shapeless", async () => {
-      // The session's authority ends at its own space, and an address it
-      // cannot state a shape for is answered as absent rather than as a
-      // failed call.
+      // A missing document contributes no shape rather than failing the call.
       const minted = await mintAddressHandle(
         createHarnessHandleTable("run-describe"),
         REF_A,

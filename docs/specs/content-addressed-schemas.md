@@ -473,13 +473,18 @@ value. Anything that passes is byte-for-byte usable as the schema
 document that id names; anything else is another class, not a rejection
 to warn about.
 
-Content-addressed documents are immutable at the commit boundary: the
-server rejects a `delete` or `patch` of any `cid:` document, whatever
-its class, and rejects a `set` that is neither the first installation
-nor content-identical to the stored document (canonical value equality,
-which compares special objects by content hash) — conflicting sets of one id
-within a single commit included — because a deleted or altered
-dependency would invalidate every document referencing it. An
+Content-addressed documents are immutable at the commit boundary:
+`set` is the only operation the server admits against a `cid:` id,
+whatever the document's class, and it rejects a `set` that is neither
+the first installation nor content-identical to the stored document
+(canonical value equality, which compares special objects by content
+hash) — conflicting sets of one id within a single commit included —
+because a deleted or altered dependency would invalidate every document
+referencing it. Admitting one operation rather than naming the ones it
+refuses is what makes an operation added to the protocol refused at this
+boundary until someone decides otherwise: `delete`, `patch`, `apply-op`
+and `release-op-field` are each refused today without the rule naming
+them. An
 idempotent re-`set` of the same content is how writers install closures
 and stays legal — and it applies as a semantic no-op: the immutability
 comparison proves the content unchanged, so the engine writes no
@@ -736,7 +741,8 @@ playbook:
   handle references that nothing yet writes. The three memory walkers learn
   reference-only schema positions in the same change.
 - **Phase 0.5 — commit-boundary enforcement.** `cid:` immutability
-  (no delete, patch, or differing re-set) and commit-time closure
+  (`set` the only admitted operation, and no differing re-set) and
+  commit-time closure
   validation (every collected reference — all but the one patch shape
   documented under Resolution — is backed, in the commit or the space's
   store, by content that verifies against its id, transitively), landed

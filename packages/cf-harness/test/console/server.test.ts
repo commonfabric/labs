@@ -243,6 +243,7 @@ describe("console/server", () => {
    */
   const indexServer = async (
     responses: readonly Response[],
+    artifactRoot?: string,
   ): Promise<
     { server: ConsoleServer; requests: IndexRequest[] }
   > => {
@@ -258,7 +259,10 @@ describe("console/server", () => {
       return Promise.resolve(response);
     };
     const indexed = new ConsoleServer(
-      await configWithIndex(),
+      {
+        ...await configWithIndex(),
+        ...(artifactRoot !== undefined ? { artifactRoot } : {}),
+      },
       (onEvent) =>
         new HarnessInteractiveChatService({
           createPromptLoop: answeringLoop,
@@ -2066,7 +2070,13 @@ describe("console/server", () => {
       const indexed = await indexServer([]);
 
       for (
-        const fn of ["recordEvent", "publishPattern", "deletePattern", 7]
+        const fn of [
+          "recordEvent",
+          "publishPattern",
+          "retractPattern",
+          "deletePattern",
+          7,
+        ]
       ) {
         const response = await call(indexed, {
           fn,
@@ -2281,6 +2291,159 @@ describe("console/server", () => {
       expect((await response.json()).error).toBe(
         "pattern index recordEvent failed (404)",
       );
+    });
+  });
+
+  describe("POST /api/index/retract", () => {
+    const request = {
+      patternId: "A".repeat(43),
+      successorPatternId: "B".repeat(43),
+      reason: "Superseded by the corrected reader",
+    };
+
+    for (const changed of [true, false]) {
+      it(`returns the index receipt with changed=${changed} for the publication id read from an artifact`, async () => {
+        const root = await Deno.makeTempDir();
+        try {
+          const outputRoot = join(root, "run-1.subagent.1", "tool-outputs");
+          await Deno.mkdir(outputRoot, { recursive: true });
+          await Deno.writeTextFile(
+            join(outputRoot, "publication.json"),
+            JSON.stringify({
+              status: "ok",
+              pieceId: CELL_ID,
+              patternPublication: {
+                status: "queued",
+                reason: "recorded-automatically",
+                patternId: request.patternId,
+              },
+            }),
+          );
+          const receipt = {
+            patternId: request.patternId,
+            status: "retracted",
+            successorPatternId: request.successorPatternId,
+            retractionReason: request.reason,
+            retractedBy: signer.did(),
+            retractedAt: "2026-09-21T00:00:00.000Z",
+            discoverable: false,
+            changed,
+          };
+          const indexed = await indexServer([Response.json(receipt)], root);
+          const artifact = await indexed.server.handle(getRequest(
+            "/api/runs/run-1.subagent.1/tool-outputs/publication.json",
+          ));
+          expect(artifact.status).toBe(200);
+          const publication = (await artifact.json()).patternPublication;
+          const response = await indexed.server.handle(
+            jsonRequest("/api/index/retract", {
+              ...request,
+              patternId: publication.patternId,
+              ownerDid: "did:key:zOther",
+              retractedBy: "did:key:zOther",
+              admin: true,
+              includeSource: true,
+            }),
+          );
+          expect(response.status).toBe(200);
+          expect(await response.json()).toEqual(receipt);
+          expect(indexed.requests).toEqual([{
+            url: "https://index.test/api/retractPattern",
+            body: JSON.stringify(request),
+          }]);
+        } finally {
+          await Deno.remove(root, { recursive: true });
+        }
+      });
+    }
+
+    for (const field of ["patternId", "successorPatternId", "reason"]) {
+      it(`returns 400 without contacting the index for an invalid ${field}`, async () => {
+        const indexed = await indexServer([]);
+        for (const value of [undefined, null, 7, "", "   "]) {
+          const response = await indexed.server.handle(
+            jsonRequest("/api/index/retract", { ...request, [field]: value }),
+          );
+          expect(response.status).toBe(400);
+          const { error } = await response.json();
+          expect(error).toContain(`${field} is required`);
+          if (field === "successorPatternId") {
+            expect(error).toContain("same-owner direct successor");
+            expect(error).toContain("standalone deletion is not supported");
+          }
+        }
+        expect(indexed.requests).toEqual([]);
+      });
+    }
+
+    it("returns 400 for malformed JSON or a non-object body without contacting the index", async () => {
+      const indexed = await indexServer([]);
+      for (const body of ["not JSON", "null", "[]", '"pattern"']) {
+        const response = await indexed.server.handle(
+          new Request("http://127.0.0.1:8100/api/index/retract", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body,
+          }),
+        );
+        expect(response.status).toBe(400);
+      }
+      expect(indexed.requests).toEqual([]);
+    });
+
+    it("returns 503 when the console has no index", async () => {
+      const response = await server.handle(
+        jsonRequest("/api/index/retract", request),
+      );
+      expect(response.status).toBe(503);
+      expect((await response.json()).error).toContain(
+        "without a pattern index",
+      );
+    });
+
+    for (const status of [400, 403, 404, 409, 500]) {
+      it(`preserves the index refusal at ${status} without exposing its body`, async () => {
+        const indexed = await indexServer([
+          Response.json({ error: "private index detail" }, { status }),
+        ]);
+        const response = await indexed.server.handle(
+          jsonRequest("/api/index/retract", request),
+        );
+        expect(response.status).toBe(status === 500 ? 502 : status);
+        expect(await response.json()).toEqual({
+          error: `pattern index retractPattern failed (${status})`,
+        });
+        expect(indexed.requests).toHaveLength(1);
+      });
+    }
+
+    it("returns a generic 502 for a host-side failure", async () => {
+      const unavailable = new ConsoleServer(
+        await configWithIndex(),
+        (onEvent) =>
+          new HarnessInteractiveChatService({
+            createPromptLoop: answeringLoop,
+            now: advancingClock(),
+            onEvent,
+          }),
+        () => Promise.reject(new Error("private identity path")),
+      );
+      const response = await unavailable.handle(
+        jsonRequest("/api/index/retract", request),
+      );
+      expect(response.status).toBe(502);
+      expect(await response.json()).toEqual({
+        error: "the index request failed on this server; see its log",
+      });
+    });
+
+    it("refuses a foreign Host before contacting the index", async () => {
+      const indexed = await indexServer([]);
+      const response = await indexed.server.handle(
+        jsonRequest("/api/index/retract", request, { host: "foreign.test" }),
+      );
+      expect(response.status).toBe(403);
+      expect(indexed.requests).toEqual([]);
     });
   });
 

@@ -1,8 +1,8 @@
 # cf-harness Current State
 
 Status: current implementation reference\
-Last verified: 2026-09-21\
-Revision: `90e1cfac7d+feedback-authors`
+Last verified: 2026-09-22\
+Revision: `4e3d5274b4+console-retraction`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -28,10 +28,11 @@ The runtime has four main boundaries:
    `runsc-cfc`. The browser child is a constrained host-adjacent profile whose
    typed `browser` tool the harness binds to a leased local CDP endpoint itself.
    The optional `run_pattern` tool is a distinct trusted-host path whose Fabric
-   identity stays outside Docker and whose authority is constrained to one
-   configured space. The agent result writer is a second such path, invoked by a
+   identity stays outside Docker. It runs pieces in the configured space and
+   admits input references from that space or foreign DIDs the operator lists
+   with their hosts. The agent result writer is a second such path, invoked by a
    host caller rather than by the model, writing a run's structured result into
-   that same space.
+   the configured space.
 4. The artifact store records run state, the model-facing transcript, a sibling
    record of the omission rules and full-artifact locations applied to each tool
    result, reports, capability and policy snapshots, tool outputs, child
@@ -56,6 +57,9 @@ The current package provides:
   Docker and index observations, with deciding records, timestamps, causes, and
   remedies; unknown observations remain distinct from failures, and reading the
   route never waits for a live probe;
+- owner retraction through console `POST /api/index/retract`, signed by the
+  configured identity and requiring an active same-owner direct successor; the
+  generic index proxy stays read-only and standalone deletion is unsupported;
 - durable Loom composition, exact inspection, and bounded receipt recovery over
   an explicitly configured host command transport; current-turn console results
   include verified authored Loom receipts and the submitted origin. See
@@ -297,11 +301,11 @@ The current package provides:
   nothing being declared — a database's tables are the contract it was created
   under, its rows are in the database file, and nothing here opens one; a count
   is taken of a whole table and of whole columns, never under a caller's own
-  predicate. Disclosure is permissive and fixed rather than configurable — no
-  setting narrows it — and is bounded to addresses in the session's own space;
-  that bound is on the handle's own address rather than on everything the
-  document reaches from it. Answering from the fabric establishes the run's
-  fabric session despite the tool's `read` effect class;
+  predicate. Disclosure admits addresses in the session's own space and foreign
+  DIDs the operator lists with their host in `--fabric-foreign-spaces`; that
+  bound is on the handle's own address rather than on everything the document
+  reaches from it. Answering from the fabric establishes the run's fabric
+  session despite the tool's `read` effect class;
 - bounded request-attribution headers on OpenAI-compatible gateway traffic,
   using persisted operational provenance rather than request content or personal
   identifiers;
@@ -337,12 +341,12 @@ The current package provides:
   `run_pattern`: compiles and runs an inline `sourceText` pattern (capped at 256
   KiB) against a deployed Fabric space from the trusted host side over a lazy
   per-run session that caches only a healthy, authorized construction; passes
-  whole-string LLM-friendly link inputs as live cells, refusing links into
-  another space, inputs the compiled pattern declares no argument for, input
-  values that carry a sealed opaque link anywhere within them, and values that
-  mismatch the compiled argument schema whether a live cell or plain JSON
-  supplies them, all before any piece exists; honors the run's abort signal by
-  stopping the created piece and returning a structured `cancelled` error;
+  whole-string LLM-friendly link inputs as live cells, refusing links into an
+  unadmitted foreign space, inputs the compiled pattern declares no argument
+  for, input values that carry a sealed opaque link anywhere within them, and
+  values that mismatch the compiled argument schema whether a live cell or plain
+  JSON supplies them, all before any piece exists; honors the run's abort signal
+  by stopping the created piece and returning a structured `cancelled` error;
   scrubs bare fabric identifiers from model-facing diagnostics; reports a result
   that settles to empty or schema-failing as an error when the invocation's
   settle window observed a cause — an action error attributed to the piece, or a

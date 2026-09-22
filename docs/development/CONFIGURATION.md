@@ -61,17 +61,20 @@ explains why it lives in the toolshed rather than in `@commonfabric/llm`.
 
 | Var | Default | Notes |
 |---|---|---|
-| `CFTS_AI_GATEWAY_URL` | `https://llm.stage.commontools.dev` | OpenAI-compatible `/v1/models` endpoint. Toolshed probes it as it starts up, alongside binding its port rather than ahead of it; reachable models are registered and `gateway:claude-sonnet-4-6` becomes the default when present. **The default URL is Tailscale-only — external users will not be able to reach it.** That fallback path is supported: an unreachable gateway logs a warning and the direct-provider models continue to work. A request naming a direct-provider model such as `anthropic:claude-sonnet-4-6` is served while the probe is still out, because that model was registered as toolshed loaded. What waits for the probe is a request naming a model that is not registered yet — a `gateway:` one, the `default` alias, or a name that is no model at all — and `GET /models`, which answers for the whole list. Off Tailscale that wait is however long the connection takes to fail, so set to `""` to skip the probe entirely. |
+| `CFTS_AI_GATEWAY_URL` | `https://llm.stage.commontools.dev` | OpenAI-compatible `/v1/models` endpoint. Toolshed probes it as it starts up, alongside binding its port rather than ahead of it; reachable models are registered and `gateway:claude-sonnet-5` becomes the default when present. **The default URL is Tailscale-only — external users will not be able to reach it.** That fallback path is supported: an unreachable gateway logs a warning and the direct-provider models continue to work. A request naming a direct-provider model such as `anthropic:claude-sonnet-4-6` is served while the probe is still out, because that model was registered as toolshed loaded. What waits for the probe is a request naming a model that is not registered yet — a `gateway:` one, the `default` alias, or a name that is no model at all — and `GET /models`, which answers for the whole list. Off Tailscale that wait is however long the connection takes to fail, so set to `""` to skip the probe entirely. |
 
 **Default model resolution order** (defined in `models.ts` as
 `DEFAULT_MODEL_CANDIDATES`):
 
-1. `gateway:claude-sonnet-4-6`
-2. `anthropic:claude-sonnet-4-6`
-3. `anthropic:claude-sonnet-4-5`
+1. `gateway:claude-sonnet-5`
+2. `gateway:gpt-5.6-luna`
+3. `gateway:gemini-3.5-flash`
 
-The first candidate registered becomes the `default` alias and the value used
-for `TASK_MODELS.coding` / `TASK_MODELS.json`.
+The first available candidate becomes the `default` alias and the value used
+for `TASK_MODELS.coding` / `TASK_MODELS.json`. Only these candidates can become
+the default. If none is registered, the alias remains unavailable even when
+other language models are registered. A request naming an unavailable `default`
+or an unknown model is rejected.
 
 ---
 
@@ -518,10 +521,13 @@ CFTS_AI_LLM_ANTHROPIC_API_KEY=sk-ant-...
 CFTS_AI_GATEWAY_URL=""        # silence the off-Tailscale gateway probe
 ```
 
+Name a registered Anthropic model explicitly in LLM requests. This setup has no
+gateway candidate for the `default` alias.
+
 **Local dev, on Tailscale, using the gateway:**
 ```bash
 # Defaults are fine. CFTS_AI_GATEWAY_URL already points at stage.
-# default model resolves to gateway:claude-sonnet-4-6.
+# default prefers gateway:claude-sonnet-5 when it is registered.
 ```
 
 **Production deploy:**

@@ -93,6 +93,13 @@ output. To pin any call to the deployment's default model explicitly — for
 instance to keep a `generateObject` call on the same model as the rest of a
 pattern — pass `model: "default"`.
 
+After provider discovery, toolshed selects the first registered model from this
+list, in order: `gateway:claude-sonnet-5`, `gateway:gpt-5.6-luna`, then
+`gateway:gemini-3.5-flash`. Only these models can become the `"default"` alias.
+If none is registered, the alias remains unavailable and a request naming it
+is rejected, even when other language models are registered. An explicitly
+named unknown model is also rejected.
+
 Hardcode a specific model only when the call needs that model's particular
 capability — for example a cheaper, faster model for a high-volume map, or a
 model chosen for a vision task.

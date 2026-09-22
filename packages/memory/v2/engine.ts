@@ -5318,11 +5318,13 @@ const applyCommitTransaction = (
   });
 
   // Content-addressed documents are immutable: the content under a `cid:`
-  // id can never change, so deleting or patching one is a protocol
-  // violation regardless of document class — a deleted or altered
-  // dependency would invalidate every document referencing it — and a
-  // `set` must be the first installation or content-identical to what is
-  // stored (an idempotent re-`set` is how writers install closures).
+  // id can never change, so `set` is the only operation admitted against
+  // one regardless of document class — a deleted or altered dependency
+  // would invalidate every document referencing it — and that `set` must
+  // be the first installation or content-identical to what is stored (an
+  // idempotent re-`set` is how writers install closures). Admitting one
+  // operation rather than refusing a named list is what holds an
+  // operation added to the protocol to this rule by default.
   // Equality is `valueEqual`, canonical content-hash equality: a special
   // object's state lives in private fields a structural walk cannot see.
   // Conflicting sets of one id within a single commit are equally

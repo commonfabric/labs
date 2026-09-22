@@ -14,7 +14,8 @@
  * shape, and reading anything behind the token means running a pattern over
  * it. An input cell names a task target, so
  * one that cannot be minted — an unparseable reference, or one targeting
- * another space — fails the run out loud rather than proceeding without it.
+ * an unadmitted space — fails the run out loud rather than proceeding without
+ * it.
  *
  * A cell may also be named the way a person sees it named — a piece's slug,
  * alone or qualified by its space — and the session resolves that name to an
@@ -26,6 +27,10 @@
 
 import { type MemorySpace, validateSlug } from "@commonfabric/runner";
 import { AGENT_INPUT_NAME_PATTERN } from "@commonfabric/runner/agent-run";
+import {
+  admitsFabricReference,
+  type HarnessForeignSpaces,
+} from "./foreign-spaces.ts";
 import {
   createHarnessHandleTable,
   mintAddressHandle,
@@ -71,8 +76,7 @@ export interface ParsedInputCellArgument {
 export interface NamedPieceAddress {
   /**
    * The space the address names, absent when the address named none. A named
-   * space is checked against the session's own: an address is resolved in one
-   * space, and the session's authority ends there.
+   * space is checked against the session's own: named addresses resolve there.
    */
   spaceName?: string;
 
@@ -124,9 +128,8 @@ export const parseNamedPieceAddress = (
 /**
  * Holds a named address to the space it may name: the session's own, or none
  * at all. A surface cannot see which space a console runs against, so naming
- * another one is a mistake to report rather than a request to honour — and
- * honouring it is not this side's to do anyway, since a session's authority
- * ends at its own space, exactly as it does for a reference.
+ * another one is a mistake to report. Foreign attachments need a reference
+ * carrying an operator-admitted DID.
  *
  * `spaceName` is the space's NAME, which is what an address carries; the
  * `MemorySpace` a mint checks a reference against is its DID, and the two are
@@ -154,7 +157,7 @@ export const checkNamedPieceAddressSpace = (
  * model-facing text of a fixed shape, and the reference is either a link
  * naming an entity (`of:` or `computed:`) or a named piece address
  * (`pattern:<space>/<slug>`, or a bare slug) — and, when the session's
- * `space` or `spaceName` is known, not one in another space. The grammar and
+ * `space` or `spaceName` is known, admitted by the session. The grammar and
  * the mint both run this, so a reference the mint would refuse is refused
  * wherever it first arrives, before a run exists to spend on it. Both spaces
  * are known only at the mint, from the live session; a surface parsing
@@ -171,6 +174,7 @@ export const checkInputCellSpec = (
   spec: HarnessInputCellSpec,
   space?: MemorySpace,
   spaceName?: string,
+  foreignSpaces?: HarnessForeignSpaces,
 ): void => {
   if (!HANDLE_NAME_PATTERN.test(spec.name)) {
     throw new Error(
@@ -213,9 +217,12 @@ export const checkInputCellSpec = (
       }`,
     );
   }
-  if (space !== undefined && link.space !== undefined && link.space !== space) {
+  if (
+    space !== undefined &&
+    !admitsFabricReference(link.space, space, foreignSpaces)
+  ) {
     throw new Error(
-      `--input-cell \`${spec.name}\` reference targets another space; only references into the session space are allowed`,
+      `--input-cell \`${spec.name}\` reference targets another space; the operator must admit its DID and host with --fabric-foreign-spaces`,
     );
   }
 };
@@ -256,12 +263,13 @@ export const parseInputCellArgument = (
 };
 
 /**
- * What the live session contributes to a mint: the name of the space it runs
- * in, and the resolution of a named piece address within it. Both are absent
- * for a caller minting plain references, which needs no session at all — a
- * named address is the only spelling that has to ask the fabric anything.
+ * The session's foreign-space admission, local space name, and resolver for
+ * named piece attachments. Plain references need no named-piece resolution.
  */
 export interface InputCellSessionResolution {
+  /** Operator admission snapshot from the Fabric session. */
+  foreignSpaces?: HarnessForeignSpaces;
+
   /** The session's space, by name. */
   spaceName?: string;
 
@@ -327,9 +335,8 @@ const resolvedInputCellRef = async (
 /**
  * Mints a handle for each input cell into `table` (or a fresh table salted
  * with `runId`), returning the extended table and the records for run state.
- * Every cell is held to {@link checkInputCellSpec} against `space` — the
- * session's authority ends at its own space, and an input cell pointing
- * elsewhere is refused before anything is recorded.
+ * Every cell is held to {@link checkInputCellSpec} against `space` and the
+ * operator's foreign-space admission map before anything is recorded.
  *
  * A cell spelled as a named piece address is resolved through `session`
  * first, so what is minted is always an entity URI: the handle table holds one
@@ -337,7 +344,7 @@ const resolvedInputCellRef = async (
  * an input cell is the address it actually names.
  *
  * @throws Error naming the failing input cell on a duplicate name, an
- * unparseable reference, a reference into another space, or a named piece
+ * unparseable reference, a reference into an unadmitted space, or a named piece
  * address this space does not hold.
  */
 export const mintInputCellHandles = async (
@@ -353,7 +360,7 @@ export const mintInputCellHandles = async (
   for (const spec of specs) {
     // Checked here, not only at parse: a library caller reaches this mint
     // without the CLI grammar, and only the live session knows the space.
-    checkInputCellSpec(spec, space, session.spaceName);
+    checkInputCellSpec(spec, space, session.spaceName, session.foreignSpaces);
     if (names.has(spec.name)) {
       throw new Error(`--input-cell names \`${spec.name}\` twice`);
     }

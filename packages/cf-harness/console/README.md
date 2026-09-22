@@ -140,23 +140,24 @@ build on its own.
 
 Every environment variable has a flag, and the flag wins:
 
-| Flag                    | Environment                          | Default                               |
-| ----------------------- | ------------------------------------ | ------------------------------------- |
-| `--port`                | `CF_HARNESS_CONSOLE_PORT`            | `8100`                                |
-| `--fabric-api-url`      | `CF_HARNESS_FABRIC_API_URL`          | `http://localhost:8000`               |
-| `--fabric-identity`     | `CF_HARNESS_FABRIC_IDENTITY`         | required                              |
-| `--fabric-space`        | `CF_HARNESS_FABRIC_SPACE`            | required, a name                      |
-| `--pattern-index-url`   | `CF_HARNESS_PATTERN_INDEX_URL`       | unset                                 |
-| `--skills-registry-url` | `CF_HARNESS_SKILLS_REGISTRY_URL`     | unset                                 |
-| `--model`               | `CF_HARNESS_MODEL`                   | the CLI's default model               |
-| `--workspace`           | `CF_HARNESS_CONSOLE_WORKSPACE`       | `.cf-harness-console/workspace`       |
-| `--artifact-root`       | `CF_HARNESS_ARTIFACT_ROOT`           | `.cf-harness-console/runs`            |
-| `--session-db`          | `CF_HARNESS_CONSOLE_SESSION_DB`      | `.cf-harness-console/sessions.sqlite` |
-| `--space-db`            | `CF_HARNESS_SPACE_DB`                | the space's own database, discovered  |
-| `--max-model-turns`     | `CF_HARNESS_CONSOLE_MAX_MODEL_TURNS` | the prompt loop's default             |
-| `--skills-root`         | `CF_HARNESS_CONSOLE_SKILLS_ROOT`     | the repository's `skills/` tree       |
-| `--allow-skill-scripts` | `CF_HARNESS_ALLOW_SKILL_SCRIPTS=1`   | off; scripts do not run               |
-| `--host-mount`          | —                                    | none; repeatable                      |
+| Flag                      | Environment                          | Default                               |
+| ------------------------- | ------------------------------------ | ------------------------------------- |
+| `--port`                  | `CF_HARNESS_CONSOLE_PORT`            | `8100`                                |
+| `--fabric-api-url`        | `CF_HARNESS_FABRIC_API_URL`          | `http://localhost:8000`               |
+| `--fabric-identity`       | `CF_HARNESS_FABRIC_IDENTITY`         | required                              |
+| `--fabric-space`          | `CF_HARNESS_FABRIC_SPACE`            | required, a name                      |
+| `--fabric-foreign-spaces` | `CF_HARNESS_FABRIC_FOREIGN_SPACES`   | no foreign spaces admitted            |
+| `--pattern-index-url`     | `CF_HARNESS_PATTERN_INDEX_URL`       | unset                                 |
+| `--skills-registry-url`   | `CF_HARNESS_SKILLS_REGISTRY_URL`     | unset                                 |
+| `--model`                 | `CF_HARNESS_MODEL`                   | the CLI's default model               |
+| `--workspace`             | `CF_HARNESS_CONSOLE_WORKSPACE`       | `.cf-harness-console/workspace`       |
+| `--artifact-root`         | `CF_HARNESS_ARTIFACT_ROOT`           | `.cf-harness-console/runs`            |
+| `--session-db`            | `CF_HARNESS_CONSOLE_SESSION_DB`      | `.cf-harness-console/sessions.sqlite` |
+| `--space-db`              | `CF_HARNESS_SPACE_DB`                | the space's own database, discovered  |
+| `--max-model-turns`       | `CF_HARNESS_CONSOLE_MAX_MODEL_TURNS` | the prompt loop's default             |
+| `--skills-root`           | `CF_HARNESS_CONSOLE_SKILLS_ROOT`     | the repository's `skills/` tree       |
+| `--allow-skill-scripts`   | `CF_HARNESS_ALLOW_SKILL_SCRIPTS=1`   | off; scripts do not run               |
+| `--host-mount`            | —                                    | none; repeatable                      |
 
 ### Skill scripts
 
@@ -243,6 +244,7 @@ one.
 | `GET`  | `/api/runs/<runId>/...`      | Run detail, flow, graph, artifacts, and tool outputs                                    |
 | `POST` | `/api/index/call`            | One allowlisted pattern-index read                                                      |
 | `POST` | `/api/index/feedback`        | Records one up or down vote on a pattern in the index                                   |
+| `POST` | `/api/index/retract`         | Retracts an owned generation in favor of its direct successor                           |
 | `GET`  | `/live/<sessionId>`          | The live pane for one session; takes `?turn=<turnId>` and `?piecesBase=<url-prefix>`    |
 
 Health returns `ok`, `fabricApiUrl`, and `fabricSession`. The last field is
@@ -313,9 +315,18 @@ name for it — never the reference, and never what the cell holds. The referenc
 grammar is `--input-cell`'s, so a spelling the CLI refuses is refused here with
 a 400 before any turn starts: a `ref` has to be a link naming an entity
 (`/of:fid1:…/path`, or `computed:`), not a bare hash. A cell that passes the
-grammar and still cannot be minted — one in another space, say — fails the turn
-rather than starting it without what the caller attached, and that turn is
-terminal like any other failed one.
+grammar and still cannot be minted — one in an unadmitted foreign space, say —
+fails the turn rather than starting it without what the caller attached, and
+that turn is terminal like any other failed one.
+
+The operator can admit foreign references at startup with
+`--fabric-foreign-spaces '{"did:key:zForeign":"https://foreign.example/"}'`. The
+value maps explicit space DIDs to HTTP(S) origins. It registers the routes for
+the session and governs attachment minting, `describe_handle`, and `run_pattern`
+together. `{}` clears an environment default. A task body and a model tool call
+cannot change this setting. Reads use the session identity's existing rights and
+retain the source CFC labels; handles do not declassify. See
+[foreign reference admission](../README.md#running-patterns-against-a-fabric-space).
 
 A `ref` may also name a piece the way a person sees it named, which is what a
 caller showing a rendered piece has to work with:
@@ -875,8 +886,9 @@ through the CLI.
 
 The route sits under `/api/`, so it is behind the same `Host` gate as the rest.
 
-Voting is the console's one write to the index, and it has a route of its own
-rather than a name in that allowlist: `POST /api/index/feedback`, below.
+Voting and owner retraction have dedicated write routes:
+`POST /api/index/feedback` and `POST /api/index/retract`, below. Neither is
+reachable through the read allowlist.
 
 Three panes:
 
@@ -960,6 +972,51 @@ contract is:
 Until the service supplies `eventAuthors`, the inspector shows the aggregate
 counts as author unavailable. The client contract and display support do not
 establish that a cloud deployment implements them.
+
+## Retracting an owned generation
+
+This route consumes the external index service contract described below for
+ownership, successor eligibility, discovery, receipts, and error statuses. The
+console forwards those decisions; verifying the deployed service requires an
+index-side check.
+
+`POST /api/index/retract` retires a pattern in favor of an existing same-owner
+direct successor. It does not delete a standalone entry: a successor is
+required, including for a non-discoverable probe. The request names both index
+identities and a nonempty reason:
+
+```json
+{
+  "patternId": "<recorded pattern identity>",
+  "successorPatternId": "<direct successor identity>",
+  "reason": "Superseded by the corrected reader"
+}
+```
+
+For a harness-authored pattern, use `patternPublication.patternId` from its
+`run_pattern` output, available through
+`GET /api/runs/<runId>/tool-outputs/<filename>.json`. The publishing attempt can
+belong to a child run. Use that recorded index identity, not the piece id, slug,
+or a hash reconstructed from source. A `queued` receipt establishes the intended
+identity, not publication success; the index can still return 404.
+
+The server composes only those three fields and signs with its configured Fabric
+identity. The index verifies ownership; a caller cannot supply another owner or
+elevate the signer through request fields. The successor must directly name the
+retired pattern in `priorPatternId` and must not itself be retracted. The index
+removes the retired generation from search and list results while retaining
+source and events; exact-ID reads and existing imports continue to work.
+
+HTTP 200 carries the index receipt: `patternId`, `status: "retracted"`,
+`successorPatternId`, `retractionReason`, `retractedBy`, `retractedAt`,
+`discoverable: false`, and `changed`. An identical repeat returns
+`changed: false` with the original timestamp. The route returns 400 for missing
+fields or malformed JSON and 503 without an index configuration. It preserves
+the index's 4xx status: 403 for a non-owner, 404 for a missing generation, 400
+for an unrelated successor, and 409 for a conflicting retraction. Upstream or
+host failures return 502. Error responses retain stable messages without
+exposing index response bodies or host details. The console's ordinary Host and
+JSON-content-type gates apply.
 
 ## How the configuration reaches the run
 

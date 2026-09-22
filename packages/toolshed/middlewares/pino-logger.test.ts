@@ -6,6 +6,8 @@ Deno.test("redactHeaders removes sensitive Headers values", () => {
     redactHeaders(
       new Headers({
         authorization: "Bearer secret",
+        "CF-Request-Auth": "signed authentication",
+        "cf-request-proof": "replayable proof",
         cookie: "session=secret",
         "set-cookie": "session=response-secret",
         "user-agent": "diagnostic-browser",
@@ -13,6 +15,8 @@ Deno.test("redactHeaders removes sensitive Headers values", () => {
     ),
     {
       authorization: "[redacted]",
+      "cf-request-auth": "[redacted]",
+      "cf-request-proof": "[redacted]",
       cookie: "[redacted]",
       "set-cookie": "[redacted]",
       "user-agent": "diagnostic-browser",
@@ -24,12 +28,16 @@ Deno.test("redactHeaders handles plain objects case-insensitively", () => {
   assertEquals(
     redactHeaders({
       Authorization: "Bearer secret",
+      "CF-Request-Auth": "signed authentication",
+      "cF-ReQuEsT-PrOoF": "replayable proof",
       "Proxy-Authorization": "Basic secret",
       "Set-Cookie": "session=secret",
       accept: "application/json",
     }),
     {
       Authorization: "[redacted]",
+      "CF-Request-Auth": "[redacted]",
+      "cF-ReQuEsT-PrOoF": "[redacted]",
       "Proxy-Authorization": "[redacted]",
       "Set-Cookie": "[redacted]",
       accept: "application/json",
