@@ -46,6 +46,33 @@ established that the cap is real. Where an entry's runs overlapped, it says so.
 
 ## Preflight common to every demo
 
+### Start a fresh console
+
+**Before anything else, restart the console rather than using one that has been
+running all day.**
+
+A console that has served a few hours of sessions can exit on a V8 heap
+out-of-memory — observed at about 4.8 hours and roughly thirty sessions, with
+its last two collections freeing about 30 MB each against a 4.1 GB heap, which
+is a heap that cannot be recovered rather than a spike (CT-2414).
+
+**Nothing announces it.** Every route answers until the process is gone, the
+last line in its log is an unrelated warning, and the loom daemon beside it goes
+on reporting healthy on its one-minute cycle — **the watchdog does not cover
+it**. From the outside: a demo appears to hang, then the console refuses
+connections. Nobody would trace that to memory.
+
+If it happens mid-session, restart the console and **treat whatever it was
+carrying as lost rather than as a failure.** A run whose console died is not a
+failed run and its result must not be recorded as one.
+
+**After a restart, give the checks below a moment.** The external rows —
+`sandbox.*` and `index.*` — are probed in the background and not awaited when
+the route is read, so a health page read in the first half-minute after start
+shows them as _unknown_. That means **not yet checked, not broken**; a second
+read a minute later settles them. The `config.*` rows are known at startup and
+do not have this window.
+
 ### Which build you are on
 
 Every timing, count and proof status here was measured on one build: labs
