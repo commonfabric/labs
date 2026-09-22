@@ -10,6 +10,7 @@
  * in, which is the order that matters for reading a run back.
  */
 
+import type { CfcLabelViewEntry } from "@commonfabric/runner/cfc";
 import { matchLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { parseConsoleReference } from "./reference.ts";
@@ -147,6 +148,12 @@ export interface ConsoleArgumentRef {
 
   /** Confidentiality atoms the invocation context put on this argument. */
   confidentiality: readonly string[];
+
+  /**
+   * Integrity atoms the invocation context recorded on this argument — the
+   * prompt slot's influence on what the model wrote there.
+   */
+  integrity: readonly string[];
 
   /** The labels the space holds for the cell this argument names. */
   labels?: ConsoleCellLabels;
@@ -1051,6 +1058,7 @@ export const consoleStepArguments = (
         key,
         isReference: false,
         confidentiality: argumentAtomNames(step, key, argumentKeys),
+        integrity: argumentInfluenceNames(step, key, argumentKeys),
         value,
       };
     }
@@ -1070,6 +1078,7 @@ export const consoleStepArguments = (
         : {}),
       ...(handle?.schema !== undefined ? { schema: handle.schema } : {}),
       confidentiality: argumentAtomNames(step, key, argumentKeys),
+      integrity: argumentInfluenceNames(step, key, argumentKeys),
       ...(cellLabels !== undefined ? { labels: cellLabels } : {}),
     };
   });
@@ -1094,8 +1103,38 @@ const argumentAtomNames = (
   step: ConsoleStep,
   key: string,
   argumentKeys: readonly string[] = [],
+): string[] =>
+  atomNamesAtArgument(
+    step.invocation?.cfcInputLabels?.entries ?? [],
+    "confidentiality",
+    key,
+    argumentKeys,
+  );
+
+/**
+ * The integrity atoms the prompt slot's influence put on one argument, read
+ * from `promptSlotInfluenceLabels` by the same path rule as
+ * `argumentAtomNames()`.
+ */
+const argumentInfluenceNames = (
+  step: ConsoleStep,
+  key: string,
+  argumentKeys: readonly string[] = [],
+): string[] =>
+  atomNamesAtArgument(
+    step.invocation?.promptSlotInfluenceLabels?.entries ?? [],
+    "integrity",
+    key,
+    argumentKeys,
+  );
+
+/** The names of the atoms on one axis of `entries` that govern `key`. */
+const atomNamesAtArgument = (
+  entries: readonly CfcLabelViewEntry[],
+  axis: "confidentiality" | "integrity",
+  key: string,
+  argumentKeys: readonly string[],
 ): string[] => {
-  const entries = step.invocation?.cfcInputLabels?.entries ?? [];
   // A label path is rooted at the operation's own argument, which is not
   // always what the model called it: a tool taking `path` and `content` may be
   // mediated as `args` and `stdin`. When no root names any argument of this
@@ -1113,7 +1152,7 @@ const argumentAtomNames = (
     if (!governs) {
       continue;
     }
-    for (const clause of entry.label?.confidentiality ?? []) {
+    for (const clause of entry.label?.[axis] ?? []) {
       const type = isObjectOrArray(clause)
         ? (clause as { type?: unknown }).type
         : undefined;
