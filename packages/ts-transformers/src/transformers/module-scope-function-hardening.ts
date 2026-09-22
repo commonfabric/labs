@@ -6,7 +6,7 @@ import {
 } from "@commonfabric/utils/sandbox-contract";
 import { TransformationContext, Transformer } from "../core/mod.ts";
 import { resolveWriterBinding } from "@commonfabric/schema-generator/writer-binding";
-import { isCommonFabricModuleName } from "../core/common-fabric-symbols.ts";
+import { isCommonFabricModuleName } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { unwrapExpression } from "../utils/expression.ts";
 import { normalizeWriterIdentityFile } from "../utils/writer-identity-file.ts";
 
@@ -582,6 +582,9 @@ const referenceName = (reference: ts.TypeReferenceNode): ts.Identifier =>
     ? reference.typeName
     : reference.typeName.right;
 
+const leftmostName = (name: ts.EntityName): ts.Identifier =>
+  ts.isIdentifier(name) ? name : leftmostName(name.left);
+
 const LIBRARY_BINDING_POSITIONS: ReadonlyMap<string, ReadonlySet<number>> =
   new Map([
     ["WriteAuthorizedBy", new Set([1])],
@@ -653,9 +656,15 @@ function collectTrustedBindingsByFile(
     reference: (reference) => {
       const name = referenceName(reference);
       const symbol = checker.getSymbolAtLocation(name);
+      // A qualified `cf.WriteAuthorizedBy` is the library's when its
+      // namespace is: the right-hand name resolves past every import hop.
+      const qualifier = ts.isQualifiedName(reference.typeName)
+        ? checker.getSymbolAtLocation(leftmostName(reference.typeName))
+        : undefined;
       if (
         LIBRARY_BINDING_POSITIONS.has(name.text) &&
-        isImportedFromLibrary(symbol, checker)
+        (isImportedFromLibrary(symbol, checker) ||
+          isImportedFromLibrary(qualifier, checker))
       ) {
         return name.text;
       }
@@ -693,7 +702,10 @@ function collectTrustedBindingsByFile(
 
 /**
  * Whether `symbol`, followed one import or re-export at a time, is brought in
- * from a Common Fabric module. The first hop out of authored code is what
+ * from a Common Fabric module: a hop that imports from one by name, or a hop
+ * declared in a declaration file, which authored code never is — that is how
+ * a namespace-qualified `cf.WriteAuthorizedBy` resolves, straight to the
+ * library's own re-export. The first hop out of authored code is what
  * decides it: the library's own files are roots of the compile too, and its
  * `WriteAuthorizedBy` is declared in a companion module the path-based
  * provenance check does not recognize, so neither the roots nor the final
@@ -709,15 +721,16 @@ function isImportedFromLibrary(
     current && current.flags & ts.SymbolFlags.Alias && !seen.has(current)
   ) {
     seen.add(current);
-    const specifier = current.declarations?.map(importModuleSpecifier).find(
-      (name) => name !== undefined,
-    );
-    if (
-      specifier !== undefined &&
-      (isCommonFabricModuleName(specifier) ||
-        specifier.startsWith("commonfabric/"))
-    ) {
-      return true;
+    for (const declaration of current.declarations ?? []) {
+      if (declaration.getSourceFile().isDeclarationFile) return true;
+      const specifier = importModuleSpecifier(declaration);
+      if (
+        specifier !== undefined &&
+        (isCommonFabricModuleName(specifier) ||
+          specifier.startsWith("commonfabric/"))
+      ) {
+        return true;
+      }
     }
     current = checker.getImmediateAliasedSymbol(current);
   }

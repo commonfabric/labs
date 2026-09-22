@@ -329,4 +329,24 @@ export const writer = handler<void, { name: Writable<{ value: string }> }>((_eve
     );
     expect(bindingIdentities(parseModule(files["/writer.ts"]))).toEqual([]);
   });
+
+  it("trusts a writer cited through a namespace-qualified policy reference", async () => {
+    const files = await transformFiles(
+      {
+        "/main.tsx": `import * as cf from "commonfabric";
+import { writer } from "./writer.ts";
+export default cf.pattern<Record<string, never>, { name: cf.WriteAuthorizedBy<string, typeof writer>; save: cf.Stream<void> }>(() => {
+  const name = new cf.Writable<string>("").for("name");
+  return { name, save: writer({ name }) };
+});`,
+        "/writer.ts": `import { handler, Writable } from "commonfabric";
+export const writer = handler<void, { name: Writable<string> }>((_event, { name }) => { name.set("updated"); });`,
+      },
+      { types: COMMONFABRIC_TYPES, typeCheck: true },
+    );
+    expect(bindingIdentities(parseModule(files["/writer.ts"]))).toEqual([{
+      sourceFile: "/writer.ts",
+      bindingPath: ["writer"],
+    }]);
+  });
 });
