@@ -2923,6 +2923,20 @@ type CalculatorRequest = {
         expect(schema).toEqual({ type: "string", scope: "user" });
       });
 
+      it("reads an alias of a scope wrapper, its payload taken from the argument", async () => {
+        const schema = await generate(
+          { "/main.ts": "export type Rec<T> = PerUser<{ value: T }>;" },
+          generic("Rec", keyword(ts.SyntaxKind.StringKeyword)),
+        );
+
+        expect(schema).toEqual({
+          type: "object",
+          properties: { value: { type: "string" } },
+          required: ["value"],
+          scope: "user",
+        });
+      });
+
       describe("an alias whose CFC lowering substitutes the arguments", () => {
         // The lowering substitutes a reference's own arguments down the
         // alias chain to the CFC alias, so no parameter is read unbound.

@@ -18,6 +18,7 @@ import { ArrayFormatter } from "./formatters/array-formatter.ts";
 import {
   CommonFabricFormatter,
   lowersFromReferenceArguments,
+  scopeOfAliasChain,
 } from "./formatters/common-fabric-formatter.ts";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import { UnionFormatter } from "./formatters/union-formatter.ts";
@@ -1213,9 +1214,17 @@ export class SchemaGenerator {
     );
     const isWrapperContext = wrapperKind !== undefined;
 
-    let namedKey = getNamedTypeKey(type, context.typeNode);
+    // A scope wrapper reached through an alias formats inline, as the wrapper
+    // itself does, so that its scope stays at the top level of the slot's own
+    // schema, the only place the write path reads it.
+    const isScopeWrapperAlias =
+      scopeOfAliasChain(type, context.typeChecker) !== undefined;
 
-    if (!namedKey && !isWrapperContext) {
+    let namedKey = isScopeWrapperAlias
+      ? undefined
+      : getNamedTypeKey(type, context.typeNode);
+
+    if (!namedKey && !isWrapperContext && !isScopeWrapperAlias) {
       // Only use synthetic names if we're not processing a wrapper type
       const synthetic = this.#anonymousNames.get(type);
       if (synthetic) namedKey = synthetic;

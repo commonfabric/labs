@@ -171,6 +171,120 @@ interface SchemaRoot {
       ),
     ).toBe(true);
   });
+  describe("a scope wrapper reached through a local alias", () => {
+    // The checker reports the local alias, not the wrapper, as the type's
+    // alias symbol, so the scope is found by following the alias.
+
+    async function propertySchemas(
+      code: string,
+    ): Promise<Record<string, unknown>> {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        code,
+        "SchemaRoot",
+      );
+      const schema = new SchemaGenerator().generateSchema(
+        type,
+        checker,
+        typeNode,
+      ) as JSONSchemaObj;
+      return { ...schema.properties, $defs: schema.$defs };
+    }
+
+    const INNER_DEF = {
+      type: "object",
+      properties: { a: { type: "string" } },
+      required: ["a"],
+    };
+
+    it("emits the scope for an alias of a scope wrapper, inline", async () => {
+      const schemas = await propertySchemas(`
+type Inner = { a: string };
+type Rec = PerUser<Inner>;
+interface SchemaRoot { run: Cell<Rec>; plain: Rec; }
+`);
+
+      expect(schemas.run).toEqual({
+        $ref: "#/$defs/Inner",
+        scope: "user",
+        asCell: ["cell"],
+      });
+      expect(schemas.plain).toEqual({ $ref: "#/$defs/Inner", scope: "user" });
+      // A definition holding the scope would take it off the slot's own top
+      // level, where the write path reads it.
+      expect(schemas.$defs).toEqual({ Inner: INNER_DEF });
+    });
+
+    it("emits the scope for an alias of an alias of a scope wrapper", async () => {
+      const schemas = await propertySchemas(`
+type Inner = { a: string };
+type Rec = PerUser<Inner>;
+type Outer = Rec;
+interface SchemaRoot { run: Cell<Outer>; }
+`);
+
+      expect(schemas.run).toEqual({
+        $ref: "#/$defs/Inner",
+        scope: "user",
+        asCell: ["cell"],
+      });
+      expect(schemas.$defs).toEqual({ Inner: INNER_DEF });
+    });
+
+    it("emits the scope for a generic alias of a scope wrapper", async () => {
+      const schemas = await propertySchemas(`
+type Inner = { a: string };
+type Rec<T> = PerSession<T>;
+interface SchemaRoot { run: Cell<Rec<Inner>>; }
+`);
+
+      expect(schemas.run).toEqual({
+        $ref: "#/$defs/Inner",
+        scope: "session",
+        asCell: ["cell"],
+      });
+    });
+
+    it("substitutes a generic alias's argument into the payload", async () => {
+      const schemas = await propertySchemas(`
+type Rec<T> = PerUser<{ value: T }>;
+interface SchemaRoot { run: Rec<string>; }
+`);
+
+      expect(schemas.run).toEqual({
+        type: "object",
+        properties: { value: { type: "string" } },
+        required: ["value"],
+        scope: "user",
+      });
+    });
+
+    it("puts the scope on the cell entry for an alias wrapping a cell", async () => {
+      const schemas = await propertySchemas(`
+type Draft = PerSession<Cell<string>>;
+interface SchemaRoot { draft: Draft; }
+`);
+
+      expect(schemas.draft).toEqual({
+        type: "string",
+        asCell: [{ kind: "cell", scope: "session" }],
+      });
+    });
+
+    it("throws for an alias of a scope wrapper that is a union member", async () => {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `
+type Draft = PerUser<Cell<string>>;
+interface SchemaRoot { draft: Draft | undefined; }
+`,
+        "SchemaRoot",
+      );
+
+      expect(() =>
+        new SchemaGenerator().generateSchema(type, checker, typeNode)
+      ).toThrow("A scope wrapper cannot be a member of a union.");
+    });
+  });
+
   describe("a synthetic node carrying a printed payload", () => {
     // The transformer prints a binding's type into `__cfHelpers.PerUser<...>`
     // when it holds no authored node for the payload. Each case pairs the

@@ -46,7 +46,19 @@ const SCOPE_WRAPPER_SCOPES: Readonly<Record<string, SchemaScope>> = {
   PerSession: "session",
   PerAny: "any",
 };
-type ResolvedCfcAlias = {
+const SCOPE_WRAPPER_NAMES: ReadonlySet<string> = new Set(
+  Object.keys(SCOPE_WRAPPER_SCOPES),
+);
+/** The aliases this formatter lowers when a chain of aliases reaches one. */
+const CHAIN_LOWERED_ALIAS_NAMES: ReadonlySet<string> = new Set([
+  ...CFC_ALIAS_NAMES,
+  ...SCOPE_WRAPPER_NAMES,
+]);
+/**
+ * The alias at the end of a chain of aliases, each the whole body of the one
+ * before, with the arguments it is instantiated with there.
+ */
+type ResolvedAliasChain = {
   readonly aliasName: string;
   readonly aliasArgs: readonly ts.Type[];
   readonly aliasArgNodes?: readonly ts.TypeNode[];
@@ -246,10 +258,11 @@ const holdsTypeParameter = (
     holdsTypeParameter(child, checker, parameters) || undefined) ?? false);
 
 /**
- * Whether the CFC lowering, handed `args` for `declaration`'s parameters,
- * reaches a CFC alias down `declaration`'s chain of aliases, each the whole
- * body of the one before and followed at most once, with every parameter along
- * the way replaced by an argument or, for one left out, its default.
+ * Whether this formatter's lowering, handed `args` for `declaration`'s
+ * parameters, reaches a CFC alias or a scope wrapper down `declaration`'s chain
+ * of aliases, each the whole body of the one before and followed at most once,
+ * with every parameter along the way replaced by an argument or, for one left
+ * out, its default.
  */
 const lowersDownAliasChain = (
   declaration: ts.TypeAliasDeclaration,
@@ -257,7 +270,7 @@ const lowersDownAliasChain = (
   checker: ts.TypeChecker,
   visited: ReadonlySet<string>,
 ): boolean => {
-  if (CFC_ALIAS_NAMES.has(declaration.name.text)) return true;
+  if (CHAIN_LOWERED_ALIAS_NAMES.has(declaration.name.text)) return true;
   const aliased = declaration.type;
   if (
     !ts.isTypeReferenceNode(aliased) || !ts.isIdentifier(aliased.typeName) ||
@@ -299,10 +312,10 @@ const lowersDownAliasChain = (
 /**
  * Whether this formatter lowers `reference`, to the generic `symbol`, from the
  * reference's own type arguments: a scope wrapper naming its payload, which it
- * reads from that argument, or an alias that is not itself a CFC alias and
- * whose whole body references one, directly or through further such aliases,
- * where substituting the reference's arguments down that chain leaves no
- * parameter unbound.
+ * reads from that argument, or an alias that is not itself a CFC alias or a
+ * scope wrapper and whose whole body references one, directly or through
+ * further such aliases, where substituting the reference's arguments down that
+ * chain leaves no parameter unbound.
  */
 export function lowersFromReferenceArguments(
   reference: ts.TypeReferenceNode,
@@ -314,13 +327,48 @@ export function lowersFromReferenceArguments(
   }
   const declaration = symbol.declarations?.find(ts.isTypeAliasDeclaration);
   return declaration !== undefined &&
-    !CFC_ALIAS_NAMES.has(declaration.name.text) &&
+    !CHAIN_LOWERED_ALIAS_NAMES.has(declaration.name.text) &&
     lowersDownAliasChain(
       declaration,
       reference.typeArguments ?? [],
       checker,
       new Set([declaration.name.text]),
     );
+}
+
+/**
+ * The scope of the wrapper that `type`'s alias names, directly or as the whole
+ * body of a chain of aliases, each followed at most once. The checker reports
+ * the outermost alias, so `type Rec = PerUser<T>` has `Rec` for its alias
+ * symbol and the wrapper is found only by following it.
+ */
+export function scopeOfAliasChain(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): SchemaScope | undefined {
+  const aliasSymbol = (type as TypeWithInternals).aliasSymbol;
+  let declaration = aliasSymbol &&
+    resolveAliasedSymbol(aliasSymbol, checker).declarations?.find(
+      ts.isTypeAliasDeclaration,
+    );
+  const visited = new Set<string>();
+  while (declaration && !visited.has(declaration.name.text)) {
+    const scope = scopeForWrapperName(declaration.name.text);
+    if (scope !== undefined) return scope;
+    visited.add(declaration.name.text);
+    const aliased = declaration.type;
+    if (
+      !ts.isTypeReferenceNode(aliased) || !ts.isIdentifier(aliased.typeName)
+    ) {
+      return undefined;
+    }
+    const symbol = checker.getSymbolAtLocation(aliased.typeName);
+    declaration = symbol &&
+      resolveAliasedSymbol(symbol, checker).declarations?.find(
+        ts.isTypeAliasDeclaration,
+      );
+  }
+  return undefined;
 }
 
 /**
@@ -351,12 +399,20 @@ export class CommonFabricFormatter implements TypeFormatter {
       return true;
     }
 
+    if (scopeOfAliasChain(type, context.typeChecker) !== undefined) {
+      return true;
+    }
+
     if (aliasName && CFC_ALIAS_NAMES.has(aliasName)) {
       return true;
     }
 
     if (
-      this.#resolveCfcAliasInstantiation(type as TypeWithInternals, context)
+      this.#resolveAliasChainInstantiation(
+        type as TypeWithInternals,
+        context,
+        CFC_ALIAS_NAMES,
+      )
     ) {
       return true;
     }
@@ -430,9 +486,22 @@ export class CommonFabricFormatter implements TypeFormatter {
       return this.#applyScopeWrapperSemantics(innerSchema, aliasScope);
     }
 
-    const resolvedCfcAlias = this.#resolveCfcAliasInstantiation(
+    const resolvedScopeAlias = this.#resolveAliasChainInstantiation(
       aliasType,
       context,
+      SCOPE_WRAPPER_NAMES,
+    );
+    if (resolvedScopeAlias) {
+      return this.#applyScopeWrapperSemantics(
+        this.#formatResolvedAliasPayload(resolvedScopeAlias, context),
+        SCOPE_WRAPPER_SCOPES[resolvedScopeAlias.aliasName]!,
+      );
+    }
+
+    const resolvedCfcAlias = this.#resolveAliasChainInstantiation(
+      aliasType,
+      context,
+      CFC_ALIAS_NAMES,
     );
     if (resolvedCfcAlias) {
       return this.#formatResolvedCfcAlias(resolvedCfcAlias, context);
@@ -1314,7 +1383,26 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   #formatResolvedCfcAlias(
-    resolved: ResolvedCfcAlias,
+    resolved: ResolvedAliasChain,
+    context: GenerationContext,
+  ): MutableJSONSchema {
+    const baseSchema = this.#formatResolvedAliasPayload(resolved, context);
+    const ifc = this.#buildIfcMetadataForAlias(
+      resolved.aliasName,
+      resolved.aliasArgs,
+      context,
+      resolved.aliasArgNodes,
+    );
+    if (ifc === undefined) {
+      return baseSchema;
+    }
+
+    return this.#mergeIfcMetadata(baseSchema, ifc);
+  }
+
+  /** The schema of the payload, the first argument, of a resolved alias. */
+  #formatResolvedAliasPayload(
+    resolved: ResolvedAliasChain,
     context: GenerationContext,
   ): MutableJSONSchema {
     const baseType = resolved.aliasArgs[0];
@@ -1334,24 +1422,12 @@ export class CommonFabricFormatter implements TypeFormatter {
         resolved.substituted,
       );
     if (unsubstituted) context.uninterpretedTypeNodes?.push(baseTypeNode);
-    const baseSchema = unsubstituted
+    return unsubstituted
       ? true
       : baseTypeNode
       ? this.#formatCfcAliasTypeNode(baseTypeNode, context) ??
         this.#schemaGenerator.formatChildType(baseType, context, baseTypeNode)
       : this.#schemaGenerator.formatChildType(baseType, context, undefined);
-
-    const ifc = this.#buildIfcMetadataForAlias(
-      resolved.aliasName,
-      resolved.aliasArgs,
-      context,
-      resolved.aliasArgNodes,
-    );
-    if (ifc === undefined) {
-      return baseSchema;
-    }
-
-    return this.#mergeIfcMetadata(baseSchema, ifc);
   }
 
   #formatCfcAliasTypeNode(
@@ -1383,7 +1459,8 @@ export class CommonFabricFormatter implements TypeFormatter {
     const aliasArgs = (aliasArgNodes ?? []).map((argNode) =>
       this.#resolveTypeNodeToType(argNode, context, new Map())
     );
-    const resolved = this.#resolveCfcAliasFromDeclaration(
+    const resolved = this.#resolveAliasChainFromDeclaration(
+      CFC_ALIAS_NAMES,
       aliasDeclaration,
       aliasArgs,
       aliasArgNodes,
@@ -1395,16 +1472,21 @@ export class CommonFabricFormatter implements TypeFormatter {
       : undefined;
   }
 
-  #resolveCfcAliasInstantiation(
+  /**
+   * The alias among `terminals` that `typeWithAlias`'s alias names, directly or
+   * down a chain of aliases, with its arguments there.
+   */
+  #resolveAliasChainInstantiation(
     typeWithAlias: TypeWithInternals,
     context: GenerationContext,
-  ): ResolvedCfcAlias | undefined {
+    terminals: ReadonlySet<string>,
+  ): ResolvedAliasChain | undefined {
     const aliasName = typeWithAlias.aliasSymbol?.name;
     if (!aliasName) {
       return undefined;
     }
     const aliasArgs = typeWithAlias.aliasTypeArguments ?? [];
-    if (CFC_ALIAS_NAMES.has(aliasName)) {
+    if (terminals.has(aliasName)) {
       return { aliasName, aliasArgs };
     }
 
@@ -1417,7 +1499,8 @@ export class CommonFabricFormatter implements TypeFormatter {
       return undefined;
     }
 
-    return this.#resolveCfcAliasFromDeclaration(
+    return this.#resolveAliasChainFromDeclaration(
+      terminals,
       aliasDeclaration,
       aliasArgs,
       this.#getAliasTypeArgumentNodes(context.typeNode),
@@ -1426,16 +1509,17 @@ export class CommonFabricFormatter implements TypeFormatter {
     );
   }
 
-  #resolveCfcAliasFromDeclaration(
+  #resolveAliasChainFromDeclaration(
+    terminals: ReadonlySet<string>,
     aliasDeclaration: ts.TypeAliasDeclaration,
     aliasArgs: readonly ts.Type[],
     aliasArgNodes: readonly ts.TypeNode[] | undefined,
     context: GenerationContext,
     visited: Set<string>,
     substituted: readonly ts.TypeParameterDeclaration[] = [],
-  ): ResolvedCfcAlias | undefined {
+  ): ResolvedAliasChain | undefined {
     const aliasName = aliasDeclaration.name.text;
-    if (CFC_ALIAS_NAMES.has(aliasName)) {
+    if (terminals.has(aliasName)) {
       return {
         aliasName,
         aliasArgs,
@@ -1498,7 +1582,8 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     visited.add(aliasName);
-    return this.#resolveCfcAliasFromDeclaration(
+    return this.#resolveAliasChainFromDeclaration(
+      terminals,
       targetDeclaration,
       resolvedArgs,
       resolvedArgNodes,
@@ -2295,9 +2380,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       // finished schema would have nothing left to reject. Catch it here,
       // where the wrapper is still visible.
       const memberScope = resolveScopeWrapperNode(memberNode)?.scope ??
-        scopeForWrapperName(
-          (memberType as TypeWithInternals).aliasSymbol?.name,
-        );
+        scopeOfAliasChain(memberType, context.typeChecker);
       if (memberScope !== undefined) {
         throw scopeInsideUnionError(memberScope);
       }
