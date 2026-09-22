@@ -1,0 +1,1209 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "system/home.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AgentQueueEntry": {
+        "properties": {
+          "address": {
+            "type": "string"
+          },
+          "host": {
+            "type": "string"
+          },
+          "run": {
+            "asCell": [
+              "cell"
+            ],
+            "scope": "user"
+          }
+        },
+        "required": [
+          "run",
+          "host"
+        ],
+        "type": "object"
+      },
+      "AgentQueueOutput": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "$UI": {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          },
+          "agentRunner": {
+            "$ref": "#/$defs/AgentRunnerEntry",
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/agent-queue.tsx",
+                  "moduleIdentity": "SEujS_7ipQsvMj44d8OiaVaDYObe2QZZOhBdJgxw1hM",
+                  "path": [
+                    "setAgentRunner"
+                  ]
+                }
+              }
+            }
+          },
+          "entries": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/AgentQueueEntry"
+            },
+            "type": "array"
+          },
+          "setAgentRunner": {
+            "$ref": "#/$defs/SetAgentRunnerEvent",
+            "asCell": [
+              "stream"
+            ]
+          }
+        },
+        "required": [
+          "entries",
+          "setAgentRunner",
+          "$NAME",
+          "$UI"
+        ],
+        "type": "object"
+      },
+      "AgentRun": {
+        "properties": {
+          "attempts": {
+            "type": "number"
+          },
+          "cancelRequestedAt": {
+            "type": "string"
+          },
+          "claim": {
+            "properties": {
+              "leaseUntil": {
+                "type": "string"
+              },
+              "runner": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "runner",
+              "leaseUntil"
+            ],
+            "type": "object"
+          },
+          "errorCode": {
+            "$ref": "#/$defs/AgentRunErrorCode"
+          },
+          "finishedAt": {
+            "type": "string"
+          },
+          "inputs": {
+            "additionalProperties": {
+              "type": "unknown"
+            },
+            "properties": {},
+            "type": "object"
+          },
+          "maxConfidentiality": {
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "modelTurns": {
+            "type": "number"
+          },
+          "outcome": {
+            "$ref": "#/$defs/AgentRunOutcome"
+          },
+          "piece": {
+            "type": "unknown"
+          },
+          "request": {
+            "type": "unknown"
+          },
+          "requestHash": {
+            "type": "string"
+          },
+          "result": {
+            "type": "unknown"
+          },
+          "resultSchema": {
+            "type": "unknown"
+          },
+          "runRef": {
+            "type": "string"
+          },
+          "space": {
+            "type": "unknown"
+          },
+          "startedAt": {
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/$defs/AgentRunState"
+          },
+          "stateSince": {
+            "type": "string"
+          },
+          "submittedAt": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          },
+          "toolCalls": {
+            "type": "number"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "usage": {
+            "$ref": "#/$defs/AgentRunUsage"
+          },
+          "usageCoverage": {
+            "enum": [
+              "direct",
+              "including-descendants"
+            ]
+          }
+        },
+        "required": [
+          "requestHash",
+          "request",
+          "piece",
+          "space",
+          "task",
+          "inputs",
+          "resultSchema",
+          "submittedAt",
+          "state",
+          "stateSince"
+        ],
+        "type": "object"
+      },
+      "AgentRunErrorCode": {
+        "enum": [
+          "INVALID_INPUT",
+          "LIMIT_REACHED",
+          "PROVIDER_FAILURE",
+          "RUNNER_LOST",
+          "CANCELLED",
+          "REFUSED"
+        ]
+      },
+      "AgentRunOutcome": {
+        "enum": [
+          "completed",
+          "failed",
+          "refused",
+          "cancelled"
+        ]
+      },
+      "AgentRunState": {
+        "enum": [
+          "queued",
+          "claimed",
+          "running",
+          "completed",
+          "failed",
+          "refused",
+          "cancelled"
+        ]
+      },
+      "AgentRunUsage": {
+        "properties": {
+          "cacheWriteTokens": {
+            "type": "number"
+          },
+          "cachedInputTokens": {
+            "type": "number"
+          },
+          "costUsd": {
+            "type": "number"
+          },
+          "estimateWithheldReason": {
+            "type": "string"
+          },
+          "estimatedCostUsd": {
+            "type": "number"
+          },
+          "inputTokens": {
+            "type": "number"
+          },
+          "outputTokens": {
+            "type": "number"
+          },
+          "reasoningTokens": {
+            "type": "number"
+          },
+          "totalTokens": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "AgentRunnerEntry": {
+        "properties": {
+          "host": {
+            "type": "string"
+          },
+          "lastClaimAt": {
+            "type": "string"
+          },
+          "registeredAt": {
+            "type": "string"
+          },
+          "registrationId": {
+            "type": "string"
+          },
+          "tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "host",
+          "tools",
+          "registeredAt"
+        ],
+        "type": "object"
+      },
+      "BackwardsCompatibleProfile": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "$UI": {
+            "type": "unknown"
+          },
+          "addElement": {
+            "$ref": "#/$defs/MutateProfileElementsEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "addExternalLink": {
+            "$ref": "#/$defs/MutateExternalProfileLinksEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "addPiece": {
+            "$ref": "#/$defs/MutateProfileElementsEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "avatar": {
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "95_FHfs9loo6OKzmEE_qTHIsHtkj39AG5g5UC3AWk9g",
+                  "path": [
+                    "setAvatar"
+                  ]
+                }
+              }
+            },
+            "type": "string"
+          },
+          "bio": {
+            "default": "",
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "95_FHfs9loo6OKzmEE_qTHIsHtkj39AG5g5UC3AWk9g",
+                  "path": [
+                    "setBio"
+                  ]
+                }
+              }
+            },
+            "type": "string"
+          },
+          "elements": {
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "95_FHfs9loo6OKzmEE_qTHIsHtkj39AG5g5UC3AWk9g",
+                  "path": [
+                    "mutateElements"
+                  ]
+                }
+              }
+            },
+            "items": {
+              "$ref": "#/$defs/ProfileElement"
+            },
+            "type": "array"
+          },
+          "externalLinks": {
+            "default": [],
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "95_FHfs9loo6OKzmEE_qTHIsHtkj39AG5g5UC3AWk9g",
+                  "path": [
+                    "mutateExternalProfileLinks"
+                  ]
+                }
+              }
+            },
+            "items": {
+              "$ref": "#/$defs/ExternalProfileLink"
+            },
+            "type": "array"
+          },
+          "inbox": {
+            "$ref": "#/$defs/ProfileInbox",
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "95_FHfs9loo6OKzmEE_qTHIsHtkj39AG5g5UC3AWk9g",
+                  "path": [
+                    "setInbox"
+                  ]
+                }
+              }
+            }
+          },
+          "initialNameApplied": {
+            "type": "string"
+          },
+          "isEditing": {
+            "default": false,
+            "type": "boolean"
+          },
+          "name": {
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "95_FHfs9loo6OKzmEE_qTHIsHtkj39AG5g5UC3AWk9g",
+                  "path": [
+                    "setName"
+                  ]
+                }
+              }
+            },
+            "type": "string"
+          },
+          "publishVerifiedIdentities": {
+            "$ref": "#/$defs/MutateVerifiedIdentitiesEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "removeElement": {
+            "$ref": "#/$defs/MutateProfileElementsEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "removeExternalLink": {
+            "$ref": "#/$defs/MutateExternalProfileLinksEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "revokeVerifiedIdentities": {
+            "$ref": "#/$defs/MutateVerifiedIdentitiesEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "setAvatar": {
+            "$ref": "#/$defs/SetProfileAvatarEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "setBio": {
+            "$ref": "#/$defs/SetProfileBioEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "setInbox": {
+            "$ref": "#/$defs/SetProfileInboxEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "setName": {
+            "$ref": "#/$defs/SetProfileNameEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "toggleEditing": {
+            "asCell": [
+              "stream",
+              "opaque"
+            ]
+          },
+          "verifiedIdentities": {
+            "default": [],
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "95_FHfs9loo6OKzmEE_qTHIsHtkj39AG5g5UC3AWk9g",
+                  "path": [
+                    "publishVerifiedIdentities"
+                  ]
+                }
+              }
+            },
+            "items": {
+              "$ref": "#/$defs/VerifiedExternalIdentity"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "$NAME",
+          "$UI",
+          "name",
+          "avatar",
+          "bio",
+          "externalLinks",
+          "verifiedIdentities",
+          "elements",
+          "setName",
+          "setAvatar",
+          "addElement",
+          "removeElement",
+          "isEditing",
+          "initialNameApplied"
+        ],
+        "type": "object"
+      },
+      "CreateProfileEvent": {
+        "properties": {
+          "detail": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "target": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "ExternalIdentityAssertion": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "verifiedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "value",
+          "verifiedAt"
+        ],
+        "type": "object"
+      },
+      "ExternalProfileLink": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "url"
+        ],
+        "type": "object"
+      },
+      "Favorite": {
+        "properties": {
+          "cell": {
+            "properties": {
+              "$NAME": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "id": {
+            "type": "string"
+          },
+          "spaceName": {
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "userTags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cell",
+          "tags",
+          "userTags"
+        ],
+        "type": "object"
+      },
+      "JournalEntry": {
+        "properties": {
+          "eventType": {
+            "type": "string"
+          },
+          "narrative": {
+            "type": "string"
+          },
+          "narrativePending": {
+            "type": "boolean"
+          },
+          "snapshot": {
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "schemaTag": {
+                "type": "string"
+              },
+              "valueExcerpt": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "space": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "unknown"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "timestamp": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "MutateExternalProfileLinksEvent": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MutateProfileElementsEvent": {
+        "properties": {
+          "catalogId": {
+            "type": "string"
+          },
+          "cell": true,
+          "patternUrl": {
+            "type": "string"
+          },
+          "pieceId": {
+            "type": "string"
+          },
+          "pieceSpace": {
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "userTags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "MutateVerifiedIdentitiesEvent": {
+        "properties": {
+          "identities": {
+            "items": {
+              "$ref": "#/$defs/VerifiedExternalIdentity"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ProfileElement": {
+        "properties": {
+          "cell": true,
+          "source": {
+            "enum": [
+              "piece",
+              "url",
+              "catalog"
+            ]
+          },
+          "tag": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "userTags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cell",
+          "tag",
+          "userTags"
+        ],
+        "type": "object"
+      },
+      "ProfileInbox": {
+        "properties": {
+          "piece": {
+            "$ref": "#/$defs/ShareInboxPiece",
+            "description": "The owner's share inbox piece."
+          }
+        },
+        "type": "object"
+      },
+      "SetAgentRunnerEvent": {
+        "properties": {
+          "expectedRegistrationId": {
+            "type": "string"
+          },
+          "runner": {
+            "$ref": "#/$defs/AgentRunnerEntry"
+          }
+        },
+        "type": "object"
+      },
+      "SetProfileAvatarEvent": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "detail": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "key": {
+            "type": "string"
+          },
+          "target": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "SetProfileBioEvent": {
+        "properties": {
+          "bio": {
+            "type": "string"
+          },
+          "detail": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "key": {
+            "type": "string"
+          },
+          "target": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "SetProfileInboxEvent": {
+        "properties": {
+          "inbox": {
+            "$ref": "#/$defs/ShareInboxPiece",
+            "description": "The inbox piece to point at; absent clears the pointer."
+          }
+        },
+        "type": "object"
+      },
+      "SetProfileNameEvent": {
+        "properties": {
+          "detail": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "target": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "ShareInboxPiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "SpaceEntry": {
+        "properties": {
+          "did": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "TrustedDefaultProfile": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "$ref": "#/$defs/BackwardsCompatibleProfile"
+          }
+        ]
+      },
+      "TrustedProfileLink": {
+        "$ref": "#/$defs/BackwardsCompatibleProfile",
+        "ifc": {
+          "addIntegrity": [
+            "profile-link"
+          ],
+          "uiContract": {
+            "action": "CreateProfile",
+            "helper": "UiAction",
+            "requiredEventIntegrity": [
+              "ProfileCreateSurface"
+            ],
+            "trustedPattern": "ProfileCreateSurface"
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/system/profile-create.tsx",
+              "moduleIdentity": "hTQ9kpwTM5Y1zmOPKq7NEVXGFb313kWb2F4UxaQ67KE",
+              "path": [
+                "submitProfileCreation"
+              ]
+            }
+          }
+        }
+      },
+      "TrustedProfileList": {
+        "ifc": {
+          "addIntegrity": [
+            "profile-link"
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/system/profile-create.tsx",
+              "moduleIdentity": "hTQ9kpwTM5Y1zmOPKq7NEVXGFb313kWb2F4UxaQ67KE",
+              "path": [
+                "submitProfileCreation"
+              ]
+            }
+          }
+        },
+        "items": {
+          "$ref": "#/$defs/TrustedProfileLink"
+        },
+        "type": "array"
+      },
+      "TrustedProfileMru": {
+        "ifc": {
+          "addIntegrity": [
+            "profile-link"
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/system/profile-create.tsx",
+              "moduleIdentity": "hTQ9kpwTM5Y1zmOPKq7NEVXGFb313kWb2F4UxaQ67KE",
+              "path": [
+                "setMruProfile"
+              ]
+            }
+          }
+        },
+        "items": {
+          "$ref": "#/$defs/BackwardsCompatibleProfile",
+          "ifc": {
+            "addIntegrity": [
+              "profile-link"
+            ],
+            "uiContract": {
+              "action": "SetMruProfile",
+              "helper": "UiAction",
+              "requiredEventIntegrity": [
+                "ProfilePickerSurface"
+              ],
+              "trustedPattern": "ProfilePickerSurface"
+            },
+            "writeAuthorizedBy": {
+              "__ctWriterIdentityOf": {
+                "file": "/packages/patterns/system/profile-create.tsx",
+                "moduleIdentity": "hTQ9kpwTM5Y1zmOPKq7NEVXGFb313kWb2F4UxaQ67KE",
+                "path": [
+                  "setMruProfile"
+                ]
+              }
+            }
+          }
+        },
+        "type": "array"
+      },
+      "VerifiedExternalIdentity": {
+        "$ref": "#/$defs/ExternalIdentityAssertion",
+        "ifc": {
+          "requiredIntegrity": [
+            "loom-verified-external-identity"
+          ]
+        }
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addFavorite": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "piece": {
+            "properties": {
+              "$NAME": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "spaceName": {
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "piece"
+        ],
+        "type": "object"
+      },
+      "addJournalEntry": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/JournalEntry"
+          }
+        },
+        "required": [
+          "entry"
+        ],
+        "type": "object"
+      },
+      "addSpace": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "detail": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "message"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "detail"
+        ],
+        "type": "object"
+      },
+      "agentQueue": {
+        "$ref": "#/$defs/AgentQueueOutput"
+      },
+      "createProfile": {
+        "$ref": "#/$defs/CreateProfileEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "defaultAppUrl": {
+        "default": "",
+        "type": "string"
+      },
+      "defaultProfile": {
+        "$ref": "#/$defs/TrustedDefaultProfile"
+      },
+      "favorites": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Favorite"
+        },
+        "type": "array"
+      },
+      "journal": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/JournalEntry"
+        },
+        "type": "array"
+      },
+      "mru": {
+        "$ref": "#/$defs/TrustedProfileMru",
+        "default": []
+      },
+      "profiles": {
+        "$ref": "#/$defs/TrustedProfileList",
+        "default": []
+      },
+      "removeFavorite": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "piece": {
+            "type": "unknown"
+          }
+        },
+        "type": "object"
+      },
+      "removeSpace": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "spaces": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/SpaceEntry"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "favorites",
+      "journal",
+      "spaces",
+      "defaultAppUrl",
+      "profiles",
+      "mru",
+      "agentQueue",
+      "createProfile",
+      "addFavorite",
+      "removeFavorite",
+      "addJournalEntry",
+      "addSpace",
+      "removeSpace",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}
