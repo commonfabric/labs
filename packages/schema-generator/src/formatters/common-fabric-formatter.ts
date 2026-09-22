@@ -28,6 +28,7 @@ import {
   resolveAliasedSymbol,
 } from "../typescript/literal-value.ts";
 import { readAuthoredTypeNode } from "../typescript/type-node.ts";
+import { resolveWriterBinding } from "../typescript/writer-binding.ts";
 import {
   type CellWrapperKind,
   getCellBrand,
@@ -1630,23 +1631,13 @@ export class CommonFabricFormatter implements TypeFormatter {
     bindingName: ts.Identifier,
     normalizeFile = true,
   ): { file: string; path: string[]; moduleIdentity?: string } {
-    // Resolved here rather than through `resolveAliasedSymbol`: the file this
-    // lands on becomes the writer's module identity, and a hop that fell back
-    // to the importing file would attribute authority to the wrong module.
-    const symbol = context.typeChecker.getSymbolAtLocation(bindingName);
-    const declarationSymbol = symbol && (symbol.flags & ts.SymbolFlags.Alias)
-      ? context.typeChecker.getAliasedSymbol(symbol)
-      : symbol;
-    const declaration = declarationSymbol?.valueDeclaration ??
-      declarationSymbol?.declarations?.[0];
-    const declaredName = declaration && ts.isVariableDeclaration(declaration) &&
-        ts.isIdentifier(declaration.name)
-      ? declaration.name.text
-      : declaration && ts.isFunctionDeclaration(declaration) &&
-          declaration.name
-      ? declaration.name.text
-      : bindingName.text;
-    const sourceFileName = declaration?.getSourceFile().fileName ??
+    // The file this lands on becomes the writer's module identity, so the
+    // binding is resolved to its DECLARATION: a claim that fell back to the
+    // importing file would attribute authority to the wrong module. The
+    // fallback below is for a binding the checker cannot resolve at all.
+    const binding = resolveWriterBinding(bindingName, context.typeChecker);
+    const declaredName = binding?.name ?? bindingName.text;
+    const sourceFileName = binding?.fileName ??
       bindingName.getSourceFile().fileName ??
       context.sourceFileName ??
       "unknown";

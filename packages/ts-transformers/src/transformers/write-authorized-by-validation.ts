@@ -2,6 +2,7 @@ import ts from "typescript";
 import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
 import { getNodeText } from "../ast/mod.ts";
 import { detectNewExpressionKind } from "../ast/call-kind.ts";
+import { resolveWriterBinding } from "@commonfabric/schema-generator/writer-binding";
 import { unwrapExpression } from "../utils/expression.ts";
 
 export class WriteAuthorizedByValidationTransformer
@@ -215,18 +216,13 @@ function isSupportedWriteAuthorizedByBinding(
   binding: ts.Identifier,
   context: TransformationContext,
 ): boolean {
-  const { checker } = context;
-  let symbol = checker.getSymbolAtLocation(binding);
-  if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
-    symbol = checker.getAliasedSymbol(symbol);
-  }
-  const declaration = symbol?.valueDeclaration;
-  if (!declaration || declaration.getSourceFile().isDeclarationFile) {
+  const resolved = resolveWriterBinding(binding, context.checker);
+  if (!resolved || resolved.declaration.getSourceFile().isDeclarationFile) {
     return false;
   }
+  const { declaration } = resolved;
   if (ts.isFunctionDeclaration(declaration)) return true;
-  return ts.isVariableDeclaration(declaration) &&
-    declaration.initializer !== undefined &&
+  return declaration.initializer !== undefined &&
     isSupportedWriteAuthorizedByInitializer(declaration.initializer);
 }
 

@@ -8,7 +8,10 @@ import {
   SchemaInjectionTransformer,
   transformCfDirective,
 } from "../src/mod.ts";
-import type { CfcPolicyCompilerManifestV1 } from "../src/mod.ts";
+import type {
+  CfcPolicyCompilerManifestV1,
+  TransformationDiagnostic,
+} from "../src/mod.ts";
 import { compileCfcPolicyManifestsForSource } from "../src/transformers/cfc-policy-authoring.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import {
@@ -1064,6 +1067,53 @@ Deno.test("WriteAuthorizedBy accepts a local function binding", async () => {
     false,
   );
 });
+
+Deno.test(
+  "a direct-root WriteAuthorizedBy claim names an imported writer's declaring module",
+  async () => {
+    // Renamed, and reached through a re-export. The direct-root path once
+    // stamped the importing file and the import's spelling, so the claim
+    // named a writer that did not exist and the intended one could not
+    // satisfy it; the nested path had resolved the declaration all along.
+    const diagnostics: TransformationDiagnostic[] = [];
+    const outputs = await transformFiles(
+      {
+        "/main.tsx": `/// <cts-enable />
+          import { toSchema, WriteAuthorizedBy } from "commonfabric";
+          import { writer as save } from "./barrel.ts";
+
+          const schema = toSchema<WriteAuthorizedBy<string, typeof save>>();
+
+          export { schema };
+        `,
+        "/barrel.ts": `export * from "./writer.ts";`,
+        "/writer.ts": `import { handler, Writable } from "commonfabric";
+          export const writer = handler<void, { name: Writable<string> }>(
+            (_event, { name }) => { name.set("updated"); },
+          );`,
+      },
+      {
+        types: COMMONFABRIC_TYPES,
+        pipelineDiagnostics: diagnostics,
+        moduleIdentities: new Map([
+          ["/main.tsx", "identity:main"],
+          ["/barrel.ts", "identity:barrel"],
+          ["/writer.ts", "identity:writer"],
+        ]),
+      },
+    );
+    assertEquals(
+      diagnostics.filter((diagnostic) => diagnostic.severity === "error"),
+      [],
+    );
+    const output = outputs["/main.tsx"]!;
+    assertEquals(output.includes('file: "/writer.ts"'), true);
+    assertEquals(output.includes('path: ["writer"]'), true);
+    assertEquals(output.includes('moduleIdentity: "identity:writer"'), true);
+    assertEquals(output.includes('path: ["save"]'), false);
+    assertEquals(output.includes("identity:main"), false);
+  },
+);
 
 Deno.test(
   "WriteAuthorizedBy preserves the local binding identity through schema emission",

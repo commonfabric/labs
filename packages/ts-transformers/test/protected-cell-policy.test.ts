@@ -258,4 +258,47 @@ export const setName = ${writer};`,
     expect(resolved((output as any).properties.name, output)?.ifc)
       .toMatchObject({ writeAuthorizedBy: writer });
   });
+
+  // The claim is the importer's; the binding identity the runtime verifies it
+  // against is minted where the writer is DECLARED. The hardening stage once
+  // read each file's own claims only, so a writer cited from another module
+  // was never given its identity, and the claim could not be satisfied.
+  it("gives an imported writer its binding identity in its own module", async () => {
+    const diagnostics: TransformationDiagnostic[] = [];
+    const files = await transformFiles(
+      {
+        "/main.tsx":
+          `import { pattern, Stream, Writable, WriteAuthorizedBy } from "commonfabric";
+import { writer as save } from "./barrel.ts";
+export default pattern<Record<string, never>, { name: WriteAuthorizedBy<string, typeof save>; save: Stream<void> }>(() => {
+  const name = new Writable<string>("").for("name");
+  return { name, save: save({ name }) };
+});`,
+        "/barrel.ts": `export * from "./writer.ts";`,
+        "/writer.ts": `import { handler, Writable } from "commonfabric";
+export const writer = handler<void, { name: Writable<string> }>((_event, { name }) => { name.set("updated"); });
+export const bystander = handler<void, { name: Writable<string> }>((_event, { name }) => { name.set("no"); });`,
+      },
+      {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      },
+    );
+    expect(diagnostics.filter(isError)).toEqual([]);
+    expect(files["/writer.ts"]).toMatch(/bindingPath:\s*\[\s*"writer"\s*\]/);
+    expect(files["/writer.ts"]).not.toMatch(/bindingPath:\s*\[\s*"bystander"/);
+    expect(patternSchemas(parseModule(files["/main.tsx"])).output)
+      .toMatchObject({
+        properties: {
+          name: {
+            ifc: {
+              writeAuthorizedBy: {
+                __ctWriterIdentityOf: { file: "/writer.ts", path: ["writer"] },
+              },
+            },
+          },
+        },
+      });
+  });
 });

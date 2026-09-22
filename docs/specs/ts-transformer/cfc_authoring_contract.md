@@ -192,6 +192,11 @@ Normative behavior:
    `moduleIdentity`, so engine-authored claims are stamped when minted.
 6. If `moduleIdentities` is supplied but omits the defining source, compilation
    must fail instead of silently minting an unstamped claim.
+7. The defining module gives the binding its runtime binding identity,
+   whichever module wrote the claim: a claim in an importing module is
+   verified against the writer's own module, never the importer's. The
+   direct-root `toSchema<WriteAuthorizedBy<…>>()` path and nested claims
+   resolve the binding to its declaration the same way.
 
 One valid marker shape is:
 

@@ -9,7 +9,8 @@
     "./property-optionality": "./src/typescript/property-optionality.ts",
     "./property-name": "./src/typescript/property-name.ts",
     "./numeric-expression": "./src/typescript/numeric-expression.ts",
-    "./type-node": "./src/typescript/type-node.ts"
+    "./type-node": "./src/typescript/type-node.ts",
+    "./writer-binding": "./src/typescript/writer-binding.ts"
   },
   "imports": {
     // Dependency guide: ../../docs/development/DEPENDENCIES.md

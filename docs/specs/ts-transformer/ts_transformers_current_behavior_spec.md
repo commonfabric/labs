@@ -3441,24 +3441,41 @@ The same stage stamps CFC **trusted bindings** with their authoring identity,
 so a `WriteAuthorizedBy` claim embedded in a schema can later be matched to
 the live handler that performs the write.
 
-**Which bindings are trusted.** `collectWriteAuthorizedByBindingNames` scans
-the stage-23 AST for type references to `WriteAuthorizedBy`,
-`TrustedActionWrite`, or `TrustedActionWriteWithIntegrity` (binding position
-= type argument 1 for all three, seeded in
-`discoverWriteAuthorizedByBindingPositions`), plus any local type aliases
-that forward a type parameter into such a position (computed to a fixed
-point, so alias-of-alias works — `collectAliasBindingPositions`; exercised by
-`test/cfc-authoring.test.ts` "lowers alias-referenced trusted builder
-bindings"). Within each binding-position type argument, every `typeof x`
-type-query identifier contributes `x` to the trusted-name set
-(`collectTypeQueryIdentifiers`). Detection is purely name-based (no
-symbol/import resolution), and it sees only type references **still present
-after stages 15–17**: a reference that lived solely inside a
-`toSchema<WriteAuthorizedBy<…>>()` type argument was already replaced by the
-schema literal in stage 18 and contributes nothing (verified by direct
-pipeline run — such a module gets a plain `__cfHardenFn` wrap and no
-annotation), whereas references surviving in `interface`/type-alias
-declarations or un-lowered type arguments do.
+**Which bindings are trusted.** A binding is trusted in the module that
+DECLARES it, whichever module wrote the claim that names it: the schema names
+the declaring module (§12), and the runtime verifies a write against that
+module's binding identity, so a writer cited only from an importing module —
+`cfc-spec-gallery` binds the trusted surfaces' writers this way — must be
+stamped by its own module. The stage reads two sources and takes their union:
+
+- `collectTrustedBindingsByFile` (once per program, cached by `ts.Program`)
+  scans every non-declaration file of the program **as authored** for type
+  references to `WriteAuthorizedBy`, `TrustedActionWrite`, or
+  `TrustedActionWriteWithIntegrity` (binding position = type argument 1 for
+  all three) and to any type alias, in any of those files, that forwards a
+  type parameter into such a position (to a fixed point, so alias-of-alias
+  works — `discoverAliasBindingPositions` / `collectAliasBindingPositions`).
+  A reference to an alias resolves through the checker to its declaration, so
+  an alias imported from another module is read; the library's three names
+  are matched by spelling. Every `typeof x` in a binding position is resolved
+  through the checker to the variable or function declaration it names
+  (`resolveWriterBinding`, `@commonfabric/schema-generator/writer-binding` —
+  the resolver the schema generator mints the claim with), and the DECLARED
+  name is indexed under the DECLARING file: `import { writer as save }` cited
+  as `typeof save` trusts `writer` in `writer.ts`. Because the program's
+  original files are read, a claim that lived solely inside a
+  `toSchema<WriteAuthorizedBy<…>>()` type argument counts too, although stage
+  18 has replaced it with a schema literal by the time this stage runs.
+- `collectWriteAuthorizedByBindingNames` scans this file's own stage-23 AST
+  the same way, by spelling and without resolution — for a claim an earlier
+  stage synthesized, which the original files do not hold.
+
+Exercised by `test/cfc-authoring.test.ts` "lowers alias-referenced trusted
+builder bindings" and `test/protected-cell-policy.test.ts` "gives an imported
+writer its binding identity in its own module" (transform), and by
+`packages/runner/test/cfc-imported-writer-binding.test.ts` (a compiled
+two-module program: the identity is registered under the declared name and
+the importer's claim admits the write).
 
 **What is emitted.** For a trusted binding whose initializer is a call
 expression or a direct function (`isTrustedCallable`), the transformer emits
