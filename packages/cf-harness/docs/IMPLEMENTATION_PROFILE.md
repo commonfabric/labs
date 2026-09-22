@@ -389,7 +389,7 @@ placeholders resolve only at the SQLite query boundary.
 
 10. **Loom row labels assumed, not read.** A row a Loom retrieval tool returns
     with no `ifc` field is given the label of the query that produced it — the
-    tool call's input label, the prompt slot's influence joined with the run's
+    confidentiality of the tool call's input label, which is the run's
     accumulated model-context label — and that assumed label is what is measured
     against the run's ceiling, recorded as the observation, and available to
     stamp on a document when the result cites the row. The pinned loom emits no

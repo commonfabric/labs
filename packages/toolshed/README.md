@@ -192,13 +192,20 @@ belong only in POST bodies and browser fragments, never URL queries.
 The reusable client is `SpaceInviteClient` from
 `@commonfabric/runner/space-invites`. The same export provides
 `createInviteCredentials`, `inviteCodeVerifier`, `buildInviteLink`, and
-`parseInviteLink`. `issue` accepts a prepared request containing `inviteId`,
-`codeVerifier`, `access`, `ttlSeconds`, and optional `maxUses`. Retain the
-credentials before calling it so an uncertain response can be retried with the
-same ID. The convenience `create` accepts the same access/lifetime/limit options
-and optional paired `inviteId` and `code`, and returns flat active metadata plus
-`code`. If the create request fails, `SpaceInviteCreateError` retains its
-credentials and original options in the frozen `retry` getter. Retry with
+`parseInviteLink`. A join link is `/join?host&space&invite#code`, with an
+optional `inviter` DID key in the query; the parser refuses any other query key.
+`inviter` is a display hint that anyone holding the link can change; it is
+checked only syntactically and is not part of the code verifier. A recipient
+cannot read the space ACL before redeeming, and afterwards an ACL check can show
+at most that the DID is an owner, not that it issued the link. Like the space
+DID, it travels in the query, so it reaches the shell host's access logs.
+`issue` accepts a prepared request containing `inviteId`, `codeVerifier`,
+`access`, `ttlSeconds`, and optional `maxUses`. Retain the credentials before
+calling it so an uncertain response can be retried with the same ID. The
+convenience `create` accepts the same access/lifetime/limit options and optional
+paired `inviteId` and `code`, and returns flat active metadata plus `code`. If
+the create request fails, `SpaceInviteCreateError` retains its credentials and
+original options in the frozen `retry` getter. Retry with
 `client.create(error.retry)` on the same client. The getter contains the bearer
 code: keep it private, and use it only to recover or retry this invitation.
 Ordinary error inspection and JSON serialization omit these credentials. The

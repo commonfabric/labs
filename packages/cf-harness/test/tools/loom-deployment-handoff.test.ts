@@ -94,23 +94,24 @@ const runCalls = async (engine: CfHarnessEngine, calls: Call[]) => {
     engine,
     apiKey: "synthetic-key",
     model: "gpt-5.4",
-    allowedToolIds: ["loom_authoring_context", "loom_compose"],
+    allowedToolIds: ["loom_authoring_context", "loom_compose", "finish_task"],
     fetchFn: () => {
       const call = calls[index++];
-      const message = call === undefined
-        ? { role: "assistant", content: "Done" }
-        : {
-          role: "assistant",
-          content: "",
-          tool_calls: [{
-            id: `call-${index}`,
-            type: "function",
-            function: {
-              name: call.name,
-              arguments: JSON.stringify(call.args),
-            },
-          }],
-        };
+      if (call === undefined) {
+        throw new Error("The model requested an unscripted handoff turn");
+      }
+      const message = {
+        role: "assistant",
+        content: "",
+        tool_calls: [{
+          id: `call-${index}`,
+          type: "function",
+          function: {
+            name: call.name,
+            arguments: JSON.stringify(call.args),
+          },
+        }],
+      };
       return Promise.resolve(
         new Response(
           JSON.stringify(responsesBodyFromChatFixture({
@@ -121,10 +122,12 @@ const runCalls = async (engine: CfHarnessEngine, calls: Call[]) => {
       );
     },
   });
-  return await loop.runPrompt({
+  const result = await loop.runPrompt({
     prompt: "Collect the Pattern I deployed into a Loom.",
     promptSlotBinding: directPromptSlotBindingFor("handoff"),
   });
+  expect(result.taskOutcome?.outcome).toBe("gave-up");
+  return result;
 };
 
 /** Helper for tests, which represents a successful host context command. */
@@ -209,6 +212,14 @@ describe("loom-deployment-handoff", () => {
         { name: "loom_authoring_context", args: {} },
         { name: "loom_authoring_context", args: {} },
         { name: "loom_compose", args: composition },
+        {
+          name: "finish_task",
+          args: {
+            outcome: "gave-up",
+            message:
+              "The available tools can inspect deployments but cannot name a displayable result.",
+          },
+        },
       ]);
       const observations = first.transcript.filter((m) =>
         m.role === "tool" &&
@@ -233,6 +244,14 @@ describe("loom-deployment-handoff", () => {
       const second = await runCalls(makeEngine(saved), [
         { name: "loom_authoring_context", args: {} },
         { name: "loom_compose", args: composition },
+        {
+          name: "finish_task",
+          args: {
+            outcome: "gave-up",
+            message:
+              "The available tools can inspect deployments but cannot name a displayable result.",
+          },
+        },
       ]);
       const lowered = {
         request_id: "same-run-collection",
@@ -366,10 +385,17 @@ describe("loom-deployment-handoff", () => {
           await engine.recordHandleTable(held.table);
           if ("general" in candidate) expectedToken = held.token;
         }
-        const result = await runCalls(engine, [{
-          name: "loom_authoring_context",
-          args: {},
-        }]);
+        const result = await runCalls(engine, [
+          { name: "loom_authoring_context", args: {} },
+          {
+            name: "finish_task",
+            args: {
+              outcome: "gave-up",
+              message:
+                "The available tools can inspect deployments but cannot name a displayable result.",
+            },
+          },
+        ]);
         const observation = result.transcript.find((m) => m.role === "tool")!;
         expect(JSON.parse(observation.content!)).toMatchObject({
           status: "ok",

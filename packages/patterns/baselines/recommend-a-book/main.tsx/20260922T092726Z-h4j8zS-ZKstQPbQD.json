@@ -1,0 +1,235 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Profile": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "description": "Published library and creator profile carried into the invitation.",
+    "properties": {
+      "originatorProfile": {
+        "$ref": "#/$defs/Profile",
+        "asCell": [
+          "readonly"
+        ]
+      }
+    },
+    "required": [
+      "originatorProfile"
+    ],
+    "type": "object"
+  },
+  "pattern": "recommend-a-book/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Book": {
+        "properties": {
+          "author": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "author"
+        ],
+        "type": "object"
+      },
+      "LibrarySeed": {
+        "properties": {
+          "books": {
+            "items": {
+              "$ref": "#/$defs/Book"
+            },
+            "type": "array"
+          },
+          "favoriteAuthors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "books",
+          "favoriteAuthors"
+        ],
+        "type": "object"
+      },
+      "LibrarySlot": {
+        "properties": {
+          "value": {
+            "$ref": "#/$defs/LibrarySeed"
+          }
+        },
+        "type": "object"
+      },
+      "OriginatorIdentity": {
+        "additionalProperties": false,
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "represents-principal",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "ownerPrincipal": {
+            "__ctCurrentPrincipal": true
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/recommend-a-book/privacy.tsx",
+              "moduleIdentity": "hLoTrbk-qMI5a8E69krkjRk_l84fMhjdK4mGnhlKJ_8",
+              "path": [
+                "retainOriginator"
+              ]
+            }
+          }
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "Profile": {
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PublishedLibrary": {
+        "$ref": "#/$defs/LibrarySlot",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "represents-principal",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "ownerPrincipal": {
+            "__ctCurrentPrincipal": true
+          },
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/packages/patterns/recommend-a-book/main.tsx",
+              "moduleIdentity": "zUOfws1c4pgpOD2PlFXwvEfDTZcq7g3Pkt5NfIVnYCc",
+              "path": [
+                "publishLibrary"
+              ]
+            }
+          }
+        }
+      },
+      "SelectedBooks": {
+        "properties": {
+          "books": {
+            "items": {
+              "$ref": "#/$defs/Book"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "books"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Private state is scoped independently from the shared invitation.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json",
+        "scope": "user"
+      },
+      "clearSelection": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "library": {
+        "$ref": "#/$defs/PublishedLibrary"
+      },
+      "originator": {
+        "$ref": "#/$defs/OriginatorIdentity"
+      },
+      "originatorProfile": {
+        "$ref": "#/$defs/Profile"
+      },
+      "publish": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "library": {
+            "$ref": "#/$defs/LibrarySeed"
+          }
+        },
+        "required": [
+          "library"
+        ],
+        "type": "object"
+      },
+      "publishReviewed": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "received": {
+        "items": {
+          "$ref": "#/$defs/Book"
+        },
+        "type": "array"
+      },
+      "recommended": {
+        "items": {
+          "$ref": "#/$defs/Book"
+        },
+        "type": "array"
+      },
+      "review": {
+        "$ref": "#/$defs/SelectedBooks",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "reviewedLibrary": {
+        "$ref": "#/$defs/LibrarySlot"
+      },
+      "selected": {
+        "$ref": "#/$defs/SelectedBooks"
+      }
+    },
+    "required": [
+      "originator",
+      "originatorProfile",
+      "library",
+      "publish",
+      "reviewedLibrary",
+      "publishReviewed",
+      "received",
+      "recommended",
+      "selected",
+      "review",
+      "clearSelection",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

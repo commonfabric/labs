@@ -748,7 +748,7 @@ describe("research", () => {
         heading: "Pattern contract",
         text: "Use the exact documented pattern contract.",
       }]);
-      const usage: number[] = [];
+      const usage: (number | undefined)[] = [];
       const model = new ScriptedModelClient([
         () =>
           assistant("", [{
@@ -806,10 +806,12 @@ describe("research", () => {
 
       const reply = await createResearchRunner({
         modelClient: model,
-        onUsage: (entry) => usage.push(entry.totalTokens ?? 0),
+        onUsage: (entry) => {
+          usage.push(entry?.totalTokens);
+        },
       })(requestFor({ corpus }));
 
-      expect(usage).toEqual([23]);
+      expect(usage).toEqual([undefined, undefined, 23]);
       expect(model.requests[2].tools).toEqual([]);
       expect(reply.record.messages.at(-1)).toEqual({
         role: "tool",
@@ -2088,6 +2090,84 @@ describe("research", () => {
       ).toBe(false);
     });
 
+    for (const repairing of [false, true]) {
+      it(`retains the response but cancels admission during awaited ${repairing ? "citation repair" : "synthesis"} usage`, async () => {
+        const abort = new AbortController();
+        const waiting = Promise.withResolvers<void>();
+        const release = Promise.withResolvers<void>();
+        const usage: (number | undefined)[] = [];
+        const finalTurn = repairing ? 3 : 2;
+        const corpus = corpusWith([{
+          path: "docs/api.md",
+          heading: "Contract",
+          text: "Use the exact API contract.",
+        }]);
+        const model = new ScriptedModelClient([
+          () =>
+            assistant("", [{
+              id: "read",
+              name: "open_doc_section",
+              input: { sectionId: "section-0" },
+            }]),
+          ...(repairing
+            ? [() =>
+              finalResult({
+                status: "complete",
+                sourceIds: ["documentation:unread"],
+                missing: [],
+              })]
+            : []),
+          () => ({ ...finalResult(), usage: { totalTokens: 17 } }),
+        ]);
+        const pending = createResearchRunner({
+          modelClient: model,
+          onUsage: async (entry) => {
+            usage.push(entry?.totalTokens);
+            if (usage.length === finalTurn) {
+              waiting.resolve();
+              await release.promise;
+            }
+          },
+        })(requestFor({ corpus, signal: abort.signal })).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        try {
+          await Promise.race([
+            waiting.promise,
+            pending.then(() => {
+              throw new Error(
+                "research ended before its usage callback waited",
+              );
+            }),
+          ]);
+          abort.abort(new Error("cancel during usage delivery"));
+          release.resolve();
+          const failure = await pending;
+          expect(failure).toBeInstanceOf(HarnessResearchError);
+          if (!(failure instanceof HarnessResearchError)) {
+            throw new Error("research admitted a canceled response");
+          }
+          expect(failure.message).toBe("cancel during usage delivery");
+          expect(failure.record.budgets).toEqual({
+            modelTurns: finalTurn,
+            toolCalls: 1,
+            readChars: 27,
+          });
+          expect(failure.record.sourceReads).toHaveLength(1);
+          expect(failure.record.messages.at(-1)).toEqual(
+            finalResult().assistant,
+          );
+          expect(usage).toEqual(
+            repairing ? [undefined, undefined, 17] : [undefined, 17],
+          );
+        } finally {
+          release.resolve();
+          await pending;
+        }
+      });
+    }
+
     it("pairs current and pending calls when cancellation interrupts a tool", async () => {
       const abort = new AbortController();
       let descriptions = 0;
@@ -2192,7 +2272,7 @@ describe("research", () => {
     });
 
     it("reports private usage through the parent accounting hook", async () => {
-      const usage: number[] = [];
+      const usage: (number | undefined)[] = [];
       const model = new ScriptedModelClient([
         () => ({
           ...finalResult(),
@@ -2202,7 +2282,9 @@ describe("research", () => {
 
       await createResearchRunner({
         modelClient: model,
-        onUsage: (entry) => usage.push(entry.totalTokens ?? 0),
+        onUsage: (entry) => {
+          usage.push(entry?.totalTokens);
+        },
       })(requestFor());
 
       expect(usage).toEqual([17]);

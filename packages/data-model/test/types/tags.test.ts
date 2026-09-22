@@ -48,7 +48,9 @@ import {
   isFabricContainerValueTag,
   isValidFabricConvertibleJsObject,
   isValidFabricValueLayer,
+  JS_PRIMITIVE_TYPE_VALUE_TAGS,
   JS_TYPE_VALUE_TAGS,
+  type JsPrimitiveTypeValueTag,
   type JsTypeValueTag,
   type PlusTypePredicate,
   type PrimitiveValueTag,
@@ -302,6 +304,30 @@ describe("tags", () => {
     it("is the `typeOfIncludingNull()` vocabulary, less `object`", () => {
       const _same: Same<JsTypeValueTag | "object", JsTypeTagIncludingNull> =
         true;
+    });
+  });
+
+  describe("JS_PRIMITIVE_TYPE_VALUE_TAGS", () => {
+    it("is frozen", () => {
+      expect(Object.isFrozen(JS_PRIMITIVE_TYPE_VALUE_TAGS)).toBe(true);
+    });
+
+    it("holds the tag of each JS primitive type and nothing else", () => {
+      // The sample table is the domain only while it covers every type, so
+      // the two are held equal rather than the table being trusted.
+
+      expect(new Set(JS_PRIMITIVE_TAGS.map(([, , tag]) => tag))).toEqual(
+        new Set(Object.values(JS_PRIMITIVE_TYPE_VALUE_TAGS)),
+      );
+    });
+
+    it("is the JS type vocabulary less `function`, and with the `FabricPrimitive` tags is the primitive vocabulary, in the type system", () => {
+      const _js: Same<JsPrimitiveTypeValueTag | "function", JsTypeValueTag> =
+        true;
+      const _primitive: Same<
+        JsPrimitiveTypeValueTag | FabricPrimitiveValueTag,
+        PrimitiveValueTag
+      > = true;
     });
   });
 

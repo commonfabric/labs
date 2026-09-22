@@ -53,11 +53,17 @@ describe("agent sink governance", () => {
         .toEqual([...KNOWN_SINKS].sort());
     });
 
-    it("classes every known sink, `agent` as `agent` and the rest as `network`", () => {
+    it("classes every known sink, `agent` as `agent`, `sqliteQuery` as `storage` and the rest as `network`", () => {
+      // The class is what an exchange rule scopes itself to, so a sink whose
+      // request never leaves for a host on the network does not answer to a
+      // rule written for one. `sqliteQuery` hands its request to the
+      // provider holding a space's replicas, which is neither of the other
+      // two.
       expect(Object.keys(SINK_CLASSES).sort()).toEqual([...KNOWN_SINKS].sort());
       expect(sinkClassOf("agent")).toBe("agent");
+      expect(sinkClassOf("sqliteQuery")).toBe("storage");
       for (const sink of KNOWN_SINKS) {
-        if (sink === "agent") continue;
+        if (sink === "agent" || sink === "sqliteQuery") continue;
         expect(sinkClassOf(sink), sink).toBe("network");
       }
     });

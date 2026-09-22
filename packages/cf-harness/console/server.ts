@@ -1297,9 +1297,8 @@ export class ConsoleServer {
   ): Promise<ConsoleTurnResult | undefined> {
     const [session] = this.#service.status(sessionId).sessions;
     const turns = await this.#service.listTurnsForReplay({ sessionId });
-    const originLoomId = turns.turns.find((entry) =>
-      entry.turn.turnId === turnId
-    )?.input.loomId;
+    const turn = turns.turns.find((entry) => entry.turn.turnId === turnId);
+    const originLoomId = turn?.input.loomId;
     return await readConsoleTurnResult({
       sessionId,
       continuable: this.#sessionContinuable(sessionId),
@@ -1307,6 +1306,7 @@ export class ConsoleServer {
       artifactRoot: session?.artifactRoot ?? this.#config.artifactRoot,
       turnId,
       spaceName: this.#config.fabricSession.space,
+      timing: turn?.turn,
     });
   }
 

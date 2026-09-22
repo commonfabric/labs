@@ -1,6 +1,6 @@
 import ts from "typescript";
 
-import { hashStringOf } from "@commonfabric/data-model";
+import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import type { MutableJSONSchema } from "@commonfabric/api";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import { getPropertyNameText } from "./typescript/property-name.ts";
@@ -988,7 +988,7 @@ export function isEmptyObjectDefaultType(
 export function extractValueFromLiteralType(
   type: ts.Type,
   typeChecker: ts.TypeChecker,
-): { value: unknown } | undefined {
+): { value: FabricValue } | undefined {
   if (type.flags & ts.TypeFlags.StringLiteral) {
     return { value: (type as ts.StringLiteralType).value };
   }
@@ -1007,7 +1007,7 @@ export function extractValueFromLiteralType(
 
   if (typeChecker.isTupleType(type)) {
     const elements = typeChecker.getTypeArguments(type as ts.TypeReference);
-    const values: unknown[] = [];
+    const values: FabricValue[] = [];
     for (const element of elements) {
       const extracted = extractValueFromLiteralType(element, typeChecker);
       if (!extracted) return undefined;
@@ -1028,7 +1028,7 @@ export function extractValueFromLiteralType(
         : undefined;
     }
     const props = typeChecker.getPropertiesOfType(type);
-    const result: Record<string, unknown> = {};
+    const result: Record<string, FabricValue> = {};
     for (const prop of props) {
       const name = String(prop.escapedName as string);
       // Symbol-keyed members (`__@...`) mean this is a brand, not data.
@@ -1047,7 +1047,7 @@ export function extractValueFromLiteralType(
 function extractPayloadFromBrandedMember(
   member: ts.Type,
   typeChecker: ts.TypeChecker,
-): { value: unknown } | undefined {
+): { value: FabricValue } | undefined {
   const payload = getDefaultMarkerPayload(member, typeChecker);
   if (!payload) return undefined;
   const extracted = extractValueFromLiteralType(payload, typeChecker);
@@ -1069,9 +1069,9 @@ function extractPayloadFromBrandedMember(
 export function extractDefaultValueFromBrandedMembers(
   branded: readonly ts.Type[],
   typeChecker: ts.TypeChecker,
-): { value: unknown } | undefined {
+): { value: FabricValue } | undefined {
   if (branded.length === 0) return undefined;
-  let agreed: { value: unknown } | undefined;
+  let agreed: { value: FabricValue } | undefined;
   for (const member of branded) {
     const extracted = extractPayloadFromBrandedMember(member, typeChecker);
     if (!extracted) return undefined;
@@ -1094,7 +1094,7 @@ export function extractDefaultValueFromBrandedMembers(
 export function extractDefaultBrandPayloadValue(
   type: ts.Type,
   typeChecker: ts.TypeChecker,
-): { value: unknown } | undefined {
+): { value: FabricValue } | undefined {
   const members = type.isUnion() ? type.types : [type];
   const branded = members.filter((member) =>
     hasDefaultMarker(member, typeChecker)

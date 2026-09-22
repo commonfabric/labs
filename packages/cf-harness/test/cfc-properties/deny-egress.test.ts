@@ -95,6 +95,7 @@ const runEpisode = async (
     const loop = new CfHarnessPromptLoop({
       apiKey: "test-key",
       engine,
+      allowedToolIds: ["run_pattern", "finish_task"],
       fetchFn: scriptedModel([{
         toolName: "run_pattern",
         arguments: {
@@ -104,6 +105,13 @@ const runEpisode = async (
             : { amount: 2 },
           resultSchema: TOTAL_RESULT_SCHEMA,
         },
+      }, {
+        toolName: "finish_task",
+        arguments: {
+          outcome: "gave-up",
+          message:
+            "This probe cannot deliver an openable answer with the available tools.",
+        },
       }]),
     });
 
@@ -112,6 +120,7 @@ const runEpisode = async (
       promptSlotBinding: directPromptSlotBinding,
     });
     await engine.persistRunState();
+    expect(result.taskOutcome?.outcome).toBe("gave-up");
 
     const toolMessage = result.transcript.find((message) =>
       message.role === "tool" && message.toolName === "run_pattern"

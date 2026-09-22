@@ -153,11 +153,31 @@ describe("subagent fabric-session posture", () => {
             fetchFn: scriptedFetch([
               delegateCallTurn("call-delegate", "Inspect the workspace."),
               finalTurn("Child done."),
-              finalTurn("Parent done."),
+              {
+                choices: [{
+                  index: 0,
+                  message: {
+                    role: "assistant",
+                    content: "",
+                    tool_calls: [{
+                      id: "call-finish",
+                      type: "function",
+                      function: {
+                        name: "finish_task",
+                        arguments: JSON.stringify({
+                          outcome: "gave-up",
+                          message:
+                            "The inspection produced no user-facing result.",
+                        }),
+                      },
+                    }],
+                  },
+                }],
+              },
             ]),
           });
 
-          await loop.runPrompt({
+          const result = await loop.runPrompt({
             prompt: "Delegate the inspection.",
             promptSlotBinding: directPromptSlotBinding,
           });
@@ -168,6 +188,8 @@ describe("subagent fabric-session posture", () => {
           const childState = await readHarnessRunState(
             join(artifactRoot, `${runId}.subagent.1`, "run-state.json"),
           );
+
+          expect(result.taskOutcome?.outcome).toBe("gave-up");
 
           // The parent's own record is the projection its session config
           // resolves; the child's is that record and says where it came from.

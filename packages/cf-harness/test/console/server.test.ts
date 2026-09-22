@@ -58,6 +58,7 @@ const answeringLoop: HarnessInteractivePromptLoopFactory = () => ({
  */
 const artifactLoop = (
   messages: readonly HarnessTranscriptMessage[],
+  onCompleted?: () => void,
 ): HarnessInteractivePromptLoopFactory =>
 (loopOptions) => ({
   runTranscript: async (
@@ -78,6 +79,7 @@ const artifactLoop = (
     const finalAssistantText =
       transcript.findLast((message) => message.role === "assistant")?.content ??
         "";
+    onCompleted?.();
     return {
       model: "gpt-test",
       finalAssistantText,
@@ -288,6 +290,7 @@ describe("console/server", () => {
     const artifactRoot = await Deno.makeTempDir({
       prefix: "cf-harness-console-result-event-",
     });
+    let clock = Date.parse("2026-01-01T00:00:00.000Z");
     try {
       const resultConfig = await resolveConsoleConfig(
         [
@@ -308,8 +311,8 @@ describe("console/server", () => {
         (onEvent) =>
           new HarnessInteractiveChatService({
             basePromptLoopOptions: { artifactRoot },
-            createPromptLoop: artifactLoop(messages),
-            now: advancingClock(),
+            createPromptLoop: artifactLoop(messages, () => clock += 1750),
+            now: () => new Date(clock).toISOString(),
             onEvent,
             runIdForTurn: (_sessionId, turnId) => turnId,
           }),
@@ -1035,6 +1038,7 @@ describe("console/server", () => {
       const artifactRoot = await Deno.makeTempDir({
         prefix: "cf-harness-console-result-route-",
       });
+      let clock = Date.parse("2026-01-01T00:00:00.000Z");
       try {
         const resultConfig = await resolveConsoleConfig(
           [
@@ -1054,8 +1058,16 @@ describe("console/server", () => {
           resultConfig,
           (onEvent) =>
             new HarnessInteractiveChatService({
-              createPromptLoop: answeringLoop,
-              now: advancingClock(),
+              createPromptLoop: (options) => ({
+                runTranscript: async (runOptions) => {
+                  const result = await answeringLoop(options).runTranscript(
+                    runOptions,
+                  );
+                  clock += 1750;
+                  return result;
+                },
+              }),
+              now: () => new Date(clock).toISOString(),
               onEvent,
             }),
         );
@@ -1105,6 +1117,7 @@ describe("console/server", () => {
           sessionId: started.sessionId,
           continuable: true,
           finalText: "built it",
+          elapsedMs: 1750,
         });
       } finally {
         await Deno.remove(artifactRoot, { recursive: true });
@@ -1115,6 +1128,7 @@ describe("console/server", () => {
       const artifactRoot = await Deno.makeTempDir({
         prefix: "cf-harness-console-result-restored-",
       });
+      let clock = Date.parse("2026-01-01T00:00:00.000Z");
       const store = await openSqliteHarnessChatSessionStore({
         url: toFileUrl(join(artifactRoot, "sessions.sqlite")),
       });
@@ -1138,7 +1152,8 @@ describe("console/server", () => {
             basePromptLoopOptions: { artifactRoot },
             createPromptLoop: artifactLoop([
               { role: "assistant", content: "restored result" },
-            ]),
+            ], () => clock += 2750),
+            now: () => new Date(clock).toISOString(),
             onEvent,
             runIdForTurn: (_sessionId, turnId) => turnId,
             sessionStore: store,
@@ -1162,6 +1177,7 @@ describe("console/server", () => {
           resultConfig,
           createService,
         );
+        clock += 10_000;
         await restoredServer.service.initializeFromStore();
         const restoredPage = await restoredServer.handle(getRequest("/"));
         await restoredPage.body?.cancel();
@@ -1180,6 +1196,7 @@ describe("console/server", () => {
           sessionId: started.sessionId,
           continuable: true,
           finalText: "restored result",
+          elapsedMs: 2750,
         });
       } finally {
         store.close();
@@ -1858,6 +1875,7 @@ describe("console/server", () => {
         sessionId: expect.any(String),
         continuable: true,
         finalText: "built it",
+        elapsedMs: 1750,
       });
     });
 
@@ -1874,6 +1892,7 @@ describe("console/server", () => {
         sessionId: expect.any(String),
         continuable: true,
         finalText: "calculated it",
+        elapsedMs: 1750,
       });
     });
 

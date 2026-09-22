@@ -438,20 +438,48 @@ CF_HARNESS_API_KEY=... deno task run -- \
   --prompt "Inspect the cf-harness package and summarize its model adapters."
 ```
 
-Operator output includes one aggregate `usage:` line covering the parent and
-completed descendant runs. The persisted `run-report.json` keeps `usage` and
-`modelUsage` for the direct run, plus `totalUsage` including completed
-descendants. The batch result JSON carries that total usage object. `costUsd`,
-when present, came from the provider; `estimatedCostUsd` is an estimate based on
-the public OpenAI GPT-5.6 price schedule and is not an invoice or a subscription
-quota conversion.
+Operator output includes one aggregate `usage:` line covering reported parent,
+research, and descendant calls. Each completed model call contributes once,
+including calls made by a child that later fails or is canceled. The persisted
+`run-report.json` keeps `usage` and `modelUsage` for the direct run, plus
+`totalUsage` including research and descendants. The batch result JSON carries
+that total usage object. `costUsd`, when present, came from the provider;
+`estimatedCostUsd` is an estimate based on the public OpenAI GPT-5.6 price
+schedule and is not an invoice or a subscription quota conversion.
 
-The parent ends a successful task with its normal final answer. When a missing
-input or choice blocks the goal, it calls `finish_task` with
-`{ "outcome": "question", "message": "…" }`; when it cannot proceed, it uses
-`"gave-up"` and a concrete reason. The call must stand alone in its model turn.
-An admitted call persists its ordinary policy decision, artifact, and paired
-transcript result, then ends the loop without another provider request.
+Interactive streams emit `turn_usage` after each completed model call with the
+root turn id, cumulative `usage`, and `elapsedMs` on the turn's wall clock. The
+console's completed-turn result carries the same usage aggregate and elapsed
+time through its terminal event. Unreported usage fields stay absent, and a call
+without usage prevents a partial dollar cost from being shown as a total. There
+is no estimate of tokens still being generated within a provider call.
+
+For an ordinary task with a configured Fabric session, the parent completes only
+after `assign_slug` successfully names a UI piece in that run. A text answer
+becomes a small pattern that renders the answer, created through the ordinary
+authoring and tool policy path. Data-only probes stay unnamed. An existing piece
+can keep its address: after a revision, `assign_slug` confirms the same piece
+under its existing slug. Its pending-read and UI checks apply in either case.
+
+Outside a budget-finalizing turn, a plain-text final answer without that receipt
+gets a host correction within the existing model-turn bound. Exhausting a strict
+turn budget still records `max_model_turns`; with `finalizeOnTurnLimit`, the
+last turn instead records the existing budget-finalized give-up without a
+correction. The host does not create a replacement piece on the model's behalf.
+Same-run resume retains naming receipts and the requirement from its recorded
+Fabric session even when connection flags are omitted; conversation history
+alone does not satisfy a new turn. Generic library runs without a configured
+Fabric session keep their text return contract; factory-only library callers can
+enable `requirePieceOutput`. Host-configured structured-result requests keep
+their schema-based document return contract, including on resume. Child return
+contracts are unchanged. A budget-finalized give-up can still report partial
+findings without a piece.
+
+When a missing input or choice blocks the goal, the parent calls `finish_task`
+with `{ "outcome": "question", "message": "…" }`; when it cannot proceed, it
+uses `"gave-up"` and a concrete reason. The call must stand alone in its model
+turn. An admitted call persists its ordinary policy decision, artifact, and
+paired transcript result, then ends the loop without another provider request.
 Malformed or withheld calls remain recoverable tool errors. Children retain
 their failure-return contract and cannot call `finish_task`.
 
@@ -1118,14 +1146,16 @@ is what a pattern does with the answer.
 
 **What is disclosed is structure and only structure**: property names, types,
 nesting, required-ness, array and object composition, a `type` from the schema
-vocabulary, a `format` from the small known set, and a local `$ref` with the
-`$defs` it points into. Definition names are not part of that: every `$defs` and
-`definitions` key is replaced by an opaque `d0`, `d1`, … and every `$ref` that
-resolves to one is rewritten to match, so the reported schema stays
-referentially valid while no name its author chose for a definition crosses. A
-`$ref` that resolves to nothing — a pointer into a `$defs` the schema does not
-declare — is dropped rather than reported, since there is nothing left of it but
-its author's text.
+vocabulary, a `format` from the small known set, a recognized `scope` (`space`,
+`user`, `session`, or `any`), and a local `$ref` with the `$defs` it points
+into. Scope annotations survive at every schema depth so a composing author can
+declare the same scope on the corresponding input. Definition names are not part
+of that: every `$defs` and `definitions` key is replaced by an opaque `d0`,
+`d1`, … and every `$ref` that resolves to one is rewritten to match, so the
+reported schema stays referentially valid while no name its author chose for a
+definition crosses. A `$ref` that resolves to nothing — a pointer into a `$defs`
+the schema does not declare — is dropped rather than reported, since there is
+nothing left of it but its author's text.
 
 **What is not disclosed is anything a value or a word can hide in.** A JSON
 Schema is a place to put data: `const`, `enum`, `default` and `examples` carry
@@ -1135,8 +1165,9 @@ therefore REBUILT from an allowlist of structural keywords rather than copied
 with a few keywords deleted — at every depth, through `properties`, `items`,
 `$defs`, and every combinator — so a keyword nobody anticipated is absent rather
 than disclosed. A `required` name that no property declares is dropped too: that
-is a string, not structure. Numeric bounds, string patterns, and the Common
-Fabric schema extensions do not cross either.
+is a string, not structure. Numeric bounds, string patterns, unrecognized scope
+values, and Common Fabric schema extensions other than `scope` do not cross
+either.
 
 The schema is also reduced to a bounded depth. Past a nesting depth no authored
 schema reaches, a subschema reports as the empty shape `{}`, the same answer a
@@ -1506,17 +1537,25 @@ supply a documentation corpus or pattern index. The gateway transport uses
 Research is a private tool loop, not web search or a delegable child profile.
 
 Fresh CLI tasks and interactive sessions without retained research request an
-opening `orient` pass. Subsequent chat turns reuse the retained findings and let
-the parent request targeted answers; they do not repeat orientation. It runs
-through the ordinary policy, artifacts, provenance, cancellation, and usage path
-before the first parent turn. A host-supplied user message puts the result
-immediately before the task. The result's `purpose` limits what `complete`
-means: a complete orientation establishes a supported approach; it does not
-claim that the application has been built. Both purposes can inspect pattern
-source, describe handles, and return examples. Orientation's `leads` are
-host-observed metadata, usable as search references for delegation, and remain
-separate from inspected `patterns`. The current user goal accompanies narrower
-research questions and delegated tasks so they retain the original context.
+opening `orient` pass for open-ended tasks. A task already selecting an
+implementation skips that automatic pass only through attached `patternRefs` or
+explicit markers in the request: `pattern:<space>/<slug>`, `cf:pattern:<id>`, or
+`skill:<id>`. A skill id names a registered skill or an `owner/repository/skill`
+address. Bare ids, paths, and prose such as "use the named skill X" remain open
+unless X uses a marker. Recognition uses the existing address parsers; it does
+not resolve references, acquire skills, or grant authority. The ordinary tools
+do that. The parent can still call `research` for an unresolved question.
+Subsequent chat turns reuse the retained findings and let the parent request
+targeted answers; they do not repeat orientation. It runs through the ordinary
+policy, artifacts, provenance, cancellation, and usage path before the first
+parent turn. A host-supplied user message puts the result immediately before the
+task. The result's `purpose` limits what `complete` means: a complete
+orientation establishes a supported approach; it does not claim that the
+application has been built. Both purposes can inspect pattern source, describe
+handles, and return examples. Orientation's `leads` are host-observed metadata,
+usable as search references for delegation, and remain separate from inspected
+`patterns`. The current user goal accompanies narrower research questions and
+delegated tasks so they retain the original context.
 
 Orientation and the parent distinguish inputs already given, inputs findable
 within the granted scope, and actions the available capabilities cannot perform.
@@ -2535,6 +2574,17 @@ skill registry, the child preloads the `pattern-dev`, `pattern-schema`, and
 root does not carry them, or that resolved no skills root at all, still gets the
 same child with the same tools, just without the preloaded guidance.
 
+The author and private researcher share compact compiler guidance: supported
+`cf-alert` props, serializable input/output shapes, straight-line pattern-owned
+callbacks, and scalar formatting inside a reactive computation. Their reader
+composition template is compiled against the mailbox primitive in tests; it
+requires the actual inspected pattern id and matching argument/result contracts,
+and preserves pending/error status beside its sample count. The child's
+composition template follows the composition-guidance switch. These instructions
+reduce avoidable compiler errors; they do not establish UI behavior or live-data
+correctness. An implementation kit without its required example is incomplete;
+factual orientation and answers may be complete without code.
+
 For an existing piece, `read_piece_source` returns its current source and
 revision, plus an opaque `inputRef` to its bound arguments. The author wires
 that reference into `run_pattern` to check the inputs the piece actually uses.
@@ -3319,14 +3369,17 @@ reading as `cfc.invocationContextTransportReadiness` — `registered`,
 `unregistered`, `unsafe-runtime-arguments`, `indeterminate`, or `unverified`
 before any enforcing invocation has probed.
 
-When a trusted prompt-slot binding is present, `cf-harness` also derives
-confidentiality-only prompt influence labels for model-authored invocation
-inputs such as shell commands, structured file-tool arguments, and stdin
-payloads. These labels are taint evidence, not integrity or authorization
-claims. When CFC-mediated bash output is released to the model, `cf-harness`
-records the observed output labels in run state and merges those confidentiality
-labels into later model-authored invocation inputs. Opaque and denied outputs
-are not added to this model-context accumulator.
+When a trusted prompt-slot binding is present, `cf-harness` also records which
+model-authored invocation inputs the bound prompt shaped — shell commands,
+structured file-tool arguments, and stdin payloads — as `PromptSlotInfluence`
+atoms in the invocation context's `promptSlotInfluenceLabels`. The atom is
+provenance-class integrity (CFC spec §15.4): it is evidence for influence
+accounting, not taint and not authority. It is kept out of `cfcInputLabels`, so
+it never seeds the sandbox's taint and never withholds a command's output from
+the model that wrote it. When CFC-mediated bash output is released to the model,
+`cf-harness` records the observed output labels in run state and merges those
+confidentiality labels into later model-authored invocation inputs. Opaque and
+denied outputs are not added to this model-context accumulator.
 
 The persisted model-context accumulator is sensitive retained run metadata. It
 does not store raw stdout/stderr bytes, but its labels and observation refs can

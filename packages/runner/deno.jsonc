@@ -46,6 +46,7 @@
     "./meta-seam": "./src/meta-seam.ts",
     "./slugs": "./src/slugs.ts",
     "./schemas": "./src/schemas.ts",
+    "./scope": "./src/scope.ts",
     "./component-read-contract": "./src/component-read-contract.ts",
     "./telemetry-otel-bridge": "./src/telemetry-otel-bridge.ts",
     "./storage/write-stack-trace": "./src/storage/write-stack-trace.ts",

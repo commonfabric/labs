@@ -13,7 +13,7 @@ export default pattern(() => {
   const startsEmpty = assert(() =>
     library.reading.books.length === 0 &&
     library.reading.favoriteAuthors.length === 0 &&
-    library.invitations.get().length === 0
+    library.invitationReady.get() === false
   );
   const missingProfileDisablesInvitation = assert(() =>
     propValue(
@@ -27,7 +27,7 @@ export default pattern(() => {
   );
   const createWithoutProfile = action(() => library.createInvitation.send());
   const noInvitationWithoutProfile = assert(() =>
-    library.invitations.get().length === 0
+    library.invitationReady.get() === false
   );
   const addBook = action(() =>
     library.addBook.send({

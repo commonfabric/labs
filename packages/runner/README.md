@@ -186,6 +186,9 @@ storage:
 - Schemas are based on JSON Schema with extensions for reactivity and references
 - Each Cell has an associated schema that validates its data
 - Schemas can define nested cells with `asCell: ["cell"]`
+- `@commonfabric/runner/scope` exposes the scope predicates, including
+  `isSchemaScope` for the closed `space`, `user`, `session`, and `any`
+  vocabulary.
 - Schema validation happens automatically when setting values
 
 ### Sigil-based Links

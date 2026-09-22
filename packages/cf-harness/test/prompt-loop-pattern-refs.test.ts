@@ -353,7 +353,10 @@ const runResumedDelegation = async (
 
 /** Runs one delegation over the patterns the task attached, with no search. */
 const runAttachedDelegation = async (): Promise<
-  DelegationFixture & { recorded: readonly string[] }
+  DelegationFixture & {
+    recorded: readonly string[];
+    openedResearch: boolean;
+  }
 > => {
   const index = stubIndex();
   const modelRequests: unknown[] = [];
@@ -397,12 +400,15 @@ const runAttachedDelegation = async (): Promise<
   const loop = new CfHarnessPromptLoop({
     apiKey: "test-key",
     engine,
-    allowedToolIds: ["search_patterns", "delegate_task"],
+    allowedToolIds: ["search_patterns", "delegate_task", "research"],
     allowedSubagentProfiles: ["default"],
     fetchFn,
   });
 
-  const result = await loop.runPrompt({ prompt: "Delegate over it." });
+  const result = await loop.runPrompt({
+    prompt: "Delegate over it.",
+    openingResearchTask: "Delegate over it.",
+  });
   const delegateMessage = result.transcript.find((message) =>
     message.role === "tool" && message.toolName === "delegate_task"
   );
@@ -419,6 +425,7 @@ const runAttachedDelegation = async (): Promise<
     delegateOutput: JSON.parse(delegateMessage.content),
     subagentRuns: result.runState.subagentRuns?.length ?? 0,
     recorded: (result.runState.patternRefs ?? []).map((ref) => ref.patternId),
+    openedResearch: result.runState.openingResearch !== undefined,
   };
 };
 
@@ -682,6 +689,7 @@ Use this as available evidence; do not assume it is mandatory.`,
   it("rehydrates a pattern the task attached, which no turn searched for", async () => {
     const result = await runAttachedDelegation();
 
+    expect(result.openedResearch).toBe(false);
     expect(result.subagentRuns).toBe(1);
     expect(result.childPrompt).toContain(SEARCH_HIT.patternId);
     expect(result.childPrompt).toContain(PATTERN_RECORD.description);

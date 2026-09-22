@@ -203,7 +203,7 @@ export const LibraryView = pattern<LibraryViewInput, ViewOutput>(
                 <cf-vstack gap="3">
                   <cf-heading level={2}>What should you read next?</cf-heading>
                   <p>
-                    Create an invitation in a new space, then share that space
+                    Prepare an invitation in this space, then share its link
                     with people whose taste you trust.
                   </p>
                   <cf-button

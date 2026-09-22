@@ -2,13 +2,11 @@
  * Shared doubles for the `value-visit` tests: a visitor that records every
  * call it receives, and builders for the result forms a test hands back.
  *
- * The recorder dispatches every value to its subtype method and recurses into
- * containers the way `RecursiveValueVisitor` does by default, so a
- * test that wants the default walk sets nothing, and one that wants a different
- * decision at one hook assigns the matching `on*` property.
+ * The recorder dispatches every value by tag and recurses into containers the
+ * way `DefaultValueVisitor` does, so a test that wants the default walk sets
+ * nothing, and one that wants a different decision at one hook assigns the
+ * matching `on*` property.
  */
-
-import type { Primitive } from "@commonfabric/utils/types";
 
 import type {
   FabricArrayPlus,
@@ -16,28 +14,32 @@ import type {
   FabricContainerValueTag,
   FabricInstancePlus,
   FabricPlainObjectPlus,
-  FabricPrimitive,
   FabricValuePlusTag,
   PrimitiveValueTag,
 } from "@";
 import {
-  type BaselineVisitResult,
-  type DispatchingVisitorResult,
-  DO_VISIT_SUBTYPE,
-  type LeafVisitorResult,
-  RecursiveValueVisitor,
+  DefaultValueVisitor,
+  type VisitedResult,
+  type VisitResult,
 } from "@/value-visit";
+
+/**
+ * What an `onValue` hook returns to have the recorder dispatch the value by
+ * tag, which is what the recorder does when no hook is set. It is a value of
+ * its own because `undefined` is already a result, the one that ends the visit
+ * of a value.
+ */
+export const DO_DISPATCH = Symbol("DO_DISPATCH");
 
 /** One recorded call into a `Recorder`. */
 export type Event = [name: string, ...args: unknown[]];
 
 /**
- * Visitor that dispatches every value to its subtype method, recurses into
- * containers the way `RecursiveValueVisitor` does by default, and
- * records each call it receives. Each hook can be overridden per test by
- * assigning the matching `on*` property.
+ * Visitor that dispatches every value by tag, recurses into containers the way
+ * `DefaultValueVisitor` does, and records each call it receives. Each hook can
+ * be overridden per test by assigning the matching `on*` property.
  */
-export class Recorder extends RecursiveValueVisitor<unknown, unknown> {
+export class Recorder extends DefaultValueVisitor<unknown, unknown> {
   readonly events: Event[] = [];
 
   /**
@@ -50,40 +52,43 @@ export class Recorder extends RecursiveValueVisitor<unknown, unknown> {
   onValue?: (
     value: unknown,
     tag: FabricValuePlusTag | null,
-  ) => DispatchingVisitorResult<unknown, unknown>;
+  ) => VisitResult<unknown, unknown> | typeof DO_DISPATCH;
   onCycle?: (
     value: FabricContainerValuePlus<unknown>,
     tag: FabricContainerValueTag,
     originalDepth: number,
     thisDepth: number,
-  ) => LeafVisitorResult<unknown, unknown>;
+  ) => VisitResult<unknown, unknown>;
   onArray?: (
     value: FabricArrayPlus<unknown>,
-  ) => LeafVisitorResult<unknown, unknown>;
+  ) => VisitResult<unknown, unknown>;
   onPlainObject?: (
     value: FabricPlainObjectPlus<unknown>,
-  ) => LeafVisitorResult<unknown, unknown>;
+  ) => VisitResult<unknown, unknown>;
   onInstance?: (
     value: FabricInstancePlus<unknown>,
-  ) => LeafVisitorResult<unknown, unknown>;
+  ) => VisitResult<unknown, unknown>;
   onPrimitive?: (
     value: unknown,
     tag: PrimitiveValueTag,
-  ) => LeafVisitorResult<unknown, unknown>;
-  onPlusType?: (value: unknown) => LeafVisitorResult<unknown, unknown>;
+  ) => VisitResult<unknown, unknown>;
+  onPlusType?: (value: unknown) => VisitResult<unknown, unknown>;
   onVisitedElement?: (
     index: number,
     value: unknown,
-  ) => BaselineVisitResult<unknown>;
-  onVisitedGap?: (start: number, count: number) => BaselineVisitResult<unknown>;
+  ) => VisitedResult<unknown>;
+  onVisitedGap?: (
+    start: number,
+    count: number,
+  ) => VisitedResult<unknown>;
   onVisitedInstance?: (
     instance: FabricInstancePlus<unknown>,
     state: unknown,
-  ) => BaselineVisitResult<unknown>;
+  ) => VisitedResult<unknown>;
   onVisitedMapping?: (
     key: unknown,
     value: unknown,
-  ) => BaselineVisitResult<unknown>;
+  ) => VisitedResult<unknown>;
 
   /** The names of the recorded calls, in order. */
   get names(): string[] {
@@ -99,9 +104,12 @@ export class Recorder extends RecursiveValueVisitor<unknown, unknown> {
   override visitValue(
     value: unknown,
     tag: FabricValuePlusTag | null,
-  ): DispatchingVisitorResult<unknown, unknown> {
+  ): VisitResult<unknown, unknown> {
     this.events.push(["value", value, tag]);
-    return this.onValue ? this.onValue(value, tag) : DO_VISIT_SUBTYPE;
+
+    const result = this.onValue ? this.onValue(value, tag) : DO_DISPATCH;
+
+    return (result === DO_DISPATCH) ? super.visitValue(value, tag) : result;
   }
 
   override visitCycle(
@@ -109,31 +117,23 @@ export class Recorder extends RecursiveValueVisitor<unknown, unknown> {
     tag: FabricContainerValueTag,
     originalDepth: number,
     thisDepth: number,
-  ): LeafVisitorResult<unknown, unknown> {
+  ): VisitResult<unknown, unknown> {
     this.events.push(["cycle", value, tag, originalDepth, thisDepth]);
     return this.onCycle
       ? this.onCycle(value, tag, originalDepth, thisDepth)
       : undefined;
   }
 
-  override visitFabricContainer(
-    value: FabricContainerValuePlus<unknown>,
-    tag: FabricContainerValueTag,
-  ): DispatchingVisitorResult<unknown, unknown> {
-    this.events.push(["container", value, tag]);
-    return DO_VISIT_SUBTYPE;
-  }
-
   override visitFabricArray(
     value: FabricArrayPlus<unknown>,
-  ): LeafVisitorResult<unknown, unknown> {
+  ): VisitResult<unknown, unknown> {
     this.events.push(["array", value]);
     return this.onArray ? this.onArray(value) : super.visitFabricArray(value);
   }
 
   override visitFabricPlainObject(
     value: FabricPlainObjectPlus<unknown>,
-  ): LeafVisitorResult<unknown, unknown> {
+  ): VisitResult<unknown, unknown> {
     this.events.push(["object", value]);
     return this.onPlainObject
       ? this.onPlainObject(value)
@@ -142,24 +142,24 @@ export class Recorder extends RecursiveValueVisitor<unknown, unknown> {
 
   override visitFabricInstance(
     value: FabricInstancePlus<unknown>,
-  ): LeafVisitorResult<unknown, unknown> {
+  ): VisitResult<unknown, unknown> {
     this.events.push(["instance", value]);
     return this.onInstance
       ? this.onInstance(value)
       : super.visitFabricInstance(value);
   }
 
-  override visitPrimitive(
-    value: Primitive | FabricPrimitive,
+  override visitPrimitiveValue(
+    value: unknown,
     tag: PrimitiveValueTag,
-  ): LeafVisitorResult<unknown, unknown> {
+  ): VisitResult<unknown, unknown> {
     this.events.push(["primitive", value, tag]);
     return this.onPrimitive ? this.onPrimitive(value, tag) : undefined;
   }
 
   override visitPlusType(
     value: unknown,
-  ): LeafVisitorResult<unknown, unknown> {
+  ): VisitResult<unknown, unknown> {
     this.events.push(["plusType", value]);
     return this.onPlusType ? this.onPlusType(value) : undefined;
   }
@@ -168,7 +168,7 @@ export class Recorder extends RecursiveValueVisitor<unknown, unknown> {
     array: FabricArrayPlus<unknown>,
     index: number,
     value: unknown,
-  ): BaselineVisitResult<unknown> {
+  ): VisitedResult<unknown> {
     this.events.push(["visitedElement", array, index, value]);
     return this.onVisitedElement
       ? this.onVisitedElement(index, value)
@@ -179,7 +179,7 @@ export class Recorder extends RecursiveValueVisitor<unknown, unknown> {
     array: FabricArrayPlus<unknown>,
     start: number,
     count: number,
-  ): BaselineVisitResult<unknown> {
+  ): VisitedResult<unknown> {
     this.events.push(["visitedGap", array, start, count]);
     return this.onVisitedGap ? this.onVisitedGap(start, count) : undefined;
   }
@@ -187,7 +187,7 @@ export class Recorder extends RecursiveValueVisitor<unknown, unknown> {
   override visitedFabricInstance(
     instance: FabricInstancePlus<unknown>,
     state: unknown,
-  ): BaselineVisitResult<unknown> {
+  ): VisitedResult<unknown> {
     this.events.push(["visitedInstance", instance, state]);
     return this.onVisitedInstance
       ? this.onVisitedInstance(instance, state)
@@ -198,7 +198,7 @@ export class Recorder extends RecursiveValueVisitor<unknown, unknown> {
     container: FabricPlainObjectPlus<unknown>,
     key: unknown,
     value: unknown,
-  ): BaselineVisitResult<unknown> {
+  ): VisitedResult<unknown> {
     this.events.push(["visitedFabricPlainObjectEntry", container, key, value]);
     return this.onVisitedMapping
       ? this.onVisitedMapping(key, value)

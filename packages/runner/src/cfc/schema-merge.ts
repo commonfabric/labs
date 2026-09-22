@@ -808,8 +808,16 @@ function resolveConfidentialSchema(
   );
 }
 
-/** Policy declarations and reference edges, independent of public value shapes. */
-interface SchemaPolicyGraph {
+/**
+ * Policy declarations and reference edges, independent of public value shapes.
+ *
+ * This is a type alias, not an `interface`, because two of these are compared
+ * by hashing them, and what gets hashed is a `FabricValue`. An `interface` is
+ * never assignable to `FabricPlainObject`, however plain its members:
+ * TypeScript gives an anonymous object type the implicit index signature which
+ * that requires, and does not give one to an interface.
+ */
+type SchemaPolicyGraph = {
   ifc: JSONSchemaObj["ifc"];
   ref: string | undefined;
   children: {
@@ -818,7 +826,7 @@ interface SchemaPolicyGraph {
     index: number | undefined;
     policy: SchemaPolicyGraph;
   }[];
-}
+};
 
 /**
  * Retains every structural policy position and definition namespace without

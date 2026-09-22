@@ -4,7 +4,7 @@
 
 import type { FabricValuePlus } from "@/interface.ts";
 
-import type { BaselineVisitResult, ValueVisitor } from "./interface.ts";
+import type { MainVisitResult, ValueVisitor } from "./interface.ts";
 import { VisitInProgress } from "./VisitInProgress.ts";
 
 /**
@@ -24,7 +24,7 @@ import { VisitInProgress } from "./VisitInProgress.ts";
 export function visitValue<PlusType, ResultType>(
   value: NoInfer<FabricValuePlus<PlusType>>,
   visitor: ValueVisitor<PlusType, ResultType>,
-): BaselineVisitResult<ResultType> {
+): MainVisitResult<ResultType> {
   const inProgress = new VisitInProgress<PlusType, ResultType>(visitor);
   return inProgress.visit(value);
 }
@@ -35,6 +35,8 @@ export function visitValue<PlusType, ResultType>(
  */
 export function makeVisitValueFunction<PlusType, ResultType>(
   visitor: ValueVisitor<PlusType, ResultType>,
-): (value: FabricValuePlus<PlusType>) => BaselineVisitResult<ResultType> {
+): (
+  value: FabricValuePlus<PlusType>,
+) => MainVisitResult<ResultType> {
   return (value: FabricValuePlus<PlusType>) => visitValue(value, visitor);
 }

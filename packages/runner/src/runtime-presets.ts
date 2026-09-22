@@ -266,9 +266,10 @@ export type CfcPosture = "max-enforcement";
  *
  * Every network-fetch egress sink is public-only (an empty ceiling admits no
  * confidentiality atom), so labeled data cannot leave through them. The
- * llm-class sinks release ungated, carrying the reason, the owner, and the
- * condition that retires the gap ({@link SINK_UNGATED_RATIONALES} in the
- * runner's sink inventory): under this posture, llm-sink release is
+ * llm-class sinks and the `sqliteQuery` sink release ungated, carrying the
+ * reason, the owner, and the condition that retires the gap
+ * ({@link SINK_UNGATED_RATIONALES} in the runner's sink inventory): under
+ * this posture, llm-sink release is
  * ungoverned — any confidentiality, a secret as much as a risk caveat,
  * reaches them without a policy evaluation running. The posture record
  * publishes that as a deviation rather than leaving it to be inferred from a
@@ -309,6 +310,15 @@ export const MAX_ENFORCEMENT_SINK_GOVERNANCE: SinkGovernanceRegistry = Object
     // refused under this posture until the gate reads a ceiling off the
     // request.
     agent: { ceiling: Object.freeze([]) },
+    // The `sqliteQuery` sink's request is a read handed to the provider
+    // holding a space's replicas. For the space's own data that provider is
+    // already the audience the result document's residency names, so a
+    // public-only ceiling would refuse every query a pattern parameterizes
+    // out of its own data while protecting nobody. The bound the sink wants
+    // is the database's space, which — as for `agent` — is not a static
+    // clause list, so the builtin applies it before staging and this row
+    // publishes the gap.
+    sqliteQuery: ungatedSink("sqliteQuery"),
   });
 
 /**

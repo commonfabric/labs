@@ -14,7 +14,7 @@ import {
   atomsOutsideCeiling,
   meetCfcObservationCeilings,
 } from "@commonfabric/runner/cfc";
-import type { JSONSchema } from "@commonfabric/api";
+import type { JSONObject, JSONSchema, JSONValue } from "@commonfabric/api";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import {
@@ -86,7 +86,7 @@ export type LoomRetrievalEntry =
     labelSource: LoomRetrievalLabelSource;
 
     /** The row without its `ifc` field, its strings bounded. */
-    value: unknown;
+    value: JSONValue;
 
     /**
      * The token the run holds this row under. A structured result names the
@@ -163,9 +163,9 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 
 /** Helper for projection, which picks named fields that are present. */
 const pick = (
-  source: Record<string, unknown>,
+  source: JSONObject,
   keys: readonly string[],
-): Record<string, unknown> =>
+): Record<string, JSONValue> =>
   Object.fromEntries(
     keys.filter((key) => source[key] !== undefined).map((
       key,
@@ -176,10 +176,11 @@ const pick = (
 type LoomRowLabel = Required<Pick<IFCLabel, "confidentiality" | "integrity">>;
 
 /**
- * The label a row with no `ifc` field is given: the label of the query that
- * produced it, which is the label of the tool call's input — the prompt
- * slot's influence joined with everything the run's model context has
- * observed. A query with no label makes the row public.
+ * The label a row with no `ifc` field is given: the confidentiality of the
+ * query that produced it, which is the confidentiality of the tool call's
+ * input label — everything the run's model context has observed. The prompt
+ * slot's influence is integrity on that label and does not reach the row. A
+ * query with no confidentiality makes the row public.
  *
  * This is a placeholder assumption, and it is not sound: what a row holds
  * is decided by the store it came from, not by who asked. It is the single
@@ -225,7 +226,9 @@ const readRowLabel = (
  * Helper for bounding, which cuts every string of a value to the string
  * bound and reports whether any was cut.
  */
-const boundStrings = (value: unknown): { value: unknown; cut: boolean } => {
+const boundStrings = (
+  value: JSONValue,
+): { value: JSONValue; cut: boolean } => {
   if (typeof value === "string") {
     return value.length > LOOM_RETRIEVAL_MAX_STRING_CHARS
       ? { value: value.slice(0, LOOM_RETRIEVAL_MAX_STRING_CHARS), cut: true }
@@ -254,8 +257,8 @@ const boundStrings = (value: unknown): { value: unknown; cut: boolean } => {
 
 /** The rows and summary fields of one command's payload. */
 interface LoomRetrievalRows {
-  rows: unknown[];
-  envelope?: Record<string, unknown>;
+  rows: readonly JSONValue[];
+  envelope?: Record<string, JSONValue>;
 }
 
 /**
@@ -267,7 +270,7 @@ interface LoomRetrievalRows {
  */
 const rowsOf = (
   command: LoomRetrievalCommand,
-  payload: unknown,
+  payload: JSONValue,
 ): LoomRetrievalRows | undefined => {
   switch (command) {
     case "search":
@@ -307,7 +310,7 @@ const HANDLE_SIZE_STAND_IN = "cfh:v:22222";
  * counted rather than carried.
  */
 const measureRows = async (
-  rows: unknown[],
+  rows: readonly JSONValue[],
   ceiling: readonly CfcConfClause[] | undefined,
   queryLabel: IFCLabel | undefined,
   reserved: number,
@@ -335,7 +338,7 @@ const measureRows = async (
     } else if (atomsOutsideCeiling(label.confidentiality, ceiling).length > 0) {
       entry = { status: "withheld", reasonCode: "cfc_ceiling_exceeded" };
     } else {
-      const { ifc: _ifc, ...value } = row as Record<string, unknown>;
+      const { ifc: _ifc, ...value } = row as JSONObject;
       const bounded = boundStrings(value);
       entry = {
         status: "admitted",

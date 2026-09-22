@@ -7,6 +7,10 @@ import {
 } from "@commonfabric/runner";
 
 import { operatorProvisionedReferenceAtom } from "../../src/contracts/docs-corpus.ts";
+import {
+  PATTERN_AUTHORING_GUIDANCE,
+  PATTERN_COMPOSITION_GUIDANCE,
+} from "../../src/pattern-authoring.ts";
 import type { HarnessResearchRunSummary } from "../../src/contracts/research.ts";
 import { RESEARCH_KIT_SCHEMA } from "../../src/contracts/research-schema.ts";
 import { splitMarkdownSections } from "../../src/docs-corpus/sections.ts";
@@ -120,6 +124,21 @@ const record = (id: string): HarnessResearchRunSummary => ({
 });
 
 describe("scoped research", () => {
+  it("gives research the author's compiler guidance without requiring code for factual orientation", async () => {
+    const trial = run([(request) => {
+      expect(request.transcript[0].content).toContain(
+        PATTERN_AUTHORING_GUIDANCE,
+      );
+      expect(request.transcript[0].content).toContain(
+        PATTERN_COMPOSITION_GUIDANCE,
+      );
+      return final({ ...brief(), leads: [], questions: [] });
+    }]);
+    const reply = await trial.result;
+    expect(reply.kit.status).toBe("complete");
+    expect(reply.kit.example).toBeUndefined();
+  });
+
   it("inspects indexed source during orientation and returns a usable invocation", async () => {
     await ensureCompilerStack();
     const program = {

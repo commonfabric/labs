@@ -1,10 +1,28 @@
-/** Refusals leave shared composition and presentation unchanged. */
-import { action, assert, pattern, TESTS, Writable } from "commonfabric";
+/** Refusals leave shared composition, presentation and participants unchanged. */
+import {
+  action,
+  assert,
+  type Confidential,
+  pattern,
+  TESTS,
+  Writable,
+} from "commonfabric";
 import Loom from "./main.tsx";
-import type { Panel } from "./schemas.tsx";
+import type { Panel, ParticipantRoster } from "./schemas.tsx";
+
+type TestProfile = Confidential<
+  { name?: string; avatar?: string },
+  readonly ["loom-test-profile"]
+>;
 
 export default pattern(() => {
-  const loom = Loom({});
+  const participants = Writable.of<ParticipantRoster>({});
+  const loom = Loom({ participants });
+  const member = Writable.of<TestProfile>({ name: "Member" });
+  const stranger = Writable.of<TestProfile>({ name: "Stranger" });
+  const join = action(() => loom.addParticipant.send({ profile: member }));
+  // The roster is written only by `addParticipant`, whoever holds its cell.
+  const directWrite = action(() => participants.key("items").set([stranger]));
   const first = new Writable<Panel>({
     kind: "url",
     url: "https://example.com/a",
@@ -50,7 +68,18 @@ export default pattern(() => {
     allowRuntimeErrors: true,
     expectRuntimeErrors: 8,
     allowConsoleErrors: true,
+    // The refused direct roster write is reported as a CFC policy warning.
+    allowConsoleWarnings: true,
     [TESTS]: [
+      { action: join },
+      { action: directWrite },
+      // A replacing write would also leave one entry; only its identity
+      // tells a refused write from an accepted one.
+      {
+        assertion: assert(() =>
+          loom.participants.length === 1 && loom.participants[0].equals(member)
+        ),
+      },
       { action: addFirst },
       { action: addSecond },
       { action: stage },

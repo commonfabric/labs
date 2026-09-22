@@ -146,9 +146,9 @@ Deno.test("createToolshedRuntime publishes the posture it resolved", async () =>
     assertEquals(cfc?.flowLabels.diagnosticOnly, false);
     assertEquals(cfc?.policyDigest, null);
     // Every known sink is named, none of them ceilinged: a server that has
-    // configured nothing publishes ten ungated sinks rather than an empty
+    // configured nothing publishes every sink as ungated rather than an empty
     // list a reader could take for full coverage.
-    assertEquals(cfc?.sinks.length, 11);
+    assertEquals(cfc?.sinks.length, 12);
     assertEquals(cfc?.sinks.every((sink) => "ungated" in sink), true);
     assertEquals(posture?.modernCellRep, true);
     // Resolved, not passed: the env reader said nothing about these, and a

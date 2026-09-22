@@ -234,6 +234,37 @@ const newId = () =>
 For reactive time in a computed, read the live clock with the `#now` wish rather
 than calling `Date.now()`.
 
+## 8. `Writable<PerUser<T>>` and `PerUser<Writable<T>>` scope different things
+
+**Symptom:** A child that should refuse a session-scoped cell passed into a
+per-user argument reads it anyway.
+
+`Writable<PerUser<T>>` puts the scope on the value (`scope: "user"` beside
+`asCell: ["cell"]`). `PerUser<Writable<T>>` puts it on the handle
+(`asCell: [{ kind: "cell", scope: "user" }]`). Both read a cell the caller
+passes in, and a write through either handle lands in that cell's own
+instance. They differ in what the scope constrains:
+
+- The handle spelling caps which link the handle may follow. A passed cell
+  narrower than the cap, such as a session cell in a `PerUser` slot, reads as
+  missing.
+- The value spelling scopes the slot's own content. A plain value written into
+  the slot narrows into the user instance, so each user gets their own copy
+  behind a base-slot redirect. It does not cap the handle, so a narrower passed
+  cell is followed.
+
+```typescript
+// Shown for illustration only.
+// A handle to a record the caller owns: scope the handle.
+type RunRecord = PerUser<Writable<AgentRun>>;
+
+// A per-user value the pattern keeps for itself: scope the value.
+type Draft = Writable<PerUser<string>>;
+```
+
+When the slot exists to receive a reference to an existing cell, scope the
+handle. `packages/runner/test/pattern-scope.test.ts` pins these behaviors.
+
 ## See Also
 
 - `docs/specs/scoped-cell-instances.md` — the underlying scope model

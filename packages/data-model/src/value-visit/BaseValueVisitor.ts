@@ -1,159 +1,93 @@
-import { type Primitive } from "@commonfabric/utils/types";
-
 import {
   type FabricArrayPlus,
   type FabricContainerValuePlus,
   type FabricInstancePlus,
   type FabricPlainObjectPlus,
-  FabricPrimitive,
   type FabricValue,
   type FabricValuePlus,
 } from "@/interface.ts";
-import {
-  type FabricContainerValueTag,
-  type FabricValuePlusTag,
-  type PrimitiveValueTag,
-} from "@/types";
+import { type FabricContainerValueTag, type FabricValuePlusTag } from "@/types";
 import { debugStr } from "@/value-debug";
 
 import {
-  type BaselineVisitResult,
-  type DispatchingVisitorResult,
-  DO_VISIT_SUBTYPE,
-  type LeafVisitorResult,
   ValueVisitor,
+  type VisitedResult,
+  type VisitResult,
 } from "./interface.ts";
 
 /**
- * Base implementation of `ValueVisitor`, which implements most visitor methods
- * as `throw`ing a "shouldn't call" error, with a handful of exceptions. The
- * point of this arrangement is that many concrete visitors won't need to
- * implement every visitor method, and TypeScript doesn't let one just implement
- * _part_ of an abstract class's contract and try to call the result concrete.
- * Subclasses of this class _do_ get to avoid a lot of the boilerplate, but as a
- * result there may be cases where an implementer forgot about a method and only
- * discovers it through testing or at runtime and not because of the type
- * checker.
- *
- * The methods that don't just `throw` a "shouldn't call" error:
- *
- * * `isPlusType()` -- Implemented to return `false`, which is consistent with
- *   this class's default binding of `PlusType = never`.
- *
- * * `visitCycle()` -- Implemented to `throw` a "cycles not handled" error.
- *
- * * `visitFabricContainer()`, `visitValue()` -- Implemented to return
- *   `DO_VISIT_SUBTYPE`, so that concrete classes get subtype dispatched
- *   visiting by default (which is easy enough to override back to
- *   non-dispatched).
- *
- * **Note:** This class is marked `abstract` not because it has `abstract`
- * members but instead because it's simply not useful if directly instantiated.
+ * Base implementation of `ValueVisitor`, which leaves most `ValueVisitor`
+ * methods `abstract`, while providing reasonable defaults for just a couple
+ * methods (see which for details).
  */
 export abstract class BaseValueVisitor<
   PlusType = never,
   ResultType = FabricValue,
 > implements ValueVisitor<PlusType, ResultType> {
+  //
+  // Subclass contract
+  //
+
   /** @inheritDoc */
+  abstract visitValue(
+    value: FabricValuePlus<PlusType>,
+    tag: FabricValuePlusTag | null,
+  ): VisitResult<PlusType, ResultType>;
+
+  /** @inheritDoc */
+  abstract visitedFabricArrayElement(
+    array: FabricArrayPlus<PlusType>,
+    index: number,
+    value: FabricValuePlus<PlusType>,
+  ): VisitedResult<ResultType>;
+
+  /** @inheritDoc */
+  abstract visitedFabricArrayGap(
+    array: FabricArrayPlus<PlusType>,
+    start: number,
+    count: number,
+  ): VisitedResult<ResultType>;
+
+  /** @inheritDoc */
+  abstract visitedFabricInstance(
+    instance: FabricInstancePlus<PlusType>,
+    state: FabricValuePlus<PlusType>,
+  ): VisitedResult<ResultType>;
+
+  /** @inheritDoc */
+  abstract visitedFabricPlainObjectEntry(
+    container: FabricPlainObjectPlus<PlusType>,
+    key: FabricValuePlus<PlusType>,
+    value: FabricValuePlus<PlusType>,
+  ): VisitedResult<ResultType>;
+
+  //
+  // Instance methods
+  //
+
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this returns `false`, thereby corresponding with the
+   * default binding for the `PlusType` parameter to `never`.
+   */
   isPlusType(_value: unknown): _value is PlusType {
     return false;
   }
 
-  /** @inheritDoc */
+  /**
+   * @inheritDoc
+   *
+   * If not overridden, this throws an error indicating that visiting cycles is
+   * not supported. Rationale: This is the safe choice.
+   */
   visitCycle(
     value: FabricContainerValuePlus<PlusType>,
     _tag: FabricContainerValueTag,
     _originalDepth: number,
     _thisDepth: number,
-  ): LeafVisitorResult<PlusType, ResultType> {
+  ): VisitResult<PlusType, ResultType> {
     this.throwNoCycles(value);
-  }
-
-  /** @inheritDoc */
-  visitFabricArray(
-    _value: FabricArrayPlus<PlusType>,
-  ): LeafVisitorResult<PlusType, ResultType> {
-    this.throwShouldntCall("visitFabricArray");
-  }
-
-  /** @inheritDoc */
-  visitFabricInstance(
-    _value: FabricInstancePlus<PlusType>,
-  ): LeafVisitorResult<PlusType, ResultType> {
-    this.throwShouldntCall("visitFabricInstance");
-  }
-
-  /** @inheritDoc */
-  visitFabricPlainObject(
-    _value: FabricPlainObjectPlus<PlusType>,
-  ): LeafVisitorResult<PlusType, ResultType> {
-    this.throwShouldntCall("visitFabricPlainObject");
-  }
-
-  /** @inheritDoc */
-  visitFabricContainer(
-    _value: FabricContainerValuePlus<PlusType>,
-    _tag: FabricContainerValueTag,
-  ): DispatchingVisitorResult<PlusType, ResultType> {
-    return DO_VISIT_SUBTYPE;
-  }
-
-  /** @inheritDoc */
-  visitPlusType(
-    _value: PlusType,
-  ): LeafVisitorResult<PlusType, ResultType> {
-    this.throwShouldntCall("visitPlusType");
-  }
-
-  /** @inheritDoc */
-  visitPrimitive(
-    _value: Primitive | FabricPrimitive,
-    _tag: PrimitiveValueTag,
-  ): LeafVisitorResult<PlusType, ResultType> {
-    this.throwShouldntCall("visitPrimitive");
-  }
-
-  /** @inheritDoc */
-  visitValue(
-    _value: FabricValuePlus<PlusType>,
-    _tag: FabricValuePlusTag | null,
-  ): DispatchingVisitorResult<PlusType, ResultType> {
-    return DO_VISIT_SUBTYPE;
-  }
-
-  /** @inheritDoc */
-  visitedFabricArrayElement(
-    _array: FabricArrayPlus<PlusType>,
-    _index: number,
-    _value: FabricValuePlus<PlusType>,
-  ): BaselineVisitResult<ResultType> {
-    this.throwShouldntCall("visitedFabricArrayElement");
-  }
-
-  /** @inheritDoc */
-  visitedFabricArrayGap(
-    _array: FabricArrayPlus<PlusType>,
-    _start: number,
-    _count: number,
-  ): BaselineVisitResult<ResultType> {
-    this.throwShouldntCall("visitedFabricArrayGap");
-  }
-
-  /** @inheritDoc */
-  visitedFabricInstance(
-    _instance: FabricInstancePlus<PlusType>,
-    _state: FabricValuePlus<PlusType>,
-  ): BaselineVisitResult<ResultType> {
-    this.throwShouldntCall("visitedFabricInstance");
-  }
-
-  /** @inheritDoc */
-  visitedFabricPlainObjectEntry(
-    _container: FabricPlainObjectPlus<PlusType>,
-    _key: FabricValuePlus<PlusType>,
-    _value: FabricValuePlus<PlusType>,
-  ): BaselineVisitResult<ResultType> {
-    this.throwShouldntCall("visitedFabricPlainObjectEntry");
   }
 
   /**

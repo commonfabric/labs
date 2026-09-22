@@ -148,7 +148,7 @@ export interface HarnessRunReport {
   /** Usage from model turns executed directly by this run. */
   usage?: HarnessModelUsage;
 
-  /** Direct usage plus usage reported by completed descendant runs. */
+  /** Direct usage plus reported research and descendant calls, even on failure. */
   totalUsage?: HarnessModelUsage;
 
   modelUsage?: HarnessModelTurnUsage[];

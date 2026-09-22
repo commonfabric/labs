@@ -5,6 +5,16 @@ import { buildCfHarnessBaseSystemPrompt } from "../src/cli.ts";
 import { finishTaskTool } from "../src/tools/finish-task.ts";
 
 describe("orientation", () => {
+  it("tells the parent which explicit selections skip opening research", () => {
+    const prompt = buildCfHarnessBaseSystemPrompt();
+    expect(prompt).toContain(
+      "attached patternRefs or explicit pattern:<space>/<slug>, cf:pattern:<id>, or skill:<id> markers",
+    );
+    expect(prompt).toContain(
+      "Prose such as 'use the named skill X' remains open unless X uses a marker",
+    );
+  });
+
   it("gives the parent a shared inspection path for calendar and document requests before asking for the source", () => {
     const prompt = buildCfHarnessBaseSystemPrompt();
     expect(prompt).toContain(

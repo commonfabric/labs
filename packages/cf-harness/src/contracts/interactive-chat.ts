@@ -337,6 +337,16 @@ export interface HarnessChatTurnStatus {
   error?: HarnessChatError;
 }
 
+/** Elapsed wall time on the durable turn clock, when both stamps are valid. */
+export const harnessChatTurnElapsedMs = (
+  startedAt: string | undefined,
+  observedAt: string | undefined,
+): number | undefined => {
+  if (startedAt === undefined || observedAt === undefined) return undefined;
+  const elapsed = Date.parse(observedAt) - Date.parse(startedAt);
+  return Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined;
+};
+
 export interface HarnessChatSessionStatus {
   sessionId: string;
   status: HarnessChatSessionLifecycle;
@@ -465,6 +475,13 @@ export type HarnessChatStructuredEvent =
   | {
     kind: "browser_access_required";
     reason: string;
+  }
+  | {
+    /** Cumulative turn usage after one parent, research, or child model call. */
+    kind: "turn_usage";
+    turnId: string;
+    usage?: HarnessChatGatewayUsage;
+    elapsedMs?: number;
   }
   | {
     kind: "turn_canceled";

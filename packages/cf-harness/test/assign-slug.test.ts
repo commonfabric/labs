@@ -373,6 +373,7 @@ describe("assign-slug", () => {
           await createPiece(engine, 99);
         } else if (options.taskText === "Triple it") {
           const state = engine.getRunState();
+          expect(state.assignedPieces).toBeUndefined();
           const input = state.inputCells![0];
           const entry = resolveHandleToken(state.handleTable!, input.token);
           expect(entry?.ref).toBe(input.ref);

@@ -40,6 +40,7 @@ import {
 } from "./cfc-seed-envelope.ts";
 import {
   type CfcAddress,
+  type CfcConfClause,
   type CfcRefusalDetail,
   type ConsumedAtomSource,
   describeRefusalInputs,
@@ -71,7 +72,7 @@ const addressOf = (id: string, path: readonly string[]): CfcAddress =>
   ({ space, id, scope: "space", path }) as CfcAddress;
 
 const sourceOf = (
-  atom: unknown,
+  atom: CfcConfClause,
   id: string,
   readPath: readonly string[],
   labelPath: readonly string[],
