@@ -174,6 +174,7 @@ import type {
 import { OpenAICompatibleGatewayModelClient } from "./model/openai-compatible-gateway.ts";
 import { sumHarnessModelUsage } from "./model/usage.ts";
 import { PIECE_OUTPUT_GUIDANCE } from "./piece-output.ts";
+import { isClosedResearchTask } from "./research/closed-task.ts";
 import { collapseSupersededRunPatternDiagnostics } from "./run-pattern-diagnostic-collapse.ts";
 import { collapseSupersededRunPatternSources } from "./run-pattern-source-collapse.ts";
 import { RESEARCH_REUSE_GUIDANCE } from "./research/reuse.ts";
@@ -3413,7 +3414,8 @@ export class CfHarnessPromptLoop {
     }
     if (
       options.task === undefined || this.engine.resumedRun ||
-      runState.lineage !== undefined || !this.#allowedToolIds.has("research")
+      runState.lineage !== undefined || !this.#allowedToolIds.has("research") ||
+      isClosedResearchTask(options.task, runState)
     ) {
       return undefined;
     }
