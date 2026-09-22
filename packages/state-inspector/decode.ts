@@ -14,21 +14,24 @@
 // live runtime/Cell needed). In the encoded form embedded links are
 // `/quote`-escaped literals, so a context-less decode is inert.
 
-import { hashStringOf, toCompactDebugString } from "@commonfabric/data-model";
+import {
+  type FabricValue,
+  hashStringOf,
+  toCompactDebugString,
+} from "@commonfabric/data-model";
 import { JsonCodecEngine } from "@commonfabric/data-model/codec-json";
 import { fabricFromJsonValue } from "@commonfabric/data-model/codecs";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
-import {
-  isObjectNotArray,
-  isObjectOrArray,
-  isPlainObject,
-} from "@commonfabric/utils/types";
+import { isObjectNotArray, isPlainObject } from "@commonfabric/utils/types";
 
 import { shortDid } from "./did-display.ts";
 
-/** Decode a stored payload string, routing the `data-model` codec envelope. */
-export function decodeStored(data: string): unknown {
+/**
+ * Decode a stored payload string, routing the `data-model` codec envelope. An
+ * untagged payload is plain JSON, whose every value is a `FabricValue` too.
+ */
+export function decodeStored(data: string): FabricValue {
   return JsonCodecEngine.seemsLikeEncoded(data)
     ? fabricFromJsonValue(data)
     : JSON.parse(data);
@@ -63,7 +66,11 @@ function isNameWalkable(v: Json): v is Record<string, Json> {
   return isPlainObject(v);
 }
 
-function setOwn(target: Record<string, Json>, key: string, value: Json): void {
+function setOwn(
+  target: Record<string, FabricValue>,
+  key: string,
+  value: FabricValue,
+): void {
   Object.defineProperty(target, key, {
     value,
     enumerable: true,
@@ -197,7 +204,7 @@ interface AnnotationVisit {
   kind: "visit";
   value: Json;
   depth: number;
-  target: Record<string, Json>;
+  target: Record<string, FabricValue>;
   key: string;
 }
 
@@ -268,7 +275,7 @@ function schemaDigest(schema: Json): string | undefined {
  * for which see `schemaDigest()`, and `keys` when the stored schema is not an
  * object and so has none.
  */
-function schemaSummary(schema: Json, bytes: number): Json {
+function schemaSummary(schema: Json, bytes: number): FabricValue {
   const digest = schemaDigest(schema);
   return {
     ...(isNameWalkable(schema) ? { keys: Object.keys(schema) } : {}),
@@ -305,7 +312,7 @@ function schemaSummary(schema: Json, bytes: number): Json {
 function linkSchemaFields(
   schema: Json,
   maxDepth: number,
-): Record<string, Json> {
+): Record<string, FabricValue> {
   if (!Number.isFinite(maxDepth)) {
     return { schema: annotate(schema, Number.POSITIVE_INFINITY) };
   }
@@ -325,8 +332,8 @@ function linkSchemaFields(
  * an infinite one additionally writes out every link's schema in full; see
  * `linkSchemaFields()` for what a finite one does with a large schema.
  */
-export function annotate(v: Json, maxDepth = 8): Json {
-  const root: Record<string, Json> = {};
+export function annotate(v: Json, maxDepth = 8): FabricValue {
+  const root: Record<string, FabricValue> = {};
   const detectCycles = !Number.isFinite(maxDepth);
   const ancestors = new WeakSet<object>();
   const work: AnnotationFrame[] = [{
@@ -344,7 +351,8 @@ export function annotate(v: Json, maxDepth = 8): Json {
       continue;
     }
 
-    const assign = (value: Json) => setOwn(frame.target, frame.key, value);
+    const assign = (value: FabricValue) =>
+      setOwn(frame.target, frame.key, value);
     if (frame.depth < 0) {
       assign("…");
       continue;
@@ -411,9 +419,9 @@ export function annotate(v: Json, maxDepth = 8): Json {
         keys.length === frame.value.length &&
         keys.every(isArrayIndexPropertyName)
       ) {
-        const output = new Array<Json>(frame.value.length);
+        const output = new Array<FabricValue>(frame.value.length);
         assign(output);
-        const target = output as unknown as Record<string, Json>;
+        const target = output as unknown as Record<string, FabricValue>;
         for (let index = frame.value.length - 1; index >= 0; index--) {
           work.push({
             kind: "visit",
@@ -426,9 +434,9 @@ export function annotate(v: Json, maxDepth = 8): Json {
         continue;
       }
 
-      const entries: Record<string, Json> = {};
-      const properties: Record<string, Json> = {};
-      const sparseArray: Record<string, Json> = {};
+      const entries: Record<string, FabricValue> = {};
+      const properties: Record<string, FabricValue> = {};
+      const sparseArray: Record<string, FabricValue> = {};
       setOwn(sparseArray, "length", frame.value.length);
       setOwn(sparseArray, "entries", entries);
       if (keys.some((key) => !isArrayIndexPropertyName(key))) {
@@ -459,7 +467,7 @@ export function annotate(v: Json, maxDepth = 8): Json {
         work.push({ kind: "leave", value: frame.value });
       }
 
-      const output: Record<string, Json> = {};
+      const output: Record<string, FabricValue> = {};
       assign(output);
       const entries = Object.entries(frame.value);
       for (let index = entries.length - 1; index >= 0; index--) {
@@ -475,12 +483,16 @@ export function annotate(v: Json, maxDepth = 8): Json {
       continue;
     }
 
-    // A `FabricInstance` has no enumerable state to walk by property name.
-    if (isObjectOrArray(frame.value)) {
-      assign({ $fabric: toCompactDebugString(frame.value) });
-      continue;
+    const leaf = frame.value;
+    if (
+      leaf === null || typeof leaf === "string" || typeof leaf === "number" ||
+      typeof leaf === "boolean"
+    ) {
+      assign(leaf);
+    } else {
+      // A `FabricInstance` has no enumerable state to walk by property name.
+      assign({ $fabric: toCompactDebugString(leaf) });
     }
-    assign(frame.value);
   }
 
   return root.value;

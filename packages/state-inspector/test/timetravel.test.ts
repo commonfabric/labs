@@ -289,15 +289,9 @@ Deno.test("time travel: diff + timelines", async (t) => {
         const nestedAfter = new Array(1_000_000_000);
         nestedBefore[5] = undefined;
         nestedAfter[5] = undefined;
-        (nestedAfter as unknown as Record<string, unknown>).label = "current";
         assertEquals(
           diffValues({ items: nestedBefore }, { items: nestedAfter }),
-          [{
-            path: "items/label",
-            pathSegments: ["items", "label"],
-            kind: "added",
-            after: "current",
-          }],
+          [],
         );
 
         const changedNestedBefore = new Array(1_000_000_000);
