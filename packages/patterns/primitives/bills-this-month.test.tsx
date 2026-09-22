@@ -55,6 +55,33 @@ export default pattern(() => {
       },
     ],
   });
+  const shortNames = BillsThisMonth({
+    headers: [{ subject: "Your Sim statement", sender: "billing@example.com" }],
+    transactions: [
+      {
+        merchant_name: "Sim A",
+        amount: 10,
+        category_primary: "RENT_AND_UTILITIES",
+      },
+      {
+        merchant_name: "Sim B",
+        amount: 20,
+        category_primary: "RENT_AND_UTILITIES",
+      },
+    ],
+  });
+  const tokenless = BillsThisMonth({
+    headers: [{ subject: "Your Sim statement", sender: "billing@example.com" }],
+    transactions: [
+      { merchant_name: "Sim Gas", amount: 10 },
+      { merchant_name: "Sim Internet", amount: 20 },
+      {
+        merchant_name: "A",
+        amount: 30,
+        category_primary: "RENT_AND_UTILITIES",
+      },
+    ],
+  });
 
   return {
     [TESTS]: [
@@ -71,6 +98,12 @@ export default pattern(() => {
       { assertion: assert(() => sharedBrand.paidCount === 3) },
       { assertion: assert(() => sharedBrand.unpaidCount === 1) },
       { assertion: assert(() => sharedBrand.unmatchedCount === 1) },
+      { assertion: assert(() => shortNames.paidCount === 0) },
+      { assertion: assert(() => shortNames.unpaidCount === 1) },
+      { assertion: assert(() => shortNames.unmatchedCount === 2) },
+      { assertion: assert(() => tokenless.paidCount === 0) },
+      { assertion: assert(() => tokenless.unpaidCount === 1) },
+      { assertion: assert(() => tokenless.unmatchedCount === 3) },
       {
         assertion: assert(() =>
           sharedBrand.paid.some((bill) =>

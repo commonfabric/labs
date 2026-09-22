@@ -191,7 +191,10 @@ const sortBills = (
   const merchants = new Map<string, string[]>();
   for (const payment of billPayments) {
     const words = merchantTokens(payment.merchant_name);
-    merchants.set(words.join(" "), words);
+    if (words.length === 0) continue;
+    const name = lower(payment.merchant_name).replace(/[^a-z0-9]+/g, " ")
+      .trim();
+    merchants.set(name, words);
   }
   const frequency = new Map<string, number>();
   for (const words of merchants.values()) {

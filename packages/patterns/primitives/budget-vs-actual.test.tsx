@@ -23,6 +23,28 @@ export default pattern(() => {
     ],
     spend: [{ category: "FOOD_AND_DRINK", total: 30 }],
   });
+  const exact = BudgetVsActual({
+    budgets: [{ category: "FOOD_AND_DRINK", budget: 100 }],
+    spend: [{ category: "FOOD_AND_DRINK", total: 30 }],
+  });
+  const normalized = BudgetVsActual({
+    budgets: [{ category: "foodanddrink", budget: 100 }],
+    spend: [{ category: "FOOD_AND_DRINK", total: 30 }],
+  });
+  const mixedNames = BudgetVsActual({
+    budgets: [
+      { category: "FOOD_AND_DRINK", budget: 100 },
+      { category: "groceries", budget: 20 },
+    ],
+    spend: [{ category: "FOOD_AND_DRINK", total: 30 }],
+  });
+  const mixedSpellings = BudgetVsActual({
+    budgets: [
+      { category: "FOOD_AND_DRINK", budget: 100 },
+      { category: "foodanddrink", budget: 20 },
+    ],
+    spend: [{ category: "FOOD_AND_DRINK", total: 30 }],
+  });
 
   return {
     [TESTS]: [
@@ -62,6 +84,31 @@ export default pattern(() => {
       },
       { assertion: assert(() => names.unmatchedBudgets.length === 2) },
       { assertion: assert(() => names.rows.length === 0) },
+      { assertion: assert(() => exact.rows[0].matchedVia === "exact") },
+      {
+        assertion: assert(() => normalized.rows[0].matchedVia === "normalized"),
+      },
+      { assertion: assert(() => mixedNames.rows[0].matchedVia === "alias") },
+      { assertion: assert(() => mixedNames.totalBudget === 120) },
+      {
+        assertion: assert(() =>
+          mixedSpellings.rows[0].matchedVia === "normalized"
+        ),
+      },
+      {
+        assertion: assert(() =>
+          textContent(mixedNames[UI]).includes(
+            "FOOD_AND_DRINK + groceries (alias)",
+          )
+        ),
+      },
+      {
+        assertion: assert(() =>
+          textContent(names[UI]).includes(
+            "Unmatched budgets: constructor, __proto__. Unmatched spending: FOOD_AND_DRINK.",
+          )
+        ),
+      },
     ],
   };
 });

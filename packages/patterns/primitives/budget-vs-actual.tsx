@@ -119,18 +119,24 @@ interface Resolution {
   via: string;
 }
 
+/** Raw names and normalized spellings stay distinct for match provenance. */
+interface SpendKeys {
+  raw: Map<string, string>;
+  normalized: Map<string, string>;
+}
+
 /**
  * The spending category a budget belongs to: its own name when a category
  * carries it, else the alias table's answer, else nothing.
  */
 const resolve = (
   budgetName: string,
-  spendKeys: ReadonlyMap<string, string>,
+  spendKeys: SpendKeys,
   useAliases: boolean,
 ): Resolution | undefined => {
-  const exact = spendKeys.get(budgetName);
+  const exact = spendKeys.raw.get(budgetName);
   if (exact !== undefined) return { key: exact, via: "exact" };
-  const normalized = spendKeys.get(normalize(budgetName));
+  const normalized = spendKeys.normalized.get(normalize(budgetName));
   if (normalized !== undefined) return { key: normalized, via: "normalized" };
   if (!useAliases) return undefined;
   const aliasKey = normalize(budgetName);
@@ -138,22 +144,23 @@ const resolve = (
     ? CATEGORY_ALIASES[aliasKey]
     : undefined;
   if (alias === undefined) return undefined;
-  const aliased = spendKeys.get(normalize(alias));
+  const aliased = spendKeys.normalized.get(normalize(alias));
   return aliased === undefined ? undefined : { key: aliased, via: "alias" };
 };
 
 /** Raw and normalized names resolve to the first spelling of each category. */
-const spendKeysOf = (spend: readonly SpendRow[]): Map<string, string> => {
-  const keys = new Map<string, string>();
+const spendKeysOf = (spend: readonly SpendRow[]): SpendKeys => {
+  const raw = new Map<string, string>();
+  const normalized = new Map<string, string>();
   for (const row of spend) {
     const name = row?.category ?? "";
     if (name === "") continue;
-    const normalized = normalize(name);
-    const canonical = keys.get(normalized) ?? name;
-    keys.set(name, canonical);
-    keys.set(normalized, canonical);
+    const key = normalize(name);
+    const canonical = normalized.get(key) ?? name;
+    raw.set(name, canonical);
+    normalized.set(key, canonical);
   }
-  return keys;
+  return { raw, normalized };
 };
 
 /** Totals under the same canonical names used to resolve budgets. */
@@ -191,7 +198,7 @@ const compare = (
   useAliases: boolean,
 ): Comparison => {
   const keys = spendKeysOf(spend);
-  const totals = spendTotals(spend, keys);
+  const totals = spendTotals(spend, keys.raw);
   const grouped = new Map<string, ComparisonRow>();
   const unmatchedBudgets: string[] = [];
 
@@ -218,6 +225,11 @@ const compare = (
     }
     running.budget += amount;
     running.budgetNames = `${running.budgetNames} + ${name}`;
+    // An aggregate names the least direct match it used.
+    if (
+      resolution.via === "alias" ||
+      (resolution.via === "normalized" && running.matchedVia === "exact")
+    ) running.matchedVia = resolution.via;
   }
 
   const rows = [...grouped.values()]
