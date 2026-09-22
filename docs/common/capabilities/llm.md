@@ -95,11 +95,12 @@ pattern — pass `model: "default"`.
 
 After provider discovery, toolshed selects the first available model in this
 order: `gateway:claude-sonnet-4-6`, `anthropic:claude-sonnet-4-6`,
-`anthropic:claude-sonnet-4-5`, then `gateway:gpt-5.4-mini`. If none is registered,
-it uses the first registered language model. That fallback follows provider
-registration order and the gateway's returned catalog order. Image-generation
-models are excluded. A deployment with no language models cannot serve the
-alias; an explicitly named unknown model is also rejected.
+`anthropic:claude-sonnet-4-5`, `gateway:gpt-5.6-luna`, then
+`gateway:gpt-5.4-mini`. If none is registered, it uses the first registered
+language model. That fallback follows provider registration order and the
+gateway's returned catalog order. Image-generation models are excluded. A
+deployment with no language models cannot serve the alias; an explicitly named
+unknown model is also rejected.
 
 Hardcode a specific model only when the call needs that model's particular
 capability — for example a cheaper, faster model for a high-volume map, or a

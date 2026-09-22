@@ -99,6 +99,7 @@ export const DEFAULT_MODEL_CANDIDATES = [
   "gateway:claude-sonnet-4-6",
   "anthropic:claude-sonnet-4-6",
   "anthropic:claude-sonnet-4-5",
+  "gateway:gpt-5.6-luna",
   "gateway:gpt-5.4-mini",
 ] as const;
 

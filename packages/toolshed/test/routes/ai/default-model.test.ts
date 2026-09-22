@@ -19,13 +19,23 @@ describe("default-model", () => {
   for (
     const { description, models, expected } of [
       {
-        description: "uses gateway GPT-5.4 mini when no Sonnet is registered",
+        description: "prefers gateway GPT-5.6 Luna over GPT-5.4 mini",
+        models: ["gpt-5.4-mini", "gpt-5.6-luna"],
+        expected: "gpt-5.6-luna",
+      },
+      {
+        description: "uses gateway GPT-5.4 mini without Sonnet or Luna",
         models: ["gpt-5.4", "gpt-5.4-mini"],
         expected: "gpt-5.4-mini",
       },
       {
+        description: "uses gateway GPT-5.4 mini as the only language model",
+        models: ["gpt-5.4-mini"],
+        expected: "gpt-5.4-mini",
+      },
+      {
         description: "prefers gateway Sonnet over other registered models",
-        models: ["gpt-5.4-mini", "claude-sonnet-4-6"],
+        models: ["gpt-5.4-mini", "gpt-5.6-luna", "claude-sonnet-4-6"],
         expected: "claude-sonnet-4-6",
       },
       {

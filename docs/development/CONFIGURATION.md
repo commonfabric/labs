@@ -69,7 +69,8 @@ explains why it lives in the toolshed rather than in `@commonfabric/llm`.
 1. `gateway:claude-sonnet-4-6`
 2. `anthropic:claude-sonnet-4-6`
 3. `anthropic:claude-sonnet-4-5`
-4. `gateway:gpt-5.4-mini`
+4. `gateway:gpt-5.6-luna`
+5. `gateway:gpt-5.4-mini`
 
 The first available candidate becomes the `default` alias and the value used
 for `TASK_MODELS.coding` / `TASK_MODELS.json`. If no candidate is registered,

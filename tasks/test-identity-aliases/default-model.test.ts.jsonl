@@ -1,0 +1,1 @@
+{"date":"2026-09-22","from":{"k":"unit","s":"toolshed","n":"default-model > uses gateway GPT-5.4 mini when no Sonnet is registered"},"to":{"k":"unit","s":"toolshed","n":"default-model > uses gateway GPT-5.4 mini without Sonnet or Luna"}}
