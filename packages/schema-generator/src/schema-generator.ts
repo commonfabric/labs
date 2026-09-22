@@ -1178,7 +1178,12 @@ export class SchemaGenerator {
     context: GenerationContext,
     isRootType: boolean = false,
   ): MutableJSONSchema {
-    if ((type.flags & ts.TypeFlags.TypeParameter) !== 0) {
+    // A scope wrapper reads its payload from the reference's argument, even
+    // when its declaration erases to an unbound type parameter.
+    if (
+      (type.flags & ts.TypeFlags.TypeParameter) !== 0 &&
+      !resolveScopeWrapperNode(context.typeNode)?.node.typeArguments?.length
+    ) {
       const checker = context.typeChecker;
       const baseConstraint = checker.getBaseConstraintOfType(type);
       if (baseConstraint && baseConstraint !== type) {
