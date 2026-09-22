@@ -114,7 +114,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-card` | Content container with header/content/footer (built-in 1rem padding) | |
 | `cf-cell-link` | Renders a link or cell as a clickable, draggable pill | |
 | `cf-cfc-authorship` | Shows trusted authorship state for CFC-labeled content | `$value`, `$author` |
-| `cf-cfc-label` | Renders the CFC label of a bound cell value | `$value` |
+| `cf-cfc-label` | Renders the CFC label of a bound cell value; `variant="badge"` shows a compact pill for whether an integrity atom matches the `atom`/`kind` filter | `$value` |
 | `cf-chart` | SVG charting container for line/area/bar/dot marks (see [cf-chart](#cf-chart)) | `$marks` (marks: `$data`) |
 | `cf-chat` | Chat container handling message flow and tool-call correlation | `$messages` |
 | `cf-chat-message` | Single chat message with markdown support | |

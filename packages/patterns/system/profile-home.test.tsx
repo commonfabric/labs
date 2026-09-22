@@ -1,8 +1,85 @@
-import { action, assert, equals, NAME, pattern, TESTS } from "commonfabric";
-import ProfileHome from "./profile-home.tsx";
+import {
+  action,
+  assert,
+  equals,
+  NAME,
+  pattern,
+  TESTS,
+  Writable,
+} from "commonfabric";
+import ProfileHome, {
+  identityProfileUrl,
+  isFreshIdentity,
+  isShownIdentity,
+  VerifiedIdentitiesSection,
+  VerifiedIdentityRow,
+} from "./profile-home.tsx";
 
 export default pattern(() => {
   const profile = ProfileHome({ initialName: "Ada Lovelace" });
+
+  // Verified identities reach the profile only as Loom-labeled cells, which a
+  // pattern test cannot mint, so the display rules are checked on the helpers
+  // and the row directly. The rendered list is covered by
+  // packages/html/test/profile-home-verified-identities.test.ts.
+  const nowMs = Date.parse("2026-07-17T20:00:00.000Z");
+  const freshLogin = {
+    type: "github.login",
+    value: "ada lovelace",
+    verifiedAt: "2026-07-16T20:00:00.000Z",
+  };
+  const assert_fresh_login_is_shown = assert(() =>
+    isShownIdentity(freshLogin, nowMs) === true
+  );
+  const assert_stale_login_is_hidden = assert(() =>
+    isShownIdentity(
+      { ...freshLogin, verifiedAt: "2026-07-14T20:00:00.000Z" },
+      nowMs,
+    ) === false
+  );
+  const assert_node_id_is_hidden = assert(() =>
+    isShownIdentity({ ...freshLogin, type: "github.node_id" }, nowMs) === false
+  );
+  const assert_undated_identity_is_hidden = assert(() =>
+    isShownIdentity({ ...freshLogin, verifiedAt: undefined }, nowMs) ===
+      false
+  );
+  const assert_unreadable_date_or_clock_hides_identity = assert(() =>
+    isFreshIdentity(freshLogin.verifiedAt, undefined) === false &&
+    isFreshIdentity("not a timestamp", nowMs) === false
+  );
+  const assert_profile_url_encodes_the_login = assert(() =>
+    identityProfileUrl("github.login", "ada lovelace") ===
+      "https://github.com/ada%20lovelace" &&
+    identityProfileUrl("github.node_id", "MDQ6VXNlcjE=") === ""
+  );
+  const freshRow = VerifiedIdentityRow({ assertion: freshLogin, nowMs });
+  const staleLogin = Writable.of({
+    ...freshLogin,
+    verifiedAt: "2026-07-14T20:00:00.000Z",
+  });
+  const nodeId = Writable.of({
+    ...freshLogin,
+    type: "github.node_id",
+    value: "MDQ6VXNlcjE=",
+  });
+  const sectionWithFreshLogin = VerifiedIdentitiesSection({
+    identities: [nodeId, Writable.of(freshLogin), staleLogin],
+    nowMs,
+  });
+  const sectionWithoutShownIdentity = VerifiedIdentitiesSection({
+    identities: [nodeId, staleLogin],
+    nowMs,
+  });
+  const assert_section_shown_for_a_fresh_login = assert(() =>
+    sectionWithFreshLogin.shown === true
+  );
+  const assert_section_hidden_without_a_shown_identity = assert(() =>
+    sectionWithoutShownIdentity.shown === false
+  );
+  const assert_row_links_the_profile = assert(() =>
+    freshRow.profileUrl === "https://github.com/ada%20lovelace"
+  );
 
   // CT-1748: the rendered profile view. Single context, so the owner-protected
   // name/avatar/elements resolve cleanly (no cross-stamp moduleIdentity
@@ -193,6 +270,15 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      { assertion: assert_fresh_login_is_shown },
+      { assertion: assert_stale_login_is_hidden },
+      { assertion: assert_node_id_is_hidden },
+      { assertion: assert_undated_identity_is_hidden },
+      { assertion: assert_unreadable_date_or_clock_hides_identity },
+      { assertion: assert_profile_url_encodes_the_login },
+      { assertion: assert_row_links_the_profile },
+      { assertion: assert_section_shown_for_a_fresh_login },
+      { assertion: assert_section_hidden_without_a_shown_identity },
       { assertion: assert_inbox_absent_at_birth },
       { assertion: assert_initial_state },
       // CT-1748: a freshly-visited profile starts in the read-only
