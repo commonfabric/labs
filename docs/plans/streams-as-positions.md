@@ -217,16 +217,20 @@ outright instead of retrying a documentless `of:` id.
 The path segment is the hash of the stream's partial cause, `hashStringOf`
 over the same value the manifest is keyed by. It is canonical — records hash
 key-order-insensitively — unique within the manifest by the builder's own
-guarantee, and stable exactly when the manifest match is stable: a named
-stream keeps its address across unrelated edits, a `$generated` one moves
-when the anonymous count moves, as its id does today. A segment whose cause
-no longer exists names nothing, so a stale sidecar entry is refused rather
-than delivered to whatever now sits where the old stream was; that is the
-property a positional key such as the manifest's array index would lack,
-since the manifest is rebuilt in descriptor order on every setup
-(`runner.ts:3060`) and matched by cause and kind, never by position
-(`runner.ts:3068`). A reader holding the owner finds the entry by hashing each
-entry's cause; the manifest is small.
+guarantee, and stable exactly when the manifest match is stable, which is
+exactly as stable as a stream's id is today, since the cause has always been
+in the id's preimage. A named cause moves only when its author renames it,
+and a segment naming a cause that no longer exists names nothing, so a stale
+sidecar entry is refused. A `$generated` cause is a position among the
+pattern's anonymous cells: an update that adds one ahead of it renumbers it,
+its address and sidecar move with it, and its old cause can be handed to the
+handler that now holds that number — which is what happens to its id today
+under the same edit. The manifest's array index would be worse in degree, not
+in kind: it is rebuilt in descriptor order on every setup (`runner.ts:3060`)
+and matched by cause and kind, never by position (`runner.ts:3068`), so it
+shifts on any descriptor inserted ahead, value cells included. A reader
+holding the owner finds the entry by hashing each entry's cause; the manifest
+is small.
 
 Separation from the result namespace is by scheme, so nothing is reserved:
 `(stream:fid1:X, [segment])` cannot equal a position on `of:fid1:X`, whatever
@@ -408,10 +412,18 @@ cutover for both kinds; its cost is stated under stage 3.
   fired just before its sender disconnected, would be lost. The `stream:` id
   is what closes this: the owner is its `of:` sibling, and the start needs
   nothing stored. This item is the reason decision 3 takes the form it does.
-- **The array index as the segment.** A positional key would be reused by a
-  different cell after any edit that reorders the manifest, and a stale
-  sidecar entry would then be delivered to the wrong handler. The hashed
-  cause fails closed instead; decision 3 states why.
+- **A renumbered generated cause reassigns a view handler's address.** A
+  pattern update that inserts an anonymous cell ahead of a view handler
+  renumbers its `$generated` cause; the handler that now holds the old number
+  inherits the old address, and a sidecar entry still pending under it would
+  be delivered there. This is today's behavior for the same edit, since the
+  cause is in the id's preimage now, and this plan neither adds to it nor
+  removes it. Whether a pattern update drains a piece's sidecars before it
+  renumbers is a question this plan does not answer and a fix for it does not
+  depend on; the durable repair is a generated cause derived from the
+  handler's content rather than its position, which is a follow-up outside
+  this plan. The manifest's array index would widen the trigger to any
+  inserted descriptor; decision 3 states the difference.
 - **The stage-1 exemptions this rests on.** Absence at a declared position is
   a handle only because the sibling plan's stage 1 made every read path treat
   it so, `required` included. Those exemptions are load-bearing here.
