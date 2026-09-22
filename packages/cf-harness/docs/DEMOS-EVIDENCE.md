@@ -142,10 +142,9 @@ demo that never worked as described, and a demo whose build moved underneath it.
 Without it, neither can be told from the other afterwards, and the entry gets
 edited on a guess.
 
-**The counts in this document were measured on `a77e958513`. A newer build is
-not claimed to be proven**, and nothing here should be read as saying it is.
-That is not a reason to avoid a newer build — it is the reason to write down
-which one you were on.
+**No build is claimed to be proven beyond the one named beside each count**, and
+nothing here should be read as saying otherwise. That is not a reason to avoid a
+newer build — it is the reason to write down which one you were on.
 
 Read these off the console's launch printout and `GET /api/health/detail`. Loom
 writes the printout to `packages/cf-harness/local-dev-console.log` under the
@@ -236,14 +235,14 @@ and it should be re-run rather than shown.
 **How much a run has to author predicts whether it works — and discovery is not
 the variable.** Ordered by how much each demo left the run to write:
 
-| Demo                    | What the run had to write                  | Result                                                |
-| ----------------------- | ------------------------------------------ | ----------------------------------------------------- |
-| §1 pomodoro             | nothing; one published part does the job   | proven 4/4 on the pin, 2/2 on `a77e958513`            |
-| Readwise "never opened" | nothing; one published part does the job   | 2 of 2                                                |
-| §2a checklist and total | two published parts, minimal glue          | proven 3/3                                            |
-| §5c bills, three ids    | three published parts do the job           | 4 correct in 4                                        |
-| §3 bank table           | a published reader plus an authored table  | proven 3/3 on `a77e958513`; 2 pass, 1 fail on the pin |
-| §5 bills                | published readers plus an authored matcher | 1 correct in 5                                        |
+| Demo                    | What the run had to write                  | Result                                                    |
+| ----------------------- | ------------------------------------------ | --------------------------------------------------------- |
+| §1 pomodoro             | nothing; one published part does the job   | proven 4/4 on `e5b9f57c6c`, 2/2 on `a77e958513`           |
+| Readwise "never opened" | nothing; one published part does the job   | 2 of 2                                                    |
+| §2a checklist and total | two published parts, minimal glue          | proven 3/3                                                |
+| §5c bills, three ids    | three published parts do the job           | 4 correct in 4                                            |
+| §3 bank table           | a published reader plus an authored table  | proven 3/3 on `a77e958513`; 2 pass 1 fail on `e5b9f57c6c` |
+| §5 bills                | published readers plus an authored matcher | 1 correct in 5                                            |
 
 **The control for this is a pair of Readwise runs** from prompts identical but
 for one sentence naming the pattern's id. The run told nothing **found the same
@@ -576,9 +575,9 @@ pass.
 **Likely failure:** an empty table on first paint is a pending read, not an
 empty month — reopen the piece rather than re-running.
 
-**Proof status: PROVEN (3/3) on `a77e958513`; 2 pass, 1 fail on the pin.** Six
-runs of this wording in all. The piece is produced every time and the rows are
-right whenever they render; one run on the pin rendered every amount as
+**Proof status: PROVEN (3/3) on `a77e958513`; 2 pass, 1 fail on `e5b9f57c6c`.**
+Six runs of this wording in all. The piece is produced every time and the rows
+are right whenever they render; one run on `e5b9f57c6c` rendered every amount as
 `[object Object]`, which is the reactive-coercion family described in the
 preflight rather than a fault of this demo. Every passing run was diffed against
 the ledger on every field rather than judged by eye.
