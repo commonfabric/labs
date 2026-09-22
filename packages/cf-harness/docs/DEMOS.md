@@ -103,9 +103,16 @@ start/pause/reset, focus and break modes, and cycle progress.
 carries on. A second `assign_slug` in the timeline is the retry working, not a
 fault.
 
-**Proof status: PROVEN (3/3)** — `pomodoro-timer-2`, `pomodoro-focus-timer`,
-`pomodoro-focus-clock`. Browser-verified: the countdown was seen running on a
-recorded take.
+**Proof status: PROVEN (3/3) for the piece; the countdown is qualified.** Three
+runs produced `pomodoro-timer-2`, `pomodoro-focus-timer`,
+`pomodoro-focus-clock`, and a fourth produced `pomodoro-timer-session`. The page
+renders in full — modes, duration fields, Start, Reset, Skip. **A reopened piece
+does not advance**: on `pomodoro-timer-session`, Start left the display at
+`15:00` across twelve seconds of sampling and the status still read "Ready when
+you are" (`proof/pomodoro-frozen.png`). That is the signature of a durably
+frozen clock, and it is to be filed. Whether a freshly created piece counts down
+before it is reopened is untested here; a recorded take shows one rendering, not
+running.
 
 ## 2. A dinner party page, composed from two library parts
 
@@ -176,10 +183,13 @@ pass.
 **Likely failure:** an empty table on first paint is a pending read, not an
 empty month — reopen the piece rather than re-running.
 
-**Proof status: PIECE PRODUCED (2/2), INTERACTION UNVERIFIED** —
-`monthly-bank-transactions`, `bank-transactions-this-month`, each composing one
-indexed reader. Neither was opened, so whether rows render and a header click
-reorders them is unestablished.
+**Proof status: PIECE PRODUCED (2/2); rows verified, sorting does not work.**
+`monthly-bank-transactions` was opened: seven real rows render for 2026-09,
+matching the ledger (`proof/bank-before.png`). **Clicking a column header does
+not reorder anything** — the row order is byte-identical before and after
+(`proof/bank-after.png`), and the only interactive element on the page is the
+title button, while six `columnheader` nodes carry no interaction at all. The
+prompt asked for a sortable table and got a table.
 
 ## 4. Bills this month, from mail and bank together
 
@@ -205,15 +215,20 @@ produced no piece. The rejections cluster into a handful of recurring authoring
 mistakes — a nonexistent `cf-alert` prop, a `Set` in pattern inputs, a loop in a
 callback body — tracked as CT-2403.
 
-**Proof status: PIECE PRODUCED (1/1), INTERACTION UNVERIFIED, and NEEDS an email
-grant and a finance grant.** One run delivered `monthly-bills-mail-bank` in 427
-s, 61 s of it the opening pass, importing both indexed readers into an authored
-wrapper. Its first submission failed on a `cf-alert` prop and the repaired
-version ran; its first naming attempt collided and the second succeeded, which
-is the slug sentence working. The run's own final text says its counts and
-matches were not independently verified, because policy withheld the results
-from the model — so this establishes a named piece and indexed composition, not
-that the bills it lists are the right ones.
+**Proof status: PROVEN (1/1), and NEEDS an email grant and a finance grant.**
+Browser-verified (`proof/bills.png`): `monthly-bills-mail-bank` shows **Paid ·
+4** with each row an email paired to a bank transaction, **Needs attention ·
+1**, and **Unmatched payments · 0**. Its source line reads "Email: 100 headers ·
+Bank: 7 live transactions", and the page states "No message bodies or snippets
+are used. No AI model is used." This is the only entry here whose done condition
+has been exercised end to end. One run delivered `monthly-bills-mail-bank` in
+427 s, 61 s of it the opening pass, importing both indexed readers into an
+authored wrapper. Its first submission failed on a `cf-alert` prop and the
+repaired version ran; its first naming attempt collided and the second
+succeeded, which is the slug sentence working. The run's own final text says its
+counts and matches were not independently verified, because policy withheld the
+results from the model — so this establishes a named piece and indexed
+composition, not that the bills it lists are the right ones.
 
 ## 5. A skill's script, run in the sandbox, folded into a piece
 
