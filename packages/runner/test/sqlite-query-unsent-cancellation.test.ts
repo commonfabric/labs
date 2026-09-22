@@ -14,6 +14,13 @@
  * makes the moment of cancellation exact: the ending fires when the staging
  * transaction abandons its work, and the case cancels between the staging and
  * that abandonment.
+ *
+ * One thing these cases do NOT reach, said here rather than left to be
+ * discovered: the staging entry the cancelled path releases on its way out.
+ * That map is closure state of the node, with no accessor, and giving it one
+ * would widen every builtin's result shape to let a test peek at a leak whose
+ * lifetime is the piece's. The release is a single line on the early return,
+ * read rather than asserted.
  */
 
 import { describe, it } from "@std/testing/bdd";

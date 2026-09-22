@@ -1290,7 +1290,15 @@ export function sqliteQuery(
       // Nothing to say on behalf of a node that is gone, and nowhere sound to
       // say it. Checked again inside the write, because the cancellation can
       // land between scheduling this and the transaction reaching storage.
-      if (cancelled.signal.aborted) return;
+      //
+      // The staging entry goes back either way. It is normally released by
+      // the ending's own `finally`, and that ending is exactly what is not
+      // going to run here, so returning without releasing would leave this
+      // request's entry in the node's map for as long as the map lives.
+      if (cancelled.signal.aborted) {
+        releaseStaging();
+        return;
+      }
       runtime.trackAsyncWork(
         settleAbandonedRequest(
           runtime,
