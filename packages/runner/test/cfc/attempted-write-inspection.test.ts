@@ -234,7 +234,9 @@ describe("CFC attempted-write inspection", () => {
                 return undefined;
               }
               const member = Reflect.get(target, property, target);
-              return typeof member === "function" ? member.bind(target) : member;
+              return typeof member === "function"
+                ? member.bind(target)
+                : member;
             },
           });
           expect(prepareBoundaryCommit(view)).toEqual([]);
