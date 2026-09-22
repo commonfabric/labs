@@ -213,7 +213,7 @@ rendered as dollars. The wording is corrected in the tree; the published index
 entry carries the old text until it is republished, so a run can still read the
 wrong contract.
 
-## 3. This month's bank transactions as a sortable table
+## 3. This month's bank transactions as a table
 
 **Preflight:** common, **plus a finance grant**. The launch printout must carry
 a line of the form `grant <your-plaid-connection> (finance)`. There is no
@@ -223,7 +223,7 @@ connection name is theirs.
 **Prompt:**
 
 ```text
-Show me this month's bank transactions as a sortable table with a count on top. Use patterns from the library where they fit. Give it a slug that is not already in use; if a slug you try is taken, choose another and retry without asking me.
+Show me this month's bank transactions as a table with a count on top. Use patterns from the library where they fit. Give it a slug that is not already in use; if a slug you try is taken, choose another and retry without asking me.
 ```
 
 Nothing is attached to the task; the grant carries the data.
@@ -231,7 +231,7 @@ Nothing is attached to the task; the grant carries the data.
 **Expected:** the opening pass, `describe_handle` against the granted store,
 then a child composing an indexed reader, then `assign_slug`.
 
-**Done when:** rows are on screen and a column header reorders them.
+**Done when:** the rows on screen match the month's transactions.
 
 **Typical wall time:** ~5 m 20 s – 5 m 35 s, of which 48–67 s is the opening
 pass.
@@ -239,13 +239,22 @@ pass.
 **Likely failure:** an empty table on first paint is a pending read, not an
 empty month — reopen the piece rather than re-running.
 
-**Proof status: PIECE PRODUCED (2/2); rows verified, sorting does not work.**
-`monthly-bank-transactions` was opened: seven real rows render for 2026-09,
-matching the ledger (`proof/bank-before.png`). **Clicking a column header does
-not reorder anything** — the row order is byte-identical before and after
-(`proof/bank-after.png`), and the only interactive element on the page is the
-title button, while six `columnheader` nodes carry no interaction at all. The
-prompt asked for a sortable table and got a table.
+**Proof status: PIECE PRODUCED (2/2).** `monthly-bank-transactions` was opened:
+seven real rows render for 2026-09, matching the ledger
+(`proof/bank-before.png`).
+
+**The prompt no longer asks for sorting, because sorting does not work.** An
+earlier wording asked for a _sortable_ table and got a table: clicking a column
+header reordered nothing, the row order was byte-identical before and after
+(`proof/bank-after.png`), and six `columnheader` nodes carried no interaction at
+all while the only interactive element on the page was the title button. A demo
+should not ask on camera for behaviour that will not appear, so it asks for what
+it reliably gets.
+
+The gap is recorded as CT-2404 rather than hidden. A sortable-table part already
+exists in the index and in `packages/patterns/primitives`, so this is more
+likely a question of what discovery surfaces than of a missing part — composing
+it by id against the bank reader would separate the two in a single run.
 
 ## 4. Bills this month, from mail and bank together
 
@@ -318,28 +327,72 @@ different outcomes — same prompt, same readers, same build, same store:
 | `0a2bc75e`, 2026-09-17 | every pair enumerated, **scored by shared-token length**, assigned globally best-first | **4 of 4 correct**      |
 | `ba249e85`, 2026-09-22 | any **one** shared token, 3-character floor, first unused row                          | 2 of 4 wrong            |
 | `0fe142a5`, 2026-09-22 | **two** shared tokens required, 4-character floor                                      | 0 of 4 — nothing paired |
+| `e4aa6b1f`, 2026-09-22 | any shared token, but refuses a pair unless each side has exactly one candidate        | 0 of 4 — nothing paired |
 
 The 09-17 piece was reopened on this build and still renders all four pairings
 correctly, so **nothing regressed**: the readers, the data and the build are not
 the variable. The matcher is.
 
-The variable is the threshold and the token-length cutoff, and nothing in the
-prompt constrains either. In this store every merchant reads `Sim <x>` and every
-subject reads `Your Sim <x> bill is ready`, so `sim` is shared by every pair and
-carries no information. A run that keeps it pairs everything; a run that drops
-it and then demands two shared tokens pairs nothing.
+**All four fail the same way and differ only in what they do next.** In this
+store every merchant reads `Sim <x>` and every subject reads
+`Your Sim <x> bill is ready`, so `sim` is shared by every possible pair and
+carries no information. No run excludes it. What separates them is how each then
+tries to disambiguate, and three of the four approaches cannot work at all:
 
-That also says what a correct run needs, and it is not a tuning value: the only
-run that worked **weighted by how long the shared token is**, which is what
-separates `internet` from `sim`. Counting shared tokens cannot do it at any
-threshold — one lets everything through and two blocks everything.
+- keep `sim` and take the first unused row — everything matches, so the pairing
+  is decided by row order;
+- drop short tokens and demand two shared words — `sim` goes, one word is left,
+  nothing matches;
+- demand that each side have exactly one candidate — every email has many
+  candidates, so nothing matches.
+
+Counting shared words cannot succeed here at any threshold: one admits
+everything, two admits nothing. The only run that worked **weighted by how long
+the shared words are**, which is the one property that separates `insurance`
+from `sim`.
 
 **So this demo's correctness is a property of the code the model writes on the
 day, not of the prompt, the parts or the build.** Running it more times samples
-that spread rather than narrowing it. What fixes it is a published, reviewed
-pairing part named by id — `bills-this-month` in #7893 — so the matcher stops
-being rewritten per run; the authoring guidance in #7895 addresses the repeated
-compile attempts alongside it.
+that spread rather than narrowing it.
+
+Two things narrow it. A published, reviewed pairing part named by id stops the
+matcher being rewritten per run, and that is the real fix. Short of that, the
+prompt can state the property the one correct run had — see §5a.
+
+Note what does _not_ help much. Of a 14 m 14 s run, every `run_pattern` call
+together took **30 seconds**; the authoring child's own model time took 411 s.
+These runs are long because the child is thinking, not because it is fighting
+the compiler, so guidance that reduces compile attempts buys a few percent here.
+
+## 5a. The same composition, with the pairing rule stated
+
+§5 leaves the pairing rule to the run, and four runs wrote four different ones.
+This entry is §5 with the one property that worked stated in the prompt. It
+exists so the difference between constraining the rule and leaving it open can
+be measured rather than argued about.
+
+**Preflight:** identical to §5.
+
+**Prompt:** §5's text, with this sentence added before the slug sentence:
+
+```text
+Rank candidate pairs by the total length of the words they share and pair the best-scoring candidates first, each email and each payment at most once; a word shared by most merchants counts for nothing.
+```
+
+**Done when:** every pairing on the page is one a person would make.
+
+**Why this wording.** It is not a guess at a better prompt. Each clause names a
+property that separated the one correct run from the three that failed: scoring
+by shared-word _length_ rather than counting words, assigning _best-first_
+rather than first-fit, consuming each side _at most once_, and discounting a
+word every merchant carries. The last clause is what would have excluded `sim`.
+
+**Proof status: PENDING.** Being run three times solo, browser-verified.
+
+**What it is not.** A prompt clause narrows the spread; it does not collapse it,
+because the model still writes the code. A published pairing part named by id is
+what removes the variable entirely, and this entry should be retired when one
+exists.
 
 ## 6. A skill's script, run in the sandbox, folded into a piece
 
@@ -373,9 +426,20 @@ wall, with 88.6 s, 63.5 s and 105.1 s in the opening pass. The first hit a
 compile error; the second submitted six times — two compile errors, then four
 accepted results carrying pending concerns and a withheld value; the third
 reached one accepted result after two compile errors. Acquisition and sandboxed
-execution work; the demo reaching a named piece does not yet. All three ran with
-other sessions in flight on one console, so the cap may be a property of that
-load; a solo run is untested.
+execution work; the demo reaching a named piece does not yet.
+
+**The cap is the likeliest reason, not the demo.** A run of comparable shape was
+later measured end to end with the console to itself: 14 m 14 s, of which the
+opening pass was 125 s, the authoring child's own model time 411 s, and every
+`run_pattern` call together **30 seconds**. Compilation is not where the time
+goes; the authoring child thinking is. A task of that shape cannot finish inside
+eight minutes whether or not the console is busy, so these three runs were cut
+off rather than failed.
+
+Re-run it against a cap matched to that shape — fifteen minutes — before reading
+anything else into the count. The three runs above also shared a console, which
+is a separate reason their wall times cannot be attributed, but it is not the
+reason they stopped.
 
 ## 7. Revise a piece in place
 
