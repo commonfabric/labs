@@ -1,4 +1,5 @@
 import type { HarnessRunState } from "../run-state.ts";
+import { isPatternRefId } from "../pattern-refs.ts";
 import { parseSkillsShSkillId } from "../skills-sh/pin.ts";
 
 /**
@@ -12,33 +13,50 @@ export const isClosedResearchTask = (
 ): boolean => {
   if (context.patternRefs?.length) return true;
 
-  const skillNames = new Set(
-    context.skillRegistry?.skills.map((skill) => skill.name),
-  );
   for (const match of task.matchAll(/[A-Za-z0-9_:/.-]+/g)) {
     const token = match[0].replace(/[.:]+$/, "");
     if (
-      /^cf:pattern:[A-Za-z0-9_-]+$/.test(token) ||
-      /^[A-Za-z0-9_-]{43}$/.test(token) || skillNames.has(token)
-    ) return true;
-
-    const skillUrl = token.startsWith("https://skills.sh/");
-    const before = task.slice(0, match.index);
-    const after = task.slice(match.index + match[0].length);
-    if (
-      !skillUrl &&
-      !/\b(?:skill(?:\s+(?:named|called))?|use|using|run|acquire|follow)\s+(?:the\s+)?[`"']?$/i
-        .test(before) &&
-      !/^[`"']?\s+skill\b/i.test(after)
-    ) continue;
-
+      token.startsWith("cf:pattern:") &&
+      isPatternRefId(token.slice("cf:pattern:".length))
+    ) {
+      return true;
+    }
+    if (!token.startsWith("https://skills.sh/")) continue;
     try {
-      parseSkillsShSkillId(
-        skillUrl ? token.slice("https://skills.sh/".length) : token,
-      );
+      parseSkillsShSkillId(token.slice("https://skills.sh/".length));
       return true;
     } catch {
-      // Ordinary prose and file paths need not be skill addresses.
+      // An incomplete address still needs discovery.
+    }
+  }
+
+  const skillNames = new Set(
+    context.skillRegistry?.skills.map((skill) => skill.name),
+  );
+  for (
+    const match of task.matchAll(
+      /\b(?:use|using|run|instantiate|compose|acquire|follow)\s+(?:the\s+)?(?:(pattern(?:\s+id)?|patternId|skill)(?:\s+(?:named|called))?\s+)?[`"']?([A-Za-z0-9_:/.-]+)/gi,
+    )
+  ) {
+    const kind = match[1]?.toLowerCase();
+    const token = match[2].replace(/[.:]+$/, "");
+    const after = task.slice(match.index + match[0].length);
+    const skillNamed = kind === "skill" || /^[`"']?\s+skill\b/i.test(after);
+    if (skillNames.has(token) && !kind?.startsWith("pattern")) return true;
+    if (skillNamed) {
+      try {
+        parseSkillsShSkillId(token);
+        return true;
+      } catch {
+        // An invalid skill address still needs discovery.
+      }
+    } else if (
+      // Length distinguishes an unmarked content hash from ordinary prose;
+      // explicitly labeled pattern ids use the full grammar without this bound.
+      (kind?.startsWith("pattern") || token.length === 43) &&
+      isPatternRefId(token)
+    ) {
+      return true;
     }
   }
   return false;

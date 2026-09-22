@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { isClosedResearchTask } from "../../src/research/closed-task.ts";
+import type { HarnessSkillRegistry } from "../../src/contracts/skill.ts";
 
 describe("isClosedResearchTask()", () => {
   const patternId = "v6_KSFHs9AmTg9PKwMmPdZyEHxZ9Oykhno4HBOfUo5s";
@@ -15,8 +16,10 @@ describe("isClosedResearchTask()", () => {
     const task of [
       `Run ${patternId} and give it a slug.`,
       `Compose \`cf:pattern:${patternId}\`.`,
+      "Run pattern pat-expenses.",
+      "Use pattern id pat_Expenses-1.",
+      "Instantiate cf:pattern:pat-expenses.",
       "Use the skill commonfabric/labs/cf-spend-digest: run its budget script.",
-      "Use commonfabric/labs/cf-spend-digest.",
       "Follow the `commonfabric/labs/cf-spend-digest` skill.",
       "Use https://skills.sh/commonfabric/labs/cf-spend-digest.",
     ]
@@ -31,11 +34,17 @@ describe("isClosedResearchTask()", () => {
       "Build a dinner planner from reusable pieces.",
       "Find a skill for comparing monthly spending.",
       "Read docs/common/README.md to build a counter.",
+      "Use docs/common/README.md to build a counter.",
+      "Use docs/common/example to build a counter.",
       "Use docs/common/concepts/reactivity.md to build a counter.",
       "Use the skill owner/../digest.",
       "Use the skill owner/repo.",
+      "Use https://skills.sh/owner/repo.",
       `Revise the piece fid1:${patternId}.`,
       `Use the handle cfh:a:${patternId}.`,
+      "Use cf:pattern:bad/id.",
+      "Use pattern id bad/id.",
+      `Build a page that displays identifier ${patternId}.`,
       `Find a pattern matching ${patternId.slice(0, -1)}.`,
       `Find a pattern matching ${patternId}x.`,
       "Build a page like cf-spend-digest-extra.",
@@ -45,4 +54,39 @@ describe("isClosedResearchTask()", () => {
       expect(isClosedResearchTask(task, {})).toBe(false);
     });
   }
+
+  it("uses a registered skill only when the task selects it", () => {
+    const skillRegistry: HarnessSkillRegistry = {
+      type: "cf-harness.skill-registry",
+      version: 1,
+      skillsRoot: "/skills",
+      sandboxSkillsRoot: "/skills",
+      generatedAt: "2026-09-22T00:00:00Z",
+      skills: [{
+        name: "cf-spend-digest",
+        description: "Summarize spending.",
+        skillDir: "/skills/cf-spend-digest",
+        skillPath: "/skills/cf-spend-digest/SKILL.md",
+        sandboxSkillDir: "/skills/cf-spend-digest",
+        sandboxSkillPath: "/skills/cf-spend-digest/SKILL.md",
+        digest: "test-digest",
+        frontmatter: {},
+        resources: [],
+        diagnostics: [],
+      }],
+      diagnostics: [],
+    };
+    expect(isClosedResearchTask("Use cf-spend-digest.", { skillRegistry }))
+      .toBe(true);
+    expect(isClosedResearchTask("Use the cf-spend-digest skill.", {
+      skillRegistry,
+    })).toBe(true);
+    expect(
+      isClosedResearchTask("Read cf-spend-digest docs.", { skillRegistry }),
+    )
+      .toBe(false);
+    expect(isClosedResearchTask("Build a page like cf-spend-digest-extra.", {
+      skillRegistry,
+    })).toBe(false);
+  });
 });
