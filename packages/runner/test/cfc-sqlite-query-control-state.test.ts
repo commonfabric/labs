@@ -582,6 +582,68 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
     expect(hasClause(held, third)).toBe(true);
   });
 
+  describe("what a reader of the control state carries", () => {
+    // The point of the change is a pane that renders from the query's state,
+    // so what that reader picks up decides whether the incident is closed.
+    // The two paths disagree, and the disagreement is the measurement: a
+    // reader of the settled `pending` flag carries nothing, a reader of the
+    // request hash carries everything the issues of this query brought.
+
+    const readIntoAnUndeclaredStore = async (
+      // deno-lint-ignore no-explicit-any -- the builtin's state
+      bodies: Cell<any>,
+      field: string,
+      cause: string,
+    ) => {
+      const tx = runtime.edit();
+      const seen = bodies.withTx(tx).key(field).get();
+      const out = runtime.getCell(space, cause, undefined, tx);
+      out.set({ seen: String(seen) });
+      tx.prepareCfc();
+      return await tx.commit();
+    };
+
+    it("lets a reader of the settled pending flag write to an undeclared store", async () => {
+      const db = labeledDb();
+      await seedMessages(db);
+      const { bodies } = await runDerivedParameterPattern(db, "reader-pending");
+      await waitForCellValue<QueryState<BodyRow>>(
+        runtime,
+        bodies,
+        (value) => (value?.result ?? []).length === 2,
+      );
+
+      const wrote = await readIntoAnUndeclaredStore(
+        bodies,
+        "pending",
+        "reader-pending-probe",
+      );
+      expect(wrote.error).toBeUndefined();
+    });
+
+    it("refuses the same write from a reader of the request hash", async () => {
+      const db = labeledDb();
+      await seedMessages(db);
+      const { bodies } = await runDerivedParameterPattern(db, "reader-hash");
+      await waitForCellValue<QueryState<BodyRow>>(
+        runtime,
+        bodies,
+        (value) => (value?.result ?? []).length === 2,
+      );
+
+      // The declared clause is a floor every reader of that path carries, so
+      // a store that declares nothing cannot hold what this one read. That
+      // is the route's documented cost, landing where the route put the
+      // declaration and nowhere else.
+      const wrote = await readIntoAnUndeclaredStore(
+        bodies,
+        "requestHash",
+        "reader-hash-probe",
+      );
+      expect(wrote.error).toBeDefined();
+    });
+  });
+
   describe("a database in another space", () => {
     it("refuses a query whose transaction carries confidentiality", async () => {
       // The refusal the store's own empty ceiling was carrying by accident:

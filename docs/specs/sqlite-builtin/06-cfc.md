@@ -748,19 +748,52 @@ their policy from the issuing transaction — CFC spec §8.12.5 route 2, the
 same route the runner's own piece documents take. The declaration grows by
 clause and never shrinks, which is the ratchet §8.12.2 asks for: a query cell
 parameterized out of three differently labeled reads ends up admitting all
-three and readable by whoever satisfies all three. `/result`'s per-column
-entries are untouched — the route declines at a path a schema declares — and
-so are the row documents, because the transaction that settles a request
-reads the destination's request hash as a read of the write destination (CFC
-spec §18.6.2) and therefore carries no clause of its own.
+three and readable by whoever satisfies all three.
+
+Where that declaration is observable afterwards is `/requestHash`, and it is
+worth knowing why the other two differ. The issuing transaction declares on
+every path it writes, and the settle then rewrites `pending` — and, on a
+failure, `error` — from a transaction that reads only its own write
+destination and therefore carries nothing. The runtime re-derives a path's
+entry from what its writer carried, so those two come back empty; the hash
+does not change between the two writes, so nothing re-derives it. A reader of
+`pending` alone is tainted by nothing as a result. Everything the flow model
+says about the routing bit still holds of the request that set it; what is
+recorded durably is the hash.
+
+`/result`'s per-column entries are untouched — the route declines at a path a
+schema declares — and so are the row documents, because that settle
+transaction carries no clause of its own. What the settle DOES declare, for a
+shared result, is the membership: `/result`'s shape `ifc` is the join of the
+rows' own labels AND the label the request carried. How many rows there are
+and which they are is a function of the parameters as much as of the rows,
+and both are readable without opening a row. A session-scoped result is
+materialized per reader, so its membership tells its own reader only what
+they asked for, and it declares nothing.
 
 What the store's undeclared bookkeeping was refusing by accident, before the
-route reached it, was one case: a query whose database lies in another space,
-issued by a transaction carrying confidentiality. The parameters of such a
-query go to whoever holds THAT space's replicas, who are not the audience the
-result document's residency names. The builtin refuses it directly, before
-the request is staged, with a stable reason and no request hash — a later
-pass whose reads carry nothing asks again rather than finding a memo hit.
+route reached it, includes one case the sink seam cannot express: a query
+whose database lies in another space, issued by a request carrying
+confidentiality. The parameters of such a query go to whoever holds THAT
+space's replicas, who are not the audience the result document's residency
+names. The builtin refuses it directly, before the request is staged, with a
+stable reason and no request hash — a later evaluation whose request carries
+nothing asks again rather than finding a memo hit.
+
+The measure there is the transaction's flow join, not the transaction-global
+consumed set the sink ceilings read. The difference is the reads the write
+machinery makes of its own destination, which the flow join excludes
+(§18.6.2): this node reads its own settled result to decide whether a
+writeback is stale, and that result carries the labels of the columns it
+projected, so the wider set answers "labeled" on every issue after the first
+whatever the parameters are.
+
+That exclusion has the cost §18.6.2 records, and it applies here: whether the
+rows landed discloses whether the stored hash still matched, and that hash is
+a labeled value. One bit per attempt, an equality oracle under repetition.
+What it buys is that the clauses the control state accumulates do not land on
+the rows, where each column's own declared ceiling is the measure and the
+route declines.
 
 Every request also stages through the sink-request seam, under the
 `sqliteQuery` sink. Under the max-enforcement posture that sink releases
@@ -770,8 +803,17 @@ carries its owner and the condition that retires it, like every other ungated
 sink. A deployment that wants a confidentiality gate on sqlite reads declares
 a ceiling for the sink, and the seam is where it applies.
 
+One thing outside this builtin decides whether a pattern can use any of it.
+A `lift` whose output document has acquired stored CFC label metadata cannot
+be written again unless the lift declares a RESULT SCHEMA: without one the
+write carries no schema write-policy input, the commit is refused, and the
+scheduler retries and gives up. A pattern whose query parameter reaches the
+builtin through a lift therefore lands its first labeled parameter and never
+its second. Declare the result schema on every lift on that path.
+
 > Implementation: `makeResultCell` plus `recordRuntimeOwnedStore` /
-> `enrollRuntimeOwnedStore`, the `crossSpace` refusal, and
+> `enrollRuntimeOwnedStore`, the `crossSpace` refusal over `deriveFlowJoin`,
+> the `shapeConfidentiality` join, and
 > `enqueueSinkRequestPostCommitEffect` in
 > [`sqlite-builtins.ts`](../../../packages/runner/src/builtins/sqlite-builtins.ts);
 > asserted in

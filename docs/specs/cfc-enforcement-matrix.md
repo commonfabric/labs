@@ -649,14 +649,20 @@ The strict-only delta is:
     own: the bound a read wants is the database's own SPACE, and a per-sink
     ceiling holds a clause list and nothing else. That bound is also what the
     store's own ceiling was refusing, and it was worth exactly one case — a
-    database in another space receiving a parameter derived from a labeled
-    read — so the builtin applies it before staging, where which space the
-    database is in is a thing it can see. The control state takes the route,
-    because a request hash is a function of parameters no author can foresee,
-    while `/result`'s per-column entries stay the author's: the route
-    declines at a declared path, and the transaction that settles a request
-    reads its destination's hash as a read of the write destination, so the
-    clauses the control state accumulates never reach the rows. Most
+    database in another space receiving a request that carries a label —
+    so the builtin applies it before staging, where which space the database
+    is in is a thing it can see, measuring the transaction's flow join rather
+    than the transaction-global consumed set the sink ceilings read. The
+    control state takes the route, because a request hash is a function of
+    parameters no author can foresee, while `/result`'s per-column entries
+    stay the author's: the route declines at a declared path, and the
+    transaction that settles a request reads its destination's hash as a read
+    of the write destination, so the clauses the control state accumulates
+    never reach the rows. The second thing that store's ceiling was refusing
+    was the membership of a SHARED result selected by a labeled parameter,
+    which no transaction's join can supply once the settle carries nothing;
+    the builtin declares it on `/result`'s shape itself, beside the rows'
+    own labels. Most
     builtins are in neither group: a list coordinator, `ifElse`, `when`,
     `unless`, `cellFromUrl` and `inspectConfLabel` stage nothing at all, so
     there is no egress to govern and no refusal to move,
