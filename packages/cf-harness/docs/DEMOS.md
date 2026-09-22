@@ -55,8 +55,9 @@ Every timing, count and proof status here was measured on one build: labs
 curl -sS <your-toolshed>/api/meta
 ```
 
-`gitSha` should open `e5b9f57c6c`. Your console reports the same build as its
-store path in `/api/health/detail`.
+**On the toolshed, not the console** — the console has no `/api/meta` and
+answers 404. `gitSha` should open `e5b9f57c6c`. Your console reports the same
+build as its store path in `/api/health/detail`.
 
 **If it matches, change nothing.** Do not run `loom vendor sync`, and do not
 take a newer bump before demonstrating. Every proof below is a statement about
