@@ -76,7 +76,20 @@ labs checkout it vendors.
 | Model          | a connected provider; `model.auth` reads connected                                        |
 | Sandbox        | `sandbox.docker` responding and `sandbox.runtime` `runsc-cfc registered`                  |
 | Index          | `index.reachable` responding **and** `index.enrolled` console identity enrolled           |
-| Posture        | `max-enforcement`, flow labels `persist`, `enforce-strict`                                |
+| Posture        | **not on this route** — read it from your toolshed, below                                 |
+
+**The posture is on the toolshed, not the console.** `/api/health/detail` has no
+posture row — its groups are console, model, sandbox, index, connectors and
+skills. Read the posture from the fabric instead:
+
+```sh
+curl -sS <your-toolshed>/api/meta
+```
+
+Under `cfc`, `enforcementMode.rung` should read `enforce-strict` with
+`diagnosticOnly` false, and `flowLabels.rung` should read `persist`. The same
+object carries `writeFloor`, `policyEvaluation` and a `deviations` list, which
+is where a posture weaker than it looks shows itself.
 
 A console proxied behind a loom daemon answers the same routes under
 `/harness-console/`. Confirm `console.base` in `/api/health/detail` names the
