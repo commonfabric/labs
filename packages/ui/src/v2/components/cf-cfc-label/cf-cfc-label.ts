@@ -149,8 +149,8 @@ const formatPath = (path: readonly string[]): string =>
  * @attr {string} atom - Optional exact atom filter.
  * @attr {string} kind - Optional object-atom kind filter.
  * @attr {"full"|"badge"} variant - Presentation; defaults to `full`.
- * @attr {string} text - Badge text when the filtered label is present;
- *   defaults to "Verified".
+ * @attr {string} text - Badge text when a filtered integrity atom is present;
+ *   defaults to "Verified". Without one the badge reads "Unverified".
  */
 export class CFCFCLabel extends BaseElement {
   static override styles = css`
