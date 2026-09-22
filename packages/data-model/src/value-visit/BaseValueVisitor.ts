@@ -92,7 +92,7 @@ export abstract class BaseValueVisitor<
    * default binding for the result type to `FabricValue<PlusType>`.
    */
   isResultType(
-    value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>,
+    _value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>,
   ): value is ResultType {
     return true;
   }

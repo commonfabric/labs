@@ -9,7 +9,6 @@ import type {
   FabricContainerValuePlus,
   FabricInstancePlus,
   FabricPlainObjectPlus,
-  FabricValue,
   FabricValuePlus,
 } from "@/interface.ts";
 
