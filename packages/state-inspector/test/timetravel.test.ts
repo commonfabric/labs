@@ -313,6 +313,27 @@ Deno.test("time travel: diff + timelines", async (t) => {
         );
       });
 
+      await t.step(
+        "diffValues tells an array's holes from its elements",
+        () => {
+          assertEquals(diffValues({ a: [1, , 3] }, { a: [1, 2, 3] }), [{
+            path: "a/1",
+            pathSegments: ["a", "1"],
+            kind: "added",
+            after: 2,
+          }]);
+          assertEquals(diffValues({ a: [1, , 3] }, { a: [1, 2, ,] }), [
+            { path: "a/1", pathSegments: ["a", "1"], kind: "added", after: 2 },
+            {
+              path: "a/2",
+              pathSegments: ["a", "2"],
+              kind: "removed",
+              before: 3,
+            },
+          ]);
+        },
+      );
+
       await t.step("diffEntity across seqs shows the changed leaf", () => {
         // Default diffs the value; change paths are value-relative.
         const d = diffEntity(space, { id: "of:A", fromSeq: 1, toSeq: 3 });
