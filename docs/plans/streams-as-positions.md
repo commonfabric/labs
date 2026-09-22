@@ -15,17 +15,20 @@ on a link's `(id, path, scope)` — the event sidecar's id, the memory server's
 admission, the scheduler's handler table, the serving drain, and `send()`
 itself — so no part of delivery needs the document. What the document supplies
 is an address: an entity id a party can hold that names the stream. This plan
-replaces that address with a path on the owner's result document — a stream
-exposed in the result is addressed as its result path, and one that is not by
-a synthetic path only its links carry — and stops writing the document.
-Two things the sibling plan builds toward then have nothing to do: the walk
-from a stream's document to its owner, which its stage 3 adds, and the
-follow-up it was written toward, a stream id that carries its owner. Here the
-owner is the id.
+stops writing the document, and changes the address for the streams that have
+somewhere better to be: a stream exposed in the result is addressed as its
+result path on the owner's result document, and one that is not keeps the id
+it is minted today. Two things the sibling plan builds toward then have
+nothing to do: the walk from a stream's document to its owner, which its
+stage 3 adds, and the follow-up it was written toward, a stream id that
+carries its owner. For a stream in the result, the owner is the id; for the
+rest, nothing needs the owner.
 
-The contract: **a stream is a position on its owner's result document. Its
-address is the owner's id and a path; the schema at that position, or on the
-link that names it, declares it; and no document exists for it.**
+The contract: **a stream that sits in the result is a position on its owner's
+result document, addressed by the owner's id and a path. A stream that does
+not is an id its links declare. The schema at the position, or on the link
+that names it, is what declares either one, and no document exists for
+either.**
 
 ## What the runtime does today
 
@@ -110,16 +113,41 @@ Two probes, run against `ddb47bfaa`, become the tests stage 1 pins:
   nothing at `bump`. `key("bump")` reads as a stream; a handler registered on
   the link `(owner, ["bump"])` receives `send({ n: 1 })`; the owner's value is
   `{ count: 0 }` afterward and nothing is stored at `bump`.
-- A cell whose schema declares nothing at `["$streams", "generated-3"]`, and a
-  handle built from a link to that path carrying `asCell: ["stream"]` on the
-  link alone — the shape of a stored sigil link. The handle reads as a stream;
-  a handler on that link receives `send({ n: 2 })`; nothing is written.
+- An id minted by `getDerivedInternalCellLink` from an owner and the cause
+  `{ $generated: 0, $kind: "stream" }`, with nothing ever written for it, and
+  a handle built from a link to it carrying `asCell: ["stream"]` on the link
+  alone — a view handler's links as they are, minus the document. The handle
+  reads as a stream; its document's value and `result` back-link are both
+  `undefined`; a handler on that link receives `send({ n: 3 })`; nothing is
+  written.
 
 Neither needed a document, a manifest entry, or a back-link.
 
+A census of real patterns, compiled from the same tree, says which kind is
+which. All twenty streams across `packages/patterns/topics/main.tsx` and
+`packages/patterns/topics/topic.tsx` sit at a result path.
+`packages/patterns/lunch-poll/main.tsx` has eighteen: twelve at a result path,
+and six that no result field reaches — every one an inline `onClick` written
+inside an `ifElse` branch or a `map` body, declared `{ "asCell": ["stream"] }`
+with no event type.
+
 ## Design decisions
 
-### 1. The address is the owner's id and a path
+### 1. Two kinds of stream, told apart by the result
+
+A **verb** is a stream that sits in the result: in the result schema,
+enumerable there, reached by `key(name)`, declared with an event type. A
+**view handler** is one that does not — a handler written inline in a view
+that is an input to `ifElse`, `map`, `when`, or `unless`, under any event
+prop and not only `onClick`; a stream handed only to a nested pattern — and
+is reachable only through the link the view or the argument holds. What makes
+one is that no result path reaches it, whatever holds it. All twenty streams of the topics board and topic patterns are verbs;
+the lunch-poll pattern's six inline `onClick` handlers are view handlers, and
+they are exactly the ones a caller should not find listed as verbs. Readers
+treat the two differently on purpose: a verb is found from the result
+schema, and a view handler is not findable from a bare address at all.
+
+### 2. A verb's address is the owner's id and its result path
 
 The alternative is a visible `stream:` entity scheme, which
 `docs/specs/computed-cell-identity.md` leaves open and
@@ -130,93 +158,77 @@ every mechanism in the table above already accepts one. `Cell.key()` on the
 result cell then yields the position with the result schema's declaration on
 it, which is what the feature document tells a caller to do.
 
-### 2. A result path is its own position; every other stream gets a synthetic one
+The position is the stream's result path: `["bump"]` for a top-level field,
+`["nested", "cancel"]` for one inside a result object, which is the path the
+transformer already records in its `{ stream: [...] }` cause and the builder's
+name assignment already picks as the stream's name (`builder/pattern.ts:308`).
+A verb exposed at two result paths has the first as its position and the
+second holds a link to it — the same shape as today, where both hold a link
+to one document.
 
-The builder's name assignment already picks a stream's first result key as its
-name (`builder/pattern.ts:308`), and `getStableInternalPathSegment`
-(`link-utils.ts:955`) already turns a `{ stream: [...] }` cause into a
-`stream:<path>` segment and a generated cause into a string. The position
-rule follows from those:
+### 3. A view handler keeps its id and loses its document
 
-- A stream that sits in the result is addressed as its result path: `["bump"]`
-  for a top-level field, `["nested", "cancel"]` for one inside a result
-  object, which is the path the transformer already records in its
-  `{ stream: [...] }` cause. A stream exposed at two result paths has the
-  first as its position and the second holds a link to it — the same shape as
-  today, where both hold a link to one document.
-- Every other stream — a handler bound only into a view, a stream handed only
-  to a nested pattern — is addressed as `["$streams", <segment>]`, with the
-  segment from `getStableInternalPathSegment` over its partial cause. The
-  prefix is a convention that makes a synthetic path legible as one, not a
-  reservation. A generated cause's segment is stable within a build and moves
-  when the pattern's stream count changes, which is what its id does today.
+A view handler is minted exactly as it is now:
+`createRef({}, { parent, type: "internal", cause })` at path `[]`, through
+`getDerivedInternalCellLink`. What changes is that setup writes nothing for
+it — no value, no `result` back-link, no manifest entry — so the id names
+nothing stored anywhere. Every link that names it already carries the
+declaration (`includeSchema: true` at `pattern-binding.ts:677`): the `$event`
+sigil the handler registers on and the sigil in the view are one mint, and
+the second probe is exactly this shape. Nothing that carries an event reads
+the document, so nothing notices its absence.
 
-The path is an address and nothing more: the builder writes nothing at a
-stream's position, and nothing about the position is stored. The result
-schema describes a result-path position; a synthetic position it does not
-describe, so the link that names one carries the declaration, as the second
-probe exercises and as a stored sigil link already does (`includeSchema:
-true` at `pattern-binding.ts:677`).
+One carrier does not hold the declaration: a sidecar entry's stream link is
+`{ id, path, scope }` (`packages/memory/v2.ts:406`), and `send()` writes it
+without the schema (`cell.ts:1904`). The sidecar routes by id and needs no
+declaration, so delivery is unaffected; what the sidecar alone cannot do is
+name the owner, which is the one cost of this decision, stated under Risks.
 
-Two kinds of stream follow, and readers treat them differently on purpose. A
-**verb** is a result-path stream: in the result schema, enumerable there,
-reached by `key(name)`, declared with an event type. A **view handler** is
-reachable only through the view that embeds it: a routing key every party
-derives the same way, carried on the link and in no schema, never stored and
-never required. All twenty streams of the topics board and topic patterns are
-verbs; the lunch-poll pattern's six inline `onClick` handlers, written inside
-`ifElse` branches and `map` bodies, are view handlers, and they are exactly
-the ones a caller should not find listed as verbs.
+Nothing is reserved and nothing is synthetic. The stored form of a view
+handler's links does not change by a field.
 
-Nothing is reserved. A link's schema says what it addresses: a link to
-`["$streams", "x"]` carrying `asCell: ["stream"]` is a stream to `send()`,
-and one carrying the field's own schema is a value to `set()`. So a pattern
-that returns data at `$streams` and a view handler with the same segment
-coexist — a reader sees the data through the result schema, a sender sees
-the stream through the link schema, and neither sees the other, which is how
-every position already decides its handle kind. What the builder prevents is
-two *streams* at one path: it assigns synthetic segments knowing every result
-path a stream has, the way it assigns causes knowing every name in use. Data
-that shares a path with a view handler has one cost, stated under Risks.
+### 4. Nothing is stored at a stream's position, and no document is written
 
-### 3. Nothing is stored at a stream's position
-
-The result projection resolves a stream's alias to a link at the stream's own
+The result projection resolves a verb's alias to a link at the verb's own
 position and writes nothing there: a reference to the position itself is a
 self-alias, which `resolveCellAlias` already drops (`builder/pattern.ts:498`).
 The sibling plan's stage 1 made every declared stream position read as a
 handle whether or not the data names it, with `required` exempting such
-positions, so absence is the correct stored form. Setup writes no document, no
-manifest entry, and no back-link for a stream.
+positions, so absence is the correct stored form. Setup writes no document,
+no manifest entry, and no back-link for a stream of either kind.
 
-### 4. One mint, no flag
+### 5. One mint, no flag
 
-The address is minted in one place. Two mints coexisting behind a flag would
-put one stream at two addresses with two sidecars, which is the compatibility
-problem this repository has been removing. The change is a cutover; its cost
-is stated under stage 3.
+The address is minted in one place, `getDerivedInternalCellLink`: from the
+result path for a verb, from the cause for a view handler. Two mints for one
+kind coexisting behind a flag would put one stream at two addresses with two
+sidecars, which is the compatibility problem this repository has been
+removing. The change is a cutover for verbs; its cost is stated under
+stage 3. A view handler's address does not change, so it has no cutover.
 
 ## Stages
 
 ### Stage 1 — Address and materialization
 
-- [ ] The builder assigns each stream a position under decision 2 and carries
-      it on the descriptor. A synthetic position equals no stream's result
-      path.
-- [ ] `getDerivedInternalCellLink` returns `(result id, position)` for a
-      stream descriptor, with the declared schema on the link; value-holding
-      internal cells are unchanged. The descriptor's `kind` is not assigned to
-      a stream.
-- [ ] `#materializeDerivedInternalCells` materializes nothing for a stream.
-- [ ] The result projection omits a stream at its own position and stores a
+- [ ] The builder marks each verb's descriptor with its result path under
+      decision 2; a view handler's descriptor is unchanged.
+- [ ] `getDerivedInternalCellLink` returns `(result id, result path)` for a
+      verb's descriptor, with the declared schema on the link, and what it
+      returns today for a view handler's; value-holding internal cells are
+      unchanged. The descriptor's `kind` is not assigned to a stream.
+- [ ] `#materializeDerivedInternalCells` materializes nothing for a stream of
+      either kind.
+- [ ] The result projection omits a verb at its own position and stores a
       link at any second position.
-- [ ] The `$event` sigil names the position. `#handlerStreamLink`
-      (`runner.ts:9628`) parses it as it does now; the dispatch assertion the
-      sibling plan's stage 3 adds reads the same link's schema.
+- [ ] The `$event` sigil names the position for a verb and the id for a view
+      handler. `#handlerStreamLink` (`runner.ts:9628`) parses it as it does
+      now; the dispatch assertion the sibling plan's stage 3 adds reads the
+      same link's schema.
 - [ ] Tests: the two measured cases above, as pinned tests; a send through
       the result key with nothing stored reaches the handler and writes
-      nothing into the owner; a send through a `$streams` position does the
-      same; the sidecar id derives from the position; a redirect-flagged link
+      nothing into the owner; a send through a never-written id with the
+      declaration on the link does the same; a verb's sidecar id derives from
+      the position and a view handler's from its id; a redirect-flagged link
       and a plain link to one position match in the handler table, which
       `areNormalizedLinksSame` compares by id, space, scope, and path
       (`packages/memory/v2.ts:402`).
@@ -226,11 +238,16 @@ is stated under stage 3.
 
 ### Stage 2 — Readers
 
-- [ ] `ensurePieceRunning` reaches a stream's owner in zero hops: the link's
-      id is the result document. The back-link chain stays for a nested
-      piece's result document, which is a derived internal cell of its parent.
-      Test: a sidecar whose link is `(result, path)` starts the piece; one on a
-      nested piece's result still starts the root.
+- [ ] `ensurePieceRunning` reaches a verb's owner in zero hops: the link's
+      id is the result document. A view handler's id names no document, so
+      there is nothing to walk from; its piece is demanded by the client watch
+      behind the view that fired it, which the serving loop already takes as
+      its demand source (`packages/runner/src/executor/space-server.ts:4705`).
+      The back-link chain stays for a nested piece's result document, which
+      is a derived internal cell of its parent. Test: a sidecar whose link is
+      `(result, path)` starts the piece; one on a nested piece's result still
+      starts the root; one naming a view handler's id on a piece a client
+      watches is delivered.
 - [ ] Delete `ownerStreamSchema`, `streamDeclarationOf`, the inspector detail
       view's manifest reading, and the llm-dialog builtin's third way of
       typing an address; its second way — the result schema at the path —
@@ -251,13 +268,13 @@ is stated under stage 3.
 
 ### Stage 3 — Identity cutover and documents
 
-- [ ] Every stream's sidecar id changes with its address. Before a served
-      space cuts over, its sidecars drain; an entry still in flight afterward
-      names a stream nothing fires at. Pieces set up before the cutover heal
-      by running — setup re-emits every stream's links on a pattern update, a
-      same-pattern restart, and a fresh session — so there is no migration
-      pass. The sibling plan's stage 3 records the same choice for its own
-      cutover.
+- [ ] Every verb's sidecar id changes with its address; a view handler's does
+      not. Before a served space cuts over, its sidecars drain; a verb's entry
+      still in flight afterward names a stream nothing fires at. Pieces set up
+      before the cutover heal by running — setup re-emits every stream's links
+      on a pattern update, a same-pattern restart, and a fresh session — so
+      there is no migration pass. The sibling plan's stage 3 records the same
+      choice for its own cutover.
 - [ ] Documents: the streams section and the unification note of
       `docs/specs/space-model/2-storage-format.md`; the stream cells section of
       `docs/specs/space-model/4-cells.md`, which locates a stream's identity in
@@ -266,15 +283,19 @@ is stated under stage 3.
       and the visible-scheme non-goal of `docs/specs/computed-cell-identity.md`;
       the terminology comment at the head of `entity-kind.ts`; the wording of
       `events.md` §1, so that "stream document" names only the sidecar.
-- [ ] `$kind: "stream"` and `{ stream: [...] }` causes are still minted, for
-      naming and for the segment; no id preimage carries them.
+- [ ] `$kind: "stream"` and `{ stream: [...] }` causes are still minted. A
+      view handler's id preimage still carries its cause, as today; a verb's
+      id is its owner's, and carries none.
 
 ## Testing
 
 - A handler node instantiates against a `$event` link naming a position, with
   nothing stored at the position, and fires on a send through the result key.
-- A send through a link to a `$streams` position, carrying the declaration on
-  the link, fires the handler and writes nothing.
+- A send through a link to a view handler's id, with nothing ever written for
+  it and the declaration on the link, fires the handler and writes nothing.
+- A view handler's sidecar entry carries no schema and still routes: the drain
+  rebuilds the link from the entry and the handler registered on that id
+  receives the event.
 - A stream exposed at two result fields: the second field holds a link to the
   first, and a send through either fires once.
 - A nested pattern receiving a parent's stream as an argument holds a link to
@@ -283,11 +304,8 @@ is stated under stage 3.
   on one naming a nested piece's position, starts the root.
 - The inspector classifies a declared position as a stream with no document
   behind it, and reports no `stream` entity.
-- A pattern that returns data at `$streams` beside a view handler with the
-  same segment: the data reads through the result schema, the send reaches
-  the handler, and neither disturbs the other.
-- Two streams are never assigned one path: a view handler's segment is chosen
-  past every result path a stream has.
+- A view handler's event queued while no client watches its piece stays
+  pending in the sidecar, and drains once a watch demands the piece.
 - A stale stored link that declares nothing refuses loudly at dispatch (the
   sibling plan's assertion) rather than writing into the result document.
 
@@ -308,14 +326,20 @@ is stated under stage 3.
   there; a hand-named stream moved between fields gets a new sidecar.
 - **Entries in flight at the cutover.** A sidecar keyed on the old address is
   orphaned; the drain condition in stage 3 is what prevents it.
-- **Data at a view handler's path.** The builder writes nothing at a
-  synthetic position, but a pattern may return data at the same path. A
-  `send()` then resolves through that data to see whether a stored link is
-  there to follow — a read under the write-destination meta that, in the
-  normal case, finds nothing stored. Whether the co-located data's label can
-  reach the event through that read is for CFC to confirm. The link stays the
-  only carrier of the position's declaration, which the second probe
-  exercises and stage 1 pins.
+- **A view handler's owner is not recoverable from its id.** The document was
+  the one thing that gave the owner back from a bare stream id, through its
+  `result` back-link, and a sidecar entry carries neither a schema nor an
+  owner. In the ordinary case nothing needs it: an event fired from a view
+  comes from a client watching the piece, so the piece is demanded and
+  running when the drain queues the event. The case that changes is an event
+  flushed after the client stopped watching — an offline queue drained on
+  reconnect after the view closed. Today the server starts the parked piece
+  from the sidecar entry; under this plan the event stays pending, durable,
+  until a watch demands the piece again. It is delayed, not lost. If that
+  delay is unacceptable, the remedy is an advisory `owner` on the sidecar
+  entry, which the firing client knows and the drain would demand-load —
+  a change to the entry shape of `events.md` §1 and its admission, recorded
+  here as the option rather than taken.
 - **The stage-1 exemptions this rests on.** Absence at a declared position is
   a handle only because the sibling plan's stage 1 made every read path treat
   it so, `required` included. Those exemptions are load-bearing here.

@@ -102,12 +102,11 @@ a record: archive it to `docs/history/plans/` following the procedure in
   [Streams as positions on their owner](streams-as-positions.md) is what it is
   written toward.
 - [Streams as positions on their owner](streams-as-positions.md) removes a
-  stream's document: a stream is addressed as a path on its owner's result
-  document — its result path for a verb, a synthetic path only its links
-  carry for a view handler — and everything that carries an event is already
-  keyed on a link's id and path. It deletes the walk from a stream's document
-  to its owner, and carries the measurement that no part of delivery needs
-  the document.
+  stream's document: a verb is addressed as its result path on its owner's
+  result document, a view handler keeps the id it is minted today, and
+  everything that carries an event is already keyed on a link's id and path.
+  It deletes the walk from a stream's document to its owner, and carries the
+  measurement that no part of delivery needs the document.
 - [Pre-syncing from node plans](presync-from-node-plans.md) makes one
   derivation per pattern node serve both instantiation and the pre-sync, so a
   resume and a fresh start name exactly what each lift, handler, builtin, and
