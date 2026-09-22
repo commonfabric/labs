@@ -6,6 +6,7 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import type { FabricValue } from "@commonfabric/data-model";
 
 import type { IFCLabel } from "@commonfabric/runner/cfc";
 
@@ -91,7 +92,7 @@ export interface HarnessHandleReferent {
   source: string;
 
   /** The content as the model saw it, JSON. */
-  value: unknown;
+  value: FabricValue;
 
   /** The label the content was admitted under. */
   label: IFCLabel;

@@ -231,6 +231,7 @@ describe("the expected-posture spec", () => {
         "ungatedSinks[llmDialog]",
         "ungatedSinks[generateText]",
         "ungatedSinks[generateObject]",
+        "ungatedSinks[sqliteQuery]",
       ]);
     });
 

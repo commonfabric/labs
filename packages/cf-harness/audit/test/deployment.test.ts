@@ -74,7 +74,13 @@ const MAX_ENFORCEMENT_SPEC = parseExpectedPosture({
   writeFloor: "enforce",
   triggerReadGating: true,
   ceilingedSinks: ["fetchText", "fetchJson"],
-  ungatedSinks: ["llm", "llmDialog", "generateText", "generateObject"],
+  ungatedSinks: [
+    "llm",
+    "llmDialog",
+    "generateText",
+    "generateObject",
+    "sqliteQuery",
+  ],
 });
 
 /**

@@ -769,13 +769,19 @@ The bundle's sink decisions are total over the sink registry
 derives): every sink `KNOWN_SINKS` names carries either a ceiling or an
 explicit ungated release with its reason, its owner, and the condition that
 retires it, so a sink added to the inventory without a decision is a compile
-error rather than a sink that quietly releases ungated. The llm sinks are the
-explicit ungated ones, and a sink with no ceiling gets no gate: llm-sink
-release is ungoverned under this posture — pending a boundary-scoped admission
-mechanism, since an exact-match ceiling cannot admit the source-varying
-material-risk caveats an llm sink exists to process. Building that mechanism
-is planned in
+error rather than a sink that quietly releases ungated. Two families are the
+explicit ungated ones, and a sink with no ceiling gets no gate. The llm sinks:
+llm-sink release is ungoverned under this posture — pending a boundary-scoped
+admission mechanism, since an exact-match ceiling cannot admit the
+source-varying material-risk caveats an llm sink exists to process. Building
+that mechanism is planned in
 [`docs/plans/cfc-llm-sink-admission.md`](../plans/cfc-llm-sink-admission.md).
+And `sqliteQuery`, whose request is a read handed to the provider holding a
+space's replicas: the bound it wants is the database's own SPACE, which a
+clause list cannot express, so the sqlite builtin refuses a request carrying
+confidentiality for a database in another space before staging it. A
+deployment that wants a confidentiality gate on sqlite reads declares a
+ceiling for the sink, which the seam then applies.
 The bundle names no enforcement mode, so a runtime taking it keeps the core's
 `enforce-strict` pin, and it leaves `cfcDecomposedEnvelopes`,
 `cfcContentAddressedLabels`, `cfcTrustConfig` and

@@ -9,6 +9,60 @@ import { MultiRuntimeHarness } from "./multi-runtime-harness.ts";
 const rootPath = fromFileUrl(new URL("../", import.meta.url));
 
 describe("recommend-a-book privacy", () => {
+  it("submits a visitor's reviewed books in the unbounded shell posture", async () => {
+    const [ownerIdentity, visitorIdentity] = await Promise.all(
+      ["owner", "visitor"].map((name) =>
+        Identity.fromPassphrase(`book unbounded submission ${name}`)
+      ),
+    );
+    const invitation = await Identity.fromPassphrase(
+      "book unbounded submission invitation",
+    );
+    const harness = await MultiRuntimeHarness.create({
+      spaceName: invitation.did(),
+      programPath: `${rootPath}integration/fixtures/recommend-a-book/main.tsx`,
+      rootPath,
+      watchPaths: [["$UI"]],
+      sessions: [ownerIdentity, visitorIdentity].map((identity, index) => ({
+        label: ["owner", "visitor"][index],
+        identity,
+        cfc: {
+          cfcEnforcementMode: "enforce-strict",
+          cfcFlowLabels: "persist",
+          experimental: { agentBuiltin: true, serverExecution: false },
+        },
+      })),
+    });
+    try {
+      const [owner, visitor] = harness.sessions;
+      await owner.client().call("selectProfile", {
+        path: ["originatorProfile"],
+      });
+      await Promise.all(
+        harness.sessions.map((session) =>
+          session.client().call("seedAgentQueue")
+        ),
+      );
+      await harness.settle();
+      expect(await owner.client().call("syncOwnerView")).toBe(true);
+      await visitor.send("review", {
+        books: [{ title: "Solaris", author: "Stanisław Lem" }],
+      });
+      const snapshot = await visitor.client().call("shareSnapshot");
+      expect(snapshot).toMatchObject({
+        value: { books: [{ title: "Solaris", author: "Stanisław Lem" }] },
+        audience: cfcAtom.user(ownerIdentity.did()),
+      });
+      await harness.settle();
+      expect(await owner.read(["received", 0, "title"])).toBe("Solaris");
+      expect(await visitor.read(["recommended", 0, "title"])).toBe(
+        "Solaris",
+      );
+    } finally {
+      await harness.dispose();
+    }
+  });
+
   it("pins the creator inbox before a visitor opens it and isolates private drafts", async () => {
     const identities = await Promise.all(
       ["owner", "visitor", "third"].map((name) =>

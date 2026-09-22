@@ -11,6 +11,11 @@ import { join } from "@std/path";
 import { describe, it } from "@std/testing/bdd";
 import { realFileGateway } from "../lib/view/filegateway.ts";
 import { MAX_BINARY_VIEW_BYTES } from "../lib/view/languages/binary/binary.ts";
+import { warmAllLanguages } from "../lib/view/languages/language.ts";
+
+// The pager loads every language's parser before it parses anything; these
+// cases reach the same synchronous entry points directly.
+await warmAllLanguages();
 
 /** Make a fresh temp directory and ensure it is removed after `fn` runs. */
 async function withTempDir(

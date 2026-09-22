@@ -1,17 +1,17 @@
 import type { TileView } from "./types.ts";
 import { durationTag, escapeHtml, STATUS_DOT } from "./tile-render-values.ts";
 
-export function renderTile(v: TileView, id?: string, wide = false): string {
+export function renderTile(label: string, v: TileView, wide = false): string {
   const cls = `tile ${v.status}${v.href ? " link" : ""}${wide ? " wide" : ""}${
     v.alignChartBottom ? " bottom-chart" : ""
   }`;
-  const key = id ? ` data-tile-id="${escapeHtml(id)}"` : "";
+  const attributes = `class="${cls}" data-tile-label="${escapeHtml(label)}"`;
   const dot = `<span class="dot ${STATUS_DOT[v.status]}"></span>`;
   const hint = v.hint
     ? `<span class="drill" title="${escapeHtml(v.hint)}" aria-hidden="true">↗</span>`
     : "";
   const header = `<p class="lbl">${dot} ${
-    escapeHtml(v.label)
+    escapeHtml(label)
   }<span class="spacer"></span>${v.aside ?? ""}${hint}</p>`;
   const big = v.value !== undefined
     ? `<p class="big ${v.status}"${
@@ -29,12 +29,12 @@ export function renderTile(v: TileView, id?: string, wide = false): string {
     }</div>`
     : (v.extra ?? "");
   const inner = `<div class="texture"></div>${header}${big}${sub}${body}`;
-  if (!v.href) return `<div class="${cls}"${key}>${inner}</div>`;
+  if (!v.href) return `<div ${attributes}>${inner}</div>`;
   const tgt = /^https?:/.test(v.href) ? ` target="_blank" rel="noopener"` : "";
   const description = v.hint
     ? ` aria-description="${escapeHtml(v.hint)}" title="${escapeHtml(v.hint)}"`
     : "";
-  return `<a class="${cls}"${key} href="${
+  return `<a ${attributes} href="${
     escapeHtml(v.href)
   }"${tgt}${description}>${inner}</a>`;
 }

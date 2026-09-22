@@ -129,8 +129,9 @@ spaces keep their identities and need no migration. The follow-up at the end
 of this plan takes that migration on for streams; this plan does not.
 
 Two schemas need the stamp, not one. When a partial-cause alias is bound to a
-link, `scopedLinkForPath` prefers the alias's own schema over the descriptor's
-(`packages/runner/src/pattern-binding.ts:179`, `:295`), and result-field aliases
+link, the binding prefers the alias's own schema over the descriptor's
+(the `alias.schema` arguments to `linkForPath` in
+`packages/runner/src/pattern-binding.ts`), and result-field aliases
 are emitted with the cell's sanitized schema (`builder/pattern.ts:509`). So the
 builder must stamp `asCell: ["stream"]` on both the descriptor schema and the
 alias schema it emits for a stream-kind cell.

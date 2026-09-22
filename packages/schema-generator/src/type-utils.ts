@@ -1,14 +1,19 @@
 import ts from "typescript";
 
-import { hashStringOf } from "@commonfabric/data-model";
+import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import type { MutableJSONSchema } from "@commonfabric/api";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import { getPropertyNameText } from "./typescript/property-name.ts";
 import type { CellWrapperKind } from "./typescript/cell-brand.ts";
+import { isCommonFabricSymbol } from "./typescript/common-fabric-symbols.ts";
 import {
   getDefaultMarkerPayload,
   hasDefaultMarker,
 } from "./typescript/default-brand.ts";
+import {
+  getTypeAliasDeclaration,
+  unwrapTypeParentheses,
+} from "./typescript/type-node.ts";
 import {
   isWrapperSpelling,
   spellingsWhere,
@@ -764,39 +769,6 @@ export function getArrayElementInfo(
 }
 
 /**
- * Check if a type reference node represents Default<T,V>
- */
-export function isDefaultTypeRef(
-  node: ts.TypeReferenceNode,
-  checker: ts.TypeChecker,
-  visited: Set<ts.Symbol> = new Set(),
-): boolean {
-  if (!node.typeName || !ts.isIdentifier(node.typeName)) return false;
-  // Fast path: identifier text says "Default" even if symbol is missing
-  if (node.typeName.text === "Default") return true;
-
-  const symbol = checker.getSymbolAtLocation(node.typeName);
-  if (!symbol) return false;
-
-  // Prevent infinite recursion from circular aliases
-  if (visited.has(symbol)) return false;
-  visited.add(symbol);
-
-  const symbolName = symbol.getName();
-  if (symbolName === "Default") return true;
-
-  // If this is an alias, resolve the alias target recursively
-  const decl = symbol.declarations?.[0];
-  if (decl && ts.isTypeAliasDeclaration(decl)) {
-    const aliased = decl.type;
-    if (ts.isTypeReferenceNode(aliased)) {
-      return isDefaultTypeRef(aliased, checker, visited); // Recursive call with visited set
-    }
-  }
-  return false;
-}
-
-/**
  * Checks if a type reference node (via literal name or alias chain) refers to a wrapper type.
  * Returns the wrapper kind if detected.
  *
@@ -818,6 +790,17 @@ export function detectWrapperViaNode(
 /**
  * Resolve a type node to a wrapper type, following alias chains.
  * Returns both the wrapper kind and the resolved type reference node with type arguments.
+ *
+ * The node is read through parentheses and through type aliases, an imported
+ * one included (`getTypeAliasDeclaration()`). The node returned is one whose
+ * type arguments are the wrapper's own, at the reference: the wrapper
+ * reference itself, the reference an alias declares where nothing in its type
+ * arguments depends on the alias's type parameters, or, through a generic
+ * alias that passes its parameters to the wrapper unchanged and in order, the
+ * reference as written. A generic alias that does more with its parameters
+ * (`Default<T[], []>`, `Default<string, V>`) leaves no such node, so its
+ * reference names no wrapper here and is read from the type it instantiates.
+ * A circular alias throws.
  */
 export function resolveWrapperNode(
   typeNode: ts.TypeNode | undefined,
@@ -826,85 +809,138 @@ export function resolveWrapperNode(
   kind: NodeWrapperKind;
   node: ts.TypeReferenceNode;
 } | undefined {
-  if (!typeNode || !ts.isTypeReferenceNode(typeNode)) {
-    return undefined;
-  }
-
-  const literalName = getEntityNameText(typeNode.typeName);
-
-  // Fast path: direct wrapper reference
-  const directKind = wrapperKindForName(literalName);
-  if (directKind) {
-    return {
-      kind: directKind,
-      node: typeNode,
-    };
-  }
-
-  // Follow alias chain
-  if (!ts.isIdentifier(typeNode.typeName)) {
-    return undefined;
-  }
-  return followAliasToWrapperNode(typeNode, typeChecker, new Set());
+  const node = typeNode && unwrapTypeParentheses(typeNode);
+  return node && ts.isTypeReferenceNode(node)
+    ? followAliasToWrapperNode(node, node, typeChecker, [], [])
+    : undefined;
 }
 
 /**
- * Follow alias chains to detect if a type alias resolves to a wrapper type.
- * Returns both the wrapper kind and the resolved node with type arguments.
+ * Helper for `followAliasToWrapperNode()`, which returns the kind of wrapper
+ * `reference` names, or `undefined` for a reference to anything else.
+ * `Default` is recognized by its spelling. A cell wrapper counts only where
+ * its name resolves, through its import binding, to the wrapper `commonfabric`
+ * declares, under whatever name it was imported as: a type of the author's own
+ * that shares a wrapper's name is something else. A reference the checker
+ * cannot resolve, as one the transformer builds, is read by its spelling.
+ */
+function wrapperKindOfReference(
+  reference: ts.TypeReferenceNode,
+  checker: ts.TypeChecker,
+): NodeWrapperKind | undefined {
+  const identifier = ts.isIdentifier(reference.typeName)
+    ? reference.typeName
+    : reference.typeName.right;
+  const spelled = wrapperKindForName(identifier.text);
+  if (spelled === "Default") return spelled;
+  const symbol = checker.getSymbolAtLocation(identifier);
+  if (!symbol) return spelled;
+  const declared = symbol.flags & ts.SymbolFlags.Alias
+    ? checker.getAliasedSymbol(symbol)
+    : symbol;
+  if (!isCommonFabricSymbol(declared)) return undefined;
+  const kind = wrapperKindForName(declared.getName());
+  return kind === "Default" ? undefined : kind;
+}
+
+/**
+ * Helper for `resolveWrapperNode()`, which follows `reference`, through
+ * parentheses and type aliases, to a reference that names a wrapper, and
+ * returns that wrapper's kind with `binding` as it stands there. `binding` is
+ * the reference whose type arguments are those of `reference` at the use
+ * site, or `undefined` once an alias has left none (`bindAliasTarget()`); the
+ * walk goes on without one, so that a circular alias still throws. `followed`
+ * holds the aliases already on this path and `names` their names, which spell
+ * the chain in the error a circular alias throws.
  */
 function followAliasToWrapperNode(
-  typeNode: ts.TypeReferenceNode,
+  reference: ts.TypeReferenceNode,
+  binding: ts.TypeReferenceNode | undefined,
   typeChecker: ts.TypeChecker,
-  visited: Set<string>,
+  followed: readonly ts.TypeAliasDeclaration[],
+  names: readonly string[],
 ): {
   kind: NodeWrapperKind;
   node: ts.TypeReferenceNode;
 } | undefined {
-  // Caller must ensure typeNode.typeName is an Identifier.
-  if (!ts.isIdentifier(typeNode.typeName)) {
-    throw new Error("followAliasToWrapperNode requires an Identifier typeName");
-  }
+  const kind = wrapperKindOfReference(reference, typeChecker);
+  if (kind) return binding && { kind, node: binding };
 
-  const typeName = typeNode.typeName.text;
-
-  // Detect circular aliases and throw descriptive error
-  if (visited.has(typeName)) {
-    const aliasChain = Array.from(visited).join(" -> ");
+  const declaration = getTypeAliasDeclaration(reference, typeChecker);
+  if (!declaration) return undefined;
+  const name = getEntityNameText(reference.typeName);
+  if (followed.includes(declaration)) {
     throw new Error(
-      `Circular type alias detected: ${aliasChain} -> ${typeName}`,
+      `Circular type alias detected: ${[...names, name].join(" -> ")}`,
     );
   }
-  visited.add(typeName);
+  const target = unwrapTypeParentheses(declaration.type);
+  if (!ts.isTypeReferenceNode(target)) return undefined;
+  return followAliasToWrapperNode(
+    target,
+    bindAliasTarget(binding, declaration, target, typeChecker),
+    typeChecker,
+    [...followed, declaration],
+    [...names, name],
+  );
+}
 
-  // Check if we've reached a wrapper type
-  const directKind = wrapperKindForName(typeName);
-  if (directKind) {
-    return {
-      kind: directKind,
-      node: typeNode,
-    };
-  }
-
-  // Look up the symbol for this type name
-  const symbol = typeChecker.getSymbolAtLocation(typeNode.typeName);
-  if (!symbol || !(symbol.flags & ts.SymbolFlags.TypeAlias)) {
-    return undefined;
-  }
-
-  const aliasDeclaration = symbol.valueDeclaration || symbol.declarations?.[0];
-  if (!aliasDeclaration || !ts.isTypeAliasDeclaration(aliasDeclaration)) {
-    return undefined;
-  }
-
-  const aliasedType = aliasDeclaration.type;
+/**
+ * Helper for `followAliasToWrapperNode()`, which returns the reference whose
+ * type arguments are those of `target`, the reference `declaration` declares,
+ * where the alias is reached through `binding`. Without type parameters, and
+ * where none of its type arguments mentions one, `target` means the same
+ * wherever it is reached, and is its own binding. Where the alias passes its
+ * parameters to `target` unchanged and in order, and `binding` supplies an
+ * argument for each, `target`'s arguments are `binding`'s. Otherwise
+ * `target`'s arguments exist only once the alias's parameters are replaced,
+ * which no authored node shows, and the result is `undefined`.
+ */
+function bindAliasTarget(
+  binding: ts.TypeReferenceNode | undefined,
+  declaration: ts.TypeAliasDeclaration,
+  target: ts.TypeReferenceNode,
+  checker: ts.TypeChecker,
+): ts.TypeReferenceNode | undefined {
+  const parameters = (declaration.typeParameters ?? []).map((parameter) =>
+    checker.getSymbolAtLocation(parameter.name)
+  );
+  const parameterSet = new Set(parameters);
+  const targetArguments = target.typeArguments ?? [];
   if (
-    ts.isTypeReferenceNode(aliasedType) && ts.isIdentifier(aliasedType.typeName)
+    !targetArguments.some((argument) =>
+      mentionsSymbol(argument, parameterSet, checker)
+    )
   ) {
-    // Recursively follow the alias chain, returning the final resolved node
-    return followAliasToWrapperNode(aliasedType, typeChecker, visited);
+    return target;
   }
+  const passesThrough = binding?.typeArguments?.length === parameters.length &&
+    targetArguments.length === parameters.length &&
+    targetArguments.every((argument, index) => {
+      const node = unwrapTypeParentheses(argument);
+      return ts.isTypeReferenceNode(node) && !node.typeArguments &&
+        ts.isIdentifier(node.typeName) &&
+        checker.getSymbolAtLocation(node.typeName) === parameters[index];
+    });
+  return passesThrough ? binding : undefined;
+}
 
-  return undefined;
+/**
+ * Helper for `bindAliasTarget()`, which returns `true` where `node` holds a
+ * reference to one of `symbols`.
+ */
+function mentionsSymbol(
+  node: ts.Node,
+  symbols: ReadonlySet<ts.Symbol | undefined>,
+  checker: ts.TypeChecker,
+): boolean {
+  if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) {
+    if (symbols.has(checker.getSymbolAtLocation(node.typeName))) return true;
+  }
+  return ts.forEachChild(
+    node,
+    (child) => mentionsSymbol(child, symbols, checker) || undefined,
+  ) ?? false;
 }
 
 /**
@@ -952,7 +988,7 @@ export function isEmptyObjectDefaultType(
 export function extractValueFromLiteralType(
   type: ts.Type,
   typeChecker: ts.TypeChecker,
-): { value: unknown } | undefined {
+): { value: FabricValue } | undefined {
   if (type.flags & ts.TypeFlags.StringLiteral) {
     return { value: (type as ts.StringLiteralType).value };
   }
@@ -971,7 +1007,7 @@ export function extractValueFromLiteralType(
 
   if (typeChecker.isTupleType(type)) {
     const elements = typeChecker.getTypeArguments(type as ts.TypeReference);
-    const values: unknown[] = [];
+    const values: FabricValue[] = [];
     for (const element of elements) {
       const extracted = extractValueFromLiteralType(element, typeChecker);
       if (!extracted) return undefined;
@@ -992,7 +1028,7 @@ export function extractValueFromLiteralType(
         : undefined;
     }
     const props = typeChecker.getPropertiesOfType(type);
-    const result: Record<string, unknown> = {};
+    const result: Record<string, FabricValue> = {};
     for (const prop of props) {
       const name = String(prop.escapedName as string);
       // Symbol-keyed members (`__@...`) mean this is a brand, not data.
@@ -1011,7 +1047,7 @@ export function extractValueFromLiteralType(
 function extractPayloadFromBrandedMember(
   member: ts.Type,
   typeChecker: ts.TypeChecker,
-): { value: unknown } | undefined {
+): { value: FabricValue } | undefined {
   const payload = getDefaultMarkerPayload(member, typeChecker);
   if (!payload) return undefined;
   const extracted = extractValueFromLiteralType(payload, typeChecker);
@@ -1033,9 +1069,9 @@ function extractPayloadFromBrandedMember(
 export function extractDefaultValueFromBrandedMembers(
   branded: readonly ts.Type[],
   typeChecker: ts.TypeChecker,
-): { value: unknown } | undefined {
+): { value: FabricValue } | undefined {
   if (branded.length === 0) return undefined;
-  let agreed: { value: unknown } | undefined;
+  let agreed: { value: FabricValue } | undefined;
   for (const member of branded) {
     const extracted = extractPayloadFromBrandedMember(member, typeChecker);
     if (!extracted) return undefined;
@@ -1058,7 +1094,7 @@ export function extractDefaultValueFromBrandedMembers(
 export function extractDefaultBrandPayloadValue(
   type: ts.Type,
   typeChecker: ts.TypeChecker,
-): { value: unknown } | undefined {
+): { value: FabricValue } | undefined {
   const members = type.isUnion() ? type.types : [type];
   const branded = members.filter((member) =>
     hasDefaultMarker(member, typeChecker)

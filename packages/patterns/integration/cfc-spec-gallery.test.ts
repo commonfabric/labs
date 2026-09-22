@@ -1,3 +1,4 @@
+import { debugStr } from "@commonfabric/data-model";
 import { env, Page, waitForCondition } from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
@@ -203,9 +204,8 @@ async function waitForCfcLabelText(page: Page, expected: string[]) {
   } catch (cause) {
     const probe = await readCfcLabelProbe(page);
     throw new Error(
-      `Timed out waiting for CFC labels. Last probe: ${
-        JSON.stringify(probe, null, 2)
-      }`,
+      `Timed out waiting for CFC labels. ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }

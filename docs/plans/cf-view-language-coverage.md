@@ -3,16 +3,17 @@
 Status: In progress.
 
 Unknown named files and filename-free source without a recognized shebang use
-plain text, while filename-free transformed compiler output keeps its TypeScript
-default. Piped source can select a language directly or through a virtual
-filename. Declarative metadata can now describe extensions, exact names,
-compound patterns, explicit aliases, direct interpreter shebangs, and
-extensions that several syntaxes share. JSON Lines and NDJSON use the JSON
-tokenizer with independent lexical state for each record. JSON also covers the
-surveyed names that no `.json` suffix announces: web manifests, TLDraw
-documents, Deno lock files, editor workspace files, Swift package resolutions,
-and the `.cfg` files whose source opens a JSON object. Python files with
-recognized extensions now have syntax highlighting.
+plain text, while filename-free transformed compiler output keeps its
+TypeScript default. Piped source can select a language directly or through a
+virtual filename. Declarative metadata can now describe extensions, exact
+names, compound patterns, explicit aliases, direct interpreter shebangs,
+launcher shebangs that a subcommand settles, and extensions that several
+syntaxes share. JSON Lines and NDJSON use the JSON tokenizer with independent
+lexical state for each record. JSON also covers the surveyed names that no
+`.json` suffix announces: web manifests, TLDraw documents, Deno lock files,
+editor workspace files, Swift package resolutions, and the `.cfg` files whose
+source opens a JSON object. Python has syntax highlighting and a structure tree
+of its classes and functions.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
@@ -27,8 +28,8 @@ output streams the complete dump. Text saves use the encoder paired with the
 decoded source, including preservation of a UTF-8 byte order mark. Binary files
 remain outside diff editing and semantic source loading.
 
-Parser-backed Python, Go, shell, and HTML implementations use Tree-sitter
-through a shared, language-neutral adapter and official grammar packages.
+Python runs on Tree-sitter through a shared, language-neutral adapter, which
+Go, shell, and HTML will use as well, with official grammar packages.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
@@ -141,15 +142,26 @@ and a warm dependency cache. Initialization starts at the first statement in a
 fresh Deno process and includes dynamic imports, runtime initialization, the
 selected grammar and query, and one empty highlight.
 
-| Dimension | Python measurement | Accepted maximum |
+| Dimension | Shipped Python | Accepted maximum |
 | --- | ---: | ---: |
-| 95th-percentile lazy initialization | 40.36 ms | 75 ms |
-| 95th-percentile full highlighting | 32.65 ms | 50 ms |
-| 95th-percentile incremental edit and changed-line highlight | 1.44 ms | 5 ms |
+| 95th-percentile lazy initialization | 29.41 ms | 75 ms |
+| 95th-percentile full highlighting | 27.89 ms | 50 ms |
+| 95th-percentile document parse, with structure | 35.56 ms | 50 ms |
+| 95th-percentile re-color after one edit | 15.07 ms | 25 ms |
 | Compiled `cf` increase | 12.03 MiB | 14 MiB for runtime and first grammar |
-| Unpacked dependencies | 11.96 MiB | 14 MiB for runtime and first grammar |
-| Owned source | 131 probe lines | 500 shipped lines |
+| Unpacked dependencies | 11.95 MiB | 14 MiB for runtime and first grammar |
+| Owned source | 584 lines | 650 shipped lines |
 | Parser-specific build and deployment steps | 0 | 0 |
+
+The shipped column is the
+[September 2026 measurement](../history/packages/cli/cf-view-python-treesitter-2026-09.md),
+which drives the real language object. Three rows changed when that
+measurement replaced the probe's. Document parsing is a row because it is what
+opening a file runs, and the probe had not measured it. Re-coloring after an
+edit replaces a row that read "incremental edit and changed-line highlight",
+for the reason under "An edit re-colors the whole document" below. The
+owned-source maximum was raised, for the reason under "Owned source over its
+maximum".
 
 Each later host grammar may add at most 10 MiB to both byte measures and 200
 owned source lines. The common runtime and the Python, Go, Bash, and HTML host
@@ -163,17 +175,20 @@ before Stage 5.
 Use `web-tree-sitter` 0.26.12, with pinned official Tree-sitter grammar
 packages, for parser-backed Python, Go, shell, and HTML implementations. Put
 parser initialization, gapless range normalization, incomplete-input recovery,
-incremental edits, and structure extraction behind one adapter that accepts
+edits to a warm tree, and structure extraction behind one adapter that accepts
 language-specific highlight-capture and structure mappings. Treat Tree-sitter
 as the default for later source languages only after checking their grammar
 coverage and integration cost.
 
-The current language selection and parsing interfaces are synchronous, while
-Tree-sitter initialization and grammar loading are asynchronous. Add and test an
-asynchronous initialization boundary before adopting the adapter. Load the
-runtime and only the grammars required by the selected language when a view
-needs them. The spike's startup measurement loaded all four host grammars, so it
-does not establish the cost of that lazy path.
+The language selection and parsing interfaces are synchronous, while
+Tree-sitter initialization and grammar loading are asynchronous, so a language
+declares what it has to load and a view loads it before parsing anything. A
+redirected view loads the grammars of the languages it selected. The
+interactive pager loads every language's, once its first frame is on screen and
+before it reads a key, because the file picker and a definition peek answer a
+keystroke by opening a file in any language. A synchronous entry point reached
+without its grammar throws rather than coloring the source as though it had no
+syntax.
 
 The measured four-grammar setup initialized in 37.2 milliseconds and highlighted
 about 100 kilobytes in 14.03 to 28.29 milliseconds at the 95th percentile. Its
@@ -191,9 +206,10 @@ body. The separately maintained Lezer Bash grammar marked that fixture as
 containing an error and left the heredoc body unclassified. Lezer's smaller
 runtime and built-in HTML nesting do not outweigh using two parser families or
 accepting weaker shell coverage. Focused scanners remain suitable for simple
-data formats, but the existing Python scanner's 862 lines and YAML scanner's 970
-lines make one custom scanner per measured source language the larger
-maintenance surface. They also require a second implementation for structure.
+data formats, but the Python scanner's 862 lines when this was written — 863
+by the time it was removed — and the YAML scanner's 970 lines make one custom
+scanner per measured source language the larger maintenance surface. They also
+require a second implementation for structure.
 
 Depend on the complete npm packages rather than checking selected WebAssembly
 artifacts into the repository. The measured packages occupy 35.66 MiB when
@@ -209,9 +225,64 @@ setup, while the dependency-size measurements are lower bounds for the
 cumulative parser packages. Measure and record the complete nested-HTML setup
 before implementing Stage 5.
 
-The focused Python scanner remains in place until the Stage 2 structure change
-replaces it through the shared adapter. Do not add another focused scanner for
-Python, Go, shell, or HTML.
+Do not add another focused scanner for Python, Go, shell, or HTML.
+
+#### An edit re-colors the whole document
+
+The probe measured, and this plan recorded a 5-millisecond maximum for,
+re-running the highlight query over the lines `Tree.getChangedRanges` reports
+after an edit. That operation does not produce the colors a complete highlight
+would, so the shipped implementation does not perform it.
+
+The report says where the tree's shape differs. A highlight query reads the
+shape around a node to classify it, so a node that keeps its own type while its
+parent changes is classified differently and is not in the report. Inserting
+one line break turned `Sto` `re()` into a call and changed how `re` is
+classified, with no range reported. Sweeping every single-character insertion
+and deletion at every offset of a 15-line Python sample found 47 edits where
+lines drawn from the report disagreed with a complete highlight.
+
+An update therefore edits the warm tree, re-parses from it, and colors the whole
+document from that parse. The incremental parse stays, because it is under a
+millisecond of the cost where a fresh parse is 11; the query over the whole
+document is the rest. The dimension is now the per-keystroke re-color, and its
+maximum is 25 milliseconds — above the 15.07 measured, and below the
+50-millisecond complete highlight this operation is a part of.
+
+Reopening the parser decision on this dimension alone would favor a focused
+scanner: the 863-line Python scanner re-colored the same source in 7.26
+milliseconds at the 95th percentile against 17.44 for the adapter, both
+measured in one paired run. It produced no structure, which is what this stage
+was for, so the decision stands.
+
+#### Owned source over its maximum
+
+Python's implementation measures 584 physical lines of owned source. The
+maximum was 500 when it was measured, and an overrun starts a measured
+comparison with a focused implementation under "Reconsidering the dependency".
+That comparison ran, it keeps the decision, and the maximum in the table above
+is the one it settled on.
+
+The maximum came from a 131-line probe that loaded a grammar, ran a query, and
+split the result into lines. A shipped adapter also reports which grammar is
+missing, converts between the two offset conventions Tree-sitter uses, gives
+each bracket its nesting depth, leaves the space between tokens uncolored,
+derives an edit from two versions of a text, and colors a document from the
+parse that edit produced. The overrun is in that work rather than in
+Tree-sitter.
+
+Compare the marginal costs a switch would remove, which is the Python-specific
+part: 127 lines of highlight query and structure rule, against the 863-line
+focused Python scanner they replaced. The scanner covered highlighting alone,
+so the focused implementation would be larger and cover less. The remaining 457
+lines are the adapter that Go, shell, and HTML use as well.
+
+Raise the first-language maximum to 650 lines and leave every other maximum
+where it is. The 1,000-line cumulative maximum is what binds the three
+languages after Python: 584 lines are spent, so 416 remain, about 139 each. The
+200 lines a later host language may add is a ceiling on any one of them rather
+than an allowance all three can take, and the first to reach the cumulative
+maximum starts its own comparison.
 
 #### Reconsidering the dependency
 
@@ -299,12 +370,14 @@ notebook selects JSON or line-oriented JSON without broad suffix guesses.
 
 - [x] Highlight `.py`, `.pyi`, and `.pyw` files.
 - [x] Recognize extensionless programs from direct Python shebangs.
-- [ ] Recognize extensionless programs from `uv run` shebangs.
-- [ ] Add class, function, async function, and decorated-definition structure.
-- [ ] Add representative Loom, Specs, Legibility, Raia, and gVisor fixtures.
+- [x] Recognize extensionless programs from `uv run` shebangs.
+- [x] Add class, function, async function, and decorated-definition structure.
+- [x] Add representative Loom, Specs, Legibility, Raia, and gVisor fixtures.
 
 Completion gate: direct files, diffs, and incomplete edits pass the shared
-fixture contract without altering source text.
+fixture contract without altering source text. The gate passes: one fixture
+from each of the five repositories runs the contract, and a corpus language may
+now carry more than one.
 
 ## Stage 3: Go and Go manifests
 

@@ -97,7 +97,7 @@ cell means none confirmed — check the component source before assuming.
 |-----|---------|----------------|
 | `cf-accordion` | Container for collapsible content panels | |
 | `cf-accordion-item` | Individual accordion panel | |
-| `cf-alert` | Alert message with variants and dismissible option | |
+| `cf-alert` | Alert message with `status` (`info`, `error`, `warning`, `success`) and dismissible option | |
 | `cf-area-mark` | Filled area mark rendered inside `cf-chart` | `$data` |
 | `cf-aspect-ratio` | Maintains a fixed aspect ratio for its content | |
 | `cf-attachments-bar` | Displays pinned cells as a horizontal list of chips | |
@@ -114,7 +114,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-card` | Content container with header/content/footer (built-in 1rem padding) | |
 | `cf-cell-link` | Renders a link or cell as a clickable, draggable pill | |
 | `cf-cfc-authorship` | Shows trusted authorship state for CFC-labeled content | `$value`, `$author` |
-| `cf-cfc-label` | Renders the CFC label of a bound cell value | `$value` |
+| `cf-cfc-label` | Renders the CFC label of a bound cell value; `variant="badge"` shows a compact pill for whether an integrity atom matches the `atom`/`kind` filter | `$value` |
 | `cf-chart` | SVG charting container for line/area/bar/dot marks (see [cf-chart](#cf-chart)) | `$marks` (marks: `$data`) |
 | `cf-chat` | Chat container handling message flow and tool-call correlation | `$messages` |
 | `cf-chat-message` | Single chat message with markdown support | |
@@ -1050,12 +1050,13 @@ different persona. The predicate selects presentation; CFC labels govern reads.
 `cf-share-snapshot` reviews a copy of a source cell before releasing that copy
 to another user or space. Bind `$source` to the JSON value to review,
 `$recipient` to a live profile or space cell, and `$result` to a writable cell
-that will receive the released cell link. Set `audience-kind` to `user` (the
-default) or `space`.
+that will receive the released cell link. In pattern JSX, set `audienceKind` to
+`user` (the default) or `space`. The native HTML attribute is `audience-kind`.
 
-The host must configure an authenticated, bounded runtime read ceiling for the
-confirming user. An unbounded runtime, including the default shell
-configuration, refuses preparation before returning a preview.
+The authenticated host checks the source against its runtime read ceiling. When
+the host has no runtime-wide ceiling, the source must fit the confirming user's
+own `User` ceiling. This permits the default shell to share the user's private
+draft while refusing a source labeled only for another user.
 
 The host displays the exact snapshot and the audience verified by the runtime in
 a native modal dialog. Its disclosure and preview are fixed host UI. The user

@@ -208,8 +208,10 @@ exposes none of them and a walk stops there (Section 8.6).
 >   via their registry key. **Unique** symbols (`Symbol(desc)`, where
 >   `Symbol.keyFor(s)` returns `undefined`) have no portable representation and
 >   are rejected. The TypeScript `symbol` type cannot express this distinction,
->   so it is enforced at runtime by the conversion, hashing, and encoding
->   boundaries (Sections 4.9, 6, and 5). Symbol-keyed *properties* on plain
+>   so it is enforced at runtime by membership, by the tag dispatch (which tags
+>   a unique symbol `null`, as it does a function), and by the conversion,
+>   hashing, and encoding boundaries (Sections 4.9, 6, and 5). Symbol-keyed
+>   *properties* on plain
 >   objects are a separate matter — see Section 1.5 (Plain Containers /
 >   Objects).
 > - `function` — Functions are opaque closures with no portable representation.
@@ -4221,9 +4223,11 @@ export function fabricFromConvertibleJsValue(
 > and whatever the value's prototype names: an `Error` re-pointed at
 > `Object.prototype` is still `"JsError"`.
 > Then the `typeof` question, ahead of every object question: a primitive,
-> and `null`, is tagged by its `typeof` name, and a function comes back
-> `null`, whatever its prototype names, since a function is never asked an
-> object question.
+> and `null`, is tagged by its `typeof` name; a function comes back `null`,
+> whatever its prototype names, since a function is never asked an object
+> question; and a symbol is tagged `"symbol"` only when it is
+> registry-interned, a unique symbol coming back `null` for the reason
+> Section 1.3 gives.
 > An array is tagged next, by `Array.isArray()`, so a subclass instance, a
 > severed-prototype array, and a cross-realm array all reach array handling and
 > are handled by the array rule of Section 1.5, rather than being rejected as

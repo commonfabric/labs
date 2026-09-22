@@ -410,6 +410,25 @@ Two things keep this off the table today. The fold happens only when minifying,
 and the shell is the only caller that minifies. The shell also lowers `using`,
 and the lowered form is not folded. esbuild fixed the underlying bug in 0.28.1.
 
+### Tree-sitter
+
+The CLI pins `web-tree-sitter` and `tree-sitter-python` exactly. `cf view`
+colors and navigates Python through them, and a grammar package ships a
+compiled parser whose binary interface has to match the runtime that loads it.
+A range on either would let an install pair a parser with a runtime that
+rejects it, which fails when a view opens a Python file rather than when the
+dependency resolves. Roll the two together, and run the `cf view` Python tests
+afterward.
+
+`tree-sitter-python` is reached in two ways, both of which have to keep
+working. `packages/cli/lib/view/languages/python/python.ts` imports its
+`package.json`, which is what makes the package present, and resolves the
+compiled grammar beside it with `import.meta.resolve`, which the adapter then
+reads as a file. A source run resolves that through the Deno cache, and
+`deno task build-binaries cf` embeds it in the binary with no step of its own.
+Neither path is exercised by type checking, so a change to either is checked by
+running `cf view` against a `.py` file.
+
 ### Viz.js
 
 The scripts workspace pins `@viz-js/viz` exactly. `scripts/docs-links.ts`

@@ -1427,37 +1427,40 @@ Deno.test("CfHarnessEngine derives prompt-slot labels for model-authored sandbox
   assertEquals(
     engine.getRunState().cfcInvocationContexts?.map((context) => ({
       toolId: context.toolId,
-      labels: context.cfcInputLabels,
+      inputLabels: context.cfcInputLabels,
+      influenceLabels: context.promptSlotInfluenceLabels,
     })),
     [
       {
         toolId: "bash",
-        labels: {
+        inputLabels: undefined,
+        influenceLabels: {
           version: 1,
           entries: [
             {
               path: ["command"],
-              label: { confidentiality: [expectedAtom] },
+              label: { integrity: [expectedAtom] },
             },
             {
               path: ["cwd"],
-              label: { confidentiality: [expectedAtom] },
+              label: { integrity: [expectedAtom] },
             },
           ],
         },
       },
       {
         toolId: "write_file",
-        labels: {
+        inputLabels: undefined,
+        influenceLabels: {
           version: 1,
           entries: [
             {
               path: ["args"],
-              label: { confidentiality: [expectedAtom] },
+              label: { integrity: [expectedAtom] },
             },
             {
               path: ["stdin"],
-              label: { confidentiality: [expectedAtom] },
+              label: { integrity: [expectedAtom] },
             },
           ],
         },

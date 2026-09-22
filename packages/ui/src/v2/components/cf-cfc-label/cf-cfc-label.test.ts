@@ -2,6 +2,21 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { CFCFCLabel, filterCfcLabelView, formatCfcLabelAtom } from "./index.ts";
 
+// Flattens a lit template to its static text interleaved with its bound
+// values, so a test can read what a render produces without a DOM.
+const templateText = (node: unknown): string => {
+  const template = node as { strings?: unknown; values?: unknown[] };
+  if (!Array.isArray(template?.strings)) {
+    return node === null || node === undefined ? "" : String(node);
+  }
+  return template.strings.map((part, index) =>
+    part +
+    (index < (template.values?.length ?? 0)
+      ? templateText(template.values![index])
+      : "")
+  ).join("");
+};
+
 describe("CFCFCLabel", () => {
   it("registers the custom element", () => {
     expect(customElements.get("cf-cfc-label")).toBe(CFCFCLabel);
@@ -149,6 +164,67 @@ describe("CFCFCLabel", () => {
     expect(element.cfcLabel).toEqual(cfcLabel);
     // The label rides the subscription; no separate getCfcLabel round-trip.
     expect(getCfcLabelCalls).toBe(0);
+  });
+});
+
+describe("cf-cfc-label badge variant", () => {
+  const integrityLabel = {
+    version: 1 as const,
+    entries: [{
+      path: ["value"],
+      label: { integrity: ["loom-verified-external-identity"] },
+    }],
+  };
+
+  it("renders a present badge naming the matched atom", () => {
+    const element = new CFCFCLabel();
+    element.variant = "badge";
+    element.atom = "loom-verified-external-identity";
+    element.text = "Verified by Loom";
+    element.cfcLabel = integrityLabel;
+
+    const text = templateText(element.render());
+
+    expect(text).toContain('data-state="present"');
+    expect(text).toContain('title="loom-verified-external-identity"');
+    expect(text).toContain("Verified by Loom");
+  });
+
+  it("renders an absent badge when no entry carries the atom", () => {
+    const element = new CFCFCLabel();
+    element.variant = "badge";
+    element.atom = "some-other-atom";
+    element.cfcLabel = integrityLabel;
+
+    const text = templateText(element.render());
+
+    expect(text).toContain('data-state="absent"');
+    expect(text).not.toContain("Verified");
+  });
+
+  it("renders an absent badge when the atom is only a confidentiality atom", () => {
+    const element = new CFCFCLabel();
+    element.variant = "badge";
+    element.atom = "loom-verified-external-identity";
+    element.cfcLabel = {
+      version: 1,
+      entries: [{
+        path: [],
+        label: { confidentiality: ["loom-verified-external-identity"] },
+      }],
+    };
+
+    const text = templateText(element.render());
+
+    expect(text).toContain('data-state="absent"');
+    expect(text).not.toContain("Verified<");
+  });
+
+  it("renders an absent badge before any label arrives", () => {
+    const element = new CFCFCLabel();
+    element.variant = "badge";
+
+    expect(templateText(element.render())).toContain('data-state="absent"');
   });
 });
 

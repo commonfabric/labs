@@ -362,6 +362,32 @@ including a reference to the same input field at a narrower scope. The reads
 that authorize initialization remain commit dependencies, so a concurrent
 explicit write cannot be overwritten silently.
 
+A pattern binding addresses an argument slot at the argument cell's own scope,
+whether the slot's scope is declared on the value (`Writable<PerUser<T>>`
+emits `scope: "user"` beside `asCell: ["cell"]`) or on the cell wrapper
+(`PerUser<Writable<T>>` emits `asCell: [{ kind: "cell", scope: "user" }]`).
+The declared scope travels in the binding's schema and is realized when the
+binding is read or written, as for any other schema-scoped slot. The base slot
+is the one place that holds both kinds of content: a reference the caller
+passed in is stored there unchanged, and a plain value is narrowed into the
+scoped instance with a redirect left in the base slot. A binding that addressed
+the scoped instance directly would find a passed reference missing.
+
+A binding to a path below a scoped slot carries that slot's scope as well. The
+serialized binding holds only the leaf's schema, so when the leaf declares no
+scope of its own, the narrowest scope declared along the path is written onto
+the leaf schema, and a link stored at the scoped slot is held to it.
+
+The two spellings differ in what they constrain. A scope on the cell wrapper
+caps which link the handle may follow: a passed reference to a narrower cell is
+not followed. A scope on the value scopes the slot's own content: a plain
+value written into the slot narrows into the scoped instance. It does not cap
+the handle, so a passed reference to a narrower cell is followed. A handle
+minted by following a passed reference addresses the referenced cell and does
+not carry the slot's value scope, so a write through it lands in that cell's
+own instance. When the slot receives a reference to an existing cell, such as a
+record handle, use the cell-wrapper spelling.
+
 With server execution enabled, an automatically created space-to-user link for
 `PerSession` storage carries `scopeInitialization: "session"` in its link
 payload. This declaration permits argument setup to fill a missing user-to-session

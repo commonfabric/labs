@@ -1,0 +1,172 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "HostValue": {
+        "$ref": "#/$defs/PollHost",
+        "default": {}
+      },
+      "LunchProfile": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "PollHost": {
+        "properties": {
+          "profile": {
+            "$ref": "#/$defs/LunchProfile",
+            "asCell": [
+              "cell"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "User": {
+        "properties": {
+          "avatar": {
+            "description": "Avatar URL or glyph, snapshotted from the joiner's shared profile.",
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          },
+          "name": {
+            "description": "Display name at join time — cosmetic, may duplicate another participant.",
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/LunchProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "Identity. Compare with `equals()`. Optional ONLY for rows stored by the\nname-keyed predecessor of this pattern: every row THIS pattern writes\ncarries it (the join gate refuses an identity that does not read as\npresent). A row without one is a display ghost — it matches no viewer,\nso its person can re-join with a profile and appear as themselves."
+          }
+        },
+        "required": [
+          "name",
+          "color"
+        ],
+        "type": "object"
+      }
+    },
+    "description": "Inputs for the participant identity/host controls.",
+    "properties": {
+      "host": {
+        "$ref": "#/$defs/HostValue",
+        "asCell": [
+          "cell"
+        ],
+        "description": "Shared pointer to whoever hosts the poll. Optional ONLY so card\ninstantiations stored by the name-keyed predecessor (which had no host\npointer) still satisfy this schema; the pattern always passes it."
+      },
+      "profile": {
+        "$ref": "#/$defs/LunchProfile",
+        "asCell": [
+          "cell"
+        ],
+        "description": "The viewer's resolved `#profile` cell — their identity. Undefined until it\nresolves, or when the viewer has no profile yet.",
+        "tags": [
+          "profile"
+        ]
+      },
+      "profileAvatar": {
+        "description": "The viewer's resolved avatar.",
+        "type": "string"
+      },
+      "profileName": {
+        "description": "The viewer's resolved display name (\"\" until `#profileName` resolves).",
+        "tags": [
+          "profilename"
+        ],
+        "type": "string"
+      },
+      "profileSetupUI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json",
+        "description": "The `#profile` wish's built-in create/pick surface, rendered by the parent\nand passed down so the card can show it when no profile resolves.",
+        "tags": [
+          "profile"
+        ]
+      },
+      "users": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "Shared roster of participants who have joined.",
+        "items": {
+          "$ref": "#/$defs/User"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "users",
+      "profileName",
+      "profileAvatar"
+    ],
+    "type": "object"
+  },
+  "pattern": "lunch-poll/participant-identity-card.tsx",
+  "resultSchema": {
+    "$defs": {
+      "ClaimHostEvent": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "JoinEvent": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "description": "Outputs for the participant identity/host controls.",
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "claimHost": {
+        "$ref": "#/$defs/ClaimHostEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "isAdmin": {
+        "description": "Whether the viewer hosts this poll.",
+        "type": "boolean"
+      },
+      "isJoined": {
+        "description": "Whether the viewer has joined this poll.",
+        "type": "boolean"
+      },
+      "joinAs": {
+        "$ref": "#/$defs/JoinEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "joinMessage": {
+        "description": "Why this viewer's last join attempt was rejected, or \"\" — the loud\ncounterpart of the join gate. Headless callers read it (a CLI smoke test\nhas no other signal); the card also renders it.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "isJoined",
+      "isAdmin",
+      "joinMessage",
+      "joinAs",
+      "claimHost",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

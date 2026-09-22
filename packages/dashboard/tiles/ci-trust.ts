@@ -49,10 +49,10 @@ async function trustOutcome(
   return passed ? "green" : "gray";
 }
 
-function makeCiTrust(opts: { id: string; label: string; repo: string; workflow: string }): Tile {
+function makeCiTrust(opts: { label: string; repo: string; workflow: string }): Tile {
   const attempts = new CompletedAttempts(opts.repo);
   return {
-    id: opts.id,
+    label: opts.label,
     intervalMs: 30_000,
     runSources: [runSource(opts.repo, opts.workflow)],
     async collect(ctx): Promise<TileView> {
@@ -84,7 +84,6 @@ function makeCiTrust(opts: { id: string; label: string; repo: string; workflow: 
         ? Math.max(...times) - Math.min(...times)
         : 0;
       return {
-        label: opts.label,
         status: s,
         value: `${pct.toFixed(1)}%`,
         sub: `first-try green · ${runSummary}`,
@@ -96,5 +95,5 @@ function makeCiTrust(opts: { id: string; label: string; repo: string; workflow: 
   };
 }
 
-export const labsCiTrust = makeCiTrust({ id: "ci-trust", label: "labs ci trust", repo: REPO, workflow: CI_WORKFLOW });
-export const loomCiTrust = makeCiTrust({ id: "loom-ci-trust", label: "loom ci trust", repo: LOOM_REPO, workflow: LOOM_CI_WORKFLOW });
+export const labsCiTrust = makeCiTrust({ label: "labs ci trust", repo: REPO, workflow: CI_WORKFLOW });
+export const loomCiTrust = makeCiTrust({ label: "loom ci trust", repo: LOOM_REPO, workflow: LOOM_CI_WORKFLOW });

@@ -1,5 +1,13 @@
 /** A space default pattern whose ordered panel occurrences own composition. */
-import { computed, handler, NAME, pattern, UI, Writable } from "commonfabric";
+import {
+  computed,
+  handler,
+  NAME,
+  pattern,
+  UI,
+  type VNode,
+  Writable,
+} from "commonfabric";
 import type {
   LoomInput,
   LoomOutput,
@@ -8,6 +16,7 @@ import type {
   Presentation,
   ViewerState,
 } from "./schemas.tsx";
+import { addParticipant, participantEntries } from "./participants.tsx";
 
 type State = {
   panels: Writable<Writable<Panel>[]>;
@@ -190,72 +199,77 @@ const setPresentation = handler<Presentation, State>(
 );
 
 /** Present one linked occurrence without reading a piece's protected fields. */
-export const PanelView = pattern<{ panel: Writable<Panel> }>(({ panel }) => ({
-  [UI]: computed(() => {
-    const value = panel.get();
-    if (value.kind === "piece") {
-      return (
-        <cf-vstack gap="2">
-          {value.titleOverride ? <h3>{value.titleOverride}</h3> : null}
-          <cf-cell-link $cell={value.piece}>Open piece</cf-cell-link>
-          <cf-render $cell={value.piece} />
-        </cf-vstack>
-      );
-    }
-    if (value.kind === "url") {
-      const url = externalUrl(value.url);
-      if (url === undefined) {
-        return <p>This panel requires an HTTP(S) URL without credentials.</p>;
-      }
-      return (
-        <cf-vstack gap="2">
-          <h3>{value.titleOverride || url}</h3>
-          <a href={url} target="_blank" rel="noopener noreferrer">
-            Open in new tab
-          </a>
-          <p>If this page cannot be embedded, open it in a new tab.</p>
-          <iframe
-            src={url}
-            title={value.titleOverride || "External page"}
-            sandbox="allow-scripts allow-forms allow-popups"
-            referrerPolicy="no-referrer"
-            style={{ width: "100%", height: "360px", border: "0" }}
-          />
-        </cf-vstack>
-      );
-    }
-    const document = value.content.get()?.source;
-    if (document === undefined) {
-      return <p>This document is unavailable.</p>;
-    }
-    if (document.kind === "page-excerpt") {
-      return (
-        <cf-vstack gap="2">
-          <h3>{value.titleOverride || document.title}</h3>
-          <div style={{ whiteSpace: "pre-wrap" }}>{document.body}</div>
-          <cf-textarea
-            $value={value.content.key("notes")}
-            placeholder="Shared notes"
-          />
-        </cf-vstack>
-      );
+function renderPanel(panel: Writable<Panel>) {
+  const value = panel.get();
+  if (value.kind === "piece") {
+    return (
+      <cf-vstack gap="2">
+        {value.titleOverride ? <h3>{value.titleOverride}</h3> : null}
+        <cf-cell-link $cell={value.piece}>Open piece</cf-cell-link>
+        <cf-render $cell={value.piece} />
+      </cf-vstack>
+    );
+  }
+  if (value.kind === "url") {
+    const url = externalUrl(value.url);
+    if (url === undefined) {
+      return <p>This panel requires an HTTP(S) URL without credentials.</p>;
     }
     return (
       <cf-vstack gap="2">
-        <h3>{value.titleOverride || document.name}</h3>
-        {document.photo
-          ? <img src={document.photo} alt="" style={{ maxWidth: "96px" }} />
-          : null}
-        {document.channels.map((channel) => (
-          <div>{channel.label || channel.kind}: {channel.value}</div>
-        ))}
+        <h3>{value.titleOverride || url}</h3>
+        <a href={url} target="_blank" rel="noopener noreferrer">
+          Open in new tab
+        </a>
+        <p>If this page cannot be embedded, open it in a new tab.</p>
+        <iframe
+          src={url}
+          title={value.titleOverride || "External page"}
+          sandbox="allow-scripts allow-forms allow-popups"
+          referrerPolicy="no-referrer"
+          style={{ width: "100%", height: "360px", border: "0" }}
+        />
+      </cf-vstack>
+    );
+  }
+  const document = value.content.get()?.source;
+  if (document === undefined) {
+    return <p>This document is unavailable.</p>;
+  }
+  if (document.kind === "page-excerpt") {
+    return (
+      <cf-vstack gap="2">
+        <h3>{value.titleOverride || document.title}</h3>
+        <div style={{ whiteSpace: "pre-wrap" }}>{document.body}</div>
         <cf-textarea
           $value={value.content.key("notes")}
           placeholder="Shared notes"
         />
       </cf-vstack>
     );
-  }),
+  }
+  return (
+    <cf-vstack gap="2">
+      <h3>{value.titleOverride || document.name}</h3>
+      {document.photo
+        ? <img src={document.photo} alt="" style={{ maxWidth: "96px" }} />
+        : null}
+      {document.channels.map((channel) => (
+        <div>{channel.label || channel.kind}: {channel.value}</div>
+      ))}
+      <cf-textarea
+        $value={value.content.key("notes")}
+        placeholder="Shared notes"
+      />
+    </cf-vstack>
+  );
+}
+
+/** Standalone view of one linked panel occurrence. */
+export const PanelView = pattern<{ panel: Writable<Panel> }, { [UI]: VNode }>((
+  { panel },
+) => ({
+  [UI]: computed(() => renderPanel(panel)),
 }));
 
 const selectPanel = handler<
@@ -266,13 +280,14 @@ const selectPanel = handler<
 });
 
 export default pattern<LoomInput, LoomOutput>(
-  ({ title, panels, presentation }) => {
+  ({ title, panels, presentation, participants }) => {
     const pieceRegistry = computed(() =>
       panels.get().flatMap((panel) => {
         const value = panel.get();
         return value.kind === "piece" ? [value.piece] : [];
       })
     );
+    const roster = computed(() => participantEntries(participants));
     const state = { panels, presentation };
     const viewerState = new Writable.perSession<ViewerState>({});
     const remove = removePanel(state);
@@ -353,7 +368,8 @@ export default pattern<LoomInput, LoomOutput>(
                           : "Not staged"}
                       </span>
                     </cf-hstack>
-                    <cf-render $cell={PanelView({ panel })} />
+                    {/* Stateless panel views need no durable child setup by READ viewers. */}
+                    {computed(() => renderPanel(panel))}
                   </cf-card>
                 ))}
               </cf-vstack>
@@ -373,6 +389,8 @@ export default pattern<LoomInput, LoomOutput>(
       movePanel: move,
       duplicatePanel: duplicate,
       setPresentation: present,
+      participants: roster,
+      addParticipant: addParticipant({ roster: participants }),
     };
   },
 );

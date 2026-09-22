@@ -139,7 +139,7 @@ export const CFC_HARNESS_OBLIGATIONS: readonly ConformanceObligation[] = [
       "how direct-command evidence is kept unforgeable by application code, model output, sandboxed tools, and free-form documents",
     status: "mechanized",
     account:
-      "Four mechanisms, each of which breaks something if removed: the binding is never a field of a tool input schema, a skill's prompt role is pinned to `context` at the type level, what crosses into the sandbox is a `PromptSlotInfluence` atom rather than a `PromptSlotBound` one, and the runner strips a pattern-authored `PromptSlotBound` from a declared label. All four are held by the type system and by package tests, so no audit check reads them.",
+      "Four mechanisms, each of which breaks something if removed: the binding is never a field of a tool input schema, a skill's prompt role is pinned to `context` at the type level, what the invocation context records is a `PromptSlotInfluence` integrity atom rather than a `PromptSlotBound` one, and the runner strips a pattern-authored `PromptSlotBound` from a declared label. All four are held by the type system and by package tests, so no audit check reads them.",
     evidence: [
       "src/contracts/skill.ts",
       "src/contracts/cfc-invocation-context.ts",

@@ -14,12 +14,12 @@
  *   that just let the authored source execute so its lines are counted. Their
  *   return values are scaffolding — the harness asserts on rendered output, not
  *   on what these produce — so keep them minimal.
- * - Real re-exports of the pure, runtime-free `data-model` helpers (`valueEqual`,
- *   `toCompactDebugString`, `toIndentedDebugString`). Faking these would both
- *   duplicate real code and rob the harness of a bonus: because the child
- *   inherits `DENO_COVERAGE_DIR`, running the real ones gives `data-model` (and
- *   its foundation deps) coverage credit for the paths the pattern runtime
- *   exercises.
+ * - Real re-exports of the pure, runtime-free `data-model` helpers
+ *   (`valueEqual`, `toCompactDebugString`, `toIndentedDebugString`,
+ *   `debugStr`). Faking these would both duplicate real code and rob the
+ *   harness of a bonus: because the child inherits `DENO_COVERAGE_DIR`,
+ *   running the real ones gives `data-model` (and its foundation deps)
+ *   coverage credit for the paths the pattern runtime exercises.
  *
  * Anything a pattern imports from `commonfabric` must be exported here, or that
  * pattern fails to load in the child (not caught by `deno check`).
@@ -39,6 +39,7 @@
 import { type FabricValue, valueEqual } from "@commonfabric/data-model";
 export { valueEqual };
 export {
+  debugStr,
   toCompactDebugString,
   toIndentedDebugString,
 } from "@commonfabric/data-model";

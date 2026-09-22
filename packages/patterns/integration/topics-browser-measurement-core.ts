@@ -5,11 +5,12 @@
  * board runs the program compiled from the sources read, without coverage
  * instrumentation, and with each lift's preview equal to its compiled text,
  * reading timing deltas and the worker's run count, and ending a sampling after
- * its operation. The TypeScript parser is its only import, so a plain
- * `deno test` exercises all of it.
+ * its operation. Its only imports are the TypeScript parser and a pure
+ * Markdown helper, so a plain `deno test` exercises all of it.
  */
 
 import ts from "typescript";
+import { backtickQuote } from "@commonfabric/utils/markdown";
 
 /** A position in authored source: line 1-based, column 0-based. */
 export interface SourcePosition {
@@ -374,8 +375,10 @@ export function confirmLiftImplementations(
       throw new Error(
         `\`${lift.name}\` at \`${lift.site}\` runs an implementation that ` +
           `differs from its compiled text at character ${at}: running ` +
-          `${JSON.stringify(other.slice(at, at + 40))}, compiled ` +
-          `${JSON.stringify(expected.slice(at, at + 40))}`,
+          `${backtickQuote(JSON.stringify(other.slice(at, at + 40)))}, ` +
+          `compiled ${
+            backtickQuote(JSON.stringify(expected.slice(at, at + 40)))
+          }`,
       );
     }
     confirmed.set(lift.site, expected);

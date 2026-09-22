@@ -773,7 +773,6 @@ describe("test-selection-history", () => {
 
   describe("withSelectionHistory()", () => {
     const view: TileView = {
-      label: "test selection",
       status: "good",
       value: "50%",
     };

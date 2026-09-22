@@ -77,7 +77,7 @@ export function nextFaviconRedSince(
 function updateFaviconRedSince(now: number, recoveryIsSettled = true): void {
   const status = faviconStatus(
     TILES.flatMap((tile) => {
-      const view = views.get(tile.id);
+      const view = views.get(tile.label);
       return view ? [activeTileView(tile, view).status] : [];
     }),
   );
@@ -102,15 +102,9 @@ function dashboardUpdate(currentViews: ReadonlyMap<string, TileView> = views): D
   const wide: string[] = [];
   const statuses: TileView["status"][] = [];
   for (const t of TILES) {
-    const v = activeTileView(
-      t,
-      currentViews.get(t.id) ?? {
-        label: t.label ?? t.id,
-        status: "unknown" as const,
-      },
-    );
+    const v = activeTileView(t, currentViews.get(t.label) ?? { status: "unknown" });
     statuses.push(v.status);
-    (t.wide ? wide : grid).push(renderTile(v, t.id, t.wide));
+    (t.wide ? wide : grid).push(renderTile(t.label, v, t.wide));
   }
   const now = Date.now();
   const ageSeconds = lastChange
@@ -168,14 +162,14 @@ let beats = 0;
 export const heartbeat = () => send(enc.encode(`event: ping\ndata: ${++beats}\n\n`));
 
 const runSourceKey = (source: RunSource): string => `${source.repo} ${source.workflow}`;
-const runSourceTileKey = (source: RunSource, tile: Tile): string => `${runSourceKey(source)} ${tile.id}`;
+const runSourceTileKey = (source: RunSource, tile: Tile): string => `${runSourceKey(source)} ${tile.label}`;
 
 function beginTileUpdate(tile: Tile, startedAt: number): void {
-  const active = activeTileUpdates.get(tile.id);
+  const active = activeTileUpdates.get(tile.label);
   if (active) {
     active.count++;
   } else {
-    activeTileUpdates.set(tile.id, {
+    activeTileUpdates.set(tile.label, {
       count: 1,
       startedAt,
       stale: false,
@@ -184,8 +178,8 @@ function beginTileUpdate(tile: Tile, startedAt: number): void {
 }
 
 function finishTileUpdate(tile: Tile): void {
-  const active = activeTileUpdates.get(tile.id);
-  if (!active || active.count === 1) activeTileUpdates.delete(tile.id);
+  const active = activeTileUpdates.get(tile.label);
+  if (!active || active.count === 1) activeTileUpdates.delete(tile.label);
   else active.count--;
 }
 
@@ -197,9 +191,9 @@ const STALE_UPDATE_MS = 60_000;
 const STALE_UPDATE_SUB = "refresh still pending";
 
 function activeTileView(tile: Tile, view: TileView): TileView {
-  const badge = activityBadges.get(tile.id);
+  const badge = activityBadges.get(tile.label);
   if (badge) view = { ...view, aside: badge + (view.aside ?? "") };
-  if (!activeTileUpdates.get(tile.id)?.stale) return view;
+  if (!activeTileUpdates.get(tile.label)?.stale) return view;
   return tile.showOnlyCompletedViews
     ? { ...view, sub: STALE_UPDATE_SUB }
     : { ...view, status: "unknown", sub: STALE_UPDATE_SUB };
@@ -207,10 +201,10 @@ function activeTileView(tile: Tile, view: TileView): TileView {
 
 function grayStaleTileUpdates(now: number): void {
   const newlyStale: string[] = [];
-  for (const [tileId, active] of activeTileUpdates) {
+  for (const [label, active] of activeTileUpdates) {
     if (active.stale || now - active.startedAt < STALE_UPDATE_MS) continue;
     active.stale = true;
-    newlyStale.push(`${tileId} (${Math.max(0, now - active.startedAt)} ms)`);
+    newlyStale.push(`"${label}" (${Math.max(0, now - active.startedAt)} ms)`);
   }
   if (newlyStale.length) {
     const sources = [...activeRunSourceUpdates];
@@ -312,19 +306,19 @@ async function collectView(
     }
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error(`tile ${tile.id} failed:`, msg);
-    const prev = views.get(tile.id);
+    console.error(`tile "${tile.label}" failed:`, msg);
+    const prev = views.get(tile.label);
     return prev
       ? { ...prev, status: "unknown", sub: friendlyError(msg) }
-      : { label: tile.label ?? tile.id, status: "unknown", value: "—", sub: friendlyError(msg) };
+      : { status: "unknown", value: "—", sub: friendlyError(msg) };
   }
 }
 
 function publishViews(collected: { tile: Tile; view: TileView }[], recoveryIsSettled: boolean): void {
   const now = Date.now();
   for (const { tile, view } of collected) {
-    views.set(tile.id, view);
-    lastRun.set(tile.id, now);
+    views.set(tile.label, view);
+    lastRun.set(tile.label, now);
   }
   lastChange = now;
   updateFaviconRedSince(now, recoveryIsSettled);
@@ -345,7 +339,7 @@ function withChartOnTile(previous: TileView | undefined, view: TileView): TileVi
 
 function publishIntermediateView(tile: Tile, view: TileView): void {
   const now = Date.now();
-  views.set(tile.id, withChartOnTile(views.get(tile.id), view));
+  views.set(tile.label, withChartOnTile(views.get(tile.label), view));
   lastChange = now;
   updateFaviconRedSince(now, false);
   broadcast(dashboardUpdate());
@@ -362,25 +356,25 @@ export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
   const activeAtTickStart = new Set(activeTileUpdates.keys());
   const dueTiles = tiles.filter((tile) =>
     !sourceTiles.has(tile) &&
-    !activeAtTickStart.has(tile.id) &&
-    now - (lastRun.get(tile.id) ?? 0) >= tile.intervalMs
+    !activeAtTickStart.has(tile.label) &&
+    now - (lastRun.get(tile.label) ?? 0) >= tile.intervalMs
   );
   const dueSources = sourceGroups.flatMap((group) => {
     if (activeRunSourceUpdates.has(runSourceKey(group.source))) return [];
     const due = group.tiles.filter((tile) =>
-      !activeAtTickStart.has(tile.id) &&
+      !activeAtTickStart.has(tile.label) &&
       now - (lastSourceTileRun.get(runSourceTileKey(group.source, tile)) ?? 0) >= tile.intervalMs
     );
     return due.length ? [{ source: group.source, tiles: due }] : [];
   });
   const dueActivity = tiles.filter((tile) =>
-    tile.collectActivity && !activeActivityUpdates.has(tile.id) &&
-    now - (lastActivityRun.get(tile.id) ?? 0) >= tile.intervalMs
+    tile.collectActivity && !activeActivityUpdates.has(tile.label) &&
+    now - (lastActivityRun.get(tile.label) ?? 0) >= tile.intervalMs
   );
   if (!dueTiles.length && !dueSources.length && !dueActivity.length) return;
 
   for (const tile of dueTiles) beginTileUpdate(tile, now);
-  for (const tile of dueActivity) activeActivityUpdates.add(tile.id);
+  for (const tile of dueActivity) activeActivityUpdates.add(tile.label);
   for (const group of dueSources) {
     activeRunSourceUpdates.add(runSourceKey(group.source));
     for (const tile of group.tiles) beginTileUpdate(tile, now);
@@ -414,10 +408,10 @@ export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
         escapeHtml(friendlyError(String(error)))
       }">activity unknown</span>`;
     } finally {
-      activeActivityUpdates.delete(tile.id);
-      lastActivityRun.set(tile.id, Date.now());
+      activeActivityUpdates.delete(tile.label);
+      lastActivityRun.set(tile.label, Date.now());
     }
-    activityBadges.set(tile.id, badge);
+    activityBadges.set(tile.label, badge);
     lastChange = Date.now();
     broadcast(dashboardUpdate());
   };
@@ -460,8 +454,8 @@ export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
       const currentCtx = snapshotCtx(sourceCtx, snapshots);
       const revision = ++sourceRevision;
       const publishIntermediate = (tile: Tile, view: TileView) => {
-        if (revision < (publishedTileRevision.get(tile.id) ?? 0)) return;
-        publishedTileRevision.set(tile.id, revision);
+        if (revision < (publishedTileRevision.get(tile.label) ?? 0)) return;
+        publishedTileRevision.set(tile.label, revision);
         publishIntermediateView(
           tile,
           withSourceHealth(tile, view, snapshots, errors),
@@ -480,8 +474,8 @@ export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
           errors,
         ),
       })));
-      const current = collected.filter(({ tile }) => revision >= (publishedTileRevision.get(tile.id) ?? 0));
-      for (const { tile } of current) publishedTileRevision.set(tile.id, revision);
+      const current = collected.filter(({ tile }) => revision >= (publishedTileRevision.get(tile.label) ?? 0));
+      for (const { tile } of current) publishedTileRevision.set(tile.label, revision);
       const completedAt = Date.now();
       for (const tile of group.tiles) {
         lastSourceTileRun.set(runSourceTileKey(group.source, tile), completedAt);

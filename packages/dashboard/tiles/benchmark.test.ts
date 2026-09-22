@@ -1283,7 +1283,7 @@ Deno.test("benchmark: a red run's measurements still reach the trend", async () 
       assertStringIncludes(v.value ?? "", "▲");
       // Every run was read for its artifact, the three red ones included.
       assertEquals(
-        artifactCalls(calls).filter((call) => call.endsWith("/artifacts"))
+        artifactCalls(calls).filter((call) => call.includes("/artifacts?"))
           .length,
         8,
       );
@@ -2061,7 +2061,6 @@ Deno.test("benchmark: the tile sums the totals, and one artifact per bucket is k
     const v = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
     assertStringIncludes(v.value ?? "", "flat"); // the headline trend, flat over the window
     assertEquals(v.status, "good");
-    assertEquals(v.label, "all benchmarks");
     assertEquals(v.duration, 11 * DAY);
     assertEquals(v.sub, undefined);
     assertStringIncludes(v.extra ?? "", "<svg");
@@ -3998,7 +3997,6 @@ describe("keyBenchmarks", () => {
         benchmark.collect(ctx({ GH_TOKEN: "t" })),
       ]);
       expect(runListCalls(calls)).toHaveLength(1);
-      expect(selected.label).toBe("key benchmarks");
       expect(selected.status).toBe("good");
       expect(selected.value).toBe("flat");
       expect(selected.extra).toContain(">2 benchmarks</div>");
@@ -4006,7 +4004,6 @@ describe("keyBenchmarks", () => {
       expect(selected.duration).toBe(9 * DAY);
       const downloads = artifactCalls(calls).length;
 
-      expect(all.label).toBe("all benchmarks");
       expect(all.status).toBe("warn");
       expect(all.extra).toContain(">5 benchmarks</div>");
       expect(all.href).toBe("/bench?view=runtime&repo=labs");
@@ -4113,7 +4110,6 @@ describe("keyBenchmarks", () => {
     });
     await withApi({ throws: new Error("network offline") }, async () => {
       const selected = await keyBenchmarks.collect(ctx({ GH_TOKEN: "t" }));
-      expect(selected.label).toBe("key benchmarks");
       expect(selected.status).toBe("unknown");
       expect(selected.value).toBe("▲100%");
       expect(selected.sub).toBeTruthy();
@@ -4143,7 +4139,6 @@ describe("keyBenchmarks", () => {
     await withApi({ pages: { 1: [] } }, async () => {
       expect(await keyBenchmarks.collect(ctx({ GH_TOKEN: "t" })))
         .toMatchObject({
-          label: "key benchmarks",
           status: "unknown",
           value: "—",
           sub: "no benchmark runs",
@@ -4154,7 +4149,6 @@ describe("keyBenchmarks", () => {
       async () => {
         expect(await keyBenchmarks.collect(ctx({ GH_TOKEN: "t" })))
           .toMatchObject({
-            label: "key benchmarks",
             status: "bad",
             value: "failed",
             sub: "no benchmark data",

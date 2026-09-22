@@ -26,12 +26,12 @@
  *    4. Click "Invoke Server Stream" - server counter should increment
  */
 import {
+  debugStr,
   Default,
   handler,
   NAME,
   pattern,
   Stream,
-  toCompactDebugString,
   toIndentedDebugString,
   UI,
   wish,
@@ -82,7 +82,7 @@ const invokeServerStream = handler<
       );
     } else {
       state.lastInvocationStatus.set(
-        `Stream not found or invalid: ${toCompactDebugString(innerValue)}`,
+        debugStr`Stream not found or invalid: $quote,long${innerValue}`,
       );
     }
   } catch (error) {

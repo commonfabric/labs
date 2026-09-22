@@ -1,0 +1,155 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "AmountEntry": {
+        "properties": {
+          "amount": {
+            "description": "In whole currency units. `12.95` is twelve dollars ninety-five.",
+            "type": "number"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "amount"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "budget": {
+        "asCell": [
+          "cell"
+        ],
+        "default": 0,
+        "description": "Total to measure spending against, in whole currency units. Zero means no\nbudget is shown.",
+        "type": "number"
+      },
+      "currencySymbol": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "$",
+        "description": "Prefixed to every formatted amount.",
+        "type": "string"
+      },
+      "entries": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "The entries being totalled. A host passes its own cell to share them.",
+        "items": {
+          "$ref": "#/$defs/AmountEntry"
+        },
+        "type": "array"
+      },
+      "label": {
+        "asCell": [
+          "cell"
+        ],
+        "default": "Expenses",
+        "description": "Heading shown above the entries.",
+        "type": "string"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "primitives/amount-ledger.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AmountEntry": {
+        "properties": {
+          "amount": {
+            "description": "In whole currency units. `12.95` is twelve dollars ninety-five.",
+            "type": "number"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "amount"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addEntry": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "amount": {
+            "type": "number"
+          },
+          "label": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "amount"
+        ],
+        "type": "object"
+      },
+      "entries": {
+        "items": {
+          "$ref": "#/$defs/AmountEntry"
+        },
+        "type": "array"
+      },
+      "entryCount": {
+        "type": "number"
+      },
+      "formattedTotal": {
+        "type": "string"
+      },
+      "overBudget": {
+        "type": "boolean"
+      },
+      "remaining": {
+        "type": "number"
+      },
+      "removeEntry": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "entry": {
+            "$ref": "#/$defs/AmountEntry"
+          }
+        },
+        "required": [
+          "entry"
+        ],
+        "type": "object"
+      },
+      "total": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "entries",
+      "total",
+      "formattedTotal",
+      "remaining",
+      "overBudget",
+      "entryCount",
+      "addEntry",
+      "removeEntry",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

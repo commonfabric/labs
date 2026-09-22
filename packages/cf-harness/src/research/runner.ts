@@ -43,6 +43,11 @@ import type { HarnessDocsCorpus } from "../docs-corpus/corpus.ts";
 import { findSectionPassage, rankSections } from "../docs-corpus/sections.ts";
 import { errorMessage } from "../error-message.ts";
 import { inputCellsContextMessage } from "../input-cells.ts";
+import { ORIENTATION_GUIDANCE } from "../orientation.ts";
+import {
+  PATTERN_AUTHORING_GUIDANCE,
+  PATTERN_COMPOSITION_GUIDANCE,
+} from "../pattern-authoring.ts";
 import { PIECE_TARGETING_GUIDANCE } from "../piece-targeting.ts";
 import type {
   HarnessModelAttemptDiagnostic,
@@ -518,6 +523,9 @@ const systemPrompt = (purpose?: HarnessResearchPurpose): string =>
       : "Produce the smallest complete recipe for the requested implementation using only the supplied tools.",
     "This is CF documentation, skills, pattern-index, source, dependency, and handle research; it is not web research.",
     PIECE_TARGETING_GUIDANCE,
+    PATTERN_AUTHORING_GUIDANCE,
+    PATTERN_COMPOSITION_GUIDANCE,
+    ...(purpose === "orient" ? [ORIENTATION_GUIDANCE] : []),
     "Search for the next unresolved fact. Search results are leads, not proof of applicability. Read exact evidence only when it changes the decision; do not keep searching after the question is answered.",
     "A long section or source file is never represented by its first chunk alone. Follow nextOffset with another exact read whenever the needed answer could continue later.",
     "Use the pattern index and available data to find a short path to the goal. Prefer composing suitable existing pieces; describe the smallest missing reusable capability when authoring is needed. If the approach becomes large or tangled, reconsider the component boundaries and data contracts before expanding it. One source file per component does not mean one component for the entire goal.",
@@ -532,9 +540,11 @@ const systemPrompt = (purpose?: HarnessResearchPurpose): string =>
       "Prefer direct-run when one verified pattern solves the task, composition when verified parts fit, and author only when reuse does not. Implementation direction is separate from the scope of this call.",
       "A run-pattern-input example has an invocation OBJECT conforming to run_pattern, with a selected patternId and no sourceText; the host serializes it into copyable JSON. A pattern-source example has complete TypeScript/TSX in content. Never put TSX into an invocation or return a clipped code prefix.",
       "Every API illustrated in an example, including an API mentioned only in a comment, must be supported by an exact opened read cited in example.sourceIds.",
-      "Examples are optional. Include one when it makes the answer usable; it may be a small idiom or a composable piece. Do not expand a factual question into a whole app. State routine assumptions and reserve missing for actual blockers to this answer, not everything left for the author to do.",
+      purpose === undefined
+        ? "An implementation kit needs a complete example: a run-pattern-input invocation for direct-run, or pattern-source for author/compose. Without it, report incomplete and name the missing example. A focused-api fact needs a cited rule, not application code."
+        : "Examples are optional. Include one when it makes the answer usable; it may be a small idiom or a composable piece. Do not expand a factual question into a whole app. State routine assumptions and reserve missing for actual blockers to this answer, not everything left for the author to do.",
     ],
-    "Distinguish available inputs, the requirements of one candidate, and missing user data. A candidate's SQLite or connector contract is specific to that candidate, not a universal task prerequisite. No current mailbox handle means mailbox data is unavailable; local-only apps need no external handle.",
+    "Distinguish available inputs, the requirements of one candidate, and missing user data. A candidate's SQLite or connector contract is specific to that candidate, not a universal task prerequisite. No current mailbox handle means mail is not yet given, not that permitted discovery cannot find it; local-only apps need no external handle.",
     "Check documentTitle and headingPath before applying a snippet. Iframe React guest code and ordinary commonfabric patterns use different execution environments. A React JSX pragma or React import belongs to an iframe guest, never add it to an ordinary compiled CF pattern. Use the relevant canonical guide sections for the execution environment. Search matching passages or list an outline to choose what to read; read larger sections when their context matters.",
     "On your final turn, make no tool calls and return only JSON matching this schema:",
     JSON.stringify(researchResultSchema(purpose)),
@@ -1131,8 +1141,8 @@ export const createResearchRunner = (options: {
   /** Records each provider attempt in the parent run report. */
   onAttempt?: (attempt: HarnessModelAttemptDiagnostic) => void | Promise<void>;
 
-  /** Counts research usage beside delegated usage. */
-  onUsage?: (usage: HarnessModelUsage) => void;
+  /** Reports every completed private model call before the next one starts. */
+  onUsage?: (usage: HarnessModelUsage | undefined) => void | Promise<void>;
 }): HarnessResearchRunner =>
 async (request) => {
   const model = researchModel(options.modelClient.providerId);
@@ -1246,10 +1256,13 @@ async (request) => {
           : {}),
       });
       modelTurns += 1;
-      if (result.usage !== undefined) options.onUsage?.(result.usage);
+      await options.onUsage?.(result.usage);
       transcript.push(result.assistant);
       const calls = result.assistant.toolCalls ?? [];
       if (calls.length === 0) {
+        if (runWasAborted(request.signal)) {
+          throw abortError(request.signal);
+        }
         finalAssistant = result.assistant;
         break;
       }
@@ -1351,13 +1364,16 @@ async (request) => {
           : {}),
       });
       modelTurns += 1;
-      if (repaired.usage !== undefined) options.onUsage?.(repaired.usage);
+      await options.onUsage?.(repaired.usage);
       transcript.push(repaired.assistant);
       const repairCalls = repaired.assistant.toolCalls ?? [];
       for (const call of repairCalls) {
         transcript.push(toolResultMessage(call.id, call.function.name, {
           error: "private tools are withheld on the citation repair turn",
         }));
+      }
+      if (runWasAborted(request.signal)) {
+        throw abortError(request.signal);
       }
       if (repairCalls.length === 0) {
         try {

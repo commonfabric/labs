@@ -26,14 +26,19 @@ type Fixture = {
   runtime: Runtime;
 };
 
-async function withFixture(body: (fixture: Fixture) => Promise<void>) {
+async function withFixture(
+  body: (fixture: Fixture) => Promise<void>,
+  { bounded = true }: { bounded?: boolean } = {},
+) {
   const storageManager = StorageManager.emulate({ as: identity });
   const runtime = new Runtime({
     apiUrl: new URL("http://toolshed.test"),
     storageManager,
     cfcEnforcementMode: "enforce-strict",
     cfcFlowLabels: "persist",
-    cfcReadMaxConfidentiality: [cfcAtom.user(identity.did())],
+    ...(bounded
+      ? { cfcReadMaxConfidentiality: [cfcAtom.user(identity.did())] }
+      : {}),
     trustSnapshotProvider: () => ({
       id: "snapshot-share-ipc",
       actingPrincipal: identity.did(),
@@ -114,32 +119,26 @@ describe("snapshot-share", () => {
     })).rejects.toThrow("Snapshot share confirmation is unavailable");
   });
 
-  it("refuses an unbounded prepare before synchronizing either handle", async () => {
-    let syncCount = 0;
-    const runtime = {
-      getCellFromLink: () => ({
-        runtime,
-        sync: () => {
-          syncCount++;
-          return Promise.resolve();
-        },
-      }),
-    };
-    const processor = buildProcessor({ runtime });
-    const ref: CellRef = {
-      space: identity.did(),
-      id: "of:fid1:unbounded",
-      scope: "space",
-      path: [],
-    };
-    await expect(processor.handleSnapshotSharePrepare({
-      type: RequestType.SnapshotSharePrepare,
-      source: ref,
-      audience: { space: ref },
-    })).rejects.toThrow(
-      "Snapshot sharing requires a bounded runtime read ceiling",
+  it("prepares an actor-private snapshot in an unbounded shell runtime", async () => {
+    await withFixture(
+      async ({ processor, sourceRef, destinationRef, runtime }) => {
+        const preview = await processor.handleSnapshotSharePrepare({
+          type: RequestType.SnapshotSharePrepare,
+          source: sourceRef,
+          audience: { space: destinationRef },
+        }, first);
+        expect(preview.value).toEqual({ title: "Solaris" });
+        expect(preview.audience).toEqual(cfcAtom.space(identity.did()));
+        const shared = await processor.handleSnapshotShareCommit({
+          type: RequestType.SnapshotShareCommit,
+          id: preview.id,
+        }, first);
+        expect(runtime.getCellFromLink(shared.cell).get()).toEqual({
+          title: "Solaris",
+        });
+      },
+      { bounded: false },
     );
-    expect(syncCount).toBe(0);
   });
 
   it("keeps consent in the backend and admits one confirmation from its client", async () => {

@@ -6,10 +6,9 @@ import type { Tile } from "../types.ts";
  * value to show, and stays green.
  */
 export const cubicSpend: Tile = {
-  id: "cubic-spend",
+  label: "cubic spend",
   intervalMs: 24 * 60 * 60_000,
   collect: () => Promise.resolve({
-    label: "cubic spend",
     status: "good",
     value: "—",
     sub: "api does not expose value",

@@ -39,6 +39,53 @@ const writeTranscript = async (
 };
 
 describe("console/turn-result", () => {
+  for (const source of ["total", "legacy", "absent", "malformed"] as const) {
+    it(`projects ${source} usage without guessing missing counts`, async () => {
+      const artifactRoot = await Deno.makeTempDir();
+      try {
+        const turnId = "usage";
+        await writeTranscript(artifactRoot, turnId, [
+          { role: "user", content: "Read the note." },
+          { role: "assistant", content: "The note is ready." },
+        ]);
+        const reportPath = join(artifactRoot, turnId, "run-report.json");
+        const report = JSON.parse(await Deno.readTextFile(reportPath));
+        if (source !== "absent") report.usage = { inputTokens: 10 };
+        if (source === "total") {
+          report.totalUsage = {
+            inputTokens: 40,
+            outputTokens: 8,
+            secret: "private",
+          };
+        } else if (source === "malformed") {
+          report.totalUsage = "unavailable";
+        }
+        await Deno.writeTextFile(reportPath, JSON.stringify(report));
+        const result = await readConsoleTurnResult({
+          artifactRoot,
+          turnId,
+          sessionId: "conversation",
+          continuable: true,
+          spaceName: "usage-test",
+          timing: {
+            startedAt: "2026-09-21T00:00:00Z",
+            endedAt: "2026-09-21T00:00:03.250Z",
+          },
+        });
+        expect(result?.usage).toEqual(
+          source === "total"
+            ? { inputTokens: 40, outputTokens: 8 }
+            : source === "legacy"
+            ? { inputTokens: 10 }
+            : undefined,
+        );
+        expect(result?.elapsedMs).toBe(3250);
+      } finally {
+        await Deno.remove(artifactRoot, { recursive: true });
+      }
+    });
+  }
+
   it("reads an unfamiliar stored outcome as completed while preserving the result body", async () => {
     const artifactRoot = await Deno.makeTempDir();
     try {

@@ -63,7 +63,6 @@ Deno.test("prod errors: the headline is the last 12h error rate — <1% good, <5
   assertEquals(good.value, "0.50%");
   assertEquals(good.status, "good");
   assertEquals(good.sub, "6 err / 1200 spans · last 12h");
-  assertEquals(good.label, "prod errors");
 
   const boundary = await view(12); // exactly 1.00% — "under 1" is exclusive
   assertEquals(boundary.value, "1.00%");

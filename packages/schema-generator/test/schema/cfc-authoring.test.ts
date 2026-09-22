@@ -1,7 +1,13 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import ts from "typescript";
 import { SchemaGenerator } from "../../src/schema-generator.ts";
-import { asObjectSchema, getTypeFromCode, getTypeFromFiles } from "../utils.ts";
+import {
+  asObjectSchema,
+  createTestProgram,
+  getTypeFromCode,
+  getTypeFromFiles,
+} from "../utils.ts";
 
 describe("Schema: CFC authoring aliases", () => {
   it("lowers AnyOf as one explicit confidentiality clause", async () => {
@@ -584,5 +590,63 @@ describe("Schema: CFC authoring aliases", () => {
     expect(value.type).toBe("object");
     expect(value.properties?.title?.type).toBe("string");
     expect(value.ifc).toBeUndefined();
+  });
+
+  it("lowers only the labels where an alias chain's payload keeps a parameter substitution does not reach", async () => {
+    // `Contact` names no parameter, but its expansion reaches `Secret`'s `T`
+    // through an indexed access the lowering does not substitute.
+    const code = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type Secret<T extends { name: string }> =
+        Confidential<{ name: T["name"] }, readonly ["owner"]>;
+      type Contact = Secret<{ name: "Ada" }>;
+
+      interface SchemaRoot {
+        contact: Contact;
+      }
+    `;
+
+    const { type, checker } = await getTypeFromCode(code, "SchemaRoot");
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker),
+    );
+
+    expect(schema.properties?.contact).toEqual({ $ref: "#/$defs/Contact" });
+    expect(schema.$defs?.Contact).toEqual({
+      ifc: { confidentiality: ["owner"] },
+    });
+  });
+
+  it("keeps the labels of a payload's own alias where the chain is entered without argument nodes", async () => {
+    // A type with no node, as a print that expands the alias leaves it, gives
+    // the lowering no argument to substitute; the payload's own alias still
+    // lowers its label.
+    const { checker, sourceFile } = await createTestProgram(`
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
+      type Owned<T> = Confidential<Integrity<T, readonly ["inner"]>, readonly ["outer"]>;
+      interface Holder { value: Owned<string> }
+    `);
+    const holder = checker.getSymbolsInScope(
+      sourceFile,
+      ts.SymbolFlags.Interface,
+    ).find((candidate) => candidate.name === "Holder")!;
+    const value = checker.getDeclaredTypeOfSymbol(holder).getProperty(
+      "value",
+    )!;
+
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(
+        checker.getTypeOfSymbolAtLocation(value, sourceFile),
+        checker,
+      ),
+    );
+
+    expect(schema.ifc).toEqual({
+      confidentiality: ["outer"],
+      integrity: ["inner"],
+    });
   });
 });

@@ -16,7 +16,7 @@ import { decodeKeys } from "./keys.ts";
 import { cursorScreenPos, renderFrame, type ViewState } from "./render.ts";
 import { Session, type SessionOptions } from "./session.ts";
 import { ui } from "./theme.ts";
-import type { Semantics } from "./languages/language.ts";
+import { type Semantics, warmAllLanguages } from "./languages/language.ts";
 import type { EditableSource } from "./editsource.ts";
 import { realFileGateway } from "./filegateway.ts";
 import { ViewError } from "./errors.ts";
@@ -302,6 +302,13 @@ export async function runPager(
     // user is reading it and before any keypress arrives, so the first info card
     // does not pay the one-time build cost on the interactive path.
     if (semantics) deps.setTimer(() => semantics.prewarm(), 0);
+    // The file picker and a definition peek open files this view has not seen,
+    // in any language, and both answer a keystroke synchronously. So every
+    // language has its parser before the first key is read. The frame above is
+    // already on screen, and keystrokes typed meanwhile wait in the terminal.
+    // A parser that will not load leaves this view and the other languages
+    // alone; opening a file in that language is what reports it.
+    await warmAllLanguages();
     while (!session.quit) {
       const n = await tty.read(buf);
       if (n === null) {

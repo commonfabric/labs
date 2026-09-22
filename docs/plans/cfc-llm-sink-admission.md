@@ -9,7 +9,10 @@ standing note.
 
 The max-enforcement posture declares public-only confidentiality ceilings for
 every network-fetch sink and an explicit ungated release for the llm sinks
-(`llm`, `llmDialog`, `generateText`, `generateObject`). A sink with no
+(`llm`, `llmDialog`, `generateText`, `generateObject`). It leaves
+`sqliteQuery` ungated as well, for a reason of its own that this plan does not
+carry: the bound a storage read wants is the database's space rather than a
+clause list, and the sqlite builtin applies it. A sink with no
 ceiling gets no gate, so llm-sink release is ungoverned under the posture:
 any confidentiality — a secret as much as a risk caveat — reaches the llm
 sinks without a policy evaluation running for them. The sink registry records

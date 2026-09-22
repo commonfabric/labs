@@ -1,19 +1,36 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { FabricMap } from "@/fabric-instances";
-import {
-  BaseValueVisitor,
-  DO_VISIT_SUBTYPE,
-  type LeafVisitorResult,
-  type ValueVisitor,
-} from "@/value-visit";
+import { BaseValueVisitor, type VisitResult } from "@/value-visit";
 import { VisitInProgress } from "@/value-visit/VisitInProgress.ts";
 
-import { mainResult, Recorder } from "./Recorder.ts";
+import { Recorder } from "./Recorder.ts";
 
 describe("BaseValueVisitor", () => {
-  class Base extends BaseValueVisitor<unknown, unknown> {}
+  /** The least a concrete subclass has to supply. */
+  class Base extends BaseValueVisitor<unknown, unknown> {
+    override visitValue(
+      _value: unknown,
+    ): VisitResult<unknown, unknown> {
+      return undefined;
+    }
+
+    override visitedFabricArrayElement(): undefined {
+      return undefined;
+    }
+
+    override visitedFabricArrayGap(): undefined {
+      return undefined;
+    }
+
+    override visitedFabricInstance(): undefined {
+      return undefined;
+    }
+
+    override visitedFabricPlainObjectEntry(): undefined {
+      return undefined;
+    }
+  }
 
   describe("instance members", () => {
     describe("isPlusType()", () => {
@@ -28,55 +45,24 @@ describe("BaseValueVisitor", () => {
           /Cannot visit cyclic value: `\[1\]`/,
         );
       });
-    });
 
-    describe("visitFabricContainer()", () => {
-      it("returns `DO_VISIT_SUBTYPE`", () => {
-        expect(new Base().visitFabricContainer([], "Array")).toBe(
-          DO_VISIT_SUBTYPE,
-        );
+      it("is what the engine reaches for a cyclic value", () => {
+        class Recursing extends Base {
+          override visitValue(
+            value: unknown,
+          ): VisitResult<unknown, unknown> {
+            return Array.isArray(value)
+              ? { type: "recurse", doKeys: false, doValues: true }
+              : undefined;
+          }
+        }
+
+        const value: unknown[] = [];
+        value.push(value);
+
+        expect(() => new VisitInProgress(new Recursing()).visit(value))
+          .toThrow(/Cannot visit cyclic value: /);
       });
-    });
-
-    describe("visitValue()", () => {
-      it("returns `DO_VISIT_SUBTYPE`", () => {
-        expect(new Base().visitValue(1, "number")).toBe(DO_VISIT_SUBTYPE);
-      });
-    });
-
-    describe("the methods left for a subclass", () => {
-      // The table is held to the interface: a method added there fails to
-      // compile until it is either listed here or named among the exceptions,
-      // so the claim that every other method throws stays closed.
-
-      const instance = new FabricMap(new Map());
-      const cases = {
-        visitFabricArray: (vis) => vis.visitFabricArray([]),
-        visitFabricInstance: (vis) => vis.visitFabricInstance(instance),
-        visitFabricPlainObject: (vis) => vis.visitFabricPlainObject({}),
-        visitPlusType: (vis) => vis.visitPlusType(new Date(0)),
-        visitPrimitive: (vis) => vis.visitPrimitive(1, "number"),
-        visitedFabricArrayElement: (vis) =>
-          vis.visitedFabricArrayElement([1], 0, 1),
-        visitedFabricArrayGap: (vis) => vis.visitedFabricArrayGap([], 0, 1),
-        visitedFabricInstance: (vis) => vis.visitedFabricInstance(instance, {}),
-        visitedFabricPlainObjectEntry: (vis) =>
-          vis.visitedFabricPlainObjectEntry({}, "k", 1),
-      } satisfies Record<
-        Exclude<
-          keyof ValueVisitor<unknown, unknown>,
-          "isPlusType" | "visitCycle" | "visitFabricContainer" | "visitValue"
-        >,
-        (vis: Base) => unknown
-      >;
-
-      for (const [name, call] of Object.entries(cases)) {
-        it(`throws from \`${name}()\`, naming that method`, () => {
-          expect(() => call(new Base())).toThrow(
-            new RegExp(`^Shouldn't happen: \`${name}\\(\\)\` called on `),
-          );
-        });
-      }
     });
 
     describe("throwNoCycles()", () => {
@@ -98,36 +84,16 @@ describe("BaseValueVisitor", () => {
     describe("throwShouldntCall()", () => {
       it("throws an error naming the method and the visitor", () => {
         class Refusing extends Recorder {
-          override visitPrimitive(): never {
-            return this.throwShouldntCall("visitPrimitive");
+          override visitNumber(): never {
+            return this.throwShouldntCall("visitNumber");
           }
         }
 
         expect(() => new VisitInProgress(new Refusing()).visit(1))
           .toThrow(
-            /Shouldn't happen: `visitPrimitive\(\)` called on `.*Refusing/,
+            /Shouldn't happen: `visitNumber\(\)` called on `.*Refusing/,
           );
       });
-    });
-  });
-
-  describe("as a visitor", () => {
-    class Leaf extends BaseValueVisitor<never, string> {
-      override visitPrimitive(
-        value: unknown,
-      ): LeafVisitorResult<never, string> {
-        return mainResult(String(value));
-      }
-    }
-
-    it("dispatches a value to its subtype method by default", () => {
-      expect(new VisitInProgress(new Leaf()).visit(5)).toEqual(mainResult("5"));
-    });
-
-    it("throws on reaching a subtype method the subclass did not override", () => {
-      expect(() => new VisitInProgress(new Leaf()).visit([5])).toThrow(
-        /Shouldn't happen: `visitFabricArray\(\)` called on /,
-      );
     });
   });
 });

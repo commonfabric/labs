@@ -8,7 +8,7 @@ export interface HighlightEvidence {
   readonly className: TokenClass;
 }
 
-/** Selection paths exercised for one surveyed language fixture. */
+/** Selection paths exercised for a language, carried by one of its fixtures. */
 export interface SelectionCases {
   readonly filenames: readonly string[];
   readonly aliases: readonly string[];
@@ -34,7 +34,9 @@ export interface ViewLanguageFixture {
   readonly before: URL;
   readonly after: URL;
   readonly incomplete: URL;
-  readonly selection: SelectionCases;
+
+  /** Present on the fixture that carries the language's selection routes. */
+  readonly selection?: SelectionCases;
   readonly beforeEvidence: HighlightEvidence;
   readonly afterEvidence: HighlightEvidence;
   readonly incompleteEvidence: HighlightEvidence;
@@ -174,12 +176,16 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     surveyRepository: "loom",
     surveyCommit: "43a4afe18fbfc37ab8a11da8fe5011f0be81f6e7",
     surveyPath: "src/bin/loom-size-report.py",
-    before: new URL("./python/before.py", import.meta.url),
-    after: new URL("./python/after.py", import.meta.url),
-    incomplete: new URL("./python/incomplete.py", import.meta.url),
+    before: new URL("./python-loom/before.py", import.meta.url),
+    after: new URL("./python-loom/after.py", import.meta.url),
+    incomplete: new URL("./python-loom/incomplete.py", import.meta.url),
     selection: {
       filenames: [
         "src/bin/loom-size-report.py",
+        "cfc/formal/scripts/check-architecture.py",
+        "src/probe/artifact_refs.py",
+        "bench/analyze.py",
+        "vdso/check_vdso.py",
         "src/loom/types.pyi",
         "tools/app.pyw",
       ],
@@ -188,11 +194,60 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
         "#!/usr/bin/python3",
         "#!/usr/bin/env python",
         "#!/usr/bin/env pypy3",
+        "#!/usr/bin/env -S uv run --script",
       ],
     },
     beforeEvidence: { text: "count_items", className: "functionName" },
     afterEvidence: { text: "count_items", className: "functionName" },
     incompleteEvidence: { text: "count_items", className: "functionName" },
+  },
+  {
+    languageId: "python",
+    surveyRepository: "specs",
+    surveyCommit: "34fb8680caa9f68005a438854fa5dc2ef15ff953",
+    surveyPath: "cfc/formal/scripts/check-architecture.py",
+    before: new URL("./python-specs/before.py", import.meta.url),
+    after: new URL("./python-specs/after.py", import.meta.url),
+    incomplete: new URL("./python-specs/incomplete.py", import.meta.url),
+    beforeEvidence: { text: "closure", className: "functionName" },
+    afterEvidence: { text: "closure", className: "functionName" },
+    incompleteEvidence: { text: "closure", className: "functionName" },
+  },
+  {
+    languageId: "python",
+    surveyRepository: "legibility",
+    surveyCommit: "ff46a8e811e0f75246b2fe1cafa8e18954dede3f",
+    surveyPath: "src/probe/artifact_refs.py",
+    before: new URL("./python-legibility/before.py", import.meta.url),
+    after: new URL("./python-legibility/after.py", import.meta.url),
+    incomplete: new URL("./python-legibility/incomplete.py", import.meta.url),
+    beforeEvidence: { text: "display_date", className: "functionName" },
+    afterEvidence: { text: "display_date", className: "functionName" },
+    incompleteEvidence: { text: "display_date", className: "functionName" },
+  },
+  {
+    languageId: "python",
+    surveyRepository: "raia",
+    surveyCommit: "a9998da33e2a04df830d684cd6eef1a3ec2a4f59",
+    surveyPath: "bench/analyze.py",
+    before: new URL("./python-raia/before.py", import.meta.url),
+    after: new URL("./python-raia/after.py", import.meta.url),
+    incomplete: new URL("./python-raia/incomplete.py", import.meta.url),
+    beforeEvidence: { text: "fail_vec", className: "functionName" },
+    afterEvidence: { text: "fail_vec", className: "functionName" },
+    incompleteEvidence: { text: "fail_vec", className: "functionName" },
+  },
+  {
+    languageId: "python",
+    surveyRepository: "gvisor",
+    surveyCommit: "0da391ef9ab8d513fba6412f4b14680917a00556",
+    surveyPath: "vdso/check_vdso.py",
+    before: new URL("./python-gvisor/before.py", import.meta.url),
+    after: new URL("./python-gvisor/after.py", import.meta.url),
+    incomplete: new URL("./python-gvisor/incomplete.py", import.meta.url),
+    beforeEvidence: { text: "PageRoundDown", className: "functionName" },
+    afterEvidence: { text: "PageRoundDown", className: "functionName" },
+    incompleteEvidence: { text: "PageRoundDown", className: "functionName" },
   },
   {
     languageId: "plain-text",

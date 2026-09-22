@@ -10,6 +10,7 @@
 
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { Database } from "@db/sqlite";
+import type { FabricValue } from "@commonfabric/data-model";
 
 import { openSpace, type SpaceDb } from "../db.ts";
 import {
@@ -272,14 +273,16 @@ Deno.test("diff names what moved, not merely that something did", () => {
 });
 
 Deno.test("a value the canonical hasher rejects is reported, not skipped", () => {
-  // Nothing stored decodes to one of these today, but `decodeStored` spans
-  // several at-rest formats. Silently treating a rejected value as empty would
-  // let real content drift read as "unchanged" — the one lie this must not tell.
+  // Silently treating a rejected value as empty would let real content drift
+  // read as "unchanged" — the one lie this must not tell. A value nested past
+  // the call stack is one the hasher rejects.
   const ok = hashEntityValue({ title: "a topic" });
   assert("hash" in ok);
 
-  const rejected = hashEntityValue(new Map([["a", 1]]));
-  assert("error" in rejected, "an unsupported object type must be reported");
+  let deep: FabricValue = null;
+  for (let i = 0; i < 100_000; i++) deep = [deep];
+  const rejected = hashEntityValue(deep);
+  assert("error" in rejected, "a rejected value must be reported");
   assert(rejected.error.length > 0, "and must carry a reason");
 });
 

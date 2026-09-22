@@ -27,6 +27,7 @@ import { faviconHref, faviconLink, type FaviconStatus } from "./favicon.ts";
 import { paintStatusFavicon } from "./favicon-client.ts";
 import { liveUpdateStream } from "./stream-client.ts";
 import { paintDashboardMessageInput } from "./dashboard-message-client.ts";
+import { reconcileTiles } from "./tiles-client.ts";
 import {
   DASHBOARD_MESSAGE_FADE_MS,
   DASHBOARD_MESSAGE_MAX_LENGTH,
@@ -52,6 +53,7 @@ const PAINT_STATUS_FAVICON = paintStatusFavicon.toString();
 const LIVE_UPDATE_STREAM = liveUpdateStream.toString();
 const DASHBOARD_MESSAGE_OPACITY = dashboardMessageOpacity.toString();
 const PAINT_DASHBOARD_MESSAGE_INPUT = paintDashboardMessageInput.toString();
+const RECONCILE_TILES = reconcileTiles.toString();
 
 // How long past the refresh interval the freshness indicator stays orange before
 // it turns red. The page treats the same span of silence from the server as a
@@ -310,6 +312,7 @@ ${DASHBOARD_THEME_CLIENT}
   const paintStatusFavicon = ${PAINT_STATUS_FAVICON};
   const dashboardMessageOpacity = ${DASHBOARD_MESSAGE_OPACITY};
   const paintDashboardMessageInput = ${PAINT_DASHBOARD_MESSAGE_INPUT};
+  const reconcileTiles = ${RECONCILE_TILES};
   const liveUpdateStream = ${LIVE_UPDATE_STREAM};
   const badge = document.getElementById('livebadge');
   const dot = document.getElementById('freshdot');
@@ -424,42 +427,11 @@ ${DASHBOARD_THEME_CLIENT}
     );
     paintDashboardMessage(now);
   }
-  function reconcileTiles(container, html) {
+  function updateTiles(container, html) {
     const template = document.createElement('template');
     template.innerHTML = html;
     formatViewerTimes(template.content.querySelectorAll('time[data-viewer-time][datetime]'));
-    const currentById = new Map(Array.from(container.children).map((tile) => [tile.dataset.tileId, tile]));
-    const desired = Array.from(template.content.children).map((next) => {
-      const current = currentById.get(next.dataset.tileId);
-      if (!current) return next;
-      currentById.delete(next.dataset.tileId);
-      if (current.outerHTML === next.outerHTML) return current;
-
-      const scrollTop = current.querySelector('.evscroll')?.scrollTop;
-      const active = document.activeElement;
-      const rootFocused = active === current;
-      const focusedHref = current.contains(active) && active instanceof HTMLAnchorElement ? active.href : null;
-      const focusedKey = current.contains(active) && active instanceof HTMLAnchorElement
-        ? active.dataset.focusKey ?? null
-        : null;
-      current.replaceWith(next);
-      const nextScroller = next.querySelector('.evscroll');
-      if (scrollTop !== undefined && nextScroller) nextScroller.scrollTop = scrollTop;
-      if (rootFocused) next.focus({ preventScroll: true });
-      else if (focusedHref) {
-        const links = Array.from(next.querySelectorAll('a'));
-        const replacement = focusedKey
-          ? links.find((link) => link.dataset.focusKey === focusedKey)
-          : undefined;
-        (replacement ?? links.find((link) => link.href === focusedHref))?.focus({ preventScroll: true });
-      }
-      return next;
-    });
-    for (const obsolete of currentById.values()) obsolete.remove();
-    desired.forEach((tile, index) => {
-      const atIndex = container.children[index];
-      if (atIndex !== tile) container.insertBefore(tile, atIndex ?? null);
-    });
+    reconcileTiles(container, Array.from(template.content.children));
   }
   const updates = liveUpdateStream(RED_AFTER, () => {
     const es = new EventSource('/events');
@@ -473,8 +445,8 @@ ${DASHBOARD_THEME_CLIENT}
       updates.heard(Date.now());
       const update = JSON.parse(e.data);
       if (update.shellVersion !== SHELL_VERSION) { location.reload(); return; }
-      reconcileTiles(grid, update.gridHtml);
-      reconcileTiles(wide, update.wideHtml);
+      updateTiles(grid, update.gridHtml);
+      updateTiles(wide, update.wideHtml);
       base = update.ageSeconds;
       t0 = Date.now();
       faviconServerRedSince = update.faviconRedSince;

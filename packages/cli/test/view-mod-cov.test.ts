@@ -10,7 +10,12 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { markdownLanguage } from "../lib/view/languages/markdown/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
-import { buildView, ViewError } from "../lib/view/mod.ts";
+import { warmAllLanguages } from "../lib/view/languages/language.ts";
+import { buildPreparedView, buildView, ViewError } from "../lib/view/mod.ts";
+
+// The pager loads every language's parser before it parses anything; these
+// cases reach the same synchronous entry points directly.
+await warmAllLanguages();
 
 const SRC = "export const x = 1;\nconst y = x + 1;\n";
 const TRANSFORMED = `// transformed: /app.ts
@@ -145,6 +150,39 @@ Deno.test("buildView: a virtual filename selects piped source without making it 
   assertEquals(r.editSource.editable, false);
   assertEquals(r.editSource.path, undefined);
   assertEquals(r.editSource.parse(source), r.doc);
+});
+
+Deno.test("buildPreparedView: a rename loads the parser of the side left behind", async () => {
+  // A diff resolves its two sides separately, so a file renamed out of one
+  // language is still parsed as that language.
+  const diff = [
+    "diff --git a/example.py b/example.txt",
+    "--- a/example.py",
+    "+++ b/example.txt",
+    "@@ -1,2 +1,2 @@",
+    "-def old_name():",
+    "-    return 1",
+    "+plain text now",
+    "+second line",
+    "",
+  ].join("\n");
+
+  const { doc } = await buildPreparedView(diff);
+
+  assertEquals(
+    doc.lines.map((line) => line.spans.map((span) => span.text).join("")).join(
+      "\n",
+    ),
+    diff,
+  );
+  assert(
+    doc.lines.some((line) =>
+      line.spans.some((span) =>
+        span.text === "old_name" && span.cls === "functionName"
+      )
+    ),
+    "the removed side kept its Python coloring",
+  );
 });
 
 Deno.test("buildView: a shebang selects an extensionless source and its editor", () => {

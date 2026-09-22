@@ -94,6 +94,10 @@ export function isValidFabricValueLayer(
 
     case "function":
     default: {
+      // A note about functions: Values of type `function` are very
+      // intentionally _never_ considered to possibly be `FabricValue`s:
+      // `FabricValue` contractually represents that its contents are inert, and
+      // `function` is about as "ert" as a value can get.
       return false;
     }
   }

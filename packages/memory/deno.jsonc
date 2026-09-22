@@ -23,6 +23,8 @@
     }
   },
   "exports": {
+    "./inbox-store": "./inbox-store.ts",
+    "./inbox": "./inbox.ts",
     "./v2/invites": "./v2/invites.ts",
     "./space-invites": "./space-invites.ts",
     "./acl": "./acl.ts",

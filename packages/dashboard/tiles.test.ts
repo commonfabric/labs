@@ -686,18 +686,10 @@ Deno.test("recent runs: duration opens every successful run for the commit", asy
   assertStringIncludes(html, '>42s</a><a class="evarrow"');
 });
 
-Deno.test("tile labels: the labs/loom ci family is renamed and paired", async () => {
+Deno.test("ci trust: both repositories keep their strip at the tile bottom", async () => {
   const one = ctx([run({ conclusion: "success" })]);
-  const labsTrust = await labsCiTrust.collect(one);
-  const loomTrust = await loomCiTrust.collect(one);
-  assertEquals((await labsCi.collect(one)).label, "labs ci");
-  assertEquals((await loomCi.collect(one)).label, "loom ci");
-  assertEquals(labsTrust.label, "labs ci trust");
-  assertEquals(loomTrust.label, "loom ci trust");
-  assertEquals(labsTrust.alignChartBottom, true);
-  assertEquals(loomTrust.alignChartBottom, true);
-  assertEquals((await labsCiDuration.collect(one)).label, "labs ci duration");
-  assertEquals((await loomCiDuration.collect(one)).label, "loom ci duration");
+  assertEquals((await labsCiTrust.collect(one)).alignChartBottom, true);
+  assertEquals((await loomCiTrust.collect(one)).alignChartBottom, true);
 });
 
 Deno.test("runSource creates workflow snapshot metadata", () => {
@@ -755,6 +747,9 @@ Deno.test("recent runs: labs and loom runs interleave chronologically, each tagg
   assertEquals(order, ["3", "7", "2", "6"]);
   assertStringIncludes(v.extra ?? "", "labs · ");
   assertStringIncludes(v.extra ?? "", "loom · ");
+  assertStringIncludes(v.aside ?? "", ">4 in window</span>");
+  // The list's scroll position carries over live updates.
+  assertStringIncludes(v.extra ?? "", '<div class="evscroll" data-focus-key="runs">');
 });
 
 Deno.test("dau: distinct identities per UTC day, excluding the DIDs we name", () => {
@@ -980,11 +975,11 @@ Deno.test("benchmark: formatNs picks a readable unit", () => {
   assertEquals(formatNs(NaN), "—");
 });
 
-Deno.test("registry: unique ids and positive intervals", () => {
-  const ids = TILES.map((t) => t.id);
-  assertEquals(new Set(ids).size, ids.length, "tile ids must be unique");
+Deno.test("registry: unique labels and positive intervals", () => {
+  const labels = TILES.map((t) => t.label);
+  assertEquals(new Set(labels).size, labels.length, "tile labels must be unique");
   for (const t of TILES) {
-    assert(t.intervalMs > 0, `${t.id} needs a positive intervalMs`);
+    assert(t.intervalMs > 0, `${t.label} needs a positive intervalMs`);
   }
 });
 
@@ -994,23 +989,23 @@ Deno.test("every tile's drill-down link reaches a route the dashboard serves", (
   const served = new Set(
     TILES.flatMap((tile) => tile.routes ?? []).map((route) => route.path),
   );
-  for (const { id, view } of TILE_LAYOUT_FIXTURES) {
+  for (const { label, view } of TILE_LAYOUT_FIXTURES) {
     if (view.href === undefined || /^https?:/.test(view.href)) continue;
     const path = new URL(view.href, "http://dashboard").pathname;
     assert(
       served.has(path),
-      `${id} links to ${path}, which no registered tile serves`,
+      `${label} links to ${path}, which no registered tile serves`,
     );
   }
 });
 
 Deno.test("layout fixtures cover every registered tile in registry order", () => {
   assertEquals(
-    TILE_LAYOUT_FIXTURES.map(({ id }) => id),
-    TILES.map(({ id }) => id),
+    TILE_LAYOUT_FIXTURES.map(({ label }) => label),
+    TILES.map(({ label }) => label),
   );
   assertEquals(
-    TILE_LAYOUT_FIXTURES.filter(({ wide }) => wide).map(({ id }) => id),
-    TILES.filter(({ wide }) => wide).map(({ id }) => id),
+    TILE_LAYOUT_FIXTURES.filter(({ wide }) => wide).map(({ label }) => label),
+    TILES.filter(({ wide }) => wide).map(({ label }) => label),
   );
 });

@@ -12,6 +12,7 @@
  * loom read-ceiling record the configuration names (`readCeilingFile`).
  */
 
+import type { JSONValue } from "@commonfabric/api";
 import type { CfcConfClause } from "@commonfabric/runner/cfc";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { isAbsolute } from "@std/path";
@@ -180,7 +181,7 @@ export type LoomRetrievalErrorCode =
 
 /** A host response checked at the command's serialization boundary. */
 export type LoomRetrievalCommandOutput =
-  | { status: "ok"; payload: unknown }
+  | { status: "ok"; payload: JSONValue }
   | {
     status: "error";
     code: LoomRetrievalErrorCode;
@@ -589,7 +590,7 @@ export const runLoomRetrievalCommand = async (
   } catch {
     return failed("The host command could not be started.");
   }
-  let payload: unknown;
+  let payload: JSONValue;
   try {
     payload = JSON.parse(response.stdout);
   } catch {

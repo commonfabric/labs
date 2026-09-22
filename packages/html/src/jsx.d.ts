@@ -3611,6 +3611,8 @@ interface CFCFCLabelAttributes<T> extends CFHTMLAttributes<T> {
   "value"?: unknown;
   "atom"?: string;
   "kind"?: string;
+  "variant"?: "full" | "badge";
+  "text"?: string;
 }
 
 interface CFCFCAuthorshipAttributes<T> extends CFHTMLAttributes<T> {
@@ -4330,7 +4332,8 @@ interface CFShareSnapshotAttributes<T> extends CFHTMLAttributes<T> {
   "$recommended"?: CellLike<unknown>;
   /** Creator inbox receiving references from the reviewed copy. */
   "$received"?: CellLike<unknown>;
-  "audience-kind"?: "user" | "space";
+  /** Matches the element property; JSX props are assigned as properties. */
+  audienceKind?: "user" | "space";
   "oncf-shared"?: EventHandler<{}>;
 }
 

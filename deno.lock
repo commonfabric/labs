@@ -153,9 +153,11 @@
     "npm:ses@^2.2.0": "2.2.0",
     "npm:source-map-js@^1.2.1": "1.2.1",
     "npm:stoker@^2.0.1": "2.0.1_@hono+zod-openapi@1.5.1__hono@4.12.31__zod@4.4.3_hono@4.12.31",
+    "npm:tree-sitter-python@0.25.0": "0.25.0",
     "npm:turndown@^7.2.4": "7.2.4",
     "npm:typescript@6.0.3": "6.0.3",
     "npm:unicode-case-folding@1.1.1": "1.1.1",
+    "npm:web-tree-sitter@0.26.12": "0.26.12",
     "npm:ws@^8.21.3": "8.21.3",
     "npm:zod@^4.4.3": "4.4.3"
   },
@@ -2345,6 +2347,9 @@
     "negotiator@1.0.0": {
       "integrity": "sha512-8Ofs/AUQh8MaEcrlq5xOX0CQ9ypTF5dl78mjlMNfOK08fzpgTHQRQPBxcPlEtIw0yRpws+Zo/3r+5WRby7u3Gg=="
     },
+    "node-addon-api@8.9.2": {
+      "integrity": "sha512-VijLXbi3UACN69I0JVXJsX4tjACjNoQDgv2gTF6sx2wWEi8tkSg2eX8p5gSIFi8z2+DL3oHmY6OyKce38SDolg=="
+    },
     "node-domexception@1.0.0": {
       "integrity": "sha512-/jKZoMpw0F8GRwl4/eLROPA3cfcXtLApP0QzLmUT/HuPCZWyB7IY9ZrMeKw2O/nFIqPQB3PVM9aYm0F312AXDQ==",
       "deprecated": true
@@ -2683,6 +2688,14 @@
     "toidentifier@1.0.1": {
       "integrity": "sha512-o5sSPKEkg/DIQNmH43V0/uerLrpzVedkUh8tGNvaeXpfpuwjKenlSox/2O/BTlZUtEe+JG7s5YhEz608PlAHRA=="
     },
+    "tree-sitter-python@0.25.0": {
+      "integrity": "sha512-eCmJx6zQa35GxaCtQD+wXHOhYqBxEL+bp71W/s3fcDMu06MrtzkVXR437dRrCrbrDbyLuUDJpAgycs7ncngLXw==",
+      "dependencies": [
+        "node-addon-api",
+        "node-gyp-build"
+      ],
+      "scripts": true
+    },
     "ts-algebra@2.0.0": {
       "integrity": "sha512-FPAhNPFMrkwz76P7cdjdmiShwMynZYN6SgOujD1urY4oNm80Ou9oMdmbR45LotcKOXoy7wSmHkRFE6Mxbrhefw=="
     },
@@ -2733,6 +2746,9 @@
     },
     "web-streams-polyfill@3.3.3": {
       "integrity": "sha512-d2JWLCivmZYTSIoge9MsgFCZrt571BikcWGYkjC1khllbTeDlGqZ2D8vD8E/lJa8WGWbb7Plm8/XJYV7IJHZZw=="
+    },
+    "web-tree-sitter@0.26.12": {
+      "integrity": "sha512-fvqTNZQBGUgUgfP0mHw+iHf9Yf6bRQrp0A3pSf2v/hSKxkT1beCoIWoLVmlPL7O6dmySfSb/t1aJoJvrgTRStw=="
     },
     "which@2.0.2": {
       "integrity": "sha512-BLI3Tl1TW3Pvl70l3yq3Y64i+awpwXqsGBYWkkqMtnbXgrMD+yj7rhW0kuEDxzJaYXGjEW5ogapKNMEKNMjibA==",
@@ -2865,7 +2881,9 @@
           "jsr:@std/fmt@~1.0.2",
           "npm:entities@8",
           "npm:marked@^18.0.6",
-          "npm:typescript@6.0.3"
+          "npm:tree-sitter-python@0.25.0",
+          "npm:typescript@6.0.3",
+          "npm:web-tree-sitter@0.26.12"
         ]
       },
       "packages/connectors/agents/connector": {

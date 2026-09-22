@@ -1725,8 +1725,8 @@ export class CfHarnessEngine {
    * An input cell names a task target, so failure is closed and loud rather
    * than tolerated: cells configured on a
    * run with no fabric session, a reference that does not parse, a reference
-   * targeting another space, and a named piece address whose slug this space
-   * does not hold all throw before anything is recorded.
+   * targeting an unadmitted space, and a named piece address whose slug this
+   * space does not hold all throw before anything is recorded.
    */
   async establishInputCells(): Promise<HarnessInputCell[]> {
     if (this.#runState.inputCells !== undefined) {
@@ -1755,6 +1755,7 @@ export class CfHarnessEngine {
           ? { spaceName: session.pieces.getSpaceName() }
           : {}),
         resolvePiece: (slug) => resolvePieceAddress(session.pieces, slug),
+        foreignSpaces: session.foreignSpaces,
       },
     );
     await this.recordHandleTable(minted.table);

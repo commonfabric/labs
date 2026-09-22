@@ -1,9 +1,9 @@
 import ts from "typescript";
+import { resolvesToCommonFabricSymbol } from "@commonfabric/schema-generator/common-fabric-symbols";
 import {
   readAuthoredTypeNodeOnce,
   unwrapTypeParentheses,
 } from "@commonfabric/schema-generator/type-node";
-import { resolvesToCommonFabricSymbol } from "../core/common-fabric-symbols.ts";
 import type { TransformationContext } from "../core/mod.ts";
 import type { CaptureTreeNode } from "../utils/capture-tree.ts";
 import { createPropertyName } from "../utils/identifiers.ts";

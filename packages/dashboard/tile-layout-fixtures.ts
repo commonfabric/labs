@@ -2,7 +2,7 @@ import type { TileView } from "./types.ts";
 import { SPARKLINE_HEIGHT } from "./tile-render-values.ts";
 
 export interface TileLayoutFixture {
-  id: string;
+  label: string;
   view: TileView;
   wide?: boolean;
   subSelector?: string;
@@ -31,9 +31,8 @@ const spendSub = (text: string) =>
 // dashboard order. The browser test supplies these views to renderTile().
 const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
   {
-    id: "labs-ci",
+    label: "labs ci",
     view: {
-      label: "labs ci",
       status: "good",
       value: "passing",
       valueLabel: "passing",
@@ -45,9 +44,8 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "ci-trust",
+    label: "labs ci trust",
     view: {
-      label: "labs ci trust",
       status: "good",
       value: "90.4%",
       sub: "first-try green · 156 of last 160 runs",
@@ -57,9 +55,8 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "ci-duration",
+    label: "labs ci duration",
     view: {
-      label: "labs ci duration",
       status: "good",
       value: "17m",
       sub: "median · 31 passing runs in the last 6h",
@@ -70,10 +67,9 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "benchmark",
+    label: "all benchmarks",
     subSelector: ".benchmark-count",
     view: {
-      label: "all benchmarks",
       status: "warn",
       value: "▲6%",
       extra:
@@ -84,9 +80,8 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "loom-ci",
+    label: "loom ci",
     view: {
-      label: "loom ci",
       status: "good",
       value: "passing",
       valueLabel: "passing",
@@ -98,9 +93,8 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "loom-ci-trust",
+    label: "loom ci trust",
     view: {
-      label: "loom ci trust",
       status: "warn",
       value: "73.8%",
       sub: "first-try green · last 160 runs",
@@ -110,9 +104,8 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "loom-ci-duration",
+    label: "loom ci duration",
     view: {
-      label: "loom ci duration",
       status: "good",
       value: "6m",
       sub: "median · last 20 passing runs",
@@ -123,10 +116,9 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "key-benchmarks",
+    label: "key benchmarks",
     subSelector: ".benchmark-count",
     view: {
-      label: "key benchmarks",
       status: "warn",
       value: "▲6%",
       extra:
@@ -137,9 +129,8 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "test-flakes",
+    label: "flaky tests",
     view: {
-      label: "flaky tests",
       status: "warn",
       value: "25 flaky tests",
       valueLabel: "25 flaky tests",
@@ -152,9 +143,8 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "test-selection",
+    label: "test selection",
     view: {
-      label: "test selection",
       status: "good",
       value: "64%",
       sub: "16,614 of 19,544 tests",
@@ -166,9 +156,8 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "coverage-debt",
+    label: "coverage debt",
     view: {
-      label: "coverage debt",
       status: "warn",
       value: "78,101 lines",
       valueLabel: "78,101 lines",
@@ -178,9 +167,8 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "prod-errors",
+    label: "prod errors",
     view: {
-      label: "production errors",
       status: "good",
       value: "0.24%",
       sub: "12 err / 5000 spans · last 12h",
@@ -191,9 +179,8 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "dau",
+    label: "dau",
     view: {
-      label: "dau",
       status: "good",
       value: "244",
       sub: "active identities · toolshed-production",
@@ -204,10 +191,9 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "discord-online",
+    label: "discord online",
     subSelector: ".sub",
     view: {
-      label: "discord online",
       status: "good",
       value: "37",
       extra: spendSub("team + visitors") + twoLines(),
@@ -215,10 +201,9 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "github-members",
+    label: "github users",
     subSelector: ".sub",
     view: {
-      label: "github people",
       status: "good",
       value: "14",
       extra: spendSub("members · collaborators") + twoLines(),
@@ -228,14 +213,13 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "prod-uptime",
+    label: "production",
     view: {
-      label: "production",
       status: "bad",
       value: "commonfabric.com down",
       valueLabel: "commonfabric.com down",
       extra:
-        `<div class="tile-detail-list" tabindex="0" role="region" aria-label="Production target details; scroll for more" title="Scroll for more details" style="display:grid;grid-template-columns:auto 1fr;gap:7px 10px;margin-top:11px;font-size:12px;line-height:1.35">${
+        `<div class="tile-detail-list" tabindex="0" role="region" data-focus-key="targets" aria-label="Production target details; scroll for more" title="Scroll for more details" style="display:grid;grid-template-columns:auto 1fr;gap:7px 10px;margin-top:11px;font-size:12px;line-height:1.35">${
           [
             "commonfabric.com",
             "estuary",
@@ -252,19 +236,17 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "cubic-spend",
+    label: "cubic spend",
     view: {
-      label: "cubic spend",
       status: "good",
       value: "—",
       sub: "api does not expose value",
     },
   },
   {
-    id: "github-ci-spend",
+    label: "github spend",
     subSelector: ".sub",
     view: {
-      label: "github ci spend",
       status: "good",
       value: "~$3059/mo",
       valueLabel: "~$3059/mo",
@@ -276,10 +258,9 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "model-spend",
+    label: "model spend",
     subSelector: ".sub",
     view: {
-      label: "model spend",
       status: "good",
       value: "~$820/mo",
       valueLabel: "~$820/mo",
@@ -289,9 +270,8 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "gcp-spend",
+    label: "cloud spend",
     view: {
-      label: "gcp spend",
       status: "good",
       value: "~$410/mo",
       valueLabel: "~$410/mo",
@@ -302,9 +282,9 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    id: "recent-runs",
+    label: "recent main runs",
     wide: true,
-    view: { label: "recent runs", status: "good" },
+    view: { status: "good" },
   },
 ] as const;
 

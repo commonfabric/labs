@@ -123,22 +123,25 @@ function fakeGitHub(
     json: async <T>(path: string): Promise<T> => {
       paths.push(path);
       const page = Number(path.match(/[?&]page=(\d+)/)?.[1] ?? 0);
-      if (page > 0) {
-        if (pages !== undefined) {
-          return { workflow_runs: pages[page - 1] ?? [] } as T;
-        }
-        const day = newestDayFirst[page - 1];
-        // Past the last day the record names the listing has ended.
-        return { workflow_runs: day === undefined ? [] : pageOf(day) } as T;
-      }
       const runId = Number(path.match(/\/runs\/(\d+)\/artifacts/)?.[1] ?? 0);
-      const run = runsById.get(runId);
-      const artifacts = run?.metrics === undefined ? [] : [{
-        id: runId,
-        name: "perf-metrics",
-        expired: false,
-      }];
-      return { artifacts } as T;
+      if (runId > 0) {
+        const run = runsById.get(runId);
+        // A run of the workflow uploads over a hundred artifacts, so a listing
+        // covering them all does not reach the coverage baseline among them:
+        // only the request naming it is answered with it.
+        const asked = new URLSearchParams(path.split("?")[1] ?? "").get("name");
+        const artifacts = run?.metrics === undefined ||
+            asked !== "perf-metrics"
+          ? []
+          : [{ id: runId, name: "perf-metrics", expired: false }];
+        return { artifacts } as T;
+      }
+      if (pages !== undefined) {
+        return { workflow_runs: pages[page - 1] ?? [] } as T;
+      }
+      const day = newestDayFirst[page - 1];
+      // Past the last day the record names the listing has ended.
+      return { workflow_runs: day === undefined ? [] : pageOf(day) } as T;
     },
     download: async (path: string): Promise<GitHubDownload> => {
       paths.push(path);
@@ -417,6 +420,28 @@ describe("coverage-debt-history", () => {
       expect(history.samples).toEqual([]);
       expect(github.paths.filter((path) => !path.includes("/runs?")))
         .toEqual([]);
+    });
+
+    it("asks the artifact listing for the coverage baseline by name", async () => {
+      const github = fakeGitHub({
+        "2026-09-02": [{ id: 55, metrics: metrics(78166) }],
+      });
+      const history = await refreshCoverageDebt({
+        token: "t",
+        days: 1,
+        now: NOW,
+        github,
+        store: new CoverageDebtStore(file),
+      });
+      expect(history.samples).toEqual([
+        { day: "2026-09-02", uncoveredLines: 78166, runId: 55 },
+      ]);
+      const listings = github.paths.filter((path) =>
+        path.includes("/artifacts?")
+      );
+      expect(listings.length).toBe(1);
+      expect(new URLSearchParams(listings[0].split("?")[1]).get("name"))
+        .toBe("perf-metrics");
     });
 
     it("names a run once that two listing pages both hold", async () => {

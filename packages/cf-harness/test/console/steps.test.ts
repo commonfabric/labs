@@ -956,9 +956,8 @@ describe("console/steps CFC and disclosure", () => {
                 label: {
                   confidentiality: [
                     {
-                      type:
-                        "https://commonfabric.org/cfc/atom/PromptSlotInfluence",
-                      version: 1,
+                      type: "test.cfc/ObservedOutput",
+                      subject: "did:key:observed",
                     },
                   ],
                 },
@@ -1279,9 +1278,8 @@ describe("console/steps provenance", () => {
               label: {
                 confidentiality: [
                   {
-                    type:
-                      "https://commonfabric.org/cfc/atom/PromptSlotInfluence",
-                    version: 1,
+                    type: "test.cfc/ObservedOutput",
+                    subject: "did:key:observed",
                   },
                 ],
               },
@@ -1312,9 +1310,70 @@ describe("console/steps provenance", () => {
       const args = consoleStepArguments(steps[0], []);
       const command = args.find((argument) => argument.key === "command");
       const cwd = args.find((argument) => argument.key === "cwd");
-      expect(command?.confidentiality).toEqual(["PromptSlotInfluence"]);
+      expect(command?.confidentiality).toEqual(["ObservedOutput"]);
       // The other argument carried no label, and must not borrow this one.
       expect(cwd?.confidentiality).toEqual([]);
+    });
+
+    it("puts the prompt slot's influence on the argument its path names, as integrity", () => {
+      const influenced: HarnessCfcInvocationContext = {
+        type: "cf-harness.cfc-invocation-context",
+        version: 1,
+        sequence: 1,
+        runId: "r",
+        createdAt: "2026-01-01T00:00:00.000Z",
+        toolId: "bash",
+        toolOutputId: createToolOutputId("r", "bash", 1),
+        operation: "shell",
+        cfcEnforcementMode: "enforce-strict",
+        cwd: "/workspace",
+        runManifest: { present: false },
+        inputs: {},
+        promptSlotInfluenceLabels: {
+          version: 1,
+          entries: [
+            {
+              path: ["command"],
+              label: {
+                integrity: [
+                  {
+                    type:
+                      "https://commonfabric.org/cfc/atom/PromptSlotInfluence",
+                    version: 1,
+                  },
+                ],
+              },
+            },
+          ],
+        },
+      };
+      const steps = consoleRunSteps(
+        [
+          call("c1", "bash", { command: "cat x", cwd: "/workspace" }),
+          {
+            role: "tool",
+            toolCallId: "c1",
+            toolName: "bash",
+            content: JSON.stringify({ status: "ok" }),
+            resultRef: {
+              type: "cf-harness.tool-result-ref",
+              outputId: createToolOutputId("r", "bash", 1),
+              toolId: "bash",
+              runId: "r",
+            },
+          },
+        ],
+        [],
+        [],
+        [influenced],
+      );
+      const args = consoleStepArguments(steps[0], []);
+      const command = args.find((argument) => argument.key === "command");
+      const cwd = args.find((argument) => argument.key === "cwd");
+      expect(command?.integrity).toEqual(["PromptSlotInfluence"]);
+      // Influence is not taint: the argument carries no confidentiality.
+      expect(command?.confidentiality).toEqual([]);
+      expect(cwd?.integrity).toEqual([]);
     });
 
     it("keeps a label whose root names no argument of the call", () => {
@@ -1342,9 +1401,8 @@ describe("console/steps provenance", () => {
               label: {
                 confidentiality: [
                   {
-                    type:
-                      "https://commonfabric.org/cfc/atom/PromptSlotInfluence",
-                    version: 1,
+                    type: "test.cfc/ObservedOutput",
+                    subject: "did:key:observed",
                   },
                 ],
               },
@@ -1374,7 +1432,7 @@ describe("console/steps provenance", () => {
       );
       const args = consoleStepArguments(steps[0], []);
       expect(args[0].key).toBe("path");
-      expect(args[0].confidentiality).toEqual(["PromptSlotInfluence"]);
+      expect(args[0].confidentiality).toEqual(["ObservedOutput"]);
     });
 
     it("reads a literal input as a value rather than a reference", () => {

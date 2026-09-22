@@ -19,7 +19,7 @@ import { CompletedAttempts } from "../completed-attempts.ts";
 import { escapeHtml, humanDur } from "../lib.ts";
 import { CI_WORKFLOW, LOOM_CI_WORKFLOW, LOOM_REPO, REPO } from "../config.ts";
 
-function makeBuildTile(opts: { id: string; label: string; repo: string; workflow: string }): Tile {
+function makeBuildTile(opts: { label: string; repo: string; workflow: string }): Tile {
   const commitsUrl = `https://github.com/${opts.repo}/commits/main`;
   const attempts = new CompletedAttempts(opts.repo);
 
@@ -60,7 +60,7 @@ function makeBuildTile(opts: { id: string; label: string; repo: string; workflow
   }
 
   return {
-    id: opts.id,
+    label: opts.label,
     intervalMs: 30_000,
     runSources: [runSource(opts.repo, opts.workflow)],
     async collect(ctx): Promise<TileView> {
@@ -95,7 +95,6 @@ function makeBuildTile(opts: { id: string; label: string; repo: string; workflow
         ? "passing"
         : escapeHtml(conclusion);
       return {
-        label: opts.label,
         status: s,
         value,
         valueLabel: value,
@@ -108,5 +107,5 @@ function makeBuildTile(opts: { id: string; label: string; repo: string; workflow
   };
 }
 
-export const labsCi = makeBuildTile({ id: "labs-ci", label: "labs ci", repo: REPO, workflow: CI_WORKFLOW });
-export const loomCi = makeBuildTile({ id: "loom-ci", label: "loom ci", repo: LOOM_REPO, workflow: LOOM_CI_WORKFLOW });
+export const labsCi = makeBuildTile({ label: "labs ci", repo: REPO, workflow: CI_WORKFLOW });
+export const loomCi = makeBuildTile({ label: "loom ci", repo: LOOM_REPO, workflow: LOOM_CI_WORKFLOW });
