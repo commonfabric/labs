@@ -66,12 +66,18 @@ If it happens mid-session, restart the console and **treat whatever it was
 carrying as lost rather than as a failure.** A run whose console died is not a
 failed run and its result must not be recorded as one.
 
-**After a restart, give the checks below a moment.** The external rows —
-`sandbox.*` and `index.*` — are probed in the background and not awaited when
-the route is read, so a health page read in the first half-minute after start
-shows them as _unknown_. That means **not yet checked, not broken**; a second
-read a minute later settles them. The `config.*` rows are known at startup and
-do not have this window.
+**After a restart, expect `unknown` rows and do not read them as failures.** The
+external rows — `sandbox.*` and `index.*` — are probed asynchronously and are
+not awaited when the route is read, so a page read soon after start shows them
+as _unknown_, meaning **not yet checked**.
+
+A later read usually settles them and is **not guaranteed to**: a probe that
+cannot run stays `unknown` indefinitely, and a dial with nothing configured
+behind it — an index that is not set up — has no probe to run at all.
+`config.store` also reads `unknown` when the store was discovered automatically
+rather than named. Treat `unknown` as _no answer yet_, which is distinct from a
+failure, and confirm the ones you actually need by exercising them rather than
+by re-reading the page.
 
 ### Which build you are on
 
@@ -130,17 +136,24 @@ entirely, because the toolshed behind them had stopped serving HTTP — still
 accepting TCP connections, still with a normal load average, and recovering
 unaided about a minute later.
 
-So health is a static route and a stall hides behind it. If a run seems to hang,
-check a **fabric-dependent** route before concluding anything:
+So health is a static route and a stall hides behind it. If a run seems to hang:
 
 ```sh
-curl -sS -m 10 <your-toolshed>/api/meta
+curl -sS -m 10 <your-toolshed>/api/meta   # reachability and build only
+cf cell get <a cell you know exists>      # an actual Fabric operation
 ```
 
-A timeout there and a healthy `/api/health` together mean the fabric is stalled
-rather than the demo being slow. It recovered on its own; nothing was restarted.
-**Any wall time measured across such a window is not a measurement** — the same
-rule as a concurrent run, for the same reason.
+**The first is not a liveness check either.** `/api/meta` serves static
+metadata, so a toolshed whose Fabric work is stalled can still answer it in a
+millisecond — the same trap as the console's health route, one layer down. It
+tells you the process is up and which build it is running. **Only the second
+tells you the Fabric is doing work.**
+
+The stall observed here showed as `/api/meta` timing out, which is the severe
+case; a milder one would answer that route and still not serve a read. It
+recovered on its own; nothing was restarted. **Any wall time measured across
+such a window is not a measurement** — the same rule as a concurrent run, for
+the same reason.
 
 **The posture is on the toolshed, not the console.** `/api/health/detail` has no
 posture row — its groups are console, model, sandbox, index, connectors and
@@ -150,10 +163,20 @@ skills. Read the posture from the fabric instead:
 curl -sS <your-toolshed>/api/meta
 ```
 
-Under `cfc`, `enforcementMode.rung` should read `enforce-strict` with
-`diagnosticOnly` false, and `flowLabels.rung` should read `persist`. The same
-object carries `writeFloor`, `policyEvaluation` and a `deviations` list, which
-is where a posture weaker than it looks shows itself.
+Under `cfc`, check **all** of these, not only the first two — a deployment can
+pass on `enforcementMode` alone while a lower dial is weaker than you assume:
+
+| Dial                           | Expected                                                        |
+| ------------------------------ | --------------------------------------------------------------- |
+| `enforcementMode.rung`         | `enforce-strict`, `diagnosticOnly` false                        |
+| `flowLabels.rung`              | `persist`                                                       |
+| `writeFloor.rung`              | `enforce`                                                       |
+| `policyEvaluation.rung`        | `enforce`                                                       |
+| `labelMetadataProtection.rung` | `enforce`                                                       |
+| `deviations`                   | read every entry — this is where a weak posture declares itself |
+
+`declaredMonotonicity` reads `observe` and `diagnosticOnly` true on the build
+these demos were measured on, which is expected rather than a finding.
 
 A console proxied behind a loom daemon answers the same routes under
 `/harness-console/`. Confirm `console.base` in `/api/health/detail` names the
@@ -201,8 +224,9 @@ top of it produced a page correct in every figure whose headline asserted the
 one claim its prompt forbade.
 
 **A reactive value touched by ordinary JavaScript produces a page that is
-silently wrong.** Two confirmed instances in one evening, from different authors
-writing against different prompts:
+silently wrong.** Two instances in one evening, from different authors against
+different prompts. The first is **documented behaviour an author missed**; the
+second is an open defect:
 
 | What the source did                         | What the page showed                       |
 | ------------------------------------------- | ------------------------------------------ |
@@ -266,8 +290,10 @@ Two instances, from different prompts on the same evening:
   left three correct pairs unmatched with the email and the payment carrying the
   _same merchant name_, on screen at the same time.
 
-Same sentence, two readings, opposite failures — and **nothing on either page
-says which reading it took** without going to the source.
+Same sentence, **three readings across three runs** — qualifiers honoured, read
+as a count, and read as its exclusion alone — with opposite failures either side
+of the one that worked. **Nothing on any of those pages says which reading it
+took** without going to the source.
 
 The consequence for anyone adding a clause to one of these prompts: an ambiguity
 cannot be closed by adding another sentence, only by writing one that has a
@@ -623,7 +649,7 @@ the variable. The matcher is.
 rank at all.** In this store every merchant reads `Sim <x>` and every subject
 reads `Your Sim <x> bill is ready`, so `sim` is shared by every possible pair
 and carries no information. No run excludes it. What separates them is how each
-then tries to disambiguate, and three of the four approaches cannot work at all:
+then tries to disambiguate, and three of those approaches cannot work at all:
 
 - keep `sim` and take the first unused row — everything matches, so the pairing
   is decided by row order;
@@ -684,7 +710,9 @@ have excluded `sim`.
 
 **Done when:** every pairing on the page is one a person would make.
 
-**Typical wall time:** ~12–17 minutes.
+**Typical wall time:** one solo run took 16 m 46 s. The other runs of this entry
+were concurrent with other sessions and carry no timing claim, so there is no
+range to give — a concurrent run's wall time cannot be attributed.
 
 **Likely failure:** not the matching — see run 2 below.
 
@@ -760,19 +788,25 @@ unpaid and 3 unmatched — the same answer as run 1 — and then rendered three
 empty lists beneath those correct counts. The page read "4 settled" above "No
 matches found."
 
-Its source branched on a reactive array inside a plain JavaScript ternary,
-testing `matchedRows.length > 0` to choose between the rows and an empty-state
-label. The branch resolved once while the derived array was still empty and
-never re-evaluated; the counts beside it stayed correct because they are
-reactive reads rather than a build-time branch.
+Its source read `matchedRows.length` to choose between the rows and an
+empty-state label. **The ternary around it is not the cause**, and the mechanism
+is already written down in this tree:
+`docs/development/debugging/gotchas/scoped-cell-pitfalls.md` records that
+`.length` read directly on a reactive array "snapshots once, does not track
+reactively", with `computed(() => …)` as the fix.
 
-The same file used `ifElse()` correctly four times — for pending, for
-`hasError`, and for ready twice — a few lines above. The author knew the
-primitive; an empty-state check simply does not feel like a reactive read.
-**Nothing catches this**: it compiles, type-checks, runs, and produces a page.
-Whether the cause is a lowering defect, a property read on a reactive
-collection, or a context the transformer does not cover is under investigation;
-`cf check --show-transformed` is what separates them.
+Reducing it confirmed exactly that. A hand-authored
+`ifElse(matchedRows.length >
+0, …)` fails identically, so the construct around
+the read is irrelevant; a branch on a separately derived reactive count passes.
+The counts beside the empty list stayed correct for the same reason — they read
+a derived value rather than the array's length.
+
+The same file used `ifElse()` correctly four times a few lines above. The author
+knew the primitive; what they missed was a documented gotcha about a property
+read. **Nothing in the tree catches it**: it compiles, type-checks, runs, and
+produces a page. CT-2410 asks whether the dependency emission should be fixed so
+the documented workaround stops being necessary.
 
 ### A weakness predicted for this wording, and withdrawn on evidence
 
@@ -821,7 +855,15 @@ and nothing else.
 
 **Preflight:** identical to §5.
 
-**Prompt:** §5a's text, with one further sentence before the slug sentence:
+**Prompt, assembled in full** rather than by reference, so that a later edit to
+§5 or §5a cannot silently change what these runs measured. This is §5's prompt
+with two added sentences, and it is what was run:
+
+```text
+Compose these two library patterns into one page: cf:pattern:-xx1hxtvAbY7AL6FeYuQWuEzbC0nOpUOHgXseIac2_w (this month's email headers from my Gmail) and cf:pattern:v6_KSFHs9AmTg9PKwMmPdZyEHxZ9Oykhno4HBOfUo5s (this month's transactions from my bank). Show the bills I need to deal with: pair an email bill with the bank payment that settled it using plain text rules on subject, sender and merchant name only; list unpaid email bills and unmatched bank payments separately. Do not send my mail or my transactions to an AI model. Rank candidate pairs by the total length of the words they share and pair the best-scoring candidates first, each email and each payment at most once; a word shared by most merchants counts for nothing. Only pair when the shared words identify the merchant: a single short or numeric token is not a match. Give it a slug that is not already in use; if a slug you try is taken, choose another and retry without asking me.
+```
+
+The sentence this entry adds over §5a is the second of the two above:
 
 ```text
 Only pair when the shared words identify the merchant: a single short or numeric token is not a match.
