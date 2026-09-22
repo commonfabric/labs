@@ -14,14 +14,15 @@ books they may have read and authors they may like. The shelf also accepts
 manual books and authors. These are suggestions to review, not verified reading
 history.
 
-The shelf and its one invitation live in the same dedicated space. **Ask for
-recommendations** makes the invitation and its sharing controls available. The
-native sharing dialog previews the exact shelf snapshot and its destination.
-Confirming publishes that copy to the invitation's shared library slot; the
-personal shelf remains a separate `PerUser` value. Grant each visitor WRITE in
-the space's Access panel so their private state and agent requests can run.
-Because WRITE covers the whole space, use disposable demo data. Another member
-with WRITE can replace the published library slot directly.
+The shelf composes `shared-invitation.tsx`; both live in the same dedicated
+space. `main.tsx` remains an independent invitation entrypoint for pieces that
+use it. **Ask for recommendations** makes the invitation and its sharing
+controls available. The native sharing dialog previews the exact shelf snapshot
+and its destination. Confirming publishes that copy to the invitation's shared
+library slot; the personal shelf remains a separate `PerUser` value. Grant each
+visitor WRITE in the space's Access panel so their private state and agent
+requests can run. Because WRITE covers the whole space, use disposable demo
+data. Another member with WRITE can replace the published library slot directly.
 
 The invitation shows a few favorite authors and a collapsed list of the
 originator's books. The visitor's agent proposes books from that visitor's Loom
@@ -117,17 +118,20 @@ a bounded runtime read ceiling.” The same-space integration test configures th
 ceiling and verifies publication. A hosted two-person demo needs a bounded shell
 runtime or a pre-published disposable shelf copy before opening the invitation.
 
-For a disposable hosted fixture,
-`cf cell get --url "$SHELF_URL" --select
-'publishedLibrary@'` returns the shared
-slot's `/of:fid1:…` address. Write a JSON object with `books` and
-`favoriteAuthors` directly to that cell's `value` path using
-`cf cell set --api-url "$CF_API_URL" --space "$CF_SPACE" --cell
-<returned-address> value`,
-then run `cf piece step --url "$SHELF_URL"`. The set command reads JSON from
-standard input. This direct fixture write is not a native reviewed share;
-writing through the shelf result path can carry the private shelf's label into
-the transaction and fail writer-fit. Use only disposable book data.
+For a disposable hosted fixture, find the shared slot's `/of:fid1:…` address and
+write a JSON object with `books` and `favoriteAuthors` to its `value` path:
+
+```bash
+cf cell get --url "$SHELF_URL" --select 'publishedLibrary@'
+cf cell set --api-url "$CF_API_URL" --space "$CF_SPACE" \
+  --cell "$PUBLISHED_LIBRARY_CELL" value < shelf.json
+cf piece step --url "$SHELF_URL"
+```
+
+Set `PUBLISHED_LIBRARY_CELL` to the address returned by the first command. This
+direct fixture write is not a native reviewed share; writing through the shelf
+result path can carry the private shelf's label into the transaction and fail
+writer-fit. Use only disposable book data.
 
 The authored tests exercise manual entry, private selection, rendering, and
 selection changes without a live model:
@@ -136,6 +140,7 @@ selection changes without a live model:
 deno task cf test \
   packages/patterns/recommend-a-book/library.test.tsx \
   packages/patterns/recommend-a-book/main.test.tsx \
+  packages/patterns/recommend-a-book/shared-invitation.test.tsx \
   packages/patterns/recommend-a-book/views.test.tsx \
   --cfc-enforcement-mode enforce-strict --cfc-flow-labels persist
 ```

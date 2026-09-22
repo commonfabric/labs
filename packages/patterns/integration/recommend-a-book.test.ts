@@ -1,4 +1,4 @@
-/** The authored book pair creates and publishes a library in a fresh space. */
+/** The authored book pair publishes a shelf within one dedicated space. */
 
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
@@ -259,8 +259,9 @@ describe("personalized book invitation", () => {
       const open = binding(openProps, "onClick");
       open.send({});
       await runtime.settled();
-      expect(navigations).toHaveLength(1);
-      expect(navigations[0]).not.toBe(entityRefToString(library.entityId));
+      expect(navigations).toEqual([
+        entityRefToString(invitation.resolveAsCell().entityId),
+      ]);
     } finally {
       if (coverage && coverageDir) {
         await writePatternCoverageLcov(

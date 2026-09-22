@@ -2,12 +2,13 @@
 
 import { action, assert, pattern, TESTS, Writable } from "commonfabric";
 import { prioritizeCandidateBooks } from "./agents.tsx";
-import Invitation from "./main.tsx";
+import Invitation from "./shared-invitation.tsx";
 import type { Profile } from "./views.tsx";
 
 export default pattern(() => {
   const originator = new Writable<Profile>({ name: "Book lover" });
-  const invitation = Invitation({ originatorProfile: originator });
+  const library = new Writable({});
+  const invitation = Invitation({ originatorProfile: originator, library });
   const empty = assert(() =>
     invitation.selected.get()?.books.length === 0 &&
     invitation.recommended.get()?.length === 0 &&

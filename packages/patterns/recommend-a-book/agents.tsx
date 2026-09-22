@@ -3,7 +3,6 @@
 import {
   agent,
   type BuiltInAgentState,
-  type Default,
   pattern,
   type ReadonlyCell,
 } from "commonfabric";
@@ -16,8 +15,8 @@ export interface Book {
 
 /** Inferred reading history and tastes, awaiting the reader's review. */
 export interface LibrarySeed {
-  books: Default<Book[], []>;
-  favoriteAuthors: Default<string[], []>;
+  books: Book[];
+  favoriteAuthors: string[];
 }
 
 /** Private suggestions; the explanation is not part of a submitted book. */

@@ -4,7 +4,7 @@
 import { pattern, Writable } from "commonfabric";
 import Invitation, {
   type InvitationOutput,
-} from "../../../recommend-a-book/main.tsx";
+} from "../../../recommend-a-book/shared-invitation.tsx";
 
 export default pattern<Record<string, never>, InvitationOutput>(() => {
   const profile = new Writable({ name: "Originator" });

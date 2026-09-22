@@ -16,10 +16,11 @@ import {
   Writable,
 } from "commonfabric";
 import { type Book, type LibrarySeed, SeedLibrary } from "./agents.tsx";
+import type { InvitationOutput as PreviousInvitationOutput } from "./main.tsx";
 import Invitation, {
   type InvitationOutput,
   type LibrarySlot,
-} from "./main.tsx";
+} from "./shared-invitation.tsx";
 import { type ReaderPrivate } from "./privacy.tsx";
 import { LibraryView, type Profile } from "./views.tsx";
 
@@ -31,6 +32,7 @@ export interface LibraryOutput {
   seeding: PerUser<BuiltInAgentState<LibrarySeed>>;
   addedBooks: PerUser<Writable<Book[]>>;
   addedAuthors: PerUser<Writable<string[]>>;
+  invitations: PerUser<Writable<PreviousInvitationOutput[]>>;
   invitation: InvitationOutput;
   publishedLibrary: Writable<LibrarySlot>;
   invitationReady: PerUser<Writable<boolean>>;
@@ -73,6 +75,7 @@ export default pattern<Record<string, never>, LibraryOutput>(() => {
   const seed = SeedLibrary.asScope("user")({});
   const addedBooks = new Writable.perUser<ReaderPrivate<Book[]>>([]);
   const addedAuthors = new Writable.perUser<ReaderPrivate<string[]>>([]);
+  const invitations = new Writable.perUser<PreviousInvitationOutput[]>([]);
   const invitationReady = new Writable.perUser(false);
   const publishedLibrary = new Writable.perSpace<LibrarySlot>({});
   const reading = computed((): LibrarySeed => ({
@@ -134,6 +137,7 @@ export default pattern<Record<string, never>, LibraryOutput>(() => {
     seeding: seed.state,
     addedBooks,
     addedAuthors,
+    invitations,
     invitation,
     publishedLibrary,
     invitationReady,
