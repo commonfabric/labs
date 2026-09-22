@@ -1288,8 +1288,8 @@ export function sqliteQuery(
     // the same question with one answer.
     const settleUnsent = () => {
       // Nothing to say on behalf of a node that is gone, and nowhere sound to
-      // say it. Checked again inside the write, because the cancellation can
-      // land between scheduling this and the transaction reaching storage.
+      // say it. Asked again inside the write, where a retry of that
+      // transaction would otherwise carry the ending past a cancellation.
       //
       // The staging entry goes back either way. It is normally released by
       // the ending's own `finally`, and that ending is exactly what is not
@@ -1305,11 +1305,15 @@ export function sqliteQuery(
           "sqliteQuery",
           effectKey,
           (settleTx) => {
-            if (cancelled.signal.aborted) return;
             if (runIdentity !== undefined) {
               settleTx.tx.scopeKeyIdentity = runIdentity;
             }
-            if (!ownsAnnouncement()) return;
+            // The cancellation is asked again here, not only where this was
+            // scheduled: `editWithRetry` runs this callback once per attempt,
+            // and a retry is where the time passes in which a node can go
+            // away. Folded into the ownership check because it is the same
+            // decision — whether this ending still has anyone to speak for.
+            if (cancelled.signal.aborted || !ownsAnnouncement()) return;
             sendResult(settleTx, result);
             recordPublication(settleTx);
             // Read the stored claim at write time. Another query holds

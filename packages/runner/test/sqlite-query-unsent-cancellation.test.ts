@@ -15,12 +15,15 @@
  * transaction abandons its work, and the case cancels between the staging and
  * that abandonment.
  *
- * One thing these cases do NOT reach, said here rather than left to be
- * discovered: the staging entry the cancelled path releases on its way out.
- * That map is closure state of the node, with no accessor, and giving it one
+ * Two things these cases do NOT reach, said here rather than left to be
+ * discovered. The staging entry the cancelled path releases on its way out:
+ * that map is closure state of the node, with no accessor, and giving it one
  * would widen every builtin's result shape to let a test peek at a leak whose
- * lifetime is the piece's. The release is a single line on the early return,
- * read rather than asserted.
+ * lifetime is the piece's. And the second cancellation check, inside the
+ * ending's write: `editWithRetry` runs that callback synchronously on the
+ * first attempt, so only a RETRY can arrive after a cancellation, and forcing
+ * one would mean driving a storage conflict for a branch that is one term of
+ * an existing guard. Both are read rather than asserted.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -43,7 +46,9 @@ interface QueryState {
 }
 
 describe("sqlite-query-unsent-cancellation", () => {
-  const drive = async (options: { cancelBeforeAbandon: boolean }) => {
+  const drive = async (
+    options: { cancel?: "before-abandon" },
+  ) => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({
       apiUrl: new URL(import.meta.url),
@@ -83,10 +88,12 @@ describe("sqlite-query-unsent-cancellation", () => {
       builtin.action(tx);
       expect(result).toBeDefined();
 
-      if (options.cancelBeforeAbandon) cancel();
+      if (options.cancel === "before-abandon") cancel();
       // What the scheduler does when it stops attempting a transaction's
       // staged work: every effect it holds is abandoned, which is the entry
-      // point to the ending under test.
+      // point to the ending under test. It runs the abandon callbacks
+      // synchronously, so the ending is scheduled by the time this returns
+      // and has not yet written anything.
       tx.abandonStagedWork({
         name: "StorageTransactionAborted",
         message: "test abandon",
@@ -105,14 +112,14 @@ describe("sqlite-query-unsent-cancellation", () => {
   };
 
   it("writes no ending for a node cancelled before the abandonment", async () => {
-    const state = await drive({ cancelBeforeAbandon: true });
+    const state = await drive({ cancel: "before-abandon" });
     expect(state?.error).toBeUndefined();
   });
 
   it("writes the ending for a node that is still running", async () => {
-    // The control the case above rests on: without it, a builtin that never
-    // settles an abandoned request at all would pass the first case.
-    const state = await drive({ cancelBeforeAbandon: false });
+    // The control the two cases above rest on: without it, a builtin that
+    // never settles an abandoned request at all would pass both.
+    const state = await drive({});
     expect(String(state?.error)).toContain("refused before it started");
     expect(state?.pending).toBe(false);
   });
