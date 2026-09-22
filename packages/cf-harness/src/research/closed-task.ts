@@ -17,7 +17,9 @@ export const isClosedResearchTask = (
   const skillNames = new Set(
     context.skillRegistry?.skills.map((skill) => skill.name),
   );
-  for (const match of task.matchAll(/[^\s`"'()[\]{},;!?<>]+/g)) {
+  for (
+    const match of task.matchAll(/[^\s`"'()[\]{},;!?<>*“”‘’。、，！？]+/gu)
+  ) {
     const token = match[0].replace(/[.:]+$/, "");
     if (
       token.startsWith("cf:pattern:") &&

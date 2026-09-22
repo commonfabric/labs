@@ -16,6 +16,10 @@ describe("isClosedResearchTask()", () => {
     const task of [
       `Run cf:pattern:${patternId} and give it a slug.`,
       `Compose \`cf:pattern:${patternId}\`.`,
+      `Run **cf:pattern:${patternId}**.`,
+      "Revise “pattern:demo-space/monthly-bills”.",
+      "Use ‘skill:commonfabric/labs/cf-spend-digest’。",
+      "Run cf:pattern:pat-expenses，then name the result.",
       "Instantiate cf:pattern:pat-expenses.",
       "Use cf:pattern:pat_Expenses-1.",
       "Revise pattern:demo-space/monthly-bills.",
