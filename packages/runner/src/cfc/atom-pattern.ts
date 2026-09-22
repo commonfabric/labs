@@ -1,5 +1,10 @@
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type { CfcAtom } from "@commonfabric/api/cfc";
+import {
+  type FabricValue,
+  isFabricPlainObject,
+  isValidFabricValue,
+} from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import {
@@ -44,9 +49,18 @@ import {
  *
  * NOT a `CfcAtom`: a pattern is atom-shaped but admits things an atom cannot
  * -- `{ var }` placeholders, and an explicitly-`undefined` field, which is an
- * absence check (`CfcJsonValue` has no `undefined`).
+ * absence check (`CfcJsonValue` has no `undefined`). It is a `FabricValue`,
+ * which is what lets a pattern be digested; `isAtomPattern()` is the check.
  */
-export type AtomPattern = unknown;
+export type AtomPattern = FabricValue;
+
+/**
+ * Indicates whether `value` can be an `AtomPattern`, which is whether it is a
+ * `FabricValue`. Whatever admits a pattern the type system has not vouched for
+ * -- configuration, a transported manifest -- asks this before trusting it.
+ */
+export const isAtomPattern = (value: unknown): value is AtomPattern =>
+  isValidFabricValue(value);
 
 /** A binding environment produced by matching (spec §4.3.3 `Bindings`). */
 export type AtomPatternBindings = Readonly<Record<string, CfcAtom>>;
@@ -294,9 +308,9 @@ export const matchAtomPatternConjunction = (
 };
 
 const instantiateValue = (
-  pattern: unknown,
+  pattern: AtomPattern,
   bindings: AtomPatternBindings,
-): { value: unknown } | null => {
+): { value: FabricValue } | null => {
   if (isAtomVarPlaceholder(pattern)) {
     if (!Object.hasOwn(bindings, pattern.var)) return null;
     const bound = bindings[pattern.var];
@@ -308,7 +322,7 @@ const instantiateValue = (
     return null;
   }
   if (Array.isArray(pattern)) {
-    const items: unknown[] = [];
+    const items: FabricValue[] = [];
     for (const element of pattern) {
       const instantiated = instantiateValue(element, bindings);
       if (instantiated === null) return null;
@@ -316,8 +330,8 @@ const instantiateValue = (
     }
     return { value: items };
   }
-  if (isObjectOrArray(pattern)) {
-    const record: Record<string, unknown> = {};
+  if (isFabricPlainObject(pattern)) {
+    const record: Record<string, FabricValue> = {};
     for (const [key, fieldPattern] of Object.entries(pattern)) {
       if (fieldPattern === undefined) continue;
       const instantiated = instantiateValue(fieldPattern, bindings);
@@ -342,7 +356,7 @@ const instantiateValue = (
 export const instantiateAtomPattern = (
   pattern: AtomPattern,
   bindings: AtomPatternBindings,
-): { value: unknown } | null => instantiateValue(pattern, bindings);
+): { value: FabricValue } | null => instantiateValue(pattern, bindings);
 
 /**
  * A concept-valued integrity guard (spec §4.4.5): a CONCRETE `Concept` atom
@@ -426,7 +440,7 @@ const isOrderedExpiresAtom = (value: unknown): value is ExpiresAtom =>
  * digesting the acting reader. Guarded by a containment pre-check so the
  * dominant all-plaintext mismatch path stays a single deepEqual.
  */
-export const atomEntails = (a: unknown, b: unknown): boolean => {
+export const atomEntails = (a: FabricValue, b: FabricValue): boolean => {
   if (deepEqual(a, b)) return true;
   if (isOrderedExpiresAtom(a) && isOrderedExpiresAtom(b)) {
     return a.timestamp <= b.timestamp;

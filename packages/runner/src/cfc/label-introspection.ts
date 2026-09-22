@@ -1,4 +1,8 @@
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import {
+  type FabricValue,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import { encodePointer, parsePointer } from "../../../memory/v2/path.ts";
@@ -68,7 +72,7 @@ import type { CfcMetadata, LabelMapEntry } from "./types.ts";
 export type ConfLabelQuery = {
   atomType?: string;
   caveatKind?: string;
-  source?: unknown;
+  source?: FabricValue;
   resourceClass?: string;
   policyName?: string;
   originUri?: string;
@@ -550,7 +554,7 @@ export const evaluateConfLabelQuery = (
           consumeAt(fieldPath, observation);
           if (
             !commitmentAwareEquals(
-              (atom as Record<string, unknown>)[field],
+              isFabricPlainObject(atom) ? atom[field] : undefined,
               expected,
             )
           ) {

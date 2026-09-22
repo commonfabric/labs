@@ -12,7 +12,12 @@ import {
   cfcCommitmentNormalForm,
   commitmentAwareEquals,
 } from "./label-representation.ts";
-import { atomEntails, conceptGuard, matchAtomPattern } from "./atom-pattern.ts";
+import {
+  atomEntails,
+  type AtomPattern,
+  conceptGuard,
+  matchAtomPattern,
+} from "./atom-pattern.ts";
 import type { TrustResolver } from "./trust.ts";
 import {
   type CfcConfClause,
@@ -269,7 +274,7 @@ export type CfcFloorTrustContext = {
  *   authored as concrete atoms keep their meaning.
  */
 const integrityAtomSatisfies = (
-  required: unknown,
+  required: AtomPattern,
   actual: CfcAtom,
   trust?: CfcFloorTrustContext,
 ): boolean => {
@@ -337,7 +342,7 @@ export const cfcIntegritySatisfiesFloor = (
  * resistance.
  */
 export const cfcIntegrityWitnessKey = (
-  required: unknown,
+  required: AtomPattern,
   actual: CfcAtom,
   trust?: CfcFloorTrustContext,
 ): string | null => {

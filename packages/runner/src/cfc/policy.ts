@@ -1,6 +1,10 @@
 import { deepFreeze, hashStringOf } from "@commonfabric/data-model";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
-import { type AtomPattern, isAtomVarPlaceholder } from "./atom-pattern.ts";
+import {
+  type AtomPattern,
+  isAtomPattern,
+  isAtomVarPlaceholder,
+} from "./atom-pattern.ts";
 
 export const CFC_POLICY_MANIFEST_ID_PREFIX = "of:cfc-policy-manifest:";
 
@@ -273,6 +277,11 @@ const validatePatternArray = (
         `cfcPolicyRecords: ${where} contains an undefined pattern`,
       );
     }
+    if (!isAtomPattern(pattern)) {
+      throw new Error(
+        `cfcPolicyRecords: ${where} contains a pattern that is not a \`FabricValue\``,
+      );
+    }
   }
   return value as readonly AtomPattern[];
 };
@@ -408,6 +417,11 @@ const validateExchangeRule = (
       `cfcPolicyRecords: ${ruleWhere} needs an appliesTo pattern`,
     );
   }
+  if (!isAtomPattern(appliesTo)) {
+    throw new Error(
+      `cfcPolicyRecords: ${ruleWhere} appliesTo is not a \`FabricValue\``,
+    );
+  }
   if (preCondition !== undefined) {
     if (!isPlainRecord(preCondition)) {
       throw new Error(
@@ -427,10 +441,9 @@ const validateExchangeRule = (
     }
     const policyState = (preCondition as Record<string, unknown>).policyState;
     if (policyState !== undefined) {
-      validatePolicyStateGuards(
-        policyState,
-        `${ruleWhere} preCondition.policyState`,
-      );
+      const guardWhere = `${ruleWhere} preCondition.policyState`;
+      validatePatternArray(policyState, guardWhere);
+      validatePolicyStateGuards(policyState, guardWhere);
     }
   }
   if (
