@@ -861,7 +861,7 @@ export function sqliteQueryMemoDecision(options: {
 export function sqliteQuery(
   inputsCell: Cell<any>,
   sendResult: (tx: IExtendedStorageTransaction, result: any) => void,
-  _addCancel: (cancel: () => void) => void,
+  addCancel: (cancel: () => void) => void,
   cause: Cell<any>[],
   parentCell: Cell<any>,
   runtime: Runtime,
@@ -872,6 +872,21 @@ export function sqliteQuery(
   let initialized = false;
   let selectedResult: Cell<QueryState>;
   let resultScope: CellScope | undefined;
+
+  // This node's own lifetime. A request that is staged and never sent settles
+  // its ending on transactions of its own, after the run that staged it, so a
+  // piece cancelled in between would otherwise write that ending to a result
+  // cell nobody is reading — and worse, to one whose runtime-owned
+  // ENROLLMENT the cancellation just released, which is what carries route 2.
+  // The write would then arrive at a store whose control paths resolve to the
+  // empty ceiling again, and at `enforce-strict` it is refused exactly as the
+  // incident this builtin's route-2 work exists to remove.
+  //
+  // `#7902` gives every phase of this builtin an `AbortController` off the
+  // same hook. When it lands, its controller replaces this one rather than
+  // joining it: one signal, and the endings below read that instead.
+  const cancelled = new AbortController();
+  addCancel(() => cancelled.abort());
 
   /** Resolved request targets with an outstanding RPC. */
   const inFlightIssues = new Set<string>();
@@ -1272,12 +1287,17 @@ export function sqliteQuery(
     // store holds either of the two states this request could have left is
     // the same question with one answer.
     const settleUnsent = () => {
+      // Nothing to say on behalf of a node that is gone, and nowhere sound to
+      // say it. Checked again inside the write, because the cancellation can
+      // land between scheduling this and the transaction reaching storage.
+      if (cancelled.signal.aborted) return;
       runtime.trackAsyncWork(
         settleAbandonedRequest(
           runtime,
           "sqliteQuery",
           effectKey,
           (settleTx) => {
+            if (cancelled.signal.aborted) return;
             if (runIdentity !== undefined) {
               settleTx.tx.scopeKeyIdentity = runIdentity;
             }
