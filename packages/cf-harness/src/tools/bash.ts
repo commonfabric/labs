@@ -39,6 +39,12 @@ export interface BashToolInput {
   command: string;
   cwd?: string;
   timeoutMs?: number;
+  /**
+   * Optional sandbox session. Commands that name the same session share one
+   * sandbox for the rest of the run; commands that name none each get a
+   * fresh one. Only the runsc runtime honours it today.
+   */
+  session?: string;
   // Trusted harness/test plumbing for invocation input labels. This is omitted
   // from the public tool schema so model-authored tool calls do not mint labels.
   cfcInputLabels?: CfcLabelView;
@@ -74,6 +80,12 @@ export const bashToolDescriptor: HarnessToolDescriptor = {
       command: { type: "string" },
       cwd: { type: "string" },
       timeoutMs: { type: "number", minimum: 0 },
+      session: {
+        type: "string",
+        pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
+        description:
+          "Name a sandbox session to keep state between commands (files outside the mounts, background processes). Omit for a fresh sandbox per command.",
+      },
     },
     required: ["command"],
     additionalProperties: false,
@@ -166,6 +178,7 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
         cwd: commandCwd,
         timeoutMs: input.timeoutMs,
         cfcInvocationContext,
+        ...(input.session !== undefined ? { session: input.session } : {}),
       });
     } catch (error) {
       if (error instanceof ProcessTimeoutError) {

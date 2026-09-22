@@ -205,6 +205,9 @@ const CLI_STRING_FLAGS = [
   "cfc-invocation-context-dir",
   "sandbox-image",
   "sandbox-docker-runtime",
+  "sandbox-runtime",
+  "sandbox-rootfs",
+  "sandbox-cfc-policy",
   "max-model-turns",
   "fabric-mount",
   "loom-authoring-config",
@@ -557,6 +560,15 @@ Options:
   --cfc-invocation-context-dir <path> Host dir where the harness writes the CFC invocation-context sidecar (required for enforce-* modes)
   --sandbox-image <image>       Docker image for the runsc-cfc sandbox (default: ${DEFAULT_DOCKER_RUNSC_IMAGE})
   --sandbox-docker-runtime <n>  Docker runtime for the sandbox (default: runsc-cfc)
+  --sandbox-runtime <kind>      docker (the default) or runsc: run runsc directly with
+                                no Docker; the same on Linux and on macOS through the
+                                darwin runsc. Tool calls may then name a sandbox session.
+  --sandbox-rootfs <path>       runsc runtime only: the rootfs a bundle names (a directory
+                                on Linux; on macOS the cfc-vm image marker, default
+                                ~/Library/Application Support/cfc-vm/images/kitchensink)
+  --sandbox-cfc-policy <path>   runsc runtime only: CFC policy file; --cfc is passed exactly
+                                when this is set (default: ~/.local/share/runsc-cfc/cfc-policy.json
+                                when present)
   --fabric-mount <path>         Host path for a Fabric FUSE mount (mounted at /fabric in the sandbox)
   --loom-authoring-config <path> Absolute host-owned JSON file backing the Loom authoring tools
   --loom-retrieval-config <path> Absolute host-owned JSON file backing the read-only Loom tools
@@ -624,6 +636,10 @@ Environment:
                                 patterns to search immediately (default: recorded only)
   CF_HARNESS_SANDBOX_IMAGE      Default value for --sandbox-image
   CF_HARNESS_SANDBOX_DOCKER_RUNTIME Default value for --sandbox-docker-runtime
+  CF_HARNESS_SANDBOX_RUNTIME    Default value for --sandbox-runtime (docker | runsc)
+  CF_HARNESS_SANDBOX_ROOTFS     Default value for --sandbox-rootfs
+  CF_HARNESS_RUNSC_CFC_POLICY   Default value for --sandbox-cfc-policy
+  CF_HARNESS_RUNSC_BINARY       runsc binary for the runsc runtime (default: runsc on PATH)
   CF_HARNESS_CFC_ENFORCEMENT_MODE Default value for --cfc-enforcement-mode (ignored on --resume-run)
   CF_CFC_MODE                   Fallback for CF_HARNESS_CFC_ENFORCEMENT_MODE
   ${CFC_RESULT_DIR_ENV} Fallback for --cfc-result-dir
@@ -1537,6 +1553,13 @@ export const parseCfHarnessCliArgs = async (
       CF_HARNESS_SANDBOX_DOCKER_RUNTIME: Deno.env.get(
         "CF_HARNESS_SANDBOX_DOCKER_RUNTIME",
       ),
+      CF_HARNESS_SANDBOX_RUNTIME: Deno.env.get("CF_HARNESS_SANDBOX_RUNTIME"),
+      CF_HARNESS_SANDBOX_ROOTFS: Deno.env.get("CF_HARNESS_SANDBOX_ROOTFS"),
+      CF_HARNESS_RUNSC_CFC_POLICY: Deno.env.get("CF_HARNESS_RUNSC_CFC_POLICY"),
+      CF_HARNESS_RUNSC_BINARY: Deno.env.get("CF_HARNESS_RUNSC_BINARY"),
+      CF_HARNESS_DOCKER_NETWORK_MODE_FOR_RUNSC: Deno.env.get(
+        "CF_HARNESS_DOCKER_NETWORK_MODE",
+      ),
       [CFC_RESULT_DIR_ENV]: Deno.env.get(CFC_RESULT_DIR_ENV),
       [CFC_INVOCATION_CONTEXT_DIR_ENV]: Deno.env.get(
         CFC_INVOCATION_CONTEXT_DIR_ENV,
@@ -1701,6 +1724,42 @@ export const parseCfHarnessCliArgs = async (
   }
   const sandboxDockerRuntime = rawSandboxDockerRuntime ??
     nonEmptyEnvValue(env.CF_HARNESS_SANDBOX_DOCKER_RUNTIME);
+  const rawSandboxRuntime = typeof args["sandbox-runtime"] === "string"
+    ? args["sandbox-runtime"].trim()
+    : nonEmptyEnvValue(env.CF_HARNESS_SANDBOX_RUNTIME);
+  if (
+    rawSandboxRuntime !== undefined && rawSandboxRuntime !== "docker" &&
+    rawSandboxRuntime !== "runsc"
+  ) {
+    throw new Error("sandbox runtime must be one of docker, runsc");
+  }
+  const sandboxRuntimeKind = rawSandboxRuntime as
+    | "docker"
+    | "runsc"
+    | undefined;
+  const rawSandboxRootfs = typeof args["sandbox-rootfs"] === "string"
+    ? args["sandbox-rootfs"].trim()
+    : nonEmptyEnvValue(env.CF_HARNESS_SANDBOX_ROOTFS);
+  const sandboxRootfs = rawSandboxRootfs === "" ? undefined : rawSandboxRootfs;
+  const rawSandboxCfcPolicy = typeof args["sandbox-cfc-policy"] === "string"
+    ? args["sandbox-cfc-policy"].trim()
+    : nonEmptyEnvValue(env.CF_HARNESS_RUNSC_CFC_POLICY);
+  const sandboxCfcPolicy = rawSandboxCfcPolicy === ""
+    ? undefined
+    : rawSandboxCfcPolicy;
+  const sandboxRunscBinary = nonEmptyEnvValue(env.CF_HARNESS_RUNSC_BINARY);
+  const rawRunscNetwork = nonEmptyEnvValue(
+    env.CF_HARNESS_DOCKER_NETWORK_MODE_FOR_RUNSC,
+  );
+  // The docker network vocabulary maps onto runsc's: none stays none, bridge
+  // is runsc's own netstack, host is the host's stack.
+  const sandboxRunscNetworkMode = rawRunscNetwork === "none"
+    ? "none" as const
+    : rawRunscNetwork === "host"
+    ? "host" as const
+    : rawRunscNetwork === "bridge"
+    ? "sandbox" as const
+    : undefined;
   const explicitCfcMode = typeof args["cfc-enforcement-mode"] === "string"
     ? args["cfc-enforcement-mode"]
     : undefined;
@@ -1937,6 +1996,13 @@ export const parseCfHarnessCliArgs = async (
     ...(apiKeySource !== undefined ? { apiKeySource } : {}),
     ...(sandboxImage !== undefined ? { sandboxImage } : {}),
     ...(sandboxDockerRuntime !== undefined ? { sandboxDockerRuntime } : {}),
+    ...(sandboxRuntimeKind !== undefined ? { sandboxRuntimeKind } : {}),
+    ...(sandboxRootfs !== undefined ? { sandboxRootfs } : {}),
+    ...(sandboxCfcPolicy !== undefined ? { sandboxCfcPolicy } : {}),
+    ...(sandboxRunscBinary !== undefined ? { sandboxRunscBinary } : {}),
+    ...(sandboxRunscNetworkMode !== undefined
+      ? { sandboxRunscNetworkMode }
+      : {}),
     ...(fabricMount !== undefined ? { fabricMount } : {}),
     ...(fabricSession !== undefined ? { fabricSession } : {}),
     ...(spaceDbPath !== undefined ? { spaceDbPath } : {}),

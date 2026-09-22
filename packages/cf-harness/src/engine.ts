@@ -206,6 +206,11 @@ import {
   resolveDockerRunscSandboxConfig,
 } from "./sandbox/docker-runsc.ts";
 import {
+  resolveRunscSandboxConfig,
+  type RunscNetworkMode,
+  RunscSandboxRuntime,
+} from "./sandbox/runsc.ts";
+import {
   DenoProcessRunner,
   type ProcessRunner,
 } from "./sandbox/process-runner.ts";
@@ -394,6 +399,19 @@ export interface CreateHarnessEngineOptions
   workspaceHostPath?: string;
   sandboxImage?: string;
   sandboxDockerRuntime?: string;
+  /**
+   * Which sandbox the engine builds when none is injected: `docker` (the
+   * default) drives Docker with the runsc-cfc runtime; `runsc` runs runsc
+   * directly, with no Docker, and honours tool-call sessions.
+   */
+  sandboxRuntimeKind?: "docker" | "runsc";
+  /** runsc runtime: the rootfs a bundle names. */
+  sandboxRootfs?: string;
+  /** runsc runtime: CFC policy file; `--cfc` is passed exactly when set. */
+  sandboxCfcPolicy?: string;
+  /** runsc runtime: the binary, default `runsc` on PATH. */
+  sandboxRunscBinary?: string;
+  sandboxRunscNetworkMode?: RunscNetworkMode;
   additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
   cfcResultDir?: string;
   cfcInvocationContextDir?: string;
@@ -869,7 +887,9 @@ export class CfHarnessEngine {
     this.#connectorGrants = options.connectorGrants ?? [];
     this.#patternRefs = options.patternRefs ?? [];
     this.#spaceDbPath = options.spaceDbPath;
-    const sandboxConfig = options.sandboxRuntime === undefined
+    const useRunsc = options.sandboxRuntime === undefined &&
+      options.sandboxRuntimeKind === "runsc";
+    const sandboxConfig = options.sandboxRuntime === undefined && !useRunsc
       ? resolveSandboxConfig(this.config, {
         workspaceHostPath: options.workspaceHostPath,
         sandboxImage: options.sandboxImage,
@@ -883,17 +903,38 @@ export class CfHarnessEngine {
     // enforce-mode sandbox work — capability probes or tools — whose sandbox
     // lacks the CFC sidecar transports (the check fires at run start, not
     // construction — see #assertCfcTransportReady).
-    // Only when the engine constructs the runtime itself: an injected
+    // Only when the engine constructs the docker runtime itself: an injected
     // sandboxRuntime is the thing that actually executes and carries its own
     // enforcement guarantees, while `sandboxConfig` in that branch is the
     // unused resolved config and may describe a different sandbox entirely.
-    this.#ownedRunscConfig = options.sandboxRuntime === undefined
+    // The runsc runtime carries the CFC transport on descriptors it opens
+    // itself, so it has no registration to check.
+    this.#ownedRunscConfig = options.sandboxRuntime === undefined && !useRunsc
       ? sandboxConfig
       : undefined;
     this.hostProcessRunner = options.processRunner ?? new DenoProcessRunner();
+    const runscConfig = useRunsc
+      ? resolveRunscSandboxConfig({
+        workspaceHostPath: options.workspaceHostPath ??
+          this.config.sandbox?.workspaceHostPath ??
+          (() => {
+            throw new Error("runsc sandbox needs a workspaceHostPath");
+          })(),
+        rootfs: options.sandboxRootfs,
+        runscBinary: options.sandboxRunscBinary,
+        cfcPolicyPath: options.sandboxCfcPolicy,
+        networkMode: options.sandboxRunscNetworkMode,
+        additionalMounts: options.additionalMounts,
+        runId,
+        homeDir: Deno.env.get("HOME"),
+      })
+      : undefined;
     this.sandbox = options.sandboxRuntime ??
-      new DockerRunscSandboxRuntime(sandboxConfig!, options.processRunner);
+      (runscConfig !== undefined
+        ? new RunscSandboxRuntime(runscConfig, options.processRunner)
+        : new DockerRunscSandboxRuntime(sandboxConfig!, options.processRunner));
     this.workspaceHostPath = sandboxConfig?.workspaceHostPath ??
+      runscConfig?.workspaceHostPath ??
       options.workspaceHostPath;
     this.workspaceMountPath = normalizeSandboxRoot(
       sandboxConfig?.workspaceMountPath ??
@@ -1430,9 +1471,27 @@ export class CfHarnessEngine {
    *
    * @throws Error when the run already has its outcome.
    */
+  /**
+   * Release what the sandbox keeps alive between calls (runsc sessions).
+   * Every terminal transition calls it; a runtime without sessions has
+   * nothing to do, and a second call is harmless.
+   */
+  async #closeSandbox(): Promise<void> {
+    try {
+      await this.sandbox.close?.();
+    } catch (error) {
+      console.error(
+        `cf-harness: sandbox close failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+
   async completeRun(
     terminalReason: HarnessRunTerminalReason,
   ): Promise<HarnessRunState> {
+    await this.#closeSandbox();
     const now = this.#now();
     this.#runState = await this.#withCellLabels(
       setHarnessRunStatus(this.#runState, "completed", now, terminalReason),
@@ -1455,6 +1514,7 @@ export class CfHarnessEngine {
     error?: unknown,
     options: Omit<ClassifyHarnessRunErrorOptions, "at"> = {},
   ): Promise<HarnessRunState> {
+    await this.#closeSandbox();
     const now = this.#now();
     if (error !== undefined) {
       this.#runState = appendHarnessFailureRecord(
@@ -1478,6 +1538,7 @@ export class CfHarnessEngine {
    * @throws Error when the run already has its outcome.
    */
   async cancelRun(reason: string): Promise<HarnessRunState> {
+    await this.#closeSandbox();
     const now = this.#now();
     this.#runState = await this.#withCellLabels(
       patchHarnessRunState(
@@ -2021,6 +2082,7 @@ export class CfHarnessEngine {
     if (isTerminalHarnessRunStatus(this.#runState.status)) {
       return this.getRunState();
     }
+    await this.#closeSandbox();
     const now = this.#now();
     this.#runState = appendHarnessFailureRecord(
       this.#runState,
