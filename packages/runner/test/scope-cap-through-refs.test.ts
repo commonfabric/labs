@@ -192,6 +192,26 @@ describe("scope-cap-through-refs", () => {
         .toBe("user");
     });
 
+    it("returns the entry scope of a handle branch beside a boolean branch of a definition", () => {
+      // A boolean schema is a valid branch that declares no cap, so the
+      // branches that do declare one decide.
+
+      const schema: JSONSchemaObj = {
+        $ref: "#/$defs/Draft",
+        $defs: {
+          Draft: {
+            anyOf: [
+              true,
+              { type: "string", asCell: [{ kind: "cell", scope: "session" }] },
+            ],
+          },
+        },
+      };
+
+      expect(ContextualFlowControl.getAsCellFollowScopeCap(schema))
+        .toBe("session");
+    });
+
     it("returns `undefined` for a handle whose definition names itself through a branch", () => {
       // The shape `type Recursive = Cell<Recursive> | null` generates: the
       // branch's `$ref` resolves to the union holding that same branch.
