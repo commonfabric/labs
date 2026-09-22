@@ -103,16 +103,10 @@ start/pause/reset, focus and break modes, and cycle progress.
 carries on. A second `assign_slug` in the timeline is the retry working, not a
 fault.
 
-**Proof status: PROVEN (3/3) for the piece; the countdown is qualified.** Three
-runs produced `pomodoro-timer-2`, `pomodoro-focus-timer`,
-`pomodoro-focus-clock`, and a fourth produced `pomodoro-timer-session`. The page
-renders in full — modes, duration fields, Start, Reset, Skip. **A reopened piece
-does not advance**: on `pomodoro-timer-session`, Start left the display at
-`15:00` across twelve seconds of sampling and the status still read "Ready when
-you are" (`proof/pomodoro-frozen.png`). That is the signature of a durably
-frozen clock, and it is to be filed. Whether a freshly created piece counts down
-before it is reopened is untested here; a recorded take shows one rendering, not
-running.
+**Proof status: PROVEN (3/3).** `pomodoro-timer-2`, `pomodoro-focus-timer`,
+`pomodoro-focus-clock`, and `pomodoro-timer-session`. Browser-verified: pressing
+Start advances the countdown — `15:00` to `14:51` to `14:43` over sixteen
+seconds (`proof/pomodoro-retest.png`).
 
 ## 2. A dinner party page, composed from two library parts
 
@@ -144,18 +138,30 @@ complaint; the silence at the front of it is.
 page still works; the run is longer and the Patterns pane shows no `cf:pattern:`
 line.
 
-**Proof status: NOT PROVEN.** Three runs each returned a named piece composing
-CheckList and AmountLedger by `cf:pattern:` id, with no compile error —
-`dinner-party-planner`, `dinner-party-prep`, `dinner-party-prep-list`. The third
-was opened, and **its controls do nothing**: items cannot be added or removed
-and the total does not move. The parts are instantiated in the parent body with
-`new Writable.perSpace(<literal array>)` inputs and their `$UI` embedded, so the
-controls render against a value rather than a writable reference — suspected,
-not confirmed, and the reason this entry is not on a recording sheet.
+**Proof status: NOT PROVEN — removal does not work.** Four runs across two
+prompts each returned a named piece composing CheckList and AmountLedger by
+`cf:pattern:` id with no compile error. Browser-verified on
+`dinner-party-prep-planner` (`proof/dinner2-retest.png`):
 
-The first two runs were marked proven on the strength of the task API returning
-a piece. Nobody opened them. That is the mistake this document's proof bar now
-exists to prevent.
+- **Ticking works.** Checking the first item moves the count from
+  `5 left, 0
+  done` to `4 left, 1 done`.
+- **Removal does not.** Clicking Remove leaves five checkboxes on the page and
+  the counts unchanged — and removal is what Ben reported broken from the
+  recorded take.
+
+So the page is half-live: the part's own checkbox writes back and its removal
+control does not. The cause is under investigation and is **not** what an
+earlier revision of this document claimed — the parents do pass real writable
+cells, so "wired with literal values" is withdrawn. What remains suspected is
+the hydration or event-write path for the removal control specifically.
+
+Prompt text does not reach it: a run whose prompt says "I need to add and remove
+items and have the total update" produced the same behaviour.
+
+One defect there was prompt-sensitive: the first piece rendered `$12950.00` for
+entries stored as 12950 cents, and the amended run got the units right
+(`$18.50`, `$34.75`, `$16.25`).
 
 ## 3. This month's bank transactions as a sortable table
 
