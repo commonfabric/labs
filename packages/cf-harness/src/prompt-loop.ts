@@ -203,6 +203,10 @@ import {
   selectResearchContext,
 } from "./research/context.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
+import {
+  PATTERN_AUTHORING_GUIDANCE,
+  PATTERN_COMPOSITION_GUIDANCE,
+} from "./pattern-authoring.ts";
 import { projectHarnessResearchKitForModel } from "./research/model-projection.ts";
 import { isEditFileToolSuccessOutput } from "./tools/edit-file.ts";
 import { isStructuredFileToolErrorOutput } from "./tools/file-errors.ts";
@@ -1504,7 +1508,7 @@ const buildSubagentSystemPrompt = (
             "Search the pattern index with search_patterns when you need a quick additional discovery pass. A published pattern that already does the job is the better answer: run it by passing its patternId to run_pattern instead of sourceText.",
             "Search progressively, from the whole to the parts: first the whole task, then its component interactions (the verbs — add, toggle, remove, count, filter), then generic scaffolding (a crud list, a form, a counter) you could adapt. Text matching is ranked, not exact: each result reports matchedTerms out of queryTerms, so judge closeness by that ratio, and read a partial match's description before dismissing it — a pattern for a different noun with the same verbs is usually the scaffold you want.",
             'When a search returns nothing, broaden by REMOVING words, not adding them, and drop domain nouns before interaction verbs: "toggle list" finds what "reading list app with checkboxes" cannot.',
-            // The composition four. Withheld together by
+            // Composition guidance is withheld together by
             // `subagentCompositionGuidance`, and only these: the search
             // bullets above and the publishing bullets below govern discovery
             // and what the run contributes back, which are separate questions
@@ -1515,6 +1519,7 @@ const buildSubagentSystemPrompt = (
                 "An indexed pattern imported that way is a component of the source you are writing: run_pattern fetches and compiles each one you name before it compiles your source, so composing one costs you the import line and nothing else. Reach for that before reimplementing what a search already found.",
                 'Compose one by calling it where you want its result. `import Card from "cf:pattern:<patternId>"` and then `card: Card({ item })` puts its result object under a field of yours; writing the same call inside your JSX — `<div>{Card({ item })}</div>` — renders its UI in place. The result shapes search_patterns reported are what you wire against.',
                 "A search hit is a component to wire, not a specification to rebuild. When a result's description says it does something one of your atoms needs, import and call it. Rewriting it from its description is the one move that makes the index worth nothing: it publishes a second pattern doing the same job under a different id, and the next searcher has two things to choose between and no reason to prefer either.",
+                PATTERN_COMPOSITION_GUIDANCE,
               ]
               : []),
             "When pattern-index publication is enabled, a pattern you author and run successfully with a non-empty `description` and a durable content-addressed pattern identity is queued for the index for later evaluation. No contribution is queued when no index is configured, publication is disabled, the description is empty, or the pattern has no durable identity. The tool result does not confirm publication; the session flush sends retained contributions when it ends, and index failures are logged. Pass run_pattern a `description` saying in one line what it does and `hashtags` naming the words someone should find it under if publication succeeds and evidence earns discoverability. Write them for the next person, not for this task. The run-created piece persists independently of index publication; `assign_slug` separately names and lists it in the space.",
@@ -1530,6 +1535,7 @@ const buildSubagentSystemPrompt = (
         "Pass pattern source inline as the run_pattern `sourceText` argument. You have no write_file or edit_file; do not try to author patterns as workspace files.",
         "Return a durable result object directly — `return { count, $UI: <div>…</div> }`. A whole-result derived wrapper is a known smell, but not a deterministic failure: after instantiation run_pattern checks the actual pattern pointer and refuses a piece materialized under a session-only identity.",
         "You own the write, compile-error, fix loop. A `compile-error` result is normal iteration material: read the diagnostic, correct the source, and call run_pattern again. Do not hand a compile error back to the parent as the answer.",
+        PATTERN_AUTHORING_GUIDANCE,
         "Use read_file and bash to read existing patterns and pattern documentation in the workspace when the compiler or the preloaded skills leave a question open.",
         "Read the passage, not the guide. Locate it first with bash — `grep -n` for the term — and read the lines around the hit with `sed -n '120,180p'`. Where you do reach for read_file on a document, bound it with `maxBytes`. A read is cut at roughly ten thousand characters with the full text left in the run artifact, so a whole-guide read spends the turn and still does not land on the passage.",
         "Read again rather than hoard. Everything you have read stays in front of you for the rest of the run whether you need it again or not, so read what the next call needs and come back to the file when a later question wants a different part of it.",

@@ -17,6 +17,7 @@ import { CfHarnessEngine } from "../src/engine.ts";
 import type { HarnessFetch } from "../src/contracts/http-fetch.ts";
 import type { HarnessResearchRunSummary } from "../src/contracts/research.ts";
 import { REUSE_RESEARCH_RUNS } from "./fixtures/research-reuse.ts";
+import { PATTERN_COMPOSITION_EXAMPLE } from "../src/pattern-authoring.ts";
 import type { FabricPatternInstantiations } from "../src/fabric-instantiations.ts";
 import { comparableEntityHash } from "../src/fabric-observations.ts";
 import {
@@ -1140,6 +1141,23 @@ describe("run-pattern over the pattern index", () => {
   });
 
   describe("composing published patterns", () => {
+    it("compiles the authoring template against the mailbox reader it describes", async () => {
+      const reader = await Deno.readTextFile(
+        new URL(
+          "../../patterns/primitives/mailbox-month-headers.tsx",
+          import.meta.url,
+        ),
+      );
+      const readerId = await entryIdentityOf(reader);
+      const source = PATTERN_COMPOSITION_EXAMPLE.replace(
+        "INSPECTED_READER_ID",
+        readerId,
+      );
+      expect(await composedIdentityOf(source, [reader])).toMatch(
+        /^[A-Za-z0-9_-]{43}$/,
+      );
+    });
+
     /**
      * An index record for `source`, stored under the identity that source
      * compiles to — which is what a `cf:pattern:` import addresses, so a

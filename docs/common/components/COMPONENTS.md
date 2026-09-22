@@ -97,7 +97,7 @@ cell means none confirmed — check the component source before assuming.
 |-----|---------|----------------|
 | `cf-accordion` | Container for collapsible content panels | |
 | `cf-accordion-item` | Individual accordion panel | |
-| `cf-alert` | Alert message with variants and dismissible option | |
+| `cf-alert` | Alert message with `status` (`info`, `error`, `warning`, `success`) and dismissible option | |
 | `cf-area-mark` | Filled area mark rendered inside `cf-chart` | `$data` |
 | `cf-aspect-ratio` | Maintains a fixed aspect ratio for its content | |
 | `cf-attachments-bar` | Displays pinned cells as a horizontal list of chips | |

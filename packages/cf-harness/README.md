@@ -2535,6 +2535,17 @@ skill registry, the child preloads the `pattern-dev`, `pattern-schema`, and
 root does not carry them, or that resolved no skills root at all, still gets the
 same child with the same tools, just without the preloaded guidance.
 
+The author and private researcher share compact compiler guidance: supported
+`cf-alert` props, serializable input/output shapes, straight-line pattern-owned
+callbacks, and scalar formatting inside a reactive computation. Their reader
+composition template is compiled against the mailbox primitive in tests; it
+requires the actual inspected pattern id and matching argument/result contracts,
+and preserves pending/error status beside its sample count. The child's
+composition template follows the composition-guidance switch. These instructions
+reduce avoidable compiler errors; they do not establish UI behavior or live-data
+correctness. An implementation kit without its required example is incomplete;
+factual orientation and answers may be complete without code.
+
 For an existing piece, `read_piece_source` returns its current source and
 revision, plus an opaque `inputRef` to its bound arguments. The author wires
 that reference into `run_pattern` to check the inputs the piece actually uses.

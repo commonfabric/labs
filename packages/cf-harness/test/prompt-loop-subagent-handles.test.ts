@@ -23,6 +23,10 @@ import {
   transferChildHandleTokens,
 } from "../src/prompt-loop.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "../src/revision-verification.ts";
+import {
+  PATTERN_AUTHORING_GUIDANCE,
+  PATTERN_COMPOSITION_GUIDANCE,
+} from "../src/pattern-authoring.ts";
 import { CAPABILITY_PROBE_SENTINEL } from "../src/diagnostics.ts";
 import {
   createHarnessHandleTable,
@@ -1360,6 +1364,8 @@ describe("prompt-loop cross-agent address handles", () => {
       "Return the resultRef of the working piece from run_pattern or revise_piece",
     );
     expect(childSystemPrompt).toContain(REVISION_VERIFICATION_GUIDANCE);
+    expect(childSystemPrompt).toContain(PATTERN_AUTHORING_GUIDANCE);
+    expect(childSystemPrompt).not.toContain(PATTERN_COMPOSITION_GUIDANCE);
     // The deliverable is a reference to something that ran, and source is
     // refused rather than merely discouraged: an encoding is still source.
     expect(childSystemPrompt).toContain("You never return source.");
@@ -1379,6 +1385,38 @@ describe("prompt-loop cross-agent address handles", () => {
       "Never return a computed(), lift, or other derived wrapper",
     );
   });
+
+  for (const enabled of [true, false]) {
+    it(`includes the indexed reader template when composition guidance is ${enabled}`, async () => {
+      const requests: unknown[] = [];
+      const loop = new CfHarnessPromptLoop({
+        apiKey: "test-key",
+        engine: new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          model: "gpt-5.4",
+          patternIndexClientFactory: () =>
+            Promise.reject(new Error("unexpected index read")),
+        }),
+        allowedSubagentProfiles: ["pattern-author"],
+        subagentCompositionGuidance: enabled,
+        fetchFn: scriptedFetch([
+          delegateCallTurn("delegate-template", {
+            goal: "Author a pattern.",
+            profile: "pattern-author",
+          }),
+          finalTurn("Child done."),
+          finalTurn("Parent done."),
+        ], requests),
+      });
+      await loop.runPrompt({
+        prompt: "Delegate the authoring.",
+        promptSlotBinding: directPromptSlotBinding,
+      });
+      const prompt = chatViewOfRequest(requests[1]).messages[0]!.content ?? "";
+      expect(prompt).toContain(PATTERN_AUTHORING_GUIDANCE);
+      expect(prompt.includes(PATTERN_COMPOSITION_GUIDANCE)).toBe(enabled);
+    });
+  }
 
   it("requires the delegated rehearsal author to import its selected mailbox or explain the omission", async () => {
     const requestBodies: unknown[] = [];
