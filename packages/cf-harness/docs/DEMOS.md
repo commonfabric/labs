@@ -716,13 +716,24 @@ range to give — a concurrent run's wall time cannot be attributed.
 
 **Likely failure:** not the matching — see run 2 below.
 
-### Proof status: NOT PROVEN — 3 passes, 1 fail in four runs
+### Proof status: NOT PROVEN — 2 passes, 2 fails in four runs
 
-**What this entry tests has not failed once.** Every run produced a correct
-matcher. Runs 1 and 3 paired all four bills; run 2 computed the same answer and
-failed to draw it. Those are different defects with different fixes, and a
-reader who sees only the count would conclude the clause does not work, which is
-the opposite of what the runs show.
+The two failures are unlike each other and neither is a failure of ranking, so
+the count alone misleads in both directions. Separating them:
+
+- **Ranking held on all four.** Every run scored by shared-word length, sorted
+  best-first, consumed each side once, and discounted the word every merchant
+  shares. That is what the added sentence asks for, and it was never the
+  problem.
+- **Admission failed on run 4.** It ranked the four real pairs correctly and
+  then kept going, adding a fifth nobody would make. The sentence says how to
+  rank and nothing about when to stop.
+- **Rendering failed on run 2**, which computed the right answer and never drew
+  it — a defect that would hit any pattern and has nothing to do with this
+  entry.
+
+So the clause does what it says, it does not say enough, and one run failed for
+an unrelated reason.
 
 **Run 1 — pass.** `bill-payment-review` (`95f37b32`), 16 m 46 s with the console
 to itself: Settled 4, Needs attention 1, Unmatched 3, every pairing right and
