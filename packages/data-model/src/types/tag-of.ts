@@ -96,13 +96,42 @@ function tagOfUnknownElseNull<PlusType = never>(
   value: unknown,
   isPlusType?: PlusTypePredicate<PlusType> | undefined,
 ): FabricValuePlusTag | null {
-  const jsType = typeOfIncludingNull(value);
+  const jsType = typeof value;
 
-  if (jsType === VALUE_TAGS.function) {
-    return isPlusType?.(value) ? VALUE_TAGS.PlusType : null;
-  } else if (jsType !== "object") {
-    return jsType;
-  } else if (Array.isArray(value)) {
+  switch (jsType) {
+    case "function": {
+      // Values of type `function` are _never_ `FabricValue`s: `FabricValue`
+      // contractually represents that its contents are inert, and `function` is
+      // about as "ert" as a value can get. However, the `PlusType` may accept
+      // `function`s, so we check that to make a final determination as to tag.
+      return isPlusType?.(value) ? VALUE_TAGS.PlusType : null;
+    }
+
+    case "object": {
+      if (value === null) {
+        return VALUE_TAGS.null;
+      }
+      break; // ...and handle non-null objects after the `switch`.
+    }
+
+    case "symbol": {
+      // Only _interned_ symbols are allowed as `FabricValue`. However, the
+      // `PlusType` may accept uninterned symbols, so we check that to make a
+      // final determination as to tag.
+      const isInterned = Symbol.keyFor(value as symbol) !== undefined;
+      if (isInterned) {
+        return VALUE_TAGS.symbol;
+      } else {
+        return isPlusType?.(value) ? VALUE_TAGS.PlusType : null;
+      }
+    }
+
+    default: {
+      return jsType;
+    }
+  }
+
+  if (Array.isArray(value)) {
     return VALUE_TAGS.Array;
   } else if (isPlainObject(value)) {
     return VALUE_TAGS.Object;
