@@ -180,7 +180,9 @@ the matcher that run wrote; unpaired panes are a pass.
 **Likely failure:** authoring from scratch and failing the compiler repeatedly.
 A run of this shape on a build with the opening pass withheld made four
 consecutive `run_pattern` calls, none carrying a `cf:pattern:` import, and
-produced no piece.
+produced no piece. The rejections cluster into a handful of recurring authoring
+mistakes — a nonexistent `cf-alert` prop, a `Set` in pattern inputs, a loop in a
+callback body — tracked as CT-2403.
 
 **Proof status: NEEDS an email grant and a finance grant.** Not yet run to three
 clean runs on the pinned build.
@@ -206,7 +208,8 @@ will not guess.
 **Done when:** the budgets from the script stand beside non-zero spend.
 
 **Likely failure:** a digest of zeros, which is a failed run rather than an
-empty month.
+empty month. Failing that, the compiler rejections in CT-2403: both recorded
+runs hit them before reaching a slug.
 
 **Proof status: NOT PROVEN (0/2 within an eight-minute cap), and NEEDS a finance
 grant with skill scripts enabled.** Both runs acquired the skill and ran its
