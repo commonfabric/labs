@@ -436,9 +436,40 @@ word every merchant carries. The last clause is what would have excluded `sim`.
 
 **Typical wall time:** ~16–17 minutes, solo.
 
-**Proof status: 1 of 3 so far, run 1 correct.** `bill-payment-review`
-(`95f37b32`), 16 m 46 s with the console to itself: Settled 4, Needs attention
-1, Unmatched 3, every pairing right and nothing borderline.
+**Likely failure:** not the matching. Of the runs so far, the one that failed
+produced a _correct_ matcher and then did not draw it — see below.
+
+**Proof status: 1 pass, 1 fail, further runs in progress.** Run 1,
+`bill-payment-review` (`95f37b32`), 16 m 46 s with the console to itself:
+Settled 4, Needs attention 1, Unmatched 3, every pairing right and nothing
+borderline.
+
+**What the clause is being tested for has not failed.** Both runs produced a
+correct matcher — run 1 paired all four, run 2 counted 4 settled, 1 unpaid and 3
+unmatched, the same answer. Run 2 failed the bar because those lists never
+reached the page, which is a rendering defect rather than a matching one, and
+the two have different fixes.
+
+**Run 2's defect, recorded because it will recur in any pattern.** Its source
+held:
+
+```tsx
+{
+  matchedRows.length > 0 ? matchedRows : <cf-label>No matches found.</cf-label>;
+}
+```
+
+`matchedRows` is a reactive array. Reading `.length` on it inside a plain
+JavaScript ternary evaluates once while the derived array is still empty, so the
+branch latches on the empty side and never re-evaluates. The counts beside it
+render correctly because they are reactive reads rather than a build-time branch
+— which is why the page showed "4 settled" above "No matches found."
+
+The same file used `ifElse()` correctly four times, for pending, for `hasError`
+and for ready twice, and then reached for a raw ternary for the empty-state
+choice. The author knew the primitive; an empty-state check simply does not feel
+like a reactive read. **Nothing catches this** — it compiles, type-checks, runs,
+and produces a page.
 
 **It implemented the clause literally, and shows its working on the page.** The
 scores are total shared-word length — `insurance`(9) + `group`(5) = 14,
