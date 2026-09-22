@@ -286,7 +286,7 @@ interface SessionState {
 
 /** Resolve when `promise` does or after `ms`, without leaving a timer behind. */
 const waitUpTo = (promise: Promise<unknown>, ms: number): Promise<void> => {
-  let timer: number | undefined;
+  let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<void>((resolve) => {
     timer = setTimeout(resolve, ms);
   });

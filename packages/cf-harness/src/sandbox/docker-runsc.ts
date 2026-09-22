@@ -10,10 +10,7 @@ import {
 
 import type {
   CfcEnforcementMode,
-  CfcSandboxJsonValue,
   CfcSandboxResult,
-  CfcStreamChannel,
-  IFCLabel,
 } from "@commonfabric/runner/cfc";
 import {
   CFC_ENFORCING_STRICTNESS,
@@ -24,7 +21,6 @@ import { isObjectNotArray } from "@commonfabric/utils/types";
 import type { HarnessCfcInvocationContext } from "../contracts/cfc-invocation-context.ts";
 import { readDockerRuntimes } from "./docker-runtimes.ts";
 import {
-  byteLength,
   cfcResultFromRunscSidecar,
   deniedCfcResult,
   type RunscCfcResultSidecar,
@@ -60,8 +56,6 @@ export const DOCKER_NETWORK_MODE_ENV = "CF_HARNESS_DOCKER_NETWORK_MODE";
 export const CFC_RESULT_DIR_ENV = "CF_HARNESS_RUNSC_CFC_RESULT_DIR";
 export const CFC_INVOCATION_CONTEXT_DIR_ENV =
   "CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR";
-
-const textEncoder = new TextEncoder();
 
 const readEnvVar = (name: string): string | undefined => {
   try {
