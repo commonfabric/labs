@@ -320,6 +320,75 @@ const trimInitialName = (initialName?: string): string =>
 const isSafeExternalProfileUrl = (url: string): boolean =>
   /^https?:\/\//i.test((url ?? "").trim());
 
+/** The verified identity types a profile shows to people, with the provider
+ * name and public profile URL each displays. A type absent here, such as the
+ * stable `github.node_id`, stays in the list for consumers but is not
+ * rendered. */
+const DISPLAYED_IDENTITY_TYPES: Readonly<
+  Record<string, { provider: string; profileUrlPrefix: string }>
+> = {
+  "github.login": {
+    provider: "GitHub",
+    profileUrlPrefix: "https://github.com/",
+  },
+};
+
+const isDisplayedIdentityType = (type: string): boolean =>
+  Object.hasOwn(DISPLAYED_IDENTITY_TYPES, type);
+
+const identityProvider = (type: string): string =>
+  DISPLAYED_IDENTITY_TYPES[type]?.provider ?? type;
+
+const identityProfileUrl = (type: string, value: string): string => {
+  const prefix = DISPLAYED_IDENTITY_TYPES[type]?.profileUrlPrefix;
+  return prefix === undefined ? "" : prefix + encodeURIComponent(value);
+};
+
+// One verified account in the profile presentation, or nothing for a type the
+// profile does not display. The account name and the badge both bind the
+// stored assertion's own `value` field, so the badge reports the Loom
+// integrity label the runtime holds for the text shown beside it. The input
+// takes the plain assertion type. Requiring the integrity atom here would put
+// a write floor on the row's input that the `map` writing each list item into
+// it cannot meet; the badge reports the atom instead.
+const VerifiedIdentityRow = pattern<
+  { assertion: ExternalIdentityAssertion },
+  { [UI]: VNode }
+>(
+  ({ assertion }) => {
+    const displayed = computed(() => isDisplayedIdentityType(assertion.type));
+    const provider = computed(() => identityProvider(assertion.type));
+    const profileUrl = computed(() =>
+      identityProfileUrl(assertion.type, assertion.value)
+    );
+    return {
+      [UI]: (
+        <cf-fragment>
+          {ifElse(
+            displayed,
+            <cf-hstack
+              gap="2"
+              align="center"
+              data-ui-region="profile-verified-identity"
+            >
+              <cf-text variant="caption" tone="muted">{provider}</cf-text>
+              <a href={profileUrl} target="_blank" rel="noopener noreferrer">
+                {assertion.value}
+              </a>
+              <cf-cfc-label
+                variant="badge"
+                atom={LOOM_VERIFIED_EXTERNAL_IDENTITY_INTEGRITY}
+                $value={assertion.value}
+              />
+            </cf-hstack>,
+            null,
+          )}
+        </cf-fragment>
+      ),
+    };
+  },
+);
+
 const ProfileCatalogCard = pattern<{ title: string }, ProfileElementCell>(
   ({ title }) => ({
     [NAME]: title,
@@ -785,6 +854,11 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
     // bio block (CT-1648).
     const hasBio = computed(() => (bio.get() ?? "").trim().length > 0);
     const hasExternalLinks = computed(() => externalLinks.get().length > 0);
+    const hasDisplayedIdentities = computed(() =>
+      verifiedIdentities.get().some((identity) =>
+        isDisplayedIdentityType(identity.get()?.type ?? "")
+      )
+    );
     const parsedUserTags = computed(() =>
       userTagsText.get().split(",").map((tag) => tag.trim()).filter((tag) =>
         tag.length > 0
@@ -922,6 +996,19 @@ export default pattern<ProfileHomeInput, ProfileHomeOutput>(
                         : <span>{link.label}</span>
                     )}
                   </cf-hstack>,
+                  null,
+                )}
+
+                {ifElse(
+                  hasDisplayedIdentities,
+                  <cf-vstack
+                    gap="1"
+                    data-ui-region="profile-verified-identities"
+                  >
+                    {verifiedIdentities.map((identity) => (
+                      <VerifiedIdentityRow assertion={identity} />
+                    ))}
+                  </cf-vstack>,
                   null,
                 )}
 

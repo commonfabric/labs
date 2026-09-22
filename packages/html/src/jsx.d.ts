@@ -3611,6 +3611,8 @@ interface CFCFCLabelAttributes<T> extends CFHTMLAttributes<T> {
   "value"?: unknown;
   "atom"?: string;
   "kind"?: string;
+  "variant"?: "full" | "badge";
+  "text"?: string;
 }
 
 interface CFCFCAuthorshipAttributes<T> extends CFHTMLAttributes<T> {
