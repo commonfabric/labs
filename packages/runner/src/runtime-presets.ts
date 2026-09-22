@@ -267,8 +267,9 @@ export type CfcPosture = "max-enforcement";
  * Every network-fetch egress sink is public-only (an empty ceiling admits no
  * confidentiality atom), so labeled data cannot leave through them. The
  * llm-class sinks and the `sqliteQuery` sink release ungated, carrying the
- * reason, the owner, and the condition that retires the gap ({@link SINK_UNGATED_RATIONALES} in the
- * runner's sink inventory): under this posture, llm-sink release is
+ * reason, the owner, and the condition that retires the gap
+ * ({@link SINK_UNGATED_RATIONALES} in the runner's sink inventory): under
+ * this posture, llm-sink release is
  * ungoverned — any confidentiality, a secret as much as a risk caveat,
  * reaches them without a policy evaluation running. The posture record
  * publishes that as a deviation rather than leaving it to be inferred from a

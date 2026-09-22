@@ -39,9 +39,9 @@ export type InitialSinkName =
  * the bound this sink wants is the database's space rather than a clause
  * list. The registry admits a static clause list per sink and nothing of that
  * shape, the way it admits nothing of the `agent` sink's per-request shape,
- * so `builtins/sqlite-builtins.ts` applies it: a query whose transaction
- * carries confidentiality and whose database lies in another space is refused
- * before its request is staged.
+ * so `builtins/sqlite-builtins.ts` applies it: a query whose REQUEST carries
+ * confidentiality and whose database lies in another space is refused before
+ * that request is staged.
  */
 export const KNOWN_SINKS = [
   "fetchBinary",
@@ -69,10 +69,13 @@ export type KnownSinkName = (typeof KNOWN_SINKS)[number];
  * `agent` is a request handed to an agent runner acting as the requester,
  * whose model observes the fabric through handles rather than receiving the
  * request's values. `storage` is a request handed to the provider holding a
- * space's replicas, which for that space's own data reaches nobody its
- * residency does not already name — a rule written for a release leaving the
- * runtime has no business firing there, which is what keeping it out of
- * `network` buys.
+ * space's replicas. For that space's OWN data it reaches nobody the
+ * destination document's residency does not already name, which is why a
+ * rule written for a release leaving the runtime has no business firing
+ * there. A request naming another space's database does leave; what keeps
+ * that out of the gate's hands is that the sqlite builtin refuses it before
+ * staging when the request carries a label, so the class says where a
+ * request goes rather than whether it may.
  */
 export type SinkClass = "network" | "agent" | "storage";
 
@@ -179,8 +182,8 @@ const LLM_SINK_UNGATED: SinkUngatedRationale = Object.freeze({
  * data. What the bound turns on is WHERE the database is, and the registry
  * admits a static clause list per sink and nothing per request.
  * `builtins/sqlite-builtins.ts` applies it instead, refusing a query whose
- * transaction carries confidentiality and whose database lies in another
- * space before the request is staged.
+ * REQUEST carries confidentiality and whose database lies in another space
+ * before that request is staged.
  */
 const SQLITE_QUERY_SINK_UNGATED: SinkUngatedRationale = Object.freeze({
   reason:
