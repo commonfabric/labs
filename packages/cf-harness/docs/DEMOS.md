@@ -438,13 +438,13 @@ have excluded `sim`.
 
 **Likely failure:** not the matching — see run 2 below.
 
-### Proof status: 1 pass, 1 fail, further runs in progress
+### Proof status: 2 passes, 1 fail, a further run in progress
 
-**What this entry tests has not failed.** Both runs produced a correct matcher.
-Run 1 paired all four bills; run 2 computed the same answer and failed to draw
-it. Those are different defects with different fixes, and a reader who sees only
-the count would conclude the clause does not work, which is the opposite of what
-the runs show.
+**What this entry tests has not failed once.** Every run produced a correct
+matcher. Runs 1 and 3 paired all four bills; run 2 computed the same answer and
+failed to draw it. Those are different defects with different fixes, and a
+reader who sees only the count would conclude the clause does not work, which is
+the opposite of what the runs show.
 
 **Run 1 — pass.** `bill-payment-review` (`95f37b32`), 16 m 46 s with the console
 to itself: Settled 4, Needs attention 1, Unmatched 3, every pairing right and
@@ -462,6 +462,27 @@ its own rule for the reader:
 
 **A page that explains the rule it used is worth more on screen than one that is
 merely right**, because a viewer can check the pairing instead of trusting it.
+
+**Run 3 — pass.** `monthly-bills-dashboard` (`d62aba06`), concurrent with other
+work so no timing claim: 4 matched, 0 unpaid, 3 unmatched. Every pairing correct
+and `sim` again in no shared-terms list. It prints its rule too, in a "How this
+works" block:
+
+> Words shorter than 3, generic stopwords, and words found in strictly more than
+> half of distinct merchants score zero. Remaining shared words score by total
+> character length; highest scores pair first, with each item used once.
+
+**One honest difference between the two passing runs.** Run 1 reported 1 unpaid
+and run 3 reported 0. Run 3's bill rule admits only subjects containing
+`invoice`, `bill`, `payment due` and similar, and "Subscription renewal reminder
+Sep 26" contains none of them — so it was never classified as a bill, rather
+than classified and left unpaid.
+
+That is a classification difference, not a pairing error, and both runs pass the
+done condition. It is recorded because a viewer may well notice two runs
+disagreeing about whether a renewal notice is a bill. It also marks the next
+axis of variance: **the added sentence constrains pairing, and nothing in the
+prompt constrains classification.**
 
 **Run 2 — fail, on rendering rather than matching.** It computed 4 settled, 1
 unpaid and 3 unmatched — the same answer as run 1 — and then rendered three
