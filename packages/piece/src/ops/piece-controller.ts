@@ -1619,11 +1619,12 @@ export function durableSourceContract(
   );
   const relativePath = (
     producerLink: ReturnType<Cell<unknown>["getAsNormalizedFullLink"]>,
+    matchScope: LinkScope | undefined = sourceLink.scope,
   ): (string | number)[] | undefined => {
     if (
       producerLink.space !== sourceLink.space ||
       producerLink.id !== sourceLink.id ||
-      (producerLink.scope ?? "space") !== (sourceLink.scope ?? "space") ||
+      (producerLink.scope ?? "space") !== (matchScope ?? "space") ||
       producerLink.path.length > sourceLink.path.length ||
       producerLink.path.some((segment, index) =>
         segment !== sourceLink.path[index]
@@ -1719,7 +1720,12 @@ export function durableSourceContract(
             parsed.schema,
             linkedCell.tx,
           ).getAsNormalizedFullLink();
-          const suffix = relativePath(target);
+          // A projection is matched at the instance the link names. A result
+          // alias reading a scoped input addresses the input's base slot and
+          // reaches the scoped value through its redirect, so it is not
+          // collected for a scoped source; the argument contract above
+          // governs that value.
+          const suffix = relativePath(target, rawSourceLink.scope);
           if (suffix !== undefined) {
             projected.push({
               root: ownerSchema,
