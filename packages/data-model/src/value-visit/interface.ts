@@ -165,11 +165,11 @@ export interface ValueVisitor<PlusType = never, ResultType = FabricValue> {
   /**
    * Indicates whether or not the given value is compatible with the `PlusType`
    * type defined by the visitor. This is a type predicate for `PlusType`. The
-   * visitor engine consults it only for a value whose shape is not a fabric
-   * one -- a function, or an object which is neither an array, a plain object,
-   * nor a `FabricSpecialObject` -- and its answer decides whether such a value
-   * goes to `visitPlusType()` or is `throw`n as being outside the visitor's
-   * domain. A value with a fabric shape is never put to it, so a predicate
+   * visitor engine consults it only for a value which cannot be a
+   * `FabricValue` -- a function, a unique (uninterned) symbol, or an object
+   * which is neither an array, a plain object, nor a `FabricSpecialObject` --
+   * and its result decides whether such a value is tagged `PlusType` or
+   * `null`. A value with a fabric shape is never put to it, so a predicate
    * which would accept, say, a plain object never sees one.
    */
   isPlusType(value: unknown): value is PlusType;

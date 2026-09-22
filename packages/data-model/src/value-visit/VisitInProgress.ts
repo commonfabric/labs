@@ -417,7 +417,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
 
   /**
    * Gets the tag for the given value, consulting the visitor's `isPlusType()`
-   * only where the value's shape is not a fabric one.
+   * only where the value cannot be a `FabricValue`.
    */
   #tagOfValueElseNull(
     value: FabricValuePlus<PlusType>,

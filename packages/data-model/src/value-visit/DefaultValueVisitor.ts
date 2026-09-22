@@ -210,8 +210,10 @@ export abstract class DefaultValueVisitor<
   }
 
   /**
-   * Visits a value of type `symbol`. If not overridden, this calls
-   * `visitJsPrimitiveValue()`.
+   * Visits a value of type `symbol`. Only a registry-interned symbol reaches
+   * this method, that being the only kind which is a `FabricValue`; a unique
+   * (uninterned) symbol is tagged `PlusType` or `null`. If not overridden, this
+   * calls `visitJsPrimitiveValue()`.
    */
   visitSymbol(value: symbol): VisitResult<PlusType, ResultType> {
     return this.visitJsPrimitiveValue(value, VALUE_TAGS.symbol);
