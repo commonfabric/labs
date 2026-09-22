@@ -106,6 +106,20 @@ type Subject = { a: string } & { readonly [OWN_BRAND]?: "user" };
     ).toBeUndefined();
   });
 
+  it("returns `undefined` for a brand keyed by an author's own `SCOPE_BRAND`", async () => {
+    const { type, checker } = await getTypeFromFiles(
+      {
+        "/brands.ts": "export declare const SCOPE_BRAND: unique symbol;",
+        "/main.ts": 'import { SCOPE_BRAND } from "./brands.ts";\n' +
+          'type Subject = { a: string } & { readonly [SCOPE_BRAND]?: "user" };',
+      },
+      "/main.ts",
+      "Subject",
+    );
+
+    expect(getScopeBrand(type, checker)).toBeUndefined();
+  });
+
   it("returns `undefined` for a brand whose scope is not a string literal", async () => {
     expect(
       await brandOf(

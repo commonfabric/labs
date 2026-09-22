@@ -275,19 +275,14 @@ const lowersDownAliasChain = (
   declaration: ts.TypeAliasDeclaration,
   args: readonly ts.TypeNode[],
   checker: ts.TypeChecker,
-  visited: ReadonlySet<string>,
+  visited: ReadonlySet<ts.TypeAliasDeclaration>,
 ): boolean => {
   if (CFC_ALIAS_NAMES.has(declaration.name.text)) return true;
   // A scope wrapper reads its payload from its argument, so one reached with
   // none is not lowered.
   if (SCOPE_WRAPPER_NAMES.has(declaration.name.text)) return args.length > 0;
   const aliased = declaration.type;
-  if (
-    !ts.isTypeReferenceNode(aliased) ||
-    visited.has(entityNameRight(aliased.typeName).text)
-  ) {
-    return false;
-  }
+  if (!ts.isTypeReferenceNode(aliased)) return false;
   // An argument left out is its parameter's default, read with the arguments
   // before it; a parameter with neither leaves the chain unlowered.
   const paramMap = new Map<string, ts.TypeNode>();
@@ -310,12 +305,12 @@ const lowersDownAliasChain = (
     resolveAliasedSymbol(symbol, checker).declarations?.find(
       ts.isTypeAliasDeclaration,
     );
-  return target !== undefined &&
+  return target !== undefined && !visited.has(target) &&
     lowersDownAliasChain(
       target,
       substituted,
       checker,
-      new Set([...visited, declaration.name.text]),
+      new Set([...visited, target]),
     );
 };
 
@@ -342,7 +337,7 @@ export function lowersFromReferenceArguments(
       declaration,
       reference.typeArguments ?? [],
       checker,
-      new Set([declaration.name.text]),
+      new Set([declaration]),
     );
 }
 
@@ -1489,7 +1484,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       aliasArgs,
       aliasArgNodes,
       { ...context, typeNode },
-      new Set([aliasDeclaration.name.text]),
+      new Set([aliasDeclaration]),
     );
     return resolved
       ? this.#formatResolvedCfcAlias(resolved, context)
@@ -1529,7 +1524,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       aliasArgs,
       this.#getAliasTypeArgumentNodes(context.typeNode),
       context,
-      new Set([aliasName]),
+      new Set([aliasDeclaration]),
     );
   }
 
@@ -1539,7 +1534,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     aliasArgs: readonly ts.Type[],
     aliasArgNodes: readonly ts.TypeNode[] | undefined,
     context: GenerationContext,
-    visited: Set<string>,
+    visited: Set<ts.TypeAliasDeclaration>,
     substituted: readonly ts.TypeParameterDeclaration[] = [],
   ): ResolvedAliasChain | undefined {
     const aliasName = aliasDeclaration.name.text;
@@ -1557,16 +1552,11 @@ export class CommonFabricFormatter implements TypeFormatter {
       return undefined;
     }
 
-    const targetName = entityNameRight(aliased.typeName).text;
-    if (visited.has(targetName)) {
-      return undefined;
-    }
-
     const targetDeclaration = this.#getTypeAliasDeclarationForSymbol(
       context.typeChecker.getSymbolAtLocation(aliased.typeName),
       context,
     );
-    if (!targetDeclaration) {
+    if (!targetDeclaration || visited.has(targetDeclaration)) {
       return undefined;
     }
 
@@ -1603,7 +1593,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       resolvedArgNodes.push(resolvedArgNode);
     }
 
-    visited.add(aliasName);
+    visited.add(targetDeclaration);
     return this.#resolveAliasChainFromDeclaration(
       terminals,
       targetDeclaration,

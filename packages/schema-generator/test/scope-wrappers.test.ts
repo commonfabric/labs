@@ -320,6 +320,21 @@ interface SchemaRoot { draft: Draft; }
       });
     });
 
+    it("follows an alias to a same-named alias in a namespace", async () => {
+      const schemas = await propertySchemas(`
+namespace Records { export type Rec<T> = PerUser<T>; }
+type Rec<T> = Records.Rec<T>;
+interface SchemaRoot { run: Rec<{ a: string }>; }
+`);
+
+      expect(schemas.run).toEqual({
+        type: "object",
+        properties: { a: { type: "string" } },
+        required: ["a"],
+        scope: "user",
+      });
+    });
+
     it("keeps the scope on each reference to a recursive alias", async () => {
       // A recursive type is written once under `$defs`; the scope is each
       // slot's own declaration, so it stays with the reference.
