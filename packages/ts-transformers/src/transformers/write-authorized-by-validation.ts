@@ -1,6 +1,7 @@
 import ts from "typescript";
 import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
 import { getNodeText } from "../ast/mod.ts";
+import { detectNewExpressionKind } from "../ast/call-kind.ts";
 import { unwrapExpression } from "../utils/expression.ts";
 
 export class WriteAuthorizedByValidationTransformer
@@ -24,7 +25,12 @@ export class WriteAuthorizedByValidationTransformer
       // A constructed cell's policy is written on its constructor, and reaches
       // the lift-result and pattern-result schemas from there. Unvalidated, a
       // binding the generator cannot read produced a schema with no writer.
-      if (ts.isNewExpression(node)) {
+      // Only a cell's constructor: `new Map<string, WriteAuthorizedBy<T, B>>()`
+      // generates no schema, and its unresolved `B` is no defect.
+      if (
+        ts.isNewExpression(node) &&
+        detectNewExpressionKind(node, context.checker) !== undefined
+      ) {
         for (const typeArg of node.typeArguments ?? []) {
           validateWriteAuthorizedByUsage(typeArg, context);
         }
@@ -103,16 +109,13 @@ function validateWriteAuthorizedByUsage(
     }
 
     if (
-      !isSupportedWriteAuthorizedByBindingName(
-        bindingType.exprName.text,
-        context.sourceFile,
-      )
+      !isSupportedWriteAuthorizedByBinding(bindingType.exprName, context)
     ) {
       context.reportDiagnostic({
         node: bindingType.exprName,
         type: "cfc-write-authorized-by",
         message:
-          "WriteAuthorizedBy only supports local handler(), module(), requireEventIntegrity(), or function-declaration bindings.",
+          "WriteAuthorizedBy only supports handler(), module(), requireEventIntegrity(), or function-declaration bindings declared in an authored module.",
       });
     }
   }
@@ -146,7 +149,7 @@ function findWriteAuthorizedByReferences(
     }
 
     if (ts.isTypeReferenceNode(current) && ts.isIdentifier(current.typeName)) {
-      const declaration = getLocalTypeDeclaration(current, context);
+      const declaration = getTypeDeclaration(current, context);
       if (declaration) {
         const key = declarationKey(declaration, current);
         if (visited.has(key)) {
@@ -195,58 +198,66 @@ function isWriteAuthorizedByLikeTypeName(name: string): boolean {
     name === "TrustedActionWriteWithIntegrity";
 }
 
-function isSupportedWriteAuthorizedByBindingName(
-  name: string,
-  sourceFile: ts.SourceFile,
+/**
+ * Whether `binding` names a writer the claim may cite: a `handler()`,
+ * `module()` or `requireEventIntegrity()` binding, or a function declaration,
+ * declared in an authored module — this one, or one it imports, through any
+ * re-export. The schema generator stamps the claim with the DECLARING module's
+ * identity, and the runtime verifies the write against the writer's own
+ * provenance, so an imported writer is as sound a claim as a local one. A
+ * declaration file has no provenance to verify against.
+ *
+ * Resolved through the checker rather than by scanning the file for the name:
+ * the file this stage sees has been rewritten by the ones before it, and a
+ * name scan cannot tell a module-level writer from a shadowing local.
+ */
+function isSupportedWriteAuthorizedByBinding(
+  binding: ts.Identifier,
+  context: TransformationContext,
 ): boolean {
-  let found = false;
-  // The file as its author wrote it. By this stage earlier ones have rewritten
-  // `sourceFile`, and a declaration they carried over still reports the
-  // authored file as its own, so identity against the rewritten file holds
-  // for nothing.
-  const authored = ts.getOriginalNode(sourceFile, ts.isSourceFile) ??
-    sourceFile;
-
-  const visit = (node: ts.Node): void => {
-    if (found) return;
-
-    if (
-      ts.isFunctionDeclaration(node) && node.name?.text === name
-    ) {
-      found = true;
-      return;
-    }
-
-    if (
-      ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) &&
-      node.name.text === name
-    ) {
-      found = node.initializer !== undefined &&
-        isSupportedWriteAuthorizedByInitializer(node.initializer);
-      return;
-    }
-
-    ts.forEachChild(node, visit);
-  };
-
-  visit(authored);
-  return found;
+  const { checker } = context;
+  let symbol = checker.getSymbolAtLocation(binding);
+  if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
+    symbol = checker.getAliasedSymbol(symbol);
+  }
+  const declaration = symbol?.valueDeclaration;
+  if (!declaration || declaration.getSourceFile().isDeclarationFile) {
+    return false;
+  }
+  if (ts.isFunctionDeclaration(declaration)) return true;
+  return ts.isVariableDeclaration(declaration) &&
+    declaration.initializer !== undefined &&
+    isSupportedWriteAuthorizedByInitializer(declaration.initializer);
 }
 
-function getLocalTypeDeclaration(
+/**
+ * The type alias or interface a reference names, wherever it is declared:
+ * this file, a module it imports through any re-export, or a declaration
+ * file. The schema generator resolves a reference the same way, so a policy
+ * any alias carries reaches the schema, and must reach this check — a
+ * declaration file's alias that names a writer is refused by the binding
+ * check, since a declaration has no provenance for the runtime to verify.
+ * The library's own `WriteAuthorizedBy` and `TrustedActionWrite*` are matched
+ * by name before their declarations would be read.
+ *
+ * Resolved through the checker: the file this stage sees has been rewritten
+ * by the ones before it, and a declaration the checker returns belongs to the
+ * file as authored, so neither identity nor a scan of the rewritten file
+ * would find it.
+ */
+function getTypeDeclaration(
   node: ts.TypeReferenceNode,
   context: TransformationContext,
 ): ts.TypeAliasDeclaration | ts.InterfaceDeclaration | undefined {
-  const symbol = context.checker.getSymbolAtLocation(node.typeName);
-  const declaration = symbol?.declarations?.find((
+  let symbol = context.checker.getSymbolAtLocation(node.typeName);
+  if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
+    symbol = context.checker.getAliasedSymbol(symbol);
+  }
+  return symbol?.declarations?.find((
     decl,
   ): decl is ts.TypeAliasDeclaration | ts.InterfaceDeclaration =>
-    (ts.isTypeAliasDeclaration(decl) || ts.isInterfaceDeclaration(decl)) &&
-    // By file name: earlier stages have rewritten `context.sourceFile`, and a
-    // declaration the checker returns belongs to the file as authored.
-    decl.getSourceFile().fileName === context.sourceFile.fileName
+    ts.isTypeAliasDeclaration(decl) || ts.isInterfaceDeclaration(decl)
   );
-  return declaration;
 }
 
 function declarationKey(

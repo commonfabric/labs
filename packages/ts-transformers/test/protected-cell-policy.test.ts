@@ -4,7 +4,7 @@ import { describe, it } from "@std/testing/bdd";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callSchemas, parseModule, patternSchemas } from "./transformed-ast.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
-import { transformSource } from "./utils.ts";
+import { transformFiles, transformSource } from "./utils.ts";
 
 describe("protected cell policy", () => {
   it("preserves a writer binding in a lifted cell's result schema", async () => {
@@ -194,8 +194,68 @@ export default pattern<{ name: string }, { name: Owned<string, typeof ${binding}
     };
     expect(await report("arbitrary")).toMatchObject([{
       type: "cfc-write-authorized-by",
-      message: expect.stringContaining("only supports local handler()"),
+      message: expect.stringContaining("only supports handler()"),
     }]);
     expect(await report("setName")).toEqual([]);
+  });
+
+  // A writer imported from another authored module, through a re-export, is
+  // as sound a claim as a local one: the schema carries the DECLARING module,
+  // which is what the runtime verifies the writer against. The validator once
+  // refused it by name, while the shipped `cfc-spec-gallery` relied on the
+  // refusal never running.
+  const importedWriterFiles = (writer: string) => ({
+    "/main.tsx": `import { pattern, Writable } from "commonfabric";
+import { type Owned, setName } from "./writers/mod.ts";
+export default pattern<{ initialName: string }>(({ initialName }) => {
+  const name = new Writable<Owned<string, typeof setName>>(initialName ?? "").for("name");
+  return { name };
+});`,
+    "/writers/mod.ts": `export * from "./set-name.ts";`,
+    "/writers/set-name.ts":
+      `import { Cfc, CurrentPrincipal, handler, RepresentsCurrentUser, Writable, WriteAuthorizedBy } from "commonfabric";
+export type Owned<T, Binding> = RepresentsCurrentUser<Cfc<WriteAuthorizedBy<T, Binding>, { ownerPrincipal: CurrentPrincipal }>>;
+export const setName = ${writer};`,
+  });
+
+  // The policy alias is imported too. The validator once followed only this
+  // file's aliases, so a policy an imported alias carried was never checked,
+  // while the generator resolved it and emitted the claim.
+  it("refuses an imported binding that is not a writer", async () => {
+    const diagnostics: TransformationDiagnostic[] = [];
+    await transformFiles(importedWriterFiles("123"), {
+      types: COMMONFABRIC_TYPES,
+      typeCheck: true,
+      pipelineDiagnostics: diagnostics,
+    });
+    expect(diagnostics.filter(isError)).toMatchObject([{
+      type: "cfc-write-authorized-by",
+      message: expect.stringContaining("only supports handler()"),
+    }]);
+  });
+
+  it("accepts an imported writer and names its declaring module", async () => {
+    const diagnostics: TransformationDiagnostic[] = [];
+    const files = await transformFiles(
+      importedWriterFiles(
+        `handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); })`,
+      ),
+      {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      },
+    );
+    expect(diagnostics.filter(isError)).toEqual([]);
+    const root = parseModule(files["/main.tsx"]);
+    const writer = {
+      __ctWriterIdentityOf: { file: "/writers/set-name.ts", path: ["setName"] },
+    };
+    expect(resolved(callSchemas(root, "lift")[1])?.ifc?.writeAuthorizedBy)
+      .toEqual(writer);
+    const output = patternSchemas(root).output;
+    // deno-lint-ignore no-explicit-any
+    expect(resolved((output as any).properties.name, output)?.ifc)
+      .toMatchObject({ writeAuthorizedBy: writer });
   });
 });

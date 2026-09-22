@@ -847,18 +847,25 @@ the wrapper that hid it.
 claims.
 
 It scans `toSchema<T>()` (one type arg), `pattern<I, R>()` (the result type
-arg), and `new` expressions (every type argument, since a constructed cell's
-policy is written there) for `WriteAuthorizedBy<T, typeof binding>` references.
-It runs after the stages that lower expressions, so it matches declarations to
-the file by name, and looks a binding up in the file as authored. It resolves
-through local type aliases and type-parameter substitution
+arg), and cell constructors (every type argument, since a constructed cell's
+policy is written there; a foreign constructor such as `new Map<…>()` is not
+scanned) for `WriteAuthorizedBy<T, typeof binding>` references. It runs after
+the stages that lower expressions, so it resolves type declarations and
+bindings through the checker rather than by scanning the rewritten file. It
+resolves through type aliases and interfaces wherever they are declared (this
+file, an import, or a declaration file; the schema generator resolves a
+reference the same way, so a policy any alias carries must be validated too)
+and type-parameter substitution
 (`findWriteAuthorizedByReferences`). For each reference it emits
 **`cfc-write-authorized-by`** when usage is malformed:
 
 - the second type argument is not a `typeof` binding (`TypeQueryNode`)
 - the `typeof` target is not a simple identifier
-- the bound name is not a supported origin — a local `handler()` / `module()` /
-  `requireEventIntegrity()` initializer, or a local function declaration
+- the bound name is not a supported origin — a `handler()` / `module()` /
+  `requireEventIntegrity()` initializer, or a function declaration, declared in
+  an authored module (this one or an import, through any re-export; a
+  declaration file declares no writer). The claim carries the declaring
+  module's identity, which is what the runtime verifies the writer against.
 
 Well-formed `WriteAuthorizedBy` usage passes validation; the base schema
 lowers as `T` plus the writer-identity claim (`ifc.writeAuthorizedBy` carrying
