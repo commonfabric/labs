@@ -2914,6 +2914,23 @@ type CalculatorRequest = {
         expect(schema).toBe(true);
       });
 
+      it("leaves a registered scope parameter unread without a payload", async () => {
+        const { type, checker } = await getTypeFromCode(
+          "export type PerUser<T> = T;",
+          "PerUser",
+        );
+        const bare = reference("PerUser");
+        const typeRegistry = new WeakMap<ts.Node, ts.Type>([[bare, type]]);
+        const schema = new SchemaGenerator()
+          .generateSchemaFromSyntheticTypeNode(
+            ts.factory.createArrayTypeNode(bare),
+            checker,
+            typeRegistry,
+          );
+
+        expect(schema).toEqual({ type: "array", items: {} });
+      });
+
       it("reads a scope wrapper, its payload taken from the argument", async () => {
         const schema = await generate(
           { "/main.ts": "export type PerUser<T> = T;" },

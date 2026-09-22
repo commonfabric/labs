@@ -1181,7 +1181,7 @@ export class SchemaGenerator {
     // when its declaration erases to an unbound type parameter.
     if (
       (type.flags & ts.TypeFlags.TypeParameter) !== 0 &&
-      resolveScopeWrapperNode(context.typeNode) === undefined
+      !resolveScopeWrapperNode(context.typeNode)?.node.typeArguments?.length
     ) {
       const checker = context.typeChecker;
       const baseConstraint = checker.getBaseConstraintOfType(type);
