@@ -1,14 +1,19 @@
 /**
- * Keeps a list of labeled amounts, sums them in integer cents, and shows the
- * formatted running total — optionally against a budget, reporting what is
- * left or how far over it the total has gone.
+ * Keeps a list of labeled amounts, sums them, and shows the formatted running
+ * total — optionally against a budget, reporting what is left or how far over
+ * it the total has gone.
  *
- * Embed it as `<AmountLedger entries={myExpenses} budget={1200} />` and read
- * the total off the host's own cell.
+ * Every amount here is in whole currency units, not minor ones: `12.95` is
+ * twelve dollars ninety-five, and passing `1295` for the same sum renders
+ * `$1295.00`. `budget` is measured the same way.
  *
- * Summing in cents and formatting once at the edge is what keeps the displayed
- * total equal to the sum of the displayed rows, rather than a float that
- * drifts a penny away from them.
+ * Embed it as `<AmountLedger entries={myExpenses} budget={1200} />` — a budget
+ * of twelve hundred dollars — and read the total off the host's own cell.
+ *
+ * Internally the sum is taken in cents and formatted once at the edge, which is
+ * what keeps the displayed total equal to the sum of the displayed rows rather
+ * than a float that drifts a penny away from them. That is a rounding device,
+ * not the unit of the input.
  *
  * @hashtags expenses, budget, total, money, ledger, spending
  * @keywords running total, sum, expense tracker, budget tracker, spending,
@@ -30,6 +35,8 @@ import {
 
 export interface AmountEntry {
   label: string;
+
+  /** In whole currency units. `12.95` is twelve dollars ninety-five. */
   amount: number;
 }
 
@@ -40,7 +47,10 @@ export interface AmountLedgerInput {
   /** Prefixed to every formatted amount. */
   currencySymbol?: Writable<string | Default<"$">>;
 
-  /** Total to measure spending against. Zero means no budget is shown. */
+  /**
+   * Total to measure spending against, in whole currency units. Zero means no
+   * budget is shown.
+   */
   budget?: Writable<number | Default<0>>;
 
   /** Heading shown above the entries. */
