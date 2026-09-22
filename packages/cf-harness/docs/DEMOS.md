@@ -12,8 +12,9 @@ page to run them; read that one to understand them.
 
 1. **Start a fresh console.** Not one that has been running all day: a console a
    few hours old can exit on a heap out-of-memory, and nothing announces it.
-2. `loom update` to the bump that pins labs `a77e958513`, then
-   `loom restart loom --include-toolshed`.
+2. `loom update` to **`loom-stable-2026-09-22-5`**, which pins labs
+   `a77e958513`, then `loom restart loom --include-toolshed`. Do not update past
+   it: a newer bump is not a better one here, only an unproven one.
 3. Confirm the build: `curl -sS <your-toolshed>/api/meta` should report `gitSha`
    opening `a77e958513`. **On the toolshed, not the console** — the console has
    no `/api/meta` and answers 404.
