@@ -301,9 +301,34 @@ pass.
 **Likely failure:** an empty table on first paint is a pending read, not an
 empty month — reopen the piece rather than re-running.
 
-**Proof status: PIECE PRODUCED (2/2).** `monthly-bank-transactions` was opened:
-seven real rows render for 2026-09, matching the ledger
-(`proof/bank-before.png`).
+**Proof status: 1 of 3 on this wording.** The prompt above asks for a table; two
+earlier clean runs asked for a _sortable_ table, and this document counts runs
+of **identical** text, so they do not count toward this entry. They are worth
+recording as evidence about the done condition rather than as proof of it: both
+asked for more than this prompt does and still delivered correct rows.
+
+The run against this wording — `monthly-bank-transactions-2` — was verified
+against the store rather than by eye. All seven rows were diffed read-only
+against the ledger and matched on **every field, including status and
+category**:
+
+| Date       | Merchant            | Amount   | Category           | Status  |
+| ---------- | ------------------- | -------- | ------------------ | ------- |
+| 2026-09-07 | Sim Insurance Group | −176.30  | GENERAL_SERVICES   | pending |
+| 2026-09-06 | Sim Phone Co        | −45.00   | RENT_AND_UTILITIES | pending |
+| 2026-09-06 | Sim Fuel Stop       | −48.95   | TRANSPORTATION     | posted  |
+| 2026-09-05 | Sim Internet        | −89.99   | RENT_AND_UTILITIES | posted  |
+| 2026-09-04 | Sim Grocery Market  | −91.72   | FOOD_AND_DRINK     | posted  |
+| 2026-09-02 | Sim Coffee Roasters | −6.75    | FOOD_AND_DRINK     | posted  |
+| 2026-09-01 | Sim Rent LLC        | −2450.00 | RENT_AND_UTILITIES | posted  |
+
+Count on top reads 7. Nothing missing and nothing invented.
+
+**Nothing on the page invites a click that does nothing.** The only interactive
+element is the title button; the five column headers are `columnheader` nodes
+and are not exposed as interactive at all. So the table lists and does not sort,
+and nothing on it looks as though it should — which is a description rather than
+a warning, and is the reason the prompt no longer asks for sorting.
 
 **The prompt no longer asks for sorting, because sorting does not work.** An
 earlier wording asked for a _sortable_ table and got a table: clicking a column
