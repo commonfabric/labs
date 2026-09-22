@@ -170,6 +170,9 @@ export interface ValueVisitor<
    * defined by the visitor. This is called at the start of a structural-map
    * operation, to determine whether or not the visitor engine ever needs to use
    * `isResultType()`.
+   *
+   * **Note:** This method is nascent: There are no structural-map methods in
+   * this module, yet.
    */
   isDomainAssignableToResultType(): boolean;
 
