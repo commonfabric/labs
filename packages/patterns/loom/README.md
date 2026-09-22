@@ -1,10 +1,10 @@
 # Loom default pattern
 
 `main.tsx` is a space default pattern with linked panel occurrence cells.
-`schemas.tsx` defines its public contract; the participant roster's types and
-its one writer live in `participants.tsx`, which `schemas.tsx` re-exports. The
-shared inputs are `title`, `panels`, `presentation`, and `participants`;
-`viewerState` belongs to one session.
+`schemas.tsx` defines its public contract and re-exports the participant
+roster's types from `participants.tsx`, which also holds the roster's one
+writer, `addParticipant`. The shared inputs are `title`, `panels`,
+`presentation`, and `participants`; `viewerState` belongs to one session.
 
 A panel is a `piece`, `document`, or HTTP(S) `url`. Piece and document targets
 are native cell references. Their complete space, scope, document, and path
