@@ -7942,3 +7942,75 @@ Deno.test("parseCfHarnessCliArgs refuses a present --max-confidentiality with no
     );
   }
 });
+
+Deno.test("parseCfHarnessCliArgs resolves the sandbox runtime kind and its runsc settings", async () => {
+  const fromFlags = await parseCfHarnessCliArgs(
+    [
+      "--prompt",
+      "hi",
+      "--sandbox-runtime",
+      "runsc",
+      "--sandbox-rootfs",
+      "/images/kitchensink",
+      "--sandbox-cfc-policy",
+      "/policy.json",
+    ],
+    {
+      cwd: "/tmp/project",
+      env: {
+        CF_HARNESS_SANDBOX_RUNTIME: "docker",
+        CF_HARNESS_RUNSC_BINARY: "/opt/runsc",
+        CF_HARNESS_DOCKER_NETWORK_MODE: "bridge",
+      },
+    },
+  );
+  if ("help" in fromFlags) {
+    throw new Error("expected config result");
+  }
+  assertEquals(fromFlags.sandboxRuntimeKind, "runsc");
+  assertEquals(fromFlags.sandboxRootfs, "/images/kitchensink");
+  assertEquals(fromFlags.sandboxCfcPolicy, "/policy.json");
+  assertEquals(fromFlags.sandboxRunscBinary, "/opt/runsc");
+  // docker's network vocabulary maps onto runsc's: bridge is runsc's netstack.
+  assertEquals(fromFlags.sandboxRunscNetworkMode, "sandbox");
+
+  const fromEnv = await parseCfHarnessCliArgs(
+    ["--prompt", "hi"],
+    {
+      cwd: "/tmp/project",
+      env: {
+        CF_HARNESS_SANDBOX_RUNTIME: "runsc",
+        CF_HARNESS_SANDBOX_ROOTFS: "/r",
+        CF_HARNESS_RUNSC_CFC_POLICY: "/p",
+        CF_HARNESS_DOCKER_NETWORK_MODE: "none",
+      },
+    },
+  );
+  if ("help" in fromEnv) {
+    throw new Error("expected config result");
+  }
+  assertEquals(fromEnv.sandboxRuntimeKind, "runsc");
+  assertEquals(fromEnv.sandboxRootfs, "/r");
+  assertEquals(fromEnv.sandboxCfcPolicy, "/p");
+  assertEquals(fromEnv.sandboxRunscNetworkMode, "none");
+
+  const unset = await parseCfHarnessCliArgs(
+    ["--prompt", "hi"],
+    { cwd: "/tmp/project", env: {} },
+  );
+  if ("help" in unset) {
+    throw new Error("expected config result");
+  }
+  assertEquals(unset.sandboxRuntimeKind, undefined);
+  assertEquals(unset.sandboxRunscNetworkMode, undefined);
+
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", "--sandbox-runtime", "podman"],
+        { cwd: "/tmp/project", env: {} },
+      ),
+    Error,
+    "sandbox runtime must be one of docker, runsc",
+  );
+});

@@ -668,6 +668,7 @@ export class CfHarnessEngine {
   readonly #spaceDbPath?: string;
   readonly #hostMounts: readonly HostSandboxMount[];
   readonly #ownedRunscConfig?: DockerRunscSandboxConfig;
+  #sandboxClosed = false;
   readonly #resumedRun: boolean;
   #runModelBound: boolean;
   #cfcTransportChecked = false;
@@ -1477,6 +1478,10 @@ export class CfHarnessEngine {
    * nothing to do, and a second call is harmless.
    */
   async #closeSandbox(): Promise<void> {
+    if (this.#sandboxClosed) {
+      return;
+    }
+    this.#sandboxClosed = true;
     try {
       await this.sandbox.close?.();
     } catch (error) {

@@ -1557,7 +1557,7 @@ export const parseCfHarnessCliArgs = async (
       CF_HARNESS_SANDBOX_ROOTFS: Deno.env.get("CF_HARNESS_SANDBOX_ROOTFS"),
       CF_HARNESS_RUNSC_CFC_POLICY: Deno.env.get("CF_HARNESS_RUNSC_CFC_POLICY"),
       CF_HARNESS_RUNSC_BINARY: Deno.env.get("CF_HARNESS_RUNSC_BINARY"),
-      CF_HARNESS_DOCKER_NETWORK_MODE_FOR_RUNSC: Deno.env.get(
+      CF_HARNESS_DOCKER_NETWORK_MODE: Deno.env.get(
         "CF_HARNESS_DOCKER_NETWORK_MODE",
       ),
       [CFC_RESULT_DIR_ENV]: Deno.env.get(CFC_RESULT_DIR_ENV),
@@ -1748,9 +1748,7 @@ export const parseCfHarnessCliArgs = async (
     ? undefined
     : rawSandboxCfcPolicy;
   const sandboxRunscBinary = nonEmptyEnvValue(env.CF_HARNESS_RUNSC_BINARY);
-  const rawRunscNetwork = nonEmptyEnvValue(
-    env.CF_HARNESS_DOCKER_NETWORK_MODE_FOR_RUNSC,
-  );
+  const rawRunscNetwork = nonEmptyEnvValue(env.CF_HARNESS_DOCKER_NETWORK_MODE);
   // The docker network vocabulary maps onto runsc's: none stays none, bridge
   // is runsc's own netstack, host is the host's stack.
   const sandboxRunscNetworkMode = rawRunscNetwork === "none"

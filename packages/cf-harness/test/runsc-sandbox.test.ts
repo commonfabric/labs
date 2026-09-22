@@ -375,3 +375,208 @@ Deno.test("RunscSandboxRuntime refuses a session call whose invocation context e
   );
   assertEquals(runner.spawns.length, 0);
 });
+
+Deno.test("resolveRunscSandboxConfig refuses relative paths, empty bind names and overlapping roots", () => {
+  assertThrows(
+    () =>
+      resolveRunscSandboxConfig({
+        workspaceHostPath: "relative/ws",
+        rootfs: "/r",
+        platform: "linux",
+      }),
+    Error,
+    "workspace host path must be an absolute host path",
+  );
+  assertThrows(
+    () =>
+      resolveRunscSandboxConfig({
+        workspaceHostPath: "/ws",
+        rootfs: "/r",
+        workspaceMountPath: "workspace",
+        platform: "linux",
+      }),
+    Error,
+    "workspace mount path must be an absolute sandbox path",
+  );
+  assertThrows(
+    () =>
+      resolveRunscSandboxConfig({
+        workspaceHostPath: "/ws",
+        rootfs: "/r",
+        platform: "linux",
+        additionalMounts: [{
+          kind: "host-bind",
+          name: " ",
+          hostPath: "/h",
+          sandboxPath: "/x",
+        }],
+      }),
+    Error,
+    "host bind mount name must be non-empty",
+  );
+  assertThrows(
+    () =>
+      resolveRunscSandboxConfig({
+        workspaceHostPath: "/ws",
+        rootfs: "/r",
+        platform: "linux",
+        additionalMounts: [{
+          kind: "host-bind",
+          name: "inner",
+          hostPath: "/h",
+          sandboxPath: "/workspace/inner",
+        }],
+      }),
+    Error,
+    "sandbox roots overlap",
+  );
+  const c = resolveRunscSandboxConfig({
+    workspaceHostPath: "/ws",
+    rootfs: "/r",
+    platform: "linux",
+    containerUser: "1000:1000",
+    sessionStartTimeoutMs: 5,
+  });
+  assertEquals(c.containerUser, "1000:1000");
+  assertEquals(c.sessionStartTimeoutMs, 5);
+});
+
+Deno.test("RunscSandboxRuntime describes itself with its mounts and session support", () => {
+  const runtime = new RunscSandboxRuntime(
+    config({
+      additionalMounts: [
+        {
+          kind: "host-bind",
+          name: "cabinet",
+          hostPath: "/home/u/cabinet",
+          sandboxPath: "/file-cabinet",
+          readOnly: false,
+        },
+        { kind: "fabric-fuse", hostPath: "/mnt/fabric" },
+      ],
+    }),
+    new FakeRunscRunner(),
+  );
+  const d = runtime.describe();
+  assertEquals(d.kind, "runsc-cfc");
+  assertEquals(d.sessions, true);
+  assertEquals(d.defaultWorkingDirectory, "/workspace");
+  assertEquals(d.cfc?.runtimeRequested, true);
+  assertEquals(d.cfc?.invocationContextTransport, "fd");
+  const mounts = d.cfc?.mounts ?? [];
+  assertEquals(mounts.map((m) => m.sandboxPath), [
+    "/workspace",
+    "/file-cabinet",
+    "/fabric",
+  ]);
+  assertEquals(mounts[1].mode, "writable");
+  assertEquals(mounts[1].name, "cabinet");
+  assertEquals(mounts[2].kind, "fabric-fuse");
+});
+
+Deno.test("RunscSandboxRuntime resolves paths inside its roots and refuses escapes", () => {
+  const runtime = new RunscSandboxRuntime(
+    config({
+      additionalMounts: [{
+        kind: "host-bind",
+        name: "cabinet",
+        hostPath: "/h",
+        sandboxPath: "/file-cabinet",
+      }],
+    }),
+    new FakeRunscRunner(),
+  );
+  assertEquals(runtime.resolvePath("notes.md"), "/workspace/notes.md");
+  assertEquals(runtime.resolvePath("../b", "/workspace/a"), "/workspace/b");
+  assertEquals(runtime.resolvePath("/file-cabinet/x"), "/file-cabinet/x");
+  assert(runtime.isPathWithinWorkspace("/workspace/x"));
+  assert(!runtime.isPathWithinWorkspace("/file-cabinet/x"));
+  assert(runtime.isPathWithinAllowedRoots("/file-cabinet/x"));
+  assertThrows(
+    () => runtime.resolvePath("/etc/passwd"),
+    Error,
+    "escapes allowed sandbox roots",
+  );
+  assertThrows(
+    () => runtime.resolvePath("../../etc", "/workspace"),
+    Error,
+    "escapes",
+  );
+});
+
+Deno.test("RunscSandboxRuntime passes env and user to a session exec and to the spec", async () => {
+  const runner = new FakeRunscRunner();
+  let spec: { process: { user: { uid: number; gid: number } } } | undefined;
+  runner.spawn = function (this: FakeRunscRunner, request) {
+    const bundle = request.args[request.args.indexOf("--bundle") + 1];
+    spec = JSON.parse(Deno.readTextFileSync(join(bundle, "config.json")));
+    return FakeRunscRunner.prototype.spawn.call(this, request);
+  };
+  const runtime = new RunscSandboxRuntime(
+    config({ containerUser: "1000:2000" }),
+    runner,
+  );
+  await runtime.run({
+    argv: ["/bin/true"],
+    session: "s",
+    env: { B: "2", A: "1" },
+  });
+  const exec = runner.requests.find((r) => r.args.includes("exec"))!;
+  const i = exec.args.indexOf("--env");
+  assertEquals(exec.args.slice(i, i + 4), ["--env", "A=1", "--env", "B=2"]);
+  assertEquals(exec.args[exec.args.indexOf("--user") + 1], "1000:2000");
+  assertEquals(spec?.process.user, { uid: 1000, gid: 2000 });
+  await runtime.close();
+});
+
+Deno.test("RunscSandboxRuntime gives up on a session whose container never reports running", async () => {
+  const runner = new FakeRunscRunner();
+  const base = FakeRunscRunner.prototype.run;
+  runner.run = function (this: FakeRunscRunner, request) {
+    if (request.args.includes("state")) {
+      this.requests.push(request);
+      return Promise.resolve({
+        stdout: '{"status": "created"}',
+        stderr: "",
+        exitCode: 0,
+      });
+    }
+    return base.call(this, request);
+  };
+  const runtime = new RunscSandboxRuntime(
+    config({ sessionStartTimeoutMs: 60 }),
+    runner,
+  );
+  await assertRejects(
+    () => runtime.run({ argv: ["/bin/true"], session: "slow" }),
+    Error,
+    "did not start within 60ms",
+  );
+  assertEquals(runner.killed, ["s-run-abc-slow:SIGKILL"]);
+  await runtime.close();
+});
+
+Deno.test("RunscSandboxRuntime needs a runner that can spawn for sessions, and refuses new sessions once closed", async () => {
+  const noSpawn: ProcessRunner = { run: (r) => new FakeRunscRunner().run(r) };
+  const runtime = new RunscSandboxRuntime(config(), noSpawn);
+  await assertRejects(
+    () => runtime.run({ argv: ["/bin/true"], session: "s" }),
+    Error,
+    "cannot keep a session alive",
+  );
+  await runtime.close();
+  await assertRejects(
+    () => runtime.run({ argv: ["/bin/true"], session: "t" }),
+    Error,
+    "sandbox runtime is closed",
+  );
+  // A fresh per-call container still runs after close: nothing to keep alive.
+  const runner = new FakeRunscRunner();
+  const open = new RunscSandboxRuntime(
+    config({ cfcPolicyPath: undefined }),
+    runner,
+  );
+  await open.close();
+  const r = await open.run({ argv: ["/bin/true"] });
+  assertEquals(r.exitCode, 0);
+});

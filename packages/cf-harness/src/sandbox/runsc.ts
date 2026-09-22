@@ -111,6 +111,8 @@ export interface RunscSandboxConfig {
   /** Distinguishes this run's sessions from every other run's. */
   runId: string;
   containerUser?: string;
+  /** How long a session's container may take to report running. */
+  sessionStartTimeoutMs: number;
 }
 
 export interface ResolveRunscSandboxConfigOptions {
@@ -128,6 +130,7 @@ export interface ResolveRunscSandboxConfigOptions {
   containerUser?: string;
   homeDir?: string;
   platform?: "darwin" | "linux" | string;
+  sessionStartTimeoutMs?: number;
 }
 
 const normalizeSandboxRoot = (path: string): string => {
@@ -251,6 +254,7 @@ export const resolveRunscSandboxConfig = (
     ...(options.containerUser !== undefined
       ? { containerUser: options.containerUser }
       : {}),
+    sessionStartTimeoutMs: options.sessionStartTimeoutMs ?? 30_000,
   };
 };
 
@@ -634,7 +638,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
           containerId,
         ],
       });
-      const deadline = Date.now() + 30_000;
+      const deadline = Date.now() + this.config.sessionStartTimeoutMs;
       while (Date.now() < deadline) {
         const st = await this.#runner.run({
           command: this.config.runscBinary,
@@ -646,7 +650,9 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         await new Promise((r) => setTimeout(r, 25));
       }
       state.handle.kill("SIGKILL");
-      throw new Error(`sandbox session "${session}" did not start within 30s`);
+      throw new Error(
+        `sandbox session "${session}" did not start within ${this.config.sessionStartTimeoutMs}ms`,
+      );
     })();
     this.#sessions.set(session, state);
     return state;
