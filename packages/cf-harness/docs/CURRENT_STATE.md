@@ -2,7 +2,7 @@
 
 Status: current implementation reference\
 Last verified: 2026-09-22\
-Revision: `1fb678d2ab+research-reuse`
+Revision: `688cd617a6`
 
 The [system map](system-map/README.md) moves in lockstep with this current-state
 reference.
@@ -341,7 +341,15 @@ The current package provides:
   together ([Read-only Loom retrieval](LOOM_RETRIEVAL.md));
 - opt-in fabric-session tools — `run_pattern` and `assign_slug`
   (`--fabric-api-url`, `--fabric-identity`, and `--fabric-space` configured
-  together, or their `CF_HARNESS_FABRIC_*` environment fallbacks).
+  together, or their `CF_HARNESS_FABRIC_*` environment fallbacks). Before
+  opening Fabric or compiling new `sourceText`, `run_pattern` requires each
+  selected pattern in retained research context to be imported as
+  `cf:pattern:<id>` or explained in one nonblank line at `reuseReasons[<id>]`.
+  This includes incomplete kits; unselected leads are advisory and direct
+  indexed execution does not enter this gate. Omitting both for a selection
+  returns `error` with the retained identities and both retry paths, and
+  persists no piece.
+
   `run_pattern`: compiles and runs an inline `sourceText` pattern (capped at 256
   KiB) against a deployed Fabric space from the trusted host side over a lazy
   per-run session that caches only a healthy, authorized construction; passes
