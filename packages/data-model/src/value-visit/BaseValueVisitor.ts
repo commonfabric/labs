@@ -3,7 +3,6 @@ import {
   type FabricContainerValuePlus,
   type FabricInstancePlus,
   type FabricPlainObjectPlus,
-  type FabricValue,
   type FabricValuePlus,
 } from "@/interface.ts";
 import { type FabricContainerValueTag, type FabricValuePlusTag } from "@/types";

@@ -16,7 +16,6 @@ import {
   type FabricInstancePlus,
   type FabricPlainObjectPlus,
   type FabricPrimitive,
-  type FabricValue,
   type FabricValuePlus,
 } from "@/interface.ts";
 import {
