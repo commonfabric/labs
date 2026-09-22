@@ -110,8 +110,9 @@ export const DO_RECURSE_VALUES: RecurseForm = Object.freeze(
  * See the included result types for details on what they mean. As for
  * `undefined`, if a visitor returns it in the context of this type, it means
  * that the visit of the given value was completed; the visitor engine will not
- * process it further, and there is no specific value to return from (this part
- * of) the visit.
+ * process it further. For a top-level `map()` call, this additionally means
+ * that the originally-visited value is the mapped result of the visit of the
+ * value.
  */
 export type BaselineVisitorMethodResult<ResultType = FabricValue> =
   | MainResultForm<ResultType>
@@ -161,7 +162,19 @@ export type VisitedResult<ResultType = FabricValue> =
  * `PlusType` type parameter is available to selectively include another type
  * (possibly itself compound) as an additional option.
  */
-export interface ValueVisitor<PlusType = never, ResultType = FabricValue> {
+export interface ValueVisitor<
+  PlusType = never,
+  ResultType = FabricValuePlus<PlusType>,
+> {
+  /**
+   * Indicates whether the complete domain of a visitor -- that is, the type
+   * `FabricValuePlus<PlusType>` -- is considered assignable to the `ResultType`
+   * defined by the visitor. This is called at the start of a structural-map
+   * operation, to determine whether or not the visitor engine ever needs to use
+   * `isResultType()`.
+   */
+  isDomainAssignableToResultType(): boolean;
+
   /**
    * Indicates whether or not the given value is compatible with the `PlusType`
    * type defined by the visitor. This is a type predicate for `PlusType`. The
@@ -173,6 +186,16 @@ export interface ValueVisitor<PlusType = never, ResultType = FabricValue> {
    * which would accept, say, a plain object never sees one.
    */
   isPlusType(value: unknown): value is PlusType;
+
+  /**
+   * Indicates whether or not the given value is compatible with the
+   * `ResultType` defined by the visitor. This is a type predicate for
+   * `ResultType`. The visitor engine consults it only when it cannot otherwise
+   * determine membership of a value in `ResultType`.
+   */
+  isResultType(
+    value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>,
+  ): value is ResultType;
 
   /**
    * Visits a container value which is already in the process of being visited.
