@@ -2965,6 +2965,9 @@ export class Runtime {
    * @param fn - Function to execute with the transaction.
    * @param maxRetries - Maximum combined number of reconciliation re-runs and
    *   commit-rejection retries after the initial invocation.
+   * @param options - Source-update authorization and an optional owner signal.
+   *   A signal enables cooperative CFC preparation and stops canceled work
+   *   before commit or retry. Callers without one prepare synchronously.
    * @returns `{ ok }` once the transaction commits, carrying whatever `fn`
    *   returned, or `{ error }` when it does not commit: a rejection that is not
    *   retryable, a retryable one whose retries are spent, or `fn` itself
@@ -2973,21 +2976,26 @@ export class Runtime {
   editWithRetry<T = void>(
     fn: (tx: IExtendedStorageTransaction) => T,
     maxRetries: number = DEFAULT_MAX_RETRIES,
-    options: { sourceUpdate?: PreparedSourceUpdate } = {},
+    options: { sourceUpdate?: PreparedSourceUpdate; signal?: AbortSignal } = {},
   ): Promise<
     { ok: T; error?: undefined } | { ok?: undefined; error: CommitError }
   > {
-    const teardownResult = (): {
+    const signal = options.signal === undefined
+      ? this.#writeTeardown.signal
+      : AbortSignal.any([options.signal, this.#writeTeardown.signal]);
+    const stoppedResult = (): {
       ok?: undefined;
       error: CommitError;
     } => ({
       error: {
         name: "StorageTransactionAborted" as const,
-        message: "editWithRetry stopped because the runtime is disposing",
-        reason: new Error("runtime disposing"),
+        message: this.#tearingDownWrites
+          ? "editWithRetry stopped because the runtime is disposing"
+          : "editWithRetry stopped because its owner canceled",
+        reason: signal.reason,
       },
     });
-    if (this.#tearingDownWrites) return Promise.resolve(teardownResult());
+    if (signal.aborted) return Promise.resolve(stoppedResult());
     const tx = this.edit(options);
     this.scheduler.beginReadAttempt(tx, "editWithRetry");
     tx.tx.immediate = true;
@@ -3011,24 +3019,36 @@ export class Runtime {
     const commitPrepared = (): Promise<
       { ok: T; error?: undefined } | { ok?: undefined; error: CommitError }
     > => {
-      if (this.#tearingDownWrites) {
-        tx.abort("editWithRetry stopped because the runtime is disposing");
-        return Promise.resolve(teardownResult());
+      if (signal.aborted) {
+        tx.abort(signal.reason);
+        return Promise.resolve(stoppedResult());
       }
+      let preparation: Promise<void> | void;
       try {
-        this.prepareTxForCommit(tx);
+        preparation = options.signal === undefined
+          ? this.prepareTxForCommit(tx)
+          : tx.prepareForCommitCooperatively(signal);
       } catch (error) {
         if (tx.status().status === "ready") tx.abort(error);
         throw error;
       }
-      return tx.commit().then(async ({ error }) => {
+      const commit = preparation === undefined
+        ? tx.commit()
+        : preparation.then(() => {
+          if (signal.aborted && tx.status().status === "ready") {
+            tx.abort(signal.reason);
+          }
+          return tx.commit();
+        });
+      return commit.then(async ({ error }) => {
         if (error) {
+          if (signal.aborted) return stoppedResult();
           if (maxRetries > 0 && isRetryableCommitRejection(error)) {
             await this.awaitCommitRetryReadiness(
               error,
-              this.#writeTeardown.signal,
+              signal,
             );
-            if (this.#tearingDownWrites) return teardownResult();
+            if (signal.aborted) return stoppedResult();
             return this.editWithRetry<T>(fn, maxRetries - 1, options);
           } else {
             return { error };
@@ -3036,6 +3056,7 @@ export class Runtime {
         }
         return { ok: result };
       }).catch((error) => {
+        if (tx.status().status === "ready") tx.abort(error);
         return {
           error: {
             name: "StorageTransactionAborted" as const,
@@ -3071,9 +3092,9 @@ export class Runtime {
       : 0;
     if (typeof reconciliation === "number") return commitPrepared();
     return reconciliation.then((present) => {
-      if (this.#tearingDownWrites) {
-        tx.abort("editWithRetry stopped because the runtime is disposing");
-        return teardownResult();
+      if (signal.aborted) {
+        tx.abort(signal.reason);
+        return stoppedResult();
       }
       if (present > 0) {
         tx.abort(
