@@ -1232,17 +1232,30 @@ person would say it. The question was which hints cover a real gap.
 The slug sentence is the clearest: `assign_slug`'s own error says _"Choose
 another"_, and the run does.
 
-**One hint covers a real defect.** Told to compose a checklist and a running
-total with no ids, a run imports the **superseded** generation of both parts —
-the one predating the removal fix. The corrected generations carry
-`priorPatternId` pointing at their predecessors, so the index holds the
-successor link; discovery does not follow it, and the older entry outranks its
-own successor because it is classified `proven` while the correction is
-`unproven`. **Publishing a fix ranks it below the version it fixes.**
+**One hint is load-bearing.** Told to compose a checklist and a running total
+with no ids, a run imports the **superseded** generation of both parts — the one
+predating the removal fix.
 
-So a prompt that names those two ids is not stylistic. Until discovery serves
-the newest generation of a chain, it is the only thing standing between a reader
-and the defect.
+The corrected generations do carry `priorPatternId` pointing at their
+predecessors, so the chain is declared. It is not followed, and the reason is a
+rule rather than a fault: successor substitution redirects discovery **only
+along a chain whose generations share an owner**
+(`src/pattern-index/successors.ts`). These two do not. The older entries belong
+to the identity that seeded them; the corrections were published under a
+different one, so the chain crosses an ownership boundary and the rule
+deliberately declines it.
+
+Ranking then decides, and it favours the older entry, which is classified
+`proven` where the correction is `unproven`. **A correction published under a
+different identity does not displace what it corrects, and starts below it.**
+
+Two consequences worth stating plainly. Nobody can retire the old entries by
+retracting them: retraction is the owner's to perform and these are not ours.
+And the fix is not a prompt — it is index curation, or a policy for honouring a
+successor across owners.
+
+So a prompt that names those two ids is not stylistic. Until one of those lands,
+it is the only thing standing between a reader and the defect.
 
 ## Where the evidence is
 
