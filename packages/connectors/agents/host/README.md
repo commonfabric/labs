@@ -296,8 +296,8 @@ The session the app makes is one the driver had not listed before the start was
 sent; two pending starts that sent different texts sharing the prefix the SDK
 lists leave a session unpaired rather than guess. A desktop start takes no
 `mode`; the app's own permission setting applies, and the app asks the person to
-trust the folder each time.
-The Claude driver offers the surface on macOS only, in `capabilities.surfaces`.
+trust the folder each time. The Claude driver offers the surface on macOS only,
+in `capabilities.surfaces`.
 
 The command cell is a shallow action array. A valid element is either a command
 object or a JSON string containing that object. The debug pattern writes JSON
