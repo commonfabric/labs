@@ -66,7 +66,7 @@ export interface AgentFabricCells {
 export type PublishedSessionState = Readonly<
   Pick<
     IndexEntry,
-    "driver" | "updatedAt" | "archived" | "active" | "syncStatus"
+    "driver" | "updatedAt" | "archived" | "active" | "syncStatus" | "startedAs"
   >
 >;
 
@@ -1092,6 +1092,7 @@ export class AgentFabricTarget implements CommandTarget {
         archived: typeof entry.archived === "boolean" ? entry.archived : null,
         active: typeof entry.active === "boolean" ? entry.active : null,
         syncStatus: entry.syncStatus,
+        ...(entry.startedAs ? { startedAs: entry.startedAs } : {}),
       });
     }
     return states;
