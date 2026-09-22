@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 
-import type { JSONSchema } from "../../src/builder/types.ts";
+import type { JSONSchema, JSONSchemaObj } from "../../src/builder/types.ts";
 import { recordNewProtectedDefaults } from "../../src/cfc/default-initialization.ts";
 import { readStoredCfcMetadata } from "../../src/cfc/metadata.ts";
 import { recordReferencedArgumentFields } from "../../src/cfc/reference-initialization.ts";
@@ -18,7 +18,7 @@ const writer = {
 };
 // The labels a message sent through a trusted surface carries: its writer,
 // the UI contract its writes come in under, and its author's integrity.
-const entrySchema: JSONSchema = {
+const entrySchema: JSONSchemaObj = {
   type: "object",
   properties: { body: { type: "string" } },
   ifc: {
@@ -38,6 +38,16 @@ const entrySchema: JSONSchema = {
 const argumentSchema: JSONSchema = {
   type: "object",
   properties: { element: entrySchema, index: { type: "number" } },
+};
+// The provenance a trusted event carries when it comes in under that contract.
+const sendProvenance = {
+  origin: "dom",
+  trusted: true,
+  ui: {
+    pattern: "SendSurface",
+    eventIntegrity: ["SendSurface"],
+    uiContractDataset: { uiAction: "SendMessage" },
+  },
 };
 
 describe("reference-initialization", () => {
@@ -213,38 +223,51 @@ describe("reference-initialization", () => {
       expect((await again.commit()).error).toBeUndefined();
     });
 
-    it("refuses a link staged into an absent field whose stored policy carries a UI contract", async () => {
-      // The envelope is persisted by initializing a protected default beside
-      // the absent field, and then stands: a stored UI contract vetoes the
-      // initialization as a stored writer binding does.
-      const guarded: JSONSchema = {
-        type: "array",
-        items: { type: "string" },
-        default: [],
-        ifc: {
-          ownerPrincipal: signer.did(),
-          addIntegrity: [{
-            kind: "represents-principal",
-            subject: signer.did(),
-          }],
-          writeAuthorizedBy: writer,
+    // A stored envelope in which `element` carries a UI contract and no writer
+    // binding, persisted by initializing a protected default beside the absent
+    // field.
+    const guarded: JSONSchemaObj = {
+      type: "array",
+      items: { type: "string" },
+      default: [],
+      ifc: {
+        ownerPrincipal: signer.did(),
+        addIntegrity: [{
+          kind: "represents-principal",
+          subject: signer.did(),
+        }],
+        writeAuthorizedBy: writer,
+      },
+    };
+    const contractOnly: JSONSchemaObj = {
+      type: "object",
+      properties: {
+        body: { type: "string" },
+      },
+      ifc: { uiContract: entrySchema.ifc!.uiContract },
+    };
+    const storedSchema: JSONSchemaObj = {
+      type: "object",
+      properties: {
+        guarded,
+        element: contractOnly,
+        note: { type: "string" },
+      },
+    };
+    /** The stored schema with a writer binding introduced on `element`. */
+    const introducingWriter: JSONSchemaObj = {
+      ...storedSchema,
+      properties: {
+        ...storedSchema.properties,
+        element: {
+          ...contractOnly,
+          ifc: { ...contractOnly.ifc, writeAuthorizedBy: writer },
         },
-      };
-      const contractOnly: JSONSchema = {
-        type: "object",
-        properties: {
-          body: { type: "string" },
-        },
-        ifc: { uiContract: entrySchema.ifc!.uiContract },
-      };
-      const schema: JSONSchema = {
-        type: "object",
-        properties: {
-          guarded,
-          element: contractOnly,
-          note: { type: "string" },
-        },
-      };
+      },
+    };
+
+    /** Persists that envelope and returns the argument's link. */
+    async function persistContractOnlyElement() {
       const previousSchema: JSONSchema = {
         type: "object",
         properties: { note: { type: "string" } },
@@ -257,18 +280,24 @@ describe("reference-initialization", () => {
       expect((await seed.commit()).error).toBeUndefined();
 
       const first = runtime.edit();
-      const created = runtime.getCell(space, "argument", schema, first);
+      const created = runtime.getCell(space, "argument", storedSchema, first);
       const link = created.getAsNormalizedFullLink();
-      recordNewProtectedDefaults(first, link, previousSchema, schema, {
+      recordNewProtectedDefaults(first, link, previousSchema, storedSchema, {
         guarded: [],
       }, { guarded: [], note: "saved" });
       created.set({ guarded: [], note: "saved" });
       runtime.prepareTxForCommit(first);
       expect((await first.commit()).error).toBeUndefined();
       expect(readStoredCfcMetadata(runtime.edit(), link)).toBeDefined();
+      return link;
+    }
 
+    it("refuses a link staged into an absent field whose stored policy carries a UI contract", async () => {
+      // A stored UI contract keeps its trusted-event requirement, as a stored
+      // writer binding keeps its writer requirement.
+      const link = await persistContractOnlyElement();
       const again = runtime.edit();
-      const held = runtime.getCell(space, "argument", schema, again);
+      const held = runtime.getCell(space, "argument", storedSchema, again);
       held.key("element").set(entryCell(again, "entry", "a"));
       recordReferencedArgumentFields(again, link, ["element"]);
       runtime.prepareTxForCommit(again);
@@ -276,6 +305,41 @@ describe("reference-initialization", () => {
       expect((await again.commit()).error?.message).toContain(
         "trusted-event",
       );
+    });
+
+    it("accepts a link staged under a writer binding the schema introduces beside a stored UI contract that a trusted event satisfies", async () => {
+      // The stored contract keeps its requirement and the event meets it; the
+      // writer binding is new to the slot, so the initialization waives it.
+      const link = await persistContractOnlyElement();
+      const again = runtime.edit();
+      const held = runtime.getCell(space, "argument", introducingWriter, again);
+      held.key("element").set(entryCell(again, "entry", "a"));
+      recordReferencedArgumentFields(again, link, ["element"]);
+      again.recordCfcWritePolicyInput({
+        kind: "trusted-event",
+        target: { space, id: link.id, scope: link.scope, path: ["element"] },
+        eventId: "trusted-event:send:argument:element",
+        provenance: sendProvenance,
+      });
+      runtime.prepareTxForCommit(again);
+
+      expect((await again.commit()).error).toBeUndefined();
+      expect(runtime.getCell(space, "argument").key("element").get()).toEqual({
+        body: "a",
+      });
+    });
+
+    it("refuses for the stored UI contract, not for the writer binding introduced beside it, when no trusted event is recorded", async () => {
+      const link = await persistContractOnlyElement();
+      const again = runtime.edit();
+      const held = runtime.getCell(space, "argument", introducingWriter, again);
+      held.key("element").set(entryCell(again, "entry", "a"));
+      recordReferencedArgumentFields(again, link, ["element"]);
+      runtime.prepareTxForCommit(again);
+
+      const message = (await again.commit()).error?.message;
+      expect(message).toContain("trusted-event");
+      expect(message).not.toContain("writeAuthorizedBy");
     });
 
     it("refuses a link to another cell staged over a field that holds one", async () => {

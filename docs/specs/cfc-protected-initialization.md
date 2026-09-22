@@ -85,10 +85,14 @@ rather than reconstructing it from overlapping write details.
 
 The permission waives `writeAuthorizedBy` and a UI contract's trusted-event
 requirement for that initialization, the two declarations that name who may
-write a value. Owner binding, represented-principal integrity, confidentiality,
-required integrity, schema compatibility, and storage authorization remain
-enforced. Stored policy is read and merged through ordinary CFC preparation; an
-unreadable envelope is never treated as absent.
+write a value. A stored declaration of the same kind on the field or an ancestor
+refuses its waiver: a stored writer binding keeps its writer requirement, and a
+stored UI contract keeps its trusted-event requirement, while a declaration the
+candidate schema introduces beside it is waived. Owner binding,
+represented-principal integrity, confidentiality, required integrity, schema
+compatibility, and storage authorization remain enforced. Stored policy is read
+and merged through ordinary CFC preparation; an unreadable envelope is never
+treated as absent.
 
 ## Existing unprotected values
 
