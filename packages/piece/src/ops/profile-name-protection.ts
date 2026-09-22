@@ -122,7 +122,12 @@ function readPlan(
   }
   const positions: ProfileNameProtectionInspection["positions"] = [];
   const missing: ProfileNamePlan["missing"] = [];
-  const evidence: unknown[] = [identity, setup, projection, envelope.metadata];
+  const evidence: FabricValue[] = [
+    identity,
+    setup,
+    projection,
+    envelope.metadata,
+  ];
   let name: string;
   for (let depth = 0;; depth++) {
     if (

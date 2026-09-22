@@ -102,6 +102,11 @@ export function styleFor(cls: TokenClass): Style {
   return TOKEN_STYLES[cls];
 }
 
+/** Whether `name` is a token class the renderer can color. */
+export function isTokenClass(name: string): name is TokenClass {
+  return Object.hasOwn(TOKEN_STYLES, name);
+}
+
 /** Token colors for content shown inside a dialog. The comment token marks
  * muted labels there, while builderCall marks shortcut keys. */
 const DIALOG_TOKEN_STYLES: Record<TokenClass, Style> = {

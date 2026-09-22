@@ -40,6 +40,7 @@
  * startup, since a run's numbers only mean something alongside them.
  */
 
+import { debugStr } from "@commonfabric/data-model";
 import {
   env,
   type Page,
@@ -635,7 +636,10 @@ function benchSegment<Reached>(
         diagnostics = { unavailable: describeThrown(diagnosticError) };
       }
       report(
-        `failed attempt ${JSON.stringify({ ...failure, diagnostics })}`,
+        debugStr`failed attempt $quote,indent,long${{
+          ...failure,
+          diagnostics,
+        }}`,
       );
       throw error;
     } finally {

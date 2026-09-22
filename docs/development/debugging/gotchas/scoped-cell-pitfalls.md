@@ -90,7 +90,7 @@ const joinAs = handler<{ name?: string }, { joinName: NameCell; ... }>(
 ## 4. Initial-state assertions before any action can read `undefined`
 
 **Symptom:** A pattern test asserts initial empty state and the framework
-reports `Expected true, got undefined`.
+reports ``Expected true, got `undefined` ``.
 
 Reactive output reads can resolve to `undefined` before defaults hydrate.
 Scrabble's tests (`packages/patterns/scrabble/scrabble.test.tsx`) sidestep this

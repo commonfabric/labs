@@ -2446,7 +2446,7 @@ export const isEntityDocument = (
  * absent document is `null`, which the root check below refuses on its own.
  */
 export const decodeStoredDocumentPayload = (
-  decode: (source: string) => unknown,
+  decode: (source: string) => FabricValue,
   data: string | null,
 ): EntityDocument => {
   const parsed = data === null ? null : decode(data);
@@ -2470,7 +2470,7 @@ export const decodeStoredDocumentPayload = (
  * no-op would leave the document reading current.
  */
 export const decodeStoredPatchListPayload = (
-  decode: (source: string) => unknown,
+  decode: (source: string) => FabricValue,
   data: string | null,
 ): PatchOp[] => {
   if (data === null) {

@@ -134,7 +134,6 @@ export function coverageDebtView(
   samples: readonly CoverageDebtSample[],
   now: number,
 ): TileView {
-  const label = "coverage debt";
   const newest = samples[samples.length - 1];
   // At the boundary the day itself is one of the days nothing measured: a
   // newest sample of five days ago leaves the four days after it and today
@@ -142,7 +141,6 @@ export function coverageDebtView(
   const staleAfter = todayAt(now) - COVERAGE_STALE_DAYS * DAY_MS;
   if (newest !== undefined && startOf(newest.day) <= staleAfter) {
     return {
-      label,
       status: "unknown",
       value: "—",
       sub: `no measurement since ${newest.day}`,
@@ -151,7 +149,6 @@ export function coverageDebtView(
   const trend = trendWindow(samples, now);
   if (trend.length < COVERAGE_MIN_DAYS) {
     return {
-      label,
       status: "unknown",
       value: "—",
       sub: samples.length === 0
@@ -169,7 +166,6 @@ export function coverageDebtView(
   // uncovered lines, not files and not a percentage.
   const headline = `${groupDigits(lines)} lines`;
   return {
-    label,
     status,
     value: headline,
     valueLabel: headline,
@@ -198,13 +194,12 @@ export function makeCoverageDebt(
     { json: github, download: githubDownload };
   let store = options.store;
   return {
-    id: "coverage-debt",
+    label: "coverage debt",
     intervalMs: COVERAGE_REFRESH_MS,
     async collect(ctx): Promise<TileView> {
-      const label = "coverage debt";
       const token = ctx.env("GH_TOKEN") ?? ctx.env("GITHUB_TOKEN");
       if (!token) {
-        return { label, status: "unknown", value: "—", sub: "set GH_TOKEN" };
+        return { status: "unknown", value: "—", sub: "set GH_TOKEN" };
       }
       store ??= new CoverageDebtStore();
       const now = options.now?.() ?? Date.now();
@@ -221,7 +216,6 @@ export function makeCoverageDebt(
           : String(history.error);
         console.error("coverage debt: could not read main runs:", message);
         return {
-          label,
           status: "unknown",
           value: "—",
           sub: friendlyError(message),

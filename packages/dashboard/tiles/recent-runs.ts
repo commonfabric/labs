@@ -85,7 +85,7 @@ export function commitGanttHref(run: Run, candidates: Run[]): string | null {
 }
 
 export const recentRuns: Tile = {
-  id: "recent-runs",
+  label: "recent main runs",
   intervalMs: 30_000,
   wide: true,
   runSources: [
@@ -152,10 +152,11 @@ export const recentRuns: Tile = {
     }).join("") ||
       `<div class="ev"><span class="dot gray"></span><span>waiting for first poll…</span></div>`;
 
+    const count = `${runs.length} in window`;
     return {
-      label: `recent main runs · ${runs.length} in window`,
       status,
-      extra: `<div class="evscroll">${rows}</div>`,
+      aside: `<span class="hfacet" title="${count}">${count}</span>`,
+      extra: `<div class="evscroll" data-focus-key="runs">${rows}</div>`,
     };
   },
 };

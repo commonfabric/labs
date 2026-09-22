@@ -1,3 +1,4 @@
+import { debugStr } from "@commonfabric/data-model";
 import {
   awaitViewSettled,
   getPresentationSession,
@@ -6,7 +7,6 @@ import {
   type ProbeApi,
   waitForCondition,
 } from "@commonfabric/integration";
-import { toIndentedDebugString } from "@commonfabric/data-model";
 import type { RequestOutcome } from "@commonfabric/runtime-client";
 
 /**
@@ -611,11 +611,9 @@ export async function clickTrustedAction(
     await settleView(page);
   } catch (cause) {
     probe ??= await readTrustedActionProbe(page, action).catch(() => undefined);
-    // Indented for readable test-log output
     throw new Error(
-      `Timed out clicking trusted action "${action}". Last probe: ${
-        toIndentedDebugString(probe)
-      }`,
+      `Timed out clicking trusted action "${action}". ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }
@@ -654,7 +652,8 @@ export async function submitViaEnter(
     );
     throw new Error(
       `Timed out waiting for ${inputSelector} to settle before pressing ` +
-        `Enter. Last probe: ${toIndentedDebugString(probe)}`,
+        `Enter. ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }
@@ -690,9 +689,9 @@ export async function clickTrustedActionAndWaitForText(
     );
     textProbe = await readTextProbe(page, selector).catch(() => undefined);
     throw new Error(
-      `Failed to click trusted action "${action}" while waiting for "${selector}" to contain "${text}". Last probes: ${
-        toIndentedDebugString({ actionProbe, textProbe })
-      }`,
+      `Failed to click trusted action "${action}" while waiting for ` +
+        `"${selector}" to contain "${text}". ` +
+        debugStr`Last probes: $quote,indent,xlong${{ actionProbe, textProbe }}`,
       { cause },
     );
   }
@@ -709,9 +708,9 @@ export async function clickTrustedActionAndWaitForText(
     );
     textProbe = await readTextProbe(page, selector).catch(() => undefined);
     throw new Error(
-      `Timed out clicking trusted action "${action}" until "${selector}" contained "${text}". Last probes: ${
-        toIndentedDebugString({ actionProbe, textProbe })
-      }`,
+      `Timed out clicking trusted action "${action}" until "${selector}" ` +
+        `contained "${text}". ` +
+        debugStr`Last probes: $quote,indent,xlong${{ actionProbe, textProbe }}`,
       { cause },
     );
   }
@@ -729,9 +728,8 @@ export async function waitForText(
   } catch (cause) {
     const probe = await readTextProbe(page, selector).catch(() => undefined);
     throw new Error(
-      `Timed out waiting for "${selector}" to contain "${text}". Last probe: ${
-        toIndentedDebugString(probe)
-      }`,
+      `Timed out waiting for "${selector}" to contain "${text}". ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }
@@ -763,9 +761,8 @@ export async function waitForSettledText(
   } catch (cause) {
     const probe = await readTextProbe(page, selector).catch(() => undefined);
     throw new Error(
-      `Timed out waiting for "${selector}" to contain "${text}". Last probe: ${
-        toIndentedDebugString(probe)
-      }`,
+      `Timed out waiting for "${selector}" to contain "${text}". ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }
@@ -783,9 +780,8 @@ export async function waitForTextAbsent(
   } catch (cause) {
     const probe = await readTextProbe(page, selector).catch(() => undefined);
     throw new Error(
-      `Timed out waiting for "${selector}" not to contain "${text}". Last probe: ${
-        toIndentedDebugString(probe)
-      }`,
+      `Timed out waiting for "${selector}" not to contain "${text}". ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }
@@ -808,9 +804,8 @@ export async function fillCfInput(
   } catch (cause) {
     const probe = await readCfInputProbe(page, selector).catch(() => undefined);
     throw new Error(
-      `Timed out filling cf input "${selector}" with "${value}". Last probe: ${
-        toIndentedDebugString(probe)
-      }`,
+      `Timed out filling cf input "${selector}" with "${value}". ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }
@@ -971,9 +966,8 @@ export async function waitForDisabled(
       undefined
     );
     throw new Error(
-      `Timed out waiting for ${selector} disabled=${disabled}. Last probe: ${
-        toIndentedDebugString(probe)
-      }`,
+      `Timed out waiting for ${selector} disabled=${disabled}. ` +
+        debugStr`Last probe: $quote,long${probe}`,
       { cause },
     );
   }
@@ -1010,12 +1004,9 @@ async function settleWithClickTargets(
         readTextProbe(page, selector).catch(() => undefined)
       ),
     );
-    // Indented for readable test-log output
     throw new Error(
-      `Timed out waiting for ${
-        selectors.join(", ")
-      } to be clickable. Last probe: ${
-        toIndentedDebugString({
+      `Timed out waiting for ${selectors.join(", ")} to be clickable. ` +
+        debugStr`Last probe: $quote,indent,long${{
           matches: Object.fromEntries(
             selectors.map((selector, index) => [
               selector,
@@ -1023,8 +1014,7 @@ async function settleWithClickTargets(
             ]),
           ),
           bodyText: probes.find((probe) => probe !== undefined)?.bodyText,
-        })
-      }`,
+        }}`,
       { cause },
     );
   }
@@ -1137,9 +1127,8 @@ export async function clickNthCfButton(
   } catch (cause) {
     const probe = await readTextProbe(page, selector).catch(() => undefined);
     throw new Error(
-      `Unable to find button #${index} matching "${selector}". Last probe: ${
-        toIndentedDebugString(probe)
-      }`,
+      `Unable to find button #${index} matching "${selector}". ` +
+        debugStr`Last probe: $quote,indent,long${probe}`,
       { cause },
     );
   }
@@ -1683,8 +1672,8 @@ export async function clickMarked(
         );
         throw new Error(
           `Marked click target ${markSelector} never presented a stable box. ` +
-            `Aim reached: ${toIndentedDebugString(progress)}. ` +
-            `Last probe: ${toIndentedDebugString(probe)}`,
+            debugStr`Aim reached: $quote,indent,long${progress}\n` +
+            debugStr`Last probe: $quote,indent,long${probe}`,
           { cause },
         );
       }
@@ -1694,10 +1683,10 @@ export async function clickMarked(
         );
         throw new Error(
           `The control marked for click lies outside the page, so there is ` +
-            `no point on it a click can reach. Its box is ` +
-            `${toIndentedDebugString(aim.box)} and the page is ` +
-            `${toIndentedDebugString(aim.page)}. ` +
-            `Last probe: ${toIndentedDebugString(probe)}`,
+            `no point on it a click can reach. ` +
+            debugStr`Its box is $quote,long${aim.box} and the page is ` +
+            debugStr`$quote,long${aim.page}. ` +
+            debugStr`Last probe: $quote,indent,long${probe}`,
         );
       }
       if (aim === undefined || "missing" in aim) {
@@ -1708,7 +1697,8 @@ export async function clickMarked(
           `The control marked for click was replaced before the click ` +
             `could be aimed at it${
               aim?.sawTarget ? " while its box was settling" : ""
-            }. Last probe: ${toIndentedDebugString(probe)}`,
+            }. ` +
+            debugStr`Last probe: $quote,indent,long${probe}`,
         );
       }
       return aim;
@@ -1763,10 +1753,12 @@ export async function clickMarked(
         );
         throw new Error(
           `${markSelector} is aimed at ${pixel} again, where a trusted click ` +
-            `already failed to reach it (${lostBefore}). Every pixel tried: ${
-              toIndentedDebugString(Object.fromEntries(lost))
-            }. Aim reached: ${toIndentedDebugString(progress)}. ` +
-            `Last probe: ${toIndentedDebugString(probe)}`,
+            `already failed to reach it (${lostBefore}). ` +
+            debugStr`Every pixel tried: $quote,indent,long${
+              Object.fromEntries(lost)
+            }\n` +
+            debugStr`Aim reached: $quote,indent,long${progress}\n` +
+            debugStr`Last probe: $quote,indent,long${probe}`,
         );
       }
       lost.set(pixel, reached);
@@ -1802,9 +1794,9 @@ export async function clickCfButtonAndWaitForText(
   } catch (cause) {
     textProbe = await readTextProbe(page, textSelector).catch(() => undefined);
     throw new Error(
-      `Failed to click "${buttonSelector}" while waiting for "${textSelector}" to contain "${text}". Last probe: ${
-        toIndentedDebugString(textProbe)
-      }`,
+      `Failed to click "${buttonSelector}" while waiting for ` +
+        `"${textSelector}" to contain "${text}". ` +
+        debugStr`Last probe: $quote,indent,long${textProbe}`,
       { cause },
     );
   }
@@ -1818,9 +1810,9 @@ export async function clickCfButtonAndWaitForText(
   } catch (cause) {
     textProbe = await readTextProbe(page, textSelector).catch(() => undefined);
     throw new Error(
-      `Timed out clicking "${buttonSelector}" until "${textSelector}" contained "${text}". Last probe: ${
-        toIndentedDebugString(textProbe)
-      }`,
+      `Timed out clicking "${buttonSelector}" until "${textSelector}" ` +
+        `contained "${text}". ` +
+        debugStr`Last probe: $quote,indent,long${textProbe}`,
       { cause },
     );
   }

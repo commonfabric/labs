@@ -14,6 +14,7 @@
  */
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { debugStr } from "@commonfabric/data-model";
 import { env } from "@commonfabric/integration";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { Identity } from "@commonfabric/identity";
@@ -60,9 +61,9 @@ function onArmStepSkip(step: string): { ignore: boolean } {
   );
   if (entry === undefined) return { ignore: false };
   console.warn(
-    `[server-execution ON arm] patterns: SKIPPING STEP ${
-      JSON.stringify(step)
-    } (until ${entry.phase}) — ${entry.reason}`,
+    `[server-execution ON arm] patterns: ` +
+      debugStr`SKIPPING STEP $quote,long${step}` +
+      ` (until ${entry.phase}) — ${entry.reason}`,
   );
   return { ignore: true };
 }

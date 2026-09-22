@@ -36,7 +36,12 @@
 import { isObjectOrArray } from "@commonfabric/utils/types";
 import { REPO } from "./config.ts";
 import { dashboardCacheFile } from "./history-files.ts";
-import { type GitHubDownload, jsonFromZip } from "./lib.ts";
+import {
+  type GitHubDownload,
+  type GitHubJson,
+  jsonFromZip,
+  runArtifactId,
+} from "./lib.ts";
 
 /** The workflow whose `main` runs measure coverage. */
 export const COVERAGE_WORKFLOW = "deno.yml";
@@ -71,13 +76,17 @@ const RUNS_MAX_PAGES = 150;
 
 const DAY_MS = 86_400_000;
 /**
- * The shape the history file is written in, bumped when that shape changes. A
- * file the running code cannot read as it was written is discarded whole
- * rather than day by day: a day it half understands reads as a day that
- * measured nothing, and a day that is over is never asked about again, so the
- * window would stay empty until it aged out.
+ * The shape the history file is written in, bumped when that shape changes, and
+ * when a change to the collection means a day the file records as measuring
+ * nothing may have measured after all. A file the running code cannot read as
+ * it was written is discarded whole rather than day by day: a day it half
+ * understands reads as a day that measured nothing, and a day that is over is
+ * never asked about again, so the window would stay empty until it aged out.
+ * The workflow keeps the artifact the days are read from for ninety days,
+ * which is longer than the window the tile charts, so discarding the file
+ * costs the collection it takes to fill the window again and no history.
  */
-export const STORE_VERSION = 2;
+export const STORE_VERSION = 3;
 
 const COVERAGE_DEBT_FILE = () =>
   dashboardCacheFile("fabric-wall-coverage-debt.json");
@@ -95,8 +104,7 @@ export interface CoverageDebtSample {
 }
 
 /** The GitHub calls the collection makes, so a test can supply its own. */
-export interface CoverageDebtGitHub {
-  json<T>(path: string, token: string): Promise<T>;
+export interface CoverageDebtGitHub extends GitHubJson {
   download(path: string, token: string): Promise<GitHubDownload>;
 }
 
@@ -136,12 +144,6 @@ interface WorkflowRun {
 
   event: string;
   conclusion: string;
-}
-
-interface RunArtifact {
-  id: number;
-  name: string;
-  expired: boolean;
 }
 
 const isRunId = (value: unknown): boolean =>
@@ -460,15 +462,14 @@ async function readDay(
       return { outcome: "unchanged" };
     }
     for (const run of runs) {
-      const artifacts = await github.json<{ artifacts?: RunArtifact[] }>(
-        `repos/${REPO}/actions/runs/${run.id}/artifacts`,
+      const artifactId = await runArtifactId({
+        github,
+        runId: run.id,
+        name: COVERAGE_ARTIFACT,
         token,
-      );
-      const artifact = (artifacts.artifacts ?? []).find((candidate) =>
-        candidate.name === COVERAGE_ARTIFACT && !candidate.expired
-      );
-      if (artifact === undefined) continue;
-      const uncoveredLines = await readArtifact(artifact.id, token, github);
+      });
+      if (artifactId === undefined) continue;
+      const uncoveredLines = await readArtifact(artifactId, token, github);
       if (uncoveredLines === undefined) continue;
       return {
         outcome: "read",

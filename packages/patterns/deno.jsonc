@@ -14,6 +14,13 @@
   // file. It is not sharded.
   // Examples: vehicles.test.ts, cfc/prompt-injection/prompt.test.ts.
   //
+  // Lane 1 runs under `test-import-map.json`, which replaces the package's
+  // own map rather than extending it. A lane-1 test reaches only what that
+  // file names, and so does every module it imports -- including one under
+  // `integration/`, which the workspace resolves for every other lane. The
+  // flat map cannot resolve `@commonfabric/data-model`'s internal graph at
+  // all, which is what the source-coverage second pass below exists for.
+  //
   // Focused browser regression — a `*.browser.test.ts` file for DOM behavior
   // that is too narrow for the running-shell integration lane. Exclude it from
   // Lane 1 and name it in `test:browser`, which runs it through deno-web-test.

@@ -20,6 +20,7 @@
 import { assertEquals } from "@std/assert";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
+import { debugStr } from "@commonfabric/data-model";
 import { experimentalOptionsFromEnv } from "@commonfabric/runner";
 import {
   type CommitRejection,
@@ -62,9 +63,9 @@ function onArmStepSkip(step: string): { ignore: boolean } {
   );
   if (entry === undefined) return { ignore: false };
   console.warn(
-    `[server-execution ON arm] patterns: SKIPPING STEP ${
-      JSON.stringify(step)
-    } (until ${entry.phase}) — ${entry.reason}`,
+    `[server-execution ON arm] patterns: ` +
+      debugStr`SKIPPING STEP $quote,long${step}` +
+      ` (until ${entry.phase}) — ${entry.reason}`,
   );
   return { ignore: true };
 }
@@ -128,7 +129,7 @@ function minimalCase(
       assertEquals(
         bodies(observerView),
         observerBodies,
-        `observer sees ${JSON.stringify(observerView)}`,
+        debugStr`observer sees $quote,long${observerView}`,
       );
     });
   });
@@ -224,7 +225,7 @@ describe("convergence storm — observer converges with optional scoped links", 
         [...sent].sort(),
         `observer missed messages: sent=${sent.length} ` +
           `landed=${observerView.length} ` +
-          `observer=${JSON.stringify(summarize(observerView))}`,
+          debugStr`observer=$quote,long${summarize(observerView)}`,
       );
 
       // What the storm cost, as opposed to whether it converged. This fixture

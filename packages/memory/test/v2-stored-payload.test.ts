@@ -16,6 +16,7 @@
 
 import { assertEquals, assertThrows } from "@std/assert";
 import { describe, it } from "@std/testing/bdd";
+import type { FabricValue } from "@commonfabric/data-model";
 
 import type { PatchOp } from "../v2.ts";
 import {
@@ -26,13 +27,13 @@ import {
 } from "../v2.ts";
 
 /** An offline reader's decoder: untagged rows are plain JSON. */
-const plainJson = (source: string): unknown => JSON.parse(source);
+const plainJson = (source: string): FabricValue => JSON.parse(source);
 
 /** The two decoders the rule is parameterized over, with a matching encoder. */
 const DECODERS = [
   {
     name: "decodeMemoryBoundary",
-    decode: decodeMemoryBoundary as (source: string) => unknown,
+    decode: decodeMemoryBoundary,
     encode: (value: unknown) => encodeMemoryBoundary(value as never),
   },
   { name: "plain JSON", decode: plainJson, encode: JSON.stringify },

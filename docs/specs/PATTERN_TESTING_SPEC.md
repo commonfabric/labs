@@ -396,7 +396,7 @@ async function runTestPattern(testPath: string, options: TestOptions): Promise<T
           ? undefined
           : record
           ? formatAssertRecord(record)
-          : `Expected true, got ${toCompactDebugString(value)}`,
+          : debugStr`Expected true, got $quote,long${value}`,
       });
     } else if (isRender) {
       await materializeTestVDOM(testsCell.key(i).key("render"), settleRuntime);

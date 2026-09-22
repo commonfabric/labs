@@ -5736,14 +5736,14 @@ const applyCommitTransaction = (
     const storedInner = state?.document === null ||
         state?.document === undefined
       ? undefined
-      : (state.document as { value?: unknown }).value;
+      : state.document.value;
     const content = installed ?? storedInner;
     if (content === undefined) {
       throw new ProtocolError(
         `memory v2 commit references CFC label document ${id} that is neither included in the commit nor stored in the space`,
       );
     }
-    if (installed === undefined && taggedHashStringOf(content) !== hash) {
+    if (installed === undefined && taggedHashStringOf(storedInner) !== hash) {
       throw new ProtocolError(
         `memory v2 commit references CFC label document ${id} whose stored content does not verify`,
       );

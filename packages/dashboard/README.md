@@ -45,7 +45,7 @@ dashboard/
   favicon-artwork.ts  build/test-only SVG source for those favicon copies
   version.ts    the browser/server compatibility version a page reloads on
   dashboard-message.ts  shared message storage and fade timing
-  render.ts     renderTile(view) + the page shell/CSS
+  render.ts     renderTile(label, view) + the page shell/CSS
   server.ts     generic runtime: scheduler, SSE, route mounting, page assembly
   registry.ts   THE ONE REGISTRATION POINT — the array of tiles
   tiles/*.ts     one tile per file
@@ -55,8 +55,8 @@ dashboard/
 collects each tile that is due (respecting its `intervalMs`), renders the
 results uniformly, mounts any drill-down routes a tile declares, and pushes new
 tile markup as each independent collection completes. Every registered tile has
-a gray placeholder labeled with its id in its registered position until its
-first collection completes, so slow collectors do not leave holes in the board.
+a gray placeholder under its label in its registered position until its first
+collection completes, so slow collectors do not leave holes in the board.
 A later ticker pass skips a tile or shared workflow fetch that is still
 updating. It starts every other due collection, so pending work does not pause
 the rest of the dashboard. A collection that remains active for one minute
@@ -109,20 +109,24 @@ has not arrived yet, it shows the runs from the available snapshot in gray and
 names the pending source. If a later refresh fails, it keeps the last good
 snapshot for that source and shows the combined list in gray with the error.
 
-Each event connection receives the current tile snapshot before it waits for
-new collections. The browser reconciles that snapshot by tile ID, leaving
-unchanged elements, focus, and scroll positions in place. Routine data updates
-never navigate the page. The page shell — the styles and the client script —
-arrives only with a full page load, so the server hands the browser a
-compatibility version and the page reloads itself as soon as the server reports
-a different one. A deployed image uses the commit its publishing workflow
-checked out, which is fixed for the life of the image, so every display on that
-image agrees. A server started from a checkout reports the moment it started
-instead, because the code under it changes between one start and the next: a
-watched restart therefore pulls every open page onto the code that restart is
-serving, and the version in the page source says which start served it.
-An unattended display reloads when it reconnects to a server reporting a
-different version.
+Each event connection receives the current tile snapshot before it waits for new
+collections. The browser matches each tile in that snapshot with the tile of the
+same label on the page, leaving unchanged elements, focus, and scroll positions
+in place. Inside a tile that changed, an element carrying a `data-focus-key`
+attribute is matched with the element carrying the same key in the new markup,
+which takes over its keyboard focus and scroll position; a tile puts that
+attribute on each element whose focus or scroll position should carry over from
+one update to the next. Routine data updates never navigate the page. The page
+shell — the styles and the client script — arrives only with a full page load,
+so the server hands the browser a compatibility version and the page reloads
+itself as soon as the server reports a different one. A deployed image uses the
+commit its publishing workflow checked out, which is fixed for the life of the
+image, so every display on that image agrees. A server started from a checkout
+reports the moment it started instead, because the code under it changes between
+one start and the next: a watched restart therefore pulls every open page onto
+the code that restart is serving, and the version in the page source says which
+start served it. An unattended display reloads when it reconnects to a server
+reporting a different version.
 
 An unattended display also survives the server going away. Every serving tick
 sends a heartbeat down each open event connection, so a browser can tell a
@@ -197,8 +201,7 @@ deno task test-favicon-raster
 import type { Status, Tile, TileView } from "../types.ts";
 
 export const myTile: Tile = {
-  id: "my-tile",          // unique, stable
-  label: "my tile",       // header before collection; defaults to id
+  label: "my tile",       // the header on every view; unique among tiles
   intervalMs: 60_000,     // how often collect() runs
   // wide: true,           // optional full-width placement
   // runSources: [{ repo: "owner/repo", workflow: "ci.yml" }],
@@ -206,7 +209,7 @@ export const myTile: Tile = {
     // ctx.runs() -> shared CI runs; ctx.env("KEY") -> env var.
     // If a required env var is missing, return a gray "unknown" view — don't throw.
     const s: Status = "good";
-    return { label: "my tile", status: s, value: "42", sub: "things" };
+    return { status: s, value: "42", sub: "things" };
   },
   // routes: [{ path: "/my-drilldown", handler: (req, url) => new Response("…") }],
 };
@@ -317,9 +320,11 @@ figure is the age badge in the header.
 
 ### The `TileView` a tile returns
 
+The header text is the tile's own `label`, which does not change from one view
+to the next; a view supplies everything under it.
+
 | field | meaning |
 |---|---|
-| `label` | header text (plain; escaped for you) |
 | `status` | `good` / `warn` / `bad` / `unknown` → green / orange / red / gray |
 | `value` | big headline (trusted HTML — escape data with `escapeHtml`) |
 | `sub` | sub line (plain; escaped for you) |

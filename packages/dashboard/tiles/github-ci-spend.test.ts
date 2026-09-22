@@ -130,7 +130,6 @@ async function view(
 
 Deno.test("github spend: without a token the tile is gray and names what it needs", async () => {
   const v = await githubCiSpend.collect(ctx({}));
-  assertEquals(v.label, "github spend");
   assertEquals(v.status, "unknown");
   assertEquals(v.value, "—");
   assertStringIncludes(v.sub ?? "", "GH_TOKEN");

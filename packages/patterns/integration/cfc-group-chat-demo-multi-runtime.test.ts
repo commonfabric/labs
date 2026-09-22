@@ -15,6 +15,7 @@ import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
+import { debugStr } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import {
   MultiRuntimeHarness,
@@ -104,7 +105,7 @@ async function saveProfile(
     action: SAVE_PROFILE_ACTION,
   });
   await harness.waitFor(
-    `${session.label} sees the profile name ${JSON.stringify(name)}`,
+    debugStr`${session.label} sees the profile name $quote${name}`,
     async () => (await session.read(["currentProfileName"])) === name,
   );
 }
@@ -209,9 +210,8 @@ describe("cfc group chat demo across runtimes", () => {
     const bobDraft = await bob.read(["profileDraft"]);
     assert(
       bobDraft !== "Alice is typing",
-      `PerUser profileDraft leaked across users: bob sees ${
-        JSON.stringify(bobDraft)
-      }`,
+      `PerUser profileDraft leaked across users: ` +
+        debugStr`bob sees $quote,long${bobDraft}`,
     );
   });
 
@@ -231,16 +231,14 @@ describe("cfc group chat demo across runtimes", () => {
     const tab2Draft = await aliceTab2.read(["hostMessageDraft"]);
     assert(
       tab2Draft !== "tab-local host draft",
-      `PerSession hostMessageDraft leaked across sessions: tab2 sees ${
-        JSON.stringify(tab2Draft)
-      }`,
+      `PerSession hostMessageDraft leaked across sessions: ` +
+        debugStr`tab2 sees $quote,long${tab2Draft}`,
     );
     const bobDraft = await bob.read(["hostMessageDraft"]);
     assert(
       bobDraft !== "tab-local host draft",
-      `PerSession hostMessageDraft leaked across users: bob sees ${
-        JSON.stringify(bobDraft)
-      }`,
+      `PerSession hostMessageDraft leaked across users: ` +
+        debugStr`bob sees $quote,long${bobDraft}`,
     );
   });
 

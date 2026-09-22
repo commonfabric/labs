@@ -12,39 +12,38 @@ const context: Ctx = {
 
 describe("registry", () => {
   it("registers tiles in dashboard display order", () => {
-    expect(TILES.map((tile) => tile.id)).toEqual([
-      "labs-ci",
-      "ci-trust",
-      "ci-duration",
-      "benchmark",
-      "loom-ci",
-      "loom-ci-trust",
-      "loom-ci-duration",
-      "key-benchmarks",
-      "test-flakes",
-      "test-selection",
-      "coverage-debt",
-      "prod-errors",
+    expect(TILES.map((tile) => tile.label)).toEqual([
+      "labs ci",
+      "labs ci trust",
+      "labs ci duration",
+      "all benchmarks",
+      "loom ci",
+      "loom ci trust",
+      "loom ci duration",
+      "key benchmarks",
+      "flaky tests",
+      "test selection",
+      "coverage debt",
+      "prod errors",
       "dau",
-      "discord-online",
-      "github-members",
-      "prod-uptime",
-      "cubic-spend",
-      "github-ci-spend",
-      "model-spend",
-      "gcp-spend",
-      "recent-runs",
+      "discord online",
+      "github users",
+      "production",
+      "cubic spend",
+      "github spend",
+      "model spend",
+      "cloud spend",
+      "recent main runs",
     ]);
   });
 
-  it("names both benchmark tiles when credentials are unavailable", async () => {
-    for (const [id, label, href] of [
-      ["benchmark", "all benchmarks", "/bench?view=runtime&repo=labs"],
-      ["key-benchmarks", "key benchmarks", "/bench?view=runtime&repo=labs&key=1"],
+  it("links both benchmark tiles when credentials are unavailable", async () => {
+    for (const [label, href] of [
+      ["all benchmarks", "/bench?view=runtime&repo=labs"],
+      ["key benchmarks", "/bench?view=runtime&repo=labs&key=1"],
     ]) {
-      const tile = TILES.find((tile) => tile.id === id);
+      const tile = TILES.find((tile) => tile.label === label);
       expect(await tile?.collect(context)).toMatchObject({
-        label,
         status: "unknown",
         value: "—",
         sub: "set GH_TOKEN",
@@ -54,10 +53,9 @@ describe("registry", () => {
   });
 
   it("reports cubic spend as a named metric with no value", async () => {
-    const cubic = TILES.find((tile) => tile.id === "cubic-spend");
+    const cubic = TILES.find((tile) => tile.label === "cubic spend");
 
     expect(await cubic?.collect(context)).toEqual({
-      label: "cubic spend",
       status: "good",
       value: "—",
       sub: "api does not expose value",

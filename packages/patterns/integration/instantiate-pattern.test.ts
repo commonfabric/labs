@@ -1,3 +1,4 @@
+import { debugStr } from "@commonfabric/data-model";
 import {
   awaitViewSettled,
   env,
@@ -14,7 +15,6 @@ import {
   PiecesController,
 } from "./pieces-controller.ts";
 import { clickCfButton } from "./cfc-browser-helpers.ts";
-import { toIndentedDebugString } from "@commonfabric/data-model";
 
 const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
 
@@ -93,9 +93,8 @@ describe("instantiate-pattern integration test", () => {
         bodyText: (document.body?.innerText ?? "").slice(0, 400),
       })).catch(() => undefined);
       throw new Error(
-        `Clicking Add did not navigate away from ${urlBefore}. Last probe: ${
-          toIndentedDebugString(seen)
-        }`,
+        `Clicking Add did not navigate away from ${urlBefore}. ` +
+          debugStr`Last probe: $quote,indent,long${seen}`,
         { cause },
       );
     }

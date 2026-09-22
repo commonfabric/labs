@@ -26,6 +26,8 @@
     "@db/sqlite": "jsr:@db/sqlite@0.13.0",
     "entities": "npm:entities@^8.0.0",
     "marked": "npm:marked@^18.0.6",
-    "typescript": "npm:typescript@6.0.3"
+    "tree-sitter-python": "npm:tree-sitter-python@0.25.0",
+    "typescript": "npm:typescript@6.0.3",
+    "web-tree-sitter": "npm:web-tree-sitter@0.26.12"
   }
 }
