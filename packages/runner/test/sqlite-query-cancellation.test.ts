@@ -6,6 +6,8 @@ import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import type { URI } from "@commonfabric/memory/interface";
 
+import { sqliteQuery } from "../src/builtins/sqlite-builtins.ts";
+import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import { CooperativeYield } from "../src/scheduler/cooperative-yield.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -16,6 +18,72 @@ const signer = await Identity.fromPassphrase("sqlite query cancellation");
 const space = signer.did();
 
 describe("sqlite-query-cancellation", () => {
+  for (const phase of ["action", "flush", "response"] as const) {
+    it(`starts no further work after cancellation before ${phase}`, async () => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      let cancel!: () => void;
+      let result: Cell<{ pending: boolean; result?: unknown }> | undefined;
+      let queries = 0;
+      using _query = stub(storageManager.open(space), "sqliteQuery", () => {
+        queries++;
+        cancel();
+        return Promise.resolve({ rows: [{ content: "message" }] });
+      });
+      using writebacks = stub(
+        runtime,
+        "editWithRetry",
+        runtime.editWithRetry.bind(runtime),
+      );
+      try {
+        const setup = runtime.edit();
+        const parent = runtime.getCell(space, "query-parent", undefined, setup);
+        parent.set({});
+        const inputs = runtime.getImmutableCell(
+          space,
+          {
+            db: { id: "of:canceled-query" },
+            sql: "SELECT content FROM messages",
+          },
+          undefined,
+          setup,
+        );
+        expect((await setup.commit()).error).toBeUndefined();
+        const builtin = sqliteQuery(
+          inputs,
+          (_tx, cell) => result = cell,
+          (stop) => cancel = stop,
+          [parent],
+          parent,
+          runtime,
+        );
+        const tx = runtime.edit();
+        if (phase === "action") cancel();
+        builtin.action(tx);
+        if (phase === "flush") cancel();
+        expect((await tx.commit()).error).toBeUndefined();
+        await tx.postCommitEffectsSettled();
+
+        expect(queries).toBe(phase === "response" ? 1 : 0);
+        expect(writebacks.calls).toHaveLength(0);
+        if (phase === "action") {
+          expect(result).toBeUndefined();
+          expect(getTransactionWriteAttempts(tx)).toHaveLength(0);
+        } else {
+          expect(result?.get()).toMatchObject({ pending: true });
+          expect(result?.get().result).toBeUndefined();
+        }
+      } finally {
+        await runtime.dispose({ closeStorage: false });
+        await storageManager.synced();
+        await storageManager.close();
+      }
+    });
+  }
+
   it("stops completion preparation with its piece and reissues the pending query on restart", async () => {
     const storageManager = StorageManager.emulate({ as: signer });
     const runtime = new Runtime({

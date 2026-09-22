@@ -8,6 +8,7 @@ import { Identity } from "@commonfabric/identity";
 import { Runtime } from "../../src/runtime.ts";
 import { CooperativeYield } from "../../src/scheduler/cooperative-yield.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
+import { TransactionWrapper } from "../../src/storage/extended-storage-transaction.ts";
 
 const signer = await Identity.fromPassphrase("cfc preparation cancellation");
 const space = signer.did();
@@ -60,7 +61,9 @@ async function prepareRows(cooperative: boolean, closed: boolean) {
         return row.getAsNormalizedFullLink();
       });
       if (cooperative) {
-        await tx.prepareForCommitCooperatively(new AbortController().signal);
+        await new TransactionWrapper(tx).prepareForCommitCooperatively(
+          new AbortController().signal,
+        );
       } else {
         tx.prepareForCommit();
       }
@@ -83,7 +86,7 @@ async function prepareRows(cooperative: boolean, closed: boolean) {
 }
 
 describe("preparation-cancellation", () => {
-  it("leaves an already canceled action unstarted and a read-only transaction untouched", async () => {
+  it("leaves canceled actions unstarted and aborts only writable transactions", async () => {
     const { runtime, storageManager } = makeRuntime();
     const controller = new AbortController();
     controller.abort("query owner stopped");
@@ -98,6 +101,44 @@ describe("preparation-cancellation", () => {
       await read.prepareForCommitCooperatively(controller.signal);
       expect(read.status().status).toBe("ready");
       expect(read.getCfcState().prepare.status).toBe("unprepared");
+      const write = runtime.edit();
+      await new TransactionWrapper(write).prepareForCommitCooperatively(
+        controller.signal,
+      );
+      expect((await write.commit()).error?.name).toBe(
+        "StorageTransactionAborted",
+      );
+      expect(write.getCfcState().prepare.status).toBe("unprepared");
+    } finally {
+      await runtime.dispose({ closeStorage: false });
+      await storageManager.synced();
+      await storageManager.close();
+    }
+  });
+
+  it("discards prepared writes canceled before their commit continuation", async () => {
+    const { runtime, storageManager } = makeRuntime();
+    const controller = new AbortController();
+    using _slices = stub(
+      CooperativeYield.prototype,
+      "maybeYield",
+      () => undefined,
+    );
+    try {
+      const outcome = runtime.editWithRetry(
+        (tx) => {
+          runtime.getCell(space, "prepared-row", rowSchema, tx)
+            .set({ content: "message" });
+        },
+        0,
+        { signal: controller.signal },
+      );
+      controller.abort("query owner stopped");
+      expect((await outcome).error?.name).toBe("StorageTransactionAborted");
+      expect(
+        runtime.getCell(space, "prepared-row", rowSchema, runtime.readTx())
+          .get(),
+      ).toBeUndefined();
     } finally {
       await runtime.dispose({ closeStorage: false });
       await storageManager.synced();
