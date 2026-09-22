@@ -113,11 +113,12 @@ strict harness mode refuses retrieval by a task in the `context` role. A demo
 using Loom retrieval needs the documented explicit override. Fabric clients can
 still enforce strict CFC with persisted flow labels.
 
-The current Estuary shell supplies a render ceiling but no runtime-wide read
-ceiling. Its native snapshot dialog therefore reports “Snapshot sharing requires
-a bounded runtime read ceiling.” The same-space integration test configures that
-ceiling and verifies publication. A hosted two-person demo needs a bounded shell
-runtime or a pre-published disposable shelf copy before opening the invitation.
+The Estuary shell supplies a render ceiling but no runtime-wide read ceiling.
+The native snapshot dialog can publish a reader's own private shelf and a
+visitor's reviewed recommendations: the trusted worker checks each source
+against the confirming user's `User` ceiling. Sources labeled only for another
+user are refused. The same-space integration tests exercise publication and
+visitor submission in this host posture.
 
 For a disposable hosted fixture, find the shared slot's `/of:fid1:…` address and
 write a JSON object with `books` and `favoriteAuthors` to its `value` path:

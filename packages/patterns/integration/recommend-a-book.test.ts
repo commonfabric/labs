@@ -117,7 +117,6 @@ describe("personalized book invitation", () => {
       experimental: { agentBuiltin: true, serverExecution: false },
       cfcEnforcementMode: "enforce-strict",
       cfcFlowLabels: "persist",
-      cfcReadMaxConfidentiality: [cfcAtom.user(identity.did())],
     });
     try {
       const program = await resolveLocalProgram(

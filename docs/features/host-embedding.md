@@ -409,10 +409,12 @@ contains an opaque `id`, the exact `value`, and the verified `audience` atom.
 The worker reads stored policy; client-provided schema and label views grant no
 authority.
 
-The runtime must have an authenticated, bounded read ceiling. Preparation in an
-unbounded runtime is refused before reading the source. The host must configure
-that ceiling for the confirming reader; the default shell's unbounded runtime
-does not support this operation.
+The runtime uses its authenticated, bounded read ceiling when one is configured.
+Without a runtime-wide ceiling, preparation requires the source to fit the
+authenticated actor's own `User` ceiling. The default shell can therefore
+share an actor-private draft but cannot preview a source labeled only for
+another user. The source is read by the trusted worker before this check; the
+preview is returned only after it passes.
 
 The trusted host displays that value and audience and requires a trusted user
 confirmation before calling `RuntimeClient.commitSnapshotShare(id)`. The result

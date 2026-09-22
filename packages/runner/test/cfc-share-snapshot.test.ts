@@ -95,11 +95,51 @@ const setup = async () => {
 };
 
 describe("cfc-share-snapshot", () => {
-  it("refuses an unbounded host before previewing another user's private value", async () => {
+  it("previews the authenticated actor's private value without a runtime-wide read ceiling", async () => {
     const fixture = await setup();
     const unbounded = new Runtime({
       apiUrl: new URL("http://toolshed.test"),
       storageManager: fixture.storage,
+      trustSnapshotProvider: () => ({
+        id: visitor.did(),
+        actingPrincipal: visitor.did(),
+      }),
+      cfcEnforcementMode: "enforce-strict",
+      cfcFlowLabels: "persist",
+    });
+    try {
+      const source = unbounded.getCellFromLink(
+        fixture.source.getAsNormalizedFullLink(),
+      );
+      const recipient = unbounded.getCellFromLink(
+        fixture.recipient.getAsNormalizedFullLink(),
+      );
+      const prepared = prepareSnapshotShare(source, { user: recipient });
+      expect(prepared.value).toEqual({
+        title: "Solaris",
+        author: "Stanisław Lem",
+      });
+      expect(prepared.audience).toEqual(cfcAtom.user(owner.did()));
+      const shared = await commitSnapshotShare(
+        prepared.consent,
+        trustedClick(),
+      );
+      expect(shared.get()).toEqual(prepared.value);
+    } finally {
+      await unbounded.dispose();
+      await fixture.dispose();
+    }
+  });
+
+  it("refuses an unbounded host's preview of another user's private value", async () => {
+    const fixture = await setup();
+    const unbounded = new Runtime({
+      apiUrl: new URL("http://toolshed.test"),
+      storageManager: fixture.storage,
+      trustSnapshotProvider: () => ({
+        id: visitor.did(),
+        actingPrincipal: visitor.did(),
+      }),
       cfcEnforcementMode: "enforce-strict",
       cfcFlowLabels: "persist",
     });
@@ -122,7 +162,7 @@ describe("cfc-share-snapshot", () => {
             ),
           },
         )
-      ).toThrow(/bounded runtime read ceiling/);
+      ).toThrow(/authenticated actor's read ceiling/);
     } finally {
       await unbounded.dispose();
       await fixture.dispose();

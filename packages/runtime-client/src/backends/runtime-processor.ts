@@ -1888,11 +1888,6 @@ export class RuntimeProcessor {
       throw new Error("Snapshot sharing is unavailable");
     }
     const source = this.#snapshotShareCell(request.source);
-    if (source.runtime.cfcReadMaxConfidentiality === undefined) {
-      throw new Error(
-        "Snapshot sharing requires a bounded runtime read ceiling",
-      );
-    }
     const audience = request.audience;
     if (
       !isObjectNotArray(audience) ||

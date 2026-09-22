@@ -1053,9 +1053,10 @@ to another user or space. Bind `$source` to the JSON value to review,
 that will receive the released cell link. Set `audience-kind` to `user` (the
 default) or `space`.
 
-The host must configure an authenticated, bounded runtime read ceiling for the
-confirming user. An unbounded runtime, including the default shell
-configuration, refuses preparation before returning a preview.
+The authenticated host checks the source against its runtime read ceiling. When
+the host has no runtime-wide ceiling, the source must fit the confirming user's
+own `User` ceiling. This permits the default shell to share the user's private
+draft while refusing a source labeled only for another user.
 
 The host displays the exact snapshot and the audience verified by the runtime in
 a native modal dialog. Its disclosure and preview are fixed host UI. The user
