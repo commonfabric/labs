@@ -59,6 +59,52 @@
         ],
         "type": "object"
       },
+      "PersonView": {
+        "properties": {
+          "login": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "PullRequestView": {
+        "properties": {
+          "number": {
+            "type": "number"
+          },
+          "state": {
+            "enum": [
+              "open",
+              "draft",
+              "merged",
+              "closed"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "title",
+          "state",
+          "url",
+          "updatedAt"
+        ],
+        "type": "object"
+      },
       "SessionEntry": {
         "properties": {
           "active": {
@@ -270,6 +316,39 @@
         ],
         "type": "object"
       },
+      "SnapshotView": {
+        "properties": {
+          "generatedAt": {
+            "default": "",
+            "type": "string"
+          },
+          "people": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/PersonView"
+            },
+            "type": "array"
+          },
+          "repository": {
+            "default": "",
+            "type": "string"
+          },
+          "workstreams": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/WorkstreamView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "repository",
+          "generatedAt",
+          "people",
+          "workstreams"
+        ],
+        "type": "object"
+      },
       "SourceEntry": {
         "properties": {
           "driver": {
@@ -285,93 +364,65 @@
         ],
         "type": "object"
       },
-      "TopicLinkView": {
+      "TopicView": {
         "properties": {
-          "addedAt": {
+          "lastActivityAt": {
             "type": "number"
           },
-          "kind": {
+          "summary": {
             "type": "string"
           },
-          "label": {
+          "title": {
             "type": "string"
-          },
-          "removedAt": {
-            "type": "number"
           },
           "url": {
             "type": "string"
           }
         },
         "required": [
-          "kind",
+          "title",
           "url"
         ],
         "type": "object"
       },
-      "TopicView": {
+      "WorkstreamView": {
         "properties": {
-          "body": {
-            "default": "",
+          "id": {
             "type": "string"
           },
-          "commentCount": {
-            "default": 0,
-            "type": [
-              "number",
-              "undefined"
-            ]
+          "name": {
+            "type": "string"
           },
-          "createdBy": {
-            "default": {
-              "kind": "person",
-              "name": ""
-            },
-            "properties": {
-              "avatar": {
-                "type": "string"
-              },
-              "kind": {
-                "type": "string"
-              },
-              "name": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "kind",
-              "name"
-            ],
-            "type": "object"
-          },
-          "lastActivityAt": {
-            "default": 0,
-            "type": [
-              "number",
-              "undefined"
-            ]
-          },
-          "links": {
-            "default": [],
+          "people": {
+            "description": "Logins or names, as the snapshot's people list spells them.",
             "items": {
-              "$ref": "#/$defs/TopicLinkView"
+              "type": "string"
             },
             "type": "array"
           },
-          "shortName": {
+          "prs": {
+            "items": {
+              "$ref": "#/$defs/PullRequestView"
+            },
+            "type": "array"
+          },
+          "summary": {
             "type": "string"
           },
-          "title": {
-            "default": "",
-            "type": "string"
+          "topics": {
+            "items": {
+              "$ref": "#/$defs/TopicView"
+            },
+            "type": "array"
           }
         },
         "required": [
-          "title",
-          "body",
-          "commentCount",
-          "lastActivityAt",
-          "links"
+          "id",
+          "name",
+          "summary",
+          "people",
+          "topics",
+          "prs"
         ],
         "type": "object"
       }
@@ -382,7 +433,7 @@
           "cell"
         ],
         "default": [],
-        "description": "Sessions attached to the topic by hand, the workbench's own record.",
+        "description": "Sessions attached to workstreams by hand, this piece's own record.",
         "items": {
           "$ref": "#/$defs/Attachment"
         },
@@ -393,7 +444,7 @@
           "cell"
         ],
         "default": [],
-        "description": "The command queue the connector's host binds for this piece. Absent until\nthe host has linked it; a start sent before then reaches nothing.",
+        "description": "The command queue the connector's host binds for this piece.",
         "items": {
           "type": "string"
         },
@@ -401,19 +452,28 @@
       },
       "harnessesShown": {
         "default": [],
-        "description": "Harnesses to list in the picker beside the connector's sources, for a\nmachine that shows a harness it does not run. Picking one starts nothing.",
+        "description": "Harnesses listed in the picker that no configured source backs.",
         "items": {
           "$ref": "#/$defs/ShownHarness"
         },
         "type": "array"
       },
+      "person": {
+        "default": "",
+        "description": "Whose work to show: a login or a name from the snapshot's people.",
+        "type": "string"
+      },
       "sessions": {
         "$ref": "#/$defs/SessionIndexView",
-        "description": "The agents connector's complete session index for this person."
+        "description": "The agents connector's complete session index for the viewer."
+      },
+      "snapshot": {
+        "$ref": "#/$defs/SnapshotView",
+        "description": "The work-snapshot piece, linked whole."
       },
       "startMode": {
         "default": "",
-        "description": "The permission mode a started session's first turn runs under, one the\ndriver advertises. Empty leaves the driver's default, which cannot pass a\ntool or network approval headlessly.",
+        "description": "The permission mode a started session's first turn runs under.",
         "type": "string"
       },
       "startSurface": {
@@ -426,20 +486,16 @@
           "cell"
         ],
         "default": [],
-        "description": "Every start this workbench has sent, the workbench's own record. A start\nthe index has confirmed stays here, since the record is what attaches its\nsession; one the index has not confirmed can be withdrawn.",
+        "description": "Every start this piece has sent, its own record. A start the index has\nconfirmed stays here, since the record is what files its session under\nthe workstream; one the index has not confirmed can be withdrawn.",
         "items": {
           "$ref": "#/$defs/SessionStart"
         },
         "type": "array"
-      },
-      "topic": {
-        "$ref": "#/$defs/TopicView",
-        "description": "The topic this workbench is about, linked from the board's topic piece."
       }
     },
     "type": "object"
   },
-  "pattern": "topic-workbench/main.tsx",
+  "pattern": "person-workbench/main.tsx",
   "resultSchema": {
     "$defs": {
       "AttachEvent": {
@@ -451,13 +507,17 @@
             "type": "string"
           },
           "title": {
-            "description": "The title as known at attach time; the live title comes from the index.",
+            "type": "string"
+          },
+          "workstreamId": {
+            "description": "One of the person's workstreams, as the workbench shows them.",
             "type": "string"
           }
         },
         "required": [
           "sourceId",
-          "nativeSessionId"
+          "nativeSessionId",
+          "workstreamId"
         ],
         "type": "object"
       },
@@ -500,6 +560,38 @@
         "required": [
           "sourceId",
           "nativeSessionId"
+        ],
+        "type": "object"
+      },
+      "PullRequestView": {
+        "properties": {
+          "number": {
+            "type": "number"
+          },
+          "state": {
+            "enum": [
+              "open",
+              "draft",
+              "merged",
+              "closed"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "number",
+          "title",
+          "state",
+          "url",
+          "updatedAt"
         ],
         "type": "object"
       },
@@ -585,6 +677,82 @@
           "startedAt"
         ],
         "type": "object"
+      },
+      "TopicView": {
+        "properties": {
+          "lastActivityAt": {
+            "type": "number"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "url"
+        ],
+        "type": "object"
+      },
+      "WorkstreamCard": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "mergedCount": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "openCount": {
+            "type": "number"
+          },
+          "people": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "prs": {
+            "items": {
+              "$ref": "#/$defs/PullRequestView"
+            },
+            "type": "array"
+          },
+          "sessions": {
+            "items": {
+              "$ref": "#/$defs/SessionRow"
+            },
+            "type": "array"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "topics": {
+            "items": {
+              "$ref": "#/$defs/TopicView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "summary",
+          "people",
+          "topics",
+          "prs",
+          "openCount",
+          "mergedCount",
+          "sessions"
+        ],
+        "type": "object"
       }
     },
     "properties": {
@@ -599,7 +767,7 @@
         "asCell": [
           "stream"
         ],
-        "description": "Attach a session by provider identity. Idempotent."
+        "description": "Attach a session under one of the person's workstreams. Idempotent."
       },
       "attached": {
         "default": [],
@@ -620,10 +788,10 @@
         "ifc": {
           "writeAuthorizedBy": {
             "__ctWriterIdentityOf": {
-              "file": "/packages/patterns/topic-workbench/main.tsx",
-              "moduleIdentity": "Gv8x203SWK_teAzMhQGymIxs_VtXH-Lsf5I0nMnGd5k",
+              "file": "/packages/patterns/person-workbench/main.tsx",
+              "moduleIdentity": "tBMd0rznGvBrFO1imoKbwz9ehxlpXdEQ42In4BW_nxw",
               "path": [
-                "startSessionCommand"
+                "startWorkstreamSession"
               ]
             }
           }
@@ -638,7 +806,16 @@
         "description": "Detach a session by provider identity, a started one included."
       },
       "kickoff": {
-        "description": "The prompt as it will be sent: the person's words, then the topic's\ncontext and links.",
+        "type": "string"
+      },
+      "orphanedSessions": {
+        "description": "Attached sessions whose workstream the workbench no longer shows.",
+        "items": {
+          "$ref": "#/$defs/SessionRow"
+        },
+        "type": "array"
+      },
+      "personName": {
         "type": "string"
       },
       "recentSessions": {
@@ -647,15 +824,6 @@
         },
         "type": "array"
       },
-      "relatedSessions": {
-        "items": {
-          "$ref": "#/$defs/SessionRow"
-        },
-        "type": "array"
-      },
-      "spawnCommand": {
-        "type": "string"
-      },
       "spawnPrompt": {
         "type": "string"
       },
@@ -663,6 +831,9 @@
         "type": "string"
       },
       "spawnSource": {
+        "type": "string"
+      },
+      "spawnWorkstream": {
         "type": "string"
       },
       "startBlocker": {
@@ -674,7 +845,7 @@
           "stream",
           "opaque"
         ],
-        "description": "Start a session for the topic: sends the connector a `start` command\ncarrying the kickoff prompt, the picked checkout, and the topic's name as\nthe session title, and records the start. Until the index carries the\nsession the start can be withdrawn; once it does, the record is what\nattaches the session.",
+        "description": "Start a session for the picked workstream.",
         "tier": "wrapper"
       },
       "startingSessions": {
@@ -683,20 +854,28 @@
           "$ref": "#/$defs/SessionStart"
         },
         "type": "array"
+      },
+      "workstreams": {
+        "items": {
+          "$ref": "#/$defs/WorkstreamCard"
+        },
+        "type": "array"
       }
     },
     "required": [
+      "personName",
+      "workstreams",
       "attached",
       "attachedSessions",
+      "orphanedSessions",
       "startingSessions",
-      "relatedSessions",
       "recentSessions",
-      "spawnCommand",
       "kickoff",
       "startBlocker",
       "spawnPrompt",
       "spawnRoot",
       "spawnSource",
+      "spawnWorkstream",
       "attach",
       "detach",
       "startSession",
