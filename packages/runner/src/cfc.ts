@@ -880,10 +880,10 @@ export class ContextualFlowControl {
    * definition states what every position of that type holds, and whether the
    * reference is local or external is a fact about how the schema travels
    * rather than about what it declares. A scope written beside the `$ref`
-   * belongs to the position itself, so it wins over the definition's. `root`
-   * is the document local references resolve against, and defaults to
-   * `schema`, which a link's schema is self-contained enough for
-   * (`schemaAtPath` keeps the reachable `$defs` closure on it).
+   * belongs to the position itself, so it wins over the definition's. Local
+   * references resolve against `schema` itself, which a link's schema is
+   * self-contained enough for (`schemaAtPath` keeps the reachable `$defs`
+   * closure on it).
    *
    * This single precedence is used both for the read follow-cap (which link
    * scopes a read may follow — see link-resolution.ts / traverse.ts) and for
@@ -893,9 +893,8 @@ export class ContextualFlowControl {
    */
   static getSchemaScopeCap(
     schema: JSONSchema | undefined,
-    root: JSONSchema | undefined = schema,
   ): SchemaScope | undefined {
-    return declaredScopeThroughRefs(schema, root, scopeDeclaredAtLevel);
+    return declaredScopeThroughRefs(schema, schema, scopeDeclaredAtLevel);
   }
 
   /**
@@ -919,9 +918,8 @@ export class ContextualFlowControl {
    */
   static getAsCellFollowScopeCap(
     schema: JSONSchema | undefined,
-    root: JSONSchema | undefined = schema,
   ): SchemaScope | undefined {
-    return followScopeCapThroughRefs(schema, root, new Set());
+    return followScopeCapThroughRefs(schema, schema, new Set());
   }
 }
 
@@ -957,9 +955,8 @@ const scopeDeclaredAtLevel = (
  */
 export const declaredSchemaScope = (
   schema: JSONSchema | undefined,
-  root: JSONSchema | undefined = schema,
 ): SchemaScope | undefined =>
-  declaredScopeThroughRefs(schema, root, scopeKeywordAtLevel);
+  declaredScopeThroughRefs(schema, schema, scopeKeywordAtLevel);
 
 /**
  * The definition `schema`'s root `$ref` names, together with the document

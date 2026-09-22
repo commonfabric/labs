@@ -3,11 +3,12 @@
  * author marked `PerUser`/`PerSession` cannot reach storage as shared
  * space-scoped data.
  *
- * The runtime reads a slot's scope from the top level of that slot's own
- * schema (`ContextualFlowControl.getSchemaScopeCap`). A declaration anywhere
- * else is not a weaker declaration, it is no declaration: no narrowing
- * redirect is written, the value lands on the space row, and every principal
- * reads one instance. Refusing the schema at generation time is what keeps
+ * The runtime reads a slot's scope from that slot's own schema — its top
+ * level, or the definition a `$ref` there names
+ * (`ContextualFlowControl.getSchemaScopeCap`). A declaration inside one of its
+ * compound branches is not a weaker declaration, it is no declaration: no
+ * narrowing redirect is written, the value lands on the space row, and every
+ * principal reads one instance. Refusing the schema at generation time is what keeps
  * that from being a silent outcome.
  *
  * The subject here is PLACEMENT. Which scope a slot should carry, and which
@@ -145,8 +146,8 @@ const descendIntoChildSlots = (schema: MutableJSONSchema): void => {
  * Throws when a generated schema declares a scope somewhere the runtime's write
  * path cannot see it.
  *
- * A slot's scope is read from the top level of that slot's schema
- * (`ContextualFlowControl.getSchemaScopeCap`). A declaration buried in an
+ * A slot's scope is read from that slot's own schema — its top level, or the
+ * definition a `$ref` there names (`ContextualFlowControl.getSchemaScopeCap`). A declaration buried in an
  * `anyOf`/`oneOf`/`allOf` branch is therefore inert on the write side: no
  * narrowing redirect is written, the value lands on the shared space row, and
  * every principal reads the same instance. Failing at generation time is what
