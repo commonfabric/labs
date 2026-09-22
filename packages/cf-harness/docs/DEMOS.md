@@ -434,15 +434,41 @@ by shared-word _length_ rather than counting words, assigning _best-first_
 rather than first-fit, consuming each side _at most once_, and discounting a
 word every merchant carries. The last clause is what would have excluded `sim`.
 
-**Proof status: PENDING.** Being run three times solo, browser-verified.
+**Typical wall time:** ~16–17 minutes, solo.
 
-**A known weakness in this wording, recorded before it is measured.** "Total
-length of the words they share" names _one_ of the two mechanisms observed to
-work. The other — a bonus when the whole merchant name appears — is not length
-at all, and on this store it is the stronger signal. A run that would have
-written the containment rule may read this sentence as an instruction to count
-characters instead, narrowing toward the weaker mechanism. The candidate
-revision, if these runs come back mixed:
+**Proof status: 1 of 3 so far, run 1 correct.** `bill-payment-review`
+(`95f37b32`), 16 m 46 s with the console to itself: Settled 4, Needs attention
+1, Unmatched 3, every pairing right and nothing borderline.
+
+**It implemented the clause literally, and shows its working on the page.** The
+scores are total shared-word length — `insurance`(9) + `group`(5) = 14,
+`rent`+`llc`+`sep` = 10, `internet` = 8, `phone` = 5 — and `sim` appears in no
+shared-terms list at all. The piece states its own rule for the reader:
+
+> Shared words used by a strict majority of distinct merchant/name texts score
+> zero. Remaining distinct shared words score their character length. Candidates
+> are ranked by score, then email and payment order, and greedily consumed once
+> each.
+
+That is the four clauses, implemented. **A page that explains the rule it used
+is worth more on screen than one that is merely right**, because a viewer can
+check it rather than trust it.
+
+**A weakness predicted for this wording, and withdrawn on evidence.** Before it
+was run, the concern was that "total length of the words they share" names only
+_one_ of the two mechanisms observed to work — a whole-name containment bonus
+being the other, and on this store the stronger one — so a model might count
+characters and lose.
+
+Run 1 counted characters and paired all four correctly. Why the prediction
+failed is the instructive part: **the fourth clause does the disambiguation, not
+the first.** Discounting the word a majority of merchants share removes `sim`
+before any scoring happens, and once it is gone every remaining shared word
+already distinguishes. Length does not have to carry that work alone, which is
+what the objection assumed.
+
+A softened wording is kept here as a candidate in case a later run fails in the
+predicted way. It is not a recommendation; one run is one run:
 
 ```text
 Rank candidate pairs by how specifically the shared text identifies that merchant — a whole-name match counts for more than a single shared word — and pair the best-scoring candidates first, each email and each payment at most once; a word shared by most merchants counts for nothing.
