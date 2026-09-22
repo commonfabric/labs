@@ -90,6 +90,12 @@ it is why these demos reuse indexed patterns instead of authoring from scratch.
 Withholding it where the task is already closed is CT-2401; drawing it in the
 live pane is CT-2402.
 
+**Compile attempts are normal.** On this build, a task that composes or authors
+a page usually takes several `run_pattern` attempts before one compiles — two to
+five in a day of runs. That is the loop working, not a fault. A run that revises
+its finished piece more than once is a different matter: it is not a clean demo,
+and it should be re-run rather than shown.
+
 **Slugs.** `assign_slug` requires a slug, never makes one unique itself, and
 refuses one that already names another piece — and pieces are never deleted. A
 prompt naming a fixed slug therefore works once and stops to ask on every later
@@ -279,9 +285,63 @@ indexed readers into an authored wrapper. Its first submission failed on a
 and the second succeeded, which is the slug sentence working. The run's own
 final text says its counts and matches were not independently verified, because
 policy withheld the results from the model — so this establishes a named piece
-and indexed composition, not that the bills it lists are the right ones.
+and indexed composition, not that the bills it lists are the right ones. Whether
+the pairings are right is the subject of
+[§5](#5-bills-from-gmail-and-plaid-composing-two-library-patterns-by-id), which
+runs the same job with the readers named and records what varies between runs.
 
-## 5. A skill's script, run in the sandbox, folded into a piece
+## 5. Bills from Gmail and Plaid, composing two library patterns by id
+
+The same job as §4, with the two readers named outright instead of discovered.
+Naming them removes the question of whether the run finds the right parts; what
+it does not remove is what §4 leaves open, and this entry exists to record that.
+
+**Preflight:** common, **plus both an email and a finance grant**, **plus** both
+reader ids discoverable — check them with the `searchPatterns` call above.
+
+**Prompt:**
+
+```text
+Compose these two library patterns into one page: cf:pattern:-xx1hxtvAbY7AL6FeYuQWuEzbC0nOpUOHgXseIac2_w (this month's email headers from my Gmail) and cf:pattern:v6_KSFHs9AmTg9PKwMmPdZyEHxZ9Oykhno4HBOfUo5s (this month's transactions from my bank). Show the bills I need to deal with: pair an email bill with the bank payment that settled it using plain text rules on subject, sender and merchant name only; list unpaid email bills and unmatched bank payments separately. Do not send my mail or my transactions to an AI model. Give it a slug that is not already in use; if a slug you try is taken, choose another and retry without asking me.
+```
+
+**Done when:** every pairing on the page is one a person would make.
+
+**Likely failure:** the pairings are wrong, or absent, while the counts look
+consistent. Also expect several `run_pattern` attempts before one compiles.
+
+**Proof status: NOT PROVEN.** Three runs, three different matchers, three
+different outcomes — same prompt, same readers, same build, same store:
+
+| Run                    | What the model wrote                                                                   | Result                  |
+| ---------------------- | -------------------------------------------------------------------------------------- | ----------------------- |
+| `0a2bc75e`, 2026-09-17 | every pair enumerated, **scored by shared-token length**, assigned globally best-first | **4 of 4 correct**      |
+| `ba249e85`, 2026-09-22 | any **one** shared token, 3-character floor, first unused row                          | 2 of 4 wrong            |
+| `0fe142a5`, 2026-09-22 | **two** shared tokens required, 4-character floor                                      | 0 of 4 — nothing paired |
+
+The 09-17 piece was reopened on this build and still renders all four pairings
+correctly, so **nothing regressed**: the readers, the data and the build are not
+the variable. The matcher is.
+
+The variable is the threshold and the token-length cutoff, and nothing in the
+prompt constrains either. In this store every merchant reads `Sim <x>` and every
+subject reads `Your Sim <x> bill is ready`, so `sim` is shared by every pair and
+carries no information. A run that keeps it pairs everything; a run that drops
+it and then demands two shared tokens pairs nothing.
+
+That also says what a correct run needs, and it is not a tuning value: the only
+run that worked **weighted by how long the shared token is**, which is what
+separates `internet` from `sim`. Counting shared tokens cannot do it at any
+threshold — one lets everything through and two blocks everything.
+
+**So this demo's correctness is a property of the code the model writes on the
+day, not of the prompt, the parts or the build.** Running it more times samples
+that spread rather than narrowing it. What fixes it is a published, reviewed
+pairing part named by id — `bills-this-month` in #7893 — so the matcher stops
+being rewritten per run; the authoring guidance in #7895 addresses the repeated
+compile attempts alongside it.
+
+## 6. A skill's script, run in the sandbox, folded into a piece
 
 The [WEAVER §7](WEAVER.md) task, unchanged but for the slug sentence.
 
@@ -317,7 +377,7 @@ execution work; the demo reaching a named piece does not yet. All three ran with
 other sessions in flight on one console, so the cap may be a property of that
 load; a solo run is untested.
 
-## 6. Revise a piece in place
+## 7. Revise a piece in place
 
 The [WEAVER §7](WEAVER.md) task. **Not runnable from the command pill**: it
 depends on the pill attaching the focused pane's piece, which is CT-2344. Loom's
