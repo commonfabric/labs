@@ -414,9 +414,9 @@ the compiler, so guidance that reduces compile attempts buys a few percent here.
 ## 5a. The same composition, with the pairing rule stated
 
 §5 leaves the pairing rule to the run, and five runs wrote five different ones.
-This entry is §5 with the one property that worked stated in the prompt. It
-exists so the difference between constraining the rule and leaving it open can
-be measured rather than argued about.
+This entry is §5 with the property that worked stated in the prompt, so the
+difference between constraining the rule and leaving it open can be measured
+rather than argued about.
 
 **Preflight:** identical to §5.
 
@@ -426,87 +426,81 @@ be measured rather than argued about.
 Rank candidate pairs by the total length of the words they share and pair the best-scoring candidates first, each email and each payment at most once; a word shared by most merchants counts for nothing.
 ```
 
+**Why this wording.** Each clause names a property that separated a run which
+paired correctly from one which did not: scoring rather than counting, assigning
+_best-first_ rather than first-fit, consuming each side _at most once_, and
+discounting a word every merchant carries. The last clause is the one that would
+have excluded `sim`.
+
 **Done when:** every pairing on the page is one a person would make.
 
-**Why this wording.** It is not a guess at a better prompt. Each clause names a
-property that separated the one correct run from the three that failed: scoring
-by shared-word _length_ rather than counting words, assigning _best-first_
-rather than first-fit, consuming each side _at most once_, and discounting a
-word every merchant carries. The last clause is what would have excluded `sim`.
+**Typical wall time:** ~12–17 minutes.
 
-**Typical wall time:** ~16–17 minutes, solo.
+**Likely failure:** not the matching — see run 2 below.
 
-**Likely failure:** not the matching. Of the runs so far, the one that failed
-produced a _correct_ matcher and then did not draw it — see below.
+### Proof status: 1 pass, 1 fail, further runs in progress
 
-**Proof status: 1 pass, 1 fail, further runs in progress.** Run 1,
-`bill-payment-review` (`95f37b32`), 16 m 46 s with the console to itself:
-Settled 4, Needs attention 1, Unmatched 3, every pairing right and nothing
-borderline.
+**What this entry tests has not failed.** Both runs produced a correct matcher.
+Run 1 paired all four bills; run 2 computed the same answer and failed to draw
+it. Those are different defects with different fixes, and a reader who sees only
+the count would conclude the clause does not work, which is the opposite of what
+the runs show.
 
-**What the clause is being tested for has not failed.** Both runs produced a
-correct matcher — run 1 paired all four, run 2 counted 4 settled, 1 unpaid and 3
-unmatched, the same answer. Run 2 failed the bar because those lists never
-reached the page, which is a rendering defect rather than a matching one, and
-the two have different fixes.
+**Run 1 — pass.** `bill-payment-review` (`95f37b32`), 16 m 46 s with the console
+to itself: Settled 4, Needs attention 1, Unmatched 3, every pairing right and
+nothing borderline.
 
-**Run 2's defect, recorded because it will recur in any pattern.** Its source
-held:
-
-```tsx
-{
-  matchedRows.length > 0 ? matchedRows : <cf-label>No matches found.</cf-label>;
-}
-```
-
-`matchedRows` is a reactive array. Reading `.length` on it inside a plain
-JavaScript ternary evaluates once while the derived array is still empty, so the
-branch latches on the empty side and never re-evaluates. The counts beside it
-render correctly because they are reactive reads rather than a build-time branch
-— which is why the page showed "4 settled" above "No matches found."
-
-The same file used `ifElse()` correctly four times, for pending, for `hasError`
-and for ready twice, and then reached for a raw ternary for the empty-state
-choice. The author knew the primitive; an empty-state check simply does not feel
-like a reactive read. **Nothing catches this** — it compiles, type-checks, runs,
-and produces a page.
-
-**It implemented the clause literally, and shows its working on the page.** The
-scores are total shared-word length — `insurance`(9) + `group`(5) = 14,
-`rent`+`llc`+`sep` = 10, `internet` = 8, `phone` = 5 — and `sim` appears in no
-shared-terms list at all. The piece states its own rule for the reader:
+It implemented the clause literally. Scores are total shared-word length —
+`insurance`(9) + `group`(5) = 14, `rent`+`llc`+`sep` = 10, `internet` = 8,
+`phone` = 5 — and `sim` appears in no shared-terms list at all. The piece states
+its own rule for the reader:
 
 > Shared words used by a strict majority of distinct merchant/name texts score
 > zero. Remaining distinct shared words score their character length. Candidates
 > are ranked by score, then email and payment order, and greedily consumed once
 > each.
 
-That is the four clauses, implemented. **A page that explains the rule it used
-is worth more on screen than one that is merely right**, because a viewer can
-check it rather than trust it.
+**A page that explains the rule it used is worth more on screen than one that is
+merely right**, because a viewer can check the pairing instead of trusting it.
 
-**A weakness predicted for this wording, and withdrawn on evidence.** Before it
-was run, the concern was that "total length of the words they share" names only
-_one_ of the two mechanisms observed to work — a whole-name containment bonus
-being the other, and on this store the stronger one — so a model might count
-characters and lose.
+**Run 2 — fail, on rendering rather than matching.** It computed 4 settled, 1
+unpaid and 3 unmatched — the same answer as run 1 — and then rendered three
+empty lists beneath those correct counts. The page read "4 settled" above "No
+matches found."
+
+Its source branched on a reactive array inside a plain JavaScript ternary,
+testing `matchedRows.length > 0` to choose between the rows and an empty-state
+label. The branch resolved once while the derived array was still empty and
+never re-evaluated; the counts beside it stayed correct because they are
+reactive reads rather than a build-time branch.
+
+The same file used `ifElse()` correctly four times — for pending, for
+`hasError`, and for ready twice — a few lines above. The author knew the
+primitive; an empty-state check simply does not feel like a reactive read.
+**Nothing catches this**: it compiles, type-checks, runs, and produces a page.
+Whether the cause is a lowering defect, a property read on a reactive
+collection, or a context the transformer does not cover is under investigation;
+`cf check --show-transformed` is what separates them.
+
+### A weakness predicted for this wording, and withdrawn on evidence
+
+Before it was run, the concern was that "total length of the words they share"
+names only one of the two mechanisms observed to work — a whole-name containment
+bonus being the other, and on this store the stronger one — so a model might
+count characters and lose.
 
 Run 1 counted characters and paired all four correctly. Why the prediction
 failed is the instructive part: **the fourth clause does the disambiguation, not
 the first.** Discounting the word a majority of merchants share removes `sim`
 before any scoring happens, and once it is gone every remaining shared word
-already distinguishes. Length does not have to carry that work alone, which is
-what the objection assumed.
+already distinguishes. Length never had to carry that work alone.
 
-A softened wording is kept here as a candidate in case a later run fails in the
+A softened wording is kept as a candidate in case a later run fails in the
 predicted way. It is not a recommendation; one run is one run:
 
 ```text
 Rank candidate pairs by how specifically the shared text identifies that merchant — a whole-name match counts for more than a single shared word — and pair the best-scoring candidates first, each email and each payment at most once; a word shared by most merchants counts for nothing.
 ```
-
-The three runs are being made against the wording above rather than this one, so
-that what is measured is what is written.
 
 **What it is not.** A prompt clause narrows the spread; it does not collapse it,
 because the model still writes the code. A published pairing part named by id is
