@@ -302,9 +302,6 @@ export default pattern<LoomInput, LoomOutput>(
             <cf-toolbar slot="header">
               <h1 slot="start">{title}</h1>
               <cf-hstack slot="end" gap="2" wrap>
-                {roster.map((profile) => (
-                  <cf-profile-badge $profile={profile} variant="circle" />
-                ))}
                 <cf-button
                   onClick={() =>
                     present.send({ stagedPanels: [...panels.get()] })}

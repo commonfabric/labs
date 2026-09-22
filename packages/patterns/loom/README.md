@@ -54,8 +54,9 @@ add, so concurrent additions all land and a listed profile is not added twice.
 Any participant may add any profile, so the stored list is a set of claims: a
 consumer that needs the actual participants keeps only profiles whose principal
 currently holds access to the Loom's space, which hides an entry for anyone else
-and drops a removed member without deleting their entry. The root header shows
-every listed profile with `cf-profile-badge`.
+and drops a removed member without deleting their entry. The root does not
+render the list: it holds claims, and only a consumer that can read the access
+list can say which are participants.
 
 Run and attach all four tests when deploying or updating source:
 
