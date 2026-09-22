@@ -156,6 +156,30 @@ is being established one at a time by reduction rather than by rule — the firs
 of them turned out **not** to be what it looked like, and a rule written from
 the symptom would have been wrong. See the `.length` case, which is CT-2410.
 
+**An unambiguous instruction not to say something can be honoured in a footnote
+and broken in the headline.** A prompt asked for a page about saves with no
+recorded reading progress, and said outright: _call this zero recorded progress,
+not proof that I have never opened an item._
+
+The page it produced was correct in every figure — 4232 qualifying, the category
+and source breakdowns matching two other runs to the digit, the oldest saves
+genuinely oldest-first with working links. Its headline read **"Reading, never
+opened"** and its largest stat was labelled **"never read"**. At the bottom, an
+alert read: _"Zero recorded progress" is not proof that an item was never
+opened._
+
+So the same page carried the claim and its refutation, with **the claim in the
+headline and the caveat in a footnote.** A viewer reads the headline.
+
+This is worth separating from every mechanical failure here. The page renders,
+the numbers are right, nothing is broken — and it asserts something false about
+the person looking at it. 4232 saves with no recorded progress is not 4232 items
+they never opened, and the instruction had anticipated exactly that.
+
+**Check what a piece says, not only what it computes.** A page can be right and
+still make a claim you did not authorise, and no gate, browser check or row diff
+will catch it.
+
 **An ambiguous instruction is not queried. It is resolved silently, and
 differently from one run to the next.** This is the single most useful thing
 learned from running these demos repeatedly, and it applies to every prompt
