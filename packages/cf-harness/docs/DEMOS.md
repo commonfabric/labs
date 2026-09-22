@@ -109,6 +109,17 @@ five in a day of runs. That is the loop working, not a fault. A run that revises
 its finished piece more than once is a different matter: it is not a clean demo,
 and it should be re-run rather than shown.
 
+**A word that names two things will be resolved to one of them, silently.** A
+request asking for "settled, successful rows" is ambiguous between _the reader
+having completed_ — `pending: false`, no error — and _the transaction's own
+status_. One run resolved it the second way, invented a status vocabulary to
+express it, and filtered every row away: the store's rows are `posted` and
+`pending`, and nothing in it is `successful` or `settled`. The page rendered
+empty with no error anywhere.
+
+Say which you mean. "After the reader reports `pending: false` and no error" is
+unambiguous and does not invite a vocabulary the data does not use.
+
 **Slugs.** `assign_slug` requires a slug, never makes one unique itself, and
 refuses one that already names another piece — and pieces are never deleted. A
 prompt naming a fixed slug therefore works once and stops to ask on every later
