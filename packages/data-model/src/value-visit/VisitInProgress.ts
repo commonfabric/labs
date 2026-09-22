@@ -50,7 +50,6 @@ type MainVisitResult<ResultType> = BaselineVisitorMethodResult<
   ResultType
 >;
 
-
 /**
  * State of a visit currently in progress, along with most of the visit
  * execution machinery.
