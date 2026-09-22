@@ -258,9 +258,17 @@ export function tagOfConvertibleJsValueElseNull(
       return null;
     }
 
+    case "symbol": {
+      // A unique (uninterned) symbol: `tagOfUnknownElseNull()` refused it, and
+      // there is no class to ask about. A registry-interned symbol never gets
+      // here, having been tagged above.
+      return null;
+    }
+
     case "object": {
       // As of this writing, `value` must be a non-null value of type `object`
-      // here due to how `tagOfUnknownElseNull()` works. This is more of a
+      // here due to how `tagOfUnknownElseNull()` works: every other `typeof`
+      // is either tagged there or handled by a case above. This is more of a
       // defense-in-depth or separation of concerns.
       if (value === null) {
         // deno-coverage-ignore-start
