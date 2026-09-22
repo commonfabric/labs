@@ -3456,8 +3456,11 @@ stamped by its own module. The stage reads two sources and takes their union:
   type parameter into such a position (to a fixed point, so alias-of-alias
   works — `discoverAliasBindingPositions` / `collectAliasBindingPositions`).
   A reference to an alias resolves through the checker to its declaration, so
-  an alias imported from another module is read; the library's three names
-  are matched by spelling. Every `typeof x` in a binding position is resolved
+  an alias imported from another module is read; one of the library's three
+  names counts as the library's type only when it is imported from a Common
+  Fabric module (through any chain of authored re-exports), so an authored
+  alias that borrows the name reads as what it declares and trusts nothing.
+  Every `typeof x` in a binding position is resolved
   through the checker to the variable or function declaration it names
   (`resolveWriterBinding`, `@commonfabric/schema-generator/writer-binding` —
   the resolver the schema generator mints the claim with), and the DECLARED
@@ -3470,8 +3473,8 @@ stamped by its own module. The stage reads two sources and takes their union:
   the same way, by spelling and without resolution — for a claim an earlier
   stage synthesized, which the original files do not hold.
 
-Exercised by `test/cfc-authoring.test.ts` "lowers alias-referenced trusted
-builder bindings" and `test/protected-cell-policy.test.ts` "gives an imported
+Exercised by `test/cfc-authoring.test.ts` "WriteAuthorizedBy lowers
+alias-referenced trusted builder bindings" and `test/protected-cell-policy.test.ts` "gives an imported
 writer its binding identity in its own module" (transform), and by
 `packages/runner/test/cfc-imported-writer-binding.test.ts` (a compiled
 two-module program: the identity is registered under the declared name and
@@ -3903,7 +3906,7 @@ re-listing it. The enforced sources of truth:
 | Module-scope `__cf_data` wrap/exclusion name sets + verifier error strings (§15) | `TRUSTED_BUILDERS` / `TRUSTED_DATA_HELPERS` (`packages/utils/src/sandbox-contract.ts`); `CF_DATA_CONSTRUCTOR_NAMES` (`src/transformers/module-scope-cf-data.ts`); `TOP_LEVEL_CALL_RESULT_ERROR` (`packages/runner/src/sandbox/policy.ts`) | one module feeds both transformer and runner verifier — cross-package contract; runtime freezer semantics live in `packages/runner/src/sandbox/plain-data.ts` |
 | Coverage instrumentation + span schema (§16) | `PatternCoverageTransformer` (`src/transformers/pattern-coverage.ts`); `PatternCoverageSpan` / `PatternCoverageOptions` / `PATTERN_COVERAGE_GLOBAL` (`src/core/transformers.ts`) | line remapping pins the one-line helper prelude: `HELPERS_STMT` (`src/core/cf-helpers.ts`) ↔ `patternCoverageOptionsForCompile` (`packages/runner/src/harness/engine.ts`) — change them together |
 | Hardening/binding helper names, metadata field, canonical helper bodies (§17) | `FUNCTION_HARDENING_HELPER_NAME` / `BINDING_IDENTITY_HELPER_NAME` / `VERIFIED_BINDING_METADATA_FIELD` and `createFunctionHardeningHelperSource` / `createBindingIdentityHelperSource` (`packages/utils/src/sandbox-contract.ts`) | the runner verifier recognizes helper declarations by trivia-stripped byte equality to these sources (`CANONICAL_HARDENING_HELPER` in `packages/runner/src/sandbox/compiled-bundle-verifier.ts`); the transformer's AST-built twins (`createFunctionHardeningHelper` / `createBindingIdentityHelper` in `src/transformers/module-scope-function-hardening.ts`) must compile to exactly that text — drift fails every module load |
-| Trusted-binding type names + binding positions (§17.3) | seed map in `discoverWriteAuthorizedByBindingPositions` (`src/transformers/module-scope-function-hardening.ts`) | keep in sync with `WriteAuthorizedByValidationTransformer` (§6.8) and the schema generator's `__ctWriterIdentityOf` claim emission; both spell files via the shared `normalizeWriterIdentityFile` (`src/utils/writer-identity-file.ts`) so claim and provenance spellings cannot drift |
+| Trusted-binding type names + binding positions (§17.3) | seed map `LIBRARY_BINDING_POSITIONS`, extended by `discoverAliasBindingPositions` / `collectAliasBindingPositions` (`src/transformers/module-scope-function-hardening.ts`) | keep in sync with `WriteAuthorizedByValidationTransformer` (§6.8) and the schema generator's `__ctWriterIdentityOf` claim emission; both spell files via the shared `normalizeWriterIdentityFile` (`src/utils/writer-identity-file.ts`) so claim and provenance spellings cannot drift |
 
 A drift-resistant habit: when a section enumerates a set, cite the constant /
 function that defines it so a reader can confirm the live set, and keep prose

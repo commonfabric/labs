@@ -6,6 +6,7 @@ import {
 } from "@commonfabric/utils/sandbox-contract";
 import { TransformationContext, Transformer } from "../core/mod.ts";
 import { resolveWriterBinding } from "@commonfabric/schema-generator/writer-binding";
+import { isCommonFabricModuleName } from "../core/common-fabric-symbols.ts";
 import { unwrapExpression } from "../utils/expression.ts";
 import { normalizeWriterIdentityFile } from "../utils/writer-identity-file.ts";
 
@@ -565,8 +566,16 @@ type BindingPositions = (
   reference: ts.TypeReferenceNode,
 ) => ReadonlySet<number> | undefined;
 
-/** The alias name a reference stands for, in a positions index. */
-type AliasName = (reference: ts.TypeReferenceNode) => string | undefined;
+/**
+ * The key a reference stands for in a positions index, and the key an alias
+ * declaration is indexed under. The library's policy types are keyed by
+ * their bare names; an authored alias's key must never collide with those,
+ * since an alias that borrows the name `WriteAuthorizedBy` names no writer.
+ */
+interface AliasKeys {
+  readonly reference: (reference: ts.TypeReferenceNode) => string | undefined;
+  readonly declaration: (declaration: ts.TypeAliasDeclaration) => string;
+}
 
 const referenceName = (reference: ts.TypeReferenceNode): ts.Identifier =>
   ts.isIdentifier(reference.typeName)
@@ -589,9 +598,12 @@ const LIBRARY_BINDING_POSITIONS: ReadonlyMap<string, ReadonlySet<number>> =
 function collectWriteAuthorizedByBindingNames(
   sourceFile: ts.SourceFile,
 ): Set<string> {
-  const bySpelling: AliasName = (reference) =>
-    ts.isIdentifier(reference.typeName) ? reference.typeName.text : undefined;
-  const positionsByName = discoverAliasBindingPositions(
+  const bySpelling: AliasKeys = {
+    reference: (reference) =>
+      ts.isIdentifier(reference.typeName) ? reference.typeName.text : undefined,
+    declaration: (declaration) => declaration.name.text,
+  };
+  const positionsByKey = discoverAliasBindingPositions(
     [sourceFile],
     bySpelling,
   );
@@ -599,8 +611,8 @@ function collectWriteAuthorizedByBindingNames(
   visitWriterBindings(
     sourceFile,
     (reference) => {
-      const name = bySpelling(reference);
-      return name === undefined ? undefined : positionsByName.get(name);
+      const key = bySpelling.reference(reference);
+      return key === undefined ? undefined : positionsByKey.get(key);
     },
     (binding) => names.add(binding.text),
   );
@@ -631,21 +643,36 @@ function collectTrustedBindingsByFile(
   const files = program.getSourceFiles().filter((file) =>
     !file.isDeclarationFile && !program.isSourceFileDefaultLibrary(file)
   );
-  // A reference stands for the library's own policy types by spelling, and
-  // for any other alias by the declaration the checker resolves it to.
-  const byDeclaration: AliasName = (reference) => {
-    const name = referenceName(reference);
-    if (LIBRARY_BINDING_POSITIONS.has(name.text)) return name.text;
-    let symbol = checker.getSymbolAtLocation(name);
-    if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
-      symbol = checker.getAliasedSymbol(symbol);
-    }
-    return symbol?.declarations?.find(ts.isTypeAliasDeclaration)?.name.text;
+  // A reference stands for one of the library's policy types when it is
+  // imported from the library, through any chain of authored re-exports; an
+  // authored alias, including one that borrows the name, is keyed by its
+  // own declaration and reads as what it declares.
+  const declarationKey = (declaration: ts.TypeAliasDeclaration): string =>
+    `${declaration.getSourceFile().fileName}\0${declaration.name.text}`;
+  const byDeclaration: AliasKeys = {
+    reference: (reference) => {
+      const name = referenceName(reference);
+      const symbol = checker.getSymbolAtLocation(name);
+      if (
+        LIBRARY_BINDING_POSITIONS.has(name.text) &&
+        isImportedFromLibrary(symbol, checker)
+      ) {
+        return name.text;
+      }
+      const resolved = symbol && symbol.flags & ts.SymbolFlags.Alias
+        ? checker.getAliasedSymbol(symbol)
+        : symbol;
+      const declaration = resolved?.declarations?.find(
+        ts.isTypeAliasDeclaration,
+      );
+      return declaration && declarationKey(declaration);
+    },
+    declaration: declarationKey,
   };
-  const positionsByName = discoverAliasBindingPositions(files, byDeclaration);
+  const positionsByKey = discoverAliasBindingPositions(files, byDeclaration);
   const positionsFor: BindingPositions = (reference) => {
-    const name = byDeclaration(reference);
-    return name === undefined ? undefined : positionsByName.get(name);
+    const key = byDeclaration.reference(reference);
+    return key === undefined ? undefined : positionsByKey.get(key);
   };
   const byFile = new Map<string, Set<string>>();
   for (const file of files) {
@@ -665,24 +692,73 @@ function collectTrustedBindingsByFile(
 }
 
 /**
+ * Whether `symbol`, followed one import or re-export at a time, is brought in
+ * from a Common Fabric module. The first hop out of authored code is what
+ * decides it: the library's own files are roots of the compile too, and its
+ * `WriteAuthorizedBy` is declared in a companion module the path-based
+ * provenance check does not recognize, so neither the roots nor the final
+ * declaration can say whose type this is.
+ */
+function isImportedFromLibrary(
+  symbol: ts.Symbol | undefined,
+  checker: ts.TypeChecker,
+): boolean {
+  const seen = new Set<ts.Symbol>();
+  let current = symbol;
+  while (
+    current && current.flags & ts.SymbolFlags.Alias && !seen.has(current)
+  ) {
+    seen.add(current);
+    const specifier = current.declarations?.map(importModuleSpecifier).find(
+      (name) => name !== undefined,
+    );
+    if (
+      specifier !== undefined &&
+      (isCommonFabricModuleName(specifier) ||
+        specifier.startsWith("commonfabric/"))
+    ) {
+      return true;
+    }
+    current = checker.getImmediateAliasedSymbol(current);
+  }
+  return false;
+}
+
+/** The module an import or re-export declaration names, if it names one. */
+function importModuleSpecifier(
+  declaration: ts.Declaration,
+): string | undefined {
+  let node: ts.Node | undefined = declaration;
+  while (
+    node && !ts.isImportDeclaration(node) && !ts.isExportDeclaration(node)
+  ) {
+    node = node.parent;
+  }
+  const specifier = node?.moduleSpecifier;
+  return specifier && ts.isStringLiteral(specifier)
+    ? specifier.text
+    : undefined;
+}
+
+/**
  * For every type alias in `files` that forwards a type parameter into a
  * binding position of a policy it names, which of its own positions those
- * are — to a fixed point, so an alias of an alias is read too. Keyed by the
- * alias's name; `aliasName` decides which name a reference stands for.
+ * are — to a fixed point, so an alias of an alias is read too. Keyed as
+ * `keys` says, seeded with the library's policy types under their names.
  */
 function discoverAliasBindingPositions(
   files: readonly ts.SourceFile[],
-  aliasName: AliasName,
+  keys: AliasKeys,
 ): Map<string, Set<number>> {
-  const positionsByName = new Map<string, Set<number>>(
+  const positionsByKey = new Map<string, Set<number>>(
     [...LIBRARY_BINDING_POSITIONS].map(([name, positions]) => [
       name,
       new Set(positions),
     ]),
   );
   const positionsFor: BindingPositions = (reference) => {
-    const name = aliasName(reference);
-    return name === undefined ? undefined : positionsByName.get(name);
+    const key = keys.reference(reference);
+    return key === undefined ? undefined : positionsByKey.get(key);
   };
 
   let changed = true;
@@ -705,20 +781,20 @@ function discoverAliasBindingPositions(
           continue;
         }
 
-        const existing = positionsByName.get(statement.name.text) ??
-          new Set();
+        const key = keys.declaration(statement);
+        const existing = positionsByKey.get(key) ?? new Set();
         for (const position of positions) {
           if (!existing.has(position)) {
             existing.add(position);
             changed = true;
           }
         }
-        positionsByName.set(statement.name.text, existing);
+        positionsByKey.set(key, existing);
       }
     }
   }
 
-  return positionsByName;
+  return positionsByKey;
 }
 
 /** Calls `onBinding` for each `typeof` identifier in a binding position. */

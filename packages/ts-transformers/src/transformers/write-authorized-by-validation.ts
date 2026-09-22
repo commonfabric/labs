@@ -217,9 +217,7 @@ function isSupportedWriteAuthorizedByBinding(
   context: TransformationContext,
 ): boolean {
   const resolved = resolveWriterBinding(binding, context.checker);
-  if (!resolved || resolved.declaration.getSourceFile().isDeclarationFile) {
-    return false;
-  }
+  if (!resolved) return false;
   const { declaration } = resolved;
   if (ts.isFunctionDeclaration(declaration)) return true;
   return declaration.initializer !== undefined &&

@@ -29,8 +29,12 @@ export interface WriterBinding {
 
 /**
  * The declaration `binding` names, or `undefined` when the checker cannot
- * resolve it to a variable or function declaration. A caller minting a claim
- * from an unresolvable binding must decide its own fallback; a caller
+ * resolve it to a variable or function declaration in an authored module. A
+ * declaration file's declaration is not a writer: it has no provenance for
+ * the runtime to verify, and no module identity for a claim to be minted
+ * with — resolving to one would have the minter throw for a missing identity
+ * where the validation pass has a diagnostic to give. A caller minting a
+ * claim from an unresolvable binding must decide its own fallback; a caller
  * validating one refuses.
  */
 export function resolveWriterBinding(
@@ -44,7 +48,9 @@ export function resolveWriterBinding(
       ts.isVariableDeclaration(candidate) ||
       ts.isFunctionDeclaration(candidate)
     );
-  if (!declaration) return undefined;
+  if (!declaration || declaration.getSourceFile().isDeclarationFile) {
+    return undefined;
+  }
   if (
     ts.isVariableDeclaration(declaration) && ts.isIdentifier(declaration.name)
   ) {

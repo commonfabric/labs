@@ -2,7 +2,12 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
-import { callSchemas, parseModule, patternSchemas } from "./transformed-ast.ts";
+import {
+  bindingIdentities,
+  callSchemas,
+  parseModule,
+  patternSchemas,
+} from "./transformed-ast.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { transformFiles, transformSource } from "./utils.ts";
 
@@ -286,8 +291,10 @@ export const bystander = handler<void, { name: Writable<string> }>((_event, { na
       },
     );
     expect(diagnostics.filter(isError)).toEqual([]);
-    expect(files["/writer.ts"]).toMatch(/bindingPath:\s*\[\s*"writer"\s*\]/);
-    expect(files["/writer.ts"]).not.toMatch(/bindingPath:\s*\[\s*"bystander"/);
+    expect(bindingIdentities(parseModule(files["/writer.ts"]))).toEqual([{
+      sourceFile: "/writer.ts",
+      bindingPath: ["writer"],
+    }]);
     expect(patternSchemas(parseModule(files["/main.tsx"])).output)
       .toMatchObject({
         properties: {
@@ -300,5 +307,26 @@ export const bystander = handler<void, { name: Writable<string> }>((_event, { na
           },
         },
       });
+  });
+
+  // A policy type is the library's by declaration, not by spelling: an
+  // authored alias that borrows the name `WriteAuthorizedBy` names no writer,
+  // and the hardening index must not trust the binding it cites.
+  it("does not trust a binding cited by an authored alias that borrows a policy name", async () => {
+    const files = await transformFiles(
+      {
+        "/main.tsx": `import { pattern, Stream, Writable } from "commonfabric";
+import { writer } from "./writer.ts";
+type WriteAuthorizedBy<T, Binding> = { value: T; by?: Binding };
+export default pattern<Record<string, never>, { name: WriteAuthorizedBy<string, typeof writer>; save: Stream<void> }>(() => {
+  const name = new Writable<{ value: string }>({ value: "" }).for("name");
+  return { name, save: writer({ name }) };
+});`,
+        "/writer.ts": `import { handler, Writable } from "commonfabric";
+export const writer = handler<void, { name: Writable<{ value: string }> }>((_event, { name }) => { name.set({ value: "updated" }); });`,
+      },
+      { types: COMMONFABRIC_TYPES, typeCheck: true },
+    );
+    expect(bindingIdentities(parseModule(files["/writer.ts"]))).toEqual([]);
   });
 });

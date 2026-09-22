@@ -14,6 +14,7 @@ import type {
 } from "../src/mod.ts";
 import { compileCfcPolicyManifestsForSource } from "../src/transformers/cfc-policy-authoring.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { parseModule, writerIdentityMarkers } from "./transformed-ast.ts";
 import {
   transformFiles,
   transformSource,
@@ -1106,12 +1107,43 @@ Deno.test(
       diagnostics.filter((diagnostic) => diagnostic.severity === "error"),
       [],
     );
-    const output = outputs["/main.tsx"]!;
-    assertEquals(output.includes('file: "/writer.ts"'), true);
-    assertEquals(output.includes('path: ["writer"]'), true);
-    assertEquals(output.includes('moduleIdentity: "identity:writer"'), true);
-    assertEquals(output.includes('path: ["save"]'), false);
-    assertEquals(output.includes("identity:main"), false);
+    assertEquals(writerIdentityMarkers(parseModule(outputs["/main.tsx"]!)), [{
+      file: "/writer.ts",
+      path: ["writer"],
+      moduleIdentity: "identity:writer",
+    }]);
+  },
+);
+
+Deno.test(
+  "a direct-root claim on a declaration file's binding is refused, not minted",
+  async () => {
+    // The minter throws for a defining source with no module identity, and a
+    // declaration file never has one. Resolving the binding must stop short
+    // of it, so the validation pass's diagnostic is what the author sees.
+    const diagnostics: TransformationDiagnostic[] = [];
+    await transformFiles(
+      {
+        "/main.tsx": `/// <cts-enable />
+          import { toSchema, WriteAuthorizedBy } from "commonfabric";
+          import { ambient } from "./ambient.d.ts";
+
+          const schema = toSchema<WriteAuthorizedBy<string, typeof ambient>>();
+
+          export { schema };
+        `,
+        "/ambient.d.ts": "export declare function ambient(): void;",
+      },
+      {
+        types: COMMONFABRIC_TYPES,
+        pipelineDiagnostics: diagnostics,
+        moduleIdentities: new Map([["/main.tsx", "identity:main"]]),
+      },
+    );
+    assertEquals(
+      diagnostics.map((diagnostic) => diagnostic.type),
+      ["cfc-write-authorized-by"],
+    );
   },
 );
 
