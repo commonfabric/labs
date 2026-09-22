@@ -143,7 +143,10 @@ function findWriteAuthorizedByReferences(
     if (
       ts.isTypeReferenceNode(current) &&
       ts.isIdentifier(current.typeName) &&
-      isWriteAuthorizedByLikeTypeName(current.typeName.text)
+      (isWriteAuthorizedByLikeTypeName(current.typeName.text) ||
+        isWriteAuthorizedByLikeTypeName(
+          importedDeclarationName(current.typeName, context),
+        ))
     ) {
       matches.push(substituteTypeReferenceNode(current, typeParamMap));
       return;
@@ -193,10 +196,26 @@ function findWriteAuthorizedByReferences(
   return matches;
 }
 
-function isWriteAuthorizedByLikeTypeName(name: string): boolean {
+function isWriteAuthorizedByLikeTypeName(name: string | undefined): boolean {
   return name === "WriteAuthorizedBy" ||
     name === "TrustedActionWrite" ||
     name === "TrustedActionWriteWithIntegrity";
+}
+
+/**
+ * The declared name behind an import binding — `Guarded` for
+ * `import { WriteAuthorizedBy as Guarded }` is `WriteAuthorizedBy`. The
+ * schema generator reads the claim through the rename, so the check must.
+ */
+function importedDeclarationName(
+  name: ts.Identifier,
+  context: TransformationContext,
+): string | undefined {
+  const symbol = context.checker.getSymbolAtLocation(name);
+  if (!symbol || !(symbol.flags & ts.SymbolFlags.Alias)) return undefined;
+  return context.checker.getAliasedSymbol(symbol).declarations?.find(
+    ts.isTypeAliasDeclaration,
+  )?.name.text;
 }
 
 /**

@@ -348,5 +348,90 @@ export const writer = handler<void, { name: Writable<string> }>((_event, { name 
       sourceFile: "/writer.ts",
       bindingPath: ["writer"],
     }]);
+    expect(patternSchemas(parseModule(files["/main.tsx"])).output)
+      .toMatchObject({
+        properties: {
+          name: {
+            ifc: {
+              writeAuthorizedBy: {
+                __ctWriterIdentityOf: { file: "/writer.ts", path: ["writer"] },
+              },
+            },
+          },
+        },
+      });
+  });
+
+  // The library's policy type is known by its declared name, however a
+  // reference spells it. The index once read the local spelling, so a
+  // renamed import produced the claim with no identity behind it.
+  for (
+    const [spelling, imports, barrel] of [
+      [
+        "a renamed import",
+        `import { pattern, Stream, Writable, WriteAuthorizedBy as Guarded } from "commonfabric";`,
+        "",
+      ],
+      [
+        "a renamed re-export through an authored module",
+        `import { pattern, Stream, Writable } from "commonfabric";\nimport { Guarded } from "./policy.ts";`,
+        `export { WriteAuthorizedBy as Guarded } from "commonfabric";`,
+      ],
+    ] as const
+  ) {
+    it(`trusts a writer cited through ${spelling} of the policy type`, async () => {
+      const files = await transformFiles(
+        {
+          "/main.tsx": `${imports}
+import { writer as save } from "./writer.ts";
+export default pattern<Record<string, never>, { name: Guarded<string, typeof save>; save: Stream<void> }>(() => {
+  const name = new Writable<string>("").for("name");
+  return { name, save: save({ name }) };
+});`,
+          ...(barrel ? { "/policy.ts": barrel } : {}),
+          "/writer.ts": `import { handler, Writable } from "commonfabric";
+export const writer = handler<void, { name: Writable<string> }>((_event, { name }) => { name.set("updated"); });`,
+        },
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      expect(bindingIdentities(parseModule(files["/writer.ts"]))).toEqual([{
+        sourceFile: "/writer.ts",
+        bindingPath: ["writer"],
+      }]);
+      expect(patternSchemas(parseModule(files["/main.tsx"])).output)
+        .toMatchObject({
+          properties: {
+            name: {
+              ifc: {
+                writeAuthorizedBy: {
+                  __ctWriterIdentityOf: {
+                    file: "/writer.ts",
+                    path: ["writer"],
+                  },
+                },
+              },
+            },
+          },
+        });
+    });
+  }
+
+  it("validates a claim written through a renamed import of the policy type", async () => {
+    const diagnostics: TransformationDiagnostic[] = [];
+    await transformSource(
+      `import { handler, pattern, Writable, WriteAuthorizedBy as Guarded } from "commonfabric";
+const setName = handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); });
+type Binding = typeof setName;
+export default pattern<{ name: string }, { name: Guarded<string, Binding> }>(({ name }) => ({ name }));`,
+      {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      },
+    );
+    expect(diagnostics.filter(isError)).toMatchObject([{
+      type: "cfc-write-authorized-by",
+      message: expect.stringContaining("direct typeof binding"),
+    }]);
   });
 });

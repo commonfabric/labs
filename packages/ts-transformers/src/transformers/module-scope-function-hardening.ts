@@ -656,24 +656,28 @@ function collectTrustedBindingsByFile(
     reference: (reference) => {
       const name = referenceName(reference);
       const symbol = checker.getSymbolAtLocation(name);
-      // A qualified `cf.WriteAuthorizedBy` is the library's when its
-      // namespace is: the right-hand name resolves past every import hop.
-      const qualifier = ts.isQualifiedName(reference.typeName)
-        ? checker.getSymbolAtLocation(leftmostName(reference.typeName))
-        : undefined;
-      if (
-        LIBRARY_BINDING_POSITIONS.has(name.text) &&
-        (isImportedFromLibrary(symbol, checker) ||
-          isImportedFromLibrary(qualifier, checker))
-      ) {
-        return name.text;
-      }
       const resolved = symbol && symbol.flags & ts.SymbolFlags.Alias
         ? checker.getAliasedSymbol(symbol)
         : symbol;
       const declaration = resolved?.declarations?.find(
         ts.isTypeAliasDeclaration,
       );
+      // The library's type is known by its DECLARED name, whatever the
+      // reference spells it — `import { WriteAuthorizedBy as Guarded }` — and
+      // by where it comes from. A qualified `cf.WriteAuthorizedBy` is the
+      // library's when its namespace is: the right-hand name resolves past
+      // every import hop.
+      const canonical = declaration?.name.text ?? name.text;
+      const qualifier = ts.isQualifiedName(reference.typeName)
+        ? checker.getSymbolAtLocation(leftmostName(reference.typeName))
+        : undefined;
+      if (
+        LIBRARY_BINDING_POSITIONS.has(canonical) &&
+        (isImportedFromLibrary(symbol, checker) ||
+          isImportedFromLibrary(qualifier, checker))
+      ) {
+        return canonical;
+      }
       return declaration && declarationKey(declaration);
     },
     declaration: declarationKey,
