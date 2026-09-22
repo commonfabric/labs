@@ -125,6 +125,9 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
               sqlType: "text",
               ifc: { confidentiality: BODY_CLAUSE },
             },
+            // Declares nothing, so a query projecting it carries no clause
+            // of its own and the only label in sight is the parameter's.
+            note: { type: "string", sqlType: "text" },
             ...extraColumns,
           },
           required: [],
@@ -151,8 +154,19 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
   const seedMessages = async (db: SqliteDbRef, at: typeof space = space) => {
     await seed(
       db,
-      "INSERT INTO messages (container_id, body) VALUES (?, ?), (?, ?), (?, ?)",
-      ["c-alpha", "first", "c-alpha", "second", "c-beta", "only"],
+      "INSERT INTO messages (container_id, body, note) VALUES " +
+        "(?, ?, ?), (?, ?, ?), (?, ?, ?)",
+      [
+        "c-alpha",
+        "first",
+        "n1",
+        "c-alpha",
+        "second",
+        "n2",
+        "c-beta",
+        "only",
+        "n3",
+      ],
       at,
     );
   };
@@ -349,27 +363,93 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       .toBe(false);
   });
 
-  it("leaves the projected column's declared ceiling as its author wrote it", async () => {
-    // Route 2 declines at a path a schema declares. The rows the second query
-    // writes are labeled with the BODY column's clause, and the parameter
-    // carried the KEY column's — so a route that reached the declared path
-    // would show the key's clause on the row's own column entry.
+  describe("a shared result", () => {
+    // Space scope, where one materialization serves every reader of the
+    // space. A session-scoped result is per-reader, so its membership tells
+    // its own reader nothing they did not ask for, and the builtin declares
+    // nothing on it.
 
-    const db = labeledDb();
-    await seedMessages(db);
-    const { bodies } = await runDerivedParameterPattern(db, "declared-path");
+    const runSharedPattern = async (
+      db: SqliteDbRef,
+      cause: string,
+      sql: string,
+    ) => {
+      const { commonfabric: cf } = createTrustedBuilder(runtime);
+      const parameterOf = parameterLift((keys) =>
+        String((keys as QueryState<KeyRow>)?.result?.[0]?.container_id ?? "")
+      );
+      const testPattern = cf.pattern<Record<string, never>>(() => {
+        const keys = cf.sqliteQuery.asScope("session")(
+          // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
+          { db, reactOn: db, sql: KEYS_SQL } as any,
+        );
+        const rows = cf.sqliteQuery(
+          // deno-lint-ignore no-explicit-any -- the builtin's input is untyped
+          { db, reactOn: db, sql, params: parameterOf(keys) } as any,
+        );
+        return { keys, rows };
+      });
+      const tx = runtime.edit();
+      const resultCell = runtime.getCell(
+        space,
+        cause,
+        testPattern.resultSchema,
+        tx,
+      );
+      const result = runtime.run(tx, testPattern, {}, resultCell);
+      runtime.prepareTxForCommit(tx);
+      expect((await tx.commit()).error).toBeUndefined();
+      // deno-lint-ignore no-explicit-any -- the builtin's state
+      return result.key("rows") as Cell<any>;
+    };
 
-    await waitForCellValue<QueryState<BodyRow>>(
-      runtime,
-      bodies,
-      (value) => (value?.result ?? []).length === 2,
-    );
+    it("carries the parameter's clause on the result's membership", async () => {
+      // Which rows came back is a function of the parameter as much as of
+      // the rows, and the length and membership of a shared array are
+      // readable without dereferencing a row. The projected column declares
+      // NOTHING here, so the parameter's clause is the only one that can
+      // reach `/result` — a fixture whose projection is labeled would pass
+      // on the rows' own clause.
 
-    const rows = bodies.key("result");
-    const row = rows.key(0) as Cell<unknown>;
-    const declared = declaredAt(row, ["body"]);
-    expect(hasClause(declared, BODY_CLAUSE)).toBe(true);
-    expect(hasClause(declared, KEY_CLAUSE)).toBe(false);
+      const db = labeledDb();
+      await seedMessages(db);
+      const rows = await runSharedPattern(
+        db,
+        "shared-membership",
+        "SELECT note FROM messages WHERE container_id = ?1 ORDER BY id",
+      );
+
+      const state = await waitForCellValue<QueryState<{ note: string }>>(
+        runtime,
+        rows,
+        (value) => (value?.result ?? []).length === 2,
+      );
+      expect(state.error).toBeUndefined();
+      expect(state.result).toEqual([{ note: "n1" }, { note: "n2" }]);
+      expect(hasClause(declaredAt(rows, ["result"]), KEY_CLAUSE)).toBe(true);
+    });
+
+    it("labels each row by the column it came from", async () => {
+      // The rows are the columns' to label, and the settle transaction
+      // carries nothing of its own, so the parameter's clause reaches the
+      // membership and not the row. Route 2 declines at `/body` in any case:
+      // the write schema declares there.
+
+      const db = labeledDb();
+      await seedMessages(db);
+      const rows = await runSharedPattern(db, "shared-rows", BODIES_SQL);
+
+      await waitForCellValue<QueryState<BodyRow>>(
+        runtime,
+        rows,
+        (value) => (value?.result ?? []).length === 2,
+      );
+
+      const row = rows.key("result").key(0) as Cell<unknown>;
+      const declared = declaredAt(row, ["body"]);
+      expect(hasClause(declared, BODY_CLAUSE)).toBe(true);
+      expect(hasClause(declared, KEY_CLAUSE)).toBe(false);
+    });
   });
 
   it("accumulates a clause per differently-labeled parameter and drops none", async () => {

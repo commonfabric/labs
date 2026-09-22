@@ -1536,11 +1536,22 @@ export function sqliteQuery(
             );
             const needsEntryRowSchema = resultRows.some(Array.isArray) &&
               (labelSchema !== undefined || anyPerRow);
+            // What a reader learns from the container without opening a
+            // row: how many rows there are, and which. That is a function
+            // of the query's PARAMETERS as much as of the rows it returned,
+            // so the label this request carried joins the rows' own — a
+            // shared result whose parameter came out of a labeled read
+            // would otherwise let anyone in the space enumerate which
+            // labeled thing the parameter named, even when every projected
+            // column declares nothing. A session-scoped result is
+            // materialized per reader, so its membership tells its own
+            // reader only what they asked for, and `[]` stands.
             const shapeConfidentiality = scope === "session"
               ? []
               : joinCfcObservedConfidentiality([
                 staticConfidentialityOf(labelSchema),
                 ...rowLabels.labels.map((label) => label?.confidentiality),
+                requestConfidentiality,
               ]);
             const rowWriteSchema = needsEntryRowSchema
               ? {
