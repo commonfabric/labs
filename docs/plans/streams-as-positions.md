@@ -418,9 +418,17 @@ cutover for both kinds; its cost is stated under stage 3.
   inherits the old address, and a sidecar entry still pending under it would
   be delivered there. This is today's behavior for the same edit, since the
   cause is in the id's preimage now, and this plan neither adds to it nor
-  removes it. Whether a pattern update drains a piece's sidecars before it
-  renumbers is a question this plan does not answer and a fix for it does not
-  depend on; the durable repair is a generated cause derived from the
+  removes it. A pattern update does not drain a piece's sidecars first:
+  `setsrc`, client or served (`packages/piece/src/ops/served-lifecycle.ts:785`
+  through `piece-controller.ts:4745`), writes the transition and the pattern
+  pointer, and the running piece's pointer watcher swaps the graph —
+  `swapToPattern` (`runner.ts:4611`) runs setup, then retires the old nodes
+  and instantiates the new ones — reading no sidecar and waiting on no queue.
+  An entry pending across that swap is handled when next drained: one whose
+  address a renumbered handler now holds is delivered to that handler, and
+  one whose address nothing holds is dropped by the no-handler predicate for
+  a piece that is running with its graph installed (`events.ts:770` through
+  `:782`). The durable repair is a generated cause derived from the
   handler's content rather than its position, which is a follow-up outside
   this plan. The manifest's array index would widen the trigger to any
   inserted descriptor; decision 3 states the difference.
