@@ -569,9 +569,11 @@ category**:
 
 Count on top reads 7. Nothing missing and nothing invented.
 
-**The headers do not sort. They are styled as clickable — the cursor changes
-over them — so a viewer will try, and nothing will happen.** Say so before
-someone finds out.
+**The headers do not sort. Whether they _look_ clickable varies by run** — one
+piece styled all six with `cursor: pointer`, another styled them `auto`, from
+the same prompt. So a viewer may get a hand cursor over a column that does
+nothing. **Check the piece you actually produced before demonstrating it**, and
+say so if it invites the click.
 
 They are also not exposed in the accessibility tree as interactive, which is why
 a snapshot reports the only interactive element as the title button. **That is a
