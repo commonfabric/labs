@@ -14,25 +14,12 @@ import {
   Writable,
 } from "commonfabric";
 import {
-  clickButton as clickRenderedButton,
-  findElementByText,
+  clickButton,
   findNode,
   fireClick,
   isButton,
-  propsOf,
   textContent,
 } from "../test/vnode-helpers.ts";
-
-// Fires the stream bound to a button's onClick, which is how the default UI's
-// own controls are reached: they are inline arrows in JSX rather than exported
-// streams, so a caller-facing test has to go through the rendered tree.
-const clickButton = (root: unknown, text: string) => {
-  const onClick = propsOf(findElementByText(root, "cf-button", text))?.onClick;
-  if (typeof onClick === "function") (onClick as () => void)();
-  else if (onClick && typeof onClick === "object" && "send" in onClick) {
-    (onClick as { send: (e: Record<string, never>) => void }).send({});
-  }
-};
 
 import AmountLedger from "./amount-ledger.tsx";
 
@@ -149,7 +136,7 @@ export default pattern(() => {
       { render: seeded[UI] },
       { assertion: assert(() => parentEntries.get().length === 2) },
       { assertion: assert(() => seeded.total === 10) },
-      { action: action(() => clickRenderedButton(seeded[UI], "Remove")) },
+      { action: action(() => clickButton(seeded[UI], "Remove")) },
       { assertion: assert(() => parentEntries.get().length === 1) },
       { assertion: assert(() => parentEntries.get()[0].label === "Cheese") },
       { assertion: assert(() => seeded.entryCount === 1) },

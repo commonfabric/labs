@@ -13,23 +13,7 @@ import {
   UI,
   Writable,
 } from "commonfabric";
-import {
-  clickButton as clickRenderedButton,
-  findElementByText,
-  propsOf,
-  textContent,
-} from "../test/vnode-helpers.ts";
-
-// Fires the stream bound to a button's onClick, which is how the default UI's
-// own controls are reached: they are inline arrows in JSX rather than exported
-// streams, so a caller-facing test has to go through the rendered tree.
-const clickButton = (root: unknown, text: string) => {
-  const onClick = propsOf(findElementByText(root, "cf-button", text))?.onClick;
-  if (typeof onClick === "function") (onClick as () => void)();
-  else if (onClick && typeof onClick === "object" && "send" in onClick) {
-    (onClick as { send: (e: Record<string, never>) => void }).send({});
-  }
-};
+import { clickButton, textContent } from "../test/vnode-helpers.ts";
 
 import CheckList from "./check-list.tsx";
 
@@ -123,7 +107,7 @@ export default pattern(() => {
       // Constructor-seeded rows retain their parent's slot identity.
       { render: seeded[UI] },
       { assertion: assert(() => parentItems.get().length === 2) },
-      { action: action(() => clickRenderedButton(seeded[UI], "Remove")) },
+      { action: action(() => clickButton(seeded[UI], "Remove")) },
       { assertion: assert(() => parentItems.get().length === 1) },
       { assertion: assert(() => parentItems.get()[0].title === "Buy bread") },
       { assertion: assert(() => seeded.remainingCount === 1) },
