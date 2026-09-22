@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 
@@ -165,5 +166,91 @@ describe("CFC attempted-write inspection", () => {
     expect(indexed.documents).toEqual(fallback.documents);
     expect(indexed.spaceWriteVisits).toBeLessThan(count * 20);
     expect(fallback.spaceWriteVisits).toBeGreaterThan(indexed.spaceWriteVisits);
+  });
+
+  it("isolates concrete and wildcard policies by scope", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://example.com"),
+      storageManager,
+      cfcEnforcementMode: "enforce-explicit",
+    });
+    try {
+      const target = runtime.getCell(signer.did(), "scoped-row", undefined)
+        .getAsNormalizedFullLink();
+      const field = {
+        type: "string",
+        ifc: { writeAuthorizedBy: ["trusted-handler"] },
+      } as const satisfies JSONSchema;
+      const schema = internSchema({
+        type: "object",
+        properties: {
+          content: field,
+          channels: { type: "array", items: field },
+          title: { type: "string" },
+        },
+      }, true);
+      const initial = {
+        content: "existing",
+        channels: ["general"],
+        title: "draft",
+      };
+      const seed = runtime.edit();
+      seedStoredEnvelope(seed, target, {
+        value: initial,
+        cfc: {
+          version: 1,
+          schemaHash: schema.taggedHashString,
+          labelMap: {
+            version: 1,
+            entries: [
+              { path: ["content"], label: {} },
+              { path: ["channels", "*"], label: {} },
+            ],
+          },
+        },
+      });
+      seed.writeOrThrow({
+        ...target,
+        id: `cid:${schema.taggedHashString}`,
+      }, { value: schema.schema });
+      expect((await seed.commit()).error).toBeUndefined();
+
+      for (const indexed of [true, false]) {
+        const tx = runtime.edit();
+        try {
+          const other = { ...target, scope: "user" } as const;
+          const otherValue = { content: "changed", channels: ["releases"] };
+          tx.writeValueOrThrow(other, otherValue);
+          tx.writeValueOrThrow({ ...target, path: ["title"] }, "updated");
+          tx.recordCfcWritePolicyInput({
+            kind: "schema",
+            target,
+            schema: schema.schema,
+          });
+          const view = new Proxy(tx, {
+            get(target, property) {
+              if (property === "getWriteDetailsForTarget" && !indexed) {
+                return undefined;
+              }
+              const member = Reflect.get(target, property, target);
+              return typeof member === "function" ? member.bind(target) : member;
+            },
+          });
+          expect(prepareBoundaryCommit(view)).toEqual([]);
+          expect(tx.readValueOrThrow(target)).toEqual({
+            ...initial,
+            title: "updated",
+          });
+          expect(tx.readValueOrThrow(other)).toEqual(otherValue);
+        } finally {
+          tx.abort();
+        }
+      }
+    } finally {
+      await storageManager.synced();
+      await runtime.dispose({ closeStorage: false });
+      await storageManager.close();
+    }
   });
 });
