@@ -806,8 +806,9 @@ end-to-end in ts-transformers `aliased-binding-declared-type.test.ts` and
 
 A scope wrapper **as a union member throws** (`A scope wrapper cannot be a
 member of a union.`; tested, scope-wrappers.test.ts). The runtime reads a
-slot's scope from the top level of that slot's own schema
-(`ContextualFlowControl.getSchemaScopeCap`), so a declaration that lands in an
+slot's scope from that slot's own schema — its top level, or the definition a
+`$ref` there names (`ContextualFlowControl.getSchemaScopeCap`) — and from no
+compound branch, so a declaration that lands in an
 `anyOf` branch is invisible to the write path: no narrowing redirect is
 written, the value lands on the shared space row, and every principal reads
 the same instance. Write the union inside the wrapper

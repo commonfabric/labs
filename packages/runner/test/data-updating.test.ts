@@ -2697,6 +2697,55 @@ describe("scope-isolation write guard", () => {
   });
 });
 
+describe("a write into a slot whose schema names a scoped definition", () => {
+  // The slot holds a `$ref`, and the scope sits on the definition it names,
+  // which is where a recursive type puts it: the definition is what every
+  // position of that type refers to.
+
+  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let runtime: Runtime;
+  let tx: IExtendedStorageTransaction;
+
+  const scopedDefinitionSchema = {
+    type: "object",
+    properties: { nickname: { $ref: "#/$defs/Nickname" } },
+    $defs: { Nickname: { type: "string", scope: "user" } },
+  } as const satisfies JSONSchema;
+
+  beforeEach(() => {
+    storageManager = StorageManager.emulate({ as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    tx = runtime.edit();
+  });
+
+  afterEach(async () => {
+    await tx.commit();
+    await runtime?.dispose();
+    await storageManager?.close();
+  });
+
+  it("stores a redirect to the scoped instance rather than the value", () => {
+    const dest = runtime.getCell<{ nickname: string }>(
+      space,
+      "scoped-definition-dest",
+      scopedDefinitionSchema,
+      tx,
+    );
+
+    dest.set({ nickname: "Alice" });
+
+    const stored = tx.readValueOrThrow(
+      dest.key("nickname").getAsNormalizedFullLink(),
+    );
+    expect(isSigilLink(stored)).toBe(true);
+    expect(parseLink(stored as any, dest.getAsNormalizedFullLink())?.scope)
+      .toBe("user");
+  });
+});
+
 describe("schemaIfcOverlapsPath", () => {
   // The predicate decides whether a schema-policy write input might cover a
   // written path. An `ifc` label in a tuple slot overlaps at the slot's

@@ -318,6 +318,17 @@ type JSONSchemaObj = {
 };
 ```
 
+A slot declares its scope on its own schema: the outermost `asCell` entry's
+`scope` where it has one, otherwise the top-level `scope`. A slot that
+declares neither takes what the definition its `$ref` names declares, whether
+that reference is a local `#/$defs/<name>` or a content-addressed `cid:` one,
+so a type whose every position is per-user — a recursive one names its own
+definition — declares that once on the definition. A `scope` written beside
+the `$ref` belongs to the slot and wins over the definition's. A scope inside
+an `anyOf`/`oneOf` branch is not a declaration: the branches are alternatives
+for one slot, and which of them a value takes is not known where the
+declaration is read.
+
 `scope: "space"`, `scope: "user"`, and `scope: "session"` set the narrowest
 link scope that reads are allowed to follow. If the schema declares
 `scope: "user"`, then space and user links may be followed, but session links
