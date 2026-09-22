@@ -438,7 +438,7 @@ have excluded `sim`.
 
 **Likely failure:** not the matching — see run 2 below.
 
-### Proof status: 2 passes, 1 fail, a further run in progress
+### Proof status: NOT PROVEN — 3 passes, 1 fail in four runs
 
 **What this entry tests has not failed once.** Every run produced a correct
 matcher. Runs 1 and 3 paired all four bills; run 2 computed the same answer and
@@ -484,6 +484,27 @@ disagreeing about whether a renewal notice is a bill. It also marks the next
 axis of variance: **the added sentence constrains pairing, and nothing in the
 prompt constrains classification.**
 
+**Run 4 — fail: it paired a fifth pair that nobody would make.** The first four
+are perfect and scored exactly as the clause asks — 14, 10, 8, 7, with `sim`
+discounted throughout. The fifth reads:
+
+> score 2 · shared: `12` — "🌐 Meet 10 Dependable Offshore Pros:
+> $12.8k–$31.2k/yr" paired to `SIM GROCERY MARKET #12`
+
+A spam email matched to a grocery payment because `$12.8k` and `#12` both
+tokenise to `12`. A viewer spots that instantly.
+
+**The clause did its job and stopped one step short.** Every property it names
+held: the common word was discounted, the four real pairs sorted above the junk,
+nothing was consumed twice. What the sentence does not say is **when to stop
+pairing.** With no floor, best-first exhausts the good candidates and then
+admits the best remaining one however bad it is, and a two-character numeric
+coincidence is still a positive score.
+
+So the missing constraint is an **admission threshold, not a ranking one** — a
+different axis from everything the sentence addresses. §5b adds exactly that and
+nothing else.
+
 **Run 2 — fail, on rendering rather than matching.** It computed 4 settled, 1
 unpaid and 3 unmatched — the same answer as run 1 — and then rendered three
 empty lists beneath those correct counts. The page read "4 settled" above "No
@@ -522,6 +543,19 @@ predicted way. It is not a recommendation; one run is one run:
 ```text
 Rank candidate pairs by how specifically the shared text identifies that merchant — a whole-name match counts for more than a single shared word — and pair the best-scoring candidates first, each email and each payment at most once; a word shared by most merchants counts for nothing.
 ```
+
+### Where the variance went
+
+Constraining the pairing rule moved the variance rather than removing it, and
+both places it moved to are named rather than guessed:
+
+- **No admission floor.** Ranking is constrained; stopping is not. Run 4's fifth
+  pair is the result.
+- **Classification is unconstrained, and varies more widely than pairing ever
+  did.** Run 3 admitted almost nothing as a bill; run 4 admitted 96 headers,
+  including Linear notifications, a calendar invite and a security alert. Same
+  prompt. That spread is also what supplied run 4's junk candidate, so the two
+  axes interact.
 
 **What it is not.** A prompt clause narrows the spread; it does not collapse it,
 because the model still writes the code. A published pairing part named by id is
