@@ -68,8 +68,8 @@ re-run it this way before believing the result.
   influence the test
 - save and reload browser state only when persistence is intentional
 - use separate named sessions when comparing environments or parallel flows
-- remember that refs become stale after page transitions or significant DOM
-  updates
+- remember that a ref is invalidated by the next snapshot, not merely by a page
+  transition or a DOM update — see "A ref is only valid until the next snapshot"
 - verify the active Common Fabric DID before drawing conclusions about scoped
   visibility
 
