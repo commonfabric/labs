@@ -14,6 +14,7 @@ import {
   Writable,
 } from "commonfabric";
 import {
+  clickButton as clickRenderedButton,
   findElementByText,
   propsOf,
   textContent,
@@ -34,6 +35,17 @@ import CheckList from "./check-list.tsx";
 
 export default pattern(() => {
   const list = CheckList({});
+  const parentItems = new Writable.perSpace([
+    { title: "Set table", done: false, quantity: 1 },
+    { title: "Buy bread", done: false, quantity: 1 },
+  ]);
+  const seeded = CheckList({ items: parentItems });
+  const external = CheckList({
+    items: new Writable.perSpace([
+      { title: "Passport", done: false, quantity: 1 },
+      { title: "Tickets", done: false, quantity: 1 },
+    ]),
+  });
   // The held-reference sequence from the primitives contract: stash an item,
   // mutate the list through the atom, then operate via the stashed reference.
   const held = new Writable<{ title: string; done: boolean; quantity: number }>(
@@ -107,6 +119,21 @@ export default pattern(() => {
       // nothing rather than an untitled row.
       { action: action(() => clickButton(list[UI], "Add")) },
       { assertion: assert(() => list.items.length === 0) },
+
+      // Constructor-seeded rows retain their parent's slot identity.
+      { render: seeded[UI] },
+      { assertion: assert(() => parentItems.get().length === 2) },
+      { action: action(() => clickRenderedButton(seeded[UI], "Remove")) },
+      { assertion: assert(() => parentItems.get().length === 1) },
+      { assertion: assert(() => parentItems.get()[0].title === "Buy bread") },
+      { assertion: assert(() => seeded.remainingCount === 1) },
+      {
+        action: action(() =>
+          external.removeItem.send({ item: external.items[0] })
+        ),
+      },
+      { assertion: assert(() => external.items.length === 1) },
+      { assertion: assert(() => external.items[0].title === "Tickets") },
     ],
   };
 });

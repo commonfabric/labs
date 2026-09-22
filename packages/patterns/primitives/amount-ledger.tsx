@@ -81,7 +81,14 @@ export const AmountLedger = pattern<AmountLedgerInput, AmountLedgerOutput>(
     );
 
     const removeEntry = action(({ entry }: { entry: AmountEntry }) => {
-      entries.remove(entry);
+      // Plain reads of inline rows carry value references; mapped UI rows
+      // carry the live slot reference.
+      const index = entries.get().findIndex((candidate, index) =>
+        Writable.equals(entries.key(index), entry) ||
+        Writable.equals(candidate, entry)
+      );
+      if (index < 0) return;
+      entries.set(entries.get().filter((_, position) => position !== index));
     });
 
     const total = computed(() =>
