@@ -18,9 +18,12 @@
  * the schema selects each one it requires. Both come off the container
  * read a view takes anyway, so neither descends.
  *
- * Ordinary children are checked at access time. Combinators, property defaults,
- * and array-item fallbacks evaluate their selected subtree through eager
- * traversal when accessed, since their result depends on descendant validity.
+ * Everything below that is checked where the reader touches it. A subtree the
+ * reader never reads is never validated — the deliberate cost of not
+ * materializing what nobody wants. One shape is the exception: a combinator
+ * (`anyOf`, `oneOf`, `allOf`) is decided by evaluating its subtree through the
+ * eager traverser, because whether a branch matches is a question about the
+ * whole branch.
  *
  * A mismatch the reader does touch surfaces at the nearest enclosing property,
  * which is where an eager read decides the same question. Under a `required`
@@ -28,8 +31,10 @@
  * reads as `undefined`, because an eager read leaves a property whose traversal
  * fails out of the object rather than voiding it. Either way the read that
  * failed is registered first, so whatever depends on it runs again when the
- * missing data arrives. A non-null property default replaces a rejected value
- * before the required-property decision.
+ * missing data arrives. A non-null property default replaces a value the view
+ * rejects at the container it is built over, before the required-property
+ * decision; what fails deeper is decided where it is touched, and never by
+ * evaluating the property whole.
  *
  * The root is the exception: a mismatch there yields `undefined`, which is what
  * an eager read yields for the same data, so the runner's existing
@@ -441,22 +446,13 @@ const readChild = (
   schema: JSONSchema,
   cfcLabelView: CfcLabelView | undefined,
   synced: boolean,
-  materializeEagerly = false,
 ): unknown => {
   const childLink: NormalizedFullLink = {
     ...link,
     path: [...link.path, key],
     schema,
   };
-  return readChildAt(
-    runtime,
-    tx,
-    childLink,
-    [key],
-    cfcLabelView,
-    synced,
-    materializeEagerly,
-  );
+  return readChildAt(runtime, tx, childLink, [key], cfcLabelView, synced);
 };
 
 /**
@@ -473,7 +469,6 @@ const readChildAt = (
   labelPath: readonly string[],
   cfcLabelView: CfcLabelView | undefined,
   synced: boolean,
-  materializeEagerly = false,
 ): unknown => {
   // Back through the front door: link resolution, `asCell` dispatch and schema
   // combination all belong there, and a marked transaction lands back here for
@@ -488,7 +483,7 @@ const readChildAt = (
       cfcLabelView: rebaseCfcLabelView(cfcLabelView, [...labelPath]),
     },
     [],
-    { synced, mismatchThrows: true, viewChild: true, materializeEagerly },
+    { synced, mismatchThrows: true, viewChild: true },
   );
 };
 
@@ -563,25 +558,18 @@ function createObjectView(
       return applyDefault();
     }
     try {
-      // Choosing between a value and its property default depends on the
-      // entire selected subtree, including required descendants.
-      return readChild(
-        runtime,
-        tx,
-        link,
-        key,
-        narrowed,
-        cfcLabelView,
-        synced,
-        defaultSchema !== undefined,
-      );
+      // What arrives here is the child's own verdict: the container-level
+      // check a view makes when it is built, or a combinator's whole-branch
+      // evaluation. A mismatch deeper inside a child view is not decided here;
+      // it surfaces where the reader touches it.
+      return readChild(runtime, tx, link, key, narrowed, cfcLabelView, synced);
     } catch (error) {
       if (!isSchemaMismatchError(error)) throw error;
-      // A subtree evaluated whole for its default can dead-end at a doc the
-      // replica cannot serve. Nothing in it is known to be invalid, so neither
-      // the default nor absence answers for it, and the refusal stands. The
-      // property's own dead-end never arrives here: the entry point stands
-      // the declared default in before it can refuse.
+      // A combinator evaluated whole can dead-end at a doc the replica cannot
+      // serve. Nothing in it is known to be invalid, so neither the default
+      // nor absence answers for it, and the refusal stands. The property's own
+      // dead-end never arrives here with a default declared: the entry point
+      // stands the default in before it can refuse.
       if (defaultSchema !== undefined && isUnresolvedInputError(error)) {
         throw error;
       }
@@ -679,7 +667,6 @@ function createArrayView(
     const key = String(index);
     const itemSchema = childSchema(schema, key);
     const item = value[index];
-    const fallbackType = arrayItemFallbackType(itemSchema);
     const slotLink: NormalizedFullLink = {
       ...link,
       path: [...link.path, key],
@@ -713,18 +700,9 @@ function createArrayView(
         [key],
         cfcLabelView,
         synced,
-        fallbackType !== undefined,
       );
     }
-    return readChildAt(
-      runtime,
-      tx,
-      slotLink,
-      [key],
-      cfcLabelView,
-      synced,
-      fallbackType !== undefined,
-    );
+    return readChildAt(runtime, tx, slotLink, [key], cfcLabelView, synced);
   };
 
   // The array's counterpart to the object view's gate: every element read steps
@@ -739,7 +717,10 @@ function createArrayView(
     } catch (error) {
       if (!isSchemaMismatchError(error)) throw error;
       // An unavailable hop target has no value to validate or substitute yet,
-      // whether it is the slot's own or one inside an item evaluated whole.
+      // whether it is the slot's own or one inside a combinator item evaluated
+      // whole. A substitute answers only for the element's own verdict: the
+      // container-level check of its view, or a combinator's evaluation. What
+      // fails deeper inside an element view is decided where it is touched.
       if (isUnresolvedInputError(error)) throw error;
       const fallbackType = arrayItemFallbackType(
         childSchema(schema, String(index)),

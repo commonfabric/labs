@@ -161,9 +161,13 @@ schema permits an omitted property or a fallback.
 **Combinators resolve at the point of access.** `anyOf`, `oneOf`, and `allOf`
 use eager traversal for the selected subtree, preserving whole-branch validation
 and merging only successful results. Shallow candidate matching does not decide
-branch validity. Property defaults and nullable array-item fallbacks also need
-the selected subtree evaluated before choosing a replacement; see
-[the feature contract](../features/lazy-cell-materialization.md).
+branch validity. Nothing else is evaluated whole: a property default and a
+nullable array-item substitute answer for what the view rejects at the
+container, and what fails deeper refuses where it is touched. The feature
+contract lists those as
+[deliberate divergences](../features/lazy-cell-materialization.md#where-a-view-deliberately-diverges),
+and `packages/patterns/integration/topics-lazy-lookup-reruns.test.ts` holds the
+cost they avoid.
 
 ### Snapshot semantics
 

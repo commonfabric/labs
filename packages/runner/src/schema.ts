@@ -982,9 +982,6 @@ function readValueAtResolvedLink(
 }
 
 export interface ValidateAndTransformOptions {
-  /** Whether to evaluate the selected subtree before a view decides a fallback. */
-  materializeEagerly?: boolean;
-
   /** When true, also read into each Cell created for asCell fields to capture dependencies */
   traverseCells?: boolean;
 
@@ -1326,14 +1323,17 @@ export function validateAndTransform(
     // Combinators decide which entire branches validate before merging their
     // results. Evaluating that boundary uses the traverser; a shallow schema
     // union would admit values assembled from different, failing branches.
+    // That is the one shape a view hands to the traverser: a defaulted
+    // property or a nullable array item is decided by what the view can see
+    // at the container, never by evaluating a present subtree whole, since
+    // registering every read below it is the cost a view exists to avoid.
     const compound = isObjectOrArray(selector.schema) &&
       (selector.schema.anyOf !== undefined ||
         selector.schema.oneOf !== undefined ||
         selector.schema.allOf !== undefined);
     if (
-      (value === undefined &&
-        defaultForAbsentValue(viewSchema) !== undefined) ||
-      (!compound && options?.materializeEagerly !== true)
+      !compound ||
+      (value === undefined && defaultForAbsentValue(viewSchema) !== undefined)
     ) {
       return materializeSchemaView(
         runtime,

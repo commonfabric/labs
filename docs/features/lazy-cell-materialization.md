@@ -7,9 +7,17 @@ entries to read `list.length`.
 
 A **view** does that work per path instead. It is a proxy over a
 `(link, schema)` pair that resolves each property as the reader asks for it,
-narrowing the schema by that step. Ordinary containers defer their children.
-Combinators and fallback decisions evaluate a selected subtree when that
-position is accessed, as described below.
+narrowing the schema by that step. What nobody reads is never built, never
+link-resolved and never registered, with one exception described below: a
+combinator is evaluated whole at the position where it is accessed.
+
+What that buys is pinned where it is largest.
+`packages/patterns/integration/topics-lazy-lookup-reruns.test.ts` holds the
+Topics board's per-topic backlink lookup, which reads a pivot table declared
+with a default, to re-running only for the topics whose row a mention edit
+changed. A runtime change that materializes a defaulted or nullable subtree
+whole under a view fails it, however faithfully the result matches an eager
+read.
 
 ## Where a view comes from
 
@@ -38,25 +46,22 @@ the schema's `required` keys — that the value carries each of them, and that t
 schema selects each one it requires. Both come off the container read a
 view takes anyway, so neither descends.
 
-Children of an ordinary container are checked where the reader touches them.
-An unread child is not validated. Three boundaries require evaluation of a whole
-selected subtree at access time, through the same traverser an eager read uses:
+Everything below is checked where the reader touches it. **A subtree the reader
+never reads is never validated.** That is the one behavior change a pattern
+author can observe, and [the divergences](#where-a-view-deliberately-diverges)
+below spell out what follows from it.
 
-- `anyOf`, `oneOf`, and `allOf` must validate entire branches before selecting
-  and merging successful results. A shallow prefilter cannot decide whether a
-  branch matches, and combining candidate property schemas loses relationships
-  between the properties of a branch.
-- A property with a non-null default must validate its selected value before
-  deciding whether to replace it with that default.
-- An array item whose schema permits `undefined` or `null` must validate its
-  selected value before deciding whether to substitute one of those values.
+One shape is evaluated whole at the position where it is accessed, through the
+same traverser an eager read uses: a combinator. `anyOf`, `oneOf`, and `allOf`
+must validate entire branches before selecting and merging successful results.
+A shallow prefilter cannot decide whether a branch matches, and combining
+candidate property schemas loses relationships between the properties of a
+branch. Accessing a combinator therefore registers reads throughout its
+selected subtree; an untouched sibling remains deferred, and cell handles
+retain their ordinary traversal boundaries.
 
-Accessing one of these boundaries therefore registers reads throughout its
-selected subtree. An untouched sibling remains deferred. Cell handles retain
-their ordinary traversal boundaries.
-
-A subtree evaluated whole can dead-end at a linked document the replica cannot
-serve. Nothing in it is then known to be invalid, so the read refuses as
+A combinator evaluated whole can dead-end at a linked document the replica
+cannot serve. Nothing in it is then known to be invalid, so the read refuses as
 unresolved input — the same `UnresolvedInputError` a view raises when its own
 link chain dead-ends — and neither a property default nor an array substitute
 answers for it. Any unserved hop inside the subtree counts, including one the
@@ -71,8 +76,46 @@ which is where an eager read decides the same question:
   leaves a property whose traversal fails out of the object rather than voiding
   it.
 
-A declared non-null property default takes precedence over either outcome. The
-read that failed is registered first, including when a default replaces it.
+A declared non-null property default takes precedence over either outcome when
+the view rejects the property at the container it is built over. The read that
+failed is registered first, including when a default replaces it.
+
+## Where a view deliberately diverges
+
+A view and an eager read agree on every value they both produce. Where they
+part is in what a view declines to look at, and each divergence below is a
+decision rather than a gap. `packages/runner/test/materialization-parity.test.ts`
+pins each one in both modes, under "where a view deliberately diverges from an
+eager read".
+
+- **An untouched mismatch does not stop the reader.** An eager read of
+  `{ count: 1, box: { n: "bad" } }` under a schema requiring a numeric `box.n`
+  is `undefined`, and a lift over it does not run. A view hands `count` back
+  and the lift runs, because nothing asked for `box.n`. A reader that does
+  touch `box.n` refuses there, with the read registered.
+- **A property default replaces what the view rejects, not what fails deeper.**
+  An eager read evaluates a defaulted property's whole subtree and takes the
+  default when any of it fails: `{ box: { n: "bad" } }` under a `box` whose
+  default is `{ n: 7 }` reads as `{ box: { n: 7 } }`. A view takes the default
+  when the property is absent or when its own container-level check rejects
+  the value — the wrong type, a required key missing — and otherwise hands
+  back a view of what is there, so `box.n` refuses where it is touched. A
+  present value is never evaluated whole to decide its default.
+- **An array substitute replaces what the view rejects, not what fails deeper.**
+  The same rule for an item whose schema permits `null` or `undefined`: an
+  eager read substitutes for `{ n: "bad" }` under a required numeric `n`, and
+  a view hands the element back and refuses at `n`.
+- **Unresolved input refuses instead of reading as absent.** A link chain that
+  dead-ends at a document the replica cannot serve makes a view refuse with
+  `UnresolvedInputError` where the schema declares no default. An eager read
+  reads the same position as `undefined`. This one is lazy-branch only by
+  design; the runner's bindings, diffing and scheduler reads keep eager
+  semantics.
+
+The first three share one reason: deciding a fallback by evaluating a present
+subtree registers every read below it, and a pattern's optional inputs are
+declared with defaults, so that rule would make every such input read eagerly.
+The Topics test named above is what holds the line.
 
 ## Returning "nothing is there" still owes a read
 
@@ -110,13 +153,14 @@ wrong. These rules hold that agreement:
   declared property takes its non-null default, including when it is required.
   A property default of `null` does not fill an absent or rejected property.
   At the top level an absent value can take a `null` default. Both paths share
-  the property-default selector in `traverse.ts`.
+  the property-default selector in `traverse.ts`. What counts as rejected is
+  where the two paths part, and that is listed under the divergences below.
 - **Invalid array items take a permitted substitute.** `undefined` takes
   precedence over `null`; when neither is permitted, the mismatch refuses.
   Both paths use the same fallback selector. An unavailable linked document
   still raises the lazy read's `UnresolvedInputError`, whether it is the item
-  itself or a link inside an item evaluated whole: its value is not known to be
-  invalid, so an array substitute does not satisfy that refusal.
+  itself or a link inside a combinator item evaluated whole: its value is not
+  known to be invalid, so an array substitute does not satisfy that refusal.
 - **An inline array element is identified by its value.** `toCell` on such an
   element, including a nested array, must not name the array's index; written
   elsewhere that link would follow whatever lands at the index next. Eager

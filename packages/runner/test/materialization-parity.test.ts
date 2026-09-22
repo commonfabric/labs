@@ -183,35 +183,6 @@ const cases: ProjectionCase[] = [
     },
     expected: { a: 1, c: 3 },
   },
-  {
-    name: "defaults a property whose nested required value is invalid",
-    value: { box: { n: "bad" } },
-    schema: {
-      type: "object",
-      properties: {
-        box: {
-          type: "object",
-          properties: { n: { type: "number" } },
-          required: ["n"],
-          default: { n: 7 },
-        },
-      },
-    },
-    expected: { box: { n: 7 } },
-  },
-  {
-    name: "substitutes `null` for an array item with an invalid required child",
-    value: [{ n: "bad" }, { n: 2 }],
-    schema: {
-      type: "array",
-      items: {
-        type: ["object", "null"],
-        properties: { n: { type: "number" } },
-        required: ["n"],
-      },
-    },
-    expected: [null, { n: 2 }],
-  },
 ];
 
 describe("materialization-parity", () => {
@@ -414,7 +385,9 @@ describe("materialization-parity", () => {
     }
   });
 
-  it("refuses an unavailable link inside an array item even when a null substitute is allowed", async () => {
+  it("refuses an unavailable link inside a combinator item even when a null branch matches", async () => {
+    // A combinator is the one shape a view evaluates whole, so the dead-end
+    // is met inside the traverser rather than where a reader touches it.
     const write = runtime.edit();
     const missing = runtime.getCell(space, "missing-child", undefined, write);
     runtime.getCell(space, "missing-in-item", undefined, write).setRaw([
@@ -430,9 +403,14 @@ describe("materialization-parity", () => {
         {
           type: "array",
           items: {
-            type: ["object", "null"],
-            properties: { n: { type: "number" } },
-            required: ["n"],
+            anyOf: [
+              {
+                type: "object",
+                properties: { n: { type: "number" } },
+                required: ["n"],
+              },
+              { type: "null" },
+            ],
           },
         },
         tx,
@@ -470,11 +448,131 @@ describe("materialization-parity", () => {
         },
         tx,
       ).get();
-      expect(() => value.box).toThrow(UnresolvedInputError);
+      expect(() => value.box.n).toThrow(UnresolvedInputError);
       expect(tx.takeSchemaRefusal()).toBeInstanceOf(UnresolvedInputError);
     } finally {
       await tx.commit();
     }
+  });
+
+  describe("where a view deliberately diverges from an eager read", () => {
+    // Each case here is a decision, not a gap: an eager read decides a
+    // fallback by evaluating the whole subtree, and a view decides it by what
+    // it can see at the container, because registering every read below a
+    // present value is the cost a view exists to avoid. What fails deeper
+    // refuses where the reader touches it.
+
+    /** Reads `name` under `schema` in each mode, handing back each read's value
+     * and transaction. */
+    const readBothWays = (name: string, schema: JSONSchema) => {
+      const eager = runtime.edit();
+      const lazy = runtime.edit();
+      lazy.markLazyMaterialize(true);
+      return {
+        eager: {
+          tx: eager,
+          value: runtime.getCell(space, name, schema, eager).get(),
+        },
+        lazy: {
+          tx: lazy,
+          value: runtime.getCell(space, name, schema, lazy).get(),
+        },
+        commit: async () => {
+          await eager.commit();
+          await lazy.commit();
+        },
+      };
+    };
+
+    it("takes a property default for a nested mismatch eagerly, and refuses it where touched lazily", async () => {
+      const write = runtime.edit();
+      runtime.getCell(space, "nested-default", undefined, write).setRaw({
+        box: { n: "bad" },
+      });
+      await write.commit();
+      const read = readBothWays("nested-default", {
+        type: "object",
+        properties: {
+          box: {
+            type: "object",
+            properties: { n: { type: "number" } },
+            required: ["n"],
+            default: { n: 7 },
+          },
+        },
+        required: ["box"],
+      });
+      try {
+        expect(snapshotQueryResult(read.eager.value)).toEqual({
+          box: { n: 7 },
+        });
+        const lazy = read.lazy.value as { box: { n: number } };
+        expect(() => lazy.box.n).toThrow();
+        expect(isSchemaMismatchError(read.lazy.tx.takeSchemaRefusal())).toBe(
+          true,
+        );
+      } finally {
+        await read.commit();
+      }
+    });
+
+    it("substitutes `null` for an item with a nested mismatch eagerly, and refuses it where touched lazily", async () => {
+      const write = runtime.edit();
+      runtime.getCell(space, "nested-substitute", undefined, write).setRaw([
+        { n: "bad" },
+        { n: 2 },
+      ]);
+      await write.commit();
+      const read = readBothWays("nested-substitute", {
+        type: "array",
+        items: {
+          type: ["object", "null"],
+          properties: { n: { type: "number" } },
+          required: ["n"],
+        },
+      });
+      try {
+        expect(snapshotQueryResult(read.eager.value)).toEqual([null, {
+          n: 2,
+        }]);
+        const lazy = read.lazy.value as ({ n: number } | null)[];
+        expect(lazy[1]).toEqual({ n: 2 });
+        expect(() => lazy[0]!.n).toThrow();
+        expect(isSchemaMismatchError(read.lazy.tx.takeSchemaRefusal())).toBe(
+          true,
+        );
+      } finally {
+        await read.commit();
+      }
+    });
+
+    it("runs a reader over an untouched mismatch lazily, and not eagerly", async () => {
+      const write = runtime.edit();
+      runtime.getCell(space, "untouched", undefined, write).setRaw({
+        count: 1,
+        box: { n: "bad" },
+      });
+      await write.commit();
+      const read = readBothWays("untouched", {
+        type: "object",
+        properties: {
+          count: { type: "number" },
+          box: {
+            type: "object",
+            properties: { n: { type: "number" } },
+            required: ["n"],
+          },
+        },
+        required: ["count", "box"],
+      });
+      try {
+        expect(read.eager.value).toBeUndefined();
+        expect((read.lazy.value as { count: number }).count).toBe(1);
+        expect(read.lazy.tx.takeSchemaRefusal()).toBeUndefined();
+      } finally {
+        await read.commit();
+      }
+    });
   });
 
   it("gives an inline nested array the same stable identity in both modes", async () => {
