@@ -602,13 +602,14 @@ mode.
 - Package-default sandbox networking is a provisional bridge-oriented posture,
   not the final destination policy model. Product adapters may narrow it.
 - Delegation is serial: only one child runs at a time.
-- Every `run_pattern` invocation persists a piece in the configured space, and
-  never registers it: the piece joins the space's registered piece list only
-  when `assign_slug` names it. An aborted run stops its piece, but no piece is
-  ever deleted, and each piece's source-history revision is a storage-retention
-  root the piece list does not reveal. Tooling that enumerates a space's
-  contents from the piece list must not assume the list is exhaustive; there is
-  no garbage collection for these pieces yet.
+- The retained-pattern preflight returns before Fabric access or compilation
+  when it refuses a `run_pattern` request, so it persists nothing. A created
+  piece persists in the configured space and joins its registered piece list
+  only when `assign_slug` names it. An aborted run stops its piece, but no piece
+  is ever deleted, and each piece's source-history revision is a
+  storage-retention root the piece list does not reveal. Tooling that enumerates
+  a space's contents from the piece list must not assume the list is exhaustive;
+  there is no garbage collection for these pieces yet.
 - Model-driven dynamic skill activation is not implemented. Skills are
   explicitly preloaded by the caller; child skills are profile-controlled.
 - Resume is transcript-oriented and does not recover an arbitrary partially
