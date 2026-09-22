@@ -84,15 +84,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
   map(
     value: FabricValuePlus<PlusType>,
   ): MainVisitResult<ResultType> {
-    this.#assertNoConcurrentUse();
-
-    this.#inProgress = true;
-    this.#doMap = true;
-    try {
-      return this.#visitValue(value);
-    } finally {
-      this.#inProgress = false;
-    }
+    return this.#topVisit(value, true);
   }
 
   /**
@@ -101,15 +93,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
   visit(
     value: FabricValuePlus<PlusType>,
   ): MainVisitResult<ResultType> {
-    this.#assertNoConcurrentUse();
-
-    this.#inProgress = true;
-    this.#doMap = false;
-    try {
-      return this.#visitValue(value);
-    } finally {
-      this.#inProgress = false;
-    }
+    return this.#topVisit(value, false);
   }
 
   //
@@ -119,16 +103,50 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
   //
 
   /**
+   * Performs a top-level visit or structural-map operation.
+   */
+  #topVisit(
+    value: FabricValuePlus<PlusType>,
+    doMap: boolean
+  ): MainVisitResult<ResultType> {
+    this.#assertNoConcurrentUse();
+
+    this.#inProgress = true;
+    this.#doMap = doMap;
+    try {
+      const result = this.#visitValue(value);
+      switch (result?.type) {
+        case "mainResult":
+        case undefined: {
+          return result;
+        }
+
+        case "mapTo": {
+          // A `mapTo` made it to the outer layer of the visit. Convert it into
+          // a `mainResult` if we're actually mapping. Otherwise, it's the same
+          // as `undefined`.
+          return doMap
+            ? { type: "mainResult", value: result.value }
+            : undefined;
+        }
+      }
+    } finally {
+      this.#inProgress = false;
+    }
+  }
+
+  /**
    * Visits a top-level value or contained sub-value.
    */
   #visitValue(
     value: FabricValuePlus<PlusType>,
-  ): MainVisitResult<ResultType> {
+  ): Exclude<VisitResult<PlusType, ResultType>, RecurseForm> {
     const tag = this.#tagOfValueElseNull(value);
     const result = this.#visitResolvingCyclesAndReplacement(value, tag);
 
     switch (result?.type) {
       case "mainResult":
+      case "mapTo":
       case undefined: {
         return result;
       }
@@ -273,8 +291,19 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
 
         const element = array[idxNumber]!;
         const elemResult = this.#visitValue(element);
-        if (elemResult?.type === "mainResult") {
-          return elemResult;
+
+        switch (elemResult?.type) {
+          case "mainResult": {
+            return elemResult;
+          }
+
+          case "mapTo": {
+            throw new Error("TODO(danfuzz): Handle recursion-iteration mapping.");
+          }
+
+          undefined: {
+            break;
+          }
         }
 
         // TODO(danfuzz): When we have a non-`mainResult` visit-result type,
@@ -327,6 +356,8 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
     this.#stack.push(instance);
 
     try {
+      // TODO(danfuzz): Adjust this section similar to the way
+      // `#recurseFabricArray()` was adjusted to deal with mapping.
       const stateResult = this.#visitValue(state);
       if (stateResult?.type === "mainResult") {
         return stateResult;
@@ -370,6 +401,9 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
 
     try {
       for (const [key, value] of entries) {
+        // TODO(danfuzz): Adjust this section similar to the way
+        // `#recurseFabricArray()` was adjusted to deal with mapping.
+
         if (doKeys) {
           const keyResult = this.#visitValue(key);
           if (keyResult?.type === "mainResult") {

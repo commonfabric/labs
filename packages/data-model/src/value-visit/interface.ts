@@ -135,6 +135,7 @@ export type BaselineVisitorMethodResult<ResultType = FabricValue> =
  */
 export type VisitResult<PlusType = never, ResultType = FabricValue> =
   | BaselineVisitorMethodResult<ResultType>
+  | MapToForm<ResultType>
   | RecurseForm
   | ReplaceForm<PlusType>;
 
