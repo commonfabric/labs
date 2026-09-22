@@ -620,7 +620,36 @@ is paired that should not be.
 
 **Typical wall time:** ~12 minutes.
 
-**Proof status: 1 pass, 1 fail, a third run in progress.**
+**Proof status: NOT PROVEN — 1 pass, 2 fail. This line of work is closed.**
+
+**Run 3 failed a third way, by reading the clause as its exclusion alone.** It
+paired a Claude Code newsletter — "…start sessions from your phone…" — to the
+`Sim Phone Co` payment on the single word `phone`, scored 5, and consumed the
+payment, so the real phone bill lost its match and the rent bill went unpaired
+too. Two correct pairs, one absurd one, two real pairs lost.
+
+`phone` is neither short nor numeric, so the pair satisfies the letter of the
+clause while defeating its purpose: the sentence also says the shared words must
+_identify the merchant_, and that half was dropped.
+
+**Why it stopped here.** That run admitted **98 of 101 headers** as bill
+candidates. The newsletter was only ever a candidate because classification
+admitted almost every email; with classification doing its job the word `phone`
+never gets the chance to match anything. Classification was the axis
+deliberately left unconstrained while one variable at a time was tested, and it
+is now the axis that decides the outcome.
+
+**Three runs, three readings of one sentence** — qualifiers honoured, read as a
+count, read as an exclusion with its positive half dropped. That is the
+ambiguity described in the preflight, on a single clause, three times.
+
+**The conclusion, which is the useful result rather than a consolation.**
+Constraining a prompt has diminishing returns against authored variance, because
+every added or reworded sentence is another sentence with its own readings. A
+fourth wording was prepared and not run: it had been written against the
+over-application in run 2, and would have _licensed_ the under-application in
+run 3. **What removes the variance is a published, reviewed part named by id —
+not a longer prompt.**
 
 **Run 2 failed by reading the same sentence the other way.** It required _two_
 overlapping identifying words — its page says so outright, "at least two
