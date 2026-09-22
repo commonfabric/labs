@@ -1150,38 +1150,50 @@ describe("console/src/live-view", () => {
       return view;
     };
 
-    for (const ending of ["completed", "failed", "canceled"] as const) {
-      it(`shows opening research until it is ${ending}`, async () => {
+    for (
+      const ending of [
+        "completed",
+        "failed",
+        "canceled",
+        "delivery_failed",
+      ] as const
+    ) {
+      const description = ending === "delivery_failed"
+        ? "preserves completed research when event delivery fails"
+        : `shows opening research until it is ${ending}`;
+      it(description, async () => {
         using time = new FakeTime("2026-01-01T00:00:00.000Z");
         const { view, stop } = paneAt("/live/session-1");
         using updates = spy(view, "requestUpdate");
         const researching = Promise.withResolvers<void>();
         const finishResearch = Promise.withResolvers<void>();
         const modelRuns: string[] = [];
-        const service = new HarnessInteractiveChatService({
-          basePromptLoopOptions: {
-            engine: new CfHarnessEngine({
-              runId: "turn-1",
-              model: "gpt-test",
-              sandboxRuntime: {
-                describe: () => ({
-                  kind: "docker-runsc-cfc",
-                  defaultWorkingDirectory: "/workspace",
-                  cfc: {
-                    runtimeRequested: true,
-                    workspaceMountPath: "/workspace",
-                  },
-                }),
-                resolvePath: (path) => path,
-                isPathWithinWorkspace: () => true,
-                isPathWithinAllowedRoots: () => true,
-                defaultWorkingDirectory: () => "/workspace",
-                run: () =>
-                  Promise.reject(new Error("unexpected sandbox command")),
-                runShell: () =>
-                  Promise.reject(new Error("unexpected sandbox command")),
+        const deliveryFailure = new Error("live event delivery failed");
+        const deliveryErrors: unknown[] = [];
+        const engine = new CfHarnessEngine({
+          runId: "turn-1",
+          model: "gpt-test",
+          sandboxRuntime: {
+            describe: () => ({
+              kind: "docker-runsc-cfc",
+              defaultWorkingDirectory: "/workspace",
+              cfc: {
+                runtimeRequested: true,
+                workspaceMountPath: "/workspace",
               },
             }),
+            resolvePath: (path) => path,
+            isPathWithinWorkspace: () => true,
+            isPathWithinAllowedRoots: () => true,
+            defaultWorkingDirectory: () => "/workspace",
+            run: () => Promise.reject(new Error("unexpected sandbox command")),
+            runShell: () =>
+              Promise.reject(new Error("unexpected sandbox command")),
+          },
+        });
+        const service = new HarnessInteractiveChatService({
+          basePromptLoopOptions: {
+            engine,
             modelClient: {
               providerId: "test",
               complete: async (request) => {
@@ -1219,6 +1231,13 @@ describe("console/src/live-view", () => {
             if (event.kind !== "turn_completed") {
               FakeEventSource.opened.at(-1)!.deliver({ ...envelope, event });
             }
+            if (
+              ending === "delivery_failed" && event.kind === "tool_completed" &&
+              event.status === "completed"
+            ) throw deliveryFailure;
+          },
+          onEventDeliveryError: (_event, error) => {
+            deliveryErrors.push(error);
           },
         });
         try {
@@ -1283,9 +1302,24 @@ describe("console/src/live-view", () => {
           }
           finishResearch.resolve();
           await service.waitForTurn("session-1", "turn-1");
+          if (ending === "delivery_failed") {
+            expect(engine.getRunState().openingResearch).toMatchObject({
+              status: "completed",
+              outputId: expect.any(String),
+              handoffMessage: expect.any(String),
+            });
+            expect(modelRuns).toHaveLength(1);
+            expect(service.events("session-1").at(-1)?.event).toMatchObject({
+              kind: "turn_failed",
+              error: { message: deliveryFailure.message },
+            });
+          }
+          expect(deliveryErrors).toEqual(
+            ending === "delivery_failed" ? [deliveryFailure] : [],
+          );
           expect(toolEntry(view.entries, "opening-research:turn-1").status)
             .toBe(
-              ending,
+              ending === "delivery_failed" ? "completed" : ending,
             );
           view.commit();
           const completedUpdates = updates.calls.length;

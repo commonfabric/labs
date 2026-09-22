@@ -3473,6 +3473,10 @@ export class CfHarnessPromptLoop {
         ),
       };
     } catch (error) {
+      // Host delivery failures preserve the persisted research outcome.
+      if (this.engine.getRunState().openingResearch?.status !== "pending") {
+        throw error;
+      }
       try {
         await this.engine.recordOpeningResearch({
           ...marker,
