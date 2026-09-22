@@ -930,6 +930,18 @@ read to taste:
   the three: naming an id would not stop a run authoring, and the ordering needs
   a term for that.
 
+**Where this entry sits, predicted before the runs.** The pairing part takes row
+arrays — `headers` and `transactions` — not database handles, so a run must wire
+both readers' outputs into a third part. That is more glue than the pomodoro
+shape and less than authoring a matcher, which places this **in the middle of
+the ordering above rather than at the top.**
+
+So the failure to expect here, if there is one, is **binding rather than
+pairing**: wiring two row arrays into a third part is exactly the seam where
+both of this evening's confirmed coercion defects lived. A run that mispairs
+indicts the part; a run that renders empty or `[object Object]` indicts the
+glue. Those are different results and the entry will say which.
+
 ## 6. A skill's script, run in the sandbox, folded into a piece
 
 The [WEAVER §7](WEAVER.md) task, unchanged but for the slug sentence.
