@@ -23,8 +23,9 @@
  * whether the member is own or inherited.
  *
  * The plus cases hold an `isPlusType` predicate to its place in the order:
- * consulted only for a value no earlier question decides, never for one the
- * vocabulary already names, and fixing the `PlusType` in the type system.
+ * consulted only for a value no earlier question decides -- a function, a
+ * unique symbol, or a class instance outside the vocabulary -- never for one
+ * membership admits, and fixing the `PlusType` in the type system.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -549,6 +550,11 @@ describe("tags", () => {
         .toThrow("Not possibly a valid `FabricValue`");
     });
 
+    it("throws for a unique symbol", () => {
+      expect(() => tagOfFabricValue(Symbol("u") as unknown as FabricValue))
+        .toThrow("Not possibly a valid `FabricValue`");
+    });
+
     it("throws for a class instance outside the vocabulary", () => {
       expect(() => tagOfFabricValue(new Date() as unknown as FabricValue))
         .toThrow("Not possibly a valid `FabricValue`");
@@ -605,6 +611,14 @@ describe("tags", () => {
         expect(tagOfFabricValue(() => {}, isPlusFn)).toBe(VALUE_TAGS.PlusType);
       });
 
+      it("returns `PlusType` for a unique symbol the predicate accepts, consulting it once with the symbol itself", () => {
+        const { asked, isPlusType } = recordingPredicate();
+        const value = Symbol("u") as unknown as FabricValuePlusLayer<PlusProbe>;
+
+        expect(tagOfFabricValue(value, isPlusType)).toBe(VALUE_TAGS.PlusType);
+        expect(asked).toEqual([value]);
+      });
+
       it("consults the predicate once, with the value itself, for a value the vocabulary does not name", () => {
         const { asked, isPlusType } = recordingPredicate();
         const value = new Date() as unknown as FabricValuePlusLayer<PlusProbe>;
@@ -623,6 +637,14 @@ describe("tags", () => {
 
       it("throws for a function the predicate refuses", () => {
         const value = (() => {}) as unknown as FabricValuePlusLayer<PlusProbe>;
+
+        expect(() => tagOfFabricValue(value, isPlusProbe)).toThrow(
+          "Not possibly a valid `FabricValue`",
+        );
+      });
+
+      it("throws for a unique symbol the predicate refuses", () => {
+        const value = Symbol("u") as unknown as FabricValuePlusLayer<PlusProbe>;
 
         expect(() => tagOfFabricValue(value, isPlusProbe)).toThrow(
           "Not possibly a valid `FabricValue`",
@@ -680,6 +702,11 @@ describe("tags", () => {
         .toBe(null);
     });
 
+    it("returns `null` for a unique symbol", () => {
+      expect(tagOfFabricValueElseNull(Symbol("u") as unknown as FabricValue))
+        .toBe(null);
+    });
+
     it("returns `null` for a class instance outside the vocabulary", () => {
       expect(tagOfFabricValueElseNull(new Date() as unknown as FabricValue))
         .toBe(null);
@@ -727,6 +754,16 @@ describe("tags", () => {
         );
       });
 
+      it("returns `PlusType` for a unique symbol the predicate accepts, consulting it once with the symbol itself", () => {
+        const { asked, isPlusType } = recordingPredicate();
+        const value = Symbol("u") as unknown as FabricValuePlusLayer<PlusProbe>;
+
+        expect(tagOfFabricValueElseNull(value, isPlusType)).toBe(
+          VALUE_TAGS.PlusType,
+        );
+        expect(asked).toEqual([value]);
+      });
+
       it("consults the predicate once, with the value itself, for a value the vocabulary does not name", () => {
         const { asked, isPlusType } = recordingPredicate();
         const value = new Date() as unknown as FabricValuePlusLayer<PlusProbe>;
@@ -745,6 +782,12 @@ describe("tags", () => {
 
       it("returns `null` for a function the predicate refuses", () => {
         const value = (() => {}) as unknown as FabricValuePlusLayer<PlusProbe>;
+
+        expect(tagOfFabricValueElseNull(value, isPlusProbe)).toBe(null);
+      });
+
+      it("returns `null` for a unique symbol the predicate refuses", () => {
+        const value = Symbol("u") as unknown as FabricValuePlusLayer<PlusProbe>;
 
         expect(tagOfFabricValueElseNull(value, isPlusProbe)).toBe(null);
       });
@@ -804,9 +847,23 @@ describe("tags", () => {
       });
     }
 
+    for (
+      const [label, value] of refused.filter(([, v]) => !isObjectOrArray(v))
+    ) {
+      it(`tags ${label} as \`null\` from either side`, () => {
+        // A refused non-object is refused for what it is, not for what it
+        // carries, and the dispatches ask that question of a value directly.
+
+        expect(tagOfFabricValueElseNull(value as FabricValue)).toBe(null);
+        expect(tagOfConvertibleJsValueElseNull(value)).toBe(null);
+      });
+    }
+
     it("reaches values on both sides of membership", () => {
       expect(accepted.length).toBeGreaterThan(0);
       expect(refused.length).toBeGreaterThan(0);
+      expect(refused.filter(([, v]) => !isObjectOrArray(v)).length)
+        .toBeGreaterThan(0);
     });
   });
 
@@ -819,6 +876,10 @@ describe("tags", () => {
 
     it("returns `null` for a function", () => {
       expect(tagOfConvertibleJsValueElseNull(() => {})).toBe(null);
+    });
+
+    it("returns `null` for a unique symbol", () => {
+      expect(tagOfConvertibleJsValueElseNull(Symbol("u"))).toBe(null);
     });
 
     it("returns `null` for a function whatever its prototype names", () => {

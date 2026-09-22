@@ -737,6 +737,40 @@ describe("VisitInProgress", () => {
           expect(rec.names).toEqual(["value", "plusType"]);
         });
 
+        it("passes a unique symbol to `isPlusType()` and, on `true`, to `visitPlusType()`", () => {
+          const rec = new Recorder();
+          const unique = Symbol("u");
+
+          visit(unique, rec);
+          expect(rec.plusTypeChecks).toEqual([unique]);
+          expect(rec.events).toEqual([
+            ["value", unique, "PlusType"],
+            ["plusType", unique],
+          ]);
+        });
+
+        it("passes a registry-interned symbol to `visitPrimitiveValue()` without consulting `isPlusType()`", () => {
+          const rec = new Recorder();
+          const interned = Symbol.for("value-visit");
+
+          visit(interned, rec);
+          expect(rec.plusTypeChecks).toEqual([]);
+          expect(rec.events).toEqual([
+            ["value", interned, "symbol"],
+            ["primitive", interned, "symbol"],
+          ]);
+        });
+
+        it("throws for a unique symbol, without calling `visitPlusType()`, on `false`", () => {
+          const rec = new Recorder();
+          rec.onIsPlusType = () => false;
+
+          expect(() => visit(Symbol("u"), rec)).toThrow(
+            /Cannot visit unrecognized value: /,
+          );
+          expect(rec.names).not.toContain("plusType");
+        });
+
         it("throws for a non-fabric value, without calling `visitPlusType()`, on `false`", () => {
           const rec = new Recorder();
           rec.onIsPlusType = () => false;
