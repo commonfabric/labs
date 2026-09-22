@@ -35,17 +35,19 @@ import {
   wrapperKindToBrand,
 } from "../typescript/cell-brand.ts";
 import { isDefaultAliasSymbol } from "../typescript/property-optionality.ts";
+import { SCOPE_WRAPPER_FOR_SCOPE } from "../typescript/scope-brand.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 import { scopeInsideUnionError } from "../scope-placement.ts";
 
 type WrapperKind = CellWrapperKind;
 const CFC_ALIAS_NAMES: ReadonlySet<string> = new Set(CFC_CANONICAL_ALIAS_NAMES);
-const SCOPE_WRAPPER_SCOPES: Readonly<Record<string, SchemaScope>> = {
-  PerSpace: "space",
-  PerUser: "user",
-  PerSession: "session",
-  PerAny: "any",
-};
+const SCOPE_WRAPPER_SCOPES: Readonly<Record<string, SchemaScope>> = Object
+  .fromEntries(
+    Object.entries(SCOPE_WRAPPER_FOR_SCOPE).map(([scope, name]) => [
+      name,
+      scope as SchemaScope,
+    ]),
+  );
 const SCOPE_WRAPPER_NAMES: ReadonlySet<string> = new Set(
   Object.keys(SCOPE_WRAPPER_SCOPES),
 );
@@ -107,7 +109,11 @@ const CELL_CAPABILITY_KIND_MAP: Readonly<Record<CellWrapperKind, boolean>> = {
 const isCellCapabilityKind = (kind: WrapperKind): boolean =>
   CELL_CAPABILITY_KIND_MAP[kind];
 
-const resolveScopeWrapperNode = (
+/**
+ * The scope wrapper `typeNode` names by its spelling, bare or qualified, with
+ * the reference that names it.
+ */
+export const resolveScopeWrapperNode = (
   typeNode: ts.TypeNode | undefined,
 ): ResolvedScopeWrapper | undefined => {
   if (!typeNode || !ts.isTypeReferenceNode(typeNode)) {

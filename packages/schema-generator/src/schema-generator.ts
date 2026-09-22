@@ -18,6 +18,7 @@ import { ArrayFormatter } from "./formatters/array-formatter.ts";
 import {
   CommonFabricFormatter,
   lowersFromReferenceArguments,
+  resolveScopeWrapperNode,
   scopeOfAliasChain,
 } from "./formatters/common-fabric-formatter.ts";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
@@ -1766,6 +1767,19 @@ export class SchemaGenerator {
         const wrapperType = typeRegistry?.get(typeNode) ??
           checker.getTypeFromTypeNode(typeNode);
         return this.formatChildType(wrapperType, context, typeNode);
+      }
+
+      // A scope wrapper naming its payload is read from that argument, which
+      // `CommonFabricFormatter` takes from the node, so its name is not
+      // resolved: the transformer prints one it builds as
+      // `__cfHelpers.PerUser`, which no scope declares, and the declared type
+      // of one the module declares leaves its parameter unbound.
+      if (resolveScopeWrapperNode(typeNode) && typeNode.typeArguments?.length) {
+        return this.formatChildType(
+          checker.getUnknownType(),
+          context,
+          typeNode,
+        );
       }
 
       const applied = this.#analyzeLibraryAliasReference(

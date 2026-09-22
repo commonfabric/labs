@@ -2923,6 +2923,35 @@ type CalculatorRequest = {
         expect(schema).toEqual({ type: "string", scope: "user" });
       });
 
+      it("reads a scope wrapper qualified by the helpers namespace", async () => {
+        // The transformer prints a wrapper it builds as `__cfHelpers.PerUser`,
+        // a name no scope declares.
+        const schema = await generate(
+          { "/main.ts": "type Rec = { count: number };\nexport {};" },
+          f.createTypeReferenceNode(
+            f.createQualifiedName(f.createIdentifier("__cfHelpers"), "PerUser"),
+            [
+              f.createUnionTypeNode([
+                f.createTypeReferenceNode("Rec"),
+                keyword(ts.SyntaxKind.UndefinedKeyword),
+              ]),
+            ],
+          ),
+        );
+
+        expect(schema).toEqual({
+          anyOf: [{ $ref: "#/$defs/Rec" }, { type: "undefined" }],
+          scope: "user",
+          $defs: {
+            Rec: {
+              type: "object",
+              properties: { count: { type: "number" } },
+              required: ["count"],
+            },
+          },
+        });
+      });
+
       it("reads an alias of a scope wrapper, its payload taken from the argument", async () => {
         const schema = await generate(
           { "/main.ts": "export type Rec<T> = PerUser<{ value: T }>;" },

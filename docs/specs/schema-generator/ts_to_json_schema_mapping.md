@@ -114,7 +114,8 @@ reading of an unbound parameter stands in for the argument a reference supplies
 contradict one, and an operator over the parameter (`keyof T`, `T["name"]`) has
 no schema at all. The exceptions are the references `CommonFabricFormatter`
 lowers from their own arguments: a scope wrapper, whose payload it reads from
-the reference's argument, and an alias that is not itself a CFC alias or a scope
+the reference's argument and whose name is not resolved, so that one the
+transformer prints as `__cfHelpers.PerUser<…>` is read, and an alias that is not itself a CFC alias or a scope
 wrapper and whose whole body references one, directly or through further such
 aliases, named with an argument for every parameter that has no default, which
 it substitutes down the chain — plus a `Date`-by-name special case), keyword types, and a final
