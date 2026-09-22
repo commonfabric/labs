@@ -101,8 +101,13 @@ export type AgentRun = {
   cancelRequestedAt?: string;
 };
 
-/** A record as a pattern holds it: the requester's own instance. */
-export type AgentRunRecord = PerUser<AgentRun>;
+/**
+ * A record as a pattern holds it: a handle to the requester's own instance.
+ * The record is a user-scoped document, and the scope sits on the handle,
+ * where it caps which link the handle may follow; a scope on the value would
+ * instead address the user instance of the slot that holds the handle.
+ */
+export type AgentRunRecord = PerUser<Writable<AgentRun>>;
 
 const TERMINAL_STATES: readonly AgentRunState[] = [
   "completed",
@@ -117,7 +122,7 @@ export const isTerminalAgentRunState = (
 ): boolean => state !== undefined && TERMINAL_STATES.includes(state);
 
 type AgentRunViewInput = {
-  run: Writable<AgentRunRecord>;
+  run: AgentRunRecord;
 
   /** The shared observation time for relative age, in epoch milliseconds. */
   nowMs?: number;
@@ -139,7 +144,7 @@ export type AgentRunViewOutput = {
  */
 export const requestCancel = handler<
   void,
-  { run: Writable<AgentRunRecord> }
+  { run: AgentRunRecord }
 >((_event, { run }) => {
   const current = run.get();
   if (current === undefined) return;

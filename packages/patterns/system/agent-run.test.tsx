@@ -27,8 +27,8 @@ const QUEUED: AgentRun = {
 };
 
 export default pattern(() => {
-  const run = new Writable<AgentRun>(QUEUED);
-  const finished = new Writable<AgentRun>({
+  const run = new Writable.perUser<AgentRun>(QUEUED);
+  const finished = new Writable.perUser<AgentRun>({
     ...QUEUED,
     requestHash: "hash-2",
     state: "completed",
