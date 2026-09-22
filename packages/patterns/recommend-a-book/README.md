@@ -122,15 +122,18 @@ For a disposable hosted fixture, find the shared slot's `/of:fid1:…` address a
 write a JSON object with `books` and `favoriteAuthors` to its `value` path:
 
 ```bash
-cf cell get --url "$SHELF_URL" --select 'publishedLibrary@'
+PUBLISHED_LIBRARY_CELL="$(
+  cf cell get --url "$SHELF_URL" --select 'publishedLibrary@' |
+    jq -r '.publishedLibrary["$link"]'
+)"
 cf cell set --api-url "$CF_API_URL" --space "$CF_SPACE" \
   --cell "$PUBLISHED_LIBRARY_CELL" value < shelf.json
 cf piece step --url "$SHELF_URL"
 ```
 
-Set `PUBLISHED_LIBRARY_CELL` to the address returned by the first command. This
-direct fixture write is not a native reviewed share; writing through the shelf
-result path can carry the private shelf's label into the transaction and fail
+The first command extracts the slot address from the JSON response. This direct
+fixture write is not a native reviewed share; writing through the shelf result
+path can carry the private shelf's label into the transaction and fail
 writer-fit. Use only disposable book data.
 
 The authored tests exercise manual entry, private selection, rendering, and
