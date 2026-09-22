@@ -257,6 +257,50 @@ Deno.test("createHarnessCfcInvocationContext can label prompt-slot and model-con
   });
 });
 
+Deno.test("createHarnessCfcInvocationContext drops a confidentiality-position prompt-slot influence atom from a saved model context", async () => {
+  // A model context saved by a run that minted the atom as confidentiality
+  // still holds it there when that run resumes.
+  const savedInfluence = {
+    type: CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE,
+    version: 1,
+    role: "direct-command",
+    kernelName: "cf-harness",
+    surface: "cli",
+  };
+  const observedSecret = {
+    type: "test.cfc/ObservedOutput",
+    subject: "did:key:observed-secret",
+  };
+
+  const context = await createHarnessCfcInvocationContext({
+    sequence: 4,
+    runId: "run-resumed-model-context",
+    createdAt: "2026-09-21T10:00:00.000Z",
+    toolId: "bash",
+    operation: "shell",
+    cfcEnforcementMode: "enforce-strict",
+    cwd: "/workspace",
+    runManifest: { present: false },
+    command: "printf hello",
+    cfcInputLabelPaths: [["command"]],
+    cfcModelContext: {
+      type: "cf-harness.cfc-model-context",
+      version: 1,
+      updatedAt: "2026-09-20T10:00:00.000Z",
+      label: { confidentiality: [savedInfluence, observedSecret] },
+      observations: [],
+    },
+  });
+
+  assertEquals(context.cfcInputLabels, {
+    version: 1,
+    entries: [{
+      path: ["command"],
+      label: { confidentiality: [observedSecret] },
+    }],
+  });
+});
+
 Deno.test("createHarnessCfcInvocationContext keeps explicit trusted labels apart from derived prompt-slot labels", async () => {
   const explicitAtom = {
     type: "test.cfc/ExplicitTrustedInput",

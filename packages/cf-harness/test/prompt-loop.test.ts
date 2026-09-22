@@ -1495,6 +1495,7 @@ describe("CfHarnessPromptLoop research handoff", () => {
       expect(modelOutput.researchRecord).toBeUndefined();
       expect(modelOutput.cfc.coverage).toBe("incomplete");
       expect(modelOutput.cfc.outputLabel).toEqual({});
+      expect(modelOutput.cfc.sourceLabel.integrity).toHaveLength(2);
       expect(modelOutput.cfc.sourceLabel.integrity).toContainEqual(
         expect.objectContaining({
           type: CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE,

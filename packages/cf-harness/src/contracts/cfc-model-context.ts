@@ -1,8 +1,10 @@
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type {
   CfcConfClause,
   CfcLabelView,
   IFCLabel,
 } from "@commonfabric/runner/cfc";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import type { HarnessCfcInvocationInputLabelPath } from "./cfc-invocation-context.ts";
 import type { ToolOutputId } from "./tool-result.ts";
@@ -168,6 +170,26 @@ export const appendHarnessCfcModelContextObservations = (
   };
 };
 
+/**
+ * Removes `PromptSlotInfluence` atoms from a confidentiality label. The atom
+ * is integrity (CFC spec §15.4), so one in a confidentiality position marks
+ * nothing secret. Retained run state can still hold one there, and left in
+ * place it would taint every input the model context is stamped on.
+ */
+const withoutConfidentialityPromptSlotInfluence = (
+  label: IFCLabel | undefined,
+): IFCLabel | undefined => {
+  // TODO(seefeldb): Remove once no retained run state holds the atom as
+  // confidentiality.
+  const confidentiality = label?.confidentiality?.filter((clause) =>
+    !(isObjectNotArray(clause) && "type" in clause &&
+      clause.type === CFC_ATOM_TYPE.PromptSlotInfluence)
+  );
+  return confidentiality === undefined || confidentiality.length === 0
+    ? undefined
+    : { confidentiality };
+};
+
 export const createHarnessCfcModelContextInputLabels = (options: {
   modelContext?: HarnessCfcModelContext;
   paths?: readonly HarnessCfcInvocationInputLabelPath[];
@@ -179,7 +201,9 @@ export const createHarnessCfcModelContextInputLabels = (options: {
   ) {
     return undefined;
   }
-  const label = confidentialityOnlyIfcLabel(options.modelContext.label);
+  const label = withoutConfidentialityPromptSlotInfluence(
+    confidentialityOnlyIfcLabel(options.modelContext.label),
+  );
   if (label === undefined) {
     return undefined;
   }
