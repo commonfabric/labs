@@ -62,6 +62,9 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
   /** Indicates if a visit is now actually in-progress. */
   #inProgress = false;
 
+  /** Whether mapping results are to be collected. */
+  #doMap = false;
+
   /**
    * Constructs an instance.
    */
@@ -75,21 +78,33 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
   //
 
   /**
-   * Visits the indicated value as a top-level operation. See the top-level
-   * `visitValue()` for the extent to which encountered values are inspected.
+   * Performs a structural-map over the indicated value, as a top-level
+   * operation.
+   */
+  map(
+    value: FabricValuePlus<PlusType>,
+  ): MainVisitResult<ResultType> {
+    this.#assertNoConcurrentUse();
+
+    this.#inProgress = true;
+    this.#doMap = true;
+    try {
+      return this.#visitValue(value);
+    } finally {
+      this.#inProgress = false;
+    }
+  }
+
+  /**
+   * Visits the indicated value as a top-level operation.
    */
   visit(
     value: FabricValuePlus<PlusType>,
   ): MainVisitResult<ResultType> {
-    if (this.#inProgress) {
-      // This is a defense-in-depth protection against bugs in this submodule,
-      // and also serves as documentation for the intended use of this class.
-      throw new Error(
-        "Shouldn't happen: Cannot use `VisitInProgress` for multiple concurrent top-level visits.",
-      );
-    }
+    this.#assertNoConcurrentUse();
 
     this.#inProgress = true;
+    this.#doMap = false;
     try {
       return this.#visitValue(value);
     } finally {
@@ -413,6 +428,20 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
     throw new Error(
       debugStr`Cannot use \`recurse\` result with non-container: $quote${finalValue}`,
     );
+  }
+
+  /**
+   * Throws a "no concurrent use" error, if this instance is currently in the
+   * middle of a top-level operation. This is called both as defense-in-depth
+   * protection against bugs in this submodule, and to serve as documentation
+   * for the intended use of this class.
+   */
+  #assertNoConcurrentUse() {
+    if (this.#inProgress) {
+      throw new Error(
+        "Shouldn't happen: Cannot use `VisitInProgress` for multiple concurrent top-level visits.",
+      );
+    }
   }
 
   /**
