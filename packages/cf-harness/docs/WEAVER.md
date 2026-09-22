@@ -289,6 +289,10 @@ Mac. Then, in Weaver's settings under Services:
 
 ## 7. Demo tasks
 
+[Running the cf-harness demos](DEMOS.md) carries the preflight for each task
+below, its proof status, and the slug sentence that makes a prompt repeatable
+across takes.
+
 Three tasks, typed into the pill as written, exercise the arrangement end to
 end. Each names what has to be true before it is typed and what a passing run
 looks like, so an agent can say whether it will work before it is tried. The
