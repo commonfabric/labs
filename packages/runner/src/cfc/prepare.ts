@@ -1111,6 +1111,9 @@ const writeIsRuntimeInitialization = (
   if (input.mode === "reference" && covering.length === 0) {
     return finalValueIsRecorded();
   }
+  // A policy the stored envelope already declares on the slot stands: a
+  // writer binding, and a UI contract, which names who may write the value
+  // as a writer binding does.
   const stored = loadStoredCfcEnvelope(tx, target);
   if (stored.status === "unreadable") return false;
   if (
@@ -1118,7 +1121,8 @@ const writeIsRuntimeInitialization = (
     cfcSchemaEntries(stored.schema).some((entry) =>
       pathPatternsOverlap(entry.path, path) &&
       isObjectOrArray(entry.schema) &&
-      entry.schema.ifc?.writeAuthorizedBy !== undefined
+      (entry.schema.ifc?.writeAuthorizedBy !== undefined ||
+        entry.schema.ifc?.uiContract !== undefined)
     )
   ) return false;
   // Overlapping write paths can capture different intermediate states. Every

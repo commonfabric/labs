@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 
 import type { JSONSchema } from "../../src/builder/types.ts";
+import { recordNewProtectedDefaults } from "../../src/cfc/default-initialization.ts";
+import { readStoredCfcMetadata } from "../../src/cfc/metadata.ts";
 import { recordReferencedArgumentFields } from "../../src/cfc/reference-initialization.ts";
 import { runtimeWritePolicyAuthorization } from "../../src/cfc/types.ts";
 import { Runtime } from "../../src/runtime.ts";
@@ -209,6 +211,71 @@ describe("reference-initialization", () => {
       runtime.prepareTxForCommit(again);
 
       expect((await again.commit()).error).toBeUndefined();
+    });
+
+    it("refuses a link staged into an absent field whose stored policy carries a UI contract", async () => {
+      // The envelope is persisted by initializing a protected default beside
+      // the absent field, and then stands: a stored UI contract vetoes the
+      // initialization as a stored writer binding does.
+      const guarded: JSONSchema = {
+        type: "array",
+        items: { type: "string" },
+        default: [],
+        ifc: {
+          ownerPrincipal: signer.did(),
+          addIntegrity: [{
+            kind: "represents-principal",
+            subject: signer.did(),
+          }],
+          writeAuthorizedBy: writer,
+        },
+      };
+      const contractOnly: JSONSchema = {
+        type: "object",
+        properties: {
+          body: { type: "string" },
+        },
+        ifc: { uiContract: entrySchema.ifc!.uiContract },
+      };
+      const schema: JSONSchema = {
+        type: "object",
+        properties: {
+          guarded,
+          element: contractOnly,
+          note: { type: "string" },
+        },
+      };
+      const previousSchema: JSONSchema = {
+        type: "object",
+        properties: { note: { type: "string" } },
+      };
+      const seed = runtime.edit();
+      runtime.getCell(space, "argument", undefined, seed).set({
+        note: "saved",
+      });
+      runtime.prepareTxForCommit(seed);
+      expect((await seed.commit()).error).toBeUndefined();
+
+      const first = runtime.edit();
+      const created = runtime.getCell(space, "argument", schema, first);
+      const link = created.getAsNormalizedFullLink();
+      recordNewProtectedDefaults(first, link, previousSchema, schema, {
+        guarded: [],
+      }, { guarded: [], note: "saved" });
+      created.set({ guarded: [], note: "saved" });
+      runtime.prepareTxForCommit(first);
+      expect((await first.commit()).error).toBeUndefined();
+      expect(readStoredCfcMetadata(runtime.edit(), link)).toBeDefined();
+
+      const again = runtime.edit();
+      const held = runtime.getCell(space, "argument", schema, again);
+      held.key("element").set(entryCell(again, "entry", "a"));
+      recordReferencedArgumentFields(again, link, ["element"]);
+      runtime.prepareTxForCommit(again);
+
+      expect((await again.commit()).error?.message).toContain(
+        "trusted-event",
+      );
     });
 
     it("refuses a link to another cell staged over a field that holds one", async () => {
