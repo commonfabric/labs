@@ -3953,7 +3953,8 @@ const ifcEntryAppliesToAttemptedWrite = (
 ): boolean => {
   const wildcardIndex = path.indexOf("*");
   if (wildcardIndex === -1) {
-    const writes = [...(tx.getWriteDetails?.(target.space) ?? [])];
+    const writes = tx.getWriteDetailsForTarget?.(target) ??
+      tx.getWriteDetails?.(target.space) ?? [];
     // Owner adoption changes policy while retaining the stored bytes. It is
     // still a policy attempt and must pass every ordinary requirement gate.
     let touched = tx.getCfcState().writePolicyInputs.some((input) =>
@@ -4032,7 +4033,8 @@ const ifcEntryAppliesToAttemptedWrite = (
     );
   }
 
-  const writes = [...(tx.getWriteDetails?.(target.space) ?? [])];
+  const writes = tx.getWriteDetailsForTarget?.(target) ??
+    tx.getWriteDetails?.(target.space) ?? [];
   let sawTargetWrite = false;
   const prefix = path.slice(0, wildcardIndex);
   for (const write of writes) {
