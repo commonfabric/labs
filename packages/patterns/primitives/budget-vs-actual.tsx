@@ -4,7 +4,8 @@
  * a budget carries whatever words its author wrote, a bank row carries
  * whatever the connector wrote — so a join on exact equality returns zeros
  * over a full ledger and looks like an answer. This atom joins on a normalized
- * key first, falls back to a published alias table second, and reports every
+ * key, aggregating spelling variants, then falls back to a published alias
+ * table and reports every
  * budget and every category it still could not match rather than showing a
  * confident zero.
  *
@@ -132,30 +133,38 @@ const resolve = (
   const normalized = spendKeys.get(normalize(budgetName));
   if (normalized !== undefined) return { key: normalized, via: "normalized" };
   if (!useAliases) return undefined;
-  const alias = CATEGORY_ALIASES[normalize(budgetName)];
+  const aliasKey = normalize(budgetName);
+  const alias = Object.hasOwn(CATEGORY_ALIASES, aliasKey)
+    ? CATEGORY_ALIASES[aliasKey]
+    : undefined;
   if (alias === undefined) return undefined;
   const aliased = spendKeys.get(normalize(alias));
   return aliased === undefined ? undefined : { key: aliased, via: "alias" };
 };
 
-/** Every spending category under both its own name and its normalized one. */
+/** Raw and normalized names resolve to the first spelling of each category. */
 const spendKeysOf = (spend: readonly SpendRow[]): Map<string, string> => {
   const keys = new Map<string, string>();
   for (const row of spend) {
     const name = row?.category ?? "";
     if (name === "") continue;
-    keys.set(name, name);
-    if (!keys.has(normalize(name))) keys.set(normalize(name), name);
+    const normalized = normalize(name);
+    const canonical = keys.get(normalized) ?? name;
+    keys.set(name, canonical);
+    keys.set(normalized, canonical);
   }
   return keys;
 };
 
-/** What each spending category came to, by its own name. */
-const spendTotals = (spend: readonly SpendRow[]): Map<string, number> => {
+/** Totals under the same canonical names used to resolve budgets. */
+const spendTotals = (
+  spend: readonly SpendRow[],
+  keys: ReadonlyMap<string, string>,
+): Map<string, number> => {
   const totals = new Map<string, number>();
   for (const row of spend) {
-    const name = row?.category ?? "";
-    if (name === "") continue;
+    const name = keys.get(row?.category ?? "");
+    if (name === undefined) continue;
     totals.set(name, (totals.get(name) ?? 0) + (Number(row?.total) || 0));
   }
   return totals;
@@ -182,7 +191,7 @@ const compare = (
   useAliases: boolean,
 ): Comparison => {
   const keys = spendKeysOf(spend);
-  const totals = spendTotals(spend);
+  const totals = spendTotals(spend, keys);
   const grouped = new Map<string, ComparisonRow>();
   const unmatchedBudgets: string[] = [];
 

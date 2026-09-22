@@ -1,19 +1,19 @@
 /**
- * Sorts a month of email headers and bank rows into the three lists a person
- * asking "what do I owe this month" actually wants: bills that look paid,
- * bills that do not, and payments no email accounted for. It takes the rows
- * rather than the databases, so it composes with whatever read them and grows
- * no second copy of their month bounds or tombstone rules.
+ * Classifies email headers by subject and sender, and bank rows by merchant
+ * name, transaction name, and category_primary. Scores candidate pairs by
+ * shared whole merchant words and assigns the strongest matches first, leaving
+ * unmatched records separate. Amounts and dates are displayed, not used to
+ * verify payment.
  *
- * Every decision here is a plain-text rule over a subject line, a sender, and
- * a merchant name. No model sees the mail or the transactions: the three lists
+ * Month bounds and tombstone filters belong to the readers supplying the rows.
+ * No model sees the mail or the transactions: the three lists
  * are a function of the words below, which is what lets the same task run over
  * a confidentiality-labeled cell without asking anything to release it.
  *
- * A pairing is a claim about two records, so it is made only where a merchant
- * word and a sender or subject word agree. Everything else stays in its own
- * list rather than being paired on a guess — an unmatched payment is a true
- * answer, and a wrong pairing is not.
+ * Among distinct merchants, a word shared by every merchant cannot identify a
+ * payment. Other shared words contribute their length, capped at 12 per word,
+ * so a specific match wins over a shared brand prefix. This is a text-based
+ * candidate match, not confirmation that a bill was paid.
  *
  * @hashtags bills, email, bank, payments, matching, finance, month
  * @keywords bills this month, what do I owe, unpaid bills, bill payments,
@@ -53,7 +53,7 @@ export interface PairedBill {
   amount: number;
   date: string;
 
-  /** The word both sides shared, which is why they were paired. */
+  /** The identifying words both sides shared, joined with commas. */
   matchedOn: string;
 }
 
@@ -133,25 +133,30 @@ const BILL_CATEGORIES: readonly string[] = ["RENT_AND_UTILITIES"];
 /** Lowercased, so every rule below compares like with like. */
 const lower = (text: string): string => (text ?? "").toLowerCase();
 
-/** Whether any of `words` appears in `text`. */
+/** Whether a whole word or phrase appears between token boundaries. */
 const mentions = (text: string, words: readonly string[]): boolean => {
-  const haystack = lower(text);
-  return words.some((word) => haystack.includes(word));
+  const haystack = ` ${lower(text).replace(/[^a-z0-9]+/g, " ")} `;
+  return words.some((word) => haystack.includes(` ${word} `));
 };
 
-/** The words a merchant name offers for pairing, the short ones dropped. */
-const merchantTokens = (merchant: string): string[] =>
-  lower(merchant).split(/[^a-z0-9]+/).filter((token) => token.length >= 4);
+/** Distinct merchant words of at least three characters, including `gas`. */
+const merchantTokens = (
+  merchant: string,
+): string[] => [
+  ...new Set(
+    lower(merchant).split(/[^a-z0-9]+/).filter((token) => token.length >= 3),
+  ),
+];
 
-/** The first merchant word that also appears in the subject or the sender. */
-const sharedWord = (
+/** Merchant words that also appear whole in the subject or sender. */
+const sharedWords = (
   header: BillHeader,
   transaction: BillTransaction,
-): string | undefined => {
+): string[] => {
   const subject = lower(header?.subject ?? "");
   const sender = lower(header?.sender ?? "");
   return merchantTokens(transaction?.merchant_name ?? "")
-    .find((token) => subject.includes(token) || sender.includes(token));
+    .filter((token) => mentions(subject, [token]) || mentions(sender, [token]));
 };
 
 /** Whether an email header reads as a bill. */
@@ -173,9 +178,9 @@ interface Sorted {
 }
 
 /**
- * Bills sorted into paid, unpaid, and unaccounted-for. A payment settles at
- * most one email and an email is settled at most once, so a single recurring
- * merchant cannot absorb a month of mail.
+ * Candidate matches assigned by decreasing shared-word score. Each payment
+ * and email appears in at most one pair; a common merchant prefix alone is
+ * insufficient when the input contains multiple distinct merchants.
  */
 const sortBills = (
   headers: readonly BillHeader[],
@@ -183,40 +188,77 @@ const sortBills = (
 ): Sorted => {
   const billEmails = headers.filter(isBillEmail);
   const billPayments = transactions.filter(isBillPayment);
+  const merchants = new Map<string, string[]>();
+  for (const payment of billPayments) {
+    const words = merchantTokens(payment.merchant_name);
+    merchants.set(words.join(" "), words);
+  }
+  const frequency = new Map<string, number>();
+  for (const words of merchants.values()) {
+    for (const word of words) {
+      frequency.set(word, (frequency.get(word) ?? 0) + 1);
+    }
+  }
+  const candidates: {
+    headerIndex: number;
+    paymentIndex: number;
+    words: string[];
+    score: number;
+  }[] = [];
+  for (let headerIndex = 0; headerIndex < billEmails.length; headerIndex += 1) {
+    for (
+      let paymentIndex = 0;
+      paymentIndex < billPayments.length;
+      paymentIndex += 1
+    ) {
+      const words = sharedWords(
+        billEmails[headerIndex],
+        billPayments[paymentIndex],
+      )
+        .filter((word) =>
+          merchants.size === 1 || frequency.get(word) !== merchants.size
+        );
+      const score = words.reduce(
+        (sum, word) => sum + Math.min(word.length, 12),
+        0,
+      );
+      if (score > 0) {
+        candidates.push({ headerIndex, paymentIndex, words, score });
+      }
+    }
+  }
+  candidates.sort((left, right) =>
+    right.score - left.score || left.headerIndex - right.headerIndex ||
+    left.paymentIndex - right.paymentIndex
+  );
+  const takenEmails = new Set<number>();
   const takenPayments = new Set<number>();
   const paid: PairedBill[] = [];
-  const unpaid: UnpaidBill[] = [];
-
-  for (const header of billEmails) {
-    let pairedAt = -1;
-    let word: string | undefined;
-    for (let index = 0; index < billPayments.length; index += 1) {
-      if (takenPayments.has(index)) continue;
-      const shared = sharedWord(header, billPayments[index]);
-      if (shared === undefined) continue;
-      pairedAt = index;
-      word = shared;
-      break;
-    }
-    if (pairedAt === -1 || word === undefined) {
-      unpaid.push({
-        subject: header?.subject ?? "",
-        sender: header?.sender ?? "",
-        received_at: header?.received_at ?? "",
-      });
-      continue;
-    }
-    takenPayments.add(pairedAt);
-    const transaction = billPayments[pairedAt];
+  for (const candidate of candidates) {
+    if (
+      takenEmails.has(candidate.headerIndex) ||
+      takenPayments.has(candidate.paymentIndex)
+    ) continue;
+    takenEmails.add(candidate.headerIndex);
+    takenPayments.add(candidate.paymentIndex);
+    const header = billEmails[candidate.headerIndex];
+    const transaction = billPayments[candidate.paymentIndex];
     paid.push({
       subject: header?.subject ?? "",
       sender: header?.sender ?? "",
       merchant: transaction?.merchant_name ?? "",
       amount: Number(transaction?.amount) || 0,
       date: transaction?.date ?? "",
-      matchedOn: word,
+      matchedOn: candidate.words.join(", "),
     });
   }
+
+  const unpaid = billEmails.filter((_, index) => !takenEmails.has(index))
+    .map((header) => ({
+      subject: header?.subject ?? "",
+      sender: header?.sender ?? "",
+      received_at: header?.received_at ?? "",
+    }));
 
   const unmatchedPayments = billPayments
     .filter((_, index) => !takenPayments.has(index))

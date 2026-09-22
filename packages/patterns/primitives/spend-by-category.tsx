@@ -1,9 +1,8 @@
 /**
- * Totals a month of bank transactions by the category the connector already
- * wrote on each row, newest category first by size. It takes the rows rather
- * than the database, so it composes with whatever read them — the month bound
- * and the tombstone filter stay in the reader that owns them, and this atom
- * never grows a second copy of either.
+ * Totals bank transactions in whole currency units by category, largest total
+ * first. Included rows must carry the same currency code, or all omit it;
+ * mixed currencies return errorMessage with no category totals. Month bounds
+ * and tombstone filters belong to the reader supplying the rows.
  *
  * Income is excluded by default. A Plaid ledger carries deposits in the same
  * table under `INCOME`, and a spending total that quietly nets them off is
@@ -67,6 +66,16 @@ export interface SpendByCategoryOutput {
 
   /** The currency the rows carried, empty when they carried none. */
   currency: string;
+
+  /** Why totals are unavailable, empty for a single-currency input. */
+  errorMessage: string;
+}
+
+/** Totals and their currency, or an explanation of incompatible units. */
+interface SpendingSummary {
+  categories: CategoryTotal[];
+  currency: string;
+  errorMessage: string;
 }
 
 /** The category name a row with none still has to be counted under. */
@@ -82,14 +91,16 @@ const INCOME_CATEGORY = "INCOME";
  * Module scope rather than a pattern-owned callback, which is where imperative
  * iteration belongs.
  */
-const totalsByCategory = (
+const summarizeSpending = (
   rows: readonly SpendTransaction[],
   includeIncome: boolean,
-): CategoryTotal[] => {
+): SpendingSummary => {
   const totals = new Map<string, CategoryTotal>();
+  const currencies = new Set<string>();
   for (const row of rows) {
     const category = row?.category_primary || UNCATEGORIZED;
     if (!includeIncome && category === INCOME_CATEGORY) continue;
+    currencies.add(row?.iso_currency_code ?? "");
     const running = totals.get(category);
     const amount = Number(row?.amount) || 0;
     if (running === undefined) {
@@ -99,17 +110,25 @@ const totalsByCategory = (
     running.total += amount;
     running.count += 1;
   }
-  return [...totals.values()]
+  if (currencies.size > 1) {
+    return {
+      categories: [],
+      currency: "",
+      errorMessage:
+        "Cannot total multiple currencies. Supply rows in one currency.",
+    };
+  }
+  const categories = [...totals.values()]
     .map((entry) => ({ ...entry, total: Math.round(entry.total * 100) / 100 }))
     .sort((left, right) =>
       right.total - left.total || (left.category < right.category ? -1 : 1)
     );
+  return {
+    categories,
+    currency: [...currencies][0] ?? "",
+    errorMessage: "",
+  };
 };
-
-/** The first currency the rows name, empty when none of them names one. */
-const currencyOf = (rows: readonly SpendTransaction[]): string =>
-  rows.find((row) => (row?.iso_currency_code ?? "") !== "")
-    ?.iso_currency_code ?? "";
 
 /** `amount` to the cent, under `code` when there is one. */
 const money = (amount: number, code: string): string =>
@@ -119,9 +138,10 @@ export const SpendByCategory = pattern<
   SpendByCategoryInput,
   SpendByCategoryOutput
 >(({ rows, includeIncome }) => {
-  const categories = computed(() =>
-    totalsByCategory(rows ?? [], includeIncome === true)
+  const summary = computed(() =>
+    summarizeSpending(rows ?? [], includeIncome === true)
   );
+  const categories = computed(() => summary.categories);
   const categoryCount = computed(() => categories.length);
   const grandTotal = computed(() =>
     Math.round(
@@ -131,8 +151,11 @@ export const SpendByCategory = pattern<
       ) * 100,
     ) / 100
   );
-  const currency = computed(() => currencyOf(rows ?? []));
-  const isEmpty = computed(() => categories.length === 0);
+  const currency = computed(() => summary.currency);
+  const errorMessage = computed(() => summary.errorMessage);
+  const isEmpty = computed(() =>
+    categories.length === 0 && errorMessage === ""
+  );
 
   const listRows = categories.map((entry: CategoryTotal) => (
     <cf-hstack gap="2" align="center" justify="between">
@@ -166,6 +189,12 @@ export const SpendByCategory = pattern<
         </cf-vstack>
 
         {ifElse(
+          errorMessage,
+          <cf-alert status="error">{errorMessage}</cf-alert>,
+          null,
+        )}
+
+        {ifElse(
           isEmpty,
           <cf-empty-state message="No spending to total." />,
           null,
@@ -176,6 +205,7 @@ export const SpendByCategory = pattern<
     categoryCount,
     grandTotal,
     currency,
+    errorMessage,
   };
 });
 
