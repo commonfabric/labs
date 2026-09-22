@@ -29,6 +29,15 @@ export type MainResultForm<ResultType> = {
 };
 
 /**
+ * A `mapTo` form. `value` is a value in the domain of `ResultType` which is to
+ * be substituted in place of the visited value in the strutural-map result.
+ */
+export type MapToForm<ResultType> = {
+  readonly type: "mapTo";
+  readonly value: ResultType;
+};
+
+/**
  * A `recurse` form. This is returned by visitor methods which visit containers.
  * This tells the visitor engine that it should recursively visit the contents
  * of the container, such that each visited item is known by the engine to be
