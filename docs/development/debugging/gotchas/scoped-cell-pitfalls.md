@@ -236,16 +236,22 @@ than calling `Date.now()`.
 
 ## 8. `Writable<PerUser<T>>` and `PerUser<Writable<T>>` scope different things
 
-**Symptom:** None at runtime; the choice decides what happens to a plain value
-written into the slot.
+**Symptom:** A child that should refuse a session-scoped cell passed into a
+per-user argument reads it anyway.
 
 `Writable<PerUser<T>>` puts the scope on the value (`scope: "user"` beside
 `asCell: ["cell"]`). `PerUser<Writable<T>>` puts it on the handle
-(`asCell: [{ kind: "cell", scope: "user" }]`). Both cap which link a read may
-follow, and both read a cell the caller passes in: the binding reads the
-argument slot at its base scope, where the passed link is stored. The value
-spelling also narrows a plain value written into the slot, so each user gets
-their own copy behind a base-slot redirect.
+(`asCell: [{ kind: "cell", scope: "user" }]`). Both read a cell the caller
+passes in, and a write through either handle lands in that cell's own
+instance. They differ in what the scope constrains:
+
+- The handle spelling caps which link the handle may follow. A passed cell
+  narrower than the cap, such as a session cell in a `PerUser` slot, reads as
+  missing.
+- The value spelling places the slot's own content. A plain value written into
+  the slot narrows into the user instance, so each user gets their own copy
+  behind a base-slot redirect. It does not cap the handle, so a narrower passed
+  cell is followed.
 
 ```typescript
 // Shown for illustration only.
@@ -257,8 +263,7 @@ type Draft = Writable<PerUser<string>>;
 ```
 
 When the slot exists to receive a reference to an existing cell, scope the
-handle. `packages/runner/test/pattern-scope.test.ts` pins both reads ("child
-reads a … cell passed into a value-scoped argument slot").
+handle. `packages/runner/test/pattern-scope.test.ts` pins these behaviors.
 
 ## See Also
 

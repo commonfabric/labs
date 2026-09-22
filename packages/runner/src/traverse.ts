@@ -89,7 +89,7 @@ import {
   parseLink,
   schemaForSpaceCrossing,
 } from "./link-utils.ts";
-import { canFollowScopedLink } from "./scope.ts";
+import { canFollowScopedLink, isCellScope, scopeRank } from "./scope.ts";
 import { type CellLinkRefPayload, SigilLink, type URI } from "./sigil-types.ts";
 import {
   type Activity,
@@ -5809,6 +5809,33 @@ export function isUnknownCellSchema(schema: JSONSchema | undefined): boolean {
 }
 
 /**
+ * Drops a top-level `scope` from `schema` when it is narrower than
+ * `targetScope`.
+ *
+ * A `scope` on a slot's schema places that slot's own content: a plain value
+ * written there narrows into the scoped instance. A handle minted by
+ * following a reference out of the slot to a different cell addresses that
+ * cell, whose scope the reference already names. Keeping the slot's scope on
+ * the handle would narrow a write through it into an instance of the
+ * referenced cell that nobody else reads, and leave a redirect in the cell's
+ * shared instance. A reference within the same cell is the slot's own
+ * narrowing redirect, which the caller leaves alone.
+ */
+function withoutSlotValueScope(
+  schema: JSONSchema,
+  targetScope: CellScope,
+): JSONSchema {
+  if (
+    !isObjectNotArray(schema) || !isCellScope(schema.scope) ||
+    scopeRank(schema.scope) <= scopeRank(targetScope)
+  ) {
+    return schema;
+  }
+  const { scope: _slotScope, ...rest } = schema;
+  return internSchema(rest);
+}
+
+/**
  * Get the link for a cell reached by following one link if available.
  * If doc.value does not contain a link, the cell will point to doc.address.
  *
@@ -5845,7 +5872,14 @@ function getNextCellLink(
     // The link may not have the asCell flags, so pull that from itemSchema.
     // Reader precedence, like every other crossing: the handle must not
     // carry the link's wider schema past the reader's.
-    const combined = combineSchemaForLink(schema, lastLink.schema ?? true);
+    const readerSchema = lastLink.id === doc.address.id &&
+        lastLink.space === doc.address.space
+      ? schema
+      : withoutSlotValueScope(schema, lastLink.scope);
+    const combined = combineSchemaForLink(
+      readerSchema,
+      lastLink.schema ?? true,
+    );
     return {
       ...lastLink,
       schema: lastLink.space === doc.address.space
