@@ -154,15 +154,26 @@ start/pause/reset, focus and break modes, and cycle progress.
 **Typical wall time:** 59–101 s across the four runs, of which 58–64 s is the
 opening pass. The spread is mostly the opening pass, not the work.
 
+**None of those four had the console to itself.** Each overlapped two to four
+other sessions — bank-table, dinner-party and skill-script runs. The behaviour
+they establish is unaffected: the piece was produced every time and the
+countdown was verified advancing. The _timing_ is a measurement taken under
+load, which is the honest label for it.
+
+Read alongside a 14 m 14 s bills run that did have the console to itself, this
+is informative rather than merely a caveat: a short task stayed short under load
+while a long one stayed long alone, so **duration here is a property of the task
+rather than of the machine.** Expect these numbers to hold on a quiet console.
+
 **Likely failure:** the slug it first tries is taken; it picks another and
 carries on. A second `assign_slug` in the timeline is the retry working, not a
 fault.
 
-**Proof status: PROVEN (4/4).** Four runs of the prompt above, each with the
-console to itself: `pomodoro-timer-2`, `pomodoro-focus-timer`,
-`pomodoro-focus-clock`, and `pomodoro-timer-session`. Browser-verified: pressing
-Start advances the countdown — `15:00` to `14:51` to `14:43` over sixteen
-seconds (`proof/pomodoro-retest.png`).
+**Proof status: PROVEN (4/4), timing under load.** Four runs of the prompt
+above: `pomodoro-timer-2`, `pomodoro-focus-timer`, `pomodoro-focus-clock`, and
+`pomodoro-timer-session`. Browser-verified: pressing Start advances the
+countdown — `15:00` to `14:51` to `14:43` over sixteen seconds
+(`proof/pomodoro-retest.png`).
 
 ## 2. A dinner party page, composed from two library parts
 
