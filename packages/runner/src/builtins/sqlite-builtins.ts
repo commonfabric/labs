@@ -1174,13 +1174,17 @@ export function sqliteQuery(
     // the parameters are, which would refuse a query permanently over a
     // label that is not in its request.
     //
-    // Derived at most once per run, and only where an answer could differ
-    // from the empty one: a runtime deriving no flow labels has an empty
-    // join by construction, so asking would buy the same answer and pay a
-    // walk of every read for it.
+    // Derived at most once per run, and not at all where no CFC gate can
+    // act on the answer. The condition is the ENFORCEMENT dial, not the flow
+    // dial: `deriveFlowJoin` resolves the labels a transaction's reads
+    // carry, and a value's label does not depend on whether the runtime
+    // propagates the join onto writes — prepare's own short-circuit on
+    // `flowMode === "off"` is about what it STAMPS, not about what exists.
+    // Keying this on the flow dial would hand a statically labeled parameter
+    // to a foreign space's provider as though it carried nothing.
     let derivedRequestLabel: readonly CfcConfClause[] | undefined;
     const requestConfidentiality = (): readonly CfcConfClause[] =>
-      derivedRequestLabel ??= tx.getCfcState().flowLabelsMode === "off"
+      derivedRequestLabel ??= tx.getCfcState().enforcementMode === "disabled"
         ? []
         : deriveFlowJoin(tx).confidentiality;
     // The bound a sqlite read's egress has, applied where the sink registry

@@ -853,6 +853,91 @@ describe("sqliteQuery's control state under a labeled parameter", () => {
       expect(refused.result ?? []).toEqual([]);
     });
 
+    it("refuses a statically labeled parameter with the flow dial off", async () => {
+      // The gate asks what the request carries, and a value's label does not
+      // depend on whether the runtime propagates a join onto writes. Keying
+      // the derivation on the flow dial rather than on the enforcement dial
+      // hands a labeled parameter to a foreign space's provider as though it
+      // carried nothing — and `off` is the DEFAULT flow mode, so that is the
+      // ordinary case rather than an exotic one.
+
+      const own = runtime;
+      const flowless = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+        // Enforcement on, flow labels off: a conforming pair, and the one
+        // the mistake was invisible at.
+        cfcEnforcementMode: "enforce-explicit",
+        cfcFlowLabels: "off",
+      });
+      try {
+        const db = labeledDb();
+        await seedMessages(db, elsewhere);
+
+        const handleTx = flowless.edit();
+        const handle = flowless.getCell<SqliteDbRef>(
+          elsewhere,
+          "foreign handle for flowless",
+          undefined,
+          handleTx,
+        );
+        handle.set(db);
+        expect((await handleTx.commit()).error).toBeUndefined();
+
+        const paramTx = flowless.edit();
+        const container = flowless.getCell<string>(space, "flowless choice", {
+          type: "string",
+          ifc: { confidentiality: KEY_CLAUSE },
+          // deno-lint-ignore no-explicit-any -- a schema literal with `ifc`
+        } as any, paramTx);
+        container.set("c-alpha");
+        expect((await paramTx.commit()).error).toBeUndefined();
+
+        const { commonfabric: cf } = createTrustedBuilder(flowless);
+        const testPattern = cf.pattern<{ db: unknown; container: string }>((
+          { db: handleInput, container: chosen },
+        ) =>
+          cf.sqliteQuery(
+            {
+              db: handleInput,
+              sql: "SELECT container_id FROM messages WHERE container_id = ?1",
+              params: [chosen],
+              // deno-lint-ignore no-explicit-any -- the input is untyped
+            } as any,
+          )
+        );
+
+        const tx = flowless.edit();
+        const resultCell = flowless.getCell(
+          space,
+          "flowless-foreign",
+          testPattern.resultSchema,
+          tx,
+        );
+        const result = flowless.run(
+          tx,
+          testPattern,
+          // deno-lint-ignore no-explicit-any -- cells stand in for arguments
+          { db: handle, container: container as any },
+          resultCell,
+        );
+        flowless.prepareTxForCommit(tx);
+        expect((await tx.commit()).error).toBeUndefined();
+
+        const refused = await waitForCellValue<QueryState<KeyRow>>(
+          flowless,
+          // deno-lint-ignore no-explicit-any -- the builtin's state
+          result as Cell<any>,
+          (value) => typeof value?.error === "string",
+        );
+        expect(refused.error).toBe(SQLITE_FOREIGN_SPACE_REFUSAL);
+        expect(refused.result ?? []).toEqual([]);
+      } finally {
+        await flowless.dispose({ closeStorage: false });
+        runtime = own;
+      }
+    });
+
     it("issues again once its own result has carried a label", async () => {
       // What the refusal must measure is the label THIS request's inputs
       // carry, not everything the transaction has touched. A cross-space
