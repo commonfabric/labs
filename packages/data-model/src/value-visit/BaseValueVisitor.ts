@@ -69,7 +69,7 @@ export abstract class BaseValueVisitor<
    * @inheritDoc
    *
    * If not overridden, this returns `true`, thereby corresponding with the
-   * default binding for the result type to `FabricValue<PlusType>`.
+   * default binding for the result type to `FabricValuePlus<PlusType>`.
    */
   isDomainAssignableToResultType(): boolean {
     return true;
@@ -89,7 +89,7 @@ export abstract class BaseValueVisitor<
    * @inheritDoc
    *
    * If not overridden, this returns `true`, thereby corresponding with the
-   * default binding for the result type to `FabricValue<PlusType>`.
+   * default binding for the result type to `FabricValuePlus<PlusType>`.
    */
   isResultType(
     _value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>,
