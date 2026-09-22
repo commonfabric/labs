@@ -132,13 +132,15 @@ start/pause/reset, focus and break modes, and cycle progress.
 
 **Done when:** the timer renders and the countdown is set.
 
-**Typical wall time:** 83–101 s, of which 58–64 s is the opening pass.
+**Typical wall time:** 59–101 s across the four runs, of which 58–64 s is the
+opening pass. The spread is mostly the opening pass, not the work.
 
 **Likely failure:** the slug it first tries is taken; it picks another and
 carries on. A second `assign_slug` in the timeline is the retry working, not a
 fault.
 
-**Proof status: PROVEN (3/3).** `pomodoro-timer-2`, `pomodoro-focus-timer`,
+**Proof status: PROVEN (4/4).** Four runs of the prompt above, each with the
+console to itself: `pomodoro-timer-2`, `pomodoro-focus-timer`,
 `pomodoro-focus-clock`, and `pomodoro-timer-session`. Browser-verified: pressing
 Start advances the countdown — `15:00` to `14:51` to `14:43` over sixteen
 seconds (`proof/pomodoro-retest.png`).
