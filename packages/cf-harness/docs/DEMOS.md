@@ -97,10 +97,17 @@ build has been re-proven against it** — not when a newer one exists. Every pro
 here is a statement about a console, a corpus and a build together, and the
 build is the part that moves without anyone touching the demo.
 
-**If it matches, change nothing before demonstrating.** Do not run
-`loom vendor sync` on the morning of a demo to pick up something newer; the
-fastest way to turn a working demo into an unknown one is to update it and not
-re-run it.
+**If it matches, change nothing before demonstrating.**
+
+**A demo runs only on the sha this document names.** A `loom update` that would
+move you off it is not preparation — it is a build change, and nobody runs one
+before a demo unless this document names the new sha. Loom's own pin moves ahead
+of the build these demos were proven against, so updating to be current is the
+careful-seeming action that lands you somewhere nothing here describes.
+
+Update deliberately, to the sha named above, and never speculatively before a
+session. The fastest way to turn a working demo into an unknown one is to update
+it and not re-run it.
 
 **If it does not match**, the proof statuses and timings below do not apply to
 you. The demos may well work — most are not sensitive to the difference — but
