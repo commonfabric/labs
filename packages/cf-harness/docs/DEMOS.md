@@ -109,6 +109,31 @@ five in a day of runs. That is the loop working, not a fault. A run that revises
 its finished piece more than once is a different matter: it is not a clean demo,
 and it should be re-run rather than shown.
 
+**A reactive value touched by ordinary JavaScript produces a page that is
+silently wrong.** Three instances in one evening, from three different authors
+writing against three different prompts:
+
+| What the source did                                 | What the page showed                       |
+| --------------------------------------------------- | ------------------------------------------ |
+| `.length` on a derived array inside a plain ternary | lists latched empty beneath correct counts |
+| `rows ?? []` passing the cell wrapper on            | the totals could not work at all           |
+| `` `${transaction.signed_amount}` ``                | every amount read `[object Object]`        |
+
+**Every one of them compiles, type-checks, runs, and produces a page.** Nothing
+in the tree catches them. A compile error is visible and cheap — a run simply
+tries again, which is why these tasks take two to five attempts and still
+succeed. These are silent, and the page looks finished.
+
+The third is the clearest illustration: every other cell in that table passed
+its value straight through and rendered correctly. The author reached for
+stringification on exactly one field, the numeric one, and that was the only
+field that broke.
+
+Whether each is a transformer fault or a context the transformer does not cover
+is being established one at a time by reduction rather than by rule — the first
+of them turned out **not** to be what it looked like, and a rule written from
+the symptom would have been wrong. See the `.length` case, which is CT-2410.
+
 **An ambiguous instruction is not queried. It is resolved silently, and
 differently from one run to the next.** This is the single most useful thing
 learned from running these demos repeatedly, and it applies to every prompt
