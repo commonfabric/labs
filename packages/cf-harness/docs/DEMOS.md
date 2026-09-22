@@ -12,9 +12,15 @@ page to run them; read that one to understand them.
 
 1. **Start a fresh console.** Not one that has been running all day: a console a
    few hours old can exit on a heap out-of-memory, and nothing announces it.
-2. `loom update` to **`loom-stable-2026-09-22-5`**, which pins labs
-   `a77e958513`, then `loom restart loom --include-toolshed`. Do not update past
-   it: a newer bump is not a better one here, only an unproven one.
+2. Pin this session to the proven build:
+   `loom vendor sync labs --ref a77e958513`, then
+   `loom restart loom --include-toolshed`.
+
+   **Do not run `loom update`.** It pulls loom's main and takes no ref, and
+   loom's main now pins a labs newer than the one these demos are proven on. It
+   is the one command here that will silently move you off it. The pin above
+   does not persist either — it leaves `vendors.json` alone — so a later
+   `loom update` undoes it and step 3 is what catches that.
 3. Confirm the build: `curl -sS <your-toolshed>/api/meta` should report `gitSha`
    opening `a77e958513`. **On the toolshed, not the console** — the console has
    no `/api/meta` and answers 404.
