@@ -428,10 +428,13 @@ prompts each returned a named piece composing CheckList and AmountLedger by
   recorded take.
 
 So the page is half-live: the part's own checkbox writes back and its removal
-control does not. The cause is under investigation and is **not** what an
-earlier revision of this document claimed — the parents do pass real writable
-cells, so "wired with literal values" is withdrawn. What remains suspected is
-the hydration or event-write path for the removal control specifically.
+control does not. The same holds for the newer published parts — see
+[§2a](#2a-a-checklist-and-a-running-total-composed-by-id), where the fix is in
+the published source and removal still does not work in a composed page. The
+cause is under investigation and is **not** what an earlier revision of this
+document claimed — the parents do pass real writable cells, so "wired with
+literal values" is withdrawn. What remains suspected is the hydration or
+event-write path for the removal control specifically.
 
 Prompt text does not reach it: a run whose prompt says "I need to add and remove
 items and have the total update" produced the same behaviour.
@@ -455,9 +458,9 @@ all**, which makes it the demo that cannot be broken by a grant going stale.
 
 **Preflight:** common only. No connectors. The two published parts must be
 discoverable — `vAx2Uy1C64duK47NIl9a0fb0UtfnHrXRrxM8giA1hWM` (CheckList) and
-`BEf5ZMjTIzX9J5HE6wec1s3zcQNqTAg-lFoD6W7pBHs` (AmountLedger). **Use these ids,
-not the older pair**: these carry the removal fix and the corrected unit
-description, and each supersedes its predecessor.
+`BEf5ZMjTIzX9J5HE6wec1s3zcQNqTAg-lFoD6W7pBHs` (AmountLedger). **Use these rather
+than the older pair**, which they supersede — and read what they do and do not
+fix, below.
 
 **Prompt:** name both ids, ask for a preparation checklist beside a running
 total of what the ingredients cost against a budget, and **state that amounts
@@ -483,12 +486,28 @@ the rest, corrects the counts and hides itself, and the expenses are untouched.
 It survives a reload. That matters because it is the gesture a viewer actually
 makes after ticking things off.
 
-**The per-row Remove control does not work, and the page shows it anyway.** The
-published `CheckList` still carries the defect fixed in the tree but not yet in
-the index, so the control is rendered on every run and the closing summary
-mentions removal on some of them. **Do not click it**, and do not let the
-summary lead you there. Publishing the corrected parts is what retires this
-caveat.
+**What these ids fix, and what they do not.**
+
+The **unit description is fixed**: the published entry no longer says the ledger
+sums "in integer cents", so a run that trusts it does not render a hundred times
+the intended figure.
+
+**Per-row Remove is not resolved.** The fix is present in the published _source_
+— both comparison arms — and a composed page still leaves the row and the counts
+unchanged when Remove is clicked, with imports source-confirmed and including
+rows the run added interactively. A checkbox click on the same page works, so
+the page is live and the control is not. The control is rendered on every run
+and the closing summary mentions removal on some of them.
+
+**So do not click per-row Remove, on either pair of ids**, and do not let the
+summary lead you there. Everything else holds: add, tick, total, reload, and
+"Clear completed", which takes exactly the checked items and leaves the rest.
+
+Two differences between the passing tests and the failing page are unisolated
+and neither is preferred: the tests invoke the click stream directly where a
+browser click takes its own path, and the tests import the module locally where
+a demo fetches a published program by id. An array-constructor explanation was
+tested and ruled out.
 
 ## 3. This month's bank transactions as a table
 
