@@ -434,48 +434,51 @@ Deno.test("reset refuses while a server still holds the working copy", async () 
 });
 
 Deno.test("reset removes the databases an attempt created beside the working copy", async () => {
-  // A link into another space makes the server create an empty store for that
-  // space on demand, beside the working copy, and the pass writes into it.
-  // `verify` reads only the cloned space, so a reset that left these behind
-  // would report the clone pristine while pass two started from pass one's
-  // state in them.
+  // A link into another space makes the server create a store for that space
+  // on demand, beside the working copy, and the pass writes into it; the server
+  // keeps cell-derived databases there too. `verify` reads only the cloned
+  // space, so a reset that left these behind would report the clone pristine
+  // while pass two started from pass one's state in them.
   await withDirs(async ({ source, clone }) => {
     await createClone({ source, space: SPACE, targetDir: clone, now: NOW });
     const engineDir = Path.dirname(clonePaths(clone, SPACE).workingPath);
-    const other = "did:key:z6MkOtherSpace";
-    const db = new Database(`${engineDir}/${other}.sqlite`);
-    db.exec("PRAGMA journal_mode = WAL");
-    db.exec("CREATE TABLE t (x)");
-    db.close();
-    await Deno.writeTextFile(`${engineDir}/${other}.sqlite-wal`, "");
-    // A cell-derived database, which the server keeps beside a file store: the
-    // attempt's too, but not a space, so it is reported apart from the stores.
+    /** A database as the engine leaves one: WAL mode, companions beside it. */
+    const openedDatabase = async (name: string): Promise<void> => {
+      const db = new Database(`${engineDir}/${name}`);
+      db.exec("PRAGMA journal_mode = WAL");
+      db.exec("CREATE TABLE t (x)");
+      db.close();
+      await Deno.writeTextFile(`${engineDir}/${name}-wal`, "");
+      await Deno.writeTextFile(`${engineDir}/${name}-shm`, "");
+    };
+    // `did:` itself is a DID by `isDID`, so a server resolves a store for it.
+    const others = ["did:", "did:key:z6MkOtherSpace"];
+    for (const other of others) await openedDatabase(`${other}.sqlite`);
+    // Not a space, so reported apart from the stores.
     const cellDb = "cell-deadbeef-cafe.sqlite";
-    await Deno.writeTextFile(`${engineDir}/${cellDb}`, "");
+    await openedDatabase(cellDb);
     // Neither name the server gives a database, so not the reset's to remove.
     await Deno.writeTextFile(`${engineDir}/operator-notes.txt`, "keep me");
     await Deno.writeTextFile(`${engineDir}/scratch.sqlite`, "keep me too");
 
     const result = await resetClone(clone);
 
-    assertEquals(result.removedStores, [other]);
+    assertEquals(result.removedStores, others);
     assertEquals(result.removedCellDatabases, [cellDb]);
-    await assertRejects(
-      () => Deno.stat(`${engineDir}/${cellDb}`),
-      Deno.errors.NotFound,
-    );
+    for (const name of [...others.map((d) => `${d}.sqlite`), cellDb]) {
+      for (const suffix of ["", "-wal", "-shm"]) {
+        await assertRejects(
+          () => Deno.stat(`${engineDir}/${name}${suffix}`),
+          Deno.errors.NotFound,
+          undefined,
+          `${name}${suffix} must not survive a reset`,
+        );
+      }
+    }
     assertEquals(
       await Deno.readTextFile(`${engineDir}/scratch.sqlite`),
       "keep me too",
     );
-    for (const suffix of ["", "-wal", "-shm"]) {
-      await assertRejects(
-        () => Deno.stat(`${engineDir}/${other}.sqlite${suffix}`),
-        Deno.errors.NotFound,
-        undefined,
-        `${other}.sqlite${suffix} must not survive a reset`,
-      );
-    }
     assertEquals(
       await Deno.readTextFile(`${engineDir}/operator-notes.txt`),
       "keep me",

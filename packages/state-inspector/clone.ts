@@ -37,6 +37,7 @@ import {
 } from "@commonfabric/memory/v2/storage-path";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { createHasher } from "@commonfabric/content-hash";
+import { isDID } from "@commonfabric/identity/did";
 import { openSpace } from "./db.ts";
 import {
   contentFingerprint,
@@ -354,7 +355,9 @@ export async function resetClone(dir: string): Promise<ResetResult> {
  * Both are recognized by the names the memory server gives them — a space's
  * store is `<did>.sqlite`, a cell-derived database `cell-<tag>.sqlite` — so
  * anything else in the directory was put there by someone other than a server,
- * and is left alone.
+ * and is left alone. What counts as a DID is `isDID`'s to say, the same test
+ * that admits a space in the first place, so no store a server could have
+ * created is missed for failing a narrower one.
  */
 async function attemptDatabases(
   workingPath: string,
@@ -366,9 +369,11 @@ async function attemptDatabases(
   try {
     for await (const entry of Deno.readDir(dir)) {
       if (!entry.isFile || entry.name === own) continue;
-      if (/^did:[^/]+\.sqlite$/.test(entry.name)) {
+      if (!entry.name.endsWith(".sqlite")) continue;
+      const stem = entry.name.slice(0, -".sqlite".length);
+      if (isDID(stem)) {
         stores.push(`${dir}/${entry.name}`);
-      } else if (/^cell-[^/]+\.sqlite$/.test(entry.name)) {
+      } else if (stem.startsWith("cell-")) {
         cellDatabases.push(`${dir}/${entry.name}`);
       }
     }
