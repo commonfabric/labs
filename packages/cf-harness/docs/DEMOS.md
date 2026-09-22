@@ -562,6 +562,47 @@ because the model still writes the code. A published pairing part named by id is
 what removes the variable entirely, and this entry should be retired when one
 exists.
 
+## 5b. The same composition, with the pairing rule and an admission floor
+
+§5a's entry showed that stating the pairing rule produces a correct matcher
+every time and still lets one bad pair through, because ranking says which
+candidate is best and nothing says when to stop. This entry adds exactly that
+and nothing else.
+
+**Preflight:** identical to §5.
+
+**Prompt:** §5a's text, with one further sentence before the slug sentence:
+
+```text
+Only pair when the shared words identify the merchant: a single short or numeric token is not a match.
+```
+
+**Done when:** every pairing on the page is one a person would make, and nothing
+is paired that should not be.
+
+**Typical wall time:** ~12 minutes.
+
+**Proof status: 1 pass so far, of three runs.** `monthly-bills-match`
+(`d524ea4a`): Email headers 101 · Bank payments 7 · Matched bills 4 · Needs
+attention 1. All four pairings correct, matched on `insurance, group`,
+`internet`, `phone` and `rent` respectively.
+
+**The floor did what it was added for.** §5a's failing run paired five, the
+fifth being recruitment spam matched to `SIM GROCERY MARKET #12` on the shared
+token `12`. Here Sim Grocery Market sits in unmatched payments where it belongs
+and the count stops at four. Same store, same readers, one added sentence.
+
+**And it did not overcorrect, which is the harder half.** `Sim Rent LLC` matched
+on `rent` alone — a single token — and was still admitted, correctly: the clause
+excludes a single _short or numeric_ token, and `rent` is neither. A floor read
+as "never pair on one word" would have lost a real pair and produced the
+opposite failure.
+
+**Still unconstrained: classification.** This run admitted one unpaid bill, the
+same call §5a's first run made — neither §5a run 3's near-zero nor run 4's
+ninety-six headers. The spread is live and no version of this prompt addresses
+it; see §5a.
+
 ## 6. A skill's script, run in the sandbox, folded into a piece
 
 The [WEAVER §7](WEAVER.md) task, unchanged but for the slug sentence.
