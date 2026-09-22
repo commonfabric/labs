@@ -985,9 +985,26 @@ eight minutes whether or not the console is busy, so these three runs were cut
 off rather than failed.
 
 Re-run it against a cap matched to that shape — fifteen minutes — before reading
-anything else into the count. The three runs above also shared a console, which
-is a separate reason their wall times cannot be attributed, but it is not the
-reason they stopped.
+anything else into the count.
+
+**Two published parts now exist for the job this demo authors.** Its recorded
+difficulty was that the skill's budget names — groceries, dining, transport — do
+not match the Plaid primaries a bank reader returns, so a join on exact equality
+returns zeros over a full ledger and looks like an answer:
+
+- `AVBtedLF7sb0Aq7JlCV6odH9h7LUtHmIPYmyDuJHORQ` — totals transactions by
+  category in whole currency units, and refuses rather than combining mixed
+  currencies.
+- `tocW3dnw6gnwYRuaOotUo2hrVfbgt4pFqtHNKV7vh8Y` — sets budgets beside actual
+  spending, joining on a normalized key with a published alias table behind it,
+  and **reports every budget and category it could not match rather than showing
+  a confident zero.**
+
+Neither has been used in a run of this demo. Naming them is the obvious next
+thing to try here, for the reason set out above: a reviewed part removes
+authoring variance where a prompt only narrows it. The three runs above also
+shared a console, which is a separate reason their wall times cannot be
+attributed, but it is not the reason they stopped.
 
 ## 7. Revise a piece in place
 
