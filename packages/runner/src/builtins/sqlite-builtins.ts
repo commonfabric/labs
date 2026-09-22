@@ -1182,6 +1182,11 @@ export function sqliteQuery(
     // — another space, and a request carrying confidentiality — and it runs
     // before the claim is written and before the request is staged, which
     // are the two things that would carry the parameters out.
+    //
+    // Not gated on the enforcement rung, because it is an egress bound
+    // rather than a writer fit: a sink ceiling refuses a request at every
+    // rung too. A deployment that labels nothing derives an empty join and
+    // never meets it.
     if (crossSpace && requestConfidentiality.length > 0) {
       // No request hash goes with it: recording this one's would make the
       // next evaluation of the same inputs a memo hit, so a later pass whose
@@ -1191,8 +1196,8 @@ export function sqliteQuery(
       result.withTx(tx).set({
         pending: false,
         error:
-          "sqlite: a query whose transaction carries confidentiality cannot " +
-          "read a database in another space",
+          "sqlite: a query whose request carries confidentiality cannot read " +
+          "a database in another space",
       });
       return;
     }
