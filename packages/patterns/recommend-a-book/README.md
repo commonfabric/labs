@@ -83,8 +83,9 @@ A visitor with WRITE access can also write directly to shared invitation state.
 An inbox entry alone is not proof that its sender used the review dialog, and
 the inbox does not prevent spam or forged unreviewed entries. A raw reference to
 an unreleased private draft does not grant the originator read access to that
-draft under the bounded runtime. Treat the inbox as a demonstration feed, not as
-an authenticated submission record.
+draft under the bounded runtime. Such an unreadable entry can prevent the
+originator's inbox view from rendering until it is removed. Treat the inbox as a
+demonstration feed, not as an authenticated submission record.
 
 The owner view uses `cf-owner-view` to compare the runtime's acting principal
 with the originator's stored root attestation. Changing the selected `#profile`

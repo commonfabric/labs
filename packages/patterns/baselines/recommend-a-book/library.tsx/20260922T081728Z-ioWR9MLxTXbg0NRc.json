@@ -210,6 +210,66 @@
           "books"
         ],
         "type": "object"
+      },
+      "SharedInvitationOutput": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "$UI": {
+            "$ref": "https://commonfabric.org/schemas/vnode.json",
+            "scope": "user"
+          },
+          "clearSelection": {
+            "asCell": [
+              "stream",
+              "opaque"
+            ]
+          },
+          "library": {
+            "$ref": "#/$defs/LibrarySlot"
+          },
+          "originator": {
+            "$ref": "#/$defs/OriginatorIdentity"
+          },
+          "originatorProfile": {
+            "$ref": "#/$defs/Profile"
+          },
+          "received": {
+            "items": {
+              "$ref": "#/$defs/Book"
+            },
+            "type": "array"
+          },
+          "recommended": {
+            "items": {
+              "$ref": "#/$defs/Book"
+            },
+            "type": "array"
+          },
+          "review": {
+            "$ref": "#/$defs/SelectedBooks",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "selected": {
+            "$ref": "#/$defs/SelectedBooks"
+          }
+        },
+        "required": [
+          "originator",
+          "originatorProfile",
+          "library",
+          "received",
+          "recommended",
+          "selected",
+          "review",
+          "clearSelection",
+          "$NAME",
+          "$UI"
+        ],
+        "type": "object"
       }
     },
     "description": "The shelf combines agent suggestions with the reader's own additions.",
@@ -259,7 +319,7 @@
         ]
       },
       "invitation": {
-        "$ref": "#/$defs/InvitationOutput"
+        "$ref": "#/$defs/SharedInvitationOutput"
       },
       "invitationReady": {
         "type": "boolean"

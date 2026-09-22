@@ -18,8 +18,8 @@ import {
 import { type Book, type LibrarySeed, SeedLibrary } from "./agents.tsx";
 import type { InvitationOutput as PreviousInvitationOutput } from "./main.tsx";
 import Invitation, {
-  type InvitationOutput,
   type LibrarySlot,
+  type SharedInvitationOutput,
 } from "./shared-invitation.tsx";
 import { type ReaderPrivate } from "./privacy.tsx";
 import { LibraryView, type Profile } from "./views.tsx";
@@ -33,7 +33,7 @@ export interface LibraryOutput {
   addedBooks: PerUser<Writable<Book[]>>;
   addedAuthors: PerUser<Writable<string[]>>;
   invitations: PerUser<Writable<PreviousInvitationOutput[]>>;
-  invitation: InvitationOutput;
+  invitation: SharedInvitationOutput;
   publishedLibrary: Writable<LibrarySlot>;
   invitationReady: PerUser<Writable<boolean>>;
   createInvitation: Stream<void>;
@@ -66,7 +66,7 @@ const createInvitation = handler<void, {
 });
 
 /** Opens an invitation that the reader can share through the space controls. */
-const openInvitation = handler<void, { invitation: InvitationOutput }>(
+const openInvitation = handler<void, { invitation: SharedInvitationOutput }>(
   (_, { invitation }) => navigateTo(invitation),
 );
 

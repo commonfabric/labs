@@ -139,6 +139,24 @@ describe("personalized book invitation", () => {
         space: identity.did(),
         tx,
       });
+      const resultSchema = factory.resultSchema as {
+        properties: {
+          invitation: { $ref: string };
+          invitations: { items: { $ref: string } };
+        };
+        $defs: Record<string, { required: string[] }>;
+      };
+      expect(resultSchema.properties.invitation.$ref).not.toBe(
+        resultSchema.properties.invitations.items.$ref,
+      );
+      const invitationDefinition = resultSchema.properties.invitation.$ref
+        .split("/").at(-1)!;
+      expect(resultSchema.$defs[invitationDefinition].required).toContain(
+        "library",
+      );
+      expect(resultSchema.$defs[invitationDefinition].required).not.toContain(
+        "publish",
+      );
       seedHomeAgentQueue(runtime, identity.did(), tx);
       const home = runtime.getCell(
         identity.did(),

@@ -41,7 +41,7 @@ export interface LibrarySlot {
 }
 
 /** Private state is scoped independently from the shared invitation. */
-export interface InvitationOutput {
+export interface SharedInvitationOutput {
   [NAME]: string;
   [UI]: PerUser<VNode>;
   originator: OriginatorIdentity;
@@ -85,7 +85,7 @@ const ReaderInvitation = pattern<
     review: PerUser<Stream<SelectedBooks>>;
     clearSelection: PerUser<Stream<void>>;
   },
-  Pick<InvitationOutput, typeof UI>
+  Pick<SharedInvitationOutput, typeof UI>
 >(
   (
     {
@@ -176,7 +176,7 @@ const ReaderInvitation = pattern<
   },
 );
 
-export default pattern<InvitationInput, InvitationOutput>(
+export default pattern<InvitationInput, SharedInvitationOutput>(
   ({ originatorProfile, library }) => {
     const originator = new Writable.perSpace<OriginatorIdentity>({});
     const received = new Writable.perSpace<ReaderPrivate<ReadonlyCell<Book>[]>>(
