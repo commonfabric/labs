@@ -32,6 +32,10 @@ export default pattern(() => {
     isShownIdentity({ ...freshLogin, type: "github.node_id" }, nowMs) === false
   );
   const assert_undated_identity_is_hidden = assert(() =>
+    isShownIdentity({ ...freshLogin, verifiedAt: undefined }, nowMs) ===
+      false
+  );
+  const assert_unreadable_date_or_clock_hides_identity = assert(() =>
     isFreshIdentity(freshLogin.verifiedAt, undefined) === false &&
     isFreshIdentity("not a timestamp", nowMs) === false
   );
@@ -238,6 +242,7 @@ export default pattern(() => {
       { assertion: assert_stale_login_is_hidden },
       { assertion: assert_node_id_is_hidden },
       { assertion: assert_undated_identity_is_hidden },
+      { assertion: assert_unreadable_date_or_clock_hides_identity },
       { assertion: assert_profile_url_encodes_the_login },
       { assertion: assert_row_links_the_profile },
       { assertion: assert_inbox_absent_at_birth },
