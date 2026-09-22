@@ -1,8 +1,10 @@
 # Loom default pattern
 
 `main.tsx` is a space default pattern with linked panel occurrence cells.
-`schemas.tsx` defines its public contract. The shared inputs are `title`,
-`panels`, and `presentation`; `viewerState` belongs to one session.
+`schemas.tsx` defines its public contract and re-exports the participant
+roster's types from `participants.tsx`, which also holds the roster's one
+writer, `addParticipant`. The shared inputs are `title`, `panels`,
+`presentation`, and `participants`; `viewerState` belongs to one session.
 
 A panel is a `piece`, `document`, or HTTP(S) `url`. Piece and document targets
 are native cell references. Their complete space, scope, document, and path
@@ -42,6 +44,20 @@ one transaction. Staged occurrences must belong to the current collection and be
 unique; focus must be staged. Omitting focus clears it. Structural actions read
 the current collection inside their handler transaction, so conflicts retry
 against current membership rather than applying a stale client's list.
+
+`participants` lists the Fabric profiles of the Loom's participants, each as the
+live profile cell in its own space. It records no DID and no name: a profile
+names its principal in its label, and its name and avatar are read from it when
+shown. `participants.tsx` holds the roster and `addParticipant({profile})`, the
+only writer its write contract admits; a write from any other action, or from
+another pattern holding the roster cell, is refused. Adding is a mergeable set
+add, so concurrent additions all land and a listed profile is not added twice.
+Any participant may add any profile, so the stored list is a set of claims: a
+consumer that needs the actual participants keeps only profiles whose principal
+currently holds access to the Loom's space, which hides an entry for anyone else
+and drops a removed member without deleting their entry. The root does not
+render the list: it holds claims, and only a consumer that can read the access
+list can say which are participants.
 
 Run and attach all four tests when deploying or updating source:
 
