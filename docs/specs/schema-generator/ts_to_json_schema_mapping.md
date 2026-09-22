@@ -110,8 +110,9 @@ no schema at all. The exceptions are the references `CommonFabricFormatter`
 lowers from their own arguments: a scope wrapper, whose payload it reads from
 the reference's argument, and an alias that is not itself a CFC alias and whose
 whole body references one, directly or through further such aliases, named with
-every argument, which it substitutes down the chain — plus a `Date`-by-name
-special case), keyword types, and a final resolve-else-`true` fallback.
+an argument for every parameter that has no default, which it substitutes down
+the chain — plus a `Date`-by-name special case), keyword types, and a final
+resolve-else-`true` fallback.
 
 A `true` from that fallback is a guess rather than a reading, and is recorded
 as one (`uninterpretedTypeNodes`). A wrapper holding a resolved type recovers
@@ -834,12 +835,14 @@ Mechanics:
   built afresh, with no original node, so the payload is read from the node
   and its arguments, never back through the checker as the declaration's
   subtree with the parameter unbound; a subtree holding none keeps its
-  declaration node. A payload that still refers to a parameter substitution
-  had an argument for but did not reach, through a kind it does not open
-  (`T["name"]`), is a guess: the payload reads as accepting anything, and the
-  labels are lowered as usual. A chain entered with no argument nodes, as from
-  a type whose print expands the alias, has nothing to substitute, and its
-  payload is read from the declaration.
+  declaration node. An argument a reference leaves out is its parameter's
+  default, read with the arguments before it, as the checker instantiates one.
+  A payload that still refers to a parameter that substitution had an argument
+  for but did not reach, through a kind it does not open (`T["name"]`), is a
+  guess: the payload reads as accepting anything, and the labels are lowered
+  as usual. A chain entered with no argument nodes, as from a type whose print
+  expands the alias, has nothing to substitute, and its payload is read from
+  the declaration.
 - Metadata values come from type-level literals: literal nodes, tuples, type
   literals, `typeof` value reads, alias-parameter substitution, and
   tuple/object **types** via the checker when nodes are gone

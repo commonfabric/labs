@@ -249,7 +249,7 @@ const holdsTypeParameter = (
  * Whether the CFC lowering, handed `args` for `declaration`'s parameters,
  * reaches a CFC alias down `declaration`'s chain of aliases, each the whole
  * body of the one before and followed at most once, with every parameter along
- * the way replaced by an argument.
+ * the way replaced by an argument or, for one left out, its default.
  */
 const lowersDownAliasChain = (
   declaration: ts.TypeAliasDeclaration,
@@ -258,18 +258,24 @@ const lowersDownAliasChain = (
   visited: ReadonlySet<string>,
 ): boolean => {
   if (CFC_ALIAS_NAMES.has(declaration.name.text)) return true;
-  const parameters = declaration.typeParameters ?? [];
   const aliased = declaration.type;
   if (
-    args.length < parameters.length ||
     !ts.isTypeReferenceNode(aliased) || !ts.isIdentifier(aliased.typeName) ||
     visited.has(aliased.typeName.text)
   ) {
     return false;
   }
-  const paramMap = new Map(
-    parameters.map((parameter, index) => [parameter.name.text, args[index]!]),
-  );
+  // An argument left out is its parameter's default, read with the arguments
+  // before it; a parameter with neither leaves the chain unlowered.
+  const paramMap = new Map<string, ts.TypeNode>();
+  for (
+    const [index, parameter] of (declaration.typeParameters ?? []).entries()
+  ) {
+    const arg = args[index] ??
+      (parameter.default && substituteTypeNode(parameter.default, paramMap));
+    if (!arg) return false;
+    paramMap.set(parameter.name.text, arg);
+  }
   const substituted = (aliased.typeArguments ?? []).map((arg) =>
     substituteTypeNode(arg, paramMap)
   );
@@ -1329,9 +1335,9 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     const baseTypeNode = resolved.aliasArgNodes?.[0];
-    // A payload still referring to a parameter substitution had an argument
-    // for, but did not reach, would be read with that parameter unbound, so
-    // it is a guess.
+    // A payload still referring to a parameter that substitution had an
+    // argument for but did not reach would be read with that parameter
+    // unbound, so it is a guess.
     const unsubstituted = baseTypeNode !== undefined &&
       resolved.substituted !== undefined &&
       holdsTypeParameter(
@@ -1480,7 +1486,13 @@ export class CommonFabricFormatter implements TypeFormatter {
       if (paramName && actualArg) {
         paramMap.set(paramName, actualArg);
       }
-      const actualArgNode = aliasArgNodes?.[i];
+      // An argument the reference leaves out is its parameter's default read
+      // with the arguments before it, as the checker instantiates one. With no
+      // argument nodes at all there is nothing to read that default with.
+      const actualArgNode = aliasArgNodes?.[i] ??
+        (aliasArgNodes && parameter?.default
+          ? substituteTypeNode(parameter.default, paramNodeMap)
+          : undefined);
       if (parameter && paramName && actualArgNode) {
         paramNodeMap.set(paramName, actualArgNode);
         substitutedHere.push(parameter);

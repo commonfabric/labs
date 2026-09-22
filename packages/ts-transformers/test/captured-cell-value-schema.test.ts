@@ -230,6 +230,32 @@ describe("captured-cell-value-schema", () => {
       });
     });
 
+    it("emits the payload of a default naming an earlier parameter from that parameter's argument", async () => {
+      // `Contact`'s body leaves `U` out, so `U` is its default `T`, which is
+      // `string`, not `T`'s own default.
+      const output = await transformFiles({
+        "/test.tsx":
+          `import { computed, Confidential, pattern, Writable } from "commonfabric";
+          type Secret<T = number, U = T> =
+            Confidential<{ name: U }, readonly ["owner"]>;
+          export type Contact = Secret<string>;
+          ${READ_CONTACT}`,
+      }, { types: COMMONFABRIC_TYPES });
+      const input = callSchemas(parseModule(output["/test.tsx"]!), "lift")[0]!;
+
+      expect((input.properties as Record<string, unknown>).contact).toEqual(
+        stored,
+      );
+      expect(input.$defs).toEqual({
+        Contact: {
+          type: "object",
+          properties: { name: { type: "string" } },
+          required: ["name"],
+          ifc: { confidentiality: ["owner"] },
+        },
+      });
+    });
+
     it("emits the labels of an alias the CFC lowering fills from the argument", async () => {
       const schema = await capturedContactSchema({
         "/test.tsx":

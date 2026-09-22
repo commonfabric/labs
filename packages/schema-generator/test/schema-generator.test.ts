@@ -3088,7 +3088,7 @@ type CalculatorRequest = {
           expect(schema).toEqual({ ifc: { confidentiality: ["owner"] } });
         });
 
-        it("returns `true` for a reference that leaves an argument to its default", async () => {
+        it("reads an argument the reference leaves out as its default", async () => {
           const schema = await generate(
             {
               "/main.ts": CFC +
@@ -3098,7 +3098,36 @@ type CalculatorRequest = {
             generic("Secret", keyword(ts.SyntaxKind.StringKeyword)),
           );
 
-          expect(schema).toBe(true);
+          expect(schema).toEqual({
+            type: "string",
+            ifc: { confidentiality: ["owner"] },
+          });
+        });
+
+        it("reads a default naming an earlier parameter with that parameter's argument", async () => {
+          // `Contact`'s body leaves `U` out, so `U` is its default `T`, which
+          // is `string`, not `T`'s own default.
+          const schema = await generate(
+            {
+              "/main.ts": CFC +
+                "type Secret<T = number, U = T> =\n" +
+                '  Confidential<{ name: U }, readonly ["owner"]>;\n' +
+                "export type Contact = Secret<string>;",
+            },
+            reference("Contact"),
+          );
+
+          expect(schema).toEqual({
+            $ref: "#/$defs/Contact",
+            $defs: {
+              Contact: {
+                type: "object",
+                properties: { name: { type: "string" } },
+                required: ["name"],
+                ifc: { confidentiality: ["owner"] },
+              },
+            },
+          });
         });
 
         it("returns `true` for a reference to the CFC alias itself", async () => {
