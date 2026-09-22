@@ -36,8 +36,8 @@ const WIDE_NUMERIC_RUN = 32;
 
 /**
  * The short names of a label's clauses. An atom's `type` is a CFC atom URL
- * whose last segment identifies it — `PromptSlotInfluence` for the atom
- * marking a value the user's own typed command influenced. A clause is
+ * whose last segment identifies it — `ExternalIngest` for the atom marking
+ * a value that arrived from outside the fabric. A clause is
  * arbitrary CFC JSON, so one that is not a typed atom is reported by its shape
  * rather than dropped: a clause the page cannot name is still one the label
  * carries.
@@ -156,7 +156,12 @@ export const withheldView = (step: ConsoleStep): TemplateResult => {
 export const stepPolicyView = (
   step: ConsoleStep,
 ): TemplateResult | typeof nothing => {
-  const labelEntries = step.invocation?.cfcInputLabels?.entries ?? [];
+  // Taint and the prompt slot's influence are separate views of the same
+  // inputs; both are listed, one row per entry, each on its own axis.
+  const labelEntries = [
+    ...step.invocation?.cfcInputLabels?.entries ?? [],
+    ...step.invocation?.promptSlotInfluenceLabels?.entries ?? [],
+  ];
   if (
     step.policy === undefined && step.policyEvents.length === 0 &&
     labelEntries.length === 0
@@ -209,7 +214,8 @@ export const stepPolicyView = (
                       : entry.path.join(".")}
                   </td>
                   <td class="label-atoms">
-                    ${atomNames(entry.label?.confidentiality).length === 0
+                    ${atomNames(entry.label?.confidentiality).length === 0 &&
+                        atomNames(entry.label?.integrity).length === 0
                       ? html`
                         <span class="muted">no confidentiality atom</span>
                       `
@@ -425,6 +431,10 @@ export class ConsoleSteps extends LitElement {
                 ${argument.confidentiality.map((name) =>
                   html`
                     <span class="atom conf">${name}</span>
+                  `
+                )} ${argument.integrity.map((name) =>
+                  html`
+                    <span class="atom integ">${name}</span>
                   `
                 )}
               </div>

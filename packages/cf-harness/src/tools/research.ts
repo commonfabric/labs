@@ -20,6 +20,7 @@ import {
 } from "../contracts/research.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import { errorMessage } from "../error-message.ts";
+import { RESEARCH_REUSE_GUIDANCE } from "../research/reuse.ts";
 import {
   createHarnessResearchCfcProjection,
   HarnessResearchError,
@@ -165,8 +166,9 @@ export const researchToolDescriptor: HarnessToolDescriptor = {
 const RESEARCH_FAILURE_MESSAGE =
   "research failed before returning an implementation kit";
 
-/** Caller guidance derived from the host-admitted kit status. */
+/** Caller guidance derived from the host-admitted kit status and selections. */
 export const researchKitGuidance = (kit: HarnessResearchResult): string =>
+  (kit.patterns.length > 0 ? `${RESEARCH_REUSE_GUIDANCE} ` : "") +
   (kit.status === "incomplete"
     ? "This research is incomplete. Do not present or implement unsupported parts as complete. "
     : "") +

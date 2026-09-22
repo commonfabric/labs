@@ -17,6 +17,7 @@
 // applier would get subtly wrong. `applyPatch` is offline-safe (pure value ops;
 // no live runtime/cell). See packages/memory/v2/patch.ts.
 
+import type { FabricValue } from "@commonfabric/data-model";
 import { applyPatchToDocument } from "@commonfabric/memory/v2/patch";
 import {
   decodeStoredDocumentPayload,
@@ -40,12 +41,24 @@ export interface ReconstructOptions extends EntityAddress {
   atSeq?: number;
 }
 
-export type EntityDocument =
-  & { value?: unknown; source?: unknown }
-  & Record<
-    string,
-    unknown
-  >;
+/**
+ * A stored document as the inspector reads one. It is memory's
+ * `EntityDocument` except for `source`, which memory declares as an
+ * `EntityRef`. A legacy result document holds a sigil link to its process cell
+ * there, and the inspector reads such documents, so `source` is any
+ * `FabricValue` here.
+ *
+ * The members are written out because `Omit<StoredDocument, "source">` does
+ * not keep them: on a type that has a string index signature, `Omit` drops
+ * every named key and leaves the index signature. `reconstructOutcome()`
+ * returns one of memory's documents as one of these, so a change to memory's
+ * type that stops it being assignable to this one stops this file compiling.
+ */
+export type EntityDocument = {
+  value?: FabricValue;
+  source?: FabricValue;
+  [key: string]: FabricValue;
+};
 
 export interface PathSelection {
   /** Whether every segment selected an own property. */
@@ -503,7 +516,7 @@ export function reconstructOutcome(
         row.seq,
         row.op_index,
       );
-    return { status: "present", document: document as EntityDocument };
+    return { status: "present", document };
   } catch (error) {
     return { status: "undecodable", error };
   }

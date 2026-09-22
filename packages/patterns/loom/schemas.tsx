@@ -9,6 +9,13 @@ import type {
   VNode,
   Writable,
 } from "commonfabric";
+import type {
+  ParticipantProfile,
+  ParticipantRoster,
+  ParticipantRosterCell,
+} from "./participants.tsx";
+
+export type { ParticipantProfile, ParticipantRoster, ParticipantRosterCell };
 
 /** Allowlisted public contact information supplied by the publisher. */
 export interface PublishedChannel {
@@ -56,6 +63,7 @@ export interface LoomInput {
   presentation?: PerSpace<
     Writable<Presentation | Default<{ stagedPanels: [] }>>
   >;
+  participants?: PerSpace<ParticipantRosterCell>;
 }
 
 /** An occurrence and its optional insertion anchor. Omission appends. */
@@ -85,4 +93,6 @@ export interface LoomOutput {
   movePanel: Stream<PanelPosition>;
   duplicatePanel: Stream<PanelPosition>;
   setPresentation: Stream<Presentation>;
+  participants: ParticipantProfile[];
+  addParticipant: Stream<{ profile: ParticipantProfile }>;
 }

@@ -23,6 +23,10 @@ import {
   transferChildHandleTokens,
 } from "../src/prompt-loop.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "../src/revision-verification.ts";
+import {
+  PATTERN_AUTHORING_GUIDANCE,
+  PATTERN_COMPOSITION_GUIDANCE,
+} from "../src/pattern-authoring.ts";
 import { CAPABILITY_PROBE_SENTINEL } from "../src/diagnostics.ts";
 import {
   createHarnessHandleTable,
@@ -39,6 +43,7 @@ import {
 } from "../src/contracts/subagent.ts";
 import type { HarnessHandleTable } from "../src/contracts/handle-table.ts";
 import { createPatternSkillsFixture } from "./support/pattern-skills-fixture.ts";
+import { REUSE_RESEARCH_RUNS } from "./fixtures/research-reuse.ts";
 import {
   chatViewOfRequest,
   responsesBodyFromChatFixture,
@@ -337,7 +342,27 @@ describe("prompt-loop cross-agent address handles", () => {
             inputs: { src: token },
           }),
           finalTurn("Child done."),
-          finalTurn("Parent done."),
+          {
+            choices: [{
+              index: 0,
+              message: {
+                role: "assistant",
+                content: "",
+                tool_calls: [{
+                  id: "call-finish",
+                  type: "function",
+                  function: {
+                    name: "finish_task",
+                    arguments: JSON.stringify({
+                      outcome: "gave-up",
+                      message:
+                        "The source cannot be inspected under this session's access limits.",
+                    }),
+                  },
+                }],
+              },
+            }],
+          },
         ];
         const engine = new CfHarnessEngine({
           sandboxRuntime: new FakeSandboxRuntime(),
@@ -371,10 +396,11 @@ describe("prompt-loop cross-agent address handles", () => {
             );
           },
         });
-        await loop.runPrompt({
+        const result = await loop.runPrompt({
           prompt: "Delegate the inspection.",
           promptSlotBinding: directPromptSlotBinding,
         });
+        expect(result.taskOutcome?.outcome).toBe("gave-up");
         const childMessages = chatViewOfRequest(requestBodies[2]).messages;
         const toolReply = childMessages.findLast((message) =>
           message.role === "tool"
@@ -1359,6 +1385,8 @@ describe("prompt-loop cross-agent address handles", () => {
       "Return the resultRef of the working piece from run_pattern or revise_piece",
     );
     expect(childSystemPrompt).toContain(REVISION_VERIFICATION_GUIDANCE);
+    expect(childSystemPrompt).toContain(PATTERN_AUTHORING_GUIDANCE);
+    expect(childSystemPrompt).not.toContain(PATTERN_COMPOSITION_GUIDANCE);
     // The deliverable is a reference to something that ran, and source is
     // refused rather than merely discouraged: an encoding is still source.
     expect(childSystemPrompt).toContain("You never return source.");
@@ -1377,6 +1405,88 @@ describe("prompt-loop cross-agent address handles", () => {
     expect(childSystemPrompt).not.toContain(
       "Never return a computed(), lift, or other derived wrapper",
     );
+  });
+
+  for (const enabled of [true, false]) {
+    it(`includes the indexed reader template when composition guidance is ${enabled}`, async () => {
+      const requests: unknown[] = [];
+      const loop = new CfHarnessPromptLoop({
+        apiKey: "test-key",
+        engine: new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime(),
+          model: "gpt-5.4",
+          patternIndexClientFactory: () =>
+            Promise.reject(new Error("unexpected index read")),
+        }),
+        allowedSubagentProfiles: ["pattern-author"],
+        subagentCompositionGuidance: enabled,
+        fetchFn: scriptedFetch([
+          delegateCallTurn("delegate-template", {
+            goal: "Author a pattern.",
+            profile: "pattern-author",
+          }),
+          finalTurn("Child done."),
+          finalTurn("Parent done."),
+        ], requests),
+      });
+      await loop.runPrompt({
+        prompt: "Delegate the authoring.",
+        promptSlotBinding: directPromptSlotBinding,
+      });
+      const prompt = chatViewOfRequest(requests[1]).messages[0]!.content ?? "";
+      expect(prompt).toContain(PATTERN_AUTHORING_GUIDANCE);
+      expect(prompt.includes(PATTERN_COMPOSITION_GUIDANCE)).toBe(enabled);
+    });
+  }
+
+  it("requires the delegated rehearsal author to import its selected mailbox or explain the omission", async () => {
+    const requestBodies: unknown[] = [];
+    let fabricOpens = 0;
+    const loop = new CfHarnessPromptLoop({
+      apiKey: "test-key",
+      engine: new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        runId: "rehearsal-reuse-child",
+        model: "gpt-5.4",
+        taskText: REUSE_RESEARCH_RUNS[0].kit.task,
+        inheritedResearchRuns: REUSE_RESEARCH_RUNS,
+        fabricSessionFactory: () => {
+          fabricOpens += 1;
+          return Promise.reject(new Error("unexpected Fabric access"));
+        },
+      }),
+      allowedSubagentProfiles: ["pattern-author"],
+      fetchFn: scriptedFetch([
+        delegateCallTurn("delegate-work-summary", {
+          goal: REUSE_RESEARCH_RUNS[0].kit.task,
+          profile: "pattern-author",
+        }),
+        runPatternCallTurn("rewrite-mailbox", {
+          sourceText: "export default {};",
+        }),
+        finalTurn(JSON.stringify({ ok: false, code: "unsupported-request" })),
+        finalTurn("Parent received the author decision."),
+      ], requestBodies),
+    });
+    await loop.runPrompt({
+      prompt: REUSE_RESEARCH_RUNS[0].kit.task,
+      promptSlotBinding: directPromptSlotBinding,
+    });
+    const childMessages = chatViewOfRequest(requestBodies[1]).messages;
+    expect(childMessages.map((message) => message.content).join("\n"))
+      .toContain(
+        "import as cf:pattern:<id>, or supply reuseReasons[<id>] as one nonblank line",
+      );
+    const childReply = chatViewOfRequest(requestBodies[2]).messages.findLast(
+      (message) => message.role === "tool",
+    );
+    expect(JSON.parse(childReply!.content ?? "{}")).toMatchObject({
+      status: "error",
+      message: expect.stringContaining(
+        "cf:pattern:-xx1hxtvAbY7AL6FeYuQWuEzbC0nOpUOHgXseIac2_w",
+      ),
+    });
+    expect(fabricOpens).toBe(0);
   });
 
   it("tells a pattern author with an inherited kit to research only unresolved items", async () => {
@@ -1440,6 +1550,15 @@ describe("prompt-loop cross-agent address handles", () => {
     );
     expect(childSystemPrompt).toContain(
       "Ask research a useful follow-up question",
+    );
+    expect(childSystemPrompt).toContain(
+      "An applicable indexed pattern can discover data within that scope under the existing piece-targeting and release rules",
+    );
+    expect(childSystemPrompt).toContain(
+      "it does not grant access to another store",
+    );
+    expect(childSystemPrompt).not.toContain(
+      "there is nowhere to look another one up",
     );
     expect(childSystemPrompt).not.toContain(
       "Use research on the whole task before you author anything",

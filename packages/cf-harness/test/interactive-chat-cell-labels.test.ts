@@ -104,8 +104,8 @@ const answer = (content: string): HarnessModelTurnResult => ({
 /**
  * A model that delegates the turn's input cell to a child by naming its
  * token in the goal, so the child's table holds the cell too, and then
- * answers; the child answers at once. Both loops share it, and the child's
- * one turn falls between the parent's two.
+ * reports that no answer was produced; the child answers at once. Both loops
+ * share it, and the child's one turn falls between the parent's two.
  */
 const delegatingModel = (): HarnessModelClient => {
   let turns = 0;
@@ -137,7 +137,23 @@ const delegatingModel = (): HarnessModelClient => {
         case 2:
           return Promise.resolve(answer("Child done."));
         default:
-          return Promise.resolve(answer("Parent done."));
+          return Promise.resolve({
+            assistant: {
+              role: "assistant",
+              content: "",
+              toolCalls: [{
+                id: "call-finish",
+                type: "function",
+                function: {
+                  name: "finish_task",
+                  arguments: JSON.stringify({
+                    outcome: "gave-up",
+                    message: "The inspection produced no answer to display.",
+                  }),
+                },
+              }],
+            },
+          });
       }
     },
   };
@@ -227,6 +243,7 @@ describe("interactive chat cell labels", () => {
       const envelope = await closed.promise;
 
       expect(envelope.event.kind).toBe("turn_completed");
+      expect(envelope.event).toMatchObject({ outcome: "gave-up" });
       const parentRoot = join(artifactRoot, turn.result.turnId);
       const childRoot = join(artifactRoot, `${turn.result.turnId}.subagent.1`);
       for (const runRoot of [parentRoot, childRoot]) {

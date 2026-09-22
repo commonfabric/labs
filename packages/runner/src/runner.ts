@@ -9027,13 +9027,19 @@ export class Runner {
       inputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
     const outputs = unwrapOneLevelAndBindToDoc(
       outputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
     return {
       inputs,
@@ -11306,13 +11312,19 @@ export class Runner {
       inputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
     const mappedOutputBindings = unwrapOneLevelAndBindToDoc(
       outputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
 
     // For the list builtins, replace a pattern-valued input (the `op`) with a
@@ -11768,7 +11780,10 @@ export class Runner {
       outputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
     const io = {
       child,

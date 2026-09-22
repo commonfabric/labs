@@ -85,6 +85,40 @@ export default { backlinksOf };
 }
 
 describe("capability-analysis-array-callbacks", () => {
+  describe("a map over a sliced array", () => {
+    for (
+      const [form, body] of [
+        ["inline", "return matches.slice().map((row) => row.id);"],
+        [
+          "named",
+          "const sliced = matches.slice(); return sliced.map((row) => row.id);",
+        ],
+      ]
+    ) {
+      it(`retains map-only fields through the ${form} slice result`, async () => {
+        const output = await transformSource(
+          `import { computed, pattern } from "commonfabric";
+export default pattern<{
+  table: { keep: boolean; id: string; unused: string }[];
+}>(({ table }) => ({
+  ids: computed(() => {
+    const matches = table.filter((row) => row.keep);
+    ${body}
+  }),
+}));`,
+          { types: COMMONFABRIC_TYPES, typeCheck: true },
+        );
+        const schema = callSchemas(parseModule(output), "lift")[0];
+        if (!schema) throw new Error("No emitted `lift` input schema");
+
+        expect(elementProperties(schema)).toEqual({
+          keep: { type: "boolean" },
+          id: { type: "string" },
+        });
+      });
+    }
+  });
+
   describe("a property read only inside an array-method callback", () => {
     it("reaches the input schema from a `find` callback behind a `??`", async () => {
       const schema = await liftInputSchema(

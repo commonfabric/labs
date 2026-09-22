@@ -43,6 +43,30 @@ export function unwrapTypeParentheses(node: ts.TypeNode): ts.TypeNode {
 }
 
 /**
+ * Returns the declaration of the type alias that `reference` names, through
+ * any import binding, or `undefined` for a reference to anything else. The
+ * alias may be generic, in which case the node it declares is written in its
+ * own type parameters and does not denote what the reference denotes until
+ * each is replaced by the reference's argument, which a caller that reads
+ * through the alias does for itself. A
+ * reference the checker cannot resolve, such as one built by the transformer,
+ * names no declaration here.
+ */
+export function getTypeAliasDeclaration(
+  reference: ts.TypeReferenceNode,
+  checker: ts.TypeChecker,
+): ts.TypeAliasDeclaration | undefined {
+  const name = ts.isIdentifier(reference.typeName)
+    ? reference.typeName
+    : reference.typeName.right;
+  const symbol = checker.getSymbolAtLocation(name);
+  return symbol &&
+    resolveAliasedSymbol(symbol, checker).declarations?.find(
+      ts.isTypeAliasDeclaration,
+    );
+}
+
+/**
  * Returns the type node that `node` stands for, one step in: the node a pair
  * of parentheses holds, or the node a type alias names where `node` refers to
  * that alias by name, through any import binding, and neither the reference
@@ -62,14 +86,7 @@ export function readAuthoredTypeNodeOnce(
   if (!ts.isTypeReferenceNode(node) || node.typeArguments?.length) {
     return undefined;
   }
-  const name = ts.isIdentifier(node.typeName)
-    ? node.typeName
-    : node.typeName.right;
-  const symbol = checker.getSymbolAtLocation(name);
-  const declaration = symbol &&
-    resolveAliasedSymbol(symbol, checker).declarations?.find(
-      ts.isTypeAliasDeclaration,
-    );
+  const declaration = getTypeAliasDeclaration(node, checker);
   return declaration && !declaration.typeParameters?.length
     ? declaration.type
     : undefined;

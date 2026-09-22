@@ -6,6 +6,8 @@ import { BaseElement } from "../../core/base-element.ts";
 
 type LabelKey = "confidentiality" | "integrity";
 
+type CfcLabelVariant = "full" | "badge";
+
 type CfcLabelFilter = {
   atom?: string;
   kind?: string;
@@ -135,11 +137,20 @@ const formatPath = (path: readonly string[]): string =>
 /**
  * Renders the CFC label associated with a bound CellHandle value.
  *
+ * The `full` variant lists every label entry that passes the filter. The
+ * `badge` variant renders a single pill that reads as present when an
+ * integrity atom passes the filter, which makes it the compact way to show
+ * that a displayed value carries a particular integrity atom. Confidentiality
+ * atoms never make the badge present.
+ *
  * @element cf-cfc-label
  *
  * @prop {unknown} value - Usually supplied via `$value`; queried for CFC label IPC.
  * @attr {string} atom - Optional exact atom filter.
  * @attr {string} kind - Optional object-atom kind filter.
+ * @attr {"full"|"badge"} variant - Presentation; defaults to `full`.
+ * @attr {string} text - Badge text when a filtered integrity atom is present;
+ *   defaults to "Verified". Without one the badge reads "Unverified".
  */
 export class CFCFCLabel extends BaseElement {
   static override styles = css`
@@ -193,6 +204,35 @@ export class CFCFCLabel extends BaseElement {
     .empty {
       color: var(--cf-theme-color-text-muted, hsl(0, 0%, 45%));
     }
+
+    :host([variant="badge"]) {
+      display: inline-block;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.25rem;
+      padding: 0.0625rem 0.5rem;
+      border-radius: 999px;
+      font-size: var(--cf-size-md-font-size, 12px);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .badge[data-state="present"] {
+      color: var(--cf-theme-color-success, var(--cf-colors-green-600, #16a34a));
+      background: color-mix(
+        in srgb,
+        var(--cf-theme-color-success, var(--cf-colors-green-600, #16a34a)) 12%,
+        transparent
+      );
+    }
+
+    .badge[data-state="absent"] {
+      color: var(--cf-theme-color-text-muted, hsl(0, 0%, 45%));
+      background: var(--cf-theme-color-muted, hsl(0, 0%, 92%));
+    }
   `;
 
   static override properties = {
@@ -200,11 +240,15 @@ export class CFCFCLabel extends BaseElement {
     cfcLabel: { attribute: false },
     atom: { type: String },
     kind: { type: String },
+    variant: { type: String, reflect: true },
+    text: { type: String },
   };
 
   declare cfcLabel: CfcLabelView | undefined;
   declare atom: string | undefined;
   declare kind: string | undefined;
+  declare variant: CfcLabelVariant;
+  declare text: string | undefined;
 
   private _labelRequestId = 0;
   private _value: unknown = undefined;
@@ -216,6 +260,8 @@ export class CFCFCLabel extends BaseElement {
     this.cfcLabel = undefined;
     this.atom = undefined;
     this.kind = undefined;
+    this.variant = "full";
+    this.text = undefined;
   }
 
   get value(): unknown {
@@ -318,6 +364,9 @@ export class CFCFCLabel extends BaseElement {
       atom: this.atom,
       kind: this.kind,
     });
+    if (this.variant === "badge") {
+      return this.renderBadge(view);
+    }
     if (!view) {
       return html`
         <span class="empty" part="empty">No CFC label</span>
@@ -351,6 +400,25 @@ export class CFCFCLabel extends BaseElement {
           `
         )}
       </div>
+    `;
+  }
+
+  private renderBadge(view: CfcLabelView | undefined) {
+    // Only integrity atoms are claims about where a value came from, so only
+    // they can make the badge read as present.
+    const atoms = (view?.entries ?? []).flatMap((entry) =>
+      entry.label.integrity ?? []
+    );
+    if (atoms.length === 0) {
+      return html`
+        <span class="badge" part="badge" data-state="absent">Unverified</span>
+      `;
+    }
+    const title = [...new Set(atoms.map(formatCfcLabelAtom))].join(", ");
+    return html`
+      <span class="badge" part="badge" data-state="present" title="${title}">
+        <span aria-hidden="true">✓</span>${this.text ?? "Verified"}
+      </span>
     `;
   }
 }

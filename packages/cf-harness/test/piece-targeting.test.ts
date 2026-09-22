@@ -54,7 +54,7 @@ describe("piece-targeting", () => {
       "For an unspecified piece, ask the user to attach or name it without reading the registry",
     );
     expect(finishTaskTool.descriptor.description).toContain(
-      "When checking whether a named data source is available",
+      "Before asking the user to connect or attach a named data source",
     );
   });
 });

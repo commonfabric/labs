@@ -52,12 +52,23 @@ export interface RedeemReceipt {
   currentAccess: Capability | null;
 }
 
-/** The non-secret destination and fragment secret in an invitation link. */
+/**
+ * The non-secret destination and fragment secret in an invitation link.
+ *
+ * `inviter` is a display hint naming who issued the invitation. Anyone who
+ * holds the link can change it, it is not bound into the code verifier, and it
+ * is checked only syntactically here. A recipient cannot read the space ACL
+ * before redeeming, and after redeeming an ACL check can show at most that the
+ * DID is an owner (the issuer must still own the space at first redemption),
+ * not that it issued this link (the issuer, `issuedBy`, is visible only to
+ * owners). Treat it as a hint bounded by that access check.
+ */
 export interface InviteLink {
   host: string;
   space: string;
   inviteId: string;
   code: string;
+  inviter?: string;
 }
 
 /** Structured protocol refusals, without private invite metadata. */
@@ -109,8 +120,11 @@ export function isInviteId(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9_-]{22,64}$/.test(value);
 }
 
-/** Whether a destination has the DID key encoding accepted by invite routes. */
-function isInviteSpace(value: unknown): value is DIDKey {
+/**
+ * Whether a space or inviter has the DID key encoding accepted by invite
+ * routes. The check is syntactic only.
+ */
+function isInviteDIDKey(value: unknown): value is DIDKey {
   return isDIDKey(value) &&
     /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,120}$/.test(value);
 }
@@ -127,7 +141,7 @@ export function createInviteCredentials(): { inviteId: string; code: string } {
 export function inviteCodeVerifier(link: InviteLink): string {
   const host = normalizeInviteHost(link.host);
   if (
-    !isInviteSpace(link.space) || !isInviteId(link.inviteId) ||
+    !isInviteDIDKey(link.space) || !isInviteId(link.inviteId) ||
     !isInviteSecret(link.code)
   ) {
     throw new SpaceInviteError("invalid-request");
@@ -141,23 +155,35 @@ export function inviteCodeVerifier(link: InviteLink): string {
   ]);
 }
 
-/** Builds a join link whose secret is carried only in its fragment. */
+/**
+ * Builds a join link whose secret is carried only in its fragment:
+ * `/join?host&space&invite[&inviter]#code`. The optional `inviter` is an
+ * unverified claim; see {@link InviteLink}.
+ */
 export function buildInviteLink(shell: string, invite: InviteLink): URL {
   inviteCodeVerifier(invite);
+  if (invite.inviter !== undefined && !isInviteDIDKey(invite.inviter)) {
+    throw new SpaceInviteError("invalid-request");
+  }
   const url = new URL("/join", normalizeInviteHost(shell));
   url.search = new URLSearchParams({
     host: normalizeInviteHost(invite.host),
     space: invite.space,
     invite: invite.inviteId,
+    ...(invite.inviter === undefined ? {} : { inviter: invite.inviter }),
   }).toString();
   url.hash = new URLSearchParams({ code: invite.code }).toString();
   return url;
 }
 
-/** Parses a join link; unrelated routes return undefined, malformed joins throw secret-free errors. */
+/**
+ * Parses a join link; unrelated routes return undefined, malformed joins throw
+ * secret-free errors. A returned `inviter` is the link's unverified claim; see
+ * {@link InviteLink}.
+ */
 export function parseInviteLink(
   link: string | URL,
-): (InviteLink & { space: DIDKey }) | undefined {
+): (InviteLink & { space: DIDKey; inviter?: DIDKey }) | undefined {
   let url: URL;
   try {
     url = new URL(link);
@@ -169,16 +195,23 @@ export function parseInviteLink(
   const fragment = new URLSearchParams(url.hash.slice(1));
   if (
     url.username || url.password || url.pathname !== "/join" ||
-    [...url.searchParams.keys()].sort().join(",") !== "host,invite,space" ||
+    !["host,invite,space", "host,invite,inviter,space"].includes(
+      [...url.searchParams.keys()].sort().join(","),
+    ) ||
     [...fragment.keys()].join(",") !== "code"
   ) throw new SpaceInviteError("invalid-link");
   const space = url.searchParams.get("space");
-  if (!isInviteSpace(space)) throw new SpaceInviteError("invalid-link");
+  if (!isInviteDIDKey(space)) throw new SpaceInviteError("invalid-link");
+  const inviter = url.searchParams.get("inviter");
+  if (inviter !== null && !isInviteDIDKey(inviter)) {
+    throw new SpaceInviteError("invalid-link");
+  }
   const invite = {
     host: normalizeInviteHost(url.searchParams.get("host")!),
     space,
     inviteId: url.searchParams.get("invite")!,
     code: fragment.get("code")!,
+    ...(inviter === null ? {} : { inviter }),
   };
   inviteCodeVerifier(invite);
   return invite;

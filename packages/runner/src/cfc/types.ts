@@ -723,7 +723,7 @@ export type CfcExternalContentObservation = {
   readonly consumed: IFCLabel;
   readonly labeledSpaces: readonly MemorySpace[];
   readonly sources: readonly {
-    readonly atom: unknown;
+    readonly atom: CfcConfClause;
     readonly read: CfcAddress;
     readonly labelPath: readonly string[];
   }[];

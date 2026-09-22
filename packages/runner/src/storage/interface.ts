@@ -175,7 +175,7 @@ export const toReplicaLoadFailureError = (
 /**
  * Metadata that can be attached to read operations
  */
-export interface Metadata extends Record<PropertyKey, unknown> {}
+export interface Metadata extends Record<PropertyKey, FabricValue> {}
 
 /**
  * Options for read operations

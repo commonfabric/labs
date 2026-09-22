@@ -1,4 +1,8 @@
 import ts from "typescript";
+import {
+  isCommonFabricSymbol,
+  resolvesToCommonFabricSymbol,
+} from "@commonfabric/schema-generator/common-fabric-symbols";
 import { getDefaultMarkerPayload } from "@commonfabric/schema-generator/default-brand";
 import { getPropertyNameText } from "@commonfabric/schema-generator/property-name";
 import {
@@ -12,14 +16,12 @@ import {
   typeToTypeNodeWithRegistry,
 } from "../ast/type-building.ts";
 import { CF_HELPERS_IDENTIFIER } from "../core/cf-helpers.ts";
-import { isCommonFabricSymbol } from "../core/common-fabric-symbols.ts";
 import { createPropertyName } from "../utils/identifiers.ts";
 import { uniquePaths } from "../utils/path-serialization.ts";
 import {
   type CapabilityParamDefault,
   type CapabilityParamSummary,
   type ReactiveCapability,
-  resolvesToCommonFabricSymbol,
   TransformationContext,
 } from "../core/mod.ts";
 import {

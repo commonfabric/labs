@@ -19,6 +19,7 @@ describe("CFC sink inventory", () => {
       "generateText",
       "generateObject",
       "agent",
+      "sqliteQuery",
     ]);
     expect(isInitialSinkInventoryName("fetchJson")).toBe(true);
     expect(isInitialSinkInventoryName("generateObject")).toBe(true);

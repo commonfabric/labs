@@ -1,0 +1,593 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "BackwardsCompatibleProfile": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "$UI": {
+            "type": "unknown"
+          },
+          "addElement": {
+            "$ref": "#/$defs/MutateProfileElementsEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "addExternalLink": {
+            "$ref": "#/$defs/MutateExternalProfileLinksEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "addPiece": {
+            "$ref": "#/$defs/MutateProfileElementsEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "avatar": {
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "5E9jgGXuHRCyzQAqFo4emUo-MRKmQvnG2EVpmpeYYDg",
+                  "path": [
+                    "setAvatar"
+                  ]
+                }
+              }
+            },
+            "type": "string"
+          },
+          "bio": {
+            "default": "",
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "5E9jgGXuHRCyzQAqFo4emUo-MRKmQvnG2EVpmpeYYDg",
+                  "path": [
+                    "setBio"
+                  ]
+                }
+              }
+            },
+            "type": "string"
+          },
+          "elements": {
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "5E9jgGXuHRCyzQAqFo4emUo-MRKmQvnG2EVpmpeYYDg",
+                  "path": [
+                    "mutateElements"
+                  ]
+                }
+              }
+            },
+            "items": {
+              "$ref": "#/$defs/ProfileElement"
+            },
+            "type": "array"
+          },
+          "externalLinks": {
+            "default": [],
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "5E9jgGXuHRCyzQAqFo4emUo-MRKmQvnG2EVpmpeYYDg",
+                  "path": [
+                    "mutateExternalProfileLinks"
+                  ]
+                }
+              }
+            },
+            "items": {
+              "$ref": "#/$defs/ExternalProfileLink"
+            },
+            "type": "array"
+          },
+          "inbox": {
+            "$ref": "#/$defs/ProfileInbox",
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "5E9jgGXuHRCyzQAqFo4emUo-MRKmQvnG2EVpmpeYYDg",
+                  "path": [
+                    "setInbox"
+                  ]
+                }
+              }
+            }
+          },
+          "initialNameApplied": {
+            "type": "string"
+          },
+          "isEditing": {
+            "default": false,
+            "type": "boolean"
+          },
+          "name": {
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "5E9jgGXuHRCyzQAqFo4emUo-MRKmQvnG2EVpmpeYYDg",
+                  "path": [
+                    "setName"
+                  ]
+                }
+              }
+            },
+            "type": "string"
+          },
+          "publishVerifiedIdentities": {
+            "$ref": "#/$defs/MutateVerifiedIdentitiesEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "removeElement": {
+            "$ref": "#/$defs/MutateProfileElementsEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "removeExternalLink": {
+            "$ref": "#/$defs/MutateExternalProfileLinksEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "revokeVerifiedIdentities": {
+            "$ref": "#/$defs/MutateVerifiedIdentitiesEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "setAvatar": {
+            "$ref": "#/$defs/SetProfileAvatarEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "setBio": {
+            "$ref": "#/$defs/SetProfileBioEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "setInbox": {
+            "$ref": "#/$defs/SetProfileInboxEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "setName": {
+            "$ref": "#/$defs/SetProfileNameEvent",
+            "asCell": [
+              "stream"
+            ]
+          },
+          "toggleEditing": {
+            "asCell": [
+              "stream",
+              "opaque"
+            ]
+          },
+          "verifiedIdentities": {
+            "default": [],
+            "ifc": {
+              "addIntegrity": [
+                {
+                  "kind": "represents-principal",
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  }
+                }
+              ],
+              "ownerPrincipal": {
+                "__ctCurrentPrincipal": true
+              },
+              "writeAuthorizedBy": {
+                "__ctWriterIdentityOf": {
+                  "file": "/packages/patterns/system/profile-home.tsx",
+                  "moduleIdentity": "5E9jgGXuHRCyzQAqFo4emUo-MRKmQvnG2EVpmpeYYDg",
+                  "path": [
+                    "publishVerifiedIdentities"
+                  ]
+                }
+              }
+            },
+            "items": {
+              "$ref": "#/$defs/VerifiedExternalIdentity",
+              "asCell": [
+                "cell"
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "$NAME",
+          "$UI",
+          "name",
+          "avatar",
+          "bio",
+          "externalLinks",
+          "verifiedIdentities",
+          "elements",
+          "setName",
+          "setAvatar",
+          "addElement",
+          "removeElement",
+          "isEditing",
+          "initialNameApplied"
+        ],
+        "type": "object"
+      },
+      "ExternalIdentityAssertion": {
+        "properties": {
+          "type": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "verifiedAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "type",
+          "value",
+          "verifiedAt"
+        ],
+        "type": "object"
+      },
+      "ExternalProfileLink": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "url"
+        ],
+        "type": "object"
+      },
+      "MutateExternalProfileLinksEvent": {
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "MutateProfileElementsEvent": {
+        "properties": {
+          "catalogId": {
+            "type": "string"
+          },
+          "cell": true,
+          "patternUrl": {
+            "type": "string"
+          },
+          "pieceId": {
+            "type": "string"
+          },
+          "pieceSpace": {
+            "type": "string"
+          },
+          "tag": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "userTags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "MutateVerifiedIdentitiesEvent": {
+        "properties": {
+          "identities": {
+            "items": {
+              "$ref": "#/$defs/VerifiedExternalIdentity",
+              "asCell": [
+                "cell"
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "type": "object"
+      },
+      "ProfileElement": {
+        "properties": {
+          "cell": true,
+          "source": {
+            "enum": [
+              "piece",
+              "url",
+              "catalog"
+            ]
+          },
+          "tag": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "userTags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "cell",
+          "tag",
+          "userTags"
+        ],
+        "type": "object"
+      },
+      "ProfileInbox": {
+        "properties": {
+          "piece": {
+            "$ref": "#/$defs/ShareInboxPiece",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The owner's share inbox piece."
+          }
+        },
+        "type": "object"
+      },
+      "SetProfileAvatarEvent": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "detail": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "key": {
+            "type": "string"
+          },
+          "target": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "SetProfileBioEvent": {
+        "properties": {
+          "bio": {
+            "type": "string"
+          },
+          "detail": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "key": {
+            "type": "string"
+          },
+          "target": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "SetProfileInboxEvent": {
+        "properties": {
+          "inbox": {
+            "$ref": "#/$defs/ShareInboxPiece",
+            "asCell": [
+              "cell"
+            ],
+            "description": "The inbox piece to point at; absent clears the pointer."
+          }
+        },
+        "type": "object"
+      },
+      "SetProfileNameEvent": {
+        "properties": {
+          "detail": {
+            "properties": {
+              "message": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "key": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "target": {
+            "properties": {
+              "value": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "ShareInboxPiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "VerifiedExternalIdentity": {
+        "$ref": "#/$defs/ExternalIdentityAssertion",
+        "ifc": {
+          "requiredIntegrity": [
+            "loom-verified-external-identity"
+          ]
+        }
+      }
+    },
+    "properties": {
+      "defaultProfile": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "$ref": "#/$defs/BackwardsCompatibleProfile"
+          }
+        ],
+        "asCell": [
+          "cell"
+        ]
+      },
+      "mru": {
+        "asCell": [
+          "cell"
+        ],
+        "items": {
+          "$ref": "#/$defs/BackwardsCompatibleProfile"
+        },
+        "type": "array"
+      },
+      "profiles": {
+        "asCell": [
+          "cell"
+        ],
+        "items": {
+          "$ref": "#/$defs/BackwardsCompatibleProfile"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "profiles",
+      "defaultProfile",
+      "mru"
+    ],
+    "type": "object"
+  },
+  "pattern": "system/profile-picker.tsx",
+  "resultSchema": {
+    "properties": {
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      }
+    },
+    "required": [
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

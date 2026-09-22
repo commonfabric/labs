@@ -1494,9 +1494,13 @@ describe("CfHarnessPromptLoop research handoff", () => {
       expect(modelOutput.guidance).toContain("Do not present or implement");
       expect(modelOutput.researchRecord).toBeUndefined();
       expect(modelOutput.cfc.coverage).toBe("incomplete");
-      expect(modelOutput.cfc.outputLabel.integrity).toBeUndefined();
-      expect(modelOutput.cfc.outputLabel.confidentiality).toHaveLength(1);
-      expect(modelOutput.cfc.sourceLabel.integrity).toHaveLength(1);
+      expect(modelOutput.cfc.outputLabel).toEqual({});
+      expect(modelOutput.cfc.sourceLabel.integrity).toHaveLength(2);
+      expect(modelOutput.cfc.sourceLabel.integrity).toContainEqual(
+        expect.objectContaining({
+          type: CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE,
+        }),
+      );
       expect(modelOutput.cfc.missingLabels).toEqual([{
         source: "handle-description",
         detail: `handle ${minted.token} metadata returned by describe_handle`,
@@ -1506,15 +1510,8 @@ describe("CfHarnessPromptLoop research handoff", () => {
         result.runState.researchRuns?.[0]?.kit.inputs[0]?.token,
       ).toBe(minted.token);
       expect(result.runState.researchRuns?.[0]?.cfc).toEqual(modelOutput.cfc);
-      expect(result.runState.cfcModelContext?.observations).toEqual([
-        expect.objectContaining({
-          toolCallId: "research-task",
-          toolId: "research",
-          outputId: toolMessage.resultRef?.outputId,
-          channels: ["output"],
-          label: modelOutput.cfc.outputLabel,
-        }),
-      ]);
+      // An output with no confidentiality adds nothing to the model context.
+      expect(result.runState.cfcModelContext).toBeUndefined();
       expect(result.totalUsage?.totalTokens).toBe(37);
 
       const outputRef = result.runState.toolOutputs.find((entry) =>
@@ -2145,6 +2142,65 @@ describe("CfHarnessPromptLoop opening research", () => {
     missing: ["an exact implementation contract"],
   });
 
+  for (
+    const selection of [
+      "pattern id",
+      "piece slug",
+      "registry skill",
+      "local skill",
+    ]
+  ) {
+    it(`starts the parent immediately for a task naming an exact ${selection}`, async () => {
+      await using skills = await createPatternSkillsFixture();
+      const task = selection === "pattern id"
+        ? "Run cf:pattern:v6_KSFHs9AmTg9PKwMmPdZyEHxZ9Oykhno4HBOfUo5s."
+        : selection === "piece slug"
+        ? "Revise pattern:demo-space/monthly-bills."
+        : selection === "registry skill"
+        ? "Use the named skill skill:commonfabric/labs/cf-spend-digest: run its script."
+        : "Use skill:pattern-dev to build a counter.";
+      const runId = `closed-task-${selection}`;
+      const requests: HarnessModelTurnRequest[] = [];
+      const engine = new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        runId,
+        model: "gpt-test",
+      });
+      await engine.persistSkillRegistry(
+        await discoverHarnessSkills({
+          skillsRoot: skills.skillsRoot,
+        }),
+      );
+      const loop = new CfHarnessPromptLoop({
+        engine,
+        allowedToolIds: ["research"],
+        modelClient: {
+          providerId: "test-provider",
+          complete: (request) => {
+            requests.push(request);
+            return Promise.resolve({
+              assistant: { role: "assistant", content: "Ready to use it." },
+            });
+          },
+        },
+      });
+
+      const result = await loop.runPrompt({
+        prompt: task,
+        openingResearchTask: task,
+        promptSlotBinding: directPromptSlotBinding,
+      });
+
+      expect(requests.map((request) => request.runId)).toEqual([runId]);
+      expect(requests[0].tools.map((tool) => tool.toolId)).toContain(
+        "research",
+      );
+      expect(result.runState.openingResearch).toBeUndefined();
+      expect(result.runState.researchRuns).toBeUndefined();
+      expect(result.runState.toolOutputs).toEqual([]);
+    });
+  }
+
   it("researches a fresh root before its first parent turn with normal accounting", async () => {
     const root = await Deno.makeTempDir({
       dir: "/tmp",
@@ -2294,6 +2350,10 @@ describe("CfHarnessPromptLoop opening research", () => {
       expect(openingCfc?.missingLabels).toEqual([]);
       expect(openingCfc?.sourceLabel.integrity).toEqual([
         expect.objectContaining({
+          type: CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE,
+          role: "direct-command",
+        }),
+        expect.objectContaining({
           class: "CommonFabricHarnessOperatorProvisionedReference",
           subject: expect.stringMatching(/\/docs\/common$/),
         }),
@@ -2302,23 +2362,9 @@ describe("CfHarnessPromptLoop opening research", () => {
           subject: expect.stringMatching(/\/skills$/),
         }),
       ]);
-      expect(openingCfc?.sourceLabel.confidentiality).toHaveLength(1);
-      expect(
-        (openingCfc?.sourceLabel.confidentiality?.[0] as { type?: string })
-          ?.type,
-      ).toBe(CF_HARNESS_PROMPT_SLOT_INFLUENCE_ATOM_TYPE);
-      expect(openingCfc?.outputLabel).toEqual({
-        confidentiality: openingCfc?.sourceLabel.confidentiality,
-      });
-      expect(result.runState.cfcModelContext?.observations).toEqual([
-        expect.objectContaining({
-          toolCallId: `opening-research:${runId}`,
-          toolId: "research",
-          outputId: openingOutputId,
-          channels: ["output"],
-          label: openingCfc?.outputLabel,
-        }),
-      ]);
+      expect(openingCfc?.sourceLabel.confidentiality).toBeUndefined();
+      expect(openingCfc?.outputLabel).toEqual({});
+      expect(result.runState.cfcModelContext).toBeUndefined();
       expect(result.usage?.totalTokens).toBe(7);
       expect(result.totalUsage?.totalTokens).toBe(18);
 
@@ -2469,16 +2515,8 @@ describe("CfHarnessPromptLoop opening research", () => {
       expect(artifactOutput.rawCauseMessage).toBe("test corpus unavailable");
       expect(artifactOutput.cfc?.coverage).toBe("complete");
       expect(artifactOutput.cfc?.missingLabels).toEqual([]);
-      expect(artifactOutput.cfc?.outputLabel.confidentiality).toHaveLength(1);
-      expect(result.runState.cfcModelContext?.observations).toEqual([
-        expect.objectContaining({
-          toolCallId: `opening-research:${runId}`,
-          toolId: "research",
-          outputId: outputRef.outputId,
-          channels: ["output"],
-          label: artifactOutput.cfc?.outputLabel,
-        }),
-      ]);
+      expect(artifactOutput.cfc?.outputLabel).toEqual({});
+      expect(result.runState.cfcModelContext).toBeUndefined();
 
       const handoff = result.transcript.find((message) =>
         message.role === "user" &&
@@ -3306,15 +3344,22 @@ Deno.test("CfHarnessPromptLoop strips trusted-only CFC input labels from model t
   assert(toolRequest !== undefined);
   // The loop labels the command from the prompt slot it was given. The entry
   // the model wrote reaches neither the sandbox nor the recorded context.
-  const sandboxLabels = toolRequest.cfcInvocationContext?.cfcInputLabels;
-  assertEquals(sandboxLabels?.entries.map((entry) => entry.path), [[
-    "command",
-  ]]);
-  assertEquals(JSON.stringify(sandboxLabels).includes("did:key:forged"), false);
+  const sandboxContext = toolRequest.cfcInvocationContext;
+  assertEquals(sandboxContext?.cfcInputLabels, undefined);
   assertEquals(
-    JSON.stringify(
-      result.runState.cfcInvocationContexts?.[0]?.cfcInputLabels ?? null,
-    ).includes("did:key:forged"),
+    sandboxContext?.promptSlotInfluenceLabels?.entries.map((entry) =>
+      entry.path
+    ),
+    [["command"]],
+  );
+  assertEquals(
+    JSON.stringify(sandboxContext).includes("did:key:forged"),
+    false,
+  );
+  assertEquals(
+    JSON.stringify(result.runState.cfcInvocationContexts ?? null).includes(
+      "did:key:forged",
+    ),
     false,
   );
 });
@@ -4136,8 +4181,8 @@ Deno.test("CfHarnessPromptLoop withholds the pattern-index tools from the patter
 
 /**
  * A scripted loop that delegates once and then finishes: the child answers
- * its profile's own return contract, and the parent says it is done. The
- * request bodies are collected, so `requestBodies[1]` is the child's.
+ * its profile's own return contract, and the parent reports the missing piece.
+ * The request bodies are collected, so `requestBodies[1]` is the child's.
  */
 const delegateThenFinishFetch = (
   requestBodies: unknown[],
@@ -4168,7 +4213,21 @@ const delegateThenFinishFetch = (
         describes: "Counts things.",
       }),
     })
-    : assistant({ content: "Parent done." });
+    : assistant({
+      content: "",
+      tool_calls: [{
+        id: "call-finish",
+        type: "function",
+        function: {
+          name: "finish_task",
+          arguments: JSON.stringify({
+            outcome: "gave-up",
+            message:
+              "The counter was created, but it has no confirmed slug in this run.",
+          }),
+        },
+      }],
+    });
   return Promise.resolve(
     new Response(JSON.stringify(responsesBodyFromChatFixture(payload)), {
       status: 200,
@@ -4232,7 +4291,21 @@ Deno.test("CfHarnessPromptLoop delegates in a run configured with a pattern inde
               hashtags: ["counter"],
             }),
           })
-          : assistant({ content: "Parent done." });
+          : assistant({
+            content: "",
+            tool_calls: [{
+              id: "call-finish",
+              type: "function",
+              function: {
+                name: "finish_task",
+                arguments: JSON.stringify({
+                  outcome: "gave-up",
+                  message:
+                    "The counter was created, but it has no confirmed slug in this run.",
+                }),
+              },
+            }],
+          });
         return Promise.resolve(
           new Response(JSON.stringify(responsesBodyFromChatFixture(payload)), {
             status: 200,
@@ -4250,6 +4323,7 @@ Deno.test("CfHarnessPromptLoop delegates in a run configured with a pattern inde
   // The delegation reached a child rather than failing the run: a child given
   // an index and no session is a configuration the config layer refuses.
   assertEquals(result.runState.status, "completed");
+  expect(result.taskOutcome?.outcome).toBe("gave-up");
   assertEquals(result.runState.subagentRuns?.length, 1);
   assertEquals(
     result.runState.subagentRuns?.[0]?.manifest.allowedToolIds.includes(

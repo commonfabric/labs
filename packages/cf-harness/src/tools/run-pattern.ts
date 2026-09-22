@@ -43,7 +43,12 @@ import {
   comparableEntityHash,
   fabricRuntimeObservations,
 } from "../fabric-observations.ts";
+import { admitsFabricReference } from "../foreign-spaces.ts";
 import { defineOwnEntry } from "../handle-table.ts";
+import {
+  RESEARCH_REUSE_GUIDANCE,
+  unexplainedResearchPatterns,
+} from "../research/reuse.ts";
 import {
   dedupedObservedOutputs,
   type ObservedOutput,
@@ -349,7 +354,7 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
   toolId: "run_pattern",
   title: "Run Pattern",
   description:
-    `Compile and run a Common Fabric pattern in the configured space, returning a reference to its live result cell. Give it either your own sourceText or the patternId of a pattern search_patterns found. Source you write imports the runtime from "${RUNTIME_MODULE_SPECIFIER}" and from no other module — every pattern opens with a line of the form ${RUNTIME_MODULE_IMPORT_LINE} — and no package named after the product resolves. The run's confidentiality ceiling bounds cell reads. Shared db.query results retain complete labeled row sets and withhold the array, including its row count, when the ceiling does not admit every row. Declare query results per session (PerSession<> on the result type, or the query's { scope: "session" } option) to filter rows under the runtime's ceiling at the query boundary. Bound every query's rows with a LIMIT — a few hundred is a sensible ceiling for a view — because every result row is materialized as its own document in the space, so an unbounded query over a large store writes a document per row it returns, and a re-run writes again only the rows that changed, except that a labeled result keys its rows on position and so also rewrites the rows a change displaced, and re-keys every row when the query's projection or the handle's tables change; an aggregate returning one row per group — count(*), sum(), a GROUP BY — is bounded by its own shape and needs no LIMIT. A pattern composing another passes on what the composed one reports: expose its error branch and its row count under your own result and render them, or the run answers over figures derived from a read that failed, and the result carries an outputConcerns entry naming the output you did not read. A query over a served store may still be pending when this call answers. Pending counts and rows are placeholders, not data. Expose pending along with the error branch and counts; before reporting success or assigning a slug, pass the held resultRef as an inputs entry to a minimal unnamed reader pattern, with a resultSchema covering pending, error, and counts. This reads the existing piece; do not author a replacement page to wait for data. If a settled filtered result is empty, compare it with a count without the uncertain predicate and present both counts, naming the filter; an empty subset does not mean the source is empty. The piece stays out of the space's piece list; assign_slug names and lists it when it deserves a public address.`,
+    `Compile and run a Common Fabric pattern in the configured space, returning a reference to its live result cell. Give it either your own sourceText or the patternId of a pattern search_patterns found. Import runtime APIs from "${RUNTIME_MODULE_SPECIFIER}" and published components from "cf:pattern:<patternId>". A runtime import has the form ${RUNTIME_MODULE_IMPORT_LINE}; no package named after the product resolves. ${RESEARCH_REUSE_GUIDANCE} The run's confidentiality ceiling bounds cell reads. Shared db.query results retain complete labeled row sets and withhold the array, including its row count, when the ceiling does not admit every row. Declare query results per session (PerSession<> on the result type, or the query's { scope: "session" } option) to filter rows under the runtime's ceiling at the query boundary. Bound every query's rows with a LIMIT — a few hundred is a sensible ceiling for a view — because every result row is materialized as its own document in the space, so an unbounded query over a large store writes a document per row it returns, and a re-run writes again only the rows that changed, except that a labeled result keys its rows on position and so also rewrites the rows a change displaced, and re-keys every row when the query's projection or the handle's tables change; an aggregate returning one row per group — count(*), sum(), a GROUP BY — is bounded by its own shape and needs no LIMIT. A pattern composing another passes on what the composed one reports: expose its error branch and its row count under your own result and render them, or the run answers over figures derived from a read that failed, and the result carries an outputConcerns entry naming the output you did not read. A query over a served store may still be pending when this call answers. Pending counts and rows are placeholders, not data. Expose pending along with the error branch and counts; before reporting success or assigning a slug, pass the held resultRef as an inputs entry to a minimal unnamed reader pattern, with a resultSchema covering pending, error, and counts. This reads the existing piece; do not author a replacement page to wait for data. If a settled filtered result is empty, compare it with a count without the uncertain predicate and present both counts, naming the filter; an empty subset does not mean the source is empty. The piece stays out of the space's piece list; assign_slug names and lists it when it deserves a public address.`,
   effectClass: "side-effect",
   inputSchema: RUN_PATTERN_INPUT_SCHEMA,
   outputSchema: {
@@ -999,6 +1004,24 @@ export const runPatternTool: HarnessToolDefinition<
           } KiB limit (${sourceTextBytes} bytes)`,
         );
       }
+      let unexplained;
+      try {
+        unexplained = await unexplainedResearchPatterns(
+          context.researchRuns ?? [],
+          { name: RUN_PATTERN_SOURCE_MAIN, contents: sourceText },
+          input.reuseReasons,
+        );
+      } catch (error) {
+        return errorOutput("error", errorMessage(error));
+      }
+      if (unexplained.length > 0) {
+        return errorOutput(
+          "error",
+          `run_pattern source omits selected research patterns: ${
+            unexplained.map((id) => `cf:pattern:${id}`).join(", ")
+          }. ${RESEARCH_REUSE_GUIDANCE}`,
+        );
+      }
     }
     let parsedResultSchema;
     try {
@@ -1026,11 +1049,11 @@ export const runPatternTool: HarnessToolDefinition<
     // Whole-string LLM-friendly links become live cell references; the
     // prompt loop has already resolved any handle tokens, so the strings
     // seen here carry canonical addresses. Non-link strings and non-strings
-    // pass through as plain JSON. A link that resolves outside the session's
-    // configured space is refused before anything is created: the session's
-    // authority ends at its own space. So is a value carrying a sealed
-    // opaque link anywhere within it, which is a redaction the model copied
-    // back out of an earlier result rather than a reference to anything.
+    // pass through as plain JSON. A link outside the local and
+    // operator-admitted spaces is refused before anything is created. So is a
+    // value carrying a sealed opaque link anywhere within it, which is a
+    // redaction the model copied back out of an earlier result rather than a
+    // reference to anything.
     let pieceInput: Record<string, unknown> | undefined;
     const liveCellInputs: Array<{ key: string; cell: Cell<unknown> }> = [];
     const plainInputs: Array<{ key: string; value: unknown }> = [];
@@ -1058,10 +1081,12 @@ export const runPatternTool: HarnessToolDefinition<
             // Not a parseable link after all — keep the plain string.
           }
           if (link !== undefined) {
-            if (link.space !== space) {
+            if (
+              !admitsFabricReference(link.space, space, session.foreignSpaces)
+            ) {
               return errorOutput(
                 "error",
-                `run_pattern input "${key}" reference targets another space; only references into the configured session space are allowed`,
+                `run_pattern input "${key}" reference targets another space; the operator must admit its DID and host with --fabric-foreign-spaces`,
               );
             }
             const linkHash = comparableEntityHash(link.id);

@@ -8,15 +8,14 @@
  */
 
 import ts from "typescript";
-import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
-import { spellingsWhere } from "@commonfabric/schema-generator/wrapper-names";
 import {
   getImportTypeModuleName,
-  HelpersOnlyTransformer,
   isCommonFabricDeclaration,
   isCommonFabricModuleName,
-  TransformationContext,
-} from "../core/mod.ts";
+} from "@commonfabric/schema-generator/common-fabric-symbols";
+import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
+import { spellingsWhere } from "@commonfabric/schema-generator/wrapper-names";
+import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
 
 /**
  * Cell-like types that should trigger an error when cast to.

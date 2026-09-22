@@ -325,6 +325,16 @@ sandboxes, the assertion says that code hash H observed the login, and verifier
 infrastructure blesses the allowed hashes. That makes the observation
 end-to-end verifiable without hard-coding a closed set of connector providers.
 
+The profile presentation renders only the assertion types meant for people to
+read. `github.login` is shown as a link to the GitHub profile, and stable
+identifiers such as `github.node_id` are left out. The presentation is itself a
+consumer of the list, so it applies the 48-hour freshness window against a
+clock that ticks every five minutes, and hides an assertion it cannot date.
+Each rendered row binds a `cf-cfc-label` badge to the stored assertion's
+`value`, so the badge reports the integrity label the runtime holds for the
+text beside it, and a value that lacks the `loom-verified-external-identity`
+integrity atom shows as unverified.
+
 `elements` is the profile-space analog of favorites and mentionables. Each
 entry points at a piece that lives in the profile space. `tag` stores the
 snapshot string used for hashtag search, following the favorites pattern:

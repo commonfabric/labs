@@ -239,9 +239,10 @@ identifier, snapshot digest, audience, and host event identifier. Source integri
 endorsements are not transferred to the copy.
 
 The renderer and runtime transport are trusted. The operation requires an
-authenticated actor and an explicitly bounded runtime read ceiling before
-preparing a preview. A host with an unbounded read context cannot use this
-surface; the recipient's access does not authorize showing the actor a preview.
+authenticated actor. When the host declares a runtime read ceiling, the source
+must fit it. Otherwise, the source must fit the actor's own `User` ceiling
+before the worker returns a preview. The recipient's access does not authorize
+showing the actor a preview.
 This reduced-evidence operation
 does not establish the full hostile-host intent chain in §4. Its in-memory
 one-use consent does not provide durable retry recovery. It releases only the
