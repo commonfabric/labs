@@ -83,6 +83,12 @@ labs checkout it vendors.
 | Index          | `index.reachable` responding **and** `index.enrolled` console identity enrolled                                                      |
 | Posture        | **not on this route** — read it from your toolshed, below                                                                            |
 
+**A healthy signal from this console means very little, and its absence is
+announced by nothing.** Two separate observations on one evening: the health
+route answered while the fabric routes behind it were dead, and later the
+process exited on a heap out-of-memory with no record of it anywhere an operator
+would look.
+
 **`/api/health` answering does not mean the fabric is answering.** It was
 observed returning `200` in under a millisecond while `/api/status` and
 `/api/turns` on the same console had stopped responding entirely, because the
