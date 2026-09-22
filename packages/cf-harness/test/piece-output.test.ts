@@ -11,6 +11,7 @@ import { readConsoleTurnResult } from "../console/turn-result.ts";
 import type { HarnessFabricSessionConfig } from "../src/config.ts";
 import type {
   HarnessAssistantTranscriptMessage,
+  HarnessTranscriptEvent,
   HarnessTranscriptMessage,
 } from "../src/contracts/transcript.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
@@ -227,6 +228,7 @@ describe("piece-output", () => {
 
   it("keeps a denied naming call out of completion without writing a replacement for the model", async () => {
     const requests: HarnessModelTurnRequest[] = [];
+    const events: HarnessTranscriptEvent[] = [];
     let fabricOpens = 0;
     const loop = new CfHarnessPromptLoop({
       sandboxRuntime: sandbox,
@@ -261,11 +263,19 @@ describe("piece-output", () => {
       prompt: "Render my answer.",
       maxModelTurns: 3,
       promptSlotBinding: directPromptSlotBindingFor("denied"),
+      onTranscriptEvent: (event) => {
+        events.push({ ...event, transcript: [...event.transcript] });
+      },
     });
     expect(requests).toHaveLength(3);
     expect(requests[2].transcript.at(-1)?.content).toContain(
       "no successful assign_slug receipt",
     );
+    const correction = events.find(({ message }) =>
+      message.content.startsWith("Host completion check:")
+    );
+    expect(correction?.message).toEqual(requests[2].transcript.at(-1));
+    expect(correction?.transcript).toEqual(requests[2].transcript);
     expect(result.taskOutcome?.outcome).toBe("gave-up");
     expect(result.runState.assignedPieces).toBeUndefined();
     expect(fabricOpens).toBe(0);
