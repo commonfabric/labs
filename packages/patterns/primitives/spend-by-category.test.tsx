@@ -1,4 +1,12 @@
-import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
+import {
+  action,
+  assert,
+  NAME,
+  pattern,
+  TESTS,
+  UI,
+  Writable,
+} from "commonfabric";
 
 import { textContent } from "../test/vnode-helpers.ts";
 import SpendByCategory, {
@@ -28,6 +36,9 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      {
+        assertion: assert(() => spending[NAME] === "Spending by category (2)"),
+      },
       { assertion: assert(() => spending.grandTotal === 30) },
       { assertion: assert(() => spending.categoryCount === 2) },
       { assertion: assert(() => spending.currency === "USD") },

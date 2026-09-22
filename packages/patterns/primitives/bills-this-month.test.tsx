@@ -1,5 +1,6 @@
-import { assert, pattern, TESTS } from "commonfabric";
+import { assert, NAME, pattern, TESTS, UI } from "commonfabric";
 
+import { findElement, propValue, textContent } from "../test/vnode-helpers.ts";
 import BillsThisMonth from "./bills-this-month.tsx";
 
 export default pattern(() => {
@@ -85,6 +86,30 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      {
+        assertion: assert(() =>
+          sharedBrand[NAME] === "Bills this month (1 unpaid, 3 paid)"
+        ),
+      },
+      {
+        assertion: assert(() =>
+          textContent(sharedBrand[UI]).includes("Unpaid (1)") &&
+          textContent(sharedBrand[UI]).includes("Paid (3)") &&
+          textContent(sharedBrand[UI]).includes("Payments with no email (1)")
+        ),
+      },
+      {
+        assertion: assert(() => textContent(gas[UI]).includes("45.00")),
+      },
+      {
+        assertion: assert(() => textContent(category[UI]).includes("42.00")),
+      },
+      {
+        assertion: assert(() =>
+          propValue(findElement(ordinary[UI], "cf-empty-state"), "message") ===
+            "Nothing this month reads as a bill."
+        ),
+      },
       { assertion: assert(() => unrelated.paidCount === 0) },
       { assertion: assert(() => unrelated.unpaidCount === 1) },
       { assertion: assert(() => unrelated.unmatchedCount === 1) },

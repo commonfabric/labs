@@ -1,4 +1,12 @@
-import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
+import {
+  action,
+  assert,
+  NAME,
+  pattern,
+  TESTS,
+  UI,
+  Writable,
+} from "commonfabric";
 
 import { textContent } from "../test/vnode-helpers.ts";
 import BudgetVsActual, { type SpendRow } from "./budget-vs-actual.tsx";
@@ -48,6 +56,11 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      {
+        assertion: assert(() =>
+          comparison[NAME] === "Budget vs actual (1 over)"
+        ),
+      },
       { assertion: assert(() => comparison.rows[0].actual === 110) },
       { assertion: assert(() => comparison.totalActual === 130) },
       { assertion: assert(() => comparison.unmatchedSpend.length === 0) },
