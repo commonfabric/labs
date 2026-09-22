@@ -75,13 +75,31 @@ Read these off the console's launch printout and `GET /api/health/detail`. Loom
 writes the printout to `packages/cf-harness/local-dev-console.log` under the
 labs checkout it vendors.
 
-| Check          | Expected                                                                                  |
-| -------------- | ----------------------------------------------------------------------------------------- |
-| Console health | `GET <console>/api/health` returns `ok: true`, and `fabricApiUrl` names **your** toolshed |
-| Model          | a connected provider; `model.auth` reads connected                                        |
-| Sandbox        | `sandbox.docker` responding and `sandbox.runtime` `runsc-cfc registered`                  |
-| Index          | `index.reachable` responding **and** `index.enrolled` console identity enrolled           |
-| Posture        | **not on this route** — read it from your toolshed, below                                 |
+| Check          | Expected                                                                                                                             |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| Console health | `GET <console>/api/health` returns `ok: true`, and `fabricApiUrl` names **your** toolshed. Necessary, **not sufficient** — see below |
+| Model          | a connected provider; `model.auth` reads connected                                                                                   |
+| Sandbox        | `sandbox.docker` responding and `sandbox.runtime` `runsc-cfc registered`                                                             |
+| Index          | `index.reachable` responding **and** `index.enrolled` console identity enrolled                                                      |
+| Posture        | **not on this route** — read it from your toolshed, below                                                                            |
+
+**`/api/health` answering does not mean the fabric is answering.** It was
+observed returning `200` in under a millisecond while `/api/status` and
+`/api/turns` on the same console had stopped responding entirely, because the
+toolshed behind them had stopped serving HTTP — still accepting TCP connections,
+still with a normal load average, and recovering unaided about a minute later.
+
+So health is a static route and a stall hides behind it. If a run seems to hang,
+check a **fabric-dependent** route before concluding anything:
+
+```sh
+curl -sS -m 10 <your-toolshed>/api/meta
+```
+
+A timeout there and a healthy `/api/health` together mean the fabric is stalled
+rather than the demo being slow. It recovered on its own; nothing was restarted.
+**Any wall time measured across such a window is not a measurement** — the same
+rule as a concurrent run, for the same reason.
 
 **The posture is on the toolshed, not the console.** `/api/health/detail` has no
 posture row — its groups are console, model, sandbox, index, connectors and
