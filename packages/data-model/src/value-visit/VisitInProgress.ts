@@ -7,7 +7,6 @@ import type {
   FabricContainerValuePlus,
   FabricInstancePlus,
   FabricPlainObjectPlus,
-  FabricValue,
   FabricValuePlus,
 } from "@/interface.ts";
 import {
@@ -57,7 +56,10 @@ type MainVisitResult<ResultType> = BaselineVisitorMethodResult<
  * This class is _intentionally_ omitted from the barrel `export` file for the
  * submodule.
  */
-export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
+export class VisitInProgress<
+  PlusType = never,
+  ResultType = FabricValuePlus<PlusType>,
+> {
   /** Concrete visitor implementation. */
   #visitor: ValueVisitor<PlusType, ResultType>;
 
