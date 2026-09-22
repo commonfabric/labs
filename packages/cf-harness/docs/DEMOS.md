@@ -4,7 +4,7 @@ Every demo this package is shown with, what has to be true before each one can
 run, and whether it has been proven to run end to end. It is written so an agent
 pointed at a person's own console can answer, mechanically, whether they can run
 a given demo — and so nobody is asked to demonstrate something that has not been
-run three times first.
+run end to end first.
 
 [Driving the console from Weaver](WEAVER.md) owns the arrangement these are
 typed into, and its §7 holds the demo tasks this document measures. Nothing here
@@ -16,9 +16,15 @@ Each entry carries a **preflight** an agent can check without running anything,
 the **prompt verbatim**, the **done condition**, a **typical wall time**, the
 **likely failure**, and a **proof status**.
 
-Proof status is a count of clean runs with identical prompt text on one console:
+Proof status is a count of clean runs with identical prompt text on one console.
+A demo earns a place on a recording sheet once it has produced its piece on
+every run; the count says how many those were, and two is not three.
 
-- **PROVEN (n/n)** — produced the expected piece on every run.
+- **PROVEN (n/n)** — produced the expected piece on every run **and** the done
+  condition was exercised in a browser.
+- **PIECE PRODUCED (n/n), INTERACTION UNVERIFIED** — every run returned a named
+  piece, and nobody opened it. A run finishing is not the page working, and this
+  status exists because that distinction was learned the hard way.
 - **NOT PROVEN (m/n)** — did not, with the evidence named.
 - **NEEDS <X>** — cannot run without a grant or connection the runner must
   supply. Not a failure; a prerequisite.
@@ -42,8 +48,8 @@ A console proxied behind a loom daemon answers the same routes under
 console you meant: an acceptance instance does not start one of its own, and its
 `/harness-console` prefix resolves to the primary instance's console.
 
-**Every demo pays an opening research pass** — 35–90 seconds at the start of any
-fresh session, during which the console draws nothing. It is not a hang. The
+**Every demo pays an opening research pass** — 35–105 seconds at the start of
+any fresh session, during which the console draws nothing. It is not a hang. The
 pass is what establishes which data and composable pieces the session has, and
 it is why these demos reuse indexed patterns instead of authoring from scratch.
 Withholding it where the task is already closed is CT-2401; drawing it in the
@@ -98,7 +104,8 @@ carries on. A second `assign_slug` in the timeline is the retry working, not a
 fault.
 
 **Proof status: PROVEN (3/3)** — `pomodoro-timer-2`, `pomodoro-focus-timer`,
-`pomodoro-focus-clock`.
+`pomodoro-focus-clock`. Browser-verified: the countdown was seen running on a
+recorded take.
 
 ## 2. A dinner party page, composed from two library parts
 
@@ -121,15 +128,27 @@ then `assign_slug`.
 
 **Done when:** you can tick an item and the total moves.
 
-**Typical wall time:** 5 m 42 s – 6 m 37 s, of which 35–43 s is the opening
-pass.
+**Typical wall time:** about 5 minutes — 4 m 52 s on the run that was opened, of
+which the first 39 s is the opening pass with nothing drawn, and the authoring
+child spent 226 s more before its first `run_pattern`. The wall time is not the
+complaint; the silence at the front of it is.
 
 **Likely failure:** the child authors from scratch instead of composing. The
 page still works; the run is longer and the Patterns pane shows no `cf:pattern:`
 line.
 
-**Proof status: PROVEN (2/2)** — `dinner-party-planner` and `dinner-party-prep`,
-each submitting source carrying `cf:pattern:` imports.
+**Proof status: NOT PROVEN.** Three runs each returned a named piece composing
+CheckList and AmountLedger by `cf:pattern:` id, with no compile error —
+`dinner-party-planner`, `dinner-party-prep`, `dinner-party-prep-list`. The third
+was opened, and **its controls do nothing**: items cannot be added or removed
+and the total does not move. The parts are instantiated in the parent body with
+`new Writable.perSpace(<literal array>)` inputs and their `$UI` embedded, so the
+controls render against a value rather than a writable reference — suspected,
+not confirmed, and the reason this entry is not on a recording sheet.
+
+The first two runs were marked proven on the strength of the task API returning
+a piece. Nobody opened them. That is the mistake this document's proof bar now
+exists to prevent.
 
 ## 3. This month's bank transactions as a sortable table
 
@@ -157,8 +176,10 @@ pass.
 **Likely failure:** an empty table on first paint is a pending read, not an
 empty month — reopen the piece rather than re-running.
 
-**Proof status: PROVEN (2/2)** — `monthly-bank-transactions`,
-`bank-transactions-this-month`, each composing one indexed reader.
+**Proof status: PIECE PRODUCED (2/2), INTERACTION UNVERIFIED** —
+`monthly-bank-transactions`, `bank-transactions-this-month`, each composing one
+indexed reader. Neither was opened, so whether rows render and a header click
+reorders them is unestablished.
 
 ## 4. Bills this month, from mail and bank together
 
@@ -184,8 +205,15 @@ produced no piece. The rejections cluster into a handful of recurring authoring
 mistakes — a nonexistent `cf-alert` prop, a `Set` in pattern inputs, a loop in a
 callback body — tracked as CT-2403.
 
-**Proof status: NEEDS an email grant and a finance grant.** Not yet run to three
-clean runs on the pinned build.
+**Proof status: PIECE PRODUCED (1/1), INTERACTION UNVERIFIED, and NEEDS an email
+grant and a finance grant.** One run delivered `monthly-bills-mail-bank` in 427
+s, 61 s of it the opening pass, importing both indexed readers into an authored
+wrapper. Its first submission failed on a `cf-alert` prop and the repaired
+version ran; its first naming attempt collided and the second succeeded, which
+is the slug sentence working. The run's own final text says its counts and
+matches were not independently verified, because policy withheld the results
+from the model — so this establishes a named piece and indexed composition, not
+that the bills it lists are the right ones.
 
 ## 5. A skill's script, run in the sandbox, folded into a piece
 
@@ -211,15 +239,16 @@ will not guess.
 empty month. Failing that, the compiler rejections in CT-2403: both recorded
 runs hit them before reaching a slug.
 
-**Proof status: NOT PROVEN (0/2 within an eight-minute cap), and NEEDS a finance
+**Proof status: NOT PROVEN (0/3 within an eight-minute cap), and NEEDS a finance
 grant with skill scripts enabled.** Both runs acquired the skill and ran its
-script, and both authored a wrapper importing the indexed bank reader, but
-neither assigned a slug before the cap: 480.7 s and 481.5 s wall, 88.6 s and
-63.5 s in the opening pass. The first hit a compile error; the second submitted
-six times — two compile errors, then four accepted results carrying pending
-concerns and a withheld value. Acquisition and sandboxed execution work; the
-demo reaching a named piece does not yet. Both ran with five sessions in flight
-on one console, so the cap may be a property of that load; a solo run is
+script, and both authored a wrapper importing the indexed bank reader, but none
+assigned a slug before the cap: 480.7 s, 481.5 s and 481.2 s wall, with 88.6 s,
+63.5 s and 105.1 s in the opening pass. The first hit a compile error; the
+second submitted six times — two compile errors, then four accepted results
+carrying pending concerns and a withheld value; the third reached one accepted
+result after two compile errors. Acquisition and sandboxed execution work; the
+demo reaching a named piece does not yet. All three ran with other sessions in
+flight on one console, so the cap may be a property of that load; a solo run is
 untested.
 
 ## 6. Revise a piece in place
