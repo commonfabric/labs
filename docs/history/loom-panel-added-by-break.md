@@ -14,9 +14,11 @@ It is plan item 2 of loom's socialized-Loom-panels proposal
 principal there when it publishes a panel, and the loom reconciler reads it to
 attribute synchronized changes and to decide whether a removal retracts the
 panel for everyone or hides it for one person. A panel without the field is
-attributed to the Loom's owner. `addPanel` and `duplicatePanel` refuse an
-`addedBy` that is not a DID, and `addPiece` and `duplicatePanel` take one in
-their events.
+attributed to the Loom's owner. `addPanel`, `addPiece`, and `duplicatePanel`
+refuse an `addedBy` that is not a DID, and `addPiece` and `duplicatePanel` take
+one in their events. The root's own buttons pass no `addedBy` yet, so the panels they
+add or duplicate are attributed to the owner until a follow-up has the root's
+handlers link the profile under which the person is acting.
 
 Against both recorded baselines of `loom/main.tsx` the pattern-update proof
 reports `argument.panels[]: a schema alternative accepted previously is not
@@ -29,10 +31,9 @@ admits only a string.
 
 ## Why this could not be done compatibly
 
-The shape that passes the gate was measured: `addedBy?: unknown` on every
-branch produces no finding over either baseline, and it is the only change
-this item makes to the argument or result contract that the gate refuses. It
-was rejected on its merits. The field would lose its type in every consumer
+The string-typed `addedBy` is the only change in this item that the gate
+refuses. Typed `addedBy?: unknown` on every branch instead, it produces no
+finding over either baseline; that shape was rejected on its merits. The field would lose its type in every consumer
 of `Panel`, and the schema would no longer say what the handlers enforce and
 what the reconciler relies on. Extending the proof's evolution allowance to
 union branches is a change to the gate, not to this pattern.

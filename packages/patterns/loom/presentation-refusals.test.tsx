@@ -70,14 +70,20 @@ export default pattern(() => {
     url: "https://example.com/c",
     addedBy: "alice",
   });
-  const unattributedAdd = action(() => loom.addPanel.send({ panel: notADid }));
-  const unattributedPiece = action(() =>
+  const invalidAdderAdd = action(() => loom.addPanel.send({ panel: notADid }));
+  const invalidAdderPiece = action(() =>
     loom.addPiece.send({ piece, addedBy: "did:key:has space" })
   );
-  const unattributedDuplicate = action(() =>
+  const invalidAdderDuplicate = action(() =>
     loom.duplicatePanel.send({ panel: first, addedBy: "did:key:a/b" })
   );
-  const overlongDuplicate = action(() =>
+  const fragmentAdderDuplicate = action(() =>
+    loom.duplicatePanel.send({ panel: first, addedBy: "did:key:z6Mk#key-1" })
+  );
+  const trailingColonAdderDuplicate = action(() =>
+    loom.duplicatePanel.send({ panel: first, addedBy: "did:key:z6Mk:" })
+  );
+  const overlongAdderDuplicate = action(() =>
     loom.duplicatePanel.send({
       panel: first,
       addedBy: `did:key:z${"6".repeat(200)}`,
@@ -85,7 +91,7 @@ export default pattern(() => {
   );
   return {
     allowRuntimeErrors: true,
-    expectRuntimeErrors: 12,
+    expectRuntimeErrors: 14,
     allowConsoleErrors: true,
     // The refused direct roster write is reported as a CFC policy warning.
     allowConsoleWarnings: true,
@@ -110,10 +116,12 @@ export default pattern(() => {
       { action: absentMove },
       { action: absentMoveSource },
       { action: invalidUrl },
-      { action: unattributedAdd },
-      { action: unattributedPiece },
-      { action: unattributedDuplicate },
-      { action: overlongDuplicate },
+      { action: invalidAdderAdd },
+      { action: invalidAdderPiece },
+      { action: invalidAdderDuplicate },
+      { action: overlongAdderDuplicate },
+      { action: fragmentAdderDuplicate },
+      { action: trailingColonAdderDuplicate },
       { assertion: assert(() => loom.panels.length === 2) },
       { assertion: assert(() => loom.panels[0].equals(first)) },
       { assertion: assert(() => loom.presentation.stagedPanels.length === 1) },

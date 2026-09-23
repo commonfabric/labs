@@ -120,6 +120,9 @@ export default pattern(() => {
   const addAttributedPiece = action(() =>
     attributed.addPiece.send({ piece: attributedPiece, addedBy: alice })
   );
+  const addAttributedPieceAgain = action(() =>
+    attributed.addPiece.send({ piece: attributedPiece, addedBy: bob })
+  );
   const duplicateUnattributed = action(() =>
     attributed.duplicatePanel.send({ panel: attributedUrl })
   );
@@ -318,6 +321,14 @@ export default pattern(() => {
           attributed.panels.length === 2 &&
           attributed.panels[0].get().addedBy === alice &&
           attributed.panels[1].get().kind === "piece" &&
+          attributed.panels[1].get().addedBy === alice
+        ),
+      },
+      // Registering a piece again changes nothing, its adder included.
+      { action: addAttributedPieceAgain },
+      {
+        assertion: assert(() =>
+          attributed.panels.length === 2 &&
           attributed.panels[1].get().addedBy === alice
         ),
       },

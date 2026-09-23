@@ -44,8 +44,9 @@ export interface PublishedDocument {
  * One occurrence in the Loom, retaining the complete target cell reference.
  *
  * `addedBy` is the DID of the person who added the occurrence, as its writer
- * claims it: handlers cannot see the caller, so any writer of the panels can
- * set any DID. A panel without it is attributed to the Loom's owner.
+ * claims it: the root's handlers check that it is a DID, not that it names the
+ * person acting, and a direct write to a panel is not checked. A panel without
+ * it is attributed to the Loom's owner.
  */
 export type Panel =
   | {

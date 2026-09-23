@@ -53,12 +53,13 @@ function externalUrl(raw: string): string | undefined {
 
 /**
  * Whether `value` is a DID a panel may name as its adder: `did:`, a lowercase
- * method, and an identifier with no whitespace or `/`, at most 195 characters
- * in all, so that the adder's `peer:<did>` actor fits the service's
- * 200-character bound.
+ * method, and an identifier with no whitespace, `/`, `?` or `#` that does not
+ * end in `:`, at most 195 characters in all, so that the adder's `peer:<did>`
+ * actor fits the service's 200-character bound.
  */
 function isAdderDid(value: string): boolean {
-  return value.length <= 195 && /^did:[a-z0-9]+:[^\s/]+$/.test(value);
+  return value.length <= 195 &&
+    /^did:[a-z0-9]+:[^\s/?#]*[^\s/?#:]$/.test(value);
 }
 
 /** Refuse an `addedBy` that is present but is not a DID. */
