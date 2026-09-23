@@ -20,7 +20,13 @@ import { HarnessInteractiveChatService } from "../../src/interactive-chat-servic
 import { CfHarnessPromptLoop } from "../../src/prompt-loop.ts";
 import type { SandboxRuntime } from "../../src/sandbox/types.ts";
 
-const gc = (globalThis as { gc?: () => void }).gc;
+const gc = (globalThis as {
+  gc?: (options: {
+    type: "major";
+    execution: "sync";
+    flavor: "last-resort";
+  }) => void;
+}).gc;
 if (!gc) throw new Error("This fixture requires --expose-gc");
 const reopen = Deno.args[0] === "reopen";
 const root = await Deno.makeTempDir({ prefix: "interactive-session-runtime-" });
@@ -120,7 +126,7 @@ async function fabric() {
   if (reopen && previousPieceId) {
     const prior = await pieces.getPieceCell<Result>(previousPieceId, true);
     await prior.pull();
-    await waitForCellValue(
+    await waitForCellValue<Result>(
       runtime,
       prior,
       (value) => value?.count === 2 && !value.pending && !value.error,
@@ -137,7 +143,7 @@ async function fabric() {
       pieces.getArgument<{ tick: number }>(prior).key("tick").withTx(tx)
         .set(count);
       expect((await tx.commit()).error).toBeUndefined();
-      await waitForCellValue(
+      await waitForCellValue<Result>(
         runtime,
         prior,
         (value) => value?.count === count && !value.pending && !value.error,
@@ -196,7 +202,7 @@ async function verifyCurrent() {
   const runtime = record.runtime.deref()!;
   const pieces = record.pieces.deref()!;
   const cell = record.cell!.deref()! as Cell<Result>;
-  await waitForCellValue(
+  await waitForCellValue<Result>(
     runtime,
     cell,
     (value) => value?.count === 2 && !value.pending && !value.error,
@@ -206,11 +212,10 @@ async function verifyCurrent() {
 }
 
 async function aliveRuntimes() {
-  // WeakRef keeps a dereferenced target alive until this task ends. A zero
-  // timer crosses that boundary; it does not wait for runtime work to finish.
+  // End WeakRef's keep-alive job, then finish a full collection before reading
+  // reachability. The zero timer is a task boundary, not a wait for cleanup.
   await new Promise((resolve) => setTimeout(resolve, 0));
-  gc!();
-  gc!();
+  gc!({ type: "major", execution: "sync", flavor: "last-resort" });
   return refs.filter((ref) => ref.runtime.deref() !== undefined).length;
 }
 
@@ -220,6 +225,7 @@ try {
     expect(
       (await service.startSession(`open-${session}`, {
         sessionId,
+        workspace: { hostPath: root },
         policy: {
           type: "cf-harness.chat-policy",
           toolMode: "workspace-write",
