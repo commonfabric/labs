@@ -382,7 +382,7 @@ describe("inbox HTTP and SDK", () => {
         path: "/api/inbox/enable",
         method: "POST",
         authority: "https://public.example",
-        error: expect.stringContaining("Invalid signature"),
+        error: "Invalid signature",
         msg: "Rejected unauthenticated first-party HTTP request",
       });
       const logged = JSON.stringify(f.diagnostics);

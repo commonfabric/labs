@@ -88,8 +88,10 @@ export function createInboxRouter(
           {
             path: c.req.path,
             method: c.req.method,
+            // Production always passes the configured `API_URL` as the host; the
+            // dialed origin is only for fixtures that build the router without one.
             authority: host ?? new URL(c.req.url).origin,
-            error: String(error),
+            error: error instanceof Error ? error.message : String(error),
           },
           "Rejected unauthenticated first-party HTTP request",
         );

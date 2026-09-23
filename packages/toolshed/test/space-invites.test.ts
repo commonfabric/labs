@@ -590,7 +590,7 @@ describe("space-invites", () => {
         path: `/api/spaces/${f.space}/invites/redeem`,
         method: "POST",
         authority: "https://public.example",
-        error: expect.stringContaining("Invalid signature"),
+        error: "Invalid signature",
         msg: "Rejected unauthenticated first-party HTTP request",
       });
       const logged = JSON.stringify(f.diagnostics);
