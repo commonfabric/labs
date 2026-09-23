@@ -154,22 +154,50 @@ Each of these refuses an honest release rather than admitting a crafted one:
 
 ## What this does not cover
 
+The first three items below release a secret under a witnessed guard, and each
+was demonstrated against the runtime. A rule author relying on the witness has
+to close them some other way. The first and third are closed by writer policies
+on the witnessed inputs and on the endorsed output, and a release rule should
+not rely on the witness without them.
+
+- **Removals and membership changes by another writer.** The witness is about
+  values written. A structure stamp records confidentiality and no integrity, so
+  when another writer empties a container inside a committed document, the
+  emptied location resolves to the committed value above it and keeps its
+  witness. Removing a path that never had an entry of its own leaves the label
+  map unchanged. Both let a secret choose what the endorsed transformer counts.
+  Declaring the committed documents `writeAuthorizedBy` the commit step confines
+  every write to them, removals included, to that code.
+- **The bottom of a chain trusts its caller.** Every endorsed step mints its
+  identity-only atom whatever it was fed, so the innermost level a rule pins is
+  satisfied by crafted input to that step. Retaining only `TransformedBy`
+  witnesses means nothing below the innermost step can be pinned. What grounds
+  a chain is evidence minted where data enters — a user's gesture on a trusted
+  surface — which is proof-of-gesture work, and a family this design can
+  retain once it exists.
+- **Composition at the release gate.** The gate evaluates a rule once per
+  consumed read over that read's effective label, whose integrity is the union
+  described above. A document that holds the endorsed output at one path and a
+  value written by other code at another satisfies the guard through the first
+  and releases both, verbatim. The identity-only guard has the same exposure;
+  the witness does not change it. An endorsed transformer whose output document
+  nobody else can write (a writer policy again) is not exposed; a gate that
+  evaluates integrity guards per consumed entry is the general fix.
 - **Stance stuffing through an endorsed entry point.** Implementation identity
   is content-addressed, so any program that imports the endorsed module runs the
   same identity. A member can bind the submit step to a crafted event and
   commit a stance computed from another member's note. The stance is then
   witnessed exactly like an honest one. What separates the two is the event's
   provenance, which is the proof-of-gesture work, not this.
-- **Composition at the release gate.** The gate evaluates a rule once per
-  consumed read over that read's effective label, whose integrity is the union
-  described above. A document that holds the endorsed output at one path and a
-  value written by other code at another satisfies the guard through the first
-  and releases both. An endorsed transformer whose output is a whole document
-  nobody else writes is not exposed to this; a gate that evaluates the guard
-  per location is the general fix.
 - **Selection among committed values.** A transformation fed a subset of
   honestly committed inputs computes over a choice. References are refused
   above; a selection made by endorsed code is that code's semantics.
+- **Public parameters.** A public input does not constrain the witness, so a
+  caller-chosen public parameter to the endorsed code (a filter, an index of
+  whom to count) chooses what it computes over committed inputs. The witness
+  attests where confidential inputs came from, not which function of them was
+  computed; endorsed code must not take parameters that select among
+  confidential values.
 - **Addressing inputs by document.** The witnesses name the code that wrote an
   input, never the input's address. A rule is static module code and cannot
   name the documents a room creates at run time, and an address list would put

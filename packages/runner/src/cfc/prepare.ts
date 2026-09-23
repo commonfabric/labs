@@ -657,11 +657,18 @@ const entryResolvesAtLocation = (
  * A location is the read's own path and, for a recursive read, the path of
  * each consumed entry below it; any other position resolves exactly as its
  * nearest enclosing location does. Each location's integrity is its own
- * resolution (per-component longest prefix, joined across components), which
- * is a claim about the value there. That is what makes the witness a claim
- * about the whole read: a value written by other code beside a witnessed one
- * is its own location, and its resolution lacks the witness. The union
- * `labelForConsumedEntries` takes would carry the neighbor's witness to it.
+ * resolution (per-component longest prefix, joined across components). A
+ * value written by other code beside a witnessed one is its own location,
+ * and its resolution lacks the witness; the union `labelForConsumedEntries`
+ * takes would carry the neighbor's witness to it.
+ *
+ * The witness covers VALUES written, not removals or membership changes.
+ * Structure stamps carry no integrity, so a container another writer emptied
+ * resolves to the witnessed value ancestor it sits under, and removing a
+ * never-labeled path leaves no entry at all. An input whose witness a rule
+ * relies on needs a writer policy (`writeAuthorizedBy`) confining its writes
+ * to the endorsed code; `docs/specs/cfc-transformed-by-input-witnesses.md`
+ * covers this.
  *
  * Integrity a runtime-minted `*` template contributes is not counted. A
  * template labels membership and slots rather than a written value, and it
