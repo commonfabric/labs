@@ -652,12 +652,15 @@ records, and the offline audit are usable now.
 
 The boundaries that affect this onboarding are:
 
-- CT-2175: a `run_pattern` call without `resultSchema` receives the result
-  handle without consulting the ceiling. If the ceiling refuses requested
-  values, the call still receives the handle, with `value` withheld, a
-  `valueError` that explains why and names the input carrying the label, and
-  `policyRefusal` as structured data. Declassification by policy — releasing a
-  value under one policy and refusing it under another — remains open.
+- CT-2175: a successful `run_pattern` capture receives its result handle and
+  host-computed `pending`/`hasError` flags when their release fit admits them. A
+  refused host-only status fit silently omits the flags and keeps the handle.
+  `resultSchema` requests computed values beyond those flags. If the ceiling
+  refuses those requested values, the call still receives the handle, with
+  `value` withheld, a `valueError` that explains why and names the input
+  carrying the label, and `policyRefusal` as structured data. Declassification
+  by policy — releasing a value under one policy and refusing it under another —
+  remains open.
 - CT-2187 and CT-2191: the audit's known findings in section 7.
 - CT-2155 clause 5: the console's web routes carry no credential. The `Host`
   allowlist is the whole of the request gate, and the network the console is

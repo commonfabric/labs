@@ -2123,12 +2123,12 @@ emptiness concern. Its captured zeros and empty lists are not data. The root's
 exact returned snapshot is checked even when the runtime has no instantiation
 recorder or the read settles before the composed-output scan. A failure is
 reported alongside pending either way. Pass the held result reference as an
-`inputs` entry to a minimal unnamed reader pattern through `run_pattern` before
-describing counts or naming the page; a replacement page is not needed to
-receive the outstanding reply. A settled, error-free empty filtered result
-should be checked against the same source without the uncertain predicate, and
-both counts and the filter presented. All value reads use the ordinary release
-boundary.
+`inputs` entry to a minimal unnamed reader pattern through `run_pattern`, with a
+`resultSchema` for any counts to describe, before describing counts or naming
+the page; a replacement page is not needed to receive the outstanding reply. A
+settled, error-free empty filtered result should be checked against the same
+source without the uncertain predicate, and both counts and the filter
+presented. All value reads use the ordinary release boundary.
 
 The failure's own TEXT does not travel in the result. A concern names what the
 model already holds: it wrote the composition, and a composed instance's outputs
