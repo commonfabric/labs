@@ -415,14 +415,41 @@ export interface HarnessResearchHandleValue {
   cfc: HarnessResearchCfcProjection;
 }
 
-/** Whether `value` has the shape of a research handle's content. */
+/**
+ * Whether `value` has the shape of a research handle's content: the
+ * discriminator, a kit with its findings fields, records that each carry
+ * their identity, and a CFC projection with both labels. A persisted referent
+ * that fails this is read as holding nothing rather than crashing its reader.
+ */
 export const isHarnessResearchHandleValue = (
   value: unknown,
 ): value is HarnessResearchHandleValue =>
   isObjectNotArray(value) &&
   value.type === HARNESS_RESEARCH_HANDLE_TYPE &&
   typeof value.researchRunId === "string" &&
-  isObjectNotArray(value.kit) &&
+  isResearchKitShape(value.kit) &&
   Array.isArray(value.confirmedPatterns) &&
+  value.confirmedPatterns.every((record) =>
+    isObjectNotArray(record) && typeof record.patternId === "string"
+  ) &&
   Array.isArray(value.describedHandles) &&
-  isObjectNotArray(value.cfc);
+  value.describedHandles.every((record) =>
+    isObjectNotArray(record) && typeof record.token === "string"
+  ) &&
+  isObjectNotArray(value.cfc) &&
+  value.cfc.version === 1 &&
+  isObjectNotArray(value.cfc.sourceLabel) &&
+  isObjectNotArray(value.cfc.outputLabel) &&
+  Array.isArray(value.cfc.missingLabels);
+
+/** The findings fields every admitted kit carries, as types alone. */
+const isResearchKitShape = (kit: unknown): boolean =>
+  isObjectNotArray(kit) &&
+  typeof kit.status === "string" &&
+  typeof kit.task === "string" &&
+  typeof kit.summary === "string" &&
+  Array.isArray(kit.inputs) &&
+  Array.isArray(kit.patterns) &&
+  Array.isArray(kit.rules) &&
+  Array.isArray(kit.sources) &&
+  Array.isArray(kit.missing);

@@ -975,16 +975,18 @@ bound for model context carries tokens, while the persisted tool-output artifact
 keeps the raw addresses. Model-authored tool arguments resolve tokens back to
 canonical references before policy evaluation, summarization, and dispatch —
 except for `finish_task`, whose user-facing sentence remains text, and
-`delegate_task`, whose `goal` and `context` reach the child verbatim, so a token
-there is inert text to the parent boundary. Its `skillHandle` and `patternRefs`
-fields are resolved separately on the trusted side: materializing stored skill
-text and rebuilding selected pattern-search records are those parameters' whole
-point (see "Skill by handle" and "Pattern references by search record" below).
-And a sealed subagent structured-return string whose raw value names an address
-comes back as a token rather than an opaque `@link` object; the return's
-`linkedStringCount` counts only the positions still sealed. Denial-path tool
-messages are not swapped; that coverage, value handles, and an explicit
-release/readback mechanism are listed in [docs/ROADMAP.md](docs/ROADMAP.md).
+`delegate_task`, whose `goal` and `context` reach the child verbatim: a token
+there is not resolved at the parent boundary, and is instead seeded into the
+child's table when the parent holds it (see "Handles across a delegation"). Its
+`skillHandle` and `patternRefs` fields are resolved separately on the trusted
+side: materializing stored skill text and rebuilding selected pattern-search
+records are those parameters' whole point (see "Skill by handle" and "Pattern
+references by search record" below). And a sealed subagent structured-return
+string whose raw value names an address comes back as a token rather than an
+opaque `@link` object; the return's `linkedStringCount` counts only the
+positions still sealed. Denial-path tool messages are not swapped; that
+coverage, value handles, and an explicit release/readback mechanism are listed
+in [docs/ROADMAP.md](docs/ROADMAP.md).
 
 #### Well-known grants
 
@@ -1239,12 +1241,13 @@ A child resolves the parent's tokens through its own boundary, against a table
 the delegation seeds. When the parent delegates, the tokens written into the
 `goal` and `context` are looked up in the parent's table, and each entry that
 resolves is copied verbatim — same token, same reference — into a fresh table
-salted with the child's run id. Nothing else crosses. A token the parent held
-but did not write into the delegation is not in the child's table, so the child
-cannot resolve it; it stays the inert text an unknown token always is. This is
-the privilege boundary: what a subagent can reach by reference is exactly what
-its delegation handed it, and the decomposition structure is therefore the
-opacity structure.
+salted with the child's run id. A research handle written there brings the
+address entries its kit binds as inputs with it. Nothing else crosses. A token
+the parent held but did not write into the delegation is not in the child's
+table, so the child cannot resolve it; it stays the inert text an unknown token
+always is. This is the privilege boundary: what a subagent can reach by
+reference is exactly what its delegation handed it, and the decomposition
+structure is therefore the opacity structure.
 
 Copying entries verbatim keeps a reference stable across the hierarchy. Minting
 looks up by address, so a child minting a handle for a seeded address gets the

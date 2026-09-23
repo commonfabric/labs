@@ -161,6 +161,7 @@ import {
   defineOwnEntry,
   mintAddressHandle,
   mintReferentHandle,
+  referentDraft,
   resolveHandleRef,
   resolveHandleToken,
   resolveReferentToken,
@@ -1336,13 +1337,10 @@ export const transferChildHandleTokens = async (
       if (referent === undefined) {
         resolved += SCRUBBED_CHILD_HANDLE_TOKEN;
       } else {
-        const minted = await mintReferentHandle(table, {
-          kind: referent.kind,
-          source: referent.source,
-          value: referent.value,
-          label: referent.label,
-          labelSource: referent.labelSource,
-        });
+        const minted = await mintReferentHandle(
+          table,
+          referentDraft(referent),
+        );
         table = minted.table;
         resolved += minted.token;
       }

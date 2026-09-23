@@ -26,7 +26,7 @@ import {
   type HarnessCfcModelContextObservationInput,
   mergeConfidentialityOnlyLabels,
 } from "../contracts/cfc-model-context.ts";
-import type { HarnessHandleReferent } from "../contracts/handle-table.ts";
+import type { HarnessDocumentReferentDraft } from "../contracts/handle-table.ts";
 import type { ToolOutputId, ToolResultRef } from "../contracts/tool-result.ts";
 import {
   type LoomCalendarListInput,
@@ -315,7 +315,7 @@ const measureRows = async (
   queryLabel: IFCLabel | undefined,
   reserved: number,
   hold?: (
-    referent: Pick<HarnessHandleReferent, "value" | "label" | "labelSource">,
+    referent: Omit<HarnessDocumentReferentDraft, "source">,
   ) => Promise<string>,
 ): Promise<{
   entries: LoomRetrievalEntry[];
@@ -474,8 +474,7 @@ const invoke = async <C extends LoomRetrievalCommand>(
     JSON.stringify(skeleton).length + LOOM_RETRIEVAL_LABEL_JOIN_ALLOWANCE,
     mint === undefined
       ? undefined
-      : (referent) =>
-        mint({ kind: "document", source: outputToolId, ...referent }),
+      : (referent) => mint({ source: outputToolId, ...referent }),
   );
   const observedLabel = mergeConfidentialityOnlyLabels(measured.labels);
   return {

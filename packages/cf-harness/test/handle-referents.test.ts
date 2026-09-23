@@ -151,6 +151,8 @@ describe("referent handles", () => {
             label: { integrity: [{ name: "no type" }] },
           },
           { ...table.referents![0], labelSource: "guess" },
+          { ...table.referents![0], labelSource: "research" },
+          { ...table.referents![0], kind: "research" },
           { ...table.referents![0], source: "" },
         ]
       ) {

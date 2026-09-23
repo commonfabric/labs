@@ -338,7 +338,8 @@ export const describeHandleToolDescriptor: HarnessToolDescriptor = {
     properties: {
       token: {
         type: "string",
-        description: "A handle token of the form cfh:a:<suffix>.",
+        description:
+          "A handle token: cfh:a:<suffix> for an address, or cfh:v:<suffix> for a held referent such as a research handle.",
       },
     },
     required: ["token"],

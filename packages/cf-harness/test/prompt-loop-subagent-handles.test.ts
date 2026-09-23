@@ -37,7 +37,7 @@ import {
 } from "../src/handle-table.ts";
 import {
   HANDLE_TOKEN_PATTERN,
-  type HarnessHandleReferent,
+  type HarnessHandleReferentDraft,
 } from "../src/contracts/handle-table.ts";
 import {
   HARNESS_RESEARCH_HANDLE_TYPE,
@@ -202,7 +202,7 @@ const researchReferentOf = (
   runId: string,
   inputs: readonly HarnessResearchInputBinding[],
   label: IFCLabel = {},
-): Omit<HarnessHandleReferent, "token"> => ({
+): HarnessHandleReferentDraft => ({
   kind: "research",
   source: "research",
   labelSource: "research",
@@ -227,7 +227,15 @@ const researchReferentOf = (
       missing: ["The final filtering rule remains unresolved."],
     },
     confirmedPatterns: [],
-    describedHandles: [],
+    describedHandles: inputs.map((input) => ({
+      token: input.token,
+      description: {
+        outputId: `described-${input.name}`,
+        token: input.token,
+        known: true,
+        hasSchema: false,
+      },
+    })),
     cfc: {
       version: 1,
       sourceLabel: label,
@@ -753,9 +761,9 @@ describe("prompt-loop cross-agent address handles", () => {
 
   for (const named of [true, false]) {
     it(
-      `seeds the handles a research handle binds when the goal ${
-        named ? "names" : "does not name"
-      } it`,
+      named
+        ? "seeds a research handle named in the goal together with the handles its kit binds"
+        : "withholds a research handle and its bindings when the goal does not name it",
       async () => {
         const runId = "run-subagent-research-handle";
         const table = await parentTableOf(runId, [URI_A]);
@@ -816,6 +824,67 @@ describe("prompt-loop cross-agent address handles", () => {
       },
     );
   }
+
+  it("lets a child that holds a research handle read the findings and see which bindings it holds", async () => {
+    const runId = "run-child-reads-research";
+    const table = await parentTableOf(runId, [URI_A]);
+    const held = table.entries[0]!.token;
+    // A binding the parent no longer holds: the kit names it, no table does.
+    const withheld = "cfh:a:gone22";
+    const minted = await mintReferentHandle(
+      table,
+      researchReferentOf(runId, [
+        { name: "mail", token: held, purpose: "Read message metadata" },
+        { name: "calendar", token: withheld, purpose: "Read events" },
+      ]),
+    );
+    const engine = new CfHarnessEngine({
+      sandboxRuntime: new FakeSandboxRuntime(),
+      runId,
+      model: "gpt-5.4",
+    });
+    await engine.recordHandleTable(minted.table);
+    const requestBodies: unknown[] = [];
+    const loop = new CfHarnessPromptLoop({
+      apiKey: "test-key",
+      engine,
+      allowedSubagentProfiles: ["pattern-author"],
+      fetchFn: scriptedFetch([
+        delegateCallTurn("call-delegate", {
+          goal: `Build what ${minted.token} describes.`,
+          profile: "pattern-author",
+        }),
+        toolCallTurn("call-describe", "describe_handle", {
+          token: minted.token,
+        }),
+        finalTurn(JSON.stringify({ ok: false, reason: "Read only." })),
+        finalTurn("Parent done."),
+      ], requestBodies),
+    });
+
+    await loop.runPrompt({
+      prompt: "Delegate the researched build.",
+      promptSlotBinding: directPromptSlotBinding,
+    });
+
+    const reply = chatViewOfRequest(requestBodies[2]).messages.findLast((
+      message,
+    ) => message.role === "tool")?.content ?? "";
+    const described = JSON.parse(reply) as {
+      research?: {
+        kit: { summary: string };
+        describedHandles: { token: string; unavailable?: true }[];
+      };
+    };
+    expect(described.research?.kit.summary).toBe(
+      "Use the described mail input.",
+    );
+    expect(described.research?.describedHandles).toEqual([
+      expect.objectContaining({ token: held }),
+      expect.objectContaining({ token: withheld, unavailable: true }),
+    ]);
+    expect(reply).not.toContain(HASH_A);
+  });
 
   it("records the kit's label when the parent reads a research handle", async () => {
     const runId = "run-describe-research-handle";

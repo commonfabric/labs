@@ -284,35 +284,37 @@ The current package provides:
   one in, so an entry without one is one whose shape was never free to capture
   and is answered from the fabric instead;
 - a `describe_handle` tool, available in any run that has handles: given a token
-  it reports the shape of the referent and its path segments, never the value,
-  and reports an unknown token as unknown rather than as an error. The shape is
-  what the referent declares in the session's fabric when the run has one — a
-  piece's document schema is the result schema of the pattern behind it, which
-  is what an agent building over that piece needs — and otherwise the
-  harness-derived schema the mint recorded. Whatever the source, the reported
-  schema is rebuilt from an allowlist of structural keywords at every depth, so
-  `const`, `enum`, `default`, `examples`, and free-text annotations never leave
-  the tool. Property names do cross, since code cannot be written over data
-  without them, so they are bounded in count and length and the model-facing
-  reply is scrubbed of bare fabric identifiers at every depth, keys included. A
-  referent that declares no schema and whose value is a SQLite database handle
-  reports `database` instead: its tables, one property per table whose own
-  properties are that table's columns with their types, reduced by the same
-  allowlist, and one label entry per column that declares an `ifc`, addressed by
-  table name and column name. Beside those it reports `fill`: per table the rows
-  it holds, and per disclosed column how many of those rows are non-NULL there,
-  so a column filled on no row is visible before a query filters on it and comes
-  back empty. A table that could not be counted reports `unread` rather than
-  zero, and a run whose storage provider offers no query reports no `fill` at
-  all. That is the one place the tool reads a value, and it is conditional on
-  nothing being declared — a database's tables are the contract it was created
-  under, its rows are in the database file, and nothing here opens one; a count
-  is taken of a whole table and of whole columns, never under a caller's own
-  predicate. Disclosure admits addresses in the session's own space and foreign
-  DIDs the operator lists with their host in `--fabric-foreign-spaces`; that
-  bound is on the handle's own address rather than on everything the document
-  reaches from it. Answering from the fabric establishes the run's fabric
-  session despite the tool's `read` effect class;
+  it reports the shape of the referent and its path segments, never the value —
+  except for a research handle, whose findings it returns under the kit's label,
+  marking each described binding the reader does not hold — and reports an
+  unknown token as unknown rather than as an error. The shape is what the
+  referent declares in the session's fabric when the run has one — a piece's
+  document schema is the result schema of the pattern behind it, which is what
+  an agent building over that piece needs — and otherwise the harness-derived
+  schema the mint recorded. Whatever the source, the reported schema is rebuilt
+  from an allowlist of structural keywords at every depth, so `const`, `enum`,
+  `default`, `examples`, and free-text annotations never leave the tool.
+  Property names do cross, since code cannot be written over data without them,
+  so they are bounded in count and length and the model-facing reply is scrubbed
+  of bare fabric identifiers at every depth, keys included. A referent that
+  declares no schema and whose value is a SQLite database handle reports
+  `database` instead: its tables, one property per table whose own properties
+  are that table's columns with their types, reduced by the same allowlist, and
+  one label entry per column that declares an `ifc`, addressed by table name and
+  column name. Beside those it reports `fill`: per table the rows it holds, and
+  per disclosed column how many of those rows are non-NULL there, so a column
+  filled on no row is visible before a query filters on it and comes back empty.
+  A table that could not be counted reports `unread` rather than zero, and a run
+  whose storage provider offers no query reports no `fill` at all. That is the
+  one place the tool reads a value, and it is conditional on nothing being
+  declared — a database's tables are the contract it was created under, its rows
+  are in the database file, and nothing here opens one; a count is taken of a
+  whole table and of whole columns, never under a caller's own predicate.
+  Disclosure admits addresses in the session's own space and foreign DIDs the
+  operator lists with their host in `--fabric-foreign-spaces`; that bound is on
+  the handle's own address rather than on everything the document reaches from
+  it. Answering from the fabric establishes the run's fabric session despite the
+  tool's `read` effect class;
 - bounded request-attribution headers on OpenAI-compatible gateway traffic,
   using persisted operational provenance rather than request content or personal
   identifiers;

@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import type { FabricValue } from "@commonfabric/data-model";
+import type { IFCLabel } from "@commonfabric/runner/cfc";
 
 import { createToolOutputId } from "../../src/contracts/tool-result.ts";
 import {
@@ -12,7 +13,7 @@ import type {
   HarnessResearchRecord,
   HarnessResearchRequest,
 } from "../../src/research/runner.ts";
-import type { HarnessHandleReferent } from "../../src/contracts/handle-table.ts";
+import type { HarnessHandleReferentDraft } from "../../src/contracts/handle-table.ts";
 import {
   HARNESS_RESEARCH_HANDLE_TYPE,
   type HarnessResearchHandleValue,
@@ -54,7 +55,7 @@ const replyFor = (kit: HarnessResearchResult) => ({
   } as unknown as HarnessResearchRecord,
 });
 
-const researchReferent: Omit<HarnessHandleReferent, "token"> = {
+const researchReferent: HarnessHandleReferentDraft = {
   kind: "research",
   source: "research",
   labelSource: "research",
@@ -111,13 +112,15 @@ describe("research", () => {
     });
 
     it("mints a research handle for an admitted kit under the kit's label and names it in the result", async () => {
-      let minted: Omit<HarnessHandleReferent, "token"> | undefined;
+      let minted:
+        | { value: HarnessResearchHandleValue; label: IFCLabel }
+        | undefined;
       const context: Partial<HarnessToolContext> = {
         nextOutputId: () => createToolOutputId("minted", "research", 1),
         now: () => "2026-09-23T00:00:00.000Z",
         runResearch: () => Promise.resolve(replyFor(KIT)),
-        mintReferentHandle: (referent) => {
-          minted = referent;
+        mintResearchHandle: (value, label) => {
+          minted = { value, label };
           return Promise.resolve("cfh:v:abcde");
         },
       };
@@ -129,12 +132,7 @@ describe("research", () => {
         status: "ok",
         researchHandle: "cfh:v:abcde",
       });
-      expect(minted).toMatchObject({
-        kind: "research",
-        source: "research",
-        labelSource: "research",
-        label: CFC.outputLabel,
-      });
+      expect(minted?.label).toEqual(CFC.outputLabel);
       expect(minted?.value).toMatchObject({
         type: HARNESS_RESEARCH_HANDLE_TYPE,
         researchRunId: "minted:research:1",
@@ -143,12 +141,33 @@ describe("research", () => {
       });
     });
 
+    it("surfaces a minting fault as its own error rather than as a research failure", async () => {
+      let failures = 0;
+      const context: Partial<HarnessToolContext> = {
+        nextOutputId: () => createToolOutputId("minting", "research", 1),
+        now: () => "2026-09-23T00:00:00.000Z",
+        runResearch: () => Promise.resolve(replyFor(KIT)),
+        recordResearchFailure: () => {
+          failures += 1;
+        },
+        mintResearchHandle: () =>
+          Promise.reject(new Error("handle table could not be written")),
+      };
+      await expect(
+        researchTool.invoke(context as HarnessToolContext, {
+          task: KIT.task,
+          purpose: "answer",
+        }),
+      ).rejects.toThrow("handle table could not be written");
+      expect(failures).toBe(0);
+    });
+
     it("mints no handle when research returns no kit", async () => {
       let mints = 0;
       const context: Partial<HarnessToolContext> = {
         nextOutputId: () => createToolOutputId("failed", "research", 1),
         runResearch: () => Promise.reject(new Error("result was not JSON")),
-        mintReferentHandle: () => {
+        mintResearchHandle: () => {
           mints += 1;
           return Promise.resolve("cfh:v:abcde");
         },

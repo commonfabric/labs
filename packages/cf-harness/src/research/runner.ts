@@ -1203,11 +1203,12 @@ async (request) => {
       integrity: structuredClone([...section.integrity]),
     });
   }
+  // An explicit handle is the whole prior context, so only its label and gaps
+  // fold in; the retained runs fold in when nothing was named.
   for (
-    const prior of [
-      ...(request.priorResearch === undefined ? [] : [request.priorResearch]),
-      ...(request.priorResearchRuns ?? []),
-    ]
+    const prior of request.priorResearch === undefined
+      ? request.priorResearchRuns ?? []
+      : [request.priorResearch]
   ) {
     if (prior.cfc === undefined) {
       addMissingLabel(
