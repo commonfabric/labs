@@ -216,7 +216,7 @@ wrong. These rules hold that agreement:
   read that holds the value settles the type first, so an object's key narrows
   through the properties and an array's element through the items, on both
   paths. [How a step narrows](../specs/json_schema.md#how-a-step-narrows)
-  states the whole rule, an enumeration's included.
+  states the whole rule, including how an enumeration narrows.
 - **A read-only array method visits every element, even past one that does not
   match.** An eager read walks the whole array before it calls the array
   invalid, so each element is a dependency of the reader either way. Stopping at
