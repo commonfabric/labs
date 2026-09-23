@@ -468,6 +468,11 @@ for (
       { "/other.ts": "export const handler = (fn: () => void) => fn;" },
     ],
     [
+      "a named Common Fabric import, which is a value and not the namespace",
+      `import { pattern as other } from "commonfabric";`,
+      {},
+    ],
+    [
       "a namespace a declaration file re-exports",
       `import { other } from "./other.d.ts";`,
       {
@@ -484,7 +489,7 @@ for (
         import { toSchema, WriteAuthorizedBy } from "commonfabric";
         ${imports}
 
-        const saver = other.handler(() => {});
+        const saver = (other as any).handler(() => {});
 
         const schema = toSchema<
           WriteAuthorizedBy<{ title: string }, typeof saver>
@@ -501,3 +506,30 @@ for (
     assert(cfc[0]!.message.includes("only supports handler()"));
   });
 }
+
+Deno.test(
+  "a builder called through a namespace an authored module re-exports from Common Fabric is a writer",
+  async () => {
+    const { diagnostics } = await validateFiles({
+      "/main.tsx": `/// <cts-enable />
+        import { toSchema, WriteAuthorizedBy } from "commonfabric";
+        import { cf } from "./barrel.ts";
+
+        const saver = cf.handler<void, {}>((_e, _s) => {});
+
+        const schema = toSchema<
+          WriteAuthorizedBy<{ title: string }, typeof saver>
+        >();
+
+        export { schema };
+      `,
+      "/barrel.ts": `export * as cf from "commonfabric";`,
+    }, { types: COMMONFABRIC_TYPES });
+    assertEquals(
+      diagnostics.filter((diagnostic) =>
+        diagnostic.type === "cfc-write-authorized-by"
+      ),
+      [],
+    );
+  },
+);

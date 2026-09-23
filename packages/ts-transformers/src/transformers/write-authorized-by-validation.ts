@@ -395,24 +395,41 @@ function substituteTypeNode(
   return node;
 }
 
+/**
+ * Whether `name` is a Common Fabric module's namespace: imported through
+ * Common Fabric (`import * as cf`, or a namespace an authored module
+ * re-exports), and resolving to the module itself. A named export of the same
+ * module — `import { pattern as cf }` — comes from Common Fabric but is a
+ * value, and its members are not the library's builders.
+ */
+function isCommonFabricNamespace(
+  name: ts.Identifier,
+  checker: ts.TypeChecker,
+): boolean {
+  const symbol = checker.getSymbolAtLocation(name);
+  if (
+    !symbol || !(symbol.flags & ts.SymbolFlags.Alias) ||
+    !isImportedFromCommonFabric(symbol, checker, { declarationFiles: false })
+  ) {
+    return false;
+  }
+  const target = checker.getAliasedSymbol(symbol);
+  return (target.flags & ts.SymbolFlags.ValueModule) !== 0;
+}
+
 function isSupportedWriteAuthorizedByInitializer(
   initializer: ts.Expression,
   checker: ts.TypeChecker,
 ): boolean {
   const expression = unwrapExpression(initializer);
   if (!ts.isCallExpression(expression)) return false;
-  // `handler(...)`, or `cf.handler(...)` where `cf` is a namespace import of a
-  // Common Fabric module; a member of any other object is not a builder.
+  // `handler(...)`, or `cf.handler(...)` where `cf` is a Common Fabric
+  // module's namespace; a member of any other object is not a builder.
   let callee: ts.Expression = expression.expression;
   if (ts.isPropertyAccessExpression(callee)) {
     const receiver = unwrapExpression(callee.expression);
     if (
-      !ts.isIdentifier(receiver) ||
-      !isImportedFromCommonFabric(
-        checker.getSymbolAtLocation(receiver),
-        checker,
-        { declarationFiles: false },
-      )
+      !ts.isIdentifier(receiver) || !isCommonFabricNamespace(receiver, checker)
     ) {
       return false;
     }
