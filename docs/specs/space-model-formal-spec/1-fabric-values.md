@@ -3952,6 +3952,14 @@ equal multiple independent copies. Cycles compare the contents reached through
 corresponding edges; a mismatch reachable after a back edge still makes the
 values unequal. Equality therefore supports cyclic values.
 
+For a cyclic value, though, this comparison and the content hash can disagree,
+because the hash also distinguishes where a cycle closes
+(`2-hash-byte-format.md` Section 4.19): `a = {x: a}` and `b = {x: {x: b}}`
+compare equal by the walk above, and hash differently. Since available hashes
+settle a comparison, the result for such a pair also depends on whether both
+of its hashes are cached. That is an exception to the governing principle, and
+to the statement below that caching a hash does not change an equality result.
+
 **UTF-8 representation.** Container equality preserves the hash encoding's
 replacement of lone UTF-16 surrogates with U+FFFD in strings, symbol registry
 keys, property names, and codec tags. Object keys retain the canonical sort
