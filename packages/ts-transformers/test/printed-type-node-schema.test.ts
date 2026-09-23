@@ -332,6 +332,25 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
       expect(input).toEqual({ confidentiality: [{ anyOf: [] }] });
     });
 
+    it("keeps the payload of a generic CFC alias in another's payload", async () => {
+      // Read from its type, `Sec<string>` binds `T` to `string` (#7995).
+      const files = await transformFiles({
+        "/main.tsx": `/// <cts-enable />
+import { Confidential, Integrity, pattern } from "commonfabric";
+type Sec<T> = Confidential<T, ["secret"]>;
+export default pattern<{ a: Integrity<Sec<string>, ["trusted"]> }>(({ a }) => ({ a }));`,
+      }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+      const { input, output } = patternSchemas(
+        parseModule(files["/main.tsx"]!),
+      );
+      const expected = {
+        type: "string",
+        ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
+      };
+      expect((input.properties as Schema).a).toEqual(expected);
+      expect((output.properties as Schema).a).toEqual(expected);
+    });
+
     describe("an object label with a member the syntax reader cannot name", () => {
       const user = {
         type: "https://commonfabric.org/cfc/atom/User",
