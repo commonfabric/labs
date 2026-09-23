@@ -181,6 +181,30 @@ describe("cf space", () => {
     });
   });
 
+  it("says when a clone predates fingerprint-scheme recording", async () => {
+    // A version-1 clone never recorded how its baseline was fingerprinted, so
+    // its verdict rests on an assumption the report has to state.
+    await withFixture(async ({ snapshot, clone }) => {
+      expect(
+        (await cf(`space clone ${SPACE} --from ${snapshot} --to ${clone}`))
+          .code,
+      ).toBe(0);
+      const manifestPath = `${clone}/clone.json`;
+      const manifest = JSON.parse(await Deno.readTextFile(manifestPath));
+      delete manifest.fingerprint.scheme;
+      await Deno.writeTextFile(
+        manifestPath,
+        JSON.stringify({ ...manifest, version: 1 }),
+      );
+
+      const verified = await cf(`space verify ${clone}`);
+      expect(verified.code).toBe(0);
+      expect(text(verified.stdout)).toContain(
+        "predates fingerprint-scheme recording",
+      );
+    });
+  });
+
   it("passes verification when only generated cells were rewritten", async () => {
     // A clean pattern update rotates generated cells and adds commits. If that
     // failed verification, every legitimate migration would look like data loss.
@@ -539,7 +563,8 @@ describe("cf space", () => {
       expect(cloned.code).toBe(0);
       const { manifest, paths } = JSON.parse(text(cloned.stdout));
       expect(manifest.space).toBe(SPACE);
-      expect(manifest.version).toBe(1);
+      expect(manifest.version).toBe(2);
+      expect(typeof manifest.fingerprint.scheme).toBe("number");
       // The reported path is absolute, so the printed serve line is a usable
       // file:// URL even when --to was relative.
       expect(paths.workingPath.startsWith("/")).toBe(true);

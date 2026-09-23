@@ -208,6 +208,18 @@ function uncertaintyNote(
  * weaker claim than zero and must not render as zero.
  */
 function verifyUncertaintyNote(u: VerifyResult["uncertainty"]): string {
+  // A clone that recorded no scheme may have had its baseline fingerprinted
+  // another way, which would move the hash with no change to the content.
+  const scheme = u.scheme.manifest === null
+    ? `⚠ this clone predates fingerprint-scheme recording, so whether its ` +
+      `BASELINE was fingerprinted the way this tool fingerprints is unknown; ` +
+      `re-clone for a verdict that can say\n`
+    : "";
+  return exclusionNote(u) + scheme;
+}
+
+/** The unhashable and ambiguous half of {@link verifyUncertaintyNote}. */
+function exclusionNote(u: VerifyResult["uncertainty"]): string {
   const working = uncertaintyNote(
     u.unhashable.working,
     u.ambiguous.working,
