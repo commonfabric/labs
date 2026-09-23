@@ -36,6 +36,11 @@ import {
   FragmentWriter,
   repositoryRelativePath,
 } from "@commonfabric/test-support/records";
+import {
+  shuffledPaths,
+  shuffleNotice,
+  shuffleSeed,
+} from "@commonfabric/test-support/shuffle";
 
 import { internSchema } from "@commonfabric/data-model-schema";
 import { debugStr, toDebugKindString } from "@commonfabric/data-model";
@@ -2390,7 +2395,15 @@ export async function runTests(
       durationMs: Math.round(durationMs),
     });
 
-  for (const testPath of paths) {
+  // Files run in the order the seed puts them in, so a file that leans
+  // on another file having run fails rather than passing quietly. The
+  // steps inside a file keep their order: a pattern test states its
+  // expectations as a sequence, each one about the state the step before
+  // it left, so their order is the test rather than an accident of it.
+  const seed = shuffleSeed();
+  console.log(shuffleNotice(seed));
+
+  for (const testPath of shuffledPaths(paths, seed)) {
     console.log(`\n${basename(testPath)}`);
     const failedBefore = totalFailed;
     const fileStarted = performance.now();

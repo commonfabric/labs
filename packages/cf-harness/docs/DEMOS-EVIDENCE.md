@@ -235,14 +235,14 @@ and it should be re-run rather than shown.
 **How much a run has to author predicts whether it works — and discovery is not
 the variable.** Ordered by how much each demo left the run to write:
 
-| Demo                    | What the run had to write                  | Result                                                    |
-| ----------------------- | ------------------------------------------ | --------------------------------------------------------- |
-| §1 pomodoro             | nothing; one published part does the job   | proven 4/4 on `e5b9f57c6c`, 2/2 on `a77e958513`           |
-| Readwise "never opened" | nothing; one published part does the job   | 2 of 2                                                    |
-| §2a checklist and total | two published parts, minimal glue          | proven 3/3                                                |
-| §5c bills, three ids    | three published parts do the job           | 4 correct in 4                                            |
-| §3 bank table           | a published reader plus an authored table  | proven 3/3 on `a77e958513`; 2 pass 1 fail on `e5b9f57c6c` |
-| §5 bills                | published readers plus an authored matcher | 1 correct in 5                                            |
+| Demo                    | What the run had to write                      | Result                                                 |
+| ----------------------- | ---------------------------------------------- | ------------------------------------------------------ |
+| §1 pomodoro             | nothing; one published part does the job       | proven 4/4 on `e5b9f57c6c`, 2/2 on `a77e958513`        |
+| Readwise "never opened" | nothing; one published part does the job       | 2 of 2                                                 |
+| §2a checklist and total | two published parts, minimal glue              | proven 3/3                                             |
+| §5c bills, three ids    | three published parts do the job               | 4 correct in 4                                         |
+| §3 bank table           | two published parts, reader and sortable table | rows proven 3/3 on `a77e958513`; sorting observed once |
+| §5 bills                | published readers plus an authored matcher     | 1 correct in 5                                         |
 
 **The control for this is a pair of Readwise runs** from prompts identical but
 for one sentence naming the pattern's id. The run told nothing **found the same
@@ -349,11 +349,11 @@ empty with no error anywhere.
 Say which you mean. "After the reader reports `pending: false` and no error" is
 unambiguous and does not invite a vocabulary the data does not use.
 
-**Slugs.** `assign_slug` requires a slug, never makes one unique itself, and
-refuses one that already names another piece — and pieces are never deleted. A
-prompt naming a fixed slug therefore works once and stops to ask on every later
-run. Every prompt below ends with the sentence that authorizes the retry, which
-is what makes the same text work repeatedly and on someone else's console.
+**Slugs.** `assign_slug` never repoints a slug that already names another piece
+— and pieces are never deleted — so a prompt naming a fixed slug gets that word
+on the first run and the word with a counter (`-2`, `-3`, ...) on every later
+one. The receipt carries the name assigned; the run reads its address there and
+needs no retry.
 
 ## Checking an index entry is discoverable
 
@@ -404,10 +404,6 @@ Read alongside a 14 m 14 s bills run that did have the console to itself, this
 is informative rather than merely a caveat: a short task stayed short under load
 while a long one stayed long alone, so **duration here is a property of the task
 rather than of the machine.** Expect these numbers to hold on a quiet console.
-
-**Likely failure:** the slug it first tries is taken; it picks another and
-carries on. A second `assign_slug` in the timeline is the retry working, not a
-fault.
 
 **Proof status: PROVEN — 4/4 on `e5b9f57c6c`, 2/2 on `a77e958513`, timing under
 load.** A further run naming the pattern by id finished end to end in **16
@@ -461,10 +457,11 @@ prompts each returned a named piece composing CheckList and AmountLedger by
 
 So the page is half-live: the part's own checkbox writes back and its removal
 control does not. **The newer published parts fix this** — see
-[§2a](#2a-a-checklist-and-a-running-total-composed-by-id), where removal is
-demonstrated working across four checks. This entry's failures predate them, and
-its runs were judged before the viewport hazard described there was known, so
-they should be re-checked with visible targets before being relied on.
+[§2a](#2a-a-checklist-and-a-running-total-composed-from-named-parts), where
+removal is demonstrated working across four checks. This entry's failures
+predate them, and its runs were judged before the viewport hazard described
+there was known, so they should be re-checked with visible targets before being
+relied on.
 
 The runtime cause behind the original defect is CT-2407: `Cell.remove` never
 matched a row of a constructor-seeded inline array, because reads of such an
@@ -485,26 +482,26 @@ rendered as dollars. The wording is corrected in the tree; the published index
 entry carries the old text until it is republished, so a run can still read the
 wrong contract.
 
-## 2a. A checklist and a running total, composed by id
+## 2a. A checklist and a running total, composed from named parts
 
 The same job as §2, with the two parts named outright instead of discovered, and
 staying clear of the one control that does not work. **It needs no connectors at
 all**, which makes it the demo that cannot be broken by a grant going stale.
 
-**Preflight:** common only. No connectors. The two published parts must be
-discoverable — `vAx2Uy1C64duK47NIl9a0fb0UtfnHrXRrxM8giA1hWM` (CheckList) and
-`BEf5ZMjTIzX9J5HE6wec1s3zcQNqTAg-lFoD6W7pBHs` (AmountLedger). **Use these rather
-than the older pair**, which they supersede — and read what they do and do not
-fix, below.
+**Preflight:** common only. No connectors. The two parts the prompt names must
+be the discoverable ones — `vAx2Uy1C64duK47NIl9a0fb0UtfnHrXRrxM8giA1hWM`
+(CheckList) and `BEf5ZMjTIzX9J5HE6wec1s3zcQNqTAg-lFoD6W7pBHs` (AmountLedger),
+with the pair they supersede hidden. Those ids are here so a preflight check can
+name what it is looking for; the prompt does not carry them.
 
-**Prompt:** [DEMOS.md](DEMOS.md) carries the text verbatim. It names both ids,
+**Prompt:** [DEMOS.md](DEMOS.md) carries the text verbatim. It names both parts,
 asks for a preparation checklist beside a running total against a budget, and
 **states that amounts are in whole dollars.**
 
-That last clause is belt-and-braces on these ids rather than a requirement: the
-entry they publish describes the amounts correctly. It is kept because it costs
-a sentence and it is what the proven runs were measured against, and because a
-run reaching an older generation of the part reads a description that calls the
+That last clause is belt-and-braces rather than a requirement: the entry these
+parts publish describes the amounts correctly. It is kept because it costs a
+sentence and it is what the proven runs were measured against, and because a run
+reaching an older generation of the part reads a description that calls the
 field integer cents and renders 100× the intended figure.
 
 **Done when:** you can add a task, check one, add an expense, watch the total
@@ -515,15 +512,23 @@ move — and reload, and find it all still there.
 **Proof status: PROVEN (3/3).** Three runs of an identical request. Each added a
 task, checked one, added a $5 expense to reach $25 of a $50 budget, and **kept
 all of it across a reload.** Source inspected every time: both published parts
-imported by id, and the wrapper renders their own UI rather than reimplementing
-them.
+imported, and the wrapper renders their own UI rather than reimplementing them.
+
+Those three runs pasted the two ids. Three later runs of the same text naming
+the parts instead imported the same two, three for three. Three runs of a prompt
+that names neither and only describes the page reached the corrected ledger
+every time and the corrected checklist twice in three — the third wrote its own
+list rather than composing one, which is a discovery miss and not a wrong part.
+Source was read every time. None of those six were driven to a working page in a
+browser, so what they establish is which parts a run reaches, not the page
+behavior above.
 
 **"Clear completed" works** — one click takes exactly the checked items, keeps
 the rest, corrects the counts and hides itself, and the expenses are untouched.
 It survives a reload. That matters because it is the gesture a viewer actually
 makes after ticking things off.
 
-**These ids carry both fixes, and both are demonstrated.**
+**These parts carry both fixes, and both are demonstrated.**
 
 The **unit description is right**: the entry they publish describes
 AmountLedger's amounts as whole currency units, which is what the field holds,
@@ -559,7 +564,7 @@ connection name is theirs.
 **Prompt:**
 
 ```text
-Show me this month's bank transactions as a table with a count on top. Use patterns from the library where they fit. Give it a slug that is not already in use; if a slug you try is taken, choose another and retry without asking me.
+Show me this month's bank transactions as a sortable table with a count on top.
 ```
 
 Nothing is attached to the task; the grant carries the data.
@@ -575,25 +580,31 @@ pass.
 **Likely failure:** an empty table on first paint is a pending read, not an
 empty month — reopen the piece rather than re-running.
 
-**Proof status: PROVEN (3/3) on `a77e958513`; 2 pass, 1 fail on `e5b9f57c6c`.**
-Six runs of this wording in all. The piece is produced every time and the rows
-are right whenever they render; one run on `e5b9f57c6c` rendered every amount as
-`[object Object]`, which is the reactive-coercion family described in the
-preflight rather than a fault of this demo. Every passing run was diffed against
-the ledger on every field rather than judged by eye.
+**Proof status for the rows: PROVEN (3/3) on `a77e958513`; 2 pass, 1 fail on
+`e5b9f57c6c`.** Six runs in all, of a previous wording that asked for a plain
+table and named the library. They stand as evidence for the done condition,
+which is that the rows on screen match the month's transactions, and that
+condition is untouched by asking for sorting. They say nothing about sorting,
+because the text they ran did not ask for it. The piece is produced every time
+and the rows are right whenever they render; one run on `e5b9f57c6c` rendered
+every amount as `[object Object]`, which is the reactive-coercion family
+described in the preflight rather than a fault of this demo. Every passing run
+was diffed against the ledger on every field rather than judged by eye.
 
-**What makes this entry reliable is the most transferable finding here, and it
-is not a well-chosen prompt.** The prompt does not ask for sorting, which is the
-one thing the demo cannot deliver, and that alone separates three clean runs
-from a wording that fails one run in three. Adding clauses does not close the
-gap: a clause constrains what a run writes and cannot supply a behaviour that is
-not there. **When a demo half-works, ask what it is being asked for that it
-cannot deliver before asking what else to say to it.**
+**The most transferable finding here is about the prompt, and it runs against
+the intuition that produced it.** A wording trimmed until the demo passed
+reliably stopped asking for sorting, and the reliability was real: it separated
+three clean runs from a wording that failed one run in three. What it cost was
+invisible from inside the demo. Asking for a sortable table reaches a published
+part whose headers sort, so the trimmed wording was not avoiding a gap in the
+runtime — it was steering discovery away from a part that already existed. **A
+prompt tuned until a demo passes will hide whatever the demo stopped asking for,
+and a green run is not evidence that nothing is missing.**
 
-This document counts runs of **identical** text, so runs against a wording that
-asks for a _sortable_ table count toward no entry here. Two such runs delivered
-correct rows, which is evidence about the done condition rather than proof of
-it: they asked for more than this prompt does and still produced the table.
+**Proof status for sorting: one run on `edd1f71108`**, driven to a page and
+clicked through, whose column headers sort. Two earlier runs of a sortable
+wording delivered correct rows. One run is below this document's bar, so sorting
+is recorded as observed rather than proven.
 
 The run against this wording — `monthly-bank-transactions-2` — was verified
 against the store rather than by eye. All seven rows were diffed read-only
@@ -612,12 +623,12 @@ category**:
 
 Count on top reads 7. Nothing missing and nothing invented.
 
-**The headers do not sort. Whether they _look_ clickable varies by run** — from
-the same prompt, one piece styled all six `cursor: pointer` and three styled
-them `auto`. So **one piece in four invites a click that does nothing**. Check
-the piece you actually produced, and say so when it does — that viewer will get
-a hand cursor over a header that does nothing. On the other three there is
-nothing to announce.
+**A table the run writes itself does not sort, and may still look as though it
+does.** Across runs of a wording that did not ask for sorting, one piece styled
+all six headers `cursor: pointer` and three styled them `auto`, so **one piece
+in four invited a click that did nothing**. That is a property of an authored
+table rather than of the demo, and the wording on this page avoids it by
+reaching the published part instead.
 
 **The count on top may not look like a count.** Of the pieces measured, two
 rendered it as a large number and one as a labelled line reading
@@ -631,18 +642,16 @@ ways: the published sortable part has headers that _do_ sort and are equally
 invisible to the tree (CT-2411). A check leaning on accessibility output alone
 will call a working control dead and a dead one harmless.
 
-**The prompt does not ask for sorting, because sorting does not work.** A
-wording that asks for a _sortable_ table gets a table: clicking a column header
-reorders nothing, the row order is byte-identical before and after
-(`proof/bank-after.png`), and six `columnheader` nodes carry no interaction at
-all while the only interactive element on the page is the title button. A demo
-should not ask on camera for behaviour that will not appear, so it asks for what
-it reliably gets.
+**The prompt asks for sorting, and that is what reaches a part that sorts.** A
+sortable-table part exists in the index and in `packages/patterns/primitives`,
+and a wording that asks for a sortable table composes it; a wording that avoids
+the word authors a table of its own instead. So the question CT-2404 raised is
+answered in favour of discovery rather than a missing part: what the word buys
+is not a behaviour added to an authored table but a different part.
 
-The gap is recorded as CT-2404 rather than hidden. A sortable-table part already
-exists in the index and in `packages/patterns/primitives`, so this is more
-likely a question of what discovery surfaces than of a missing part — composing
-it by id against the bank reader would separate the two in a single run.
+Sorting a column replaces that header's caret with a policy placeholder
+(CT-2418). The rows are right and the order is correct; only the caret is
+affected.
 
 ## 4. Bills this month, from mail and bank together
 
@@ -690,11 +699,12 @@ the only entry here whose done condition has been exercised end to end. One run
 delivered `monthly-bills-mail-bank` in 427 s, 61 s of it the opening pass,
 importing both indexed readers into an authored wrapper. Its first submission
 failed on a `cf-alert` prop and the repaired version ran; its first naming
-attempt collided and the second succeeded, which is the slug sentence working.
-The run's own final text says its counts and matches were not independently
-verified, because policy withheld the results from the model — so this
-establishes a named piece and indexed composition, not that the bills it lists
-are the right ones. Whether the pairings are right is the subject of
+attempt collided and the second succeeded, which was the slug sentence working
+on a build that refused a collision. The run's own final text says its counts
+and matches were not independently verified, because policy withheld the results
+from the model — so this establishes a named piece and indexed composition, not
+that the bills it lists are the right ones. Whether the pairings are right is
+the subject of
 [§5](#5-bills-from-gmail-and-plaid-composing-two-library-patterns-by-id), which
 runs the same job with the readers named and records what varies between runs.
 
@@ -1187,6 +1197,114 @@ there.
 **Proof status: NEEDS CT-2344.**
 
 ---
+
+## Every demo re-run on `edd1f71108`
+
+The four demos on [DEMOS.md](DEMOS.md) were run again on labs `edd1f71108`,
+which `loom-stable-2026-09-22-7` vendors, from the page's own prompt text.
+
+| Demo                          | Result on `edd1f71108`   |
+| ----------------------------- | ------------------------ |
+| §1 pomodoro                   | 1 of 1, browser-verified |
+| §2a checklist + running total | 1 of 1, browser-verified |
+| §3 bank table                 | 1 of 1, browser-verified |
+| §5c three-id bills            | 1 of 1, browser-verified |
+
+Each is **one run, one working page**, confirmed in a browser. One run is not
+the three this document's own bar asks for, so none of these counts promotes an
+entry to proven on this build; they say the demo still works here.
+
+**No wall time from this set is a measurement.** Two sessions shared the console
+throughout, by instruction. The runs establish that the demos work, which
+concurrency does not affect, and establish nothing about how long they take.
+
+§5c met a `cfc_release_withheld` refusal on `run_pattern` — a sink-ceiling
+refusal on mail-derived values carrying a `prompt-injection-risk-unscreened`
+caveat. The pattern ran, the result stayed in the space, `resultRef` still named
+it, and the page works. That demo's prompt asks for exactly this, so the refusal
+is the advertised behaviour rather than a fault.
+
+## What the prompts' hints are actually for
+
+Each demo was then run a second time **with every hint stripped** — no slug
+sentence, no pattern ids, no unit sentence, and with "sortable" restored where a
+person would say it. The question was which hints cover a real gap.
+
+**Two hints cover nothing, because the harness already does the work.**
+
+| Hint                                         | What happens without it                                                                                      |
+| -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
+| the slug-retry sentence                      | a taken slug is retried unprompted — observed three times, including two collisions recovered inside one run |
+| "use a pattern from the library if one fits" | the same indexed pattern is found anyway                                                                     |
+
+The slug sentence is the clearest: `assign_slug`'s own error says _"Choose
+another"_, and the run does.
+
+**The word "sortable" runs the other way: its absence costs a capability.** A
+prompt that asks for a sortable table reaches a published sortable part, and one
+that avoids the word never looks for it. That is a word to keep, not a hint to
+delete.
+
+**One hint is load-bearing, and it is not the one in the dinner demo.** Told to
+compose this month's bills from mail and bank with no ids, a run finds both
+readers every time and the **bills matcher** one run in three; the other two
+author their own pairing logic rather than composing the published part. Demo 4
+names its three ids for that reason, and the gap is in discovery rather than in
+the wording.
+
+**A correction published under a different identity does not displace what it
+corrects, and starts below it.** Successor substitution redirects discovery only
+along a chain whose generations share an owner
+(`src/pattern-index/successors.ts`). A correction whose predecessor was seeded
+by another identity declares `priorPatternId`, so the chain is stated, and the
+rule deliberately declines to follow it across the ownership boundary. Ranking
+then decides, and it favours the older entry, which is classified `proven` where
+the correction is `unproven`.
+
+Retraction does not resolve that: it is the owner's to perform, and the older
+entry is not ours. What resolves it is index curation — hiding the superseded
+entry so that ranking never sees it — or a policy for honouring a successor
+across owners. The `check-list` and `amount-ledger` pair is curated that way,
+and a prompt naming those parts reaches the corrected generation.
+
+## The hints the prompts no longer carry
+
+Three hints were removed from the run page and one word restored, each on
+evidence from running the prompts without them. `NAIVE.md` and `BASELINE.md` in
+the demo-owner thread's storage hold the runs.
+
+**The slug sentence is gone from all four prompts.** A run picks another name by
+itself when the one it tries is taken — observed on every prompt that lost the
+sentence, including one run that recovered two collisions in a row. The tool's
+own error says "Choose another", and the run does.
+
+**The library hint is gone from demos 1 and 3.** Without it, the pomodoro demo
+still composes the indexed timer, and the bank demo still composes the published
+reader. Naming the library did not change which part a run reached.
+
+**Demo 3 asks for a _sortable_ table again, and sorting works.** The published
+sortable part is only reached by a prompt that asks for sorting; a wording that
+avoids the word never looks for it. Avoiding it did not route around a gap — it
+hid a capability.
+
+**Demo 2 names its two parts instead of pasting their ids.** `CheckList` and
+`AmountLedger` by name reach the corrected generation of both, and so does a
+prompt that names neither and only describes the page it wants. The ids in that
+prompt were standing in for the curation: with the superseded pair hidden,
+ranking never sees it, so there is nothing left for the ids to steer past.
+
+**Demo 4 keeps its three ids**, because the bills matcher is the one part
+discovery does not reliably reach — see above. That is a hint over a real gap,
+not over the wording, and it comes out when the gap closes rather than when the
+prompt is rephrased.
+
+### A defect the restored wording exposes
+
+Sorting a column replaces that header's caret with a policy placeholder, so it
+reads "DateContent hidden by policy" (CT-2418). The sort is correct and the rows
+are right; the caret is a `computed` over sort state written by a handler that
+had read labelled rows, so the label reaches the header. The run page says what
+a runner will see.
 
 ## Where the evidence is
 

@@ -8,7 +8,6 @@
  * rather than one inside each of them.
  */
 
-import { constructorOfObject } from "@commonfabric/utils/objects";
 import { isPlainObject } from "@commonfabric/utils/types";
 
 import {
@@ -219,9 +218,12 @@ export function tagOfFabricValueElseNull<PlusType = never>(
  * `Error.isError()` and _not_ by looking at the prototype chain.
  *
  * Note: The other `FabricConvertibleJsObject` classes are recognized by
- * constructor identity, which is a per-realm question: another realm's `Map`
+ * prototype identity, which is a per-realm question: another realm's `Map`
  * is a different `Map`, and is not this one. Such a value comes back `null`,
- * unrecognized rather than misidentified.
+ * unrecognized rather than misidentified. The global constructor bindings do
+ * not enter into it: SES lockdown replaces the global `Date` and `RegExp` with
+ * constructors of its own that keep the original prototypes, so an instance
+ * made before lockdown, after it, or inside a compartment is recognized alike.
  */
 export function tagOfConvertibleJsValueElseNull(
   value: unknown,
@@ -287,26 +289,24 @@ export function tagOfConvertibleJsValueElseNull(
       // deno-coverage-ignore-stop
   }
 
-  const constructor = constructorOfObject(value);
-
-  switch (constructor) {
-    case Map: {
+  switch (Object.getPrototypeOf(value)) {
+    case Map.prototype: {
       return VALUE_TAGS.JsMap;
     }
 
-    case Set: {
+    case Set.prototype: {
       return VALUE_TAGS.JsSet;
     }
 
-    case Date: {
+    case Date.prototype: {
       return VALUE_TAGS.JsDate;
     }
 
-    case Uint8Array: {
+    case Uint8Array.prototype: {
       return VALUE_TAGS.JsUint8Array;
     }
 
-    case RegExp: {
+    case RegExp.prototype: {
       return VALUE_TAGS.JsRegExp;
     }
 

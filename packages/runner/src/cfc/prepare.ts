@@ -6711,10 +6711,22 @@ const verifyWriteFloor = (
   return failures;
 };
 
+/** Runs every boundary check synchronously. */
 export const prepareBoundaryCommit = (
   tx: IExtendedStorageTransaction,
   instrumentation?: CfcPrepareInstrumentation,
 ): string[] => {
+  const steps = prepareBoundaryCommitSteps(tx, instrumentation);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+};
+
+/** Runs the boundary checks with suspension points between target documents. */
+export function* prepareBoundaryCommitSteps(
+  tx: IExtendedStorageTransaction,
+  instrumentation?: CfcPrepareInstrumentation,
+): Generator<void, string[]> {
   // WATCH(cfc-verdict): every reason recorded here decides whether the commit
   // is retried. A reason that says policy REFUSED this data — deterministic,
   // so an identical re-run refuses identically — must be wrapped in
@@ -6960,6 +6972,7 @@ export const prepareBoundaryCommit = (
   }
   const metadataResolver = new VerifierMetadataResolver(tx);
   for (const key of targetKeys) {
+    yield;
     const candidateSchema = candidates.get(key);
     const schema = candidateSchema ?? emptySchemaObject();
     const undefinedCandidate = candidateSchema === undefined;
@@ -8567,10 +8580,10 @@ export const prepareBoundaryCommit = (
   reasons.push(...verifySinkRequestCeilings(tx));
   // Single-use grant consumption (design §2.2): stage every claim the
   // consuming gates above registered — the receipt write plus its
-  // create-only mark — into THIS transaction, inside the privileged scope
-  // prepareCfc wraps this whole pass in (the receipt is reserved-namespace
-  // policy state; the unprivileged arm is the S18 gate). After every gate so
-  // all resolutions are registered; before the return so a claim that cannot
+  // create-only mark — into THIS transaction, inside this step's privileged
+  // scope (the receipt is reserved-namespace policy state; the unprivileged
+  // arm is the S18 gate). After every gate so all resolutions are registered;
+  // before the return so a claim that cannot
   // stage fails closed as a prepare reason. The staged write rides the
   // releasing commit: consumption is atomic with the release, a failed
   // commit consumes nothing (spec §6.5.2 no-consume-on-failure), and the
@@ -8583,7 +8596,7 @@ export const prepareBoundaryCommit = (
     instrumentation!.onPrefixProvenance!(prefixProvenance);
   }
   return reasons;
-};
+}
 
 const cfcLogger = getLogger("cfc", { enabled: false });
 

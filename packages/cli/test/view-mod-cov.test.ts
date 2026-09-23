@@ -10,12 +10,12 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import { markdownLanguage } from "../lib/view/languages/markdown/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
-import { warmAllLanguages } from "../lib/view/languages/language.ts";
+import { pythonLanguage } from "../lib/view/languages/python/language.ts";
 import { buildPreparedView, buildView, ViewError } from "../lib/view/mod.ts";
 
-// The pager loads every language's parser before it parses anything; these
-// cases reach the same synchronous entry points directly.
-await warmAllLanguages();
+// These cases color Python through its synchronous entry points, which show
+// plain text until its parser has loaded.
+await pythonLanguage.prepare!();
 
 const SRC = "export const x = 1;\nconst y = x + 1;\n";
 const TRANSFORMED = `// transformed: /app.ts

@@ -2,6 +2,7 @@ export {
   buildObjectBody,
   ciObjectName,
   datePartition,
+  isSeed,
   localObjectName,
   objectNameSlug,
   parseContextLine,

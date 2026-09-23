@@ -26,7 +26,7 @@ import {
   type HarnessCfcModelContextObservationInput,
   mergeConfidentialityOnlyLabels,
 } from "../contracts/cfc-model-context.ts";
-import type { HarnessHandleReferent } from "../contracts/handle-table.ts";
+import type { HarnessDocumentReferentDraft } from "../contracts/handle-table.ts";
 import type { ToolOutputId, ToolResultRef } from "../contracts/tool-result.ts";
 import {
   type LoomCalendarListInput,
@@ -315,7 +315,7 @@ const measureRows = async (
   queryLabel: IFCLabel | undefined,
   reserved: number,
   hold?: (
-    referent: Pick<HarnessHandleReferent, "value" | "label" | "labelSource">,
+    referent: Omit<HarnessDocumentReferentDraft, "source">,
   ) => Promise<string>,
 ): Promise<{
   entries: LoomRetrievalEntry[];

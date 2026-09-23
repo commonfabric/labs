@@ -429,6 +429,32 @@ Deno.test("github spend: an undated row weighs on the comparison as it does on t
   assertStringIncludes(v.extra ?? "", "Budget $400");
 });
 
+Deno.test("github spend: a date that names no day reads as no date at all", async () => {
+  // Each of these reaches the report as a date and names no calendar day: not
+  // text, a month past twelve, a day past thirty-one, and the thirtieth of
+  // February, which a lenient parser would roll into March. Each must read
+  // exactly as the undated row above does, chart and all: landing on some
+  // other day would leave the totals as they are and move the chart.
+  const reading = (date: unknown) =>
+    view("2026-01-20T09:00:00Z", {
+      [usagePath(2026, 1)]: {
+        usageItems: [
+          ...days(2026, 1, 1, 10, 18),
+          { ...item("", 100), date },
+          stillReporting("2026-01-18"),
+        ],
+      },
+      [budgetsPath()]: { budgets: [productBudget("actions", 400)] },
+    });
+  const undated = await reading("");
+  const onTheThirteenth = await reading("2026-01-13");
+  // The chart does tell a dated row from an undated one.
+  assert(onTheThirteenth.extra !== undated.extra);
+  for (const date of [null, "2026-13-01", "2026-01-32", "2026-02-30"]) {
+    assertEquals(await reading(date), undated, String(date));
+  }
+});
+
 Deno.test("github spend: the headline sits under the shown budget exactly when the tile is green", async () => {
   // The color comes from the budgeted products while the headline carries
   // every product, so the two are only readable together if the ceiling shown

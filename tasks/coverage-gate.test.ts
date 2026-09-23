@@ -24,6 +24,7 @@ function suite(id: string, measured: MeasuredSet[]): Suite {
     needs: [],
     units: measured.flatMap((set) => set.units),
     unavailable: [],
+    whole: [],
     measured,
     locate: () => undefined,
     command: () => Promise.resolve([]),

@@ -10,6 +10,7 @@
  * every way of widening what runs beyond them starts here.
  */
 
+import { readOnlyArguments } from "./only-arguments.ts";
 import { matchesPatternFilter } from "./pattern-files.ts";
 import { parseShard as parseShardSpec } from "./shard-utils.ts";
 
@@ -43,24 +44,10 @@ export const WHOLE: Shard = { index: 0, count: 1 };
  * filter, which matches no pattern and would check nothing.
  */
 export function parseOnly(argv: readonly string[]): string[] {
-  const only: string[] = [];
-  for (let i = 0; i < argv.length; i++) {
-    const argument = argv[i]!;
-    let value: string | undefined;
-    if (argument === "--only") value = argv[++i];
-    else if (argument.startsWith("--only=")) {
-      value = argument.slice("--only=".length);
-    } else throw new Error(`Unknown argument: ${argument}`);
-    if (value === undefined || value.length === 0) {
-      throw new Error("--only needs a value");
-    }
-    if (value.startsWith("--")) {
-      throw new Error(
-        `--only needs a value, and was given ${JSON.stringify(value)}`,
-      );
-    }
-    only.push(value);
-  }
+  const read = readOnlyArguments(argv);
+  if ("error" in read) throw new Error(read.error);
+  const { only, rest } = read;
+  if (rest.length > 0) throw new Error(`Unknown argument: ${rest[0]}`);
   return only;
 }
 

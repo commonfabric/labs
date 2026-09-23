@@ -18,7 +18,7 @@ import {
   languageForName,
   languageForSource,
   languageIds,
-  warmAllLanguages,
+  prepareLanguages,
 } from "../lib/view/languages/language.ts";
 import type { Line, TokenClass } from "../lib/view/model.ts";
 import {
@@ -27,8 +27,8 @@ import {
 } from "./fixtures/view-language/corpus.ts";
 
 // Every fixture is parsed through its language's synchronous entry points,
-// which the pager reaches only after the parsers are loaded.
-await warmAllLanguages();
+// which show plain text until the language's parser has loaded.
+await prepareLanguages(languageIds().map((id) => languageForName(id)!));
 
 const UNAVAILABLE_WORKSPACE: DiffWorkspace = {
   resolve: () => null,

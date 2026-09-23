@@ -1103,6 +1103,64 @@ artifacts, so it takes minutes; nothing waits on it.
 To see what it would say about a run, set `MAIN_REPORT_RUN_ID` to that
 run and pass `--dry-run`, which posts nothing.
 
+## Units that run whole
+
+An invocation unit is usually one test file. A lane that wants part of
+one registers the rest of the file's tests as ignored.
+
+Some units hold more than one test and cannot be split. These are a
+workspace member whose test task takes no file list, a member's browser
+half, the reload suite's directory, and a section of the FUSE
+integration script. A lane that asks for one test of such a unit runs
+every test in it.
+
+Each suite lists these units in `whole`, and a lane writes no skip list
+for one. Most units in `whole` hold a single identity, such as a gate, a
+type-check group, a binary build, one pattern's check, or one vintage
+fixture's replay. Only the four kinds above hold several. A unit's shape
+does not tell you which kind it is, because two of the four kinds are
+paths.
+
+The packer places each such unit as one choice. `plan()` in
+`tasks/test-selection/plan.ts` merges the unit's tests into one choice
+before it packs. That choice costs what all the tests cost together, and
+it is held back when any of them is. The plan it writes lists the tests
+again in place of the merged choice. The merge exists only inside
+`plan()`. The manifest, the records, and the plan all name tests, so
+anything that matches a record against the manifest or a plan finds the
+test by its own name.
+
+A change to such a member's source makes its unit mandatory only
+through the coverage gate. A member with a measured set is reached by
+changes under its own tree. At present those members are
+`packages/connectors/agents/debug-view` and `packages/dashboard`. The
+others have no measured set, because
+[the coverage gate excludes them](#the-coverage-gate). No diff names a
+directory, so those units reach a lane only on the score of their tests.
+At present those are `packages/identity`, `packages/patterns`, and the
+three browser halves.
+
+A workspace member stops running whole when the task holding its tests
+becomes one the topology can point at files. That task is its
+`deno-test`, or its `test` if it defines no `deno-test`. The topology can
+point a single `deno test` at files, and also a dependency list that
+resolves to one, or the shard wrapper around one. It cannot point a task
+that joins commands with a shell operator such as `&&`, a task that
+names its own import map, or a test runner of the package's own.
+
+The shard wrapper, `tasks/run-sharded-test-files.ts`, is also how a
+member whose files need different flags stays splittable. Its `--serial`
+option names files that cannot run beside another test file in one
+process, and those run in a `deno test` without `--parallel`, one file
+at a time. Its `--all-access` option names files that need every
+permission, and those run under `--allow-all`. The wrapper runs each
+group as a `deno test` of its own and merges their JUnit reports into
+the one path it was handed. A lane groups the files it selects the same
+way, with a report for each group. The topology refuses a `--serial` or
+`--all-access` pattern that names no test file, and so does the wrapper,
+which also refuses such an `--ignore`. `packages/cli` is the member that
+uses both options.
+
 ## A case that fails only when its siblings do not run
 
 A lane runs part of a file: the cases it holds run, and the registration

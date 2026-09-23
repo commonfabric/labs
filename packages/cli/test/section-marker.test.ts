@@ -76,7 +76,7 @@ describe("section-marker", () => {
      *
      * A `ValidationError` reaches the caller as help output plus an exit, so
      * the refusal is read where a caller reads it — off stderr — rather than
-     * as a thrown value. Same idiom as `wish-command.test.ts`.
+     * as a thrown value. Same idiom as `wish-command.serial.test.ts`.
      */
     async function outputFrom(
       // deno-lint-ignore no-explicit-any

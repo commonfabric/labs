@@ -1,6 +1,7 @@
 {
   "version": "5",
   "specifiers": {
+    "jsr:@astral/astral@*": "0.5.6",
     "jsr:@astral/astral@0.5.6": "0.5.6",
     "jsr:@cliffy/command@1.0.0-rc.8": "1.0.0-rc.8",
     "jsr:@cliffy/flags@1.0.0-rc.8": "1.0.0-rc.8",
@@ -76,6 +77,7 @@
     "npm:@arizeai/openinference-semantic-conventions@^2.5.0": "2.5.0",
     "npm:@arizeai/openinference-vercel@^3.1.0": "3.1.0_@ai-sdk+otel@1.0.31__zod@4.4.3_@opentelemetry+api@1.9.1_ai@7.0.31__zod@4.4.3_zod@4.4.3",
     "npm:@babylonjs/core@9.23.0": "9.23.0",
+    "npm:@binclusive/tree-sitter-swift-wasm@0.1.0": "0.1.0",
     "npm:@codemirror/autocomplete@^6.20.3": "6.20.3",
     "npm:@codemirror/collab@6.1.1": "6.1.1",
     "npm:@codemirror/collab@^6.1.1": "6.1.1",
@@ -587,6 +589,9 @@
     },
     "@babylonjs/core@9.23.0": {
       "integrity": "sha512-FpDaTPx485J1H0AEJpoJ785Z1CwCkEPNnZFu7WzHTy0ByGCy75bkZZILh4QFU4LLnzK1iuHwUfecCguATIeKSA=="
+    },
+    "@binclusive/tree-sitter-swift-wasm@0.1.0": {
+      "integrity": "sha512-QZr3UahyLhPUZtBmcleKzx/TTWT4dcXv9Xb8OeGrubtqsu1aNbaBYrlzeiM4XZzmm/Q+YDQEnk7/rg15SGZU1A=="
     },
     "@codemirror/autocomplete@6.20.3": {
       "integrity": "sha512-tlosUqb+3BbxCxZdu4tKeRghPFC+QM7q4X5YhKV2eCmPG+1r2F3f4AaSz5sCrFqUtX4Jh20VFTKecl16MgiV9g==",
@@ -2879,6 +2884,7 @@
           "jsr:@cliffy/table@1.0.0-rc.8",
           "jsr:@db/sqlite@0.13.0",
           "jsr:@std/fmt@~1.0.2",
+          "npm:@binclusive/tree-sitter-swift-wasm@0.1.0",
           "npm:entities@8",
           "npm:marked@^18.0.6",
           "npm:tree-sitter-python@0.25.0",

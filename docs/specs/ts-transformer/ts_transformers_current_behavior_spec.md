@@ -846,16 +846,26 @@ the wrapper that hid it.
 `WriteAuthorizedByValidationTransformer` separately validates writer-binding
 claims.
 
-It scans `toSchema<T>()` (one type arg) and `pattern<I, R>()` (the result type
-arg) for `WriteAuthorizedBy<T, typeof binding>` references, resolving through
-local type aliases and type-parameter substitution
+It scans `toSchema<T>()` (one type arg), `pattern<I, R>()` (the result type
+arg), and cell constructors (every type argument, since a constructed cell's
+policy is written there; a foreign constructor such as `new Map<…>()` is not
+scanned) for `WriteAuthorizedBy<T, typeof binding>` references. It runs after
+the stages that lower expressions, so it resolves type declarations and
+bindings through the checker rather than by scanning the rewritten file. It
+resolves through type aliases and interfaces wherever they are declared (this
+file, an import, or a declaration file; the schema generator resolves a
+reference the same way, so a policy any alias carries must be validated too)
+and type-parameter substitution
 (`findWriteAuthorizedByReferences`). For each reference it emits
 **`cfc-write-authorized-by`** when usage is malformed:
 
 - the second type argument is not a `typeof` binding (`TypeQueryNode`)
 - the `typeof` target is not a simple identifier
-- the bound name is not a supported origin — a local `handler()` / `module()` /
-  `requireEventIntegrity()` initializer, or a local function declaration
+- the bound name is not a supported origin — a `handler()` / `module()` /
+  `requireEventIntegrity()` initializer, or a function declaration, declared in
+  an authored module (this one or an import, through any re-export; a
+  declaration file declares no writer). The claim carries the declaring
+  module's identity, which is what the runtime verifies the writer against.
 
 Well-formed `WriteAuthorizedBy` usage passes validation; the base schema
 lowers as `T` plus the writer-identity claim (`ifc.writeAuthorizedBy` carrying
@@ -2164,14 +2174,28 @@ carry a repeated source-metadata helper implementation.
 
 ## 12. Schema Generation
 
-Cell constructors whose authored type arguments include a `typeof` value binding
-retain those arguments when their result is lowered into a lift. Recovery follows
-`.for()` and unannotated `const` aliases, and also preserves the declaration in
-an inferred object-literal pattern result. This keeps `WriteAuthorizedBy` tied to
-the named writer instead of an inferred structural function type. Explicit
-variable annotations remain authoritative; mutable aliases are not followed.
+Cell constructors whose authored type arguments name a `typeof` value binding
+retain those arguments when their result is lowered into a lift
+(`getConstructedCellTypeNode`). Recovery follows `.for()` and unannotated
+`const` aliases, and also preserves the declaration in an inferred
+object-literal pattern result. This keeps `WriteAuthorizedBy` tied to the named
+writer instead of an inferred structural function type. Explicit variable
+annotations remain authoritative; mutable aliases are not followed.
 Pattern-local object value aliases retain their definitions in each generated
-schema. `protected-cell-policy.test.ts` pins both generated schemas.
+schema.
+
+An argument names a binding (`namesValueBinding`) when a `typeof` is written in
+it, in anything it holds, or in a type alias or interface it refers to by name,
+through any import binding and without substituting a generic alias's
+parameters. Only declarations in authored modules are followed: a declaration
+file's `typeof`, such as a brand key, names no writer. The schema generator
+reads the type arguments of the reference that carries a policy through
+parentheses and plain aliases (`readAuthoredTypeNode`), so a pattern-local
+`type Name = Owned<string, typeof setName>` names the writer that the same
+syntax written in place names. The binding itself stays a direct `typeof`
+(§6.8): `type Binding = typeof setName` is refused, on a constructor's type
+arguments as on a declared field. `protected-cell-policy.test.ts` pins the
+generated schemas and the refusals.
 
 `SchemaGeneratorTransformer` replaces `toSchema<T>(options?)` calls with JSON
 schema literals.
@@ -3255,7 +3279,7 @@ Test inventory for this stage: transformer unit suite
 `test/pattern-coverage-transformer.test.ts`; end-to-end line mapping and LCOV
 `packages/runner/test/pattern-coverage.test.ts`; cache bypass
 `packages/runner/test/esm-engine.test.ts`; flag/env-var enablement
-`packages/cli/test/test-runner-pattern-coverage.test.ts`; stage order
+`packages/cli/test/test-runner-pattern-coverage.serial.test.ts`; stage order
 `test/pipeline-regressions.test.ts`. The `*.input.*`/`*.expected.*` fixture
 corpus (§20) never enables the option, so fixture expectations contain no
 counters.
@@ -3420,24 +3444,44 @@ The same stage stamps CFC **trusted bindings** with their authoring identity,
 so a `WriteAuthorizedBy` claim embedded in a schema can later be matched to
 the live handler that performs the write.
 
-**Which bindings are trusted.** `collectWriteAuthorizedByBindingNames` scans
-the stage-23 AST for type references to `WriteAuthorizedBy`,
-`TrustedActionWrite`, or `TrustedActionWriteWithIntegrity` (binding position
-= type argument 1 for all three, seeded in
-`discoverWriteAuthorizedByBindingPositions`), plus any local type aliases
-that forward a type parameter into such a position (computed to a fixed
-point, so alias-of-alias works — `collectAliasBindingPositions`; exercised by
-`test/cfc-authoring.test.ts` "lowers alias-referenced trusted builder
-bindings"). Within each binding-position type argument, every `typeof x`
-type-query identifier contributes `x` to the trusted-name set
-(`collectTypeQueryIdentifiers`). Detection is purely name-based (no
-symbol/import resolution), and it sees only type references **still present
-after stages 15–17**: a reference that lived solely inside a
-`toSchema<WriteAuthorizedBy<…>>()` type argument was already replaced by the
-schema literal in stage 18 and contributes nothing (verified by direct
-pipeline run — such a module gets a plain `__cfHardenFn` wrap and no
-annotation), whereas references surviving in `interface`/type-alias
-declarations or un-lowered type arguments do.
+**Which bindings are trusted.** A binding is trusted in the module that
+DECLARES it, whichever module wrote the claim that names it: the schema names
+the declaring module (§12), and the runtime verifies a write against that
+module's binding identity, so a writer cited only from an importing module —
+`cfc-spec-gallery` binds the trusted surfaces' writers this way — must be
+stamped by its own module. The stage reads two sources and takes their union:
+
+- `collectTrustedBindingsByFile` (once per program, cached by `ts.Program`)
+  scans every non-declaration file of the program **as authored** for type
+  references to `WriteAuthorizedBy`, `TrustedActionWrite`, or
+  `TrustedActionWriteWithIntegrity` (binding position = type argument 1 for
+  all three) and to any type alias, in any of those files, that forwards a
+  type parameter into such a position (to a fixed point, so alias-of-alias
+  works — `discoverAliasBindingPositions` / `collectAliasBindingPositions`).
+  A reference to an alias resolves through the checker to its declaration, so
+  an alias imported from another module is read; one of the library's three
+  names counts as the library's type only when it is imported from a Common
+  Fabric module (through any chain of authored re-exports), so an authored
+  alias that borrows the name reads as what it declares and trusts nothing.
+  Every `typeof x` in a binding position is resolved
+  through the checker to the variable or function declaration it names
+  (`resolveWriterBinding`, `@commonfabric/schema-generator/writer-binding` —
+  the resolver the schema generator mints the claim with), and the DECLARED
+  name is indexed under the DECLARING file: `import { writer as save }` cited
+  as `typeof save` trusts `writer` in `writer.ts`. Because the program's
+  original files are read, a claim that lived solely inside a
+  `toSchema<WriteAuthorizedBy<…>>()` type argument counts too, although stage
+  18 has replaced it with a schema literal by the time this stage runs.
+- `collectWriteAuthorizedByBindingNames` scans this file's own stage-23 AST
+  the same way, by spelling and without resolution — for a claim an earlier
+  stage synthesized, which the original files do not hold.
+
+Exercised by `test/cfc-authoring.test.ts` "WriteAuthorizedBy lowers
+alias-referenced trusted builder bindings" and `test/protected-cell-policy.test.ts` "gives an imported
+writer its binding identity in its own module" (transform), and by
+`packages/runner/test/cfc-imported-writer-binding.test.ts` (a compiled
+two-module program: the identity is registered under the declared name and
+the importer's claim admits the write).
 
 **What is emitted.** For a trusted binding whose initializer is a call
 expression or a direct function (`isTrustedCallable`), the transformer emits
@@ -3865,7 +3909,7 @@ re-listing it. The enforced sources of truth:
 | Module-scope `__cf_data` wrap/exclusion name sets + verifier error strings (§15) | `TRUSTED_BUILDERS` / `TRUSTED_DATA_HELPERS` (`packages/utils/src/sandbox-contract.ts`); `CF_DATA_CONSTRUCTOR_NAMES` (`src/transformers/module-scope-cf-data.ts`); `TOP_LEVEL_CALL_RESULT_ERROR` (`packages/runner/src/sandbox/policy.ts`) | one module feeds both transformer and runner verifier — cross-package contract; runtime freezer semantics live in `packages/runner/src/sandbox/plain-data.ts` |
 | Coverage instrumentation + span schema (§16) | `PatternCoverageTransformer` (`src/transformers/pattern-coverage.ts`); `PatternCoverageSpan` / `PatternCoverageOptions` / `PATTERN_COVERAGE_GLOBAL` (`src/core/transformers.ts`) | line remapping pins the one-line helper prelude: `HELPERS_STMT` (`src/core/cf-helpers.ts`) ↔ `patternCoverageOptionsForCompile` (`packages/runner/src/harness/engine.ts`) — change them together |
 | Hardening/binding helper names, metadata field, canonical helper bodies (§17) | `FUNCTION_HARDENING_HELPER_NAME` / `BINDING_IDENTITY_HELPER_NAME` / `VERIFIED_BINDING_METADATA_FIELD` and `createFunctionHardeningHelperSource` / `createBindingIdentityHelperSource` (`packages/utils/src/sandbox-contract.ts`) | the runner verifier recognizes helper declarations by trivia-stripped byte equality to these sources (`CANONICAL_HARDENING_HELPER` in `packages/runner/src/sandbox/compiled-bundle-verifier.ts`); the transformer's AST-built twins (`createFunctionHardeningHelper` / `createBindingIdentityHelper` in `src/transformers/module-scope-function-hardening.ts`) must compile to exactly that text — drift fails every module load |
-| Trusted-binding type names + binding positions (§17.3) | seed map in `discoverWriteAuthorizedByBindingPositions` (`src/transformers/module-scope-function-hardening.ts`) | keep in sync with `WriteAuthorizedByValidationTransformer` (§6.8) and the schema generator's `__ctWriterIdentityOf` claim emission; both spell files via the shared `normalizeWriterIdentityFile` (`src/utils/writer-identity-file.ts`) so claim and provenance spellings cannot drift |
+| Trusted-binding type names + binding positions (§17.3) | seed map `LIBRARY_BINDING_POSITIONS`, extended by `discoverAliasBindingPositions` / `collectAliasBindingPositions` (`src/transformers/module-scope-function-hardening.ts`) | keep in sync with `WriteAuthorizedByValidationTransformer` (§6.8) and the schema generator's `__ctWriterIdentityOf` claim emission; both spell files via the shared `normalizeWriterIdentityFile` (`src/utils/writer-identity-file.ts`) so claim and provenance spellings cannot drift |
 
 A drift-resistant habit: when a section enumerates a set, cite the constant /
 function that defines it so a reader can confirm the live set, and keep prose

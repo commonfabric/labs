@@ -7,7 +7,7 @@
  */
 
 import { isObjectOrArray } from "@commonfabric/utils/types";
-import type { Status } from "./types.ts";
+import type { Run, Status } from "./types.ts";
 import { PROD_SERVICE, REPO } from "./config.ts";
 import {
   type GitHubPrimaryRateLimit,
@@ -20,9 +20,12 @@ import {
   durationTag,
   escapeHtml,
   groupDigits,
+  humanDuration,
   humanSpan,
   SPARKLINE_HEIGHT,
   STATUS_DOT,
+  STATUS_RANK,
+  worstStatus,
 } from "./tile-render-values.ts";
 
 export {
@@ -32,9 +35,12 @@ export {
   durationTag,
   escapeHtml,
   groupDigits,
+  humanDuration,
   humanSpan,
   SPARKLINE_HEIGHT,
   STATUS_DOT,
+  STATUS_RANK,
+  worstStatus,
 };
 
 // The service.name to scope a SigNoz query to. The name lands inside a query
@@ -586,6 +592,20 @@ export function usd(n: number): string {
   if (cents === 0) return "$0";
   if (Math.abs(cents) < 100) return `${cents}¢`;
   return `$${Math.round(n)}`;
+}
+
+/**
+ * How long a completed run ran, in milliseconds, or nothing at all when it is
+ * still running or its two timestamps do not describe a span.
+ */
+export function runDurationMs(run: Run): number | undefined {
+  if (run.status !== "completed") return undefined;
+  const start = Date.parse(run.run_started_at);
+  const end = Date.parse(run.updated_at);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    return undefined;
+  }
+  return end - start;
 }
 
 // A completed run's dot color: only genuine failures are red.

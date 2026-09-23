@@ -4238,17 +4238,21 @@ export function fabricFromConvertibleJsValue(
 > lets the object rule of Section 1.5 reject the value by name rather than as
 > some unrecognized class. Then a `FabricPrimitive`, by the tag its instance
 > reports, one of `FABRIC_PRIMITIVE_VALUE_TAGS`, and a `FabricInstance`, by
-> class. What remains is a JS class instance, decided last by its class, read
-> from its prototype, by a `switch` on constructor identity; a
+> class. What remains is a JS class instance, decided last by its class, by a
+> `switch` on the identity of its prototype; a
 > recognized one is a value the conversion has yet to import, the heavier
 > path, so the lookup's cost sits on it alone. That `switch` names only the
 > classes no earlier question decides: an object merely built on a plain
 > object, or on the prototype of `Array` or of an `Error` class, is none of
 > those by the test that decides it, and comes back `null`, unrecognized
-> rather than misidentified. Constructor identity is a per-realm question, so
+> rather than misidentified. Prototype identity is a per-realm question, so
 > a `Map`, `Set`, `Date`, `Uint8Array`, or `RegExp` from another realm comes
 > back `null` the same way, where an array or an error from another realm is
-> decided by the earlier test that holds across realms. A
+> decided by the earlier test that holds across realms. The realm's global
+> constructor bindings do not enter into it: SES lockdown replaces the global
+> `Date` and `RegExp` with constructors of its own that keep the original
+> prototypes, so an instance made before lockdown, after it, or inside a
+> compartment is recognized alike. A
 > `FabricPrimitive` subclass that reports no tag of its own is tagged as its
 > parent, which is a defect in that subclass rather than one the dispatch
 > guards against.

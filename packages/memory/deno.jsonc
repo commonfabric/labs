@@ -2,17 +2,11 @@
   "name": "@commonfabric/memory",
   "tasks": {
     "check": "deno check .",
-    "just-test": {
+    "deno-test": {
       "description": "Run unit tests",
-      "command": "deno test --allow-read --allow-write --allow-net --allow-ffi --allow-env --allow-run"
+      "command": "deno test --shuffle=$(deno task -q test-seed) --allow-read --allow-write --allow-net --allow-ffi --allow-env --allow-run"
     },
-    "test": {
-      "description": "Type check & run tests",
-      "dependencies": [
-        "check",
-        "just-test"
-      ]
-    },
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
     "bench": {
       "description": "Run memory benchmarks",
       "command": "deno bench --allow-read --allow-write --allow-net --allow-ffi --allow-env"

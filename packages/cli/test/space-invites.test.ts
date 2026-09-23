@@ -9,6 +9,92 @@ import {
 } from "@commonfabric/runner/space-invites";
 import { verifyFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 
+/**
+ * Runs `cf space invite` subcommands against a stubbed fabric service that
+ * checks each request's signer and route and answers every operation. Each
+ * run places the connection options directly after the subcommand's name, so
+ * that the words after them may end with `--` and an invitation ID, and
+ * returns the JSON the command printed. Disposing it restores the stubs and
+ * removes its state directory.
+ */
+async function inviteCli(passphrase: string) {
+  await using stack = new AsyncDisposableStack();
+  const signer = await Identity.fromPassphrase(passphrase, {
+    implementation: "noble",
+  });
+  const directory = await Deno.makeTempDir();
+  stack.defer(() => Deno.remove(directory, { recursive: true }));
+  const getEnv = Deno.env.get.bind(Deno.env);
+  stack.use(stub(
+    Deno.env,
+    "get",
+    (name) => name === "XDG_STATE_HOME" ? directory : getEnv(name),
+  ));
+  stack.use(stub(console, "error", () => {}));
+  const keyPath = `${directory}/identity.key`;
+  await Deno.writeFile(keyPath, signer.toPkcs8());
+  const requests: { operation: string; body: Record<string, unknown> }[] = [];
+  const outputs: string[] = [];
+  stack.use(stub(console, "log", (value: string) => {
+    outputs.push(value);
+  }));
+  stack.use(stub(globalThis, "fetch", async (input, init) => {
+    const request = new Request(input, init);
+    expect((await verifyFirstPartyHttpRequest({ request })).userDid).toBe(
+      signer.did(),
+    );
+    const body = await request.json();
+    const operation = new URL(request.url).pathname.split("/").at(-1)!;
+    expect(new URL(request.url).pathname).toContain(
+      `/api/spaces/${encodeURIComponent(signer.did())}/invites/`,
+    );
+    requests.push({ operation, body });
+    if (operation === "create") {
+      return Response.json({
+        inviteId: body.inviteId,
+        access: body.access,
+        maxUses: body.maxUses,
+        issuedBy: signer.did(),
+        createdAt: 1,
+        expiresAt: 60001,
+        usedCount: 0,
+        remainingUses: body.maxUses,
+      });
+    }
+    if (operation === "redeem") {
+      return Response.json({
+        outcome: "redeemed",
+        redemption: { inviteId: body.inviteId, did: signer.did() },
+        currentAccess: "READ",
+      });
+    }
+    if (operation === "revoke") return Response.json({ revoked: true });
+    return Response.json([]);
+  }));
+  const run = async (command: string, ...args: string[]) => {
+    await buildSpaceInviteCommand().reset().throwErrors().parse([
+      command,
+      "--api-url",
+      "https://fabric.example",
+      "--space",
+      signer.did(),
+      "--identity",
+      keyPath,
+      ...args,
+    ]);
+    return JSON.parse(outputs.at(-1)!);
+  };
+  const disposables = stack.move();
+  return {
+    signer,
+    codePath: `${directory}/invite.code`,
+    requests,
+    outputs,
+    run,
+    [Symbol.asyncDispose]: () => disposables.disposeAsync(),
+  };
+}
+
 describe("space invite", () => {
   it("persists private creation credentials before HTTP and reuses them after a lost response", async () => {
     const signer = await Identity.fromPassphrase("durable invite CLI", {
@@ -541,152 +627,203 @@ describe("space invite", () => {
   });
 
   it("transports the requested invite operations and returns caller-only credentials", async () => {
-    const signer = await Identity.fromPassphrase("invite CLI operations", {
-      implementation: "noble",
-    });
-    const directory = await Deno.makeTempDir();
-    const getEnv = Deno.env.get.bind(Deno.env);
-    using _state = stub(
-      Deno.env,
-      "get",
-      (name) => name === "XDG_STATE_HOME" ? directory : getEnv(name),
+    await using cli = await inviteCli("invite CLI operations");
+    const { requests, run } = cli;
+    const first = await run(
+      "create",
+      "--access",
+      "READ",
+      "--ttl",
+      "60",
+      "--shell",
+      "https://shell.example",
     );
-    using _error = stub(console, "error", () => {});
-    const keyPath = `${directory}/identity.key`;
-    const codePath = `${directory}/invite.code`;
-    await Deno.writeFile(keyPath, signer.toPkcs8());
-    const requests: { operation: string; body: Record<string, unknown> }[] = [];
-    const outputs: string[] = [];
-    using _output = stub(console, "log", (value: string) => {
-      outputs.push(value);
+    expect(requests.at(-1)).toMatchObject({
+      operation: "create",
+      body: { access: "READ", ttlSeconds: 60, maxUses: 1 },
     });
-    using _http = stub(globalThis, "fetch", async (input, init) => {
-      const request = new Request(input, init);
-      expect((await verifyFirstPartyHttpRequest({ request })).userDid).toBe(
-        signer.did(),
-      );
-      const body = await request.json();
-      const operation = new URL(request.url).pathname.split("/").at(-1)!;
-      expect(new URL(request.url).pathname).toContain(
-        `/api/spaces/${encodeURIComponent(signer.did())}/invites/`,
-      );
-      requests.push({ operation, body });
-      if (operation === "create") {
-        return Response.json({
-          inviteId: body.inviteId,
-          access: body.access,
-          maxUses: body.maxUses,
-          issuedBy: signer.did(),
-          createdAt: 1,
-          expiresAt: 60001,
-          usedCount: 0,
-          remainingUses: body.maxUses,
-        });
-      }
-      if (operation === "redeem") {
-        return Response.json({
-          outcome: "redeemed",
-          redemption: { inviteId: body.inviteId, did: signer.did() },
-          currentAccess: "READ",
-        });
-      }
-      if (operation === "revoke") return Response.json({ revoked: true });
-      return Response.json([]);
+    expect(requests.at(-1)!.body).not.toHaveProperty("code");
+    expect(parseInviteLink(first.link)).toEqual({
+      host: "https://fabric.example",
+      space: cli.signer.did(),
+      inviteId: first.inviteId,
+      code: first.code,
     });
-    const run = async (...args: string[]) => {
-      await buildSpaceInviteCommand().reset().throwErrors().parse([
-        ...args,
-        "--api-url",
-        "https://fabric.example",
-        "--space",
-        signer.did(),
-        "--identity",
-        keyPath,
-      ]);
-      return JSON.parse(outputs.at(-1)!);
-    };
+    const second = await run(
+      "create",
+      "--access",
+      "WRITE",
+      "--ttl",
+      "90",
+      "--max-uses",
+      "3",
+    );
+    expect(second).toMatchObject({ access: "WRITE", maxUses: 3 });
+    expect(requests.at(-1)).toMatchObject({
+      operation: "create",
+      body: { access: "WRITE", ttlSeconds: 90, maxUses: 3 },
+    });
+    expect(second).not.toHaveProperty("link");
+    expect(second.inviteId).not.toBe(first.inviteId);
+    await Deno.writeTextFile(cli.codePath, ` ${first.code}\n`);
+    expect(await run("redeem", first.inviteId, "--code-file", cli.codePath))
+      .toMatchObject({ outcome: "redeemed", currentAccess: "READ" });
+    expect(requests.at(-1)).toEqual({
+      operation: "redeem",
+      body: { inviteId: first.inviteId, code: first.code },
+    });
+    const original = Object.getOwnPropertyDescriptor(Deno.stdin, "readable");
+    Object.defineProperty(Deno.stdin, "readable", {
+      configurable: true,
+      value: new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(first.code + "\n"));
+          controller.close();
+        },
+      }),
+    });
     try {
-      const first = await run(
-        "create",
-        "--access",
-        "READ",
-        "--ttl",
-        "60",
-        "--shell",
-        "https://shell.example",
+      await run("redeem", first.inviteId, "--code-file", "-");
+    } finally {
+      if (original) Object.defineProperty(Deno.stdin, "readable", original);
+      else Reflect.deleteProperty(Deno.stdin, "readable");
+    }
+    expect(requests.at(-1)).toEqual({
+      operation: "redeem",
+      body: { inviteId: first.inviteId, code: first.code },
+    });
+    expect(await run("list")).toEqual([]);
+    expect(requests.at(-1)).toEqual({ operation: "list", body: {} });
+    expect(await run("receipts")).toEqual([]);
+    expect(requests.at(-1)).toEqual({ operation: "receipts", body: {} });
+    await run("receipts", first.inviteId);
+    expect(requests.at(-1)).toEqual({
+      operation: "receipts",
+      body: { inviteId: first.inviteId },
+    });
+    expect(await run("revoke", first.inviteId)).toEqual({ revoked: true });
+    expect(requests.at(-1)).toEqual({
+      operation: "revoke",
+      body: { inviteId: first.inviteId },
+    });
+    expect(cli.outputs).toHaveLength(8);
+  });
+
+  it("redeems, revokes, and lists receipts for an invitation created from random bytes that encode a leading dash", async () => {
+    await using cli = await inviteCli("invite CLI leading dash");
+    let created;
+    {
+      // Unpadded base64url encodes a first byte of 0xF8 as "-".
+      using _random = stub(
+        crypto,
+        "getRandomValues",
+        <T extends ArrayBufferView | null>(array: T) => {
+          new Uint8Array(array!.buffer, array!.byteOffset, array!.byteLength)
+            .fill(0xF8);
+          return array;
+        },
       );
-      expect(requests.at(-1)).toMatchObject({
-        operation: "create",
-        body: { access: "READ", ttlSeconds: 60, maxUses: 1 },
-      });
-      expect(requests.at(-1)!.body).not.toHaveProperty("code");
-      expect(parseInviteLink(first.link)).toEqual({
-        host: "https://fabric.example",
-        space: signer.did(),
-        inviteId: first.inviteId,
-        code: first.code,
-      });
-      const second = await run(
-        "create",
-        "--access",
-        "WRITE",
-        "--ttl",
-        "90",
-        "--max-uses",
-        "3",
-      );
-      expect(second).toMatchObject({ access: "WRITE", maxUses: 3 });
-      expect(requests.at(-1)).toMatchObject({
-        operation: "create",
-        body: { access: "WRITE", ttlSeconds: 90, maxUses: 3 },
-      });
-      expect(second).not.toHaveProperty("link");
-      expect(second.inviteId).not.toBe(first.inviteId);
-      await Deno.writeTextFile(codePath, ` ${first.code}\n`);
-      expect(await run("redeem", first.inviteId, "--code-file", codePath))
-        .toMatchObject({ outcome: "redeemed", currentAccess: "READ" });
+      created = await cli.run("create", "--access", "READ", "--ttl", "60");
+    }
+    await Deno.writeTextFile(cli.codePath, created.code);
+    expect(
+      await cli.run("redeem", created.inviteId, "--code-file", cli.codePath),
+    )
+      .toMatchObject({ outcome: "redeemed" });
+    expect(await cli.run("revoke", created.inviteId)).toEqual({
+      revoked: true,
+    });
+    await cli.run("receipts", created.inviteId);
+    expect(
+      cli.requests.map(({ operation, body }) => [operation, body.inviteId]),
+    )
+      .toEqual([
+        ["create", created.inviteId],
+        ["redeem", created.inviteId],
+        ["revoke", created.inviteId],
+        ["receipts", created.inviteId],
+      ]);
+  });
+
+  it("sends an invitation ID beginning with `-` when it follows `--`", async () => {
+    await using cli = await inviteCli("invite CLI dash IDs");
+    const { requests, run } = cli;
+    const code = "A".repeat(43);
+    await Deno.writeTextFile(cli.codePath, code);
+    for (const inviteId of ["-" + "P".repeat(21), "--" + "Q".repeat(20)]) {
+      await run("redeem", "--code-file", cli.codePath, "--", inviteId);
       expect(requests.at(-1)).toEqual({
         operation: "redeem",
-        body: { inviteId: first.inviteId, code: first.code },
+        body: { inviteId, code },
       });
-      const original = Object.getOwnPropertyDescriptor(Deno.stdin, "readable");
-      Object.defineProperty(Deno.stdin, "readable", {
-        configurable: true,
-        value: new ReadableStream({
-          start(controller) {
-            controller.enqueue(new TextEncoder().encode(first.code + "\n"));
-            controller.close();
-          },
-        }),
-      });
-      try {
-        await run("redeem", first.inviteId, "--code-file", "-");
-      } finally {
-        if (original) Object.defineProperty(Deno.stdin, "readable", original);
-        else Reflect.deleteProperty(Deno.stdin, "readable");
-      }
-      expect(requests.at(-1)).toEqual({
-        operation: "redeem",
-        body: { inviteId: first.inviteId, code: first.code },
-      });
-      expect(await run("list")).toEqual([]);
-      expect(requests.at(-1)).toEqual({ operation: "list", body: {} });
-      expect(await run("receipts")).toEqual([]);
-      expect(requests.at(-1)).toEqual({ operation: "receipts", body: {} });
-      await run("receipts", first.inviteId);
+      await run("receipts", "--", inviteId);
       expect(requests.at(-1)).toEqual({
         operation: "receipts",
-        body: { inviteId: first.inviteId },
+        body: { inviteId },
       });
-      expect(await run("revoke", first.inviteId)).toEqual({ revoked: true });
+      await run("revoke", "--", inviteId);
       expect(requests.at(-1)).toEqual({
         operation: "revoke",
-        body: { inviteId: first.inviteId },
+        body: { inviteId },
       });
-      expect(outputs).toHaveLength(8);
-    } finally {
-      await Deno.remove(directory, { recursive: true });
     }
+    await run("receipts", "--");
+    expect(requests.at(-1)).toEqual({ operation: "receipts", body: {} });
+    expect(requests).toHaveLength(7);
+  });
+
+  it("refuses an invitation ID named twice, followed by other words, or missing, before making a request", async () => {
+    using http = stub(
+      globalThis,
+      "fetch",
+      () => Promise.reject(new Error("unexpected request")),
+    );
+    const common = [
+      "--api-url",
+      "https://fabric.example",
+      "--space",
+      "named-space",
+      "--identity",
+      "/not-needed.key",
+    ];
+    const dashId = "-" + "P".repeat(21);
+    const plainId = "A".repeat(22);
+    for (const command of ["redeem", "revoke", "receipts"]) {
+      await expect(
+        buildSpaceInviteCommand().reset().throwErrors().parse([
+          command,
+          ...common,
+          dashId,
+        ]),
+      ).rejects.toThrow('Unknown option "-P');
+      for (
+        const [words, error] of [
+          [[plainId, "--", dashId], "not both"],
+          [["--", plainId, dashId], "Only the invitation ID may follow `--`"],
+          [["--", dashId, "--space", "named-space"], "options go before it"],
+        ] as const
+      ) {
+        await expect(
+          buildSpaceInviteCommand().reset().throwErrors().parse([
+            command,
+            ...common,
+            ...words,
+          ]),
+        ).rejects.toThrow(error);
+      }
+    }
+    for (const command of ["redeem", "revoke"]) {
+      for (const words of [[], ["--"]]) {
+        await expect(
+          buildSpaceInviteCommand().reset().throwErrors().parse([
+            command,
+            ...common,
+            ...words,
+          ]),
+        ).rejects.toThrow("Missing argument: `invite-id`");
+      }
+    }
+    expect(http.calls).toHaveLength(0);
   });
 
   it("refuses incomplete commands before making a request", async () => {

@@ -947,8 +947,8 @@ describe("tags", () => {
       const severed = new Error("severed");
       Object.setPrototypeOf(severed, null);
 
-      // No reachable constructor, so the class-level lookup yields nothing and
-      // the `Error.isError()` fallback is what recognizes it.
+      // No prototype, so the class-level lookup yields nothing and the
+      // `Error.isError()` fallback is what recognizes it.
       expect((severed as { constructor?: unknown }).constructor).toBe(
         undefined,
       );
@@ -1039,13 +1039,34 @@ describe("tags", () => {
         });
       }
 
-      it("reads an inherited `constructor`, which is the real one", () => {
-        // The counterpart: what the prototype says IS the answer, so a value
-        // whose class is reachable only through its prototype is tagged by it.
+      it("returns `JsMap` for a value whose prototype is `Map.prototype`", () => {
+        // The counterpart: the prototype is the answer, so a value whose class
+        // is reachable only through its prototype is tagged by it.
         expect(tagOfConvertibleJsValueElseNull(new Map())).toBe(
           VALUE_TAGS.JsMap,
         );
         expect(isValidFabricConvertibleJsObject(new Map())).toBe(true);
+      });
+    });
+
+    describe("the prototype decides the class, not the `constructor` it names", () => {
+      it("returns `null` for an object whose prototype names `Map`", () => {
+        const forged = Object.create({ constructor: Map });
+
+        expect(tagOfConvertibleJsValueElseNull(forged)).toBe(null);
+      });
+
+      it("returns `null` for an instance of a function-style `Date` subclass", () => {
+        // `LegacyDate.prototype` inherits its `constructor`, `Date`, from
+        // `Date.prototype`, so only the prototype itself tells the instance
+        // apart from a `Date`, as it does for a `class` extending `Date`.
+
+        function LegacyDate() {}
+        LegacyDate.prototype = Object.create(Date.prototype);
+        const instance = Reflect.construct(Date, [0], LegacyDate);
+
+        expect(instance.constructor).toBe(Date);
+        expect(tagOfConvertibleJsValueElseNull(instance)).toBe(null);
       });
     });
 

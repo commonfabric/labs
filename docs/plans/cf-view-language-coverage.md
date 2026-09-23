@@ -13,7 +13,9 @@ lexical state for each record. JSON also covers the surveyed names that no
 `.json` suffix announces: web manifests, TLDraw documents, Deno lock files,
 editor workspace files, Swift package resolutions, and the `.cfg` files whose
 source opens a JSON object. Python has syntax highlighting and a structure tree
-of its classes and functions.
+of its classes and functions. Swift has syntax highlighting and a structure
+tree of its types, functions, initializers, and type-level properties, and its
+package manifests select it through their `.swift` extension.
 
 Automatic container detection is limited to structurally identified raw unified
 diffs and standard Git commit output. Source evidence otherwise settles only an
@@ -28,14 +30,14 @@ output streams the complete dump. Text saves use the encoder paired with the
 decoded source, including preservation of a UTF-8 byte order mark. Binary files
 remain outside diff editing and semantic source loading.
 
-Python runs on Tree-sitter through a shared, language-neutral adapter, which
-Go, shell, and HTML will use as well, with official grammar packages.
+Python and Swift run on Tree-sitter through a shared, language-neutral adapter,
+which Go, shell, and HTML will use as well.
 The order is provisional because recent activity was measured in six of the 26
 active organization repositories.
 
 This plan takes `cf view` from its current TypeScript and JavaScript, Markdown,
-JSON, JSONC, JSON Lines, YAML, extension-based Python highlighting, and diff
-support to honest handling of every textual syntax in the active
+JSON, JSONC, JSON Lines, YAML, Python, Swift, and diff support to honest
+handling of every textual syntax in the active
 `commonfabric` repositories.
 
 The frozen evidence is in the
@@ -142,19 +144,19 @@ and a warm dependency cache. Initialization starts at the first statement in a
 fresh Deno process and includes dynamic imports, runtime initialization, the
 selected grammar and query, and one empty highlight.
 
-| Dimension | Shipped Python | Accepted maximum |
-| --- | ---: | ---: |
-| 95th-percentile lazy initialization | 29.41 ms | 75 ms |
-| 95th-percentile full highlighting | 27.89 ms | 50 ms |
-| 95th-percentile document parse, with structure | 35.56 ms | 50 ms |
-| 95th-percentile re-color after one edit | 15.07 ms | 25 ms |
-| Compiled `cf` increase | 12.03 MiB | 14 MiB for runtime and first grammar |
-| Unpacked dependencies | 11.95 MiB | 14 MiB for runtime and first grammar |
-| Owned source | 584 lines | 650 shipped lines |
-| Parser-specific build and deployment steps | 0 | 0 |
+| Dimension | Shipped Python | Shipped Swift | Accepted maximum |
+| --- | ---: | ---: | ---: |
+| 95th-percentile lazy initialization | 29.41 ms | 71.98 ms | 75 ms |
+| 95th-percentile full highlighting | 27.89 ms | 37.69 ms | 50 ms |
+| 95th-percentile document parse, with structure | 35.56 ms | 39.08 ms | 50 ms |
+| 95th-percentile re-color after one edit | 15.07 ms | 15.36 ms | 25 ms |
+| Compiled `cf` increase | 12.03 MiB | 3.72 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Unpacked dependencies | 11.95 MiB | 3.66 MiB | 14 MiB for runtime and first grammar; 10 MiB for a later grammar |
+| Owned source | 584 lines | 200 lines | 650 shipped lines; 200 for a later grammar |
+| Parser-specific build and deployment steps | 0 | 0 | 0 |
 
-The shipped column is the
-[September 2026 measurement](../history/packages/cli/cf-view-python-treesitter-2026-09.md),
+The Python column is the
+[September 2026 Python measurement](../history/packages/cli/cf-view-python-treesitter-2026-09.md),
 which drives the real language object. Three rows changed when that
 measurement replaced the probe's. Document parsing is a row because it is what
 opening a file runs, and the probe had not measured it. Re-coloring after an
@@ -162,6 +164,13 @@ edit replaces a row that read "incremental edit and changed-line highlight",
 for the reason under "An edit re-colors the whole document" below. The
 owned-source maximum was raised, for the reason under "Owned source over its
 maximum".
+
+The Swift column is the
+[September 2026 Swift measurement](../history/packages/cli/cf-view-swift-treesitter-2026-09.md),
+made the same way. Its byte and source figures are what Swift adds, and they
+are held to the later-grammar maximums in the next paragraph. A view loads only
+the grammars of the languages it shows, so only a view showing Swift pays
+Swift's initialization.
 
 Each later host grammar may add at most 10 MiB to both byte measures and 200
 owned source lines. The common runtime and the Python, Go, Bash, and HTML host
@@ -182,13 +191,14 @@ coverage and integration cost.
 
 The language selection and parsing interfaces are synchronous, while
 Tree-sitter initialization and grammar loading are asynchronous, so a language
-declares what it has to load and a view loads it before parsing anything. A
-redirected view loads the grammars of the languages it selected. The
-interactive pager loads every language's, once its first frame is on screen and
-before it reads a key, because the file picker and a definition peek answer a
-keystroke by opening a file in any language. A synchronous entry point reached
-without its grammar throws rather than coloring the source as though it had no
-syntax.
+declares what it has to load and a view loads the grammars of the languages it
+selected before parsing anything. No other grammar is loaded. When the
+interactive pager opens a file in a language whose grammar has not loaded, as
+the file picker can, the synchronous entry point shows the source as plain text
+and starts the load, and the pager parses the document again once the grammar
+loads. A grammar that cannot load leaves the source plain, and the pager shows
+the reason in its status line. A redirected view, which loads its grammars
+before it parses, fails with the reason instead.
 
 The measured four-grammar setup initialized in 37.2 milliseconds and highlighted
 about 100 kilobytes in 14.03 to 28.29 milliseconds at the 95th percentile. Its
@@ -461,12 +471,49 @@ selects without content guessing.
 
 ## Stage 10: Swift, Rust, TOML, and native manifests
 
-- [ ] Add Swift and Rust source.
+Swift is implemented ahead of Stages 3 to 9. A September 22, 2026 refresh read
+the Swift in local checkouts of Fabric Mobile (19 files), gVisor (10), Loom
+(12), Loom Scripts (1), and the `commonfabric-weaver` repository (1,150), which
+the July survey predates. The six months before the refresh hold 6,646
+path-change events on Swift paths in `commonfabric-weaver` alone, more than the
+survey's history sample recorded for any family except Python. Rust, TOML, and
+Cargo keep their place.
+
+- [x] Add Swift source.
+- [ ] Add Rust source.
 - [ ] Add TOML.
 - [ ] Recognize Cargo manifests and lock files.
-- [ ] Recognize Swift package manifests and package-resolution JSON.
+- [x] Recognize Swift package manifests and package-resolution JSON.
 - [ ] Delegate embedded notebook cells when their language metadata names one
   of the implemented languages.
+
+Swift runs on the Tree-sitter adapter with the
+[`alex-pinkus/tree-sitter-swift`](https://github.com/alex-pinkus/tree-sitter-swift)
+grammar, which is not an official Tree-sitter grammar. Its own npm package
+ships no WebAssembly grammar, so the CLI depends on a package holding the
+upstream release's WebAssembly build, whose digest matches the release asset;
+`docs/development/DEPENDENCIES.md` gives the procedure for rolling it. A
+coverage check over 1,039 Swift files from those five repositories found every
+file reconstructed exactly and 0.071 percent of non-whitespace characters
+without a token class. The grammar could not parse part of 112 of those files,
+all in `commonfabric-weaver`, and continues coloring inside those regions.
+
+The Swift grammar is about eight times the size of Python's, and compiling a
+highlight query costs it several milliseconds for each pattern that constrains
+a node's parent. The Swift query therefore matches a declared name or a callee
+by the token beside it, which keeps its initialization inside the maximum. The
+[September 2026 Swift measurement](../history/packages/cli/cf-view-swift-treesitter-2026-09.md)
+records the costs pattern by pattern.
+
+Structure covers classes, structures, enumerations, actors, extensions,
+protocols, type aliases, functions, methods, protocol method and property
+requirements, initializers, deinitializers, subscripts, and each property
+declaration on a type or at file level, under the first name it binds. Local
+variables are not structure. `.swift` selects Swift, which covers
+`Package.swift` and a manifest for one compiler version such as
+`Package@swift-5.9.swift`, and so does a module's textual `.swiftinterface`.
+`swift` and `xcrun swift` shebangs select it for an extensionless script.
+Fixtures come from Fabric Mobile, gVisor, Loom, and Loom Scripts.
 
 Completion gate: Fabric Mobile and surveyed gVisor native-language files have
 complete source and manifest selection.

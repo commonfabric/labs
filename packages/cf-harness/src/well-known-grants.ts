@@ -158,6 +158,22 @@ const connectorGrantDescription = (grant: HarnessConnectorGrantSpec): string =>
   } (when Loom observed a record, not its content time). Wire it into run_pattern \`inputs\` and read it with \`db.query\`; use describe_handle first to see its tables and how full each column is, because a column that is empty for every row is a filter that returns nothing. Refer to the connection by its human name when speaking to the user, never by a handle token.`;
 
 /**
+ * The name a model may be handed for `grant` beside its token: a connector
+ * grant's connection label, or a fixed grant's own name. Both are names this
+ * module already pairs with the token in the grant context, so nothing new
+ * crosses to a model given one.
+ */
+export const wellKnownGrantLabel = (grant: HarnessWellKnownGrant): string => {
+  if (grant.source === undefined) {
+    return grant.name;
+  }
+  // Checked here as every other model-facing use of a connector grant checks
+  // it: the record may be run state this process did not write.
+  checkConnectorGrantSpec(grant);
+  return connectorGrantLabel(grant);
+};
+
+/**
  * Holds one connector grant to the rule its handle is minted under: a name
  * of the shape a model may be handed, and a reference naming an entity. The
  * launcher that resolves these checks them against the record they came from

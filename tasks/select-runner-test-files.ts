@@ -2,7 +2,7 @@
 
 /** Discovers runner tests and assigns files to weighted CI shards. */
 
-import { fromFileUrl, relative } from "@std/path";
+import { fromFileUrl } from "@std/path";
 import { collectTestFiles } from "./run-sharded-test-files.ts";
 import { parseShard } from "./shard-utils.ts";
 import { RUNNER_TEST_WEIGHTS } from "./test-timing-weights.ts";
@@ -32,7 +32,7 @@ export async function listRunnerTests(
 ): Promise<{ name: string }[]> {
   return (await collectTestFiles(testDir))
     .filter((file) => /\.test\.tsx?$/.test(file))
-    .map((file) => ({ name: relative(testDir, file).replaceAll("\\", "/") }))
+    .map((name) => ({ name }))
     .sort((a, b) => a.name.localeCompare(b.name));
 }
 

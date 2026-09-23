@@ -21,7 +21,8 @@
  * from the dashboard itself.
  */
 
-import { escapeHtml } from "../lib.ts";
+import { STATUS_RANK, worstStatus } from "../lib.ts";
+import { type DetailRow, detailList } from "../detail-list.ts";
 import type { Status, Tile, TileView } from "../types.ts";
 
 const HEALTH_PATH = "/_health";
@@ -41,18 +42,6 @@ const SOCKS5_CONNECT = 1;
 const SOCKS5_DOMAIN_NAME = 3;
 const SOCKS5_SUCCEEDED = 0;
 const SOCKS5_DEFAULT_PORT = 1080;
-const STATUS_DOT: Record<Status, string> = {
-  good: "green",
-  warn: "amber",
-  bad: "red",
-  unknown: "gray",
-};
-const STATUS_RANK: Record<Status, number> = {
-  good: 0,
-  unknown: 1,
-  warn: 2,
-  bad: 3,
-};
 
 type CreateHttpClient = typeof Deno.createHttpClient;
 type HttpClientOptions = Parameters<CreateHttpClient>[0];
@@ -242,14 +231,6 @@ function hostTarget(
     href,
     http: null,
   };
-}
-
-function worstStatus(statuses: readonly Status[]): Status {
-  return statuses.reduce<Status>(
-    (worst, status) =>
-      STATUS_RANK[status] > STATUS_RANK[worst] ? status : worst,
-    "good",
-  );
 }
 
 // A host nothing answered for is the plainest thing the tile can say, so it
@@ -500,23 +481,14 @@ async function checkTarget(
   };
 }
 
-function resultRow(result: TargetResult): string {
-  const target = result.target;
-  const details = [result.http.detail, result.reach.detail].filter(Boolean)
-    .join(" · ");
-  const content =
-    `<span style="display:inline-flex;align-items:center;gap:6px;font-weight:600"><span class="dot ${
-      STATUS_DOT[result.status]
-    }"></span>${
-      escapeHtml(target.name)
-    }</span><span style="color:var(--text-muted);font-variant-numeric:tabular-nums">${
-      escapeHtml(details)
-    }</span>`;
-  return target.href === undefined
-    ? content
-    : `<a href="${
-      escapeHtml(target.href)
-    }" target="_blank" rel="noopener" style="display:contents;color:inherit;text-decoration:none">${content}</a>`;
+function resultRow(result: TargetResult): DetailRow {
+  return {
+    status: result.status,
+    name: result.target.name,
+    detail: [result.http.detail, result.reach.detail].filter(Boolean)
+      .join(" · "),
+    href: result.target.href,
+  };
 }
 
 function view(results: readonly TargetResult[]): TileView {
@@ -527,10 +499,6 @@ function view(results: readonly TargetResult[]): TileView {
       result.status !== "good" ||
       (status !== "bad" && result.target.http?.kind === "health"),
   );
-  const rows = visible.map(resultRow).join("");
-  const listAttributes = visible.length > 1
-    ? ` aria-label="Production target details; scroll for more" title="Scroll for more details"`
-    : ` aria-label="Production target details"`;
   const value = headline ??
     `${
       results.filter((result) => result.status === "good").length
@@ -539,9 +507,10 @@ function view(results: readonly TargetResult[]): TileView {
     status,
     value,
     valueLabel: value,
-    extra: rows === ""
-      ? undefined
-      : `<div class="tile-detail-list" role="region" tabindex="0" data-focus-key="targets"${listAttributes} style="display:grid;grid-template-columns:auto 1fr;gap:7px 10px;margin-top:11px;font-size:12px;line-height:1.35">${rows}</div>`,
+    extra: detailList(visible.map(resultRow), {
+      subject: "Production target details",
+      focusKey: "targets",
+    }),
   };
 }
 

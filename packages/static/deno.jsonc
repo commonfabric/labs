@@ -1,18 +1,13 @@
 {
   "name": "@commonfabric/static",
   "tasks": {
-    "test": {
-      "dependencies": [
-        "deno-test",
-        "browser-test"
-      ]
-    },
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test browser-test",
     // The run grant cannot be narrowed to `deno`: these tests start the Deno
     // running them, and Deno resolves an allowlist entry of `deno` through
     // `PATH`, which is a different binary when the shell's Deno is not the pin.
     // A task line runs the Deno running the task, so asking that Deno for its
     // own path allows exactly the one binary the tests start.
-    "deno-test": "deno test --allow-read --allow-env=API_URL,\"TSC_*\",NODE_INSPECTOR_IPC,VSCODE_INSPECTOR_OPTIONS,NODE_ENV,CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST --allow-run=$(deno eval \"console.log(Deno.execPath())\") --allow-write=/tmp,/var/folders",
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --allow-read --allow-env=API_URL,\"TSC_*\",NODE_INSPECTOR_IPC,VSCODE_INSPECTOR_OPTIONS,NODE_ENV,CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" --allow-write=/tmp,/var/folders",
     "browser-test": "deno run --allow-env --allow-read --allow-write --allow-run --allow-net ../deno-web-test/cli.ts test/*.test.ts",
     "compile-types": "./scripts/compile-type-lib.ts ../../../TypeScript/src/lib ./assets/types/es2023.d.ts",
     "gen-cfc-types": "./scripts/generate-cfc-types.ts",

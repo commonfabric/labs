@@ -9,8 +9,8 @@
  * back, which is the only way in that does not reach past the seam.
  *
  * One case stands in for `Deno.consoleSize`, which is a member of the whole
- * process, so this file runs in the serial pass (`SERIAL_TESTS`,
- * `test/run-tests.ts`).
+ * process, so this file is a serial one, which the package's `deno-test` task
+ * runs apart from the rest.
  */
 
 import { expect } from "@std/expect";

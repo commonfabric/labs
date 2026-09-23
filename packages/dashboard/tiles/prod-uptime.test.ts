@@ -405,7 +405,11 @@ Deno.test("prod uptime: healthy server checks keep pings while other hosts disap
     assertStringIncludes(view.extra ?? "", "estuary");
     assertStringIncludes(view.extra ?? "", "rapids");
     assertEquals((view.extra ?? "").includes("commonfabric.com"), false);
-    assertEquals((view.extra ?? "").match(/\d+ ms/g)?.length, 2);
+    // The detail cells themselves, not the tooltips repeating them.
+    assertEquals(
+      [...(view.extra ?? "").matchAll(/tabular-nums[^>]*>(\d+ ms)</g)].length,
+      2,
+    );
     assert(!(view.extra ?? "").includes("bastion"));
     assert(!(view.extra ?? "").includes("prod shell"));
     assert(!(view.extra ?? "").includes("DNS yes"));

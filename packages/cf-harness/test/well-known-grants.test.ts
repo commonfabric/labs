@@ -24,6 +24,7 @@ import {
   checkRecordedWellKnownGrant,
   mintWellKnownGrants,
   resolveWellKnownGrantRefs,
+  wellKnownGrantLabel,
   wellKnownGrantsContextMessage,
 } from "../src/well-known-grants.ts";
 
@@ -287,6 +288,38 @@ describe("well-known-grants", () => {
       expect(grants[0]!.source).toBeUndefined();
       expect(grants[1]!.source).toEqual(MAIL_GRANT.source);
       expect(grants[1]!.token).not.toBe(grants[0]!.token);
+    });
+  });
+
+  describe("wellKnownGrantLabel()", () => {
+    it("names a fixed grant by its own name", () => {
+      expect(wellKnownGrantLabel({
+        name: "piece-registry",
+        token: "cfh:a:abcdefgh",
+        ref: REGISTRY_REF,
+      })).toBe("piece-registry");
+    });
+
+    it("names a connector grant by its connection and classes, never its ref", () => {
+      const label = wellKnownGrantLabel({
+        name: "email",
+        token: "cfh:a:ijklmnop",
+        ref: MAIL_REF,
+        source: MAIL_GRANT.source,
+      });
+      expect(label).toBe("gmail-work (email)");
+      expect(label).not.toContain(MAIL_ID);
+    });
+
+    it("refuses a connector record whose connection name never passed the launcher's rule", () => {
+      expect(() =>
+        wellKnownGrantLabel({
+          name: "email",
+          token: "cfh:a:ijklmnop",
+          ref: MAIL_REF,
+          source: { connection: "gmail work!", piece: MAIL_GRANT.source.piece },
+        })
+      ).toThrow("connector connection must match");
     });
   });
 

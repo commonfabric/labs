@@ -37,6 +37,7 @@ import {
 } from "@commonfabric/memory/v2/storage-path";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { createHasher } from "@commonfabric/content-hash";
+import { isDID } from "@commonfabric/identity/did";
 import { openSpace } from "./db.ts";
 import {
   contentFingerprint,
@@ -268,15 +269,44 @@ export async function createClone(
   return manifest;
 }
 
+/** What {@link resetClone} restored, and what it cleared away. */
+export interface ResetResult {
+  manifest: CloneManifest;
+
+  /**
+   * DIDs of the other spaces whose stores the reset removed from beside the
+   * working copy.
+   *
+   * The engine directory holds the cloned space alone when a clone is taken, so
+   * any other store in it was created by the attempt being discarded: a link
+   * into another space makes the server create a store for that space on
+   * demand, and the pass then writes into it. Left in place, the next pass
+   * starts from the last one's state there while `verify` — which reads only
+   * the cloned space — reports the clone pristine.
+   */
+  removedStores: string[];
+
+  /**
+   * File names of the cell-derived databases the reset removed.
+   *
+   * The memory server keeps these beside a file store (`#cellDbPath` in
+   * `packages/memory/v2/server.ts`), for the cloned space as much as for any
+   * other. A snapshot is the space's store alone, so a clone starts with none,
+   * and any present at reset time were written by the attempt.
+   */
+  removedCellDatabases: string[];
+}
+
 /**
- * Restore the working copy from the pristine snapshot.
+ * Restore the working copy from the pristine snapshot, and remove every other
+ * database the attempt created beside it (see {@link ResetResult}).
  *
  * Deletes the `-wal`/`-shm` companions the engine creates on open. Leaving them
  * behind would let a checkpoint replay part of the discarded attempt over the
  * fresh copy — a reset that silently isn't one.
  *
- * REFUSES while a server still has the working copy open, because unlinking a
- * file does not disturb a process that already holds it: the server keeps
+ * REFUSES while a server still has any of those databases open, because unlinking
+ * a file does not disturb a process that already holds it: the server keeps
  * reading and writing the unlinked inode while every new reader — including the
  * `verify` this function's caller runs next — sees the restored one. Pass two of
  * a rehearsal would then run against pass one's state while `cf space verify`
@@ -293,23 +323,73 @@ export async function createClone(
  * restored copy on close). Stopping the server is what makes a reset correct;
  * this makes forgetting to loud rather than silent.
  */
-export async function resetClone(dir: string): Promise<CloneManifest> {
+export async function resetClone(dir: string): Promise<ResetResult> {
   const manifest = await readManifest(dir);
   const paths = clonePaths(await canonicalPath(dir), manifest.space);
+  // Every database is probed before any is removed, so a refusal leaves the
+  // clone exactly as it was rather than half cleared. The working copy goes
+  // first: it is the store a forgotten server is most likely to hold, and the
+  // one a reset exists for.
   await assertNotInUse(paths.workingPath);
-  // The companions are absent on a clone no engine has opened yet — the normal
-  // case at the start of a rehearsal — so their absence is not an error, while
-  // any OTHER failure must surface rather than leave a half-reset clone.
-  for (const suffix of ["", "-wal", "-shm"]) {
-    const path = `${paths.workingPath}${suffix}`;
-    if (await pathExists(path)) await Deno.remove(path);
+  const { stores, cellDatabases } = await attemptDatabases(paths.workingPath);
+  for (const database of [...stores, ...cellDatabases]) {
+    await assertNotInUse(database);
   }
+  const databases = [paths.workingPath, ...stores, ...cellDatabases];
+  // The companions are absent on a database no engine has opened yet — the
+  // normal case at the start of a rehearsal — so their absence is not an error,
+  // while any OTHER failure must surface rather than leave a half-reset clone.
+  for (const database of databases) {
+    for (const suffix of ["", "-wal", "-shm"]) {
+      const path = `${database}${suffix}`;
+      if (await pathExists(path)) await Deno.remove(path);
+    }
+  }
+  await Deno.mkdir(Path.dirname(paths.workingPath), { recursive: true });
   await Deno.copyFile(paths.pristinePath, paths.workingPath);
-  return manifest;
+  return {
+    manifest,
+    removedStores: stores.map((path) => Path.basename(path, ".sqlite")),
+    removedCellDatabases: cellDatabases.map((path) => Path.basename(path)),
+  };
 }
 
 /**
- * Refuse if any process still holds the working copy open, as of now.
+ * The databases beside `workingPath` that a server created during an attempt,
+ * each kind sorted: other spaces' stores, and cell-derived databases.
+ *
+ * Both are recognized by the names the memory server gives them — a space's
+ * store is `<did>.sqlite`, a cell-derived database `cell-<tag>.sqlite` — so
+ * anything else in the directory was put there by someone other than a server,
+ * and is left alone. What counts as a DID is `isDID`'s to say, the same test
+ * that admits a space in the first place, so no store a server could have
+ * created is missed for failing a narrower one.
+ */
+async function attemptDatabases(
+  workingPath: string,
+): Promise<{ stores: string[]; cellDatabases: string[] }> {
+  const dir = Path.dirname(workingPath);
+  const own = Path.basename(workingPath);
+  const stores: string[] = [];
+  const cellDatabases: string[] = [];
+  // A clone whose engine directory was deleted outright has nothing beside the
+  // working copy, and the restore recreates the directory.
+  if (!(await pathExists(dir))) return { stores, cellDatabases };
+  for await (const entry of Deno.readDir(dir)) {
+    if (!entry.isFile || entry.name === own) continue;
+    if (!entry.name.endsWith(".sqlite")) continue;
+    const stem = entry.name.slice(0, -".sqlite".length);
+    if (isDID(stem)) {
+      stores.push(`${dir}/${entry.name}`);
+    } else if (stem.startsWith("cell-")) {
+      cellDatabases.push(`${dir}/${entry.name}`);
+    }
+  }
+  return { stores: stores.sort(), cellDatabases: cellDatabases.sort() };
+}
+
+/**
+ * Refuse if any process still holds the store at `storePath` open, as of now.
  *
  * "As of now" is the honest scope — see the tripwire note on {@link resetClone}
  * for why nothing stronger is available from outside the server.
@@ -326,17 +406,17 @@ export async function resetClone(dir: string): Promise<CloneManifest> {
  *
  * Locking is the only signal the binding exposes — its errors carry a message
  * and nothing else — so the two outcomes are separated by message. Anything
- * that is not a lock conflict means the working copy could not be opened as a
+ * that is not a lock conflict means the store could not be opened as a
  * database at all, and that is precisely when a reset is the remedy rather than
  * the risk, so it proceeds.
  */
-async function assertNotInUse(workingPath: string): Promise<void> {
+async function assertNotInUse(storePath: string): Promise<void> {
   // Nothing to hold open, and `Database` would otherwise create an empty file
-  // just to probe it. The copy below restores it either way.
-  if (!(await pathExists(workingPath))) return;
+  // just to probe it.
+  if (!(await pathExists(storePath))) return;
   let db: Database;
   try {
-    db = new Database(workingPath, { create: false });
+    db = new Database(storePath, { create: false });
   } catch {
     return; // unopenable — reset is the fix, not the hazard
   }
@@ -348,7 +428,7 @@ async function assertNotInUse(workingPath: string): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     if (!/database (is|table is) locked/i.test(message)) return;
     throw new Error(
-      `refusing to reset ${workingPath}: another process still has it open ` +
+      `refusing to reset ${storePath}: another process still has it open ` +
         `(${message}). Unlinking it would not reach that process — it would ` +
         `keep serving the discarded attempt while verify reported the clone ` +
         `pristine. Stop the server first (scripts/stop-local-dev.sh ` +

@@ -57,9 +57,9 @@
   // docs/common/workflows/pattern-testing.md (writing pattern tests), and
   // docs/development/COVERAGE.md (how the lanes feed the coverage-debt gate).
   "tasks": {
-    "integration": "LOG_LEVEL=warn deno test --v8-flags=--max-old-space-size=4096 --trace-leaks -A $INTEGRATION_TEST_FLAGS ./integration/*.test.ts",
-    "integration:reload": "LOG_LEVEL=warn deno test --v8-flags=--max-old-space-size=4096 --trace-leaks -A $INTEGRATION_TEST_FLAGS ./integration/reload/*.test.ts",
-    "integration:all": "TEST_HTTP=1 TEST_LLM=1 LOG_LEVEL=warn deno test --v8-flags=--max-old-space-size=4096 --trace-leaks -A ./integration/*.test.ts",
+    "integration": "LOG_LEVEL=warn deno test --shuffle=$(deno task -q test-seed) --v8-flags=--max-old-space-size=4096 --trace-leaks -A $INTEGRATION_TEST_FLAGS ./integration/*.test.ts",
+    "integration:reload": "LOG_LEVEL=warn deno test --shuffle=$(deno task -q test-seed) --v8-flags=--max-old-space-size=4096 --trace-leaks -A $INTEGRATION_TEST_FLAGS ./integration/reload/*.test.ts",
+    "integration:all": "TEST_HTTP=1 TEST_LLM=1 LOG_LEVEL=warn deno test --shuffle=$(deno task -q test-seed) --v8-flags=--max-old-space-size=4096 --trace-leaks -A ./integration/*.test.ts",
     // `test/source-coverage/` runs in a second pass under workspace resolution,
     // not `test-import-map.json`: its `commonfabric` shim re-exports real
     // `data-model` helpers, whose internal `@/` graph the flat test import map
@@ -68,7 +68,9 @@
     // DOM. The `*.browser.test.ts` name is what routes a file there: the same
     // glob keeps it out of the Deno-only pass, so only executed tests count.
     "test:browser": "deno run --allow-env --allow-read --allow-write --allow-run --allow-net ../deno-web-test/cli.ts **/*.browser.test.ts",
-    "test": "deno test -A --import-map ./test-import-map.json --ignore='**/*.test.tsx' --ignore='integration' --ignore='test/source-coverage' --ignore='**/*.browser.test.ts' . && deno test -A test/source-coverage/ && deno task test:browser"
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test source-coverage-test test:browser",
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) -A --import-map ./test-import-map.json --ignore='**/*.test.tsx' --ignore='integration' --ignore='test/source-coverage' --ignore='**/*.browser.test.ts' .",
+    "source-coverage-test": "deno test --shuffle=$(deno task -q test-seed) -A test/source-coverage/"
   },
   // File discovery for the first pass of the `test` task (lane 1). `include` keeps only
   // `.test.ts`, so pattern tests (`.test.tsx`, lane 2) are never collected;

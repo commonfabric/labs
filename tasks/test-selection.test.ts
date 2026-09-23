@@ -43,6 +43,7 @@ function suiteHolding(units: readonly string[]): Suite {
     needs: ["deno"],
     units: [...units],
     unavailable: [],
+    whole: [],
     locate: () => undefined,
     command: () => Promise.resolve([]),
   };

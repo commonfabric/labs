@@ -5,6 +5,7 @@
 
 import type { JSONSchema } from "@commonfabric/api";
 import type { IFCLabel } from "@commonfabric/runner/cfc";
+import { isObjectNotArray } from "@commonfabric/utils/types";
 
 import type { TrustedPatternRecord } from "./trusted-pattern.ts";
 
@@ -377,3 +378,78 @@ export interface HarnessResearchRunSummary {
   /** Findings from an earlier root task; its handle bindings are historical. */
   historical?: true;
 }
+
+/** Discriminator value of a {@link HarnessResearchHandleValue}. */
+export const HARNESS_RESEARCH_HANDLE_TYPE = "cf-harness.research-handle";
+
+/**
+ * What a research handle holds: the admitted kit, the records the host
+ * confirmed while producing it, and the label the kit carries. The `research`
+ * tool mints one into the run's handle table the moment a kit is admitted, and
+ * `describe_handle` reads it back, which is how a run — this one, or a child
+ * handed the token — reads what research found rather than researching again.
+ * The private transcript and the raw research record stay in the artifact and
+ * are no part of it.
+ */
+export interface HarnessResearchHandleValue {
+  /** Research-handle discriminator. */
+  type: typeof HARNESS_RESEARCH_HANDLE_TYPE;
+
+  /** The research run the findings came from. */
+  researchRunId: string;
+
+  /** The admitted kit, as the research tool returned it. */
+  kit: HarnessResearchResult;
+
+  /** Every pattern whose record the host confirmed during the run. */
+  confirmedPatterns: readonly HarnessResearchPatternRecord[];
+
+  /**
+   * Every handle the run described, with the description it got. A token
+   * here is a binding the kit may name; whether a reader still holds it is
+   * the reader's table's business, and `describe_handle` says so per token.
+   */
+  describedHandles: readonly HarnessResearchHandleRecord[];
+
+  /** Known CFC labels and explicit metadata gaps carried by the kit. */
+  cfc: HarnessResearchCfcProjection;
+}
+
+/**
+ * Whether `value` has the shape of a research handle's content: the
+ * discriminator, a kit with its findings fields, records that each carry
+ * their identity, and a CFC projection with both labels. A persisted referent
+ * that fails this is read as holding nothing rather than crashing its reader.
+ */
+export const isHarnessResearchHandleValue = (
+  value: unknown,
+): value is HarnessResearchHandleValue =>
+  isObjectNotArray(value) &&
+  value.type === HARNESS_RESEARCH_HANDLE_TYPE &&
+  typeof value.researchRunId === "string" &&
+  isResearchKitShape(value.kit) &&
+  Array.isArray(value.confirmedPatterns) &&
+  value.confirmedPatterns.every((record) =>
+    isObjectNotArray(record) && typeof record.patternId === "string"
+  ) &&
+  Array.isArray(value.describedHandles) &&
+  value.describedHandles.every((record) =>
+    isObjectNotArray(record) && typeof record.token === "string"
+  ) &&
+  isObjectNotArray(value.cfc) &&
+  value.cfc.version === 1 &&
+  isObjectNotArray(value.cfc.sourceLabel) &&
+  isObjectNotArray(value.cfc.outputLabel) &&
+  Array.isArray(value.cfc.missingLabels);
+
+/** The findings fields every admitted kit carries, as types alone. */
+const isResearchKitShape = (kit: unknown): boolean =>
+  isObjectNotArray(kit) &&
+  typeof kit.status === "string" &&
+  typeof kit.task === "string" &&
+  typeof kit.summary === "string" &&
+  Array.isArray(kit.inputs) &&
+  Array.isArray(kit.patterns) &&
+  Array.isArray(kit.rules) &&
+  Array.isArray(kit.sources) &&
+  Array.isArray(kit.missing);

@@ -26,6 +26,7 @@ import {
 } from "@std/path";
 import { normalize as normalizeSandboxPath } from "@std/path/posix";
 
+import type { FabricValue } from "@commonfabric/data-model";
 import {
   type CfcConfClause,
   type CfcLabelView,
@@ -59,7 +60,11 @@ import {
 import type { HarnessResearchRunner } from "./research/runner.ts";
 import type { HarnessToolContext } from "./tools/types.ts";
 import type { HarnessDocsCorpusRecord } from "./contracts/docs-corpus.ts";
-import type { HarnessResearchRunSummary } from "./contracts/research.ts";
+import {
+  type HarnessResearchHandleValue,
+  type HarnessResearchRunSummary,
+  isHarnessResearchHandleValue,
+} from "./contracts/research.ts";
 import {
   createHarnessCfcInvocationContext,
   createHarnessPromptSlotInfluenceLabels,
@@ -75,7 +80,8 @@ import {
 } from "./contracts/cfc-model-context.ts";
 import type { HarnessCfcPolicySnapshot } from "./contracts/cfc-policy-snapshot.ts";
 import type {
-  HarnessHandleReferent,
+  HarnessDocumentReferentDraft,
+  HarnessHandleReferentDraft,
   HarnessHandleTable,
 } from "./contracts/handle-table.ts";
 import {
@@ -1648,8 +1654,36 @@ export class CfHarnessEngine {
    * cell, so a result naming the token can link a document minted from it.
    */
   async mintReferentHandle(
-    referent: Omit<HarnessHandleReferent, "token" | "kind">,
+    referent: HarnessDocumentReferentDraft,
   ): Promise<string> {
+    return await this.#mintReferent({ kind: "document", ...referent });
+  }
+
+  /**
+   * Mints and records the handle for an admitted research kit, under the
+   * kit's own label. This is the one path that mints a research referent, and
+   * the research tool's admission is the one caller: a value that is not a
+   * research handle's content is refused rather than held as one.
+   *
+   * @throws Error when `value` is not the content of a research handle.
+   */
+  async mintResearchHandle(
+    value: HarnessResearchHandleValue,
+    label: IFCLabel,
+  ): Promise<string> {
+    if (!isHarnessResearchHandleValue(value)) {
+      throw new Error("a research handle holds an admitted kit's projection");
+    }
+    return await this.#mintReferent({
+      kind: "research",
+      source: "research",
+      labelSource: "research",
+      value: value as unknown as FabricValue,
+      label,
+    });
+  }
+
+  async #mintReferent(referent: HarnessHandleReferentDraft): Promise<string> {
     const minted = await mintReferentHandle(
       this.handleTable ?? createHarnessHandleTable(this.#runState.runId),
       referent,
@@ -2730,6 +2764,7 @@ export class CfHarnessEngine {
         : {}),
       researchRuns: this.#runState.researchRuns ?? [],
       researchGoal: this.#runState.researchGoal,
+      wellKnownGrants: this.#runState.wellKnownGrants ?? [],
       ...(researchTaskCfcLabel !== undefined
         ? {
           researchTaskCfcLabel,
@@ -2773,9 +2808,12 @@ export class CfHarnessEngine {
       hostProcessRunner: this.hostProcessRunner,
       loomAuthoring: this.config.loomAuthoring,
       loomRetrieval: this.config.loomRetrieval,
-      mintReferentHandle: (
-        referent: Omit<HarnessHandleReferent, "token" | "kind">,
-      ) => this.mintReferentHandle(referent),
+      mintReferentHandle: (referent: HarnessDocumentReferentDraft) =>
+        this.mintReferentHandle(referent),
+      mintResearchHandle: (
+        value: HarnessResearchHandleValue,
+        label: IFCLabel,
+      ) => this.mintResearchHandle(value, label),
       ...(this.#structuredResult !== undefined
         ? {
           structuredResult: {

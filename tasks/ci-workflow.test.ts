@@ -716,7 +716,13 @@ Deno.test("the Dashboard workflow records no tests", async () => {
   assertEquals(dashboard.includes("CF_TEST_RECORDS_DIR"), false);
   assertEquals(dashboard.includes("run-recorded"), false);
   assertEquals(dashboard.includes("test-records-ship"), false);
-  assertStringIncludes(workflowTriggers(relay), '    workflows: ["CI"]\n');
+  const name = dashboard.match(/^name: (.+)$/m);
+  assert(name, "the workflow has no name");
+  assertEquals(
+    workflowTriggers(relay).includes(name[1]),
+    false,
+    `the relay follows ${name[1]}, whose records nothing gathers`,
+  );
 });
 
 Deno.test("the Coverage Check job records no tests", async () => {
@@ -778,7 +784,11 @@ Deno.test("the CFC Property Suite workflow records no tests", async () => {
 
   // Both checks themselves still run.
   const job = jobBlock(suite, "cfc-properties");
-  assertStringIncludes(job, "run: deno test -A test/cfc-properties/\n");
+  assertStringIncludes(
+    job,
+    "run: deno test --shuffle=$(deno task -q test-seed) -A " +
+      "test/cfc-properties/\n",
+  );
   assertStringIncludes(job, "deno task cfc-audit ");
 });
 
@@ -1387,4 +1397,91 @@ Deno.test("both package integration roles upload failure logs", async () => {
     assertStringIncludes(upload, "retention-days: 14");
     assertStringIncludes(upload, "if-no-files-found: ignore");
   }
+});
+
+Deno.test("the run in tomorrow's order runs the CI suites and ships nothing", async () => {
+  interface Job {
+    if?: string;
+    environment?: string;
+    uses?: string;
+    with?: Record<string, string>;
+    secrets?: unknown;
+    permissions?: Record<string, string>;
+    steps?: { run?: string }[];
+  }
+  interface Workflow {
+    name: string;
+    on: Record<string, unknown>;
+    env?: Record<string, string>;
+    jobs: Record<string, Job>;
+  }
+  const ciText = await workflow("deno.yml");
+  const ci = parseYaml(ciText) as Workflow;
+  const tomorrow = parseYaml(
+    await workflow("test-order-tomorrow.yml"),
+  ) as Workflow;
+  const relay = withoutComments(await workflow("test-records-relay.yml"));
+
+  // The scheduled workflow works out the next Pacific day's seed and hands it
+  // to the CI workflow, which puts it where every test runner reads it.
+  assertEquals(tomorrow.on.schedule, [{ cron: "0 11 * * *" }]);
+  assert(
+    tomorrow.jobs.seed.steps?.some((step) =>
+      step.run?.includes("deno task -q test-seed --tomorrow")
+    ),
+    "no step asks for the next day's seed",
+  );
+  const call = tomorrow.jobs.ci;
+  assertEquals(call.uses, "./.github/workflows/deno.yml");
+  assertEquals(call.with, { "shuffle-seed": "${{ needs.seed.outputs.seed }}" });
+  assertEquals(ci.env?.CF_TEST_SHUFFLE_SEED, "${{ inputs.shuffle-seed }}");
+
+  // GitHub refuses to start the run when a called job asks for a permission
+  // the call does not grant, whether or not the job would run. The call hands
+  // on no secrets, so the only jobs that name one run for a push alone.
+  const asked = new Map<string, string>();
+  for (const job of Object.values(ci.jobs)) {
+    for (const [scope, level] of Object.entries(job.permissions ?? {})) {
+      if (asked.get(scope) !== "write") asked.set(scope, level);
+    }
+  }
+  assertEquals(call.permissions, Object.fromEntries(asked));
+  assertEquals(call.secrets, undefined);
+
+  // A called run takes its caller's event and ref, and the scheduled run's
+  // ref is main. So a job that holds a deployment environment or a secret
+  // runs only for a push to main, and a guard on the branch alone would let
+  // the scheduled run attest and deploy. The gates on coverage and topology
+  // judge the commit, which the commit's own run already does.
+  const shipping = jobIds(ciText).filter((id) =>
+    ci.jobs[id].environment !== undefined ||
+    /secrets\.(?!GITHUB_TOKEN\b)/.test(jobBlock(ciText, id))
+  );
+  assertEquals(shipping.sort(), [
+    "attest-binaries",
+    "deploy-rapids",
+    "deploy-shell-staging",
+  ]);
+  for (const id of shipping) {
+    assertEquals(
+      ci.jobs[id].if,
+      "github.event_name == 'push' && github.ref == 'refs/heads/main'",
+      `${id} can run in a called run`,
+    );
+  }
+  for (const id of ["coverage-check", "test-topology-store-check"]) {
+    assertEquals(
+      ci.jobs[id].if,
+      "(github.event_name == 'pull_request') || " +
+        "(github.event_name == 'push' && github.ref_name == 'main')",
+      `${id} can run in a called run`,
+    );
+  }
+
+  // The relay follows a workflow by its own name, and a called run belongs to
+  // its caller, so the relay names this workflow as well as the CI workflow
+  // for the records of both to ship.
+  const followed = workflowTriggers(relay);
+  assertStringIncludes(followed, `"${ci.name}"`);
+  assertStringIncludes(followed, `"${tomorrow.name}"`);
 });

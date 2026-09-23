@@ -26,6 +26,7 @@ import {
   isClean,
   isDerivedHoistSymbol,
   isStoredArgumentRefusal,
+  judgeWholeTree,
   KNOWN_FLAGS,
   newestAutoGeneration,
   parseVintagePath,
@@ -35,14 +36,19 @@ import {
   promoteVintage,
   relativeToRepo,
   removeVintages,
+  replayFilterTakes,
+  replayScope,
   reportCaptureRefusedOnRed,
   reportCapturesSuperseded,
   reportDropsApplied,
+  reportEmptyReplay,
   reportEveryGenerationCurrent,
   reportFailures,
+  reportNothingMatched,
   reportNothingReplayed,
   reportNothingToPin,
   reportNoVerdict,
+  reportOnlyWithCapture,
   reportPinNeedsOneTestKey,
   reportReplaySummary,
   reportUncovered,
@@ -58,6 +64,10 @@ import {
   vintageFileName,
   VINTAGES_DIR,
 } from "./pattern-vintage-lib.ts";
+import {
+  acceptedDropKey,
+  type AcceptedStateDrop,
+} from "./pattern-vintage-accepted-drops.ts";
 import { STORED_ARGUMENT_SCHEMA_REFUSAL } from "@commonfabric/runner";
 
 const ID_A = "bafyaaaa";
@@ -1732,6 +1742,9 @@ describe("what the capture and promote commands print", () => {
     expect(unknownFlags(["--", "--update", "a/a.test.tsx"])).toEqual([]);
     // Positionals are not flags — a test key is an argument, not a typo.
     expect(unknownFlags(["--pin", "a/a.test.tsx"])).toEqual([]);
+    // `--only=<value>` is the same flag as `--only`, written with its value
+    // attached.
+    expect(unknownFlags(["--only=system/home.test.tsx"])).toEqual([]);
     for (const flag of KNOWN_FLAGS) expect(unknownFlags([flag])).toEqual([]);
 
     const message = reportUnknownFlags(["--capture-chnged"]);
@@ -1739,6 +1752,107 @@ describe("what the capture and promote commands print", () => {
     // It must name what IS valid, or the reader is left guessing at a typo.
     expect(message).toContain("--capture-changed");
     expect(message).toContain("exit 0");
+  });
+
+  it("reads a replay scope from the command line", () => {
+    expect(replayScope([])).toEqual({ only: [], whole: true });
+    expect(replayScope(["--only", "a/a.test.tsx"])).toEqual({
+      only: ["a/a.test.tsx"],
+      whole: false,
+    });
+    expect(replayScope(["--only"])).toHaveProperty("error");
+  });
+
+  it("refuses a filter beside a capture command", () => {
+    for (const flag of ["--update", "--capture-changed", "--pin"]) {
+      expect(replayScope(["--only", "a", flag])).toEqual({
+        error: reportOnlyWithCapture(),
+      });
+    }
+    // A capture on its own reads every fixture, which is what it needs.
+    expect(replayScope(["--pin"])).toEqual({ only: [], whole: true });
+  });
+
+  it("reports an empty replay by what was asked for", () => {
+    expect(reportEmptyReplay([])).toBe(reportNothingReplayed());
+    expect(reportEmptyReplay(["a"])).toBe(reportNothingMatched(["a"]));
+  });
+
+  describe("judgeWholeTree()", () => {
+    const drop = (pattern: string, paths: string[]): AcceptedStateDrop => ({
+      pattern,
+      paths,
+      capturedThrough: "2026-01-01T00-00-00.000Z",
+      reason: "test",
+      record: "docs/history/example.md",
+    });
+    const drops = [drop("a.tsx", ["x", "y"]), drop("b.tsx", ["z"])];
+    const replay = {
+      covered: new Set(["a.tsx"]),
+      coveredBy: new Map<string, unknown>(),
+      dropsApplied: new Set([acceptedDropKey("a.tsx", "x")]),
+    };
+
+    it("finds uncovered patterns and stale or unjudgeable removals", () => {
+      expect(judgeWholeTree(true, ["a.tsx", "c.tsx"], replay, drops))
+        .toEqual({
+          uncovered: ["c.tsx"],
+          staleDrops: [acceptedDropKey("a.tsx", "y")],
+          unjudgeableDrops: ["b.tsx"],
+        });
+    });
+
+    it("makes none of the three checks for a filtered run", () => {
+      expect(judgeWholeTree(false, ["a.tsx", "c.tsx"], replay, drops))
+        .toEqual({ uncovered: [], staleDrops: [], unjudgeableDrops: [] });
+    });
+  });
+
+  it("names the filter when it matched no fixture", () => {
+    const message = reportNothingMatched(["a/a.test.tsx", "b"]);
+    expect(message).toContain("`a/a.test.tsx` or `b`");
+    expect(message).toContain("failure");
+  });
+
+  it("takes a fixture whose path holds a filter value, and only then", () => {
+    const root = "/work/labs";
+    const relative = "packages/piece/test/vintages/system/home.test.tsx/" +
+      "pinned/2026-07-30T21-32-46.548Z-abc.sqlite";
+    const fixture = `${root}/${relative}`;
+    const takes = (only: string[]) => replayFilterTakes(fixture, root, only);
+    expect(takes([])).toBe(true);
+    expect(takes([relative])).toBe(true);
+    expect(takes(["system/home.test.tsx"])).toBe(true);
+    expect(takes(["topics/topics.test.tsx"])).toBe(false);
+    expect(takes(["topics", "system"])).toBe(true);
+  });
+
+  it("matches a filter against the path inside the repository only", () => {
+    // A term that names part of the checkout's directory matches no
+    // fixture.
+    const fixture =
+      "/work/labs/packages/piece/test/vintages/a.test.tsx/x.sqlite";
+    expect(replayFilterTakes(fixture, "/work/labs", ["labs"])).toBe(false);
+  });
+
+  it("matches a filter written with either separator", () => {
+    const root = "C:\\work\\labs";
+    const fixture = `${root}\\packages\\piece\\test\\vintages\\a.test.tsx`;
+    expect(replayFilterTakes(fixture, root, ["piece/test/vintages"])).toBe(
+      true,
+    );
+    expect(
+      replayFilterTakes(fixture, root, ["piece\\test\\vintages"]),
+    ).toBe(true);
+  });
+
+  it("says why a filter cannot be given beside a capture", () => {
+    // A capture command decides what is due by reading every fixture, and its
+    // positional argument is a test key rather than a fixture. A filter next to
+    // one therefore has no meaning, and the task refuses the pair.
+    const message = reportOnlyWithCapture();
+    expect(message).toContain("--only");
+    expect(message).toContain("whole tree");
   });
 
   it("EXITS 1 on an empty tree, not just prints differently", () => {

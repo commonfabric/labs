@@ -33,7 +33,9 @@ export const selectResearchContext = (
 };
 
 /** Small prior findings for a new question, with recipes and old bindings omitted. */
-export const researchStartingContext = (run: HarnessResearchRunSummary) => ({
+export const researchStartingContext = (
+  run: Pick<HarnessResearchRunSummary, "researchRunId" | "kit">,
+) => ({
   researchRunId: run.researchRunId,
   purpose: researchPurposeOf(run.kit),
   task: run.kit.task,

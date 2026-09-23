@@ -70,11 +70,11 @@ command's `--lock` flag.
 - A `--allow-run=deno` grant does not permit spawning `Deno.execPath()`, because
   Deno resolves the allowlist entry through `PATH` as well. Name the binary
   rather than widening the grant to a bare `--allow-run`. In a task line,
-  `--allow-run=$(deno eval "console.log(Deno.execPath())")` computes it, because
-  `deno` inside a task runs the Deno running the task whatever `PATH` says —
-  `packages/test-support/src/isolated-deno.test.ts` pins that with a decoy
-  `deno` on the child's `PATH`. From a script, read `Deno.execPath()` directly,
-  as `packages/dashboard/test/runner.ts` does with
+  `--allow-run="$(deno eval "console.log(Deno.execPath())")"` computes it,
+  because `deno` inside a task runs the Deno running the task whatever `PATH`
+  says — `packages/test-support/src/isolated-deno.test.ts` pins that with a
+  decoy `deno` on the child's `PATH`. From a script, read `Deno.execPath()`
+  directly, as `packages/dashboard/test/runner.ts` does with
   `--allow-run=${Deno.execPath()},git`.
 
 ## Common Tells

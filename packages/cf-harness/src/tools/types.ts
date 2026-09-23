@@ -23,12 +23,16 @@ import type {
 import type { HarnessBrowserAccessLease } from "../contracts/browser-access.ts";
 import type { HarnessAssignedPiece } from "../contracts/assigned-piece.ts";
 import type { HarnessDocsCorpus } from "../docs-corpus/corpus.ts";
-import type { HarnessResearchRunSummary } from "../contracts/research.ts";
+import type {
+  HarnessResearchHandleValue,
+  HarnessResearchRunSummary,
+} from "../contracts/research.ts";
 import type { HarnessPatternRef } from "../contracts/pattern-refs.ts";
 import type { HarnessInputCell } from "../contracts/input-cells.ts";
+import type { HarnessWellKnownGrant } from "../contracts/well-known-grants.ts";
 import type { HarnessResearchRunner } from "../research/runner.ts";
 import type {
-  HarnessHandleReferent,
+  HarnessDocumentReferentDraft,
   HarnessHandleTable,
 } from "../contracts/handle-table.ts";
 import type { HarnessFabricSession } from "../fabric-session.ts";
@@ -70,6 +74,14 @@ export interface HarnessToolContext {
    * addresses by the prompt loop; restricted tokens remain opaque.
    */
   handleTable?: HarnessHandleTable;
+
+  /**
+   * The references granted to the run, each already a general handle in
+   * {@link handleTable}. A grant pairs its token with a name a model may be
+   * handed, which is what lets a tool say which handle is which without
+   * describing every one.
+   */
+  wellKnownGrants?: readonly HarnessWellKnownGrant[];
 
   /**
    * The run's trusted Fabric session, lazy and cached by the engine.
@@ -222,8 +234,17 @@ export interface HarnessToolContext {
    * Registers content a tool observed as a referent the run holds, and
    * returns its token. Absent outside a run that keeps a handle table.
    */
-  mintReferentHandle?(
-    referent: Omit<HarnessHandleReferent, "token" | "kind">,
+  mintReferentHandle?(referent: HarnessDocumentReferentDraft): Promise<string>;
+
+  /**
+   * Registers an admitted research kit's content as the research referent
+   * the run holds, under the kit's label, and returns its token. The research
+   * tool's admission is its caller. Absent outside a run that keeps a handle
+   * table.
+   */
+  mintResearchHandle?(
+    value: HarnessResearchHandleValue,
+    label: IFCLabel,
   ): Promise<string>;
 
   /**

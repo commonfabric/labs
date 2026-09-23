@@ -32,6 +32,7 @@ import { markdownLanguage } from "./markdown/language.ts";
 import { jsonLanguage, jsonLinesLanguage } from "./json/language.ts";
 import { yamlLanguage } from "./yaml/language.ts";
 import { pythonLanguage } from "./python/language.ts";
+import { swiftLanguage } from "./swift/language.ts";
 import { binaryLanguage } from "./binary/language.ts";
 import { plainTextLanguage } from "./plain-text/language.ts";
 import type { LineEndingProvenance } from "../editbuffer.ts";
@@ -240,7 +241,8 @@ export interface LanguageMetadata {
 export interface Language {
   /**
    * Stable identifier, such as `"typescript"`, `"markdown"`, `"json"`,
-   * `"json-lines"`, `"yaml"`, `"python"`, `"binary"`, or `"plain-text"`.
+   * `"json-lines"`, `"yaml"`, `"python"`, `"swift"`, `"binary"`, or
+   * `"plain-text"`.
    */
   readonly id: string;
 
@@ -254,9 +256,10 @@ export interface Language {
   /**
    * Load whatever this language needs before any of the synchronous methods
    * below run, such as a parser that is fetched and compiled. A view prepares
-   * the languages it has selected, and the interactive pager prepares every
-   * language, because the file it opens next can be in any of them. Repeated
-   * calls share one load. A language with nothing to load omits this.
+   * the languages it has selected. A synchronous method reached before this
+   * has finished shows the source as plain text and starts the load; see
+   * {@link onGrammarLoad}. Repeated calls share one load. A language with
+   * nothing to load omits this.
    */
   prepare?(): Promise<void>;
 
@@ -349,16 +352,9 @@ export function prepareLanguages(
   ).then(() => {});
 }
 
-/**
- * Warm every language's parser, for a view that can open any file. A language
- * whose parser will not load leaves the rest of them working; opening a file in
- * that language then fails, saying why the parser did not load.
- */
-export async function warmAllLanguages(): Promise<void> {
-  await Promise.allSettled(
-    allLanguages().map((language) => language.prepare?.()),
-  );
-}
+// A language used before its parser has loaded shows its source as plain text
+// and starts the load, so a view that opens files as it runs listens for loads.
+export { onGrammarLoad } from "./treesitter/adapter.ts";
 
 /** Whether a renderer can be projected onto line-aligned diff content. */
 export function canRenderDiffLines(language: Language): boolean {
@@ -460,6 +456,7 @@ function allLanguages(): readonly Language[] {
     jsonLinesLanguage,
     yamlLanguage,
     pythonLanguage,
+    swiftLanguage,
     binaryLanguage,
     plainTextLanguage,
   ];

@@ -1,11 +1,12 @@
 {
   "name": "@commonfabric/html",
   "tasks": {
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
     // --no-check: this package is type-checked by `deno task check` (tasks/check.sh).
     // --preload runs test/clock-preload.ts before the test modules; it freezes
     // positive-delay timers so a wall-clock sleep deadlocks. See that file and
     // docs/development/waiting-in-tests.md.
-    "test": "deno test --no-check --preload=test/clock-preload.ts --allow-env --allow-ffi --allow-read --allow-net test/*.test.ts test/*.test.tsx",
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --preload=test/clock-preload.ts --allow-env --allow-ffi --allow-read --allow-net test/*.test.ts test/*.test.tsx",
     "bench": "deno bench --allow-read --allow-write --allow-net --allow-ffi --allow-env --no-check bench/*.bench.ts"
   },
   "exports": {

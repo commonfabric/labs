@@ -1,5 +1,8 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import { fromFileUrl } from "@std/path";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { shuffleNotice } from "@commonfabric/test-support/shuffle";
 import {
   type TestIdentity,
   testIdentityKey,
@@ -9,7 +12,11 @@ import {
   CAPABILITY_LOG_TAIL_LINES,
   type CapabilityId,
 } from "./ci-capabilities.ts";
-import { capabilitiesBySuite, loadTopology } from "./test-topology.ts";
+import {
+  capabilitiesBySuite,
+  loadTopology,
+  wholeUnits,
+} from "./test-topology.ts";
 
 import {
   accountFor,
@@ -77,6 +84,7 @@ function suite(partial: Partial<Suite> & { id: string }): Suite {
     needs: ["deno"],
     units: [],
     unavailable: [],
+    whole: [],
     locate: () => undefined,
     command: () => Promise.resolve([]),
     ...partial,
@@ -114,6 +122,30 @@ function manifestOf(entries: readonly Partial<ManifestEntry>[]): Manifest {
 }
 
 describe("reading the lane's command line", () => {
+  it("names the seed it settled on even when it refuses the command line", async () => {
+    // The lane settles one seed for every command it builds, and says
+    // which before it reads anything, so a log that stops early still
+    // names the order its tests would have run in.
+    const result = await runDenoCommandWithTemporaryLock({
+      root: fromFileUrl(new URL("..", import.meta.url)),
+      args: (lock) => [
+        "run",
+        `--lock=${lock}`,
+        "-A",
+        fromFileUrl(new URL("./ci-lane.ts", import.meta.url)),
+        "--bogus",
+      ],
+      env: { CF_TEST_SHUFFLE_SEED: "7" },
+    });
+    expect(result.code).toBe(2);
+    const stderr = new TextDecoder().decode(result.stderr);
+    expect(stderr).toContain(shuffleNotice(7));
+    expect(stderr).toContain("usage: ci-lane.ts");
+    expect(stderr.indexOf(shuffleNotice(7))).toBeLessThan(
+      stderr.indexOf("usage: ci-lane.ts"),
+    );
+  });
+
   it("takes the lane, its share, and the moment to resolve at", () => {
     const options = parseLaneArgs([
       "--lane",
@@ -180,7 +212,7 @@ describe("the moment a lane resolves its manifest at", () => {
     // Git writes the committer's own offset and manifest names carry
     // UTC, so the two are only comparable once this one is normalized.
     const root = await repository("2026-09-01T10:41:59-07:00");
-    expect((await manifestMoment({ ...lane, root })).at).toBe(
+    expect(manifestMoment({ ...lane, root }).at).toBe(
       "2026-09-01T17:41:59.000Z",
     );
   });
@@ -190,15 +222,15 @@ describe("the moment a lane resolves its manifest at", () => {
     // comes from the run, so a re-run resolves what the first attempt
     // resolved.
     const root = await repository("2026-09-01T10:41:59-07:00");
-    const first = await manifestMoment({ ...lane, root });
-    const again = await manifestMoment({ ...lane, root });
+    const first = manifestMoment({ ...lane, root });
+    const again = manifestMoment({ ...lane, root });
     expect(again.at).toBe(first.at);
     expect(first.note).toBeUndefined();
   });
 
   it("lets a caller ask about a moment that is not this tree's", async () => {
     const root = await repository("2026-09-01T10:41:59-07:00");
-    const moment = await manifestMoment({
+    const moment = manifestMoment({
       ...lane,
       root,
       at: "2026-08-01T00:00:00.000Z",
@@ -208,7 +240,7 @@ describe("the moment a lane resolves its manifest at", () => {
 
   it("falls back to the newest manifest outside a repository, and says so", async () => {
     const root = await Deno.makeTempDir({ prefix: "ci-lane-nogit-" });
-    const moment = await manifestMoment({ ...lane, root });
+    const moment = manifestMoment({ ...lane, root });
     expect(moment.note).toContain("cannot read the commit's date");
     expect(Number.isNaN(new Date(moment.at).getTime())).toBe(false);
   });
@@ -235,6 +267,30 @@ describe("turning a lane's selections into batches", () => {
       unit: "packages/bakery/glaze.test.ts",
       skip: ["glaze > browns"],
     }]);
+  });
+
+  it("skips nothing inside a unit its suite declares whole", () => {
+    // The runner of such a unit reads no skip list. The batch therefore carries
+    // none, and the lane's report of what it ran lists every test in the unit.
+
+    const member = suite({
+      id: "workspace-unit",
+      units: ["packages/bakery"],
+      whole: ["packages/bakery"],
+    });
+    const manifest = manifestOf([
+      { unit: "packages/bakery" },
+      {
+        test: { k: "unit", s: "bakery", n: "glaze > browns" },
+        unit: "packages/bakery",
+      },
+    ]);
+    const batches = batchesOf([member], manifest, [{
+      entry: manifest.entries[0]!,
+      reason: "value",
+      repeats: 1,
+    }]);
+    expect(batches[0]!.units).toEqual([{ unit: "packages/bakery", skip: [] }]);
   });
 
   it("skips nothing when every identity of a unit was chosen", () => {
@@ -329,6 +385,7 @@ function unitsPerLane(
     manifest: seen.manifest,
     mandatory: seen.mandatory,
     capabilities: capabilitiesBySuite(suites),
+    wholeUnits: wholeUnits(suites),
     lanes,
     ...(policy === undefined ? {} : { policy }),
   });
@@ -549,6 +606,7 @@ describe("how many lanes the full run asks for", () => {
       manifest: seen.manifest,
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(deps.suites),
+      wholeUnits: wholeUnits(deps.suites),
       policy: "everything",
       lanes,
     });
@@ -580,6 +638,7 @@ describe("how many lanes the full run asks for", () => {
       manifest: seen.manifest,
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(deps.suites),
+      wholeUnits: wholeUnits(deps.suites),
       policy: "everything",
       lanes,
     });
@@ -671,6 +730,7 @@ describe("how many lanes the full run asks for", () => {
       manifest: seen.manifest,
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(suites),
+      wholeUnits: wholeUnits(suites),
       policy: "everything",
       lanes,
     });
@@ -782,6 +842,7 @@ describe("what the two runs agree about", () => {
       manifest: seen.manifest,
       mandatory: new Map<string, SelectionReason>(),
       capabilities: capabilitiesBySuite(suites),
+      wholeUnits: wholeUnits(suites),
       lanes: 3,
       budgetSeconds: 1_000_000,
     };
@@ -841,6 +902,7 @@ describe("running a lane's work", () => {
       needs: [],
       units: ["packages/bakery/glaze.test.ts"],
       unavailable: [],
+      whole: [],
       locate: () => undefined,
       command: (_units, context) => {
         given = context;
@@ -873,6 +935,7 @@ describe("running a lane's work", () => {
       needs: [],
       units: ["packages/bakery/glaze.test.ts"],
       unavailable: [],
+      whole: [],
       locate: () => undefined,
       command: (_units, context) => {
         given = context;
@@ -1660,6 +1723,7 @@ describe("the lane's own housekeeping", () => {
       needs: [],
       units: [],
       unavailable: [],
+      whole: [],
       locate: () => undefined,
       command: () => Promise.resolve([]),
     };
@@ -1702,6 +1766,7 @@ describe("the lane's own housekeeping", () => {
       needs: ["nothing-opens-this" as CapabilityId],
       units: ["packages/bakery/glaze.test.ts"],
       unavailable: [],
+      whole: [],
       locate: () => undefined,
       command: () => Promise.resolve([]),
     };

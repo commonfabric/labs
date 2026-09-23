@@ -419,6 +419,9 @@ export function readReport(
         day,
         startedAt: group.context.startedAt,
         commit: group.context.commit,
+        ...(group.context.shuffleSeed === undefined
+          ? {}
+          : { seed: group.context.shuffleSeed }),
         source: where.source,
         place: where.place,
       });

@@ -3,11 +3,13 @@ import {
   type CfcAtom,
   type CfcModulePolicyRefAtom,
 } from "@commonfabric/api/cfc";
+import type { FabricValue } from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 
 import {
+  type AtomPattern,
   type AtomPatternBindings,
   conceptGuard,
   instantiateAtomPattern,
@@ -121,7 +123,7 @@ export type CfcGrantConsumptionContext = "consuming" | "observing";
  */
 export type CfcGrantResolverQuery = {
   readonly kind: string;
-  readonly fields: Readonly<Record<string, unknown>>;
+  readonly fields: Readonly<Record<string, FabricValue>>;
 
   /**
    * The evaluation site's consumption context, stamped from
@@ -219,7 +221,7 @@ export type ExchangeEvalResult = {
  */
 const extendThroughPattern = (
   environments: readonly AtomPatternBindings[],
-  pattern: unknown,
+  pattern: AtomPattern,
   pool: readonly CfcAtom[],
 ): AtomPatternBindings[] => {
   const next: AtomPatternBindings[] = [];
@@ -490,8 +492,9 @@ const resolveSelectedModulePolicies = (
  * pattern under one binding environment, or `undefined` when the pattern is
  * not queryable (fail closed): not a plain record, or its `kind` is not a
  * concrete non-empty string (boot validation enforces this for configured
- * policies; the evaluator re-checks because patterns are `unknown` and a
- * hand-built snapshot must not bypass the discipline). Query fields are the
+ * policies; the evaluator re-checks because an `AtomPattern`'s type says
+ * nothing about its shape and a hand-built snapshot must not bypass the
+ * discipline). Query fields are the
  * guard fields that INSTANTIATE under the environment — a bound variable or a
  * fully concrete value; fields with free variables are omitted (they bind
  * FROM the grant). Explicit-`undefined` fields (absence requirements) are
@@ -499,7 +502,7 @@ const resolveSelectedModulePolicies = (
  * them against the returned facts.
  */
 const grantGuardQuery = (
-  pattern: unknown,
+  pattern: AtomPattern,
   bindings: AtomPatternBindings,
   consumption: CfcGrantConsumptionContext,
 ): CfcGrantResolverQuery | undefined => {
@@ -513,7 +516,7 @@ const grantGuardQuery = (
   if (typeof kind !== "string" || kind.length === 0) {
     return undefined;
   }
-  const fields: Record<string, unknown> = {};
+  const fields: Record<string, FabricValue> = {};
   for (const [key, fieldPattern] of Object.entries(pattern)) {
     if (key === "kind" || fieldPattern === undefined) continue;
     const instantiated = instantiateAtomPattern(fieldPattern, bindings);
@@ -535,7 +538,7 @@ const grantGuardQuery = (
  */
 const extendThroughGrantGuard = (
   environments: readonly AtomPatternBindings[],
-  pattern: unknown,
+  pattern: AtomPattern,
   resolver: CfcGrantResolver | undefined,
   consumption: CfcGrantConsumptionContext,
 ): AtomPatternBindings[] => {

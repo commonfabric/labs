@@ -1,9 +1,8 @@
 /**
  * Contract tests for the shared Tree-sitter adapter, written against the
- * Python grammar because it is the one language on the adapter today. They
- * pin the conventions a grammar upgrade could move silently: which offsets
- * Tree-sitter reports and accepts, that a query covers the range it is given,
- * and that a grammar has to be loaded before it is used.
+ * Python grammar. They pin the conventions a grammar upgrade could move
+ * silently: which offsets Tree-sitter reports and accepts, that a query covers
+ * the range it is given, and what a grammar shows before it has loaded.
  */
 
 import { describe, it } from "@std/testing/bdd";
@@ -12,6 +11,7 @@ import { expect } from "@std/expect";
 import {
   createHighlighter,
   highlightLines,
+  onGrammarLoad,
   parseDocument,
   prepareGrammar,
   type TreeSitterGrammar,
@@ -83,37 +83,63 @@ describe("adapter", () => {
     });
 
     it("says why a parser would not load when the grammar is used", async () => {
-      // The pager warms every language and leaves one that will not load to
-      // report itself when a file in it is opened.
+      // A grammar that will not load leaves the rest working and reports
+      // itself when a file in its language is opened.
       const missing: TreeSitterGrammar = {
         ...pythonGrammar,
         id: "python-unreadable-parser",
         wasmUrl: () => new URL("./no-such-grammar.wasm", import.meta.url).href,
       };
 
-      await expect(prepareGrammar(missing)).rejects.toThrow(
-        /could not be read from/,
-      );
-      expect(() => highlightLines(missing, "x = 1")).toThrow(
+      const failures: (string | undefined)[] = [];
+      const stop = onGrammarLoad((failure) => failures.push(failure));
+      try {
+        await expect(prepareGrammar(missing)).rejects.toThrow(
+          /could not be read from/,
+        );
+      } finally {
+        stop();
+      }
+
+      expect(failures).toHaveLength(1);
+      expect(failures[0]).toMatch(
         /the python-unreadable-parser grammar could not be read from/,
       );
+      expect(classesOf(highlightLines(missing, "x = 1"), "x = 1"))
+        .toEqual(["plain"]);
     });
 
-    it("refuses to use a grammar that was never loaded", () => {
-      const missing: TreeSitterGrammar = {
+    it("shows plain text until a grammar loads, and starts the load on first use", async () => {
+      let reads = 0;
+      const pending: TreeSitterGrammar = {
         ...pythonGrammar,
-        id: "python-never-loaded",
+        id: "python-loaded-on-use",
+        wasmUrl: () => {
+          reads++;
+          return pythonGrammar.wasmUrl();
+        },
       };
+      const outcomes: (string | undefined)[] = [];
+      const stop = onGrammarLoad((failure) => outcomes.push(failure));
+      try {
+        expect(classesOf(highlightLines(pending, "x = 1"), "x = 1"))
+          .toEqual(["plain"]);
+        expect(parseDocument(pending, "def f():\n    pass").structure)
+          .toEqual([]);
+        expect(verbatim(createHighlighter(pending, "x = 1").lines))
+          .toBe("x = 1");
 
-      expect(() => highlightLines(missing, "x = 1")).toThrow(
-        /python-never-loaded grammar is used before it is loaded/,
-      );
-      expect(() => parseDocument(missing, "x = 1")).toThrow(
-        /python-never-loaded grammar is used before it is loaded/,
-      );
-      expect(() => createHighlighter(missing, "x = 1")).toThrow(
-        /python-never-loaded grammar is used before it is loaded/,
-      );
+        // The first use started the load, which this shares.
+        expect(reads).toBe(1);
+        await prepareGrammar(pending);
+        expect(reads).toBe(1);
+
+        expect(outcomes).toEqual([undefined]);
+        expect(classesOf(highlightLines(pending, "x = 1"), "1"))
+          .toEqual(["number"]);
+      } finally {
+        stop();
+      }
     });
   });
 

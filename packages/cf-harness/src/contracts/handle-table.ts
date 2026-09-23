@@ -74,19 +74,43 @@ export const ANY_HANDLE_TOKEN_PATTERN = new RegExp(
 
 /**
  * A referent a run holds that is not a cell: content a tool observed — a Loom
- * row — with the label it was admitted under. The token stands for it in
- * model-visible text, and a result that names the token gets a document
- * minted from this record and a link to it.
+ * row — or the findings a research call admitted, with the label it was
+ * admitted under. The token stands for it in model-visible text. A result
+ * that names a document referent's token gets a document minted from this
+ * record and a link to it; a research referent is a projection of the run's
+ * own work, and no document is minted from it.
  *
- * The content and label reach a model-visible surface nowhere through this
- * entry: the model saw the content when the tool returned it, and
- * `describe_handle` reports the label's atom types alone.
+ * A document's content reaches a model-visible surface nowhere through this
+ * entry: the model saw it when the tool returned it, and `describe_handle`
+ * reports the label's atom types alone. A research referent is the one whose
+ * content `describe_handle` does return, under this same label, which is how
+ * a run — or a child handed the token — reads what research found instead of
+ * researching again. The two kinds are told apart by `kind`, and each has
+ * the label sources that can apply to it and no other.
  */
-export interface HarnessHandleReferent {
+export type HarnessHandleReferent =
+  | (HarnessHandleReferentBase & {
+    /** Content a tool observed. */
+    kind: "document";
+
+    /**
+     * Where the label came from: the row's own `ifc`, or the label of the
+     * query, assigned because the row carried none.
+     */
+    labelSource: "row" | "query";
+  })
+  | (HarnessHandleReferentBase & {
+    /** An admitted research kit. */
+    kind: "research";
+
+    /** The label research derived for its kit. */
+    labelSource: "research";
+  });
+
+/** What every referent carries whatever its kind. */
+interface HarnessHandleReferentBase {
   /** The full token, prefix included (`cfh:v:<suffix>`). */
   token: string;
-
-  kind: "document";
 
   /** The tool that observed the referent. */
   source: string;
@@ -96,13 +120,22 @@ export interface HarnessHandleReferent {
 
   /** The label the content was admitted under. */
   label: IFCLabel;
-
-  /**
-   * Where that label came from: the row's own `ifc`, or the label of the
-   * query, assigned because the row carried none.
-   */
-  labelSource: "row" | "query";
 }
+
+/**
+ * A referent as handed to minting: everything but the token, per kind. Spelled
+ * distributively so a draft is a document draft or a research draft, and a
+ * label source of the wrong kind is refused where the draft is written.
+ */
+export type HarnessHandleReferentDraft = HarnessHandleReferent extends infer R
+  ? R extends HarnessHandleReferent ? Omit<R, "token"> : never
+  : never;
+
+/** A document referent as a tool hands it to the run: content and label. */
+export type HarnessDocumentReferentDraft = Omit<
+  Extract<HarnessHandleReferent, { kind: "document" }>,
+  "token" | "kind"
+>;
 
 /**
  * One handle: a token and the address it stands for.

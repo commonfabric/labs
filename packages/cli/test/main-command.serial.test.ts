@@ -74,11 +74,19 @@ describe("main command", () => {
     );
     const commands = [main];
     const mismatchedUsage: string[] = [];
-    // Both mounts of `call`, which states its own usage because the callable
-    // section is not expressible as a Cliffy positional. Written out rather
-    // than derived: this set had held one name twice, so the exemption it was
-    // meant to carry had silently lapsed.
-    const customUsageCommands = new Set(["cf piece call", "cf call"]);
+    // Commands that state their own usage because what they accept is not
+    // expressible as a Cliffy positional: both mounts of `call`, for the
+    // callable section, and the invitation commands, which also take the ID
+    // as the word after `--`. Written out rather than derived: this set had
+    // held one name twice, so the exemption it was meant to carry had
+    // silently lapsed.
+    const customUsageCommands = new Set([
+      "cf piece call",
+      "cf call",
+      "cf space invite redeem",
+      "cf space invite revoke",
+      "cf space invite receipts",
+    ]);
 
     for (const command of commands) {
       commands.push(...command.getCommands());

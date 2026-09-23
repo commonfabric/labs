@@ -499,6 +499,28 @@ export async function tick(tiles: Tile[] = TILES, sourceCtx: Ctx = ctx) {
   ]);
 }
 
+/**
+ * Clears everything the board has collected — its views, run times, run
+ * snapshots, activity badges, and red streak — so that a test sees none of what
+ * an earlier test collected. Connected clients and the dashboard message are
+ * left as they are. Throws while a collection is still running, because that
+ * collection would publish into the board after the reset.
+ */
+export function resetBoardForTest(): void {
+  if (!allUpdatesSettled() || activeActivityUpdates.size) {
+    throw new Error("the board cannot be reset while a collection is running");
+  }
+  views.clear();
+  lastRun.clear();
+  activityBadges.clear();
+  lastActivityRun.clear();
+  runSnapshots.clear();
+  runSourceErrors.clear();
+  lastSourceTileRun.clear();
+  lastChange = 0;
+  faviconRedSince = null;
+}
+
 // Collect drill-down routes declared by tiles.
 const routes = TILES.flatMap((t) => t.routes ?? []);
 

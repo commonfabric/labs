@@ -8,8 +8,10 @@
  *
  * Loading a grammar is asynchronous and the pager's parsing surface is
  * synchronous, so a view loads the grammars it needs through
- * {@link prepareGrammar} before it parses anything. The synchronous entry
- * points below require a loaded grammar and throw without one.
+ * {@link prepareGrammar} before it parses anything. A synchronous entry point
+ * reached before its grammar has loaded shows the source as plain text and
+ * starts the load, and {@link onGrammarLoad} tells a view when to parse again,
+ * or why the grammar could not load.
  *
  * Offsets throughout are JavaScript string offsets — UTF-16 code units — which
  * is what the Tree-sitter JavaScript binding reports for nodes and accepts for
@@ -29,6 +31,11 @@ import { flattenStructure } from "../../model.ts";
 import { cpLen } from "../../ansi.ts";
 import { computeLineStarts, lineIndexOf } from "../../lines.ts";
 import { isTokenClass } from "../../theme.ts";
+import {
+  createPlainTextHighlighter,
+  plainTextDocument,
+  plainTextLines,
+} from "../plain-text/plain-text.ts";
 import type { Highlighter } from "../language.ts";
 import type * as treeSitter from "web-tree-sitter";
 
@@ -83,12 +90,28 @@ interface LoadedGrammar {
 const loaded = new Map<string, LoadedGrammar>();
 const loading = new Map<string, Promise<void>>();
 
-/** Why a grammar's load failed, kept so using it says that rather than that it
- * was never loaded. */
-const failures = new Map<string, unknown>();
-
 /** The runtime shared by every loaded grammar, present once one is loaded. */
 let runtime: TreeSitterModule | undefined;
+
+/** The runtime's one initialization, which every grammar load awaits. */
+let initialized: Promise<TreeSitterModule> | undefined;
+
+/** What to call each time a grammar's load ends. */
+const loadListeners = new Set<(failure?: string) => void>();
+
+/**
+ * Calls `listener` each time a grammar's load ends, until the returned
+ * function is called: with no argument when the grammar loaded, and with the
+ * reason when it could not. A source shown as plain text because its grammar
+ * was still loading is colored by parsing it again once the grammar loads, and
+ * stays plain if it cannot.
+ */
+export function onGrammarLoad(
+  listener: (failure?: string) => void,
+): () => void {
+  loadListeners.add(listener);
+  return () => loadListeners.delete(listener);
+}
 
 /** Load a grammar's runtime and parser, once per grammar. */
 export function prepareGrammar(grammar: TreeSitterGrammar): Promise<void> {
@@ -99,21 +122,42 @@ export function prepareGrammar(grammar: TreeSitterGrammar): Promise<void> {
 }
 
 async function loadGrammar(grammar: TreeSitterGrammar): Promise<void> {
-  try {
-    await loadGrammarNow(grammar);
-  } catch (error) {
-    failures.set(grammar.id, error);
-    throw error;
-  }
+  const failed = await loadGrammarNow(grammar, grammar.wasmUrl()).then(
+    () => undefined,
+    (error: unknown) => ({ error }),
+  );
+  const failure = failed === undefined
+    ? undefined
+    : failed.error instanceof Error
+    ? failed.error.message
+    : String(failed.error);
+  for (const listener of loadListeners) listener(failure);
+  if (failed !== undefined) throw failed.error;
 }
 
-async function loadGrammarNow(grammar: TreeSitterGrammar): Promise<void> {
-  // The runtime is loaded when a view selects a parser-backed language, and
-  // not before.
-  // deno-lint-ignore cf-imports/no-inline-module-import -- loaded on selection
-  const module = runtime ??= await import("web-tree-sitter");
-  const wasm = await readGrammar(grammar);
-  await module.Parser.init();
+/**
+ * Loads and initializes the runtime once. Initializing it again while an
+ * earlier initialization is in flight creates a second WebAssembly module and
+ * replaces the first, and a grammar loaded into the replaced module fails to
+ * parse.
+ */
+function initializeRuntime(): Promise<TreeSitterModule> {
+  return initialized ??= (async () => {
+    // The runtime is loaded when a view selects a parser-backed language, and
+    // not before.
+    // deno-lint-ignore cf-imports/no-inline-module-import -- loaded on selection
+    const module = await import("web-tree-sitter");
+    await module.Parser.init();
+    return runtime = module;
+  })();
+}
+
+async function loadGrammarNow(
+  grammar: TreeSitterGrammar,
+  wasmUrl: string,
+): Promise<void> {
+  const module = await initializeRuntime();
+  const wasm = await readGrammar(grammar.id, wasmUrl);
   const language = await module.Language.load(wasm);
   const parser = new module.Parser();
   parser.setLanguage(language);
@@ -131,28 +175,25 @@ async function loadGrammarNow(grammar: TreeSitterGrammar): Promise<void> {
 
 /** Read a compiled grammar, saying which one when it cannot be read: it ships
  * beside the code rather than with the file being viewed. */
-async function readGrammar(grammar: TreeSitterGrammar): Promise<Uint8Array> {
+async function readGrammar(id: string, wasmUrl: string): Promise<Uint8Array> {
   try {
-    return await Deno.readFile(new URL(grammar.wasmUrl()));
+    return await Deno.readFile(new URL(wasmUrl));
   } catch (error) {
     throw new Error(
-      `cf view: the ${grammar.id} grammar could not be read from ` +
-        `${grammar.wasmUrl()}.`,
+      `cf view: the ${id} grammar could not be read from ${wasmUrl}.`,
       { cause: error },
     );
   }
 }
 
-function loadedGrammar(grammar: TreeSitterGrammar): LoadedGrammar {
+/**
+ * Returns a loaded grammar, or undefined when it has not loaded, starting its
+ * load if none has started.
+ */
+function loadedGrammar(grammar: TreeSitterGrammar): LoadedGrammar | undefined {
   const ready = loaded.get(grammar.id);
-  if (ready === undefined && failures.has(grammar.id)) {
-    throw failures.get(grammar.id);
-  }
-  if (ready === undefined) {
-    throw new Error(
-      `cf view: the ${grammar.id} grammar is used before it is loaded.`,
-    );
-  }
+  // A load that fails reports why to the load listeners.
+  if (ready === undefined) prepareGrammar(grammar).catch(() => {});
   return ready;
 }
 
@@ -165,12 +206,16 @@ function parseWith(ready: LoadedGrammar, text: string, from?: Tree): Tree {
   return tree;
 }
 
-/** Color `text` through a loaded grammar, one display line per source line. */
+/**
+ * Color `text` through its grammar, one display line per source line, or as
+ * plain text while the grammar loads.
+ */
 export function highlightLines(
   grammar: TreeSitterGrammar,
   text: string,
 ): Line[] {
   const ready = loadedGrammar(grammar);
+  if (ready === undefined) return plainTextLines(text);
   const tree = parseWith(ready, text);
   try {
     const lineStarts = computeLineStarts(text);
@@ -180,12 +225,16 @@ export function highlightLines(
   }
 }
 
-/** Color `text` and build its structure tree and definition index. */
+/**
+ * Color `text` and build its structure tree and definition index, or build a
+ * plain document with neither while the grammar loads.
+ */
 export function parseDocument(
   grammar: TreeSitterGrammar,
   text: string,
 ): Document {
   const ready = loadedGrammar(grammar);
+  if (ready === undefined) return plainTextDocument(text);
   const tree = parseWith(ready, text);
   try {
     const lineStarts = computeLineStarts(text);
@@ -209,9 +258,9 @@ export function parseDocument(
 }
 
 /**
- * An incremental highlighter. Each update edits the warm tree and re-parses
- * from it, so the parse costs the size of the edit, and then colors the whole
- * document from that parse.
+ * An incremental highlighter, or a plain one while the grammar loads. Each
+ * update edits the warm tree and re-parses from it, so the parse costs the
+ * size of the edit, and then colors the whole document from that parse.
  *
  * The coloring is not narrowed to the lines the edit touched. An edit can move
  * a token's class anywhere in the document — closing a bracket completes an
@@ -227,6 +276,7 @@ export function createHighlighter(
   initial: string,
 ): Highlighter {
   const ready = loadedGrammar(grammar);
+  if (ready === undefined) return createPlainTextHighlighter(initial);
   let text = initial;
   let lineStarts = computeLineStarts(text);
   const held = { tree: parseWith(ready, text) };

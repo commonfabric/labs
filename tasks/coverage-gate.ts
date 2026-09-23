@@ -550,7 +550,7 @@ export async function main(
   const suites = await (deps.topology ?? loadTopology)(options.root);
   const changed = await changedFiles(options.root, options.base);
   const gate = coverageGateFor(suites, changed);
-  const moment = await manifestMoment({
+  const moment = manifestMoment({
     lane: 1,
     of: 1,
     full: false,

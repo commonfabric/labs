@@ -129,10 +129,16 @@ function isInviteDIDKey(value: unknown): value is DIDKey {
     /^did:key:z[1-9A-HJ-NP-Za-km-z]{20,120}$/.test(value);
 }
 
-/** Generates independent opaque credentials using the platform RNG. */
+/**
+ * Generates independent opaque credentials using the platform RNG. The invite
+ * ID begins with a letter, so a command line never reads it as an option.
+ */
 export function createInviteCredentials(): { inviteId: string; code: string } {
+  const id = crypto.getRandomValues(new Uint8Array(16));
+  // A first byte below 0x80 encodes as a first character in A-Z or a-f.
+  id[0] &= 0x7f;
   return {
-    inviteId: toUnpaddedBase64url(crypto.getRandomValues(new Uint8Array(16))),
+    inviteId: toUnpaddedBase64url(id),
     code: toUnpaddedBase64url(crypto.getRandomValues(new Uint8Array(32))),
   };
 }

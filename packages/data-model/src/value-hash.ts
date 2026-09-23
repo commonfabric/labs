@@ -19,6 +19,7 @@ import { backtickQuote } from "@commonfabric/utils/markdown";
 import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 import { isDeepFrozen } from "./deep-freeze.ts";
+import type { FabricValue } from "@/interface.ts";
 import { shallowFabricFromConvertibleJsValue } from "./convertible-js.ts";
 import { tagOfConvertibleJsValueElseNull, VALUE_TAGS } from "@/types";
 import { BaseFabricInstance } from "@/fabric-bases";
@@ -629,7 +630,7 @@ function hashOfInternal(
  *
  * Caches results for primitives (LRU) and deep-frozen objects (`WeakMap`).
  */
-export function hashOf(value: unknown): FabricHash {
+export function hashOf(value: FabricValue): FabricHash {
   return hashOfInternal(value, false);
 }
 

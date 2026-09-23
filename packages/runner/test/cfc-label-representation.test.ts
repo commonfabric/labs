@@ -95,6 +95,19 @@ describe("CFC label representation transform (inv-12 Stage 1)", () => {
       ).toBe(false);
     });
 
+    it("returns for two plaintext records what their digests say", () => {
+      // A lone surrogate is digested as the replacement character, so these
+      // two records have one digest. Each equals the other's commitment, and
+      // so each must equal the other.
+      const lone = { subject: "\uD800" };
+      const replaced = { subject: "\uFFFD" };
+      expect(hashStringOf(lone)).toBe(hashStringOf(replaced));
+      expect(
+        commitmentAwareEquals(lone, { subject: commitCfcFieldValue("\uFFFD") }),
+      ).toBe(true);
+      expect(commitmentAwareEquals(lone, replaced)).toBe(true);
+    });
+
     it("treats a malformed digestOf-bearing record as an opaque value", () => {
       // Extra keys disqualify the marker shape: only structural equality
       // applies (fail-closed — never digest-matched).

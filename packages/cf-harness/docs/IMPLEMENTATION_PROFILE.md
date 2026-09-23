@@ -229,10 +229,10 @@ never its data. It prefers the session Fabric's declared shape when available
 and otherwise uses a harness-captured schema, recursively removes value-bearing
 and descriptive schema fields, bounds disclosed property names, and scrubs bare
 Fabric identifiers. A referent that declares no schema and holds a SQLite
-database handle reports that database's tables and its columns' labels through
-the same reduction, which is the one value the tool reads. An unknown or
-shapeless token remains an ordinary bounded tool result rather than a
-dereference path.
+database handle reports that database's tables, and the distinct labels its
+columns carry, through the same reduction, which is the one value the tool
+reads. An unknown or shapeless token remains an ordinary bounded tool result
+rather than a dereference path.
 
 `run_pattern` accepts at most 256 KiB of inline source. It resolves whole-string
 LLM-friendly link inputs to live cells in the configured space and foreign

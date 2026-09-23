@@ -68,7 +68,11 @@ import {
   surfaceName,
   type Unplaced,
 } from "./test-selection/build.ts";
-import { capabilitiesBySuite, loadTopology } from "./test-topology.ts";
+import {
+  capabilitiesBySuite,
+  loadTopology,
+  wholeUnits,
+} from "./test-topology.ts";
 import { publishableBaselines } from "./test-selection/baselines.ts";
 import type { Suite } from "./test-topology/suite.ts";
 import {
@@ -822,6 +826,7 @@ export async function publish(
     manifest,
     mandatory: new Map(),
     capabilities: capabilitiesBySuite(suites),
+    wholeUnits: wholeUnits(suites),
   });
   // What the packer refused, from the packer, carrying the cost the bound
   // was compared against rather than a raw one that leaves out every

@@ -48,6 +48,7 @@ const TOPOLOGY: Suite[] = [{
   needs: ["deno"],
   units: ["packages/memory/test/space.test.ts"],
   unavailable: [],
+  whole: [],
   locate: (record) =>
     record.test.k === "unit" && record.test.s === "memory"
       ? { level: "unit", unit: "packages/memory/test/space.test.ts" }

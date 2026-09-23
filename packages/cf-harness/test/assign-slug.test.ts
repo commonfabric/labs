@@ -742,12 +742,11 @@ describe("assign-slug", () => {
       }
     });
 
-    it("refuses a slug that already names another piece, leaving the address where it pointed", async () => {
+    it("names the piece under the next counter when the slug already names another piece", async () => {
       // A second call naming the same slug would repoint an address a person
-      // already opens. The refusal is a pre-flight one, so the attempt costs
-      // a message and nothing else — and it is the one that names which kind
-      // of address is in the way, where the assignment's own refusal
-      // underneath would only say the name is taken.
+      // already opens. The name is passed over rather than refused: the piece
+      // gets the word with a counter appended, and the receipt says so, which
+      // is where the caller reads the address it got.
       await linkDefaultPattern();
       const engine = createEngine();
       const first = await createPiece(engine, 21);
@@ -762,17 +761,67 @@ describe("assign-slug", () => {
         token: second.resultRef,
         slug: "doubling-report",
       });
-      const output = result.output as AssignSlugToolErrorOutput;
-      expect(output.status).toBe("error");
-      expect(output.message).toContain("doubling-report");
-      // The address still names the piece it named before, so the refusal
-      // protected the name rather than merely reporting on it.
+      const output = result.output as AssignSlugToolSuccessOutput;
+      expect(output.status).toBe("ok");
+      expect(output.slug).toBe("doubling-report-2");
+      // The URL carries the name assigned, not the one asked for.
+      expect(output.url).toContain("http://toolshed.test/");
+      expect(output.url?.endsWith("/doubling-report-2")).toBe(true);
+      // The address still names the piece it named before, so the counter
+      // protected the name rather than taking it.
       expect(await resolvePieceAddress(pieces, "doubling-report")).toBe(
         first.pieceId,
       );
+      expect(await resolvePieceAddress(pieces, "doubling-report-2")).toBe(
+        second.pieceId,
+      );
     });
 
-    it("refuses a slug that names a collection, leaving the address where it pointed", async () => {
+    it("counts past every taken name, and answers ok for a counter already naming this piece", async () => {
+      // Three pieces asking for one word end up at the word, -2 and -3. The
+      // counter is derived from the requested word each time rather than
+      // remembered, so a fourth call from the third piece lands on the name
+      // it already holds and says so, the way the bare word does.
+      await linkDefaultPattern();
+      const engine = createEngine();
+      const pieces3 = [
+        await createPiece(engine, 21),
+        await createPiece(engine, 22),
+        await createPiece(engine, 23),
+      ];
+      const slugs: string[] = [];
+      for (const piece of pieces3) {
+        const result = await engine.invokeBuiltinTool("assign_slug", {
+          token: piece.resultRef,
+          slug: "doubling-report",
+        });
+        slugs.push((result.output as AssignSlugToolSuccessOutput).slug);
+      }
+      expect(slugs).toEqual([
+        "doubling-report",
+        "doubling-report-2",
+        "doubling-report-3",
+      ]);
+      expect(await resolvePieceAddress(pieces, "doubling-report-3")).toBe(
+        pieces3[2].pieceId,
+      );
+
+      const again = await engine.invokeBuiltinTool("assign_slug", {
+        token: pieces3[2].resultRef,
+        slug: "doubling-report",
+      });
+      expect((again.output as AssignSlugToolSuccessOutput).slug).toBe(
+        "doubling-report-3",
+      );
+      await expect(resolvePieceAddress(pieces, "doubling-report-4")).rejects
+        .toThrow();
+      const registered = await pieces.getRegisteredPieces();
+      expect(registered.map((piece) => piece.id)).toEqual(
+        pieces3.map((piece) => piece.pieceId),
+      );
+    });
+
+    it("passes over a slug that names a collection, leaving the address where it pointed", async () => {
       // A slug pointing at a cell inside a piece names a collection, which is
       // an address a person opens as much as a piece is. Reading that as an
       // operational failure would report a positive statement about what the
@@ -792,20 +841,18 @@ describe("assign-slug", () => {
         token: taking.resultRef,
         slug: "doubling-report",
       });
-      const output = result.output as AssignSlugToolErrorOutput;
-      expect(output.status).toBe("error");
-      expect(output.message).toContain("already names a collection");
-      expect(output.message).not.toContain("could not establish");
-      // The refusal names the caller's own slug and nothing behind it, the
-      // way the refusal for a name already taken by a piece does: the address
-      // the name resolves to stays trusted-side.
-      expect(output.message).not.toContain(held.pieceId);
-      // The name still points into the piece it pointed into, so the refusal
-      // protected the address rather than merely reporting on it.
+      const output = result.output as AssignSlugToolSuccessOutput;
+      expect(output.status).toBe("ok");
+      expect(output.slug).toBe("doubling-report-2");
+      // The name still points into the piece it pointed into, so the counter
+      // protected the address rather than taking it.
       expect(await resolveSlugTarget(pieces, "doubling-report")).toEqual({
         piece: held.pieceId,
         pathInside: ["doubled"],
       });
+      expect(await resolvePieceAddress(pieces, "doubling-report-2")).toBe(
+        taking.pieceId,
+      );
     });
 
     it("takes a name whose document points at no piece, which this tool calls free", async () => {
@@ -838,19 +885,20 @@ describe("assign-slug", () => {
       );
     });
 
-    it("gives a free name to the first of two calls and refuses the second", async () => {
+    it("gives a free name to one of two calls and the next counter to the other", async () => {
       // Two calls for one free name, started together and settling one after
       // the other. What this asserts is the outcome — exactly one takes the
-      // name — and nothing about the interleaving: the assertions hold
-      // whether the two overlapped or ran in sequence. Forcing over the read
-      // instead of carrying it into the write would let the loser overwrite
-      // the winner and report success, which is what the assertions catch.
+      // name and the other takes the counter — and nothing about the
+      // interleaving: the assertions hold whether the two overlapped or ran
+      // in sequence. Forcing over the read instead of carrying it into the
+      // write would let the loser overwrite the winner and report success,
+      // which is what the assertions catch.
       //
       // The racing path is the library's, pinned over two sessions where the
       // losing replica is provably behind: `packages/piece/test/slug.test.ts`,
       // under "the read a refusal claims on".
       //
-      // The two tokens name different pieces, so the address the name ends
+      // The two tokens name different pieces, so the address each name ends
       // up holding says which call won rather than being true either way.
       await linkDefaultPattern();
       const engine = createEngine();
@@ -869,20 +917,21 @@ describe("assign-slug", () => {
         }),
       ]);
       const outputs = results.map((result) =>
-        result.output as AssignSlugToolSuccessOutput | AssignSlugToolErrorOutput
+        result.output as AssignSlugToolSuccessOutput
       );
 
-      expect(outputs.filter((output) => output.status === "ok")).toHaveLength(
-        1,
-      );
-      const loser = outputs.find((output) => output.status === "error") as
-        | AssignSlugToolErrorOutput
-        | undefined;
-      expect(loser?.message).toContain("doubling-report");
-      expect(loser?.message).toContain("Choose another slug");
-      const winner = outputs[0].status === "ok" ? first : second;
+      expect(outputs.map((output) => output.status)).toEqual(["ok", "ok"]);
+      expect(outputs.map((output) => output.slug).sort()).toEqual([
+        "doubling-report",
+        "doubling-report-2",
+      ]);
+      const winner = outputs[0].slug === "doubling-report" ? first : second;
+      const loser = winner === first ? second : first;
       expect(await resolvePieceAddress(pieces, "doubling-report")).toBe(
         winner.pieceId,
+      );
+      expect(await resolvePieceAddress(pieces, "doubling-report-2")).toBe(
+        loser.pieceId,
       );
     });
 
@@ -976,11 +1025,44 @@ describe("assign-slug", () => {
       expect(output.message).toContain("space root unavailable");
     });
 
+    it("answers ok on the bare word when the race it lost was to a call naming this same piece", async () => {
+      // Two calls for one piece under one word, one landing between the
+      // other's read and write. The loser's write is refused underneath, and
+      // what refused it is its own piece, so advancing to a counter would
+      // give the piece a second name it never asked for. The refused name is
+      // read again instead, and the read says the request is already true.
+      // The registry join sits between the read and the write, which is
+      // where the winning call is staged.
+      await linkDefaultPattern();
+      const engine = createEngine();
+      const created = await createPiece(engine);
+      const cell = pieces.runtime.getCellFromLink(
+        parseLLMFriendlyLink(created.resultRef, pieces.getSpace()),
+      );
+      await cell.sync();
+      const originalAdd = pieces.add.bind(pieces);
+      pieces.add = async (cells) => {
+        await originalAdd(cells);
+        await setSlugLink(pieces, "doubling-report", cell);
+      };
+      const result = await engine.invokeBuiltinTool("assign_slug", {
+        token: created.resultRef,
+        slug: "doubling-report",
+      });
+      pieces.add = originalAdd;
+
+      const output = result.output as AssignSlugToolSuccessOutput;
+      expect(output.status).toBe("ok");
+      expect(output.slug).toBe("doubling-report");
+      await expect(resolvePieceAddress(pieces, "doubling-report-2")).rejects
+        .toThrow();
+    });
+
     it("reports a name released between the availability read and the write as one to retry", async () => {
       // The tool judges a name free, and the name comes to point nowhere
       // before the write lands. That is not the same outcome as a name
       // somebody else took: nobody holds it, so the answer is to read it
-      // again rather than to choose another name. The registry join sits
+      // again rather than to move on to a counter. The registry join sits
       // between the two, which is where the release is staged.
       await linkDefaultPattern();
       const engine = createEngine();
@@ -1024,9 +1106,6 @@ describe("assign-slug", () => {
       // piece is listed rather than that nothing happened.
       expect(output.message).toContain("the piece is listed");
       expect(output.message).not.toContain("Nothing was assigned");
-      // Told to retry rather than to choose another name, which is the
-      // answer a name somebody else holds gets.
-      expect(output.message).not.toContain("Choose another slug");
     });
 
     it("does not list the piece twice when retried after a failed assignment", async () => {
@@ -1112,7 +1191,7 @@ describe("assign-slug", () => {
 
       // The slug document's own cell, so only its sync fails and every other
       // cell the call reaches behaves normally.
-      const slugEntity = JSON.stringify(
+      const slugEntity = String(
         entityIdFrom(slugIdForSpace(pieces.getSpace(), "doubling-report")),
       );
       const originalGetCell = runtime.getCellFromEntityId.bind(runtime);
@@ -1121,7 +1200,7 @@ describe("assign-slug", () => {
         ...args: Parameters<Runtime["getCellFromEntityId"]>
       ) => {
         const cell = originalGetCell(...args);
-        if (JSON.stringify(args[1]) !== slugEntity) {
+        if (String(args[1]) !== slugEntity) {
           return cell;
         }
         (cell as unknown as { sync: () => Promise<unknown> }).sync = () => {
@@ -1146,6 +1225,91 @@ describe("assign-slug", () => {
       expect(output.message).toContain("doubling-report");
       expect(output.message).not.toContain("already names another piece");
       expect(await pieces.getRegisteredPieces()).toEqual([]);
+    });
+
+    it("says the piece is listed when a name passed over after the join leaves the next one unanswerable", async () => {
+      // The registry join has committed, the bare word is then found held
+      // by another piece at the write, and the counter's first candidate
+      // cannot be read at all. The refusal reports what the call left: a
+      // listed piece with no name, not "nothing was assigned" — a caller
+      // told the latter would never look for the piece it listed.
+      await linkDefaultPattern();
+      const engine = createEngine();
+      const created = await createPiece(engine, 21);
+      const other = await createPiece(engine, 22);
+      const otherCell = pieces.runtime.getCellFromLink(
+        parseLLMFriendlyLink(other.resultRef, pieces.getSpace()),
+      );
+      await otherCell.sync();
+
+      // Only the counter's slug document fails to sync; the bare word and
+      // everything else the call reaches behave normally.
+      const counterEntity = String(
+        entityIdFrom(slugIdForSpace(pieces.getSpace(), "doubling-report-2")),
+      );
+      const originalGetCell = runtime.getCellFromEntityId.bind(runtime);
+      runtime.getCellFromEntityId = ((
+        ...args: Parameters<Runtime["getCellFromEntityId"]>
+      ) => {
+        const cell = originalGetCell(...args);
+        if (String(args[1]) !== counterEntity) {
+          return cell;
+        }
+        (cell as unknown as { sync: () => Promise<unknown> }).sync = () =>
+          Promise.reject(new Error("storage unavailable"));
+        return cell;
+      }) as Runtime["getCellFromEntityId"];
+      const originalAdd = pieces.add.bind(pieces);
+      pieces.add = async (cells) => {
+        await originalAdd(cells);
+        // The join has landed; the bare word now belongs to another piece.
+        await setSlugLink(pieces, "doubling-report", otherCell);
+      };
+      const result = await engine.invokeBuiltinTool("assign_slug", {
+        token: created.resultRef,
+        slug: "doubling-report",
+      });
+      pieces.add = originalAdd;
+      runtime.getCellFromEntityId = originalGetCell;
+
+      const output = result.output as AssignSlugToolErrorOutput;
+      expect(output.status).toBe("error");
+      expect(output.message).toContain("could not establish");
+      expect(output.message).toContain("doubling-report-2");
+      expect(output.message).toContain("the piece is listed");
+      expect(output.message).not.toContain("Nothing was assigned");
+      expect(await resolvePieceAddress(pieces, "doubling-report")).toBe(
+        other.pieceId,
+      );
+      const registered = await pieces.getRegisteredPieces();
+      expect(registered.map((piece) => piece.id)).toEqual([created.pieceId]);
+    });
+
+    it("refuses a taken word too long for any counter to fit, naming nothing", async () => {
+      // The one collision that is refused: the requested word already sits
+      // at the slug length limit, so no counter can be appended and the tool
+      // has no free name to derive. Saying so beats inventing a shorter one.
+      await linkDefaultPattern();
+      const engine = createEngine();
+      const first = await createPiece(engine, 21);
+      const second = await createPiece(engine, 22);
+      const longest = "a".repeat(80);
+      const held = await engine.invokeBuiltinTool("assign_slug", {
+        token: first.resultRef,
+        slug: longest,
+      });
+      expect((held.output as AssignSlugToolSuccessOutput).slug).toBe(longest);
+
+      const result = await engine.invokeBuiltinTool("assign_slug", {
+        token: second.resultRef,
+        slug: longest,
+      });
+      const output = result.output as AssignSlugToolErrorOutput;
+      expect(output.status).toBe("error");
+      expect(output.message).toContain("no free slug can be derived");
+      expect(await resolvePieceAddress(pieces, longest)).toBe(first.pieceId);
+      const registered = await pieces.getRegisteredPieces();
+      expect(registered.map((piece) => piece.id)).toEqual([first.pieceId]);
     });
 
     it("returns the slug without a URL when the session's space is configured by DID", async () => {

@@ -64,6 +64,15 @@ if (Deno.env.get("DASHBOARD_CACHE_DIR") === undefined) {
   );
 }
 
+// These tests hand each collection its token through the context. The /bench
+// route handlers read theirs from the environment, and a page request that
+// finds one there starts a drill-down refresh against GitHub. That refresh can
+// run on into whichever test comes next, and its failure is remembered for the
+// tests after it. So the environment holds no token unless a test puts one
+// there.
+Deno.env.delete("GH_TOKEN");
+Deno.env.delete("GITHUB_TOKEN");
+
 const DAY = 86_400_000;
 const HOUR = 3_600_000;
 // One full hour before the current hour keeps each common newest successful
@@ -831,11 +840,7 @@ Deno.test("/bench before any data shows an idle progress panel", async () => {
 });
 
 Deno.test("/bench?view=ci serves CI job history through the same drill-down", async () => {
-  const gh = Deno.env.get("GH_TOKEN");
-  const github = Deno.env.get("GITHUB_TOKEN");
   const cacheDirectory = Deno.env.get("DASHBOARD_CACHE_DIR");
-  Deno.env.delete("GH_TOKEN");
-  Deno.env.delete("GITHUB_TOKEN");
   Deno.env.set(
     "DASHBOARD_CACHE_DIR",
     `/tmp/ci-job-history-missing-${crypto.randomUUID()}`,
@@ -851,10 +856,6 @@ Deno.test("/bench?view=ci serves CI job history through the same drill-down", as
     assertStringIncludes(html, "<title>CI job history</title>");
     assertStringIncludes(html, "Set GH_TOKEN to collect CI job history.");
   } finally {
-    if (gh === undefined) Deno.env.delete("GH_TOKEN");
-    else Deno.env.set("GH_TOKEN", gh);
-    if (github === undefined) Deno.env.delete("GITHUB_TOKEN");
-    else Deno.env.set("GITHUB_TOKEN", github);
     if (cacheDirectory === undefined) Deno.env.delete("DASHBOARD_CACHE_DIR");
     else Deno.env.set("DASHBOARD_CACHE_DIR", cacheDirectory);
   }
@@ -2019,56 +2020,76 @@ Deno.test("benchmark: a failed newer attempt stays stale and reports an error", 
   }
 });
 
-Deno.test("benchmark: the tile sums the totals, and one artifact per bucket is kept", async () => {
-  // Twelve days, one run a day. Two runs share the last window; the older one is a
-  // wildly slow benchmark, so the drill-down must keep the newer one — and the tile
-  // must sum the winner's 500ns avg, not the displaced twin's ~5ms.
+Deno.test("benchmark: a collection keeps one artifact per bucket, and a later one reads it from the cache", async (t) => {
+  // The second step reads the run results the first step fetched and cached, so
+  // the two run in order within one test.
+
   const at = (d: number) => SAMPLED_BASE - (11 - d) * DAY;
-  const key = "packages/runner/solo.bench.ts";
-  const runs: GhRun[] = [];
-  const artifacts: Api["artifacts"] = {};
-  const zips: Api["zips"] = {};
-  for (let d = 0; d <= 11; d++) {
-    const id = 501 + d;
-    runs.push(ghRun(id, at(d)));
-    artifacts[id] = [{ id: id * 10, name: "bench-results", expired: false }];
-    // No "version" key here: the report is parsed whole when there is no console
-    // output to skip past.
-    zips[id * 10] = await benchZip(
+
+  await t.step("the tile sums the totals, and one artifact per bucket is kept", async () => {
+    // Twelve days, one run a day. Two runs share the last window; the older one is a
+    // wildly slow benchmark, so the drill-down must keep the newer one — and the tile
+    // must sum the winner's 500ns avg, not the displaced twin's ~5ms.
+    const key = "packages/runner/solo.bench.ts";
+    const runs: GhRun[] = [];
+    const artifacts: Api["artifacts"] = {};
+    const zips: Api["zips"] = {};
+    for (let d = 0; d <= 11; d++) {
+      const id = 501 + d;
+      runs.push(ghRun(id, at(d)));
+      artifacts[id] = [{ id: id * 10, name: "bench-results", expired: false }];
+      // No "version" key here: the report is parsed whole when there is no console
+      // output to skip past.
+      zips[id * 10] = await benchZip(
+        JSON.stringify({
+          cpu: TEST_CPU,
+          benches: [bench(key, null, "tick", timings(1_000))],
+        }),
+      );
+    }
+    // The stale twin, listed before its window's winner so the newer one displaces it.
+    runs.push(ghRun(599, at(11) - COLLECTION_BUCKET / 2));
+    artifacts[599] = [{ id: 5_990, name: "bench-results", expired: false }];
+    zips[5_990] = await benchZip(
       JSON.stringify({
         cpu: TEST_CPU,
-        benches: [bench(key, null, "tick", timings(1_000))],
+        benches: [bench(key, null, "tick", timings(9_999_999))],
       }),
     );
-  }
-  // The stale twin, listed before its window's winner so the newer one displaces it.
-  runs.push(ghRun(599, at(11) - COLLECTION_BUCKET / 2));
-  artifacts[599] = [{ id: 5_990, name: "bench-results", expired: false }];
-  zips[5_990] = await benchZip(
-    JSON.stringify({
-      cpu: TEST_CPU,
-      benches: [bench(key, null, "tick", timings(9_999_999))],
-    }),
-  );
 
-  await withApi({
-    pages: {
-      1: [ghRun(599, at(11) - COLLECTION_BUCKET / 2), ...runs.slice(0, 12)],
-    },
-    artifacts,
-    zips,
-  }, async () => {
-    const v = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
-    assertStringIncludes(v.value ?? "", "flat"); // the headline trend, flat over the window
-    assertEquals(v.status, "good");
-    assertEquals(v.duration, 11 * DAY);
-    assertEquals(v.sub, undefined);
-    assertStringIncludes(v.extra ?? "", "<svg");
-    assertStringIncludes(v.extra ?? "", "1 benchmark"); // the count line, one benchmark
-    // The drill-down kept the newer run in the shared bucket: it reads the 1µs
-    // winner's metric, not the displaced 10ms twin's.
-    const tick = rows(await page("")).find((r) => r.name === "tick");
-    assertStringIncludes(tick?.value ?? "", "1.0µs");
+    await withApi({
+      pages: {
+        1: [ghRun(599, at(11) - COLLECTION_BUCKET / 2), ...runs.slice(0, 12)],
+      },
+      artifacts,
+      zips,
+    }, async () => {
+      const v = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
+      assertStringIncludes(v.value ?? "", "flat"); // the headline trend, flat over the window
+      assertEquals(v.status, "good");
+      assertEquals(v.duration, 11 * DAY);
+      assertEquals(v.sub, undefined);
+      assertStringIncludes(v.extra ?? "", "<svg");
+      assertStringIncludes(v.extra ?? "", "1 benchmark"); // the count line, one benchmark
+      // The drill-down kept the newer run in the shared bucket: it reads the 1µs
+      // winner's metric, not the displaced 10ms twin's.
+      const tick = rows(await page("")).find((r) => r.name === "tick");
+      assertStringIncludes(tick?.value ?? "", "1.0µs");
+    });
+  });
+
+  await t.step("a run's results are immutable, so a cached run is not refetched", async () => {
+    const runs = [
+      ghRun(599, at(11) - COLLECTION_BUCKET / 2),
+      ...Array.from({ length: 12 }, (_, d) => ghRun(501 + d, at(d))),
+    ];
+    // Every artifact call would 500; the cache the step before filled answers instead.
+    await withApi({ pages: { 1: runs } }, async (calls) => {
+      const v = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
+      assertStringIncludes(v.value ?? "", "flat"); // the cached runs' trend
+      assertEquals(v.status, "good");
+      assertEquals(artifactCalls(calls), []);
+    });
   });
 });
 
@@ -2085,21 +2106,6 @@ Deno.test("sampleBenchmarkRuns keeps the newest successful run in each bucket", 
       Math.floor(at(11) / COLLECTION_BUCKET)
   );
   assertEquals(lastBucket.map((run) => run.id), [512]); // the twin is displaced
-});
-
-Deno.test("benchmark: a run's results are immutable, so a cached run is not refetched", async () => {
-  const at = (d: number) => SAMPLED_BASE - (11 - d) * DAY;
-  const runs = [
-    ghRun(599, at(11) - COLLECTION_BUCKET / 2),
-    ...Array.from({ length: 12 }, (_, d) => ghRun(501 + d, at(d))),
-  ];
-  // Every artifact call would 500; the cache from the previous test answers instead.
-  await withApi({ pages: { 1: runs } }, async (calls) => {
-    const v = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
-    assertStringIncludes(v.value ?? "", "flat"); // the cached runs' trend
-    assertEquals(v.status, "good");
-    assertEquals(artifactCalls(calls), []);
-  });
 });
 
 // A geometric series over twelve days: the Theil–Sen slope is exact, so the
@@ -2155,6 +2161,14 @@ async function fillVaried(): Promise<Api> {
     );
   }
   return { pages: { 1: runs }, artifacts, zips };
+}
+
+// Collects the varied history, which leaves it as the drill-down's snapshot for
+// the /bench page to render.
+async function collectVaried(): Promise<void> {
+  await withApi(await fillVaried(), async () => {
+    await benchmark.collect(ctx({ GH_TOKEN: "t" }));
+  });
 }
 
 // Pull the rendered rows out of the drill-down html.
@@ -2614,6 +2628,7 @@ Deno.test("benchmark: CPU-less cached runs are fetched again", async () => {
 });
 
 Deno.test("/bench: grouped by source file, each benchmark colored by its own trend", async () => {
+  await collectVaried();
   const html = await page("?stat=p99&sort=file");
   assertEquals(
     [...html.matchAll(/<h2>([^<]*)<\/h2>/g)].map((m) => m[1]),
@@ -2759,6 +2774,7 @@ Deno.test("/bench: grouped by source file, each benchmark colored by its own tre
 });
 
 Deno.test("/bench?sort=trend: a flat list, biggest rise first, showing the full key", async () => {
+  await collectVaried();
   const html = await page("?stat=p99&sort=trend");
   // The " > " between a benchmark's file and its name is html-escaped on the page.
   assertEquals(rows(html).map((r) => r.name), [
@@ -2780,6 +2796,7 @@ Deno.test("/bench?sort=trend: a flat list, biggest rise first, showing the full 
 });
 
 Deno.test("/bench?sort=duration lists the longest displayed benchmark first", async () => {
+  await collectVaried();
   const html = await page("?stat=p99&sort=duration");
   assertEquals(rows(html).map((row) => row.name).slice(0, 3), [
     "packages/memory/query.bench.ts &gt; quarter",
@@ -2870,6 +2887,7 @@ Deno.test("benchmark collection retains enough runs for the shortest history win
 });
 
 Deno.test("/bench: the measurement selector changes what is plotted", async () => {
+  await collectVaried();
   const mean = rows(await page("?stat=mean"));
   assertEquals(mean.find((r) => r.name === "hot/steep")?.value, "10ms"); // the mean, half the p99
   // A benchmark that reported only an average reads the same at every measurement.
@@ -2984,6 +3002,7 @@ Deno.test("/bench runtime graphs ignore two values at each end when twenty are s
 });
 
 Deno.test("/bench: the history slider selects and clamps the displayed days", async () => {
+  await collectVaried();
   const short = await page("?days=1");
   assertStringIncludes(
     short,
@@ -3380,22 +3399,11 @@ Deno.test("benchmark routes serve the Gantt and both progress endpoints", async 
     "<title>CI run Gantt</title>",
   );
 
-  const gh = Deno.env.get("GH_TOKEN");
-  const github = Deno.env.get("GITHUB_TOKEN");
-  Deno.env.delete("GH_TOKEN");
-  Deno.env.delete("GITHUB_TOKEN");
-  try {
-    const check = new URL("http://x/bench/check?view=ci");
-    assertEquals(
-      (await benchmark.routes![1].handler(new Request(check), check)).status,
-      200,
-    );
-  } finally {
-    if (gh === undefined) Deno.env.delete("GH_TOKEN");
-    else Deno.env.set("GH_TOKEN", gh);
-    if (github === undefined) Deno.env.delete("GITHUB_TOKEN");
-    else Deno.env.set("GITHUB_TOKEN", github);
-  }
+  const check = new URL("http://x/bench/check?view=ci");
+  assertEquals(
+    (await benchmark.routes![1].handler(new Request(check), check)).status,
+    200,
+  );
 
   const progress = new URL("http://x/bench/runtime-progress");
   const progressResponse = await benchmark.routes![3].handler(
@@ -4113,7 +4121,9 @@ describe("keyBenchmarks", () => {
       expect(selected.status).toBe("unknown");
       expect(selected.value).toBe("▲100%");
       expect(selected.sub).toBeTruthy();
-      expect(selected.extra).toContain(">2 benchmarks</div>");
+      // The reason takes the line the count would have had, rather than
+      // standing above it and growing the tile past the row it sits in.
+      expect(selected.extra).not.toContain("benchmarks</div>");
     });
   });
 
@@ -4212,6 +4222,31 @@ describe("keyBenchmarks", () => {
       expect(selected.aside).toContain("running");
       expect(selected.extra).toContain("<svg");
       expect(selected.extra).not.toContain("2 benchmarks");
+    });
+  });
+
+  it("gives an unreadable collection the count's line rather than a second one", async () => {
+    // The tile keeps each run's results by id, so a range another test reads
+    // would carry this test's measurements into it.
+    const api = await history(936_000, () =>
+      report([
+        bench(navigation, "topic board", "journey", timings(1e9)),
+        bench(scale, "topic board scale", "100", timings(1e9)),
+      ]));
+    await withApi(api, async () => {
+      const measured = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
+      expect(measured.sub).toBeUndefined();
+      expect(measured.extra).toContain(">2 benchmarks</div>");
+    });
+
+    // Every tile in a row is as tall as the tallest, so a reason standing
+    // above the count rather than in its place grows the whole row.
+    await withApi({ throws: new Error("network offline") }, async () => {
+      const offline = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
+      expect(offline.status).toBe("unknown");
+      expect(offline.sub).toBe("source unreachable");
+      expect(offline.extra).not.toContain("benchmarks</div>");
+      expect(offline.extra).toContain("<svg");
     });
   });
 });

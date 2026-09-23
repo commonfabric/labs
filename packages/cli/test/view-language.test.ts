@@ -36,6 +36,7 @@ import {
 } from "../lib/view/languages/json/language.ts";
 import { yamlLanguage } from "../lib/view/languages/yaml/language.ts";
 import { pythonLanguage } from "../lib/view/languages/python/language.ts";
+import { swiftLanguage } from "../lib/view/languages/swift/language.ts";
 import { binaryLanguage } from "../lib/view/languages/binary/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
 import {
@@ -131,6 +132,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("yml"), yamlLanguage);
   assertEquals(languageForName("python"), pythonLanguage);
   assertEquals(languageForName("py"), pythonLanguage);
+  assertEquals(languageForName("swift"), swiftLanguage);
   expect(languageForName("binary")).toBe(binaryLanguage);
   expect(languageForName("bytes")).toBe(binaryLanguage);
   assertEquals(languageForName("plain-text"), plainTextLanguage);
@@ -144,6 +146,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "json-lines",
     "yaml",
     "python",
+    "swift",
     "binary",
     "plain-text",
   ]);
@@ -163,6 +166,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "yml",
     "python",
     "py",
+    "swift",
     "binary",
     "bytes",
     "plain-text",
@@ -526,6 +530,7 @@ Deno.test("distinctLanguages: dedupes in first-seen order", () => {
     "events.jsonl",
     "e.yaml",
     "f.py",
+    "Package.swift",
     "image.png",
     "LICENSE",
     undefined,
@@ -538,6 +543,7 @@ Deno.test("distinctLanguages: dedupes in first-seen order", () => {
       "json-lines",
       "yaml",
       "python",
+      "swift",
       "binary",
       "plain-text",
     ],

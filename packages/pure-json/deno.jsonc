@@ -9,17 +9,11 @@
   },
   "tasks": {
     "check": "deno check .",
-    "just-test": {
+    "deno-test": {
       "description": "Run unit tests",
-      "command": "deno test"
+      "command": "deno test --shuffle=$(deno task -q test-seed) --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST"
     },
-    "test": {
-      "description": "Type check & run tests",
-      "dependencies": [
-        "check",
-        "just-test"
-      ]
-    }
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test"
   },
   "test": {
     "include": [

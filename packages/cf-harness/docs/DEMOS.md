@@ -1,8 +1,11 @@
 # Running the cf-harness demos
 
-Four demos, in the order to run them. Each was run to a working page on labs
-`a77e958513` — three times for demos 2, 3 and 4, twice for demo 1 — with the
-page checked in a browser every time.
+Four demos, in the order to run them. Each was run to a working page and checked
+in a browser, on labs `a77e958513` and again on `edd1f71108` — with one
+exception. Demo 2's prompt names its two parts where the browser-checked runs
+pasted their ids; three runs of the wording below reach the same two parts, read
+from the source each submitted, but none of the three was clicked through. Treat
+that demo's page behavior as carried over rather than re-checked.
 
 Everything else — the counts, the findings behind them, the demos that are not
 on this page and why — is in [DEMOS-EVIDENCE.md](DEMOS-EVIDENCE.md). Read this
@@ -24,21 +27,21 @@ page to run them; read that one to understand them.
    Demo 4 needs a finance grant and an email grant.
 
 **Why note the sha rather than match it.** These counts were measured on
-`a77e958513`, and `loom update` may land you on something newer. That is the
-intended way to run these, and the newer build is not claimed to be proven. So a
-demo that misbehaves on a build these were not measured on is a new observation
-rather than a contradiction of the count — and the sha in your run notes is the
-only thing that lets anyone tell those two apart afterwards.
+`a77e958513` and `edd1f71108`, and `loom update` may land you on something
+newer. That is the intended way to run these, and the newer build is not claimed
+to be proven. So a demo that misbehaves on a build these were not measured on is
+a new observation rather than a contradiction of the count — and the sha in your
+run notes is the only thing that lets anyone tell those two apart afterwards.
 
-Every prompt below ends with a sentence authorizing a slug retry. Keep it: slugs
-are never reused, so without it the second run of a demo stops to ask.
+Slugs are never reused, and a run picks another name by itself when the one it
+tries is taken. Nothing in these prompts needs to tell it to.
 
 ---
 
 ## 1. A pomodoro timer
 
 ```text
-I want a pomodoro timer. Use a pattern from the library if one fits. Give it a slug that is not already in use; if a slug you try is taken, choose another and retry without asking me.
+I want a pomodoro timer.
 ```
 
 **What appears:** the console thinks for half a minute or so with nothing drawn,
@@ -55,7 +58,7 @@ a hang. Wait.
 ## 2. A checklist and a running total
 
 ```text
-Make a dinner-preparation page by composing cf:pattern:vAx2Uy1C64duK47NIl9a0fb0UtfnHrXRrxM8giA1hWM for tasks and cf:pattern:BEf5ZMjTIzX9J5HE6wec1s3zcQNqTAg-lFoD6W7pBHs for expenses. Use the published components' existing controls with writable local state. Start with tasks Buy pasta, Set the table and Chill drinks, all unchecked. Start with Pasta costing $12.50 and Drinks costing $7.50, against a $50 budget. AmountLedger's amount and budget inputs are in whole dollars: pass 12.50 and 7.50, not 1250 and 750, despite the published description mentioning cents. I need to add and check off tasks, add expenses, and see the running total and remaining budget. This page uses no connectors. Give it a slug that is not already in use; if a slug you try is taken, choose another and retry without asking me.
+Make a dinner-preparation page by composing CheckList for tasks and AmountLedger for expenses. Use the published components' existing controls with writable local state. Start with tasks Buy pasta, Set the table and Chill drinks, all unchecked. Start with Pasta costing $12.50 and Drinks costing $7.50, against a $50 budget. AmountLedger's amount and budget inputs are in whole dollars: pass 12.50 and 7.50, not 1250 and 750, despite the published description mentioning cents. I need to add and check off tasks, add expenses, and see the running total and remaining budget. This page uses no connectors.
 ```
 
 **What appears:** a checklist beside an expense ledger, both built from the two
@@ -73,7 +76,7 @@ click again. A control below the fold can look dead when it is not.
 ## 3. This month's bank transactions as a table
 
 ```text
-Show me this month's bank transactions as a table with a count on top. Use patterns from the library where they fit. Give it a slug that is not already in use; if a slug you try is taken, choose another and retry without asking me.
+Show me this month's bank transactions as a sortable table with a count on top.
 ```
 
 **What appears:** a table of the month's transactions with a count above it.
@@ -82,15 +85,22 @@ Show me this month's bank transactions as a table with a count on top. Use patte
 
 **Rough time:** about five and a half minutes.
 
-**If the column headers show a hand cursor,** say that they do not sort before
-anyone reaches for one. Whether they look clickable varies from run to run; they
-never sort. The count may also render as a phrase rather than a number — "7
-Transactions in 2026-09" is the count, not a missing one.
+**Sorting works — click a column header.** Asking for a sortable table is what
+reaches the published sortable part; a prompt that does not ask for it does not
+get it.
+
+**If a sorted header reads "DateContent hidden by policy",** that is CT-2418 and
+not your run. The sort itself is correct and the rows are right; the caret
+beside the header is replaced by a policy placeholder once that column has been
+sorted. Sort a column you are not about to point at, or leave sorting for last.
+
+The count may render as a phrase rather than a number — "7 Transactions in
+2026-09" is the count, not a missing one.
 
 ## 4. Bills this month, from mail and bank together
 
 ```text
-Compose these three library patterns into one page: cf:pattern:-xx1hxtvAbY7AL6FeYuQWuEzbC0nOpUOHgXseIac2_w (this month's email headers from my Gmail), cf:pattern:v6_KSFHs9AmTg9PKwMmPdZyEHxZ9Oykhno4HBOfUo5s (this month's transactions from my bank) and cf:pattern:d_z9mtdCBUwBpG0A6nBwOy5_2fxqySuk2zNxeIdXAYA (pairs email bills with the bank payments that settled them). Show the bills I need to deal with: pair an email bill with the bank payment that settled it using plain text rules on subject, sender and merchant name only; list unpaid email bills and unmatched bank payments separately. Do not send my mail or my transactions to an AI model. Give it a slug that is not already in use; if a slug you try is taken, choose another and retry without asking me.
+Compose these three library patterns into one page: cf:pattern:-xx1hxtvAbY7AL6FeYuQWuEzbC0nOpUOHgXseIac2_w (this month's email headers from my Gmail), cf:pattern:v6_KSFHs9AmTg9PKwMmPdZyEHxZ9Oykhno4HBOfUo5s (this month's transactions from my bank) and cf:pattern:d_z9mtdCBUwBpG0A6nBwOy5_2fxqySuk2zNxeIdXAYA (pairs email bills with the bank payments that settled them). Show the bills I need to deal with: pair an email bill with the bank payment that settled it using plain text rules on subject, sender and merchant name only; list unpaid email bills and unmatched bank payments separately. Do not send my mail or my transactions to an AI model.
 ```
 
 **What appears:** paid bills paired with the payments that settled them, with

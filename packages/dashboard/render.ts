@@ -15,7 +15,6 @@ import {
 import {
   escapeHtml,
   SPARKLINE_HEIGHT,
-  STATUS_DOT,
 } from "./lib.ts";
 import {
   STATUS_EDGE,
@@ -154,28 +153,6 @@ const BIG_RULES = STATUSES.map((s) =>
 )
   .join("");
 
-// The header dot's shape, which says the same thing its color does without
-// using color: a circle when all is well, a triangle to warn, a diamond when
-// something needs a person, and a hollow ring when the tile cannot tell. The
-// diamond is drawn a pixel over each edge so it carries the weight the circle
-// does at the same nominal size.
-const DOT_SHAPE: Record<Status, string> = {
-  good: "border-radius:50%",
-  warn: "clip-path:polygon(50% 0,100% 100%,0 100%)",
-  bad: "inset:-1px;clip-path:polygon(50% 0,100% 50%,50% 100%,0 50%)",
-  unknown: "border-radius:50%",
-};
-
-const DOT_RULES =
-  STATUSES.map((s) =>
-    `.dot.${STATUS_DOT[s]}::before{${DOT_SHAPE[s]};${
-      s === "unknown"
-        ? `border:2px solid var(--status-${s})`
-        : `background:var(--status-${s})`
-    }}`
-  ).join("") +
-  `.dot.run::before{border-radius:50%;background:var(--running)}`;
-
 type ViewerTimeElement = Pick<HTMLTimeElement, "dateTime" | "textContent">;
 
 /** Replace marked absolute timestamps with the viewer's local wall-clock time. */
@@ -260,10 +237,6 @@ ${TILE_RULES}
   ${BIG_RULES}
   a.cell{display:block}
   a.cell:hover{outline:1px solid var(--accent);outline-offset:-1px}
-  /* The dot is drawn by its own layer so each status can take a shape as well
-     as a color. The shape carries the same signal the color does, which is
-     what a viewer who cannot separate the hues reads instead. */
-  ${DOT_RULES}
   a.tile.link:hover{border-color:var(--border-hover)}
   .evscroll{max-height:340px;overflow:auto}
   .ev{display:flex;align-items:center;gap:11px;padding:6px 0;font-size:13px;border-top:1px solid var(--divider)}.ev:first-child{border-top:0}

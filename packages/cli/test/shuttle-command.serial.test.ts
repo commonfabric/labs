@@ -76,7 +76,7 @@ describe("cf sh", () => {
     // body above it, and nothing else drives it. Parsing with no connection
     // configured runs that action and stops inside the flag reading, so the
     // wiring is exercised without a fabric behind it — the shape
-    // `wish-command.test.ts` uses for the same reason.
+    // `wish-command.serial.test.ts` uses for the same reason.
 
     await withEnv("CF_IDENTITY", undefined, async () => {
       await withEnv("CF_API_URL", undefined, async () => {

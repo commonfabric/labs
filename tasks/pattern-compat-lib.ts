@@ -28,6 +28,7 @@ import {
   jsonFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 import { assertPatternSchemasBackwardCompatible } from "../packages/piece/src/schema-compatibility.ts";
+import { readOnlyArguments } from "./only-arguments.ts";
 
 /**
  * The two schemas that constitute a pattern's update contract. Nothing else
@@ -89,15 +90,15 @@ export interface CliOptions {
 }
 
 export function parseArgs(argv: readonly string[]): CliOptions {
-  const only: string[] = [];
+  const read = readOnlyArguments(argv);
+  if ("error" in read) throw new Error(read.error);
+  const { only, rest } = read;
   let update = false;
-  for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === "--update") update = true;
-    else if (argv[i] === "--only") only.push(argv[++i] ?? "");
-    else if (argv[i].startsWith("--only=")) only.push(argv[i].slice(7));
-    else throw new Error(`Unknown argument: ${argv[i]}`);
+  for (const argument of rest) {
+    if (argument === "--update") update = true;
+    else throw new Error(`Unknown argument: ${argument}`);
   }
-  return { update, only: only.filter((value) => value.length > 0) };
+  return { update, only };
 }
 
 /**

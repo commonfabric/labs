@@ -1,8 +1,9 @@
 {
   "name": "@commonfabric/deno-web-test",
   "tasks": {
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
     // --no-check: this package is type-checked by `deno task check` (tasks/check.sh).
-    "test": "deno test --no-check --allow-env --allow-read --allow-write --allow-run --allow-net test/*.test.ts"
+    "deno-test": "deno test --shuffle=$(deno task -q test-seed) --no-check --allow-env --allow-read --allow-write --allow-run --allow-net test/*.test.ts"
   },
   "imports": {
     // Dependency guide: ../../docs/development/DEPENDENCIES.md
