@@ -23,6 +23,7 @@ import {
   resolveWrapperNode,
   type TypeWithInternals,
 } from "../type-utils.ts";
+import { isCommonFabricSymbol } from "../typescript/common-fabric-symbols.ts";
 import {
   extractLiteralValueOfSymbol,
   resolveAliasedSymbol,
@@ -1389,7 +1390,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       undefined,
       aliasArgNodes,
       { ...context, typeNode },
-      new Set([aliasDeclaration.name.text]),
+      new Set([aliasDeclaration]),
     );
     return resolved
       ? this.#formatResolvedCfcAlias(resolved, context)
@@ -1418,7 +1419,7 @@ export class CommonFabricFormatter implements TypeFormatter {
           undefined,
           nodes,
           context,
-          new Set([declaration.name.text]),
+          new Set([declaration]),
         );
         if (resolved) return resolved;
       }
@@ -1447,7 +1448,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       aliasArgs,
       this.#getAliasTypeArgumentNodes(context),
       context,
-      new Set([aliasName]),
+      new Set([aliasDeclaration]),
     );
   }
 
@@ -1456,7 +1457,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     aliasArgs: readonly ts.Type[] | undefined,
     aliasArgNodes: readonly ts.TypeNode[] | undefined,
     context: GenerationContext,
-    visited: Set<string>,
+    visited: Set<ts.TypeAliasDeclaration>,
     substituted: readonly ts.TypeParameterDeclaration[] = [],
   ): ResolvedCfcAlias | undefined {
     const aliasName = aliasDeclaration.name.text;
@@ -1482,18 +1483,13 @@ export class CommonFabricFormatter implements TypeFormatter {
       return undefined;
     }
 
-    const targetName = ts.isIdentifier(aliased.typeName)
-      ? aliased.typeName.text
-      : aliased.typeName.right.text;
-    if (visited.has(targetName)) {
-      return undefined;
-    }
-
     const targetDeclaration = this.#getTypeAliasDeclarationForSymbol(
       context.typeChecker.getSymbolAtLocation(aliased.typeName),
       context,
     );
-    if (!targetDeclaration) {
+    // Different modules can export the same alias name. A cycle revisits a
+    // declaration, not a spelling.
+    if (!targetDeclaration || visited.has(targetDeclaration)) {
       return undefined;
     }
 
@@ -1521,7 +1517,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       resolvedArgNodes.push(resolvedArgNode);
     }
 
-    visited.add(aliasName);
+    visited.add(targetDeclaration);
     return this.#resolveCfcAliasFromDeclaration(
       targetDeclaration,
       undefined,
@@ -2070,13 +2066,22 @@ export class CommonFabricFormatter implements TypeFormatter {
   #resolveTypeReferenceName(
     typeName: ts.EntityName,
     context: GenerationContext,
-  ): string {
+  ): string | undefined {
     const symbol = context.typeChecker.getSymbolAtLocation(typeName);
     const resolved = symbol && (symbol.flags & ts.SymbolFlags.Alias)
       ? context.typeChecker.getAliasedSymbol(symbol)
       : symbol;
-    return resolved?.name ??
+    const name = resolved?.name ??
       (ts.isIdentifier(typeName) ? typeName.text : typeName.right.text);
+    // Qualified metadata receives canonical lowering only for library symbols;
+    // an authored namespace member is read from its own declaration instead.
+    if (
+      ts.isQualifiedName(typeName) &&
+      (!resolved || !isCommonFabricSymbol(resolved))
+    ) {
+      return undefined;
+    }
+    return name;
   }
 
   #extractDefaultValueFromNode(

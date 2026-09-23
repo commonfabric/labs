@@ -2198,6 +2198,9 @@ from its authored declaration, even when TypeScript reports the resolved type
 under an inner alias's name. A generic alias may name its policy through a
 namespace import (`cf.WriteAuthorizedBy<T, typeof setName>`) at module scope or
 inside the pattern, including through alias chains and nested policy wrappers.
+An outer alias and an imported alias may share a name: the chain is followed
+by declaration identity, so `type Owned<T> = ns.Owned<T, typeof save>` retains
+the imported policy and writer.
 The binding itself stays a direct `typeof`
 (§6.8): `type Binding = typeof setName` is refused, on a constructor's type
 arguments as on a declared field. `protected-cell-policy.test.ts` pins the

@@ -391,6 +391,50 @@ export default pattern<{ initialName: string }>(({ initialName }) => {
       }]);
   });
 
+  for (const scope of ["module", "pattern"] as const) {
+    it(`keeps a writer through same-named aliases at ${scope} scope`, async () => {
+      const alias = "type Owned<T> = ns.Owned<T, typeof save>;";
+      const diagnostics: TransformationDiagnostic[] = [];
+      const files = await transformFiles({
+        ...importedWriterFiles(
+          `handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); })`,
+        ),
+        "/main.tsx": `import { pattern, Writable } from "commonfabric";
+import * as ns from "./writers/mod.ts";
+import { setName as save } from "./writers/mod.ts";
+${scope === "module" ? alias : ""}
+export default pattern<{ initialName: string }>(({ initialName }) => {
+  ${scope === "pattern" ? alias : ""}
+  const name = new Writable<Owned<string>>(initialName ?? "").for("name");
+  return { name };
+});`,
+      }, {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      });
+      expect(diagnostics.filter(isError)).toEqual([]);
+      const root = parseModule(files["/main.tsx"]);
+      const expected = {
+        type: "string",
+        ifc: {
+          ...policy,
+          writeAuthorizedBy: {
+            __ctWriterIdentityOf: {
+              file: "/writers/set-name.ts",
+              path: ["setName"],
+            },
+          },
+        },
+      };
+      expect(resolved(callSchemas(root, "lift")[1])).toMatchObject(expected);
+      const output = patternSchemas(root).output;
+      // deno-lint-ignore no-explicit-any
+      expect(resolved((output as any).properties.name, output))
+        .toMatchObject(expected);
+    });
+  }
+
   // The claim is the importer's; the binding identity the runtime verifies it
   // against is minted where the writer is DECLARED. The hardening stage once
   // read each file's own claims only, so a writer cited from another module
