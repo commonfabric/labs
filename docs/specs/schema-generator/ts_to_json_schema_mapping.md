@@ -111,16 +111,17 @@ wrapper, whose scope `CommonFabricFormatter` reads from the reference's name;
 then the general path, which resolves the name the same way — bound through
 the node, else lexically from the module's scope, an import followed to what
 it imports — and formats the declared type, so a name the module declares,
-exported or not, or imports is read. A generic declared outside the default
-library is left unread: its declared type leaves the parameters unbound, and no
-reading of an unbound parameter stands in for the argument a reference supplies
-— the constraint drops the members an argument adds, the default is free to
-contradict one, and an operator over the parameter (`keyof T`, `T["name"]`) has
-no schema at all. The exceptions are the references `CommonFabricFormatter`
-lowers from their own arguments: a scope wrapper, whose payload it reads from
-the reference's argument, and an alias that is not itself a CFC alias and whose
-whole body references one, directly or through further such aliases, named with
-an argument for every parameter that has no default, which it substitutes down
+exported or not, or imports is read. On the general path, a generic
+declared outside the default library is left unread: its declared type leaves
+the parameters unbound, and no reading of an unbound parameter stands in for
+the argument a reference supplies — the constraint drops the members an
+argument adds, the default is free to contradict one, and an operator over the
+parameter (`keyof T`, `T["name"]`) has no schema at all. The exceptions are the
+references `CommonFabricFormatter` lowers from their own arguments: a scope
+wrapper, whose payload it reads from the reference's argument, and an alias
+that is not itself a CFC alias and whose whole body references one, directly
+or through further such aliases, named with an argument for every parameter
+that has no default, which it substitutes down
 the chain — plus a `Date`-by-name special case), keyword types, and a final
 resolve-else-`true` fallback.
 
