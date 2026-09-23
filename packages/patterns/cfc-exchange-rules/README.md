@@ -17,7 +17,8 @@ and export name onto what it writes, and the rule matches it with
 `moduleIdentity: THIS_POLICY.moduleIdentity`, which binds to the defining
 module's identity at evaluation time. Another function of the same module, a
 handler copying a raw input, or a different version of the module does not
-satisfy the rule.
+satisfy the rule. `countBallot` shows that an object output is released as well
+as a scalar one.
 
 The compiler binds `PolicyOf` to the defining module export and a canonical
 manifest digest. At label creation the runtime binds the concrete owning space
