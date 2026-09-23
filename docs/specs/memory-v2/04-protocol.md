@@ -52,6 +52,7 @@ The client MUST declare its protocol version in the first WebSocket message:
   "flags": {
     "modernCellRep": true,
     "stableExpressionResultIds": true,
+    "versionedGeneratedCellIds": true,
     "messageCompressionV1": true,
     "syncSchemaTableV2": true,
     "verdictCatchUpMarkers": true,
@@ -73,6 +74,7 @@ If the server accepts the protocol, it returns:
   "flags": {
     "modernCellRep": true,
     "stableExpressionResultIds": true,
+    "versionedGeneratedCellIds": true,
     "messageCompressionV1": true,
     "syncSchemaTableV2": true,
     "verdictCatchUpMarkers": true,
@@ -114,6 +116,17 @@ Backend replacement must disconnect existing sockets so their next session
 open passes through admission; publishing shell assets alone does not apply
 the gate to workers already running in tabs. This changes admission, not the
 stored document format, and requires no document migration.
+
+`versionedGeneratedCellIds` independently requires the
+[generated cell identity contract](../generated-cell-identity.md): runtimes
+honor each piece's accepted addressing format and authored artifact namespace.
+It follows the same terminal admission and reconnect rules as
+`stableExpressionResultIds`; omission or false refuses session admission,
+and a non-boolean value is malformed. Both markers are build contracts.
+Before enabling authored updates, deployment must drain old backends and close
+their transport sockets. Admission cannot fence a connection still attached to
+an old backend, and clearing a server's connection bookkeeping does not close
+its transport sockets. Unchanged legacy pieces need no address migration.
 
 `hello` and `hello.ok` are always ordinary memory text messages. When both
 peers advertise `messageCompressionV1`, either peer may send later messages as
@@ -425,7 +438,8 @@ Rules:
 The current wire protocol uses JSON message envelopes serialized at the wire
 boundary with the shared flag-dispatched value codec. The `modernCellRep` flag
 MUST match between peers; optional capabilities govern accepted operations,
-and `stableExpressionResultIds` governs session admission as described above.
+and `stableExpressionResultIds` and `versionedGeneratedCellIds` govern session
+admission as described above.
 `session.open` currently carries the
 only signed authorization material in this pass; `transact` carries just the
 semantic commit body. Per-commit signed UCAN envelopes remain deferred.
@@ -438,6 +452,7 @@ interface HelloMessage {
   flags: {
     modernCellRep: boolean;
     stableExpressionResultIds?: boolean;
+    versionedGeneratedCellIds?: boolean;
     messageCompressionV1?: boolean;
     syncSchemaTableV2?: boolean;
     entityIdListing?: boolean;

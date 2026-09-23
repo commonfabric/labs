@@ -60,6 +60,8 @@ type SendValueToBindingOptions = {
 };
 
 type UnwrapOneLevelOptions = {
+  /** Derive a child identity coordinate with the same cause, without its value kind. */
+  omitDerivedCellKind?: boolean;
   targetSchema?: JSONSchema;
   derivedInternalCells?: readonly DerivedInternalCellDescriptor[];
 
@@ -686,7 +688,9 @@ export function unwrapOneLevelAndBindToDoc<T extends FabricExecValue>(
         // Without the derivedInternalCells, we also won't be able to set the
         // initial values.
         const link = descriptor !== undefined
-          ? getDerivedInternalCellLink(resultCell, descriptor)
+          ? getDerivedInternalCellLink(resultCell, descriptor, {
+            omitKind: options?.omitDerivedCellKind,
+          })
           : getDerivedInternalCellLink(resultCell, {
             partialCause: alias.partialCause,
             scope: alias.scope,

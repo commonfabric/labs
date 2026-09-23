@@ -7,6 +7,7 @@ import {
   executionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
 
+import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import type { Cell } from "../src/cell.ts";
 import {
   stampWaveRunContext,
@@ -95,6 +96,59 @@ export default pattern<{ value: number }, { doubled: number }>(
     expect((await tx.commit()).error).toBeUndefined();
     await runtime.idle();
   }
+
+  it("keeps a legacy instance reactive beside a pending versioned instance", async () => {
+    const program = await runtime.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{
+        name: "/main.tsx",
+        contents: `
+        import { computed, pattern } from "commonfabric";
+        export default pattern<{ value: number }>(({ value }) => ({
+          values: [0].map(() => computed(() => value * 2)),
+        }));
+      `,
+      }],
+    }, { space });
+    const ref = runtime.patternManager.getArtifactEntryRef(program)!;
+    const result = runtime.getCell<{ values: number[] }>(
+      space,
+      "mixed-generated-formats",
+      program.resultSchema,
+      undefined,
+      "user",
+    );
+    const aliceTx = runtime.edit();
+    stampWaveRunContext(aliceTx, {
+      actionId: "alice-generated-format",
+      kind: "bookkeeping",
+      scopeKeyIdentity: { principal: alice.did(), sessionId: "alice-format" },
+      attributionFromScope: true,
+    });
+    runtime.run(aliceTx, program, { value: 2 }, result.withTx(aliceTx));
+    expect(result.withTx(aliceTx).getMetaRaw("generatedCellIdentity")).toEqual({
+      version: 1,
+      ...ref,
+    });
+    const bobTx = runtime.edit();
+    result.withTx(bobTx).setMetaRaw(
+      "patternIdentity",
+      ref,
+      rawMetaWriteAuthorization,
+    );
+    runtime.run(bobTx, program, { value: 3 }, result.withTx(bobTx));
+    expect(result.withTx(bobTx).getMetaRaw("generatedCellIdentity")).toEqual({
+      version: 0,
+      ...ref,
+    });
+    expect((await bobTx.commit()).error).toBeUndefined();
+    demands.push(result.sink(() => {}));
+    expect(await result.pull()).toEqual({ values: [6] });
+    expect(aliceTx.abort("Alice's versioned setup is refused").error)
+      .toBeUndefined();
+    await updateChild(result, 5);
+    expect(result.get()).toEqual({ values: [10] });
+  });
 
   it("keeps Bob's shared program reactive when Alice's first setup aborts", async () => {
     const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;

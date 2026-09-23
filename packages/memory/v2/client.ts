@@ -594,6 +594,12 @@ export class Client {
           ));
           return;
         }
+        if (!helloOk.flags.versionedGeneratedCellIds) {
+          this.#helloPending.reject(permanentProtocolError(
+            "The memory server does not enforce versioned generated cell identities. Update the server before connecting this runtime.",
+          ));
+          return;
+        }
         if (!compatibleMemoryProtocolFlags(helloOk.flags, expectedFlags)) {
           // A data-model wire-contract mismatch: this client and server cannot
           // talk at all, and no retry changes that. Mark it permanent so a

@@ -821,6 +821,7 @@ class Connection {
   #closed = false;
   #syncSchemaTable = false;
   #stableExpressionResultIds = false;
+  #versionedGeneratedCellIds = false;
   #sessions = new Map<string, SessionHandle>();
   #sessionOpenChallenge: SessionOpenChallengeState | null = null;
   #receiving: Promise<void> = Promise.resolve();
@@ -853,6 +854,11 @@ class Connection {
   /** Whether the peer declared the expression result identity contract. */
   get stableExpressionResultIds(): boolean {
     return this.#stableExpressionResultIds;
+  }
+
+  /** Whether the peer honors accepted generated-cell namespaces. */
+  get versionedGeneratedCellIds(): boolean {
+    return this.#versionedGeneratedCellIds;
   }
 
   hasSession(space: string, sessionId: string): boolean {
@@ -1100,6 +1106,8 @@ class Connection {
       }
       const clientFlags = parseMemoryProtocolFlags(parsed.flags);
       const serverFlags = parseMemoryProtocolFlags(response.flags);
+      this.#versionedGeneratedCellIds =
+        clientFlags?.versionedGeneratedCellIds === true;
       this.#stableExpressionResultIds =
         clientFlags?.stableExpressionResultIds === true;
       this.#syncSchemaTable = clientFlags?.syncSchemaTableV2 === true &&
@@ -3312,6 +3320,15 @@ export class Server {
             "SessionRevokedError",
             "This runtime uses incompatible expression result identities. " +
               "Reload the browser tab or update the CLI checkout.",
+          ),
+        );
+      }
+      if (!connection.versionedGeneratedCellIds) {
+        return respondTypedError<SessionOpenResult>(
+          message.requestId,
+          toError(
+            "SessionRevokedError",
+            "This runtime uses incompatible generated cell identities. Reload the browser tab or update the CLI checkout.",
           ),
         );
       }

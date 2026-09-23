@@ -7481,6 +7481,10 @@ describe("piece pull materialization", () => {
       compiledMultiplierProgram("remote", 10),
       { space: pieces.getSpace() },
     );
+    const remoteRef = runtime.patternManager.getArtifactEntryRef(remotePattern);
+    if (!remoteRef) {
+      throw new Error("missing compiled pattern ref");
+    }
     const piece = await pieces.runPersistent(
       firstPattern,
       { input: 5 },
@@ -7509,9 +7513,7 @@ describe("piece pull materialization", () => {
       await remotePieces.synced();
       await pieces.synced();
       await piece.pull();
-      expect(getPatternIdentityRef(piece)).toEqual(
-        runtime.patternManager.getArtifactEntryRef(remotePattern),
-      );
+      expect(getPatternIdentityRef(piece)).toEqual(remoteRef);
 
       let dependencySyncs = 0;
       runtime.runner.accessForTestingOnly.dependencySyncer = async (
@@ -7520,7 +7522,13 @@ describe("piece pull materialization", () => {
         inputs,
         sync,
       ) => {
-        if (pattern === remotePattern) dependencySyncs++;
+        const syncedRef = runtime.patternManager.getArtifactEntryRef(pattern);
+        if (
+          syncedRef?.identity === remoteRef.identity &&
+          syncedRef.symbol === remoteRef.symbol
+        ) {
+          dependencySyncs++;
+        }
         return await sync(resultCell, pattern, inputs);
       };
       try {

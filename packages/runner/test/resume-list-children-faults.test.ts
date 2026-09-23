@@ -127,8 +127,9 @@ const PROGRAM: RuntimeProgram = {
 
 describe("resume-list-children-faults", () => {
   // The resume's list wave names what its coordinators will run, and it is
-  // best-effort: a node it cannot read past is skipped, and a document it
-  // cannot pull is resumed without. Each exit is logged under
+  // best-effort for node plans and values. Child metadata must load before
+  // selecting an address format; a failed metadata load refuses resume.
+  // Other exits are logged under
   // `resume-list-children`, at debug where the start that follows reports
   // the same failure itself and at warn where nothing else would.
 
@@ -244,7 +245,7 @@ describe("resume-list-children-faults", () => {
       return { runtime, manager };
     }
 
-    it("resumes without the children, owned cells, and slot targets it could not sync, warning for each", async () => {
+    it("refuses unavailable child identity metadata and resumes after it can be loaded", async () => {
       const cellId = "list-faults-sync-failures";
 
       // CREATE: the durable list and its children, on one replica.
@@ -298,11 +299,13 @@ describe("resume-list-children-faults", () => {
       await resumer.runtime.patternManager.compilePattern(PROGRAM, { space });
       const original = resumer.manager.syncCell.bind(resumer.manager);
       const refused: string[] = [];
+      let refuseChildMetadata = true;
       resumer.manager.syncCell = ((cell, options) => {
         const link = cell.getAsNormalizedFullLink();
         const isSlotTarget = link.id === argumentId && link.path.length > 1;
         if (
-          childIds.includes(link.id) || ownedIds.includes(link.id) ||
+          (refuseChildMetadata && childIds.includes(link.id)) ||
+          ownedIds.includes(link.id) ||
           isSlotTarget
         ) {
           refused.push(link.id);
@@ -314,6 +317,13 @@ describe("resume-list-children-faults", () => {
         { doubled: { value: number }[] }
       >(space, cellId, compiled.resultSchema);
 
+      await expect(resumer.runtime.runner.start(resumed)).rejects.toThrow(
+        "injected sync failure",
+      );
+      expect(refused.length).toBeGreaterThan(0);
+
+      // Once metadata can load, value prefetch failures remain best-effort.
+      refuseChildMetadata = false;
       const emissions = await captureRunnerLog(async () => {
         expect(await resumer.runtime.runner.start(resumed)).toBe(true);
       });
@@ -322,15 +332,8 @@ describe("resume-list-children-faults", () => {
         "warn:list slot resolution sync failed; resuming without it",
       );
       expect(messages).toContain(
-        "warn:list child sync failed; resuming without it",
-      );
-      expect(messages).toContain(
         "warn:list child owned-cell sync failed; resuming without it",
       );
-      expect(refused.length).toBeGreaterThan(0);
-
-      // The resume still converges: the coordinator's own run pulls what the
-      // wave could not, once the injected refusals no longer apply.
       resumer.manager.syncCell = original as typeof resumer.manager.syncCell;
       await resumed.pull();
       await resumer.runtime.settled();

@@ -1104,6 +1104,9 @@ export type MemoryProtocolFlags = {
    */
   stableExpressionResultIds: boolean;
 
+  /** Generated internal addresses honor each piece's accepted authored artifact. */
+  versionedGeneratedCellIds: boolean;
+
   commitPreconditions: boolean;
 
   /** The server integrates durable collaborative operation streams. */
@@ -1210,6 +1213,9 @@ export type WireMemoryProtocolFlags = {
 
   /** Expression result identity contract required for session admission. */
   stableExpressionResultIds?: boolean;
+
+  /** Generated cell identity contract required for session admission. */
+  versionedGeneratedCellIds?: boolean;
 
   commitPreconditions?: boolean;
   applyOp?: boolean;
@@ -2119,6 +2125,7 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   genesisRoot: true,
   modernCellRep: getModernCellRepConfig(),
   stableExpressionResultIds: true,
+  versionedGeneratedCellIds: true,
   commitPreconditions: getCommitPreconditionsConfig(),
   applyOp: true,
   operationCodecs: [CODEMIRROR_CHANGESET_CODEC],
@@ -2154,7 +2161,7 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
 
 /**
  * Compares data-model wire contracts. Capability flags govern accepted
- * operations separately; `stableExpressionResultIds` governs session admission.
+ * operations separately; identity-contract markers govern session admission.
  */
 export const compatibleMemoryProtocolFlags = (
   left: MemoryProtocolFlags,
@@ -2176,6 +2183,13 @@ export const parseMemoryProtocolFlags = (
   if (genesisRoot !== undefined && typeof genesisRoot !== "boolean") {
     return null;
   }
+
+  const versionedGeneratedCellIds = value.versionedGeneratedCellIds;
+  if (
+    versionedGeneratedCellIds !== undefined &&
+    typeof versionedGeneratedCellIds !== "boolean"
+  ) return null;
+
   const stableExpressionResultIds = value.stableExpressionResultIds;
   if (
     stableExpressionResultIds !== undefined &&
@@ -2315,6 +2329,7 @@ export const parseMemoryProtocolFlags = (
     modernCellRep: modernCellRep === true,
     genesisRoot: value.genesisRoot === true,
     stableExpressionResultIds: stableExpressionResultIds === true,
+    versionedGeneratedCellIds: versionedGeneratedCellIds === true,
     commitPreconditions: commitPreconditions === true,
     applyOp: applyOp === true,
     ...(operationCodecs === undefined
@@ -2356,6 +2371,7 @@ export const wireMemoryProtocolFlags = (
   genesisRoot: flags.genesisRoot,
   modernCellRep: flags.modernCellRep,
   stableExpressionResultIds: flags.stableExpressionResultIds,
+  versionedGeneratedCellIds: flags.versionedGeneratedCellIds,
   commitPreconditions: flags.commitPreconditions,
   applyOp: flags.applyOp,
   ...(flags.operationCodecs === undefined

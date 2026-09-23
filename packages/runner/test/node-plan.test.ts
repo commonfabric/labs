@@ -4,6 +4,10 @@ import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
+import {
+  parseGeneratedCellIdentity,
+  prepareGeneratedCellIdentity,
+} from "../src/builder/pattern-metadata.ts";
 import type { Cell } from "../src/cell.ts";
 import { parseLink } from "../src/link-utils.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
@@ -77,6 +81,17 @@ describe("Runner node plans", () => {
     expect(running.key("value").get()).toBe(10);
 
     const tx = runtime.edit();
+    const selection = parseGeneratedCellIdentity(
+      resultCell.withTx(tx).getMetaRaw("generatedCellIdentity"),
+    );
+    expect(selection).toBeDefined();
+    if (selection === undefined) {
+      throw new Error("Missing generated cell identity");
+    }
+    const instance = prepareGeneratedCellIdentity(
+      compiled,
+      selection,
+    );
     const plans: NodePlan[] = [];
     try {
       for (const node of compiled.nodes) {
@@ -84,7 +99,7 @@ describe("Runner node plans", () => {
           tx,
           node,
           resultCell as Cell<any>,
-          compiled,
+          instance,
         );
         if (plan !== undefined) plans.push(plan);
       }

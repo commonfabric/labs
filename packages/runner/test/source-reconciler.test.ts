@@ -362,6 +362,71 @@ describe("piece source reconciliation", () => {
       expect((await piece.pull())?.marker).toBe("v2");
     });
 
+    it("stages a markerless running piece's anonymous state with its accepted source", async () => {
+      const anonymousSource = (value: string) => `
+        import { pattern, Writable } from "commonfabric";
+        export const ${SYMBOL} = pattern<Record<string, never>, { slots: Writable<string>[] }>(() => ({
+          slots: [0].map(() => new Writable("${value}")),
+        }));
+      `;
+      const nextSource = anonymousSource("new-default");
+      const nextRef = {
+        identity: await identityFor(nextSource),
+        symbol: SYMBOL,
+      };
+      createRuntime(servingFetch(() => nextRef.identity, () => nextSource));
+      const initial = await runtime.patternManager.compilePattern(
+        parentProgram(anonymousSource("old-default")),
+        { space: signer.did() },
+      );
+      const initialRef = runtime.patternManager.getArtifactEntryRef(initial)!;
+      const piece = runtime.getCell(signer.did(), "reconcile-legacy-anonymous");
+      const seed = runtime.edit();
+      piece.withTx(seed).setMetaRaw(
+        "patternIdentity",
+        initialRef,
+        rawMetaWriteAuthorization,
+      );
+      await runtime.setup(seed, initial, {}, piece);
+      expect((await seed.commit()).error).toBeUndefined();
+      expect(await runtime.start(piece)).toBe(true);
+      const view = piece.asSchema<{ slots: string[] }>({
+        type: "object",
+        properties: { slots: { type: "array", items: { type: "string" } } },
+      });
+      expect(await view.pull()).toEqual({ slots: ["old-default"] });
+      const legacy = view.key("slots").key(0).resolveAsCell();
+      expect(
+        (await runtime.editWithRetry((tx) => {
+          legacy.withTx(tx).set("legacy-user-value");
+          piece.withTx(tx).setMetaRaw(
+            "generatedCellIdentity",
+            undefined,
+            rawMetaWriteAuthorization,
+          );
+          piece.withTx(tx).setMetaRaw(
+            "patternSetupIdentity",
+            undefined,
+            rawMetaWriteAuthorization,
+          );
+          setPatternSource(piece, tx, PARENT_SOURCE);
+        })).error,
+      ).toBeUndefined();
+
+      expect(await reconcile(piece)).toBe("updated");
+      // Reconciliation commits the defaults and projection with both markers;
+      // the watcher does not have to finish before this state is readable.
+      expect(getPatternIdentityRef(piece)).toEqual(nextRef);
+      expect(getPatternSetupIdentityRef(piece)).toEqual(nextRef);
+      expect(piece.getMetaRaw("generatedCellIdentity")).toEqual({
+        version: 1,
+        ...nextRef,
+      });
+      expect(view.get()).toEqual({ slots: ["new-default"] });
+      expect(legacy.get()).toBe("legacy-user-value");
+      await runtime.runner.idlePointerMaintenance();
+    });
+
     it("treats a pattern index that errors as an artifact that will not load", async () => {
       // Asking whether the running pattern still loads is a question that can
       // fail rather than answer. A failure is read as "it will not load",
