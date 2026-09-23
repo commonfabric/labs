@@ -31,9 +31,8 @@ the root renders it as a shared text field.
 
 Any panel may carry `addedBy`, the DID of the person who added it. A panel
 without one is attributed to the Loom's owner. `addPanel`, `addPiece`, and
-`duplicatePanel` refuse an `addedBy` that is not a DID (`did:`, a lowercase
-method, and an identifier with no whitespace, `/`, `?` or `#` that does not end
-in `:`, at most 195 characters in all). They do not check that the DID names the
+`duplicatePanel` refuse an `addedBy` that is not a DID in W3C DID Core syntax,
+or that is longer than 195 characters. They do not check that the DID names the
 person acting, and a direct write to the panels, or a later write to an
 occurrence, is not checked at all, so the stored value is a claim. Each
 participant's publishing daemon writes its own principal there, and consumers

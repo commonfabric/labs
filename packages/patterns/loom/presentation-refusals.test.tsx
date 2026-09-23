@@ -83,6 +83,9 @@ export default pattern(() => {
   const trailingColonAdderDuplicate = action(() =>
     loom.duplicatePanel.send({ panel: first, addedBy: "did:key:z6Mk:" })
   );
+  const punctuationAdderDuplicate = action(() =>
+    loom.duplicatePanel.send({ panel: first, addedBy: "did:key:z6Mk!" })
+  );
   const overlongAdderDuplicate = action(() =>
     loom.duplicatePanel.send({
       panel: first,
@@ -91,7 +94,7 @@ export default pattern(() => {
   );
   return {
     allowRuntimeErrors: true,
-    expectRuntimeErrors: 14,
+    expectRuntimeErrors: 15,
     allowConsoleErrors: true,
     // The refused direct roster write is reported as a CFC policy warning.
     allowConsoleWarnings: true,
@@ -122,6 +125,7 @@ export default pattern(() => {
       { action: overlongAdderDuplicate },
       { action: fragmentAdderDuplicate },
       { action: trailingColonAdderDuplicate },
+      { action: punctuationAdderDuplicate },
       { assertion: assert(() => loom.panels.length === 2) },
       { assertion: assert(() => loom.panels[0].equals(first)) },
       { assertion: assert(() => loom.presentation.stagedPanels.length === 1) },

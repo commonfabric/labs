@@ -52,14 +52,20 @@ function externalUrl(raw: string): string | undefined {
 }
 
 /**
- * Whether `value` is a DID a panel may name as its adder: `did:`, a lowercase
- * method, and an identifier with no whitespace, `/`, `?` or `#` that does not
- * end in `:`, at most 195 characters in all, so that the adder's `peer:<did>`
- * actor fits the service's 200-character bound.
+ * A DID in W3C DID Core syntax: `did:`, a lowercase method, and a
+ * method-specific identifier of colon-separated segments drawn from letters,
+ * digits, `.`, `-`, `_` and percent-encodings, the last segment nonempty.
+ */
+const DID_SYNTAX =
+  /^did:[a-z0-9]+:(?:(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})*:)*(?:[A-Za-z0-9._-]|%[0-9A-Fa-f]{2})+$/;
+
+/**
+ * Whether `value` is a DID a panel may name as its adder: a DID of at most 195
+ * characters, so that the adder's `peer:<did>` actor fits the service's
+ * 200-character bound.
  */
 function isAdderDid(value: string): boolean {
-  return value.length <= 195 &&
-    /^did:[a-z0-9]+:[^\s/?#]*[^\s/?#:]$/.test(value);
+  return value.length <= 195 && DID_SYNTAX.test(value);
 }
 
 /** Refuse an `addedBy` that is present but is not a DID. */

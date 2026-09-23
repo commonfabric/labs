@@ -106,7 +106,8 @@ export default pattern(() => {
   const moveFirstFromUI = action(() => clickFirstPanel(loom[UI], "Move first"));
   const removeFromUI = action(() => clickFirstPanel(loom[UI], "Remove"));
   const alice = "did:key:z6MkAliceAddsPanelsToTheSharedLoom";
-  const bob = "did:key:z6MkBobDuplicatesAPanelInTheSharedLoom";
+  // DID Core admits empty inner segments and percent-encodings.
+  const bob = "did:web:example.com%3A8443::bob";
   const attributed = Loom({});
   const attributedPiece = new Writable({ title: "Attributed target" });
   const attributedUrl = new Writable<Panel>({
