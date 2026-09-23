@@ -327,24 +327,24 @@ const trimInitialName = (initialName?: string): string =>
 const isSafeExternalProfileUrl = (url: string): boolean =>
   /^https?:\/\//i.test((url ?? "").trim());
 
-/** The verified identity types a profile shows to people, with the provider
- * name and public profile URL each displays. A type absent here, such as the
- * stable `github.node_id`, stays in the list for consumers but is not
- * rendered. */
-const DISPLAYED_IDENTITY_TYPES: Readonly<
-  Record<string, { provider: string; profileUrlPrefix: string }>
+/** How the profile presents the assertion types it knows by name: the provider
+ * label it shows, and the public profile URL prefix for the types that have
+ * one. Every verified assertion is shown; a type absent here appears under its
+ * own name and without a link, so a provider Loom starts publishing needs no
+ * change here to reach the profile. */
+const KNOWN_IDENTITY_TYPES: Readonly<
+  Record<string, { provider: string; profileUrlPrefix?: string }>
 > = {
   "github.login": {
     provider: "GitHub",
     profileUrlPrefix: "https://github.com/",
   },
+  "github.node_id": { provider: "GitHub ID" },
+  email: { provider: "Email" },
 };
 
-const isDisplayedIdentityType = (type: string): boolean =>
-  Object.hasOwn(DISPLAYED_IDENTITY_TYPES, type);
-
-const identityProvider = (type: string): string =>
-  DISPLAYED_IDENTITY_TYPES[type]?.provider ?? type;
+export const identityProvider = (type: string): string =>
+  KNOWN_IDENTITY_TYPES[type]?.provider ?? type;
 
 /** How long after `verifiedAt` an assertion still counts as verified, the
  * consumer freshness window of the shared profile space spec. */
@@ -365,28 +365,33 @@ export const isFreshIdentity = (
     nowMs - verifiedMs <= VERIFIED_IDENTITY_FRESHNESS_MS;
 };
 
+/** Whether the presentation shows an assertion: every type is shown, so what
+ * is left to hold is that it says something and is still fresh. */
 export const isShownIdentity = (
   identity: Partial<ExternalIdentityAssertion> | undefined,
   nowMs: number | undefined,
 ): boolean =>
-  isDisplayedIdentityType(identity?.type ?? "") &&
+  (identity?.type ?? "").length > 0 && (identity?.value ?? "").length > 0 &&
   isFreshIdentity(identity?.verifiedAt, nowMs);
 
+/** The public page for an identity, or the empty string for a type with no
+ * such page — an email address among them, which the profile shows as text
+ * rather than turning a public profile into a one-click mail target. */
 export const identityProfileUrl = (type: string, value: string): string => {
-  const prefix = DISPLAYED_IDENTITY_TYPES[type]?.profileUrlPrefix;
+  const prefix = KNOWN_IDENTITY_TYPES[type]?.profileUrlPrefix;
   return prefix === undefined ? "" : prefix + encodeURIComponent(value);
 };
 
-// One verified account in the profile presentation, or nothing for a type the
-// profile does not display or an assertion outside the freshness window. The account name and the badge both bind the
-// stored assertion's own `value` field, so the badge reports the Loom
+// One verified account in the profile presentation, or nothing for an
+// assertion outside the freshness window. The account name and the badge both
+// bind the stored assertion's own `value` field, so the badge reports the Loom
 // integrity label the runtime holds for the text shown beside it. The input
 // takes the plain assertion type. Requiring the integrity atom here would put
 // a write floor on the row's input that the `map` writing each list item into
 // it cannot meet; the badge reports the atom instead.
 export const VerifiedIdentityRow = pattern<
   { assertion: ExternalIdentityAssertion; nowMs: number | undefined },
-  { [UI]: VNode; profileUrl: string }
+  { [UI]: VNode; profileUrl: string; linked: boolean }
 >(
   ({ assertion, nowMs }) => {
     const displayed = computed(() => isShownIdentity(assertion, nowMs));
@@ -394,8 +399,12 @@ export const VerifiedIdentityRow = pattern<
     const profileUrl = computed(() =>
       identityProfileUrl(assertion.type, assertion.value)
     );
+    const linked = computed(() =>
+      identityProfileUrl(assertion.type, assertion.value).length > 0
+    );
     return {
       profileUrl,
+      linked,
       [UI]: (
         <cf-fragment>
           {ifElse(
@@ -406,9 +415,13 @@ export const VerifiedIdentityRow = pattern<
               data-ui-region="profile-verified-identity"
             >
               <cf-text variant="caption" tone="muted">{provider} ·</cf-text>
-              <a href={profileUrl} target="_blank" rel="noopener noreferrer">
-                {assertion.value}
-              </a>
+              {ifElse(
+                linked,
+                <a href={profileUrl} target="_blank" rel="noopener noreferrer">
+                  {assertion.value}
+                </a>,
+                <cf-text variant="body">{assertion.value}</cf-text>,
+              )}
               <cf-cfc-label
                 variant="badge"
                 atom={LOOM_VERIFIED_EXTERNAL_IDENTITY_INTEGRITY}
