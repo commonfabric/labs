@@ -17,73 +17,22 @@
  * label the resolved schema does not have.
  */
 
-import { isObjectOrArray } from "@commonfabric/utils/types";
+import type {
+  MutableJSONSchema,
+  MutableJSONSchemaObj,
+} from "@commonfabric/api";
 import {
   debugStr,
   type FabricValue,
   valueEqual,
 } from "@commonfabric/data-model";
-import type {
-  MutableJSONSchema,
-  MutableJSONSchemaObj,
-} from "@commonfabric/api";
+import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
+import { isObjectOrArray } from "@commonfabric/utils/types";
 import { dedupeByValueEqual } from "./value-equality.ts";
 
 type IfcLabels = Readonly<Record<string, unknown>>;
 
 const LOCAL_DEFINITION_PREFIX = "#/$defs/";
-
-/** Keywords whose value is a schema, or in the older `items` form a list. */
-const SUBSCHEMA_KEYWORDS = [
-  "not",
-  "items",
-  "additionalProperties",
-  "contains",
-  "propertyNames",
-  "if",
-  "then",
-  "else",
-] as const;
-
-/** Keywords whose value is a list of schemas. */
-const SUBSCHEMA_LIST_KEYWORDS = [
-  "allOf",
-  "anyOf",
-  "oneOf",
-  "prefixItems",
-] as const;
-
-/** Keywords whose value maps names to schemas. */
-const SUBSCHEMA_MAP_KEYWORDS = [
-  "properties",
-  "patternProperties",
-  "dependentSchemas",
-  "$defs",
-] as const;
-
-/**
- * Each schema `schema` holds directly. Values under the other keywords
- * (`default`, `const`, `enum`) are data, however they are shaped.
- */
-const subschemasOf = (schema: MutableJSONSchemaObj): MutableJSONSchema[] => {
-  const found: unknown[] = [];
-  for (const keyword of SUBSCHEMA_KEYWORDS) {
-    const value = schema[keyword];
-    if (Array.isArray(value)) found.push(...value);
-    else if (value !== undefined) found.push(value);
-  }
-  for (const keyword of SUBSCHEMA_LIST_KEYWORDS) {
-    const value = schema[keyword];
-    if (Array.isArray(value)) found.push(...value);
-  }
-  for (const keyword of SUBSCHEMA_MAP_KEYWORDS) {
-    const value = schema[keyword];
-    if (isObjectOrArray(value) && !Array.isArray(value)) {
-      found.push(...Object.values(value));
-    }
-  }
-  return found as MutableJSONSchema[];
-};
 
 /**
  * The labels of one value that `inner` and then `outer` both declared:
@@ -171,7 +120,13 @@ export const stateReferencedIfcLabels = (schema: MutableJSONSchema): void => {
       }
       node.ifc = labels as NonNullable<MutableJSONSchemaObj["ifc"]>;
     }
-    for (const child of subschemasOf(node)) visit(child);
+    // Every keyword the walk reads as holding schemas, `$defs` included (this
+    // generator emits no `definitions`); `default`, `const` and `enum` hold
+    // data, however it is shaped.
+    forEachSubschema(node, (child) => {
+      visit(child as MutableJSONSchema);
+      return false;
+    }, { includeDefs: true, includeUnused: true });
   };
   visit(schema);
 };

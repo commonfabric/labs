@@ -142,6 +142,22 @@ describe("ifc-labels", () => {
       });
     });
 
+    it("writes a definition's labels beside a reference under a keyword the generator does not emit", () => {
+      const schema: MutableJSONSchemaObj = {
+        patternProperties: {
+          "^t": { $ref: "#/$defs/Secret", ifc: { confidentiality: ["b"] } },
+        },
+        $defs: {
+          Secret: { type: "string", ifc: { confidentiality: ["a"] } },
+        },
+      };
+      stateReferencedIfcLabels(schema);
+      expect(schema.patternProperties?.["^t"]).toEqual({
+        $ref: "#/$defs/Secret",
+        ifc: { confidentiality: ["a", "b"] },
+      });
+    });
+
     it("leaves a `default` shaped like a labeled reference as it is", () => {
       const value = { $ref: "#/$defs/Secret", ifc: { integrity: ["i"] } };
       const schema: MutableJSONSchemaObj = {
