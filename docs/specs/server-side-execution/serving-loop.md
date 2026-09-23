@@ -1683,9 +1683,12 @@ time — which INCLUDES the awaited structure-load segments
 O(rows) reconcile (the reconcile does no per-row engine read and runs on
 registry deltas; the label is wall time, review MINOR-3);
 `structureRootsPreloaded` counts the root-document addresses the pass requests
-TOGETHER before those segments run — the instance a demand names, and the
-space instance a scoped demand falls back to. Each is one a segment may sync,
-so issuing them in one pull is what lets the replica's refresh queue coalesce
+TOGETHER before those segments run — the instance a demand names and, for
+every scoped demand, the space instance as well. A segment syncs that space
+instance only when the scoped read finds no pattern pointer and starts
+nothing, which the pull cannot know in advance, so a scoped root whose own
+instance resolves has one address requested that its segment never syncs.
+Issuing them in one pull is what lets the replica's refresh queue coalesce
 them into a single `session.watch.add` rather than one per address inside the
 settle. It is counted per address requested per pass, and most requested
 addresses are already watched and cost no round trip, so it runs well above
