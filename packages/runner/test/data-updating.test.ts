@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -14,6 +15,7 @@ import {
   diffAndUpdate,
   normalizeAndDiff,
   schemaIfcOverlapsPath,
+  writeAuthorizationCoversPath,
 } from "../src/data-updating.ts";
 import {
   areLinksSame,
@@ -24,6 +26,8 @@ import {
   parseLink,
 } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
+import { decomposeSchema } from "../src/schema-decompose.ts";
+import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { toURI } from "../src/uri-utils.ts";
 
@@ -2800,5 +2804,137 @@ describe("schemaIfcOverlapsPath", () => {
       },
     } as const satisfies JSONSchema;
     expect(schemaIfcOverlapsPath(branchSchema, [], ["field"])).toBe(true);
+  });
+});
+
+describe("writeAuthorizationCoversPath", () => {
+  // The predicate decides whether a write authorization arriving with a
+  // transaction protects the location a link is written to, so the link is
+  // held to the same source check it meets once the claim is stored.
+  const writeAuthorizedBy = ["writer"];
+
+  it("covers an element of a protected list", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        items: {
+          type: "array",
+          items: { type: "object" },
+          ifc: { writeAuthorizedBy },
+        },
+      },
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["items", "0"])).toBe(
+      true,
+    );
+  });
+
+  it("does not cover a sibling of the protected field", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        items: { type: "array", ifc: { writeAuthorizedBy } },
+        notes: { type: "array" },
+      },
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["notes", "0"])).toBe(
+      false,
+    );
+  });
+
+  it("covers through allOf, which every value is held to", () => {
+    const schema = {
+      type: "array",
+      allOf: [{ ifc: { writeAuthorizedBy } }],
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["0"])).toBe(true);
+  });
+
+  it("does not cover through an anyOf branch, which holds only some values", () => {
+    const schema = {
+      type: "array",
+      items: {
+        anyOf: [
+          { type: "object", ifc: { writeAuthorizedBy } },
+          { type: "string" },
+        ],
+      },
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["0"])).toBe(false);
+  });
+
+  it("covers a list whose claim is reached through a reference", () => {
+    const schema = {
+      type: "object",
+      properties: { items: { $ref: "#/$defs/Protected" } },
+      $defs: {
+        Protected: {
+          type: "array",
+          items: { type: "object" },
+          ifc: { writeAuthorizedBy },
+        },
+      },
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["items", "0"])).toBe(
+      true,
+    );
+  });
+
+  it("does not hold a named property to the additionalProperties claim", () => {
+    const schema = {
+      type: "object",
+      properties: { open: { type: "array" } },
+      additionalProperties: { type: "array", ifc: { writeAuthorizedBy } },
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["open", "0"])).toBe(
+      false,
+    );
+  });
+
+  it("covers a key only the additionalProperties schema describes", () => {
+    const schema = {
+      type: "object",
+      additionalProperties: { type: "array", ifc: { writeAuthorizedBy } },
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["any", "0"])).toBe(true);
+  });
+
+  it("covers a claim whose schema document arrives after a first ask", () => {
+    const decomposed = decomposeSchema({
+      type: "object",
+      properties: { lateItems: { $ref: "#/$defs/LateProtected" } },
+      $defs: {
+        LateProtected: {
+          type: "array",
+          items: { type: "object" },
+          ifc: { writeAuthorizedBy },
+        },
+      },
+    });
+    const schema = internSchema({ $ref: decomposed.rootRef });
+
+    // The first ask resolves nothing, so it must not be remembered.
+    expect(writeAuthorizationCoversPath(schema, [], ["lateItems", "0"])).toBe(
+      false,
+    );
+    for (const [hash, document] of decomposed.documents) {
+      registerSchemaDocument(hash, document);
+    }
+    expect(writeAuthorizationCoversPath(schema, [], ["lateItems", "0"])).toBe(
+      true,
+    );
+  });
+
+  it("ignores claims that are not write authorizations", () => {
+    const schema = {
+      type: "object",
+      properties: {
+        title: {
+          type: "string",
+          ifc: { uiContract: { helper: "UiAction", action: "Save" } },
+        },
+      },
+    } as const satisfies JSONSchema;
+    expect(writeAuthorizationCoversPath(schema, [], ["title"])).toBe(false);
   });
 });
