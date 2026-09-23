@@ -1044,12 +1044,21 @@ function buildShrunkTypeNodeFromType(
         }
       }
       if (nullishMembers.length === 0) return shrunkInner;
+      // A default restored on the value belongs to the whole union: the
+      // runtime reads a missing property's default only from the top of its
+      // schema.
+      const [value, defaultValue] = RESTORED_DEFAULTS.has(shrunkInner) &&
+          ts.isTypeReferenceNode(shrunkInner) && shrunkInner.typeArguments
+        ? shrunkInner.typeArguments
+        : [shrunkInner];
       const unionNode = factory.createUnionTypeNode([
-        shrunkInner,
+        value!,
         ...nullishMembers,
       ]);
       ensureTypeNodeRegistered(unionNode, checker, typeRegistry);
-      return unionNode;
+      return defaultValue
+        ? wrapTypeNodeWithRestoredDefault(unionNode, defaultValue, factory)
+        : unionNode;
     }
   }
 
@@ -1206,8 +1215,23 @@ function getScopeWrapper(
     : undefined;
 }
 
-/** The `Default` wrappers `restoreDefault()` built. */
+/** The `Default` wrappers `wrapTypeNodeWithRestoredDefault()` built. */
 const RESTORED_DEFAULTS = new WeakSet<ts.TypeNode>();
+
+/**
+ * Helper for `buildShrunkTypeNodeFromType()` and `restoreDefault()`, which
+ * wraps `node` in a `Default` of `value` that type shrinking restored rather
+ * than one its author wrote, and records it in `RESTORED_DEFAULTS`.
+ */
+function wrapTypeNodeWithRestoredDefault(
+  node: ts.TypeNode,
+  value: ts.TypeNode,
+  factory: ts.NodeFactory,
+): ts.TypeNode {
+  const restored = wrapTypeNodeWithDefault(node, value, factory);
+  RESTORED_DEFAULTS.add(restored);
+  return restored;
+}
 
 /**
  * Helper for `buildShrunkTypeNodeFromType()`, which wraps `node`, a node built
@@ -1238,9 +1262,7 @@ function restoreDefault(
     typeRegistry,
     DEFAULT_TYPE_NODE_FLAGS | ts.NodeBuilderFlags.AllowEmptyTuple,
   );
-  const restored = wrapTypeNodeWithDefault(node, value, factory);
-  RESTORED_DEFAULTS.add(restored);
-  return restored;
+  return wrapTypeNodeWithRestoredDefault(node, value, factory);
 }
 
 function buildShrunkTypeNodeFromTypeNode(

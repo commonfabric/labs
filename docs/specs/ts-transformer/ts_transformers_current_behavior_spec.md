@@ -1832,9 +1832,12 @@ adjustments:
   restore no default, and a scope the type carries only as its brand, with no
   alias left to name it, is not restored. Neither is a scope wrapper around a
   cell: schema generation reads the wrapper by the scoped type it is registered
-  with, which would undo the capability narrowing of the cell inside it. A restored `Default` does not count
-  toward the preference for the node-driven candidate, which applies where only
-  that candidate holds an authored `Default` (`getScopeWrapper` and
+  with, which would undo the capability narrowing of the cell inside it. A
+  default restored on a value that a union also lets be `undefined` or `null`
+  wraps the whole union, since the runtime reads a missing property's default
+  only from the top of the property's schema. A restored `Default` does not
+  count toward the preference for the node-driven candidate, which applies where
+  only that candidate holds an authored `Default` (`getScopeWrapper` and
   `restoreDefault` in `transformers/type-shrinking.ts`;
   `test/shrunk-capture-wrappers.test.ts`)
 - tuple types and numeric-indexed object types are not rewritten to
