@@ -136,35 +136,58 @@ deno task cf piece call --cell "$TOPICS_BOARD" --invocation '<id>' backfillNames
 this replaced cost one `cf piece link` per Topic.
 
 Step 2 is still one source update per Topic. Drive it as a plan rather than a
-loop of `setsrc` calls (`docs/common/workflows/bulk-operations.md`), with one
-`--test` for every authored test file beside the Topic source:
+loop of `setsrc` calls (`docs/common/workflows/bulk-operations.md`). Attach the
+complete source package — one `--test` for every `*.test.tsx` beside the Topic
+source, since attached tests are part of the package the plan's identity is
+computed from — and expand the list from the directory rather than writing it
+out, so it cannot fall behind a test added later:
 
 ```bash
 PLAN="$(mktemp -d)/topics-plan.jsonl"
+TESTS=()
+for t in packages/patterns/topics/*.test.tsx; do TESTS+=(--test "$t"); done
 deno task cf piece survey --piece "$TOPICS_BOARD" --path topics \
   --retarget "topics=packages/patterns/topics/topic.tsx" --root . \
-  --test packages/patterns/topics/topics.test.tsx \
-  --dangerously-allow-incompatible-schema --out "$PLAN"
+  "${TESTS[@]}" --dangerously-allow-incompatible-schema --out "$PLAN"
+
 # dry: every row classified against its own reference pair, nothing written
 deno task cf piece retarget --plan "$PLAN"
+```
+
+Before the apply, take out the rows that need no move. A Topic filed through the
+board after step 1 runs the Topic code the board's own program carries, under a
+different identity from the standalone build the plan targets, and stores its
+number from creation. The apply cannot be undone ("Traps"), so settle these rows
+first. A Topic's `shortName` input read succeeds only when it stores a number —
+it fails on a Topic whose source does not declare the input, and on one that
+declares it and stores none — so that read is the test:
+
+```bash
+: > "$PLAN.numbered"
+for p in $(jq -r 'select(.op) | .piece' "$PLAN"); do
+  if deno task cf cell get --cell "/of:$p" shortName --input >/dev/null 2>&1; then
+    echo "$p" >> "$PLAN.numbered"
+  fi
+done
+wc -l < "$PLAN.numbered"   # expect the Topics filed since step 1, and no others
+jq -c --rawfile skip "$PLAN.numbered" \
+  '.piece as $p | if .op and (($skip | split("\n")) | index($p)) then del(.op) else . end' \
+  "$PLAN" > "$PLAN.edited" && mv "$PLAN.edited" "$PLAN"
+deno task cf piece retarget --plan "$PLAN"   # dry again: the outstanding count drops by that many
+
 deno task cf piece retarget --plan "$PLAN" --group-size 25 --apply
 # the verdict: a second survey held against the plan
 deno task cf piece survey --piece "$TOPICS_BOARD" --path topics --diff "$PLAN"
 ```
 
-The `--test` line above stands for the whole set; name every one. A run that
-stops partway is resumed by running the apply again, since a Topic already on
-the target reads as landed and is not rewritten. On a board the size of the
-Estuary one this is the bulk-CLI shape
+A row without an operation is the plan format's own "leave this piece where it
+is", so the edited rows are reported as unchanged by the verdict rather than
+counted as missed. A run that stops partway is resumed by running the apply
+again, since a Topic already on the target reads as landed and is not rewritten.
+On a board the size of the Estuary one this is the bulk-CLI shape
 `docs/history/topics-board-migration-2026-08-28.md` found unreliable from a
 laptop over the network, so treat a stopped run as a reason to resume rather
 than start over.
-
-A Topic filed through the board after step 1 runs the Topic code the board's own
-program carries, under a different identity from the standalone build the plan
-targets, and stores its number from creation. Its row needs no operation: before
-the apply, read one such Topic's `shortName --input` to confirm, and delete the
-`op` from those rows so the plan leaves them where they are.
 
 The report is three lists of numbers in filing order:
 
@@ -370,22 +393,22 @@ it.
 | board `index` row's `shortName` | absent for every Topic                                                                               | the number that Topic stores      |
 | board `names` map               | which Topics the namespace has numbered, and what each number is — never whether the Topic stores it | the same                          |
 | Topic's `shortName` input       | the number that Topic stores                                                                         | the same                          |
-| `recordName` on one Topic       | `wrote` says whether it had to write                                                                 | the same                          |
+| `recordName` on one Topic       | a write, not a read: the repair, whose `wrote` says whether it had to                                | the same                          |
 | `//<space>/top/<n>`             | resolves to the Topic                                                                                | the same                          |
 
 So while numbers are hidden, **the board's index answers nothing about storage**
 — it is the read to skip, not the survey — and there is no board-wide read of
-what Topics store. The two that work are one per Topic:
+what Topics store. The read that works is one per Topic:
 
 ```bash
 # what this Topic stores. No switch gates the durable input.
 deno task cf cell get --cell "$TOPIC" shortName --input
-
-# or ask the Topic, which answers for itself
-deno task cf piece call --cell "$TOPIC" recordName '{"name":"<n>"}'
-# -> { "name": "<n>", "wrote": false }   already stored; nothing written
-# -> { "name": "<n>", "wrote": true }    it had none and now stores this
 ```
+
+`recordName` also answers the question, but it is a mutation, not a read: on a
+Topic storing no number it writes the one it is handed. Use it only as the
+repair in "Telling when it is done", with its invocation id and the read-back
+that confirms it.
 
 Board-wide, the namespace is what can be surveyed, and it answers the other half
 of the question:
@@ -434,11 +457,8 @@ when it agrees. A targeted `deno task cf cell set --input` write to `shortName`
 carries no such guard and will overwrite or blank a stored number. The path
 check above does not stand in for it: that one asks whether the pattern declares
 `shortName` at all, and on a migrated Topic it passes and the write lands. So
-reach for the verb:
-
-```bash
-deno task cf piece call --cell "$TOPIC" recordName '{"name":"42"}'
-```
+reach for the verb, with the invocation id and read-back of the repair in
+"Telling when it is done".
 
 **A half-finished Topic is not an error state.** What it costs is above, under
 "What a half-finished Topic looks like"; the repair is another run of the step,
