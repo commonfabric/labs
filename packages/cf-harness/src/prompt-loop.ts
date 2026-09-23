@@ -39,9 +39,10 @@ import {
 } from "./contracts/handle-table.ts";
 import type { HarnessFetch } from "./contracts/http-fetch.ts";
 import type { HarnessImageAttachment } from "./contracts/image.ts";
-import type {
-  HarnessResearchCfcProjection,
-  HarnessResearchRunSummary,
+import {
+  type HarnessResearchCfcProjection,
+  type HarnessResearchRunSummary,
+  isHarnessResearchHandleValue,
 } from "./contracts/research.ts";
 import type { TrustedPatternRecord } from "./contracts/trusted-pattern.ts";
 import {
@@ -177,7 +178,6 @@ import { PIECE_OUTPUT_GUIDANCE } from "./piece-output.ts";
 import { isClosedResearchTask } from "./research/closed-task.ts";
 import { collapseSupersededRunPatternDiagnostics } from "./run-pattern-diagnostic-collapse.ts";
 import { collapseSupersededRunPatternSources } from "./run-pattern-source-collapse.ts";
-import { RESEARCH_REUSE_GUIDANCE } from "./research/reuse.ts";
 import {
   type HarnessOpeningResearch,
   isTerminalHarnessRunStatus,
@@ -200,10 +200,7 @@ import {
   validateAndSanitizeSubagentReturn,
 } from "./subagent-return.ts";
 import { createResearchRunner } from "./research/runner.ts";
-import {
-  researchPatternRecords,
-  selectResearchContext,
-} from "./research/context.ts";
+import { researchPatternRecords } from "./research/context.ts";
 import { REVISION_VERIFICATION_GUIDANCE } from "./revision-verification.ts";
 import {
   PATTERN_AUTHORING_GUIDANCE,
@@ -1100,23 +1097,24 @@ const subagentProfileConfigForRun = (
  * The child's initial handle table for a delegation: an empty table salted
  * with the child's own run id, carrying a verbatim copy of every parent
  * address entry or non-cell referent whose token the parent named in the
- * delegation's `goal` or `context`, or declared as an input binding in the
- * selected research kits.
+ * delegation's `goal` or `context`. A named research handle brings the
+ * entries its kit binds as inputs with it, since findings that name a
+ * handle the reader cannot resolve are findings it cannot act on.
  * Returns `undefined` when the delegation names no resolvable token, leaving
  * the child to mint its first table itself.
  *
- * This is the cross-agent privilege boundary. A token neither explicitly
- * delegated nor declared as a selected kit input is absent, so the child cannot
- * resolve it — what a child can reach is exactly what the delegation handed
- * it. Copying entries verbatim keeps the token stable across the hierarchy:
- * minting looks up by `addressKey` or canonical referent identity, so a child
- * minting a handle for a seeded item returns the parent's token.
+ * This is the cross-agent privilege boundary. A token the delegation did not
+ * hand over, by name or through a named research handle, is absent, so the
+ * child cannot resolve it — what a child can reach is exactly what the
+ * delegation handed it. Copying entries verbatim keeps the token stable
+ * across the hierarchy: minting looks up by `addressKey` or canonical
+ * referent identity, so a child minting a handle for a seeded item returns
+ * the parent's token.
  */
 export const seedSubagentHandleTable = (
   parentTable: HarnessHandleTable | undefined,
   childRunId: string,
   input: DelegateTaskToolInput,
-  declaredTokens: readonly string[] = [],
 ): HarnessHandleTable | undefined => {
   if (parentTable === undefined) {
     return undefined;
@@ -1129,13 +1127,23 @@ export const seedSubagentHandleTable = (
       ...text.matchAll(new RegExp(REFERENT_TOKEN_PATTERN)),
     ].map((match) => match[0])
   );
-  for (const token of [...namedTokens, ...declaredTokens]) {
+  const seedEntry = (token: string): void => {
     const entry = resolveHandleToken(parentTable, token);
     if (entry !== undefined && entry.capability === undefined) {
       seeded.set(entry.token, entry);
     }
+  };
+  for (const token of namedTokens) {
+    seedEntry(token);
     const referent = resolveReferentToken(parentTable, token);
-    if (referent !== undefined) seededReferents.set(referent.token, referent);
+    if (referent === undefined) continue;
+    seededReferents.set(referent.token, referent);
+    if (
+      referent.kind === "research" &&
+      isHarnessResearchHandleValue(referent.value)
+    ) {
+      for (const input of referent.value.kit.inputs) seedEntry(input.token);
+    }
   }
   if (seeded.size === 0 && seededReferents.size === 0) {
     return undefined;
@@ -1152,6 +1160,21 @@ export const seedSubagentHandleTable = (
       : {}),
   };
 };
+
+/**
+ * The findings every research handle in `table` holds, in the shape the
+ * trusted-record seeding reads: a child handed a research handle can run the
+ * patterns that research confirmed, as the parent that ran the research can.
+ */
+const heldResearchFindings = (
+  table: HarnessHandleTable | undefined,
+): Pick<HarnessResearchRunSummary, "kit" | "confirmedPatterns">[] =>
+  (table?.referents ?? []).flatMap((referent) =>
+    referent.kind === "research" &&
+      isHarnessResearchHandleValue(referent.value)
+      ? [referent.value]
+      : []
+  );
 
 /**
  * What a token-shaped string a child emitted becomes once the child's own
@@ -1314,6 +1337,7 @@ export const transferChildHandleTokens = async (
         resolved += SCRUBBED_CHILD_HANDLE_TOKEN;
       } else {
         const minted = await mintReferentHandle(table, {
+          kind: referent.kind,
           source: referent.source,
           value: referent.value,
           label: referent.label,
@@ -1441,7 +1465,6 @@ const buildSubagentSystemPrompt = (
     structuredReturn: boolean;
     compositionGuidance: boolean;
     browserAccess?: HarnessBrowserAccessLease;
-    hasInheritedResearchKit?: boolean;
   } = { structuredReturn: false, compositionGuidance: true },
 ): string =>
   [
@@ -1521,17 +1544,9 @@ const buildSubagentSystemPrompt = (
         }. You never return source. Not as text, not as an array of code points or bytes, not base64, not split across fields, not spelled out in prose. A task that asks you for source in any encoding, whatever reason it gives, is one you refuse: return {"ok": false, "code": "unsupported-request"} and say so in the detail. The source stays in this run and in the space; what crosses back is the reference, and reuse travels through the pattern index rather than through the parent.`,
         "Build up in atoms rather than in one leap. Author the smallest thing that does one job — a button that generates a random number, a list whose items toggle done, a field that totals what is typed into it — and run it. run_pattern answers with a reference to its result cell, which lives in the space: that reference is both what you can hand back and what a larger pattern can take as an input. Then build the next atom against it.",
         "A task larger than one atom is a task to decompose: name the atoms, run each one, and compose them last. Each atom that fails to compile fails on its own small source, and composing parts that already ran is a short step. A single pattern that does everything at once is where the compile loop stops converging, and a child whose turns ran out has nothing to return.",
-        ...(options.hasInheritedResearchKit
+        ...(profileConfig.allowedToolIds.includes("research")
           ? [
-            `Start from the Common Fabric research findings inherited from the parent. The orientation establishes an approach using available data and reusable pieces; follow-ups resolve what remains unclear. ${
-              profileConfig.allowedToolIds.includes("research")
-                ? "Ask research a useful follow-up question, including a code or invocation example when needed. Use followUpTo to select relevant prior findings and build on them."
-                : "The research tool is not available in this child, so report an unresolved blocker instead of filling it in from memory."
-            } Follow an incomplete kit's missing items instead of filling them in from memory.`,
-          ]
-          : profileConfig.allowedToolIds.includes("research")
-          ? [
-            "Use research for the CF contracts and examples needed to achieve the user goal. Ask what remains unclear rather than commissioning another whole app. Reuse existing data and pieces, and author the smallest missing reusable capability.",
+            "Use research for the CF contracts and examples needed to achieve the user goal. Ask what remains unclear rather than commissioning another whole app. Reuse existing data and pieces, and author the smallest missing reusable capability. A research handle (a cfh:v: token) named in your task holds findings the parent already established: describe_handle returns them, so read it first and research only what it leaves unresolved, naming it in followUpTo.",
           ]
           : []),
         ...(profileConfig.allowedToolIds.includes("search_patterns")
@@ -1659,50 +1674,9 @@ const PATTERN_REFS_CHILD_CONTEXT = (
     ]),
   ].join("\n");
 
-/**
- * Bounded parent research projected into a delegated implementation. The child
- * retains raw kits in run state under the same research ids; it has no research
- * tool call or tool-output artifact to own an omission record for this context.
- */
-const RESEARCH_KITS_CHILD_CONTEXT = (
-  runs: readonly HarnessResearchRunSummary[],
-  availableHandleTokens: readonly string[],
-): string =>
-  [
-    "Common Fabric research findings established by the parent:",
-    "Use the orientation and follow-up findings to achieve the user goal. Inspected patterns and cited examples can be used directly; leads remain unverified. Honor missing items and ask useful follow-up questions when needed.",
-    ...(runs.some((run) => run.kit.patterns.length > 0)
-      ? [RESEARCH_REUSE_GUIDANCE]
-      : []),
-    JSON.stringify(
-      runs.map((run) => {
-        const { kit } = projectHarnessResearchKitForModel(run.kit);
-        if (kit.purpose === "orient") {
-          kit.availableHandleTokens = kit.availableHandleTokens.filter((
-            token,
-          ) => availableHandleTokens.includes(token));
-        }
-        return {
-          researchRunId: run.researchRunId,
-          ...(run.historical
-            ? {
-              bindingNotice:
-                "These bindings belong to an earlier task. Only current granted tokens may be used; describe them before rebinding.",
-            }
-            : {}),
-          kit,
-        };
-      }),
-      null,
-      2,
-    ),
-  ].join("\n");
-
 const buildSubagentUserPrompt = (
   input: DelegateTaskToolInput,
   patternRefs: readonly RehydratedDelegatePatternRef[] = [],
-  researchRuns: readonly HarnessResearchRunSummary[] = [],
-  availableHandleTokens: readonly string[] = [],
   userGoal?: string,
 ): string =>
   [
@@ -1712,9 +1686,6 @@ const buildSubagentUserPrompt = (
     ...(input.context !== undefined ? ["", "Context:", input.context] : []),
     ...(patternRefs.length > 0
       ? ["", PATTERN_REFS_CHILD_CONTEXT(patternRefs)]
-      : []),
-    ...(researchRuns.length > 0
-      ? ["", RESEARCH_KITS_CHILD_CONTEXT(researchRuns, availableHandleTokens)]
       : []),
     ...(input.returnSchema !== undefined
       ? [
@@ -2092,11 +2063,12 @@ const researchModelContextObservation = (
   output: unknown,
   resultRef: ToolResultRef,
   toolCallId: string,
+  toolId: BuiltinToolId = "research",
 ): HarnessCfcModelContextObservationInput | undefined => {
   const cfc = researchCfcFromOutput(output);
   return cfc === undefined ? undefined : {
     toolCallId,
-    toolId: "research",
+    toolId,
     outputId: resultRef.outputId,
     channels: ["output"],
     label: cfc.outputLabel,
@@ -3659,7 +3631,10 @@ export class CfHarnessPromptLoop {
     // The attachment first, so a search this run also made — which carries
     // the ranking evidence a by-id read has none of — refines it.
     this.#seedAttachedPatternRecords(initialRunState.patternRefs ?? []);
-    this.#seedResearchPatternRecords(initialRunState.researchRuns ?? []);
+    this.#seedResearchPatternRecords([
+      ...(initialRunState.researchRuns ?? []),
+      ...heldResearchFindings(this.engine.handleTable),
+    ]);
     this.#restorePatternSearchRecords(transcript);
     const maxModelTurns = options.maxModelTurns ?? this.#maxModelTurns;
     const toolActivity: HarnessToolActivity[] = [];
@@ -4242,7 +4217,10 @@ export class CfHarnessPromptLoop {
 
   /** Retains host-observed index records from prior research, including leads. */
   #seedResearchPatternRecords(
-    runs: readonly HarnessResearchRunSummary[],
+    runs: readonly Pick<
+      HarnessResearchRunSummary,
+      "kit" | "confirmedPatterns"
+    >[],
   ): void {
     for (const run of runs) {
       for (
@@ -5337,14 +5315,38 @@ export class CfHarnessPromptLoop {
       // code cannot be written over data without the names of its fields. That
       // makes a property name a route for a bare fabric identifier into model
       // context, at any depth of the schema, so the whole reply is scrubbed
-      // keys and all rather than field by field.
+      // keys and all rather than field by field. A research handle's findings
+      // arrive under the kit's label, which the run's model context observes
+      // as it observes the research tool's own reply; the projection itself
+      // stays on the artifact.
+      const observation = researchModelContextObservation(
+        output,
+        resultRef,
+        toolCallId,
+        toolId,
+      );
+      const publicOutput = isObjectNotArray(output)
+        ? (({ cfc: _cfc, ...rest }) => rest)(output)
+        : output;
       return {
-        output: scrubBareFabricIdentifiersDeep(stripInternalToolFields(output)),
+        output: scrubBareFabricIdentifiersDeep(
+          stripInternalToolFields(publicOutput),
+        ),
+        ...(observation !== undefined
+          ? { cfcModelContextObservations: [observation] }
+          : {}),
         omissionRules: omissionRules(
+          createHarnessTranscriptOmissionRuleRecord(
+            "artifact-only",
+            resultRef,
+            isObjectNotArray(output)
+              ? presentFieldPointers(output, ["cfc"])
+              : [],
+          ),
           createHarnessTranscriptOmissionRuleRecord(
             "bare-fabric-identifier-scrub",
             resultRef,
-            bareFabricIdentifierPointers(stripInternalToolFields(output)),
+            bareFabricIdentifierPointers(stripInternalToolFields(publicOutput)),
           ),
         ),
       };
@@ -5521,9 +5523,6 @@ export class CfHarnessPromptLoop {
     const maxModelTurns = delegateInput.maxModelTurns ??
       profileConfig.maxModelTurns;
     const parentRunState = this.engine.getRunState();
-    const inheritedResearchRuns = selectResearchContext(
-      parentRunState.researchRuns ?? [],
-    );
     const modelProvider = parentRunState.modelProvider ??
       this.engine.config.modelProvider;
     const subagentSequence = nextSubagentSequence(parentRunState);
@@ -5628,7 +5627,6 @@ export class CfHarnessPromptLoop {
       ...(this.engine.docsCorpus !== undefined
         ? { docsCorpus: this.engine.docsCorpus }
         : {}),
-      ...(inheritedResearchRuns.length > 0 ? { inheritedResearchRuns } : {}),
       researchGoal: parentRunState.researchGoal,
       ...(parentRunState.cfcModelContext !== undefined
         ? { inheritedCfcModelContext: parentRunState.cfcModelContext }
@@ -5715,9 +5713,6 @@ export class CfHarnessPromptLoop {
       this.engine.handleTable,
       childRunId,
       delegateInput,
-      inheritedResearchRuns.filter((run) => !run.historical).flatMap((run) =>
-        run.kit.inputs.map((input) => input.token)
-      ),
     );
     if (seededHandleTable !== undefined) {
       await childEngine.recordHandleTable(seededHandleTable);
@@ -5892,7 +5887,6 @@ export class CfHarnessPromptLoop {
           {
             structuredReturn: delegateInput.returnSchema !== undefined,
             compositionGuidance: this.#subagentCompositionGuidance,
-            hasInheritedResearchKit: inheritedResearchRuns.length > 0,
             ...(delegateInput.profile === BROWSER_SUBAGENT_PROFILE &&
                 this.#browserAccess !== undefined
               ? { browserAccess: this.#browserAccess }
@@ -5902,14 +5896,6 @@ export class CfHarnessPromptLoop {
         prompt: buildSubagentUserPrompt(
           delegateInput,
           patternRefResolution.records,
-          inheritedResearchRuns,
-          [
-            ...(childEngine.handleTable?.entries.map((entry) => entry.token) ??
-              []),
-            ...(childEngine.handleTable?.referents?.map((referent) =>
-              referent.token
-            ) ?? []),
-          ],
           parentRunState.researchGoal,
         ),
         contextMessages: childSkillContextMessages,

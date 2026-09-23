@@ -136,15 +136,11 @@ The current package provides:
   selected findings and source locations without copying prior examples or
   bindings. Interactive sessions persist that context, the original user goal,
   and full CFC influence with completed history. Follow-ups retain that goal
-  alongside the current request; old bindings remain historical. Child handle
-  transfer reads only selected current bindings; its inherited CFC context
-  retains the full parent influence even when no kit is selected. Kits and
-  confirmed records persist through delegation, while local authored-source
-  artifacts record the research ids that shaped them. Before new source
-  compiles, `run_pattern` requires an import or a one-line
-  `reuseReasons[patternId]` explanation for every selected pattern in retained
-  context, including incomplete kits; leads remain advisory. The check
-  establishes a dependency or explanation, not its semantic adequacy.
+  alongside the current request; old bindings remain historical. An admitted kit
+  is minted as a research handle; a child receives findings only through a
+  research handle its brief names, with the entries that kit binds, and its
+  inherited CFC context retains the full parent influence either way. Local
+  authored-source artifacts record the research ids that shaped them.
   `query_docs` is accepted only as a legacy CLI or persisted-policy alias and is
   normalized without rewriting old transcript or run-state evidence;
 - shared parent and opening-research guidance that distinguishes given inputs,
@@ -348,14 +344,7 @@ The current package provides:
   together ([Read-only Loom retrieval](LOOM_RETRIEVAL.md));
 - opt-in fabric-session tools — `run_pattern` and `assign_slug`
   (`--fabric-api-url`, `--fabric-identity`, and `--fabric-space` configured
-  together, or their `CF_HARNESS_FABRIC_*` environment fallbacks). Before
-  opening Fabric or compiling new `sourceText`, `run_pattern` requires each
-  selected pattern in retained research context to be imported as
-  `cf:pattern:<id>` or explained in one nonblank line at `reuseReasons[<id>]`.
-  This includes incomplete kits; unselected leads are advisory and direct
-  indexed execution does not enter this gate. Omitting both for a selection
-  returns `error` with the retained identities and both retry paths, and
-  persists no piece.
+  together, or their `CF_HARNESS_FABRIC_*` environment fallbacks).
 
   `run_pattern`: compiles and runs an inline `sourceText` pattern (capped at 256
   KiB) against a deployed Fabric space from the trusted host side over a lazy

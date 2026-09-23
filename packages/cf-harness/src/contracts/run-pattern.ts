@@ -23,9 +23,6 @@ export interface RunPatternToolInput {
    */
   patternId?: string;
 
-  /** One-line reasons for selected research patterns this source does not import. */
-  reuseReasons?: Readonly<Record<string, string>>;
-
   inputs?: Record<string, unknown>;
   resultSchema?: JSONSchema;
 }
@@ -43,16 +40,6 @@ export const RUN_PATTERN_INPUT_SCHEMA = {
       type: "string",
       description:
         "Id of a pattern published to the index, as search_patterns reports it. Exactly one of sourceText and patternId is given; the published program is fetched and compiled without passing through this conversation.",
-    },
-    reuseReasons: {
-      type: "object",
-      additionalProperties: {
-        type: "string",
-        minLength: 1,
-        pattern: "^[^\\r\\n]*\\S[^\\r\\n]*(?![\\s\\S])",
-      },
-      description:
-        "One-line reasons keyed by patternId for selected kit.patterns entries this source does not import. Explain why each omitted pattern does not fit this call, including when this is a separate atom or a reader of an existing result. Required for each omission from retained research, even when its kit is incomplete. Unverified leads do not require a reason. Reasons remain in the tool-call record.",
     },
     description: {
       type: "string",

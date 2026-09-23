@@ -232,7 +232,7 @@ export interface HarnessToolContext {
    * returns its token. Absent outside a run that keeps a handle table.
    */
   mintReferentHandle?(
-    referent: Omit<HarnessHandleReferent, "token" | "kind">,
+    referent: Omit<HarnessHandleReferent, "token">,
   ): Promise<string>;
 
   /**

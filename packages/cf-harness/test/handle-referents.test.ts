@@ -22,6 +22,7 @@ import type { HarnessToolContext } from "../src/tools/types.ts";
 const WORK = "https://cfc.test/atom/facet/work";
 
 const ROW = {
+  kind: "document" as const,
   source: "loom_search",
   value: { title: "Mail 1", snippet: "donuts on friday" },
   label: { confidentiality: [WORK] },
@@ -39,7 +40,6 @@ describe("referent handles", () => {
       expect(minted.token).toMatch(/^cfh:v:[2-9a-z]{5}$/);
       expect(resolveReferentToken(minted.table, minted.token)).toEqual({
         token: minted.token,
-        kind: "document",
         ...ROW,
       });
       expect(minted.table.entries).toEqual([]);
@@ -129,6 +129,14 @@ describe("referent handles", () => {
       );
 
       expect(() => assertValidHarnessHandleTable(table)).not.toThrow();
+      const research = await mintReferentHandle(table, {
+        ...ROW,
+        kind: "research",
+        source: "research",
+        labelSource: "research",
+      });
+      expect(() => assertValidHarnessHandleTable(research.table)).not
+        .toThrow();
       for (
         const broken of [
           { ...table.referents![0], token: "cfh:a:22222" },

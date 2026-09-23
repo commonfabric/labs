@@ -43,8 +43,13 @@ import type { HarnessFabricSession } from "../src/fabric-session.ts";
 import {
   createHarnessHandleTable,
   mintAddressHandle,
+  mintReferentHandle,
 } from "../src/handle-table.ts";
 import type { HarnessHandleTable } from "../src/contracts/handle-table.ts";
+import {
+  HARNESS_RESEARCH_HANDLE_TYPE,
+  type HarnessResearchHandleValue,
+} from "../src/contracts/research.ts";
 import { createToolOutputId } from "../src/contracts/tool-result.ts";
 import type { HarnessToolContext } from "../src/tools/types.ts";
 import { seedStoredEnvelope } from "../../runner/test/cfc-seed-envelope.ts";
@@ -258,6 +263,131 @@ const contextWith = (
   }) as unknown as HarnessToolContext;
 
 describe("describe_handle", () => {
+  describe("a research referent", () => {
+    const findings = (
+      describedTokens: readonly string[],
+    ): HarnessResearchHandleValue => ({
+      type: HARNESS_RESEARCH_HANDLE_TYPE,
+      researchRunId: "run-describe:research:1",
+      kit: {
+        purpose: "answer",
+        status: "complete",
+        task: "Which reader fits?",
+        summary: "The ledger reader fits.",
+        inputs: [],
+        patterns: [],
+        rules: [],
+        sources: [],
+        missing: [],
+      },
+      confirmedPatterns: [{
+        patternId: "ledger-reader",
+        description: "Reads a ledger.",
+        hashtags: [],
+        importHint: 'import Ledger from "cf:pattern:ledger-reader";',
+        ownerDid: "did:key:owner",
+        createdAt: "2026-09-01T00:00:00.000Z",
+        dependencies: [],
+        argumentSchema: { type: "object", properties: { db: {} } },
+        resultSchema: {
+          type: "object",
+          properties: { rows: { type: "array" } },
+        },
+      }],
+      describedHandles: describedTokens.map((token) => ({
+        token,
+        description: { outputId: `described-${token}`, token, known: true },
+      })),
+      cfc: {
+        version: 1,
+        sourceLabel: { confidentiality: ["https://cfc.test/atom/finding"] },
+        outputLabel: { confidentiality: ["https://cfc.test/atom/finding"] },
+        coverage: "complete",
+        missingLabels: [],
+      },
+    });
+
+    it("returns what research found, marks a binding this run does not hold, and keeps raw schemas off the reply", async () => {
+      const held = await mintAddressHandle(
+        createHarnessHandleTable("run-describe"),
+        REF_A,
+      );
+      const minted = await mintReferentHandle(held.table, {
+        kind: "research",
+        source: "research",
+        labelSource: "research",
+        label: { confidentiality: ["https://cfc.test/atom/finding"] },
+        value: findings([held.token, "cfh:a:gone2"]) as unknown as FabricValue,
+      });
+
+      const output = await describeHandleTool.invoke(
+        contextWith(minted.table),
+        { token: minted.token },
+      );
+
+      expect(output.referent).toEqual({
+        kind: "research",
+        source: "research",
+        labelSource: "research",
+      });
+      expect(output.labels).toEqual([{
+        path: [],
+        confidentiality: [["https://cfc.test/atom/finding"]],
+        integrity: [],
+      }]);
+      expect(output.research?.kit.summary).toBe("The ledger reader fits.");
+      expect(output.research?.patterns).toHaveLength(1);
+      expect(output.research?.patterns[0]).not.toHaveProperty(
+        "argumentSchema",
+      );
+      expect(output.research?.patterns[0]).not.toHaveProperty("resultSchema");
+      expect(output.research?.describedHandles).toEqual([
+        {
+          token: held.token,
+          description: {
+            outputId: `described-${held.token}`,
+            token: held.token,
+            known: true,
+          },
+        },
+        {
+          token: "cfh:a:gone2",
+          description: {
+            outputId: "described-cfh:a:gone2",
+            token: "cfh:a:gone2",
+            known: true,
+          },
+          unavailable: true,
+        },
+      ]);
+      expect(output.cfc?.outputLabel).toEqual({
+        confidentiality: ["https://cfc.test/atom/finding"],
+      });
+    });
+
+    it("returns a document referent's kind and label, and no content", async () => {
+      const minted = await mintReferentHandle(
+        createHarnessHandleTable("run-describe"),
+        {
+          kind: "document",
+          source: "loom_search",
+          labelSource: "query",
+          label: {},
+          value: { title: "A row nobody re-reads" },
+        },
+      );
+
+      const output = await describeHandleTool.invoke(
+        contextWith(minted.table),
+        { token: minted.token },
+      );
+
+      expect(output.referent?.kind).toBe("document");
+      expect(output.research).toBeUndefined();
+      expect(JSON.stringify(output)).not.toContain("A row nobody re-reads");
+    });
+  });
+
   it("refuses to resolve a skill-context handle", async () => {
     const minted = await mintAddressHandle(
       createHarnessHandleTable("run-describe"),

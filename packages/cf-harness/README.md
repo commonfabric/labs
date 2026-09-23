@@ -1523,9 +1523,11 @@ not existing compositions or the index's stored event history.
 
 ### Researching Common Fabric
 
-`research` takes a `task`, a `purpose`, and an optional `followUpTo` naming an
-available research run or output. Both purposes have the same tools and limits;
-the question determines how much research is useful:
+`research` takes a `task`, a `purpose`, and an optional `followUpTo` naming a
+research handle this run holds or a research run it retains. A successful result
+names the handle minted for its findings under `researchHandle`. Both purposes
+have the same tools and limits; the question determines how much research is
+useful:
 
 | Purpose            | Result                                                                                                                                    | Model turns / tool calls / read characters |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
@@ -1782,27 +1784,18 @@ status, distinguishable from results known to have no omissions. SQLite schema
 inspection and migration share an immediate transaction, so concurrent openers
 cannot both migrate the same missing column.
 
-Children receive projected findings and retain the selected raw summaries in run
-state, joined by research run id. An inherited orientation lists only handles
-available in the child's own table. They have no research tool call to own a
-separate omission entry for inherited context. Only selected, current
-`inputs[].token` bindings transfer automatically. Prose mentions, superseded
-bindings, and historical bindings transfer nothing. The parent's full CFC
-context carries forward even when selection omits a result. Pattern authors
-start from these findings and ask only unresolved questions.
-
-Before compiling new `run_pattern.sourceText`, the host checks selections from
-the retained orientation and two answers. Each `kit.patterns` entry must have a
-Fabric pattern import in the source or a nonblank, one-line reason under
-`reuseReasons[patternId]` explaining why it does not fit this call. This applies
-to parent and child authors, incomplete kits, and retained findings with
-historical bindings. An unrelated atom, an existing result passed by reference,
-or a verification reader can state that narrower scope. Unverified leads and
-unselected inspected records create no requirement; direct `patternId` execution
-is unchanged. The compiler import reader excludes comments and quoted examples.
-The check establishes an import or explanation, not meaningful invocation or the
-explanation's correctness. Reasons remain in the tool-call record when old
-source attempts are collapsed.
+Research reaches a child the way any other content does: as a handle. An
+admitted kit is minted into the run's handle table as a research referent (a
+`cfh:v:` token the result names under `researchHandle`), under the kit's own CFC
+label. A parent that names the token in a delegation's `goal` or `context` seeds
+it into the child's table together with the address entries the kit binds as
+`inputs`, and nothing else about the research transfers: a child whose brief
+names no research handle receives no findings. The child reads the findings with
+`describe_handle`, which returns the kit, the patterns research confirmed, and
+the handles it described — each marked `unavailable` when the child's table does
+not hold its token — and the child's `run_pattern` can run a confirmed pattern
+by id as the parent can. The parent's full CFC context carries forward whether
+or not a handle is named.
 
 Locally authored source artifacts record the research run ids that shaped them.
 The pattern-index publication API has no research-association field, so this

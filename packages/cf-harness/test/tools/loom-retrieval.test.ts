@@ -1043,6 +1043,7 @@ describe("loom-retrieval tools", () => {
     // measured with, and says where that label came from.
     expect(referents).toEqual([
       {
+        kind: "document",
         source: "loom_search",
         value: {
           sourceSystem: "google.gmail",
@@ -1056,6 +1057,7 @@ describe("loom-retrieval tools", () => {
         labelSource: "row",
       },
       {
+        kind: "document",
         source: "loom_search",
         value: {
           sourceSystem: "google.gmail",

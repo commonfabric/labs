@@ -826,7 +826,6 @@ Use this as available evidence; do not assume it is mandatory.`,
 
     expect(childPrompt).toContain(SEARCH_HIT.patternId);
     expect(childPrompt).toContain(PATTERN_RECORD.description);
-    expect(childPrompt).toContain(researchRun.researchRunId);
     expect(delegateOutput.patternRefRefusals).toBeUndefined();
     expect(result.runState.researchRuns).toEqual([researchRun]);
   });

@@ -1,31 +1,75 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
+import type { FabricValue } from "@commonfabric/data-model";
 
 import { createToolOutputId } from "../../src/contracts/tool-result.ts";
 import {
   isResearchToolSuccessOutput,
-  researchKitGuidance,
   researchTool,
 } from "../../src/tools/research.ts";
 import type { HarnessToolContext } from "../../src/tools/types.ts";
-import type { HarnessResearchRequest } from "../../src/research/runner.ts";
-import { REUSE_RESEARCH_RUNS } from "../fixtures/research-reuse.ts";
+import type {
+  HarnessResearchRecord,
+  HarnessResearchRequest,
+} from "../../src/research/runner.ts";
+import type { HarnessHandleReferent } from "../../src/contracts/handle-table.ts";
+import {
+  HARNESS_RESEARCH_HANDLE_TYPE,
+  type HarnessResearchHandleValue,
+  type HarnessResearchResult,
+} from "../../src/contracts/research.ts";
 import {
   createHarnessHandleTable,
   mintAddressHandle,
+  mintReferentHandle,
 } from "../../src/handle-table.ts";
 
-describe("research", () => {
-  describe("researchKitGuidance()", () => {
-    it("tells the author how to account for the incomplete kit's selected mailbox", () => {
-      const guidance = researchKitGuidance(REUSE_RESEARCH_RUNS[0].kit);
-      expect(guidance).toContain(
-        "import as cf:pattern:<id>, or supply reuseReasons[<id>] as one nonblank line",
-      );
-      expect(guidance).toContain("This also applies to an incomplete kit.");
-    });
-  });
+const KIT: HarnessResearchResult = {
+  purpose: "answer",
+  status: "complete",
+  task: "Which renderer takes a typed collection?",
+  summary: "The typed renderer does.",
+  inputs: [],
+  patterns: [],
+  rules: [],
+  sources: [],
+  missing: [],
+};
 
+const CFC = {
+  version: 1 as const,
+  sourceLabel: { confidentiality: ["https://cfc.test/atom/finding"] },
+  outputLabel: { confidentiality: ["https://cfc.test/atom/finding"] },
+  coverage: "complete" as const,
+  missingLabels: [],
+};
+
+/** A reply whose record carries only what minting and retention read. */
+const replyFor = (kit: HarnessResearchResult) => ({
+  kit,
+  record: {
+    confirmedPatterns: [],
+    describedHandles: [],
+    cfc: CFC,
+  } as unknown as HarnessResearchRecord,
+});
+
+const researchReferent: Omit<HarnessHandleReferent, "token"> = {
+  kind: "research",
+  source: "research",
+  labelSource: "research",
+  label: CFC.outputLabel,
+  value: {
+    type: HARNESS_RESEARCH_HANDLE_TYPE,
+    researchRunId: "earlier:research:1",
+    kit: KIT,
+    confirmedPatterns: [],
+    describedHandles: [],
+    cfc: CFC,
+  } satisfies HarnessResearchHandleValue as unknown as FabricValue,
+};
+
+describe("research", () => {
   describe("isResearchToolSuccessOutput()", () => {
     it("returns false for values that are not result objects", () => {
       for (const output of [null, undefined, "ok", 1, []]) {
@@ -64,6 +108,113 @@ describe("research", () => {
       });
       expect(request?.inputCells).toEqual(inputCells);
       expect(request?.handleTokens).toEqual([attached.token, registry.token]);
+    });
+
+    it("mints a research handle for an admitted kit under the kit's label and names it in the result", async () => {
+      let minted: Omit<HarnessHandleReferent, "token"> | undefined;
+      const context: Partial<HarnessToolContext> = {
+        nextOutputId: () => createToolOutputId("minted", "research", 1),
+        now: () => "2026-09-23T00:00:00.000Z",
+        runResearch: () => Promise.resolve(replyFor(KIT)),
+        mintReferentHandle: (referent) => {
+          minted = referent;
+          return Promise.resolve("cfh:v:abcde");
+        },
+      };
+      const output = await researchTool.invoke(context as HarnessToolContext, {
+        task: KIT.task,
+        purpose: "answer",
+      });
+      expect(output).toMatchObject({
+        status: "ok",
+        researchHandle: "cfh:v:abcde",
+      });
+      expect(minted).toMatchObject({
+        kind: "research",
+        source: "research",
+        labelSource: "research",
+        label: CFC.outputLabel,
+      });
+      expect(minted?.value).toMatchObject({
+        type: HARNESS_RESEARCH_HANDLE_TYPE,
+        researchRunId: "minted:research:1",
+        kit: KIT,
+        cfc: CFC,
+      });
+    });
+
+    it("mints no handle when research returns no kit", async () => {
+      let mints = 0;
+      const context: Partial<HarnessToolContext> = {
+        nextOutputId: () => createToolOutputId("failed", "research", 1),
+        runResearch: () => Promise.reject(new Error("result was not JSON")),
+        mintReferentHandle: () => {
+          mints += 1;
+          return Promise.resolve("cfh:v:abcde");
+        },
+      };
+      const output = await researchTool.invoke(context as HarnessToolContext, {
+        task: KIT.task,
+      });
+      expect(output).toMatchObject({ status: "error" });
+      expect(mints).toBe(0);
+    });
+
+    it("hands a research handle named in followUpTo to the runner as the prior context", async () => {
+      const minted = await mintReferentHandle(
+        createHarnessHandleTable("follow-up"),
+        researchReferent,
+      );
+      let request: HarnessResearchRequest | undefined;
+      const context: Partial<HarnessToolContext> = {
+        nextOutputId: () => createToolOutputId("follow-up", "research", 2),
+        handleTable: minted.table,
+        researchRuns: [],
+        runResearch: (value) => {
+          request = value;
+          return Promise.reject(new Error("stop after capturing the request"));
+        },
+      };
+      await researchTool.invoke(context as HarnessToolContext, {
+        task: "Does it also take a map?",
+        purpose: "answer",
+        followUpTo: minted.token,
+      });
+      expect(request?.followUpTo).toBe(minted.token);
+      expect(request?.priorResearch?.researchRunId).toBe("earlier:research:1");
+    });
+
+    it("refuses a followUpTo naming a referent that is not research", async () => {
+      const minted = await mintReferentHandle(
+        createHarnessHandleTable("follow-up"),
+        {
+          kind: "document",
+          source: "loom_search",
+          labelSource: "query",
+          label: {},
+          value: { title: "A row" },
+        },
+      );
+      let invoked = false;
+      const context: Partial<HarnessToolContext> = {
+        nextOutputId: () => createToolOutputId("follow-up", "research", 3),
+        handleTable: minted.table,
+        researchRuns: [],
+        runResearch: () => {
+          invoked = true;
+          return Promise.reject(new Error("unexpected research invocation"));
+        },
+      };
+      const output = await researchTool.invoke(context as HarnessToolContext, {
+        task: "Clarify the row",
+        followUpTo: minted.token,
+      });
+      expect(invoked).toBe(false);
+      expect(output).toMatchObject({
+        status: "error",
+        message:
+          "followUpTo must name an admitted research result available to this run",
+      });
     });
 
     it("names the granted tokens in the inventory it hands to research", async () => {

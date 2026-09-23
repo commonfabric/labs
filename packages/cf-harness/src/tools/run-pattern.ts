@@ -46,10 +46,6 @@ import {
 import { admitsFabricReference } from "../foreign-spaces.ts";
 import { defineOwnEntry } from "../handle-table.ts";
 import {
-  RESEARCH_REUSE_GUIDANCE,
-  unexplainedResearchPatterns,
-} from "../research/reuse.ts";
-import {
   dedupedObservedOutputs,
   type ObservedOutput,
   observedOutputCause,
@@ -353,7 +349,7 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
   toolId: "run_pattern",
   title: "Run Pattern",
   description:
-    `Compile and run a Common Fabric pattern in the configured space, returning a reference to its live result cell. Give it either your own sourceText or the patternId of a pattern search_patterns found. Import runtime APIs from "${RUNTIME_MODULE_SPECIFIER}" and published components from "cf:pattern:<patternId>". A runtime import has the form ${RUNTIME_MODULE_IMPORT_LINE}; no package named after the product resolves. ${RESEARCH_REUSE_GUIDANCE} The run's confidentiality ceiling bounds cell reads. Shared db.query results retain complete labeled row sets and withhold the array, including its row count, when the ceiling does not admit every row. Declare query results per session (PerSession<> on the result type, or the query's { scope: "session" } option) to filter rows under the runtime's ceiling at the query boundary. Bound every query's rows with a LIMIT — a few hundred is a sensible ceiling for a view — because every result row is materialized as its own document in the space, so an unbounded query over a large store writes a document per row it returns, and a re-run writes again only the rows that changed, except that a labeled result keys its rows on position and so also rewrites the rows a change displaced, and re-keys every row when the query's projection or the handle's tables change; an aggregate returning one row per group — count(*), sum(), a GROUP BY — is bounded by its own shape and needs no LIMIT. A pattern composing another passes on what the composed one reports: expose its error branch and its row count under your own result and render them, or the run answers over figures derived from a read that failed, and the result carries an outputConcerns entry naming the output you did not read. A query over a served store may still be pending when this call answers. Pending counts and rows are placeholders, not data. Expose pending along with the error branch and counts. The host returns pending and hasError from the captured declared top-level outputs when the release fit admits them. Reread the held resultRef if it is pending; do not author a replacement page to wait for data. If a settled filtered result is empty, compare it with a count without the uncertain predicate and present both counts, naming the filter; an empty subset does not mean the source is empty. The piece stays out of the space's piece list; assign_slug names and lists it when it deserves a public address.`,
+    `Compile and run a Common Fabric pattern in the configured space, returning a reference to its live result cell. Give it either your own sourceText or the patternId of a pattern search_patterns found. Import runtime APIs from "${RUNTIME_MODULE_SPECIFIER}" and published components from "cf:pattern:<patternId>". A runtime import has the form ${RUNTIME_MODULE_IMPORT_LINE}; no package named after the product resolves. The run's confidentiality ceiling bounds cell reads. Shared db.query results retain complete labeled row sets and withhold the array, including its row count, when the ceiling does not admit every row. Declare query results per session (PerSession<> on the result type, or the query's { scope: "session" } option) to filter rows under the runtime's ceiling at the query boundary. Bound every query's rows with a LIMIT — a few hundred is a sensible ceiling for a view — because every result row is materialized as its own document in the space, so an unbounded query over a large store writes a document per row it returns, and a re-run writes again only the rows that changed, except that a labeled result keys its rows on position and so also rewrites the rows a change displaced, and re-keys every row when the query's projection or the handle's tables change; an aggregate returning one row per group — count(*), sum(), a GROUP BY — is bounded by its own shape and needs no LIMIT. A pattern composing another passes on what the composed one reports: expose its error branch and its row count under your own result and render them, or the run answers over figures derived from a read that failed, and the result carries an outputConcerns entry naming the output you did not read. A query over a served store may still be pending when this call answers. Pending counts and rows are placeholders, not data. Expose pending along with the error branch and counts. The host returns pending and hasError from the captured declared top-level outputs when the release fit admits them. Reread the held resultRef if it is pending; do not author a replacement page to wait for data. If a settled filtered result is empty, compare it with a count without the uncertain predicate and present both counts, naming the filter; an empty subset does not mean the source is empty. The piece stays out of the space's piece list; assign_slug names and lists it when it deserves a public address.`,
   effectClass: "side-effect",
   inputSchema: RUN_PATTERN_INPUT_SCHEMA,
   outputSchema: {
@@ -1001,24 +997,6 @@ export const runPatternTool: HarnessToolDefinition<
           `run_pattern sourceText exceeds the ${
             RUN_PATTERN_MAX_SOURCE_TEXT_BYTES / 1024
           } KiB limit (${sourceTextBytes} bytes)`,
-        );
-      }
-      let unexplained;
-      try {
-        unexplained = await unexplainedResearchPatterns(
-          context.researchRuns ?? [],
-          { name: RUN_PATTERN_SOURCE_MAIN, contents: sourceText },
-          input.reuseReasons,
-        );
-      } catch (error) {
-        return errorOutput("error", errorMessage(error));
-      }
-      if (unexplained.length > 0) {
-        return errorOutput(
-          "error",
-          `run_pattern source omits selected research patterns: ${
-            unexplained.map((id) => `cf:pattern:${id}`).join(", ")
-          }. ${RESEARCH_REUSE_GUIDANCE}`,
         );
       }
     }

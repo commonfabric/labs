@@ -296,7 +296,7 @@ const referentIdentityKey = (
 
 export const mintReferentHandle = async (
   table: HarnessHandleTable,
-  referent: Omit<HarnessHandleReferent, "token" | "kind">,
+  referent: Omit<HarnessHandleReferent, "token">,
   options: { hasher?: HandleTokenHasher } = {},
 ): Promise<{ table: HarnessHandleTable; token: string }> => {
   const hasher = options.hasher ?? sha256Hasher;
@@ -318,7 +318,7 @@ export const mintReferentHandle = async (
   return {
     table: {
       ...table,
-      referents: [...referents, { token, kind: "document", ...referent }],
+      referents: [...referents, { token, ...referent }],
     },
     token,
   };
@@ -569,9 +569,9 @@ const assertValidReferents = (referents: unknown): void => {
         `invalid handle table: malformed referent token \`${String(token)}\``,
       );
     }
-    if (kind !== "document") {
+    if (kind !== "document" && kind !== "research") {
       throw new Error(
-        `invalid handle table: referent kind must be \`document\`, got \`${
+        `invalid handle table: referent kind must be \`document\` or \`research\`, got \`${
           String(kind)
         }\``,
       );
@@ -586,7 +586,10 @@ const assertValidReferents = (referents: unknown): void => {
         `invalid handle table: referent \`${token}\` has a malformed label`,
       );
     }
-    if (labelSource !== "row" && labelSource !== "query") {
+    if (
+      labelSource !== "row" && labelSource !== "query" &&
+      labelSource !== "research"
+    ) {
       throw new Error(
         `invalid handle table: referent \`${token}\` has an unknown labelSource \`${
           String(labelSource)

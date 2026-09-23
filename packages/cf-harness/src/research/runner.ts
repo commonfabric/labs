@@ -16,6 +16,7 @@ import { mergeLabel } from "@commonfabric/runner/cfc/label-view-core";
 import type {
   HarnessResearchCfcProjection,
   HarnessResearchHandleRecord,
+  HarnessResearchHandleValue,
   HarnessResearchMissingLabel,
   HarnessResearchMissingLabelSource,
   HarnessResearchPatternRecord,
@@ -169,6 +170,13 @@ export interface HarnessResearchRequest {
 
   /** Prior research retained by this run, newest last. */
   priorResearchRuns?: readonly HarnessResearchRunSummary[];
+
+  /**
+   * Findings an earlier call admitted, handed in as a research handle. When
+   * present it is the whole of the prior context: the caller chose it by
+   * naming the token, so no selection over retained runs happens here.
+   */
+  priorResearch?: HarnessResearchHandleValue;
 
   /** Index-resolved pattern attachments supplied with the root task. */
   attachedPatterns?: readonly TrustedPatternRecord[];
@@ -578,7 +586,9 @@ const userPrompt = (
   request: HarnessResearchRequest,
 ): string => {
   const retained = request.priorResearchRuns ?? [];
-  const prior = request.followUpTo === undefined
+  const prior = request.priorResearch !== undefined
+    ? [request.priorResearch]
+    : request.followUpTo === undefined
     ? selectResearchContext(retained)
     : retained.filter((run) =>
       run.researchRunId === request.followUpTo ||
@@ -1193,7 +1203,12 @@ async (request) => {
       integrity: structuredClone([...section.integrity]),
     });
   }
-  for (const prior of request.priorResearchRuns ?? []) {
+  for (
+    const prior of [
+      ...(request.priorResearch === undefined ? [] : [request.priorResearch]),
+      ...(request.priorResearchRuns ?? []),
+    ]
+  ) {
     if (prior.cfc === undefined) {
       addMissingLabel(
         state,

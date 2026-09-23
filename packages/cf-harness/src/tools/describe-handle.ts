@@ -25,10 +25,20 @@ import {
   type DisclosedCfcLabel,
   disclosedCfcLabels,
 } from "../cfc-label-disclosure.ts";
+import type { HarnessHandleTable } from "../contracts/handle-table.ts";
+import {
+  type HarnessResearchCfcProjection,
+  type HarnessResearchHandleRecord,
+  type HarnessResearchHandleValue,
+  type HarnessResearchPatternRecord,
+  type HarnessResearchResult,
+  isHarnessResearchHandleValue,
+} from "../contracts/research.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
 import type { HarnessFabricSession } from "../fabric-session.ts";
 import { admitsFabricReference } from "../foreign-spaces.ts";
 import { resolveHandleToken, resolveReferentToken } from "../handle-table.ts";
+import { projectHarnessResearchKitForModel } from "../research/model-projection.ts";
 import { schemaShapeOnly } from "../schema-shape.ts";
 import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
 
@@ -88,10 +98,46 @@ export interface DescribeHandleToolOutput {
    * kind it is, which tool observed it, and where its label came from.
    */
   referent?: {
-    kind: "document";
+    kind: "document" | "research";
     source: string;
-    labelSource: "row" | "query";
+    labelSource: "row" | "query" | "research";
   };
+
+  /**
+   * Present when the referent is a research handle: what the research found,
+   * which is the one referent content this tool returns. Reported under the
+   * kit's own label, carried in {@link cfc} for the run's model context.
+   */
+  research?: DescribeHandleResearch;
+
+  /** The research findings' CFC projection, beside {@link research}. */
+  cfc?: HarnessResearchCfcProjection;
+}
+
+/**
+ * What a research handle discloses: the kit as the research tool's caller
+ * saw it, the patterns the host confirmed with their raw schemas left on the
+ * artifact, and the handles research described — each marked unavailable
+ * when the reader's own table does not hold it, since a binding is only as
+ * good as the token in the hand of whoever reads it.
+ */
+export interface DescribeHandleResearch {
+  /** The research run the findings came from. */
+  researchRunId: string;
+
+  /** The admitted kit, projected as the research tool's own reply is. */
+  kit: HarnessResearchResult;
+
+  /** Confirmed pattern records, without their raw schemas. */
+  patterns: readonly Omit<
+    HarnessResearchPatternRecord,
+    "argumentSchema" | "resultSchema"
+  >[];
+
+  /** Each described handle, and whether this run holds its token. */
+  describedHandles: readonly (HarnessResearchHandleRecord & {
+    unavailable?: true;
+  })[];
 }
 
 /**
@@ -285,7 +331,7 @@ export const describeHandleToolDescriptor: HarnessToolDescriptor = {
   toolId: "describe_handle",
   title: "Describe Handle",
   description:
-    "Report the shape of a general handle's referent and the CFC labels it carries: its recorded schema, path and label atom types, never its data. A held non-cell referent returns its kind and provenance under `referent`, with `hasSchema: false`. A referent that is a SQLite database reports its tables instead of a schema, under `database`: the columns of each table with their types, the distinct labels those columns carry, and under `fill` how many rows each table holds and how many of them are non-NULL in each column. Read `fill` before writing a query: a column whose count is 0 is NULL on every row of this database, so filtering on it returns nothing, and a table reporting `unread` was not counted rather than empty. A table reporting `rowLabelReads` carries a per-row label rule over those columns, and a query over it must select every one of them by its own name — an alias does not stand in for the column — or the read is refused and the refusal arrives on the result's `error` rather than as rows; `rowLabelReadsIncomplete` means the named columns are not the whole of what the rule needs — it reads a column this reply does not name, or it is declared in a shape that cannot be read — so such a query is refused whatever it selects. Read such a referent with `db.query` over the handle rather than as a value. A capability-restricted handle returns a named refusal. Use it to check that a reference is the kind of thing a step expects, and what handling it demands, before passing it on.",
+    "Report the shape of a general handle's referent and the CFC labels it carries: its recorded schema, path and label atom types, never its data. A held non-cell referent returns its kind and provenance under `referent`, with `hasSchema: false`. A referent that is a SQLite database reports its tables instead of a schema, under `database`: the columns of each table with their types, the distinct labels those columns carry, and under `fill` how many rows each table holds and how many of them are non-NULL in each column. Read `fill` before writing a query: a column whose count is 0 is NULL on every row of this database, so filtering on it returns nothing, and a table reporting `unread` was not counted rather than empty. A table reporting `rowLabelReads` carries a per-row label rule over those columns, and a query over it must select every one of them by its own name — an alias does not stand in for the column — or the read is refused and the refusal arrives on the result's `error` rather than as rows; `rowLabelReadsIncomplete` means the named columns are not the whole of what the rule needs — it reads a column this reply does not name, or it is declared in a shape that cannot be read — so such a query is refused whatever it selects. Read such a referent with `db.query` over the handle rather than as a value. A research handle — the cfh:v: token a research call returned — returns what that research found under `research`: its kit, the patterns it confirmed, and the handles it described, each marked `unavailable` when this run does not hold its token; read it before researching the same question again. A capability-restricted handle returns a named refusal. Use it to check that a reference is the kind of thing a step expects, and what handling it demands, before passing it on.",
   effectClass: "read",
   inputSchema: {
     type: "object",
@@ -375,6 +421,8 @@ export const describeHandleToolDescriptor: HarnessToolDescriptor = {
         required: ["kind", "source", "labelSource"],
         additionalProperties: false,
       },
+      research: { type: "object" },
+      cfc: { type: "object" },
       error: { type: "string" },
     },
     required: ["outputId", "token", "known", "hasSchema"],
@@ -786,6 +834,45 @@ const describeInFabric = async (
   }
 };
 
+/**
+ * What a research referent discloses to `table`'s holder. The kit goes
+ * through the same projection the research tool's reply does, and a described
+ * handle is marked unavailable when the table holds neither an address entry
+ * nor a referent under its token.
+ */
+const disclosedResearch = (
+  value: HarnessResearchHandleValue,
+  table: HarnessHandleTable,
+): DescribeHandleResearch => ({
+  researchRunId: value.researchRunId,
+  kit: projectHarnessResearchKitForModel(value.kit).kit,
+  patterns: value.confirmedPatterns.map(
+    (
+      {
+        argumentSchema: _argumentSchema,
+        resultSchema: _resultSchema,
+        ...record
+      },
+    ) => structuredClone(record),
+  ),
+  describedHandles: value.describedHandles.map((record) => ({
+    ...structuredClone(record),
+    ...(holdsGeneralToken(table, record.token)
+      ? {}
+      : { unavailable: true as const }),
+  })),
+});
+
+/** Whether `table` holds `token` as a general address entry or a referent. */
+const holdsGeneralToken = (
+  table: HarnessHandleTable,
+  token: string,
+): boolean => {
+  const entry = resolveHandleToken(table, token);
+  return (entry !== undefined && entry.capability === undefined) ||
+    resolveReferentToken(table, token) !== undefined;
+};
+
 /** Private sidecar used to carry exact existing labels into research. */
 export interface DescribeHandleResearchResult {
   /** Ordinary safe shape-only result shown to the research model. */
@@ -808,9 +895,15 @@ const invokeDescribeHandle = async (
     ? undefined
     : resolveReferentToken(context.handleTable, token);
   if (referent !== undefined) {
-    // A held referent that is not a cell. The model saw its content when the
-    // tool returned it; what is reported here is what it is and the atom
-    // types of the label it was admitted under.
+    // A held referent that is not a cell. For a document the model saw its
+    // content when the tool returned it, and what is reported here is what
+    // it is and the atom types of the label it was admitted under. Research
+    // findings are the content a reader has not seen, so they are returned,
+    // with the kit's CFC projection beside them for the model context.
+    const findings = referent.kind === "research" &&
+        isHarnessResearchHandleValue(referent.value)
+      ? referent.value
+      : undefined;
     return {
       output: {
         outputId,
@@ -823,6 +916,10 @@ const invokeDescribeHandle = async (
           labelSource: referent.labelSource,
         },
         labels: [{ path: [], ...cfcLabelAtomTypes(referent.label) }],
+        ...(findings === undefined || context.handleTable === undefined ? {} : {
+          research: disclosedResearch(findings, context.handleTable),
+          cfc: structuredClone(findings.cfc),
+        }),
       },
       cfcLabel: referent.label,
       cfcLabelAvailable: true,

@@ -474,7 +474,8 @@ const invoke = async <C extends LoomRetrievalCommand>(
     JSON.stringify(skeleton).length + LOOM_RETRIEVAL_LABEL_JOIN_ALLOWANCE,
     mint === undefined
       ? undefined
-      : (referent) => mint({ source: outputToolId, ...referent }),
+      : (referent) =>
+        mint({ kind: "document", source: outputToolId, ...referent }),
   );
   const observedLabel = mergeConfidentialityOnlyLabels(measured.labels);
   return {

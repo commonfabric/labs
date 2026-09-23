@@ -1648,7 +1648,7 @@ export class CfHarnessEngine {
    * cell, so a result naming the token can link a document minted from it.
    */
   async mintReferentHandle(
-    referent: Omit<HarnessHandleReferent, "token" | "kind">,
+    referent: Omit<HarnessHandleReferent, "token">,
   ): Promise<string> {
     const minted = await mintReferentHandle(
       this.handleTable ?? createHarnessHandleTable(this.#runState.runId),
@@ -2775,7 +2775,7 @@ export class CfHarnessEngine {
       loomAuthoring: this.config.loomAuthoring,
       loomRetrieval: this.config.loomRetrieval,
       mintReferentHandle: (
-        referent: Omit<HarnessHandleReferent, "token" | "kind">,
+        referent: Omit<HarnessHandleReferent, "token">,
       ) => this.mintReferentHandle(referent),
       ...(this.#structuredResult !== undefined
         ? {
