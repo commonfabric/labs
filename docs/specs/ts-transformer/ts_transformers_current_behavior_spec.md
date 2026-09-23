@@ -3279,7 +3279,7 @@ Test inventory for this stage: transformer unit suite
 `test/pattern-coverage-transformer.test.ts`; end-to-end line mapping and LCOV
 `packages/runner/test/pattern-coverage.test.ts`; cache bypass
 `packages/runner/test/esm-engine.test.ts`; flag/env-var enablement
-`packages/cli/test/test-runner-pattern-coverage.test.ts`; stage order
+`packages/cli/test/test-runner-pattern-coverage.serial.test.ts`; stage order
 `test/pipeline-regressions.test.ts`. The `*.input.*`/`*.expected.*` fixture
 corpus (§20) never enables the option, so fixture expectations contain no
 counters.

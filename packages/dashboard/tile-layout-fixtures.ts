@@ -1,5 +1,6 @@
-import type { TileView } from "./types.ts";
+import type { Status, TileView } from "./types.ts";
 import { SPARKLINE_HEIGHT } from "./tile-render-values.ts";
+import { detailList } from "./detail-list.ts";
 
 export interface TileLayoutFixture {
   label: string;
@@ -23,6 +24,15 @@ const trustStrip = (prefix: string, badEvery: number) =>
         })"></a>`,
     ).join("")
   }</div>`;
+const jobList = (rows: readonly (readonly [Status, string, string])[]) =>
+  detailList(
+    rows.map(([status, name, detail]) => ({
+      status,
+      name,
+      detail,
+    })),
+    { subject: "Failing job details", focusKey: "jobs" },
+  );
 const spendSub = (text: string) =>
   `<p class="sub" title="${text}"><span class="swatch" style="background:#7aa2ff"></span> ${text}</p>`;
 
@@ -31,16 +41,20 @@ const spendSub = (text: string) =>
 // dashboard order. The browser test supplies these views to renderTile().
 const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
   {
-    label: "labs ci",
+    label: "ci",
     view: {
-      status: "good",
-      value: "passing",
-      valueLabel: "passing",
-      sub: "green for 3h",
-      hint: "commits ↗",
-      href: "https://example.com/labs/commits",
-      extra:
-        `<span class="running"><span class="rdot"></span>next build running</span>`,
+      status: "bad",
+      value: "3 failing",
+      valueLabel: "3 failing",
+      aside: `<span class="hfacet" title="42 jobs · 33 repos">42 jobs · 33 repos</span>`,
+      hint: "every job ↗",
+      href: "/ci",
+      extra: jobList([
+        ["bad", "loom · Benchmarks", "failure · 3h ago"],
+        ["bad", "labs · CFC properties audit", "failure · 6h ago"],
+        ["bad", "infra · Terraform plan", "timed_out · 1d ago"],
+        ["warn", "gvisor · workflows", "unreadable"],
+      ]),
     },
   },
   {
@@ -80,16 +94,11 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
     },
   },
   {
-    label: "loom ci",
+    label: "your metric here",
     view: {
       status: "good",
-      value: "passing",
-      valueLabel: "passing",
-      sub: "green for 5h",
-      hint: "commits ↗",
-      href: "https://example.com/loom/commits",
-      extra:
-        `<span class="running"><span class="rdot"></span>next build running</span>`,
+      value: "—",
+      sub: "do you have data to show?",
     },
   },
   {
@@ -218,21 +227,24 @@ const TILE_LAYOUT_FIXTURE_INPUTS: readonly TileLayoutFixture[] = [
       status: "bad",
       value: "commonfabric.com down",
       valueLabel: "commonfabric.com down",
-      extra:
-        `<div class="tile-detail-list" tabindex="0" role="region" data-focus-key="targets" aria-label="Production target details; scroll for more" title="Scroll for more details" style="display:grid;grid-template-columns:auto 1fr;gap:7px 10px;margin-top:11px;font-size:12px;line-height:1.35">${
-          [
-            "commonfabric.com",
-            "estuary",
-            "rapids",
-            "bastion",
-            "prod shell",
-            "stage shell",
-            "LLM",
-            "sandbox",
-          ].map((name) =>
-            `<span style="display:inline-flex;align-items:center;gap:6px;font-weight:600"><span class="dot red"></span>${name}</span><span style="color:var(--text-muted);font-variant-numeric:tabular-nums">connection refused</span>`
-          ).join("")
-        }</div>`,
+      extra: detailList(
+        [
+          "commonfabric.com",
+          "estuary",
+          "rapids",
+          "bastion",
+          "prod shell",
+          "stage shell",
+          "LLM",
+          "sandbox",
+        ].map((name) => ({
+          status: "bad" as Status,
+          name,
+          detail: "connection refused",
+          href: `https://example.com/${name}`,
+        })),
+        { subject: "Production target details", focusKey: "targets" },
+      ),
     },
   },
   {

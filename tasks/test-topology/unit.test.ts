@@ -367,6 +367,102 @@ describe("running a member that cannot be handed a subset", () => {
     expect(suite.whole).toEqual([]);
   });
 
+  it("runs the files the runner sets apart in a `deno test` each", async () => {
+    // A serial file cannot run beside another test file in one process, and an
+    // all-access file needs every permission. A lane that selects some of each
+    // runs them apart, as the runner does, with a report and a skip list of
+    // their own.
+
+    const root = await workspace({
+      "./packages/bakery": {
+        tasks: {
+          test: "deno run --allow-read " +
+            "../../tasks/run-sharded-test-files.ts BAKERY_SHARD cli . " +
+            "--serial='**/*.serial.test.ts' --all-access=test/oven.test.ts " +
+            "-- --no-check --parallel --allow-read",
+        },
+        files: [
+          "test/glaze.test.ts",
+          "test/oven.test.ts",
+          "test/proof.serial.test.ts",
+        ],
+      },
+    });
+    const suite = workspaceUnit(await loadUnitSuites(root));
+    expect(suite.whole).toEqual([]);
+    const outputDir = await Deno.makeTempDir({ prefix: "unit-out-" });
+    const invocations = await suite.command(
+      [
+        { unit: "packages/bakery/test/proof.serial.test.ts", skip: ["rises"] },
+        { unit: "packages/bakery/test/oven.test.ts", skip: [] },
+        { unit: "packages/bakery/test/glaze.test.ts", skip: [] },
+      ],
+      { root, outputDir, spoolDir: "/spool" },
+    );
+    const files = invocations.map((invocation) =>
+      invocation.command.filter((word) => word.endsWith(".test.ts"))
+    );
+    expect(files).toEqual([
+      ["test/glaze.test.ts"],
+      ["test/oven.test.ts"],
+      ["test/proof.serial.test.ts"],
+    ]);
+    const [plain, allAccess, serial] = invocations;
+    expect(plain!.command).toContain("--parallel");
+    expect(plain!.command).toContain("--allow-read");
+    expect(allAccess!.command).toContain("--allow-all");
+    expect(allAccess!.command).not.toContain("--allow-read");
+    expect(serial!.command).not.toContain("--parallel");
+    expect(serial!.command).toContain("--allow-read");
+    expect(
+      new Set(invocations.map((invocation) => invocation.junit![0]!.path)).size,
+    ).toBe(3);
+    expect(plain!.env?.[SKIP_LIST_VARIABLE]).toBeUndefined();
+    expect(
+      JSON.parse(await Deno.readTextFile(serial!.env![SKIP_LIST_VARIABLE]!)),
+    ).toEqual({ "packages/bakery/test/proof.serial.test.ts": ["rises"] });
+  });
+
+  it("refuses a member whose serial glob names no file", async () => {
+    // Such a glob is a file renamed from under the task, which would
+    // otherwise run beside the rest under `--parallel`.
+
+    const root = await workspace({
+      "./packages/bakery": {
+        tasks: {
+          test: "deno run --allow-read " +
+            "../../tasks/run-sharded-test-files.ts BAKERY_SHARD cli . " +
+            "--serial=test/proof.serial.test.ts -- --no-check --parallel",
+        },
+        files: ["test/glaze.test.ts", "test/proof.test.ts"],
+      },
+    });
+    await expect(loadUnitSuites(root)).rejects.toThrow(
+      "No test file in `./packages/bakery` matches " +
+        "`test/proof.serial.test.ts`.",
+    );
+  });
+
+  it("builds one `deno test` where the files all need the same flags", async () => {
+    const root = await workspace({
+      "./packages/bakery": {
+        tasks: {
+          test: "deno run --allow-read " +
+            "../../tasks/run-sharded-test-files.ts BAKERY_SHARD cli . " +
+            "--serial='**/*.serial.test.ts' -- --no-check --parallel",
+        },
+        files: ["test/glaze.test.ts", "test/proof.serial.test.ts"],
+      },
+    });
+    const suite = workspaceUnit(await loadUnitSuites(root));
+    const invocations = await suite.command(
+      [{ unit: "packages/bakery/test/glaze.test.ts", skip: [] }],
+      { root, outputDir: "/out", spoolDir: "/spool" },
+    );
+    expect(invocations).toHaveLength(1);
+    expect(invocations[0]!.command).toContain("--parallel");
+  });
+
   it("declares a browser half whole, since its runner takes no list", async () => {
     const root = await workspace({
       "./packages/bakery": {

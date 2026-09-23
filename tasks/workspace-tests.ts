@@ -211,7 +211,6 @@ const INTERNALLY_SHARDED_PACKAGES: Record<
     total: 5,
     envVar: "AGENTS_HOST_TEST_SHARD",
   },
-  // packages/cli/test/run-tests.ts reads CLI_TEST_SHARD.
   cli: { total: 10, envVar: "CLI_TEST_SHARD" },
   piece: { total: 3, envVar: "PIECE_TEST_SHARD" },
   tasks: { total: 3, envVar: "TASK_TEST_SHARD" },
@@ -226,17 +225,19 @@ const INTERNALLY_SHARDED_PACKAGES: Record<
 // test command, and takes it for none.
 //
 // A leaf that runs a script of its own cannot show what the script does
-// with the flags it is handed. The members listed here route through a
-// runner that forwards them to one `deno test`. The runners that do not
-// appear here keep their leaves out: `cli` runs three `deno test`
-// invocations per slice, which would each overwrite the file, and
-// `dashboard` and `identity` drive browser harnesses that record through
-// the deno-web-test reporter instead.
-const FLAG_FORWARDING_RUNNERS = new Set([
-  "./packages/connectors/agents/host",
-  "./packages/piece",
-  "./tasks",
-]);
+// with the flags it is handed. `tasks/run-sharded-test-files.ts` is the
+// script known to forward them: it hands them to its `deno test` runs and
+// leaves one report where the flag names. A leaf running any other script
+// is kept out: `dashboard` and `identity` drive browser harnesses that
+// record through the deno-web-test reporter instead.
+const FLAG_FORWARDING_RUNNER = "run-sharded-test-files.ts";
+
+/** Whether a leaf task runs the script that forwards its flags. */
+function runsForwardingRunner(task: string): boolean {
+  return task.split(/\s+/).some((word) =>
+    path.basename(word) === FLAG_FORWARDING_RUNNER
+  );
+}
 
 /**
  * A directory, given as a path or a URL, as a URL that member paths
@@ -388,16 +389,14 @@ export async function assertMemberTestTasksDefined(
 }
 
 /**
- * Whether an appended `--junit-path` reaches this member's `deno test`
- * whole, so the runner can thread the flag and ingest the XML it writes.
+ * Whether an appended `--junit-path` reaches the `deno test` of a member
+ * whose leaf is `task`, whole, so the runner can thread the flag and
+ * ingest the XML it writes.
  */
-export function acceptsJUnitPath(
-  member: string,
-  task: string | undefined,
-): boolean {
-  if (FLAG_FORWARDING_RUNNERS.has(member)) return true;
+export function acceptsJUnitPath(task: string | undefined): boolean {
   if (task === undefined) return false;
   if (/[&;|<>]/.test(task)) return false;
+  if (runsForwardingRunner(task)) return true;
   return /(^|\s)deno test(\s|$)/.test(task);
 }
 
@@ -412,11 +411,8 @@ export function acceptsJUnitPath(
  * with nothing of this repository's own between the file and
  * `Deno.test`.
  */
-export function acceptsPreload(
-  member: string,
-  task: string | undefined,
-): boolean {
-  if (!acceptsJUnitPath(member, task)) return false;
+export function acceptsPreload(task: string | undefined): boolean {
+  if (!acceptsJUnitPath(task)) return false;
   return task === undefined || !/--import-map[= ]/.test(task);
 }
 
@@ -452,9 +448,9 @@ export function recordingSpool(
  * permission the preload has. Every other member runs its leaf directly,
  * and the whole line is that leaf's.
  */
-export function leafFlags(member: string, task: string): string[] {
+export function leafFlags(task: string): string[] {
   const tokens = task.split(/\s+/);
-  if (!FLAG_FORWARDING_RUNNERS.has(member)) return tokens;
+  if (!runsForwardingRunner(task)) return tokens;
   const forwarded = tokens.indexOf("--");
   return forwarded === -1 ? tokens : tokens.slice(forwarded + 1);
 }
@@ -473,11 +469,11 @@ export async function memberRecordingArguments(
   const recording = new Map<string, string[]>();
   for (const member of members) {
     const task = await leafTask(member, root);
-    if (!acceptsPreload(member, task)) {
+    if (!acceptsPreload(task)) {
       recording.set(member, []);
       continue;
     }
-    const write = spoolWriteArgument(leafFlags(member, task ?? ""), spool);
+    const write = spoolWriteArgument(leafFlags(task ?? ""), spool);
     recording.set(
       member,
       write === undefined ? [preloadArgument()] : [preloadArgument(), write],
@@ -493,7 +489,7 @@ export async function junitCapableMembers(
 ): Promise<Set<string>> {
   const capable = new Set<string>();
   for (const member of members) {
-    if (acceptsJUnitPath(member, await leafTask(member, root))) {
+    if (acceptsJUnitPath(await leafTask(member, root))) {
       capable.add(member);
     }
   }

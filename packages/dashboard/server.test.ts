@@ -29,14 +29,11 @@ import {
   tick,
 } from "./server.ts";
 import {
-  CI_WORKFLOW,
   LOOM_CI_WORKFLOW,
   LOOM_REPO,
   PORT,
-  REPO,
 } from "./config.ts";
 import { TILES } from "./registry.ts";
-import { labsCi } from "./tiles/main-build.ts";
 import { github } from "./lib.ts";
 import type { Ctx, Run, RunSource, Tile, TileView } from "./types.ts";
 import { DASHBOARD_MESSAGE_LIFETIME_MS } from "./dashboard-message.ts";
@@ -170,7 +167,7 @@ boardTest("healthz: not ok until the board has collected something", async () =>
   assertEquals(res.status, 200);
   assertEquals(await res.json(), { ok: false, at: 0 });
 
-  await tick([fake("labs ci", () => ({ status: "good", value: "passing" }))]);
+  await tick([fake("ci", () => ({ status: "good", value: "passing" }))]);
   const collected = await (await handle(req("/healthz"))).json();
   assertEquals(collected.ok, true);
   assert(collected.at > 0, "collecting stamps the board's last change");
@@ -918,14 +915,14 @@ boardTest("each completed collection is published while slower tiles are still r
   const slow = deferred<TileView>();
   clients.add(client);
   const collection = tick([
-    fake("labs ci", () => ({ status: "good", value: "fast" })),
-    fake("loom ci", () => slow.promise),
+    fake("ci", () => ({ status: "good", value: "fast" })),
+    fake("your metric here", () => slow.promise),
   ]);
   try {
     const first = updateFromEvent(await firstUpdate).gridHtml;
     assertEquals(messages.length, 1);
-    assertStringIncludes(tileHtml("labs ci", first), "fast");
-    assert(!tileHtml("loom ci", first).includes("slow"));
+    assertStringIncludes(tileHtml("ci", first), "fast");
+    assert(!tileHtml("your metric here", first).includes("slow"));
     slow.resolve({ status: "good", value: "slow" });
     await collection;
   } finally {
@@ -934,7 +931,7 @@ boardTest("each completed collection is published while slower tiles are still r
     await collection;
   }
   assertEquals(messages.length, 2);
-  assertStringIncludes(tileHtml("loom ci", updateFromEvent(messages[1]).gridHtml), "slow");
+  assertStringIncludes(tileHtml("your metric here", updateFromEvent(messages[1]).gridHtml), "slow");
 });
 
 boardTest("each run source publishes its dependent tiles as one batch", async () => {
@@ -948,9 +945,9 @@ boardTest("each run source publishes its dependent tiles as one batch", async ()
     env: () => undefined,
   };
   const tiles = [
-    sourceTile("labs ci", [labsSource]),
+    sourceTile("ci", [labsSource]),
     sourceTile("labs ci trust", [labsSource]),
-    sourceTile("loom ci", [loomSource]),
+    sourceTile("your metric here", [loomSource]),
     sourceTile("loom ci trust", [loomSource]),
     sourceTile("recent main runs", [labsSource, loomSource], true),
   ];
@@ -971,9 +968,9 @@ boardTest("each run source publishes its dependent tiles as one batch", async ()
     const firstMessage = nextMessage();
     labs.resolve([sourceRun(1, "labs new")]);
     const first = updateFromEvent(await firstMessage);
-    assertStringIncludes(tileHtml("labs ci", first.gridHtml), "labs new");
+    assertStringIncludes(tileHtml("ci", first.gridHtml), "labs new");
     assertStringIncludes(tileHtml("labs ci trust", first.gridHtml), "labs new");
-    assert(!tileHtml("loom ci", first.gridHtml).includes("loom new"));
+    assert(!tileHtml("your metric here", first.gridHtml).includes("loom new"));
     assertStringIncludes(tileHtml("recent main runs", first.wideHtml), "labs new");
     assertStringIncludes(first.wideHtml, "loom-incremental pending");
     assertEquals(messages.length, 1, "one source arrival produces one broadcast");
@@ -981,7 +978,7 @@ boardTest("each run source publishes its dependent tiles as one batch", async ()
     const secondMessage = nextMessage();
     loom.resolve([sourceRun(2, "loom new")]);
     const second = updateFromEvent(await secondMessage);
-    assertStringIncludes(tileHtml("loom ci", second.gridHtml), "loom new");
+    assertStringIncludes(tileHtml("your metric here", second.gridHtml), "loom new");
     assertStringIncludes(tileHtml("loom ci trust", second.gridHtml), "loom new");
     assertStringIncludes(second.wideHtml, "labs new, loom new");
     assert(!second.wideHtml.includes("pending"));
@@ -993,47 +990,6 @@ boardTest("each run source publishes its dependent tiles as one batch", async ()
     loom.resolve([]);
     await refresh;
   }
-});
-
-boardTest("a new source snapshot keeps the prior CI verdict during a rerun", async () => {
-  const failure = {
-    ...sourceRun(81, "failed build"),
-    conclusion: "failure",
-  };
-  const olderSuccess = sourceRun(82, "older passing build");
-  let runs = [failure, olderSuccess];
-  const sourceCtx: Ctx = {
-    runs: () => Promise.resolve(runs),
-    runsFor: (repo, workflow) => {
-      assertEquals(repo, REPO);
-      assertEquals(workflow, CI_WORKFLOW);
-      return Promise.resolve(runs);
-    },
-    env: () => undefined,
-  };
-  const tile = { ...labsCi, intervalMs: 0 };
-
-  await tick([tile], sourceCtx);
-  assertStringIncludes(
-    page(),
-    `<a class="tile bad link" data-tile-label="labs ci" href="https://github.com/${REPO}/commits/main"`,
-  );
-
-  runs = [{
-    ...failure,
-    status: "in_progress",
-    conclusion: null,
-    run_attempt: 2,
-    display_title: "rerun failed build",
-  }, olderSuccess];
-  await tick([tile], sourceCtx);
-  const rerunning = page();
-  assertStringIncludes(
-    rerunning,
-    `<a class="tile bad link" data-tile-label="labs ci" href="https://github.com/${REPO}/commits/main"`,
-  );
-  assertStringIncludes(rerunning, "failure");
-  assertStringIncludes(rerunning, "build rerunning");
 });
 
 boardTest("a ready source publishes while an older combined collection is still running", async () => {
@@ -1072,8 +1028,8 @@ boardTest("a ready source publishes while an older combined collection is still 
     },
   };
   const tiles = [
-    sourceTile("labs ci", [labsSource]),
-    sourceTile("loom ci", [loomSource]),
+    sourceTile("ci", [labsSource]),
+    sourceTile("your metric here", [loomSource]),
     combined,
   ];
   const messages: string[] = [];
@@ -1106,11 +1062,11 @@ boardTest("a ready source publishes while an older combined collection is still 
     const loomUpdate = nextMessage();
     loom.resolve([sourceRun(5, "loom ready")]);
     const first = updateFromEvent(await loomUpdate);
-    assertStringIncludes(tileHtml("loom ci", first.gridHtml), "loom ready");
+    assertStringIncludes(tileHtml("your metric here", first.gridHtml), "loom ready");
     const firstRecent = tileHtml("recent main runs", first.wideHtml);
     assertStringIncludes(firstRecent, "labs ready, loom ready");
     assert(firstRecent.startsWith(`unknown wide"`));
-    assert(!tileHtml("labs ci", first.gridHtml).includes("labs ready"));
+    assert(!tileHtml("ci", first.gridHtml).includes("labs ready"));
     publishOld({ status: "bad", value: "older cached merge" });
     assertEquals(messages.length, 1);
     assertStringIncludes(tileHtml("recent main runs"), "labs ready, loom ready");
@@ -1118,7 +1074,7 @@ boardTest("a ready source publishes while an older combined collection is still 
     const labsUpdate = nextMessage();
     oldCollection.resolve(undefined);
     const second = updateFromEvent(await labsUpdate);
-    assertStringIncludes(tileHtml("labs ci", second.gridHtml), "labs ready");
+    assertStringIncludes(tileHtml("ci", second.gridHtml), "labs ready");
     const secondRecent = tileHtml("recent main runs", second.wideHtml);
     assertStringIncludes(secondRecent, "labs ready, loom ready");
     assert(secondRecent.startsWith(`good wide"`));
@@ -1152,7 +1108,7 @@ boardTest("a shared run source preserves each dependent tile's per-source interv
   };
   const tiles: Tile[] = [
     {
-      label: "labs ci",
+      label: "ci",
       intervalMs: 0,
       runSources: [source],
       collect(): Promise<TileView> {
@@ -1189,14 +1145,14 @@ boardTest("a failed run source keeps its last good snapshot", async () => {
       : Promise.resolve([sourceRun(3, "last good run")]),
     env: () => undefined,
   };
-  const tile = sourceTile("labs ci", [source]);
+  const tile = sourceTile("ci", [source]);
 
   await tick([tile], sourceCtx);
-  assertStringIncludes(tileHtml("labs ci"), "last good run");
+  assertStringIncludes(tileHtml("ci"), "last good run");
 
   failing = true;
   await tick([tile], sourceCtx);
-  const stale = tileHtml("labs ci");
+  const stale = tileHtml("ci");
   assert(stale.startsWith(`unknown"`));
   assertStringIncludes(stale, "last good run");
   assertStringIncludes(stale, "stale-source source unreachable");
@@ -1213,14 +1169,14 @@ boardTest("a run source that reads backwards in time keeps its last good snapsho
       Promise.resolve([sourceRun(stale ? 5000 : 3, stale ? "weeks-old run" : "current run")]),
     env: () => undefined,
   };
-  const tile = sourceTile("labs ci", [source]);
+  const tile = sourceTile("ci", [source]);
 
   await tick([tile], sourceCtx);
-  assertStringIncludes(tileHtml("labs ci"), "current run");
+  assertStringIncludes(tileHtml("ci"), "current run");
 
   stale = true;
   await tick([tile], sourceCtx);
-  const held = tileHtml("labs ci");
+  const held = tileHtml("ci");
   assert(held.startsWith(`unknown"`));
   assertStringIncludes(held, "current run");
   assert(!held.includes("weeks-old run"), held);
@@ -1228,7 +1184,7 @@ boardTest("a run source that reads backwards in time keeps its last good snapsho
 
   stale = false;
   await tick([tile], sourceCtx);
-  const recovered = tileHtml("labs ci");
+  const recovered = tileHtml("ci");
   assert(recovered.startsWith(`good"`));
   assertStringIncludes(recovered, "current run");
 });
@@ -1358,9 +1314,9 @@ boardTest("sse: /events opens a stream, tick pushes new tile markup, disconnect 
   assert(Object.hasOwn(initial, "faviconRedSince"));
   assert(Object.hasOwn(initial, "faviconRedAgeMs"));
 
-  await tick([fake("labs ci", () => ({ status: "good", value: "live update" }))]);
+  await tick([fake("ci", () => ({ status: "good", value: "live update" }))]);
   const update = updateFromEvent(await chunk(reader));
-  assertStringIncludes(tileHtml("labs ci", update.gridHtml), "live update");
+  assertStringIncludes(tileHtml("ci", update.gridHtml), "live update");
   assert(update.ageSeconds >= 0);
   assertEquals(update.shellVersion, initial.shellVersion);
   assert(["good", "warn", "bad"].includes(update.faviconStatus));

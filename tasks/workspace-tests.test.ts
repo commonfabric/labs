@@ -667,14 +667,14 @@ Deno.test("runTests reports a failure when every member is disabled", async () =
 //
 
 Deno.test("acceptsJUnitPath reads an ordinary test task", () => {
-  assertEquals(acceptsJUnitPath("./packages/x", "deno test"), true);
+  assertEquals(acceptsJUnitPath("deno test"), true);
   assertEquals(
-    acceptsJUnitPath("./packages/x", "ENV=test deno test --no-check -A"),
+    acceptsJUnitPath("ENV=test deno test --no-check -A"),
     true,
   );
-  assertEquals(acceptsJUnitPath("./packages/x", undefined), false);
+  assertEquals(acceptsJUnitPath(undefined), false);
   assertEquals(
-    acceptsJUnitPath("./packages/x", "echo 'No tests defined.'"),
+    acceptsJUnitPath("echo 'No tests defined.'"),
     false,
   );
 });
@@ -683,47 +683,64 @@ Deno.test("acceptsPreload refuses a task naming its own import map", () => {
   // That map governs every module of the invocation, the preload
   // included, so a specifier the preload needs and the map does not carry
   // fails the whole run rather than the preload alone.
-  assertEquals(acceptsPreload("./packages/x", "deno test"), true);
+  assertEquals(acceptsPreload("deno test"), true);
   assertEquals(
-    acceptsPreload("./packages/x", "deno test -A --import-map ./m.json ."),
+    acceptsPreload("deno test -A --import-map ./m.json ."),
     false,
   );
   assertEquals(
-    acceptsPreload("./packages/x", "deno test -A --import-map=./m.json ."),
+    acceptsPreload("deno test -A --import-map=./m.json ."),
     false,
   );
   // A member that cannot take the JUnit path cannot take the preload
   // either: neither reaches the leaf.
   assertEquals(
-    acceptsPreload("./packages/x", "deno test a/ && deno test b/"),
+    acceptsPreload("deno test a/ && deno test b/"),
     false,
   );
-  assertEquals(acceptsPreload("./packages/x", undefined), false);
+  assertEquals(acceptsPreload(undefined), false);
 });
 
 Deno.test("acceptsJUnitPath refuses a task whose flag would land elsewhere", () => {
   // The appended flag reaches only the last command of a chain, which is
   // how a benchmark once received a --junit-path meant for the tests.
   assertEquals(
-    acceptsJUnitPath("./packages/x", "deno test test/ && deno run -A perf.ts"),
+    acceptsJUnitPath("deno test test/ && deno run -A perf.ts"),
     false,
   );
   assertEquals(
-    acceptsJUnitPath("./packages/x", "deno test a/ ; deno test b/"),
+    acceptsJUnitPath("deno test a/ ; deno test b/"),
     false,
   );
   assertEquals(
-    acceptsJUnitPath("./packages/x", "deno test > results.txt"),
+    acceptsJUnitPath("deno test > results.txt"),
     false,
   );
 });
 
 Deno.test("acceptsJUnitPath takes a runner only when it is known to forward", () => {
-  const runner = "deno run -A test/run-tests.ts";
-  assertEquals(acceptsJUnitPath("./packages/piece", runner), true);
-  assertEquals(acceptsJUnitPath("./tasks", runner), true);
-  assertEquals(acceptsJUnitPath("./packages/cli", runner), false);
-  assertEquals(acceptsJUnitPath("./packages/dashboard", runner), false);
+  // The sharded runner hands appended flags to its `deno test` runs and
+  // leaves one report; a script of a package's own shows nothing of what
+  // it does with them. Which member runs the task does not enter into it.
+  assertEquals(
+    acceptsJUnitPath(
+      "deno run -A ../../tasks/run-sharded-test-files.ts X cli . -- -A",
+    ),
+    true,
+  );
+  assertEquals(
+    acceptsJUnitPath("deno run -A ./run-sharded-test-files.ts X tasks . -- -A"),
+    true,
+  );
+  assertEquals(acceptsJUnitPath("deno run -A test/runner.ts"), false);
+  // Chained with another command, the runner is not the one the appended
+  // flag reaches.
+  assertEquals(
+    acceptsJUnitPath(
+      "deno run -A ./run-sharded-test-files.ts X tasks . -- -A && echo done",
+    ),
+    false,
+  );
 });
 
 Deno.test("memberTestTask accepts a directory path as well as a URL", async () => {
@@ -777,11 +794,13 @@ Deno.test("the workspace's capable members are read from their manifests", async
   const capable = await junitCapableMembers(members, rootUrl);
 
   // Members whose `deno-test` is one `deno test`, reached through
-  // `run-member-tests.ts`, and a flag-forwarding runner behind it.
+  // `run-member-tests.ts`, and flag-forwarding runners behind it, one of
+  // them running its files as several `deno test` commands.
   for (
     const member of [
       "./packages/navigation",
       "./tasks",
+      "./packages/cli",
       "./packages/runner",
       "./packages/api",
       "./packages/memory",
@@ -789,11 +808,12 @@ Deno.test("the workspace's capable members are read from their manifests", async
   ) {
     assertEquals(capable.has(member), true, `${member} should take the flag`);
   }
-  // A runner that runs several test commands, and a browser harness,
-  // neither of which does.
-  for (const member of ["./packages/cli", "./packages/dashboard"]) {
-    assertEquals(capable.has(member), false, `${member} should not`);
-  }
+  // A browser harness, which does not.
+  assertEquals(
+    capable.has("./packages/dashboard"),
+    false,
+    "./packages/dashboard should not",
+  );
 });
 
 Deno.test("the flag reaches the `deno-test` of a member running the wrapper", async () => {
@@ -849,7 +869,7 @@ Deno.test("every member whose leaf takes the preload lets it read its variables"
   const unreadable: string[] = [];
   for (const [member, args] of recording) {
     if (args.length === 0) continue;
-    const flags = leafFlags(member, (await leafTask(member, rootUrl)) ?? "");
+    const flags = leafFlags((await leafTask(member, rootUrl)) ?? "");
     const reads = flags.some((flag) =>
       flag === "-A" || flag === "--allow-all" || flag === "--allow-env" ||
       (flag.startsWith("--allow-env=") &&
@@ -891,15 +911,28 @@ Deno.test("a forwarding runner is read by the flags it hands its leaf", () => {
   // whole line would answer from the runner's.
   assertEquals(
     leafFlags(
-      "./tasks",
-      "deno run --allow-read runner.ts x . -- --no-check -A",
+      "deno run --allow-read run-sharded-test-files.ts x y . -- --no-check -A",
     ),
     ["--no-check", "-A"],
   );
   // A member running its leaf directly has one list, and it is the whole
-  // of the line.
+  // of the line, as it is for a script that forwards nothing.
   assertEquals(
-    leafFlags("./packages/html", "deno test --allow-read a.test.ts"),
+    leafFlags("deno run --allow-read runner.ts x . -- --no-check -A"),
+    [
+      "deno",
+      "run",
+      "--allow-read",
+      "runner.ts",
+      "x",
+      ".",
+      "--",
+      "--no-check",
+      "-A",
+    ],
+  );
+  assertEquals(
+    leafFlags("deno test --allow-read a.test.ts"),
     ["deno", "test", "--allow-read", "a.test.ts"],
   );
 });
@@ -925,8 +958,11 @@ Deno.test("a recording leaf is given the preload and a write it needs", async ()
   // write is what makes the preload take the class names, and the read
   // is what finds the files that replace them.
   assertEquals(recording.get("./packages/utils"), [preload]);
+  // A member behind the sharded runner is read by the flags its leaf takes,
+  // which here grant a write anywhere.
+  assertEquals(recording.get("./packages/cli"), [preload]);
   // A member whose task cannot take the preload takes nothing at all.
-  assertEquals(recording.get("./packages/cli"), []);
+  assertEquals(recording.get("./packages/dashboard"), []);
 });
 
 //

@@ -26,11 +26,16 @@ interface HeldRun {
  */
 export class CompletedAttempts {
   #repo: string;
+  #token: string | undefined;
   #runs = new Map<number, HeldRun>();
 
-  /** Constructs an instance that reads the runs of `repo`, an "owner/name". */
-  constructor(repo: string) {
+  /**
+   * Constructs an instance that reads the runs of `repo`, an "owner/name",
+   * with `token`, or with the dashboard's own GitHub token when none is given.
+   */
+  constructor(repo: string, token?: string) {
     this.#repo = repo;
+    this.#token = token;
   }
 
   /**
@@ -60,6 +65,7 @@ export class CompletedAttempts {
     if (held) return held;
     const completed = await github<Run>(
       `repos/${this.#repo}/actions/runs/${run.id}/attempts/${attempt}`,
+      this.#token,
     );
     if (
       completed.id !== run.id ||
@@ -91,6 +97,7 @@ export class CompletedAttempts {
     if (held !== undefined) return !held;
     const listing = await github<unknown>(
       `repos/${this.#repo}/actions/runs/${id}/attempts/${number}/jobs?per_page=1`,
+      this.#token,
     );
     if (!isObjectNotArray(listing) || typeof listing.total_count !== "number") {
       throw new Error(

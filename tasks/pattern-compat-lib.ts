@@ -102,8 +102,10 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 }
 
 /**
- * CI fan-out, mirroring cfcheck's `CFCHECK_SHARD`: `"i/n"`, 1-based. Compiling
- * a pattern is single-threaded CPU work, so more cores means more processes.
+ * The share of the patterns `PATTERN_COMPAT_SHARD` names, as `"i/n"` counting
+ * from one, or all of them where it names nothing. Compiling a pattern is
+ * single-threaded CPU work, so dividing the patterns between processes is
+ * what puts more cores to use.
  */
 export function parseShard(raw: string | undefined): {
   index: number;

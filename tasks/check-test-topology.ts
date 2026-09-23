@@ -136,7 +136,8 @@ export async function candidateSurfaces(root: string): Promise<string[]> {
 
 /**
  * Paths that look like tests and are not: fixtures a test drives rather
- * than tests of their own. Each says why, and an entry that stops
+ * than tests of their own. An entry ending in `/` is a directory, and
+ * covers everything under it. Each says why, and an entry that stops
  * applying fails, so the list cannot go stale unnoticed.
  */
 const NOT_A_TEST_SURFACE: ReadonlyArray<{ path: string; reason: string }> = [
@@ -159,6 +160,11 @@ const NOT_A_TEST_SURFACE: ReadonlyArray<{ path: string; reason: string }> = [
   {
     path: "packages/deno-web-test/test/timeout-project/hang.test.ts",
     reason: "a project the harness runs to prove it reports a wedged test",
+  },
+  {
+    path: "packages/cli/test/fixtures/",
+    reason: "pattern tests the CLI's own tests hand to `cf test`, to check " +
+      "what it reports for each",
   },
   {
     path: "packages/cli/integration/bulk-ops-demo.sh",
@@ -281,6 +287,12 @@ export function checkTree(
   const fixtures = new Map(
     (declared.fixtures ?? []).map((entry) => [entry.path, entry.reason]),
   );
+  // The entry covering a path: the path itself, or a directory above it.
+  const fixtureOf = (candidate: string): string | undefined =>
+    [...fixtures.keys()].find((entry) =>
+      entry === candidate ||
+      (entry.endsWith("/") && candidate.startsWith(entry))
+    );
   const held = new Set<string>();
   for (const candidate of candidates) {
     const exact = claims.filter((claim) => claim.exact.has(candidate));
@@ -304,19 +316,19 @@ export function checkTree(
         });
       }
     }
+    const fixture = fixtureOf(candidate);
     if (exact.length > 0) {
-      const reason = fixtures.get(candidate);
-      if (reason !== undefined) {
+      if (fixture !== undefined) {
         findings.push({
           fails: true,
           message: `${candidate} is claimed by a suite and is still listed ` +
-            `as a fixture: ${reason}`,
+            `as a fixture: ${fixtures.get(fixture)}`,
         });
       }
       continue;
     }
-    if (fixtures.has(candidate)) {
-      held.add(candidate);
+    if (fixture !== undefined) {
+      held.add(fixture);
       continue;
     }
     // A suite whose units are coarser than a file — a workspace member
@@ -337,7 +349,9 @@ export function checkTree(
   }
   for (const path of fixtures.keys()) {
     if (held.has(path)) continue;
-    if (candidates.includes(path)) continue;
+    if (candidates.some((candidate) => fixtureOf(candidate) === path)) {
+      continue;
+    }
     findings.push({
       fails: true,
       message: `${path} is listed as a fixture and the tree no longer holds it`,

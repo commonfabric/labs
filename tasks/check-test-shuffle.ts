@@ -66,11 +66,6 @@ const RUNNERS: readonly Runner[] = [
     implementation: "tasks/run-sharded-test-files.ts",
   },
   {
-    command: "test/run-tests.ts",
-    kind: "forwards",
-    implementation: "packages/cli/test/run-tests.ts",
-  },
-  {
     command: "test/runner.ts",
     kind: "shuffles",
     implementation: "packages/dashboard/test/runner.ts",

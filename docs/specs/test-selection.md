@@ -708,7 +708,8 @@ takes the shape of the topology instead. The same holds for a manifest
 that arrives and knows none of the tree, which is why the question is
 whether anything is measured rather than whether a manifest was found. A
 consumer that reports a projected time says how much of it rests on
-stand-ins.
+stand-ins. A lane that could not ask the store at all is the exception to
+running, for the reason under [Determinism](#determinism).
 
 That the manifest may be an ordinary public object rather than a signed
 artifact follows from what it can do. It can only change *which* tests
@@ -895,7 +896,7 @@ two are different moments: a publisher names its manifest from the moment
 it started and creates the object when it finishes, so the name carries a
 moment at which the object was not yet there to be read. A listing that
 will not say when it created an object fails rather than standing a value
-in, and the lane goes on with no manifest.
+in, and a lane whose listing fails does not pack, for the reason below.
 
 That difference is what keeps the eligible set closed. Every manifest is
 created at a real moment, and the lanes list after the commit was made, so
@@ -922,11 +923,19 @@ still permits that run to be re-run, which is a lifecycle rule on the
 bucket rather than anything a reader controls. Where the re-run window is
 the longer of the two, the retention is what to raise.
 
-A lane that resolves no manifest still agrees with its siblings, because
-what it packs is decided by the tree rather than by what it failed to
-read. Nothing has records in that state, so every unit the tree holds is
-an identity with none and the whole corpus is mandatory. The lanes divide
-that between them and say what they are doing.
+A lane that resolves no manifest because the store answered that it holds
+none, or none this reader understands, still agrees with its siblings. The
+store gives every lane that answer, and what the lanes then pack is decided
+by the tree. Nothing has records in that state, so every unit the tree
+holds is an identity with none and the whole corpus is mandatory. The
+lanes divide that between them and say what they are doing.
+
+A store that could not be asked is different. A listing or a read can fail
+for one lane and succeed for the next. A lane that packed without the
+manifest its siblings read would lay out a plan they are not following,
+and a test each plan put in the other's lanes would run in neither while
+the run passed. So a lane whose listing or read fails refuses to pack, and
+says why. A count of lanes planned from the same reading refuses too.
 
 A consumer with no commit to read falls back to the newest manifest there
 is and reports that it has done so. That is the answer for a tool invoked

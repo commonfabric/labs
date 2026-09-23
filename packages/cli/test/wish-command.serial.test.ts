@@ -15,7 +15,7 @@ import { CellSelectionError } from "../lib/cell-selection.ts";
 import { captureStderr, withEnv } from "./utils.ts";
 
 // Drives the `cf wish` action body in-process with a stubbed readWish/exit
-// (same idiom as test/inspect-remote.test.ts), so flag handling, config
+// (same idiom as test/inspect-remote.serial.test.ts), so flag handling, config
 // shaping, JSON output and the error/exit paths are covered without a live
 // server. The wish resolution itself is covered in test/wish.test.ts.
 

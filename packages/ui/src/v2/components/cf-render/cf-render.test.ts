@@ -1345,7 +1345,9 @@ describe("CFRender piece context menu", () => {
 
   it("opens the built-in menu when no host takes the click", () => {
     // The menu mounts on document.body, outside the piece — see cf-piece-menu.
+
     const mounted: unknown[] = [];
+    const closedFor: Element[] = [];
     const original = Object.getOwnPropertyDescriptor(globalThis, "document");
     Object.defineProperty(globalThis, "document", {
       configurable: true,
@@ -1354,6 +1356,7 @@ describe("CFRender piece context menu", () => {
         createElement: () => ({
           open: () => {},
           close: () => {},
+          closeFor: (piece: Element) => closedFor.push(piece),
           style: { setProperty: () => {}, removeProperty: () => {} },
         }),
         body: {
@@ -1390,6 +1393,10 @@ describe("CFRender piece context menu", () => {
 
       expect(mounted.length).toBe(1);
       expect(event.defaultPrevented).toBe(true);
+
+      element.disconnectedCallback();
+      expect(closedFor).toHaveLength(1);
+      expect(closedFor[0]).toBe(element);
     } finally {
       if (original) Object.defineProperty(globalThis, "document", original);
       else Reflect.deleteProperty(globalThis, "document");

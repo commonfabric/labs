@@ -27,7 +27,13 @@
 import * as path from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
 import { SKIP_LIST_VARIABLE } from "@commonfabric/test-support/records";
-import { memberTasks, memberTestFiles } from "./deno-task.ts";
+import {
+  memberTasks,
+  memberTestFiles,
+  type ParsedTestTask,
+  testBatches,
+  unmatchedGlobs,
+} from "./deno-task.ts";
 import {
   claimsIdentity,
   type CommandContext,
@@ -64,8 +70,8 @@ interface Member {
   /** Repository-relative test files, when the member is read one at a time. */
   files: string[];
 
-  /** The task's flags and environment, when its files are selectable. */
-  run?: { flags: string[]; env: Record<string, string> };
+  /** The task taken apart, when its files are selectable. */
+  run?: ParsedTestTask;
 
   /** The task that runs the Deno-only half, for a member that runs whole. */
   denoTestTask: string;
@@ -115,6 +121,19 @@ async function readMember(
     browserFiles: [],
   };
   if (tasks.denoTest === undefined) return member;
+  // A glob giving files flags of their own that names no file would leave
+  // a renamed file running under the flags of the rest.
+  const unmatched = await unmatchedGlobs(memberDir, tasks.denoTest.paths, [
+    ...tasks.denoTest.serial,
+    ...tasks.denoTest.allAccess,
+  ]);
+  if (unmatched.length > 0) {
+    throw new Error(
+      `No test file in \`${memberPath}\` matches ${
+        unmatched.map((glob) => `\`${glob}\``).join(", ")
+      }.`,
+    );
+  }
   // Normalized against the repository root, because a member's task may
   // name a file outside its own directory and a unit is a path anyone
   // else can resolve.
@@ -122,7 +141,7 @@ async function readMember(
     path.relative(root, path.resolve(memberDir, file));
   member.files = (await memberTestFiles(memberDir, tasks.denoTest))
     .map(relative);
-  member.run = { flags: tasks.denoTest.flags, env: tasks.denoTest.env };
+  member.run = tasks.denoTest;
   if (member.browserTest) {
     // What the Deno-only half ignores is what the browser half runs. A
     // member that splits its halves by a name — `*.browser.test.ts` — is
@@ -315,31 +334,37 @@ function unitSuite(
           });
         }
         if (files.length > 0 && member.run !== undefined) {
-          const junitPath = path.join(context.outputDir, `${slug}.xml`);
-          invocations.push({
-            command: [
-              Deno.execPath(),
-              "test",
-              ...member.run.flags,
-              ...shuffleArguments(),
-              ...recordingArguments(member.run.flags, context),
-              `--junit-path=${junitPath}`,
-              ...files.map((request) =>
-                path.relative(
-                  memberDir,
-                  path.resolve(context.root, request.unit),
-                )
-              ),
-            ],
-            cwd: memberDir,
-            env: { ...denoEnv, ...await skipEnv(context, slug, files) },
-            junit: [{
-              path: junitPath,
-              kind: "unit",
-              scope: member.scope,
-              filePrefix: member.memberPath.replace(/^\.\//, ""),
-            }],
-          });
+          // Keyed by the path the member's own task would name the file by,
+          // which is what the batches are drawn up over.
+          const byFile = new Map(files.map((request) => [
+            path.relative(memberDir, path.resolve(context.root, request.unit)),
+            request,
+          ]));
+          const batches = testBatches(member.run, [...byFile.keys()]);
+          for (const [index, batch] of batches.entries()) {
+            const name = index === 0 ? slug : `${slug}.${index}`;
+            const junitPath = path.join(context.outputDir, `${name}.xml`);
+            const requests = batch.files.map((file) => byFile.get(file)!);
+            invocations.push({
+              command: [
+                Deno.execPath(),
+                "test",
+                ...batch.flags,
+                ...shuffleArguments(),
+                ...recordingArguments(batch.flags, context),
+                `--junit-path=${junitPath}`,
+                ...batch.files,
+              ],
+              cwd: memberDir,
+              env: { ...denoEnv, ...await skipEnv(context, name, requests) },
+              junit: [{
+                path: junitPath,
+                kind: "unit",
+                scope: member.scope,
+                filePrefix: member.memberPath.replace(/^\.\//, ""),
+              }],
+            });
+          }
         }
         if (runsBrowser) {
           invocations.push({
