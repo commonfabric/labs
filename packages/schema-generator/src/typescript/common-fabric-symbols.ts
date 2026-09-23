@@ -73,6 +73,55 @@ export function isCommonFabricSymbol(
 }
 
 /**
+ * Follows import and re-export hops to a Common Fabric module or a declaration
+ * file, which authored pattern code never is. This recognizes library types
+ * declared in companion modules without depending on their physical paths.
+ * Stops at authored type aliases: a wrapper must keep its own argument mapping
+ * even when its body references a library type.
+ */
+export function isImportedFromCommonFabric(
+  symbol: ts.Symbol | undefined,
+  checker: ts.TypeChecker,
+): boolean {
+  const seen = new Set<ts.Symbol>();
+  let current = symbol;
+  while (
+    current && current.flags & ts.SymbolFlags.Alias && !seen.has(current)
+  ) {
+    seen.add(current);
+    for (const declaration of current.declarations ?? []) {
+      if (declaration.getSourceFile().isDeclarationFile) return true;
+      const specifier = importModuleSpecifier(declaration);
+      if (
+        specifier !== undefined &&
+        (isCommonFabricModuleName(specifier) ||
+          specifier.startsWith("commonfabric/"))
+      ) {
+        return true;
+      }
+    }
+    current = checker.getImmediateAliasedSymbol(current);
+  }
+  return false;
+}
+
+/** The module an import or re-export declaration names, if it names one. */
+function importModuleSpecifier(
+  declaration: ts.Declaration,
+): string | undefined {
+  let node: ts.Node | undefined = declaration;
+  while (
+    node && !ts.isImportDeclaration(node) && !ts.isExportDeclaration(node)
+  ) {
+    node = node.parent;
+  }
+  const specifier = node?.moduleSpecifier;
+  return specifier && ts.isStringLiteral(specifier)
+    ? specifier.text
+    : undefined;
+}
+
+/**
  * Resolves a symbol to check if it represents a Common Fabric export
  */
 export function resolvesToCommonFabricSymbol(

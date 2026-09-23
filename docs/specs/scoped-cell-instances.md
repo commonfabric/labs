@@ -318,6 +318,20 @@ type JSONSchemaObj = {
 };
 ```
 
+A slot declares its scope on its own schema: the outermost `asCell` entry's
+`scope` where it has one, otherwise the top-level `scope`. A slot whose schema
+is a `$ref` is read with the reference resolved, whether it is a local
+`#/$defs/<name>` or a content-addressed `cid:` one, so a type whose every
+position is per-user — a recursive one names its own definition — declares
+that once on the definition. Resolution merges the keywords written beside the
+`$ref` over the definition's one keyword at a time, as it does for every
+reference the runtime follows, and the precedence above then applies to the
+result: a `scope` beside the `$ref` replaces the definition's `scope`, while an
+`asCell` entry scope on the definition still comes first. A scope inside an
+`anyOf`/`oneOf` branch is not a declaration: the branches are alternatives for
+one slot, and which of them a value takes is not known where the declaration is
+read.
+
 `scope: "space"`, `scope: "user"`, and `scope: "session"` set the narrowest
 link scope that reads are allowed to follow. If the schema declares
 `scope: "user"`, then space and user links may be followed, but session links

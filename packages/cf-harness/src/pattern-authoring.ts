@@ -35,7 +35,11 @@ export default pattern<Input, Output>(({ mail }) => {
   };
 });`;
 
-/** Compiler and value-boundary rules shared by recipe research and authors. */
+/**
+ * Compiler and value-boundary rules for an author writing new pattern source.
+ * Research does not carry them: it chooses published parts, which are
+ * imported rather than rewritten, on their contract rather than their source.
+ */
 export const PATTERN_AUTHORING_GUIDANCE = [
   'Use cf-alert status="info" | "error" | "warning" | "success". It has no variant or severity prop.',
   "Pattern inputs and outputs must be serializable: use arrays or plain records, not Set or Map. A temporary Set inside a computed is local working state; return an array from it, not the Set.",

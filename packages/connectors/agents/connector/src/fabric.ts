@@ -59,14 +59,16 @@ export interface AgentFabricCells {
   receipts: Cell<unknown>;
 }
 
-/** What the indexes say about one session, read without its transcript. */
-/** What a host reads of a published session to decide retention: the fields
- * an inventory summary can change, and the row's status. The map it comes in
- * supplies the identity. */
+/**
+ * What a host reads of a published session to decide retention: the fields
+ * an inventory summary can change, the row's status, and any durable pairing
+ * with the desktop start that made it. The map it comes in supplies the
+ * identity.
+ */
 export type PublishedSessionState = Readonly<
   Pick<
     IndexEntry,
-    "driver" | "updatedAt" | "archived" | "active" | "syncStatus"
+    "driver" | "updatedAt" | "archived" | "active" | "syncStatus" | "startedAs"
   >
 >;
 
@@ -1092,6 +1094,7 @@ export class AgentFabricTarget implements CommandTarget {
         archived: typeof entry.archived === "boolean" ? entry.archived : null,
         active: typeof entry.active === "boolean" ? entry.active : null,
         syncStatus: entry.syncStatus,
+        ...(entry.startedAs ? { startedAs: entry.startedAs } : {}),
       });
     }
     return states;

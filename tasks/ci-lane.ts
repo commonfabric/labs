@@ -274,22 +274,26 @@ export function parseLaneArgs(
  *
  * The seed test order is shuffled by is taken from the same moment, for
  * the same reasons.
+ *
+ * Throws where the commit's date cannot be read. Reading it can fail in
+ * one lane and not in its siblings, and no other moment is one they are
+ * sure to share.
  */
 export function manifestMoment(
   options: Pick<LaneOptions, "at" | "root">,
-): { at: string; note?: string } {
-  if (options.at !== undefined) return { at: options.at };
-  // Git writes the committer's own offset, and manifest names carry UTC,
-  // so the two are only comparable once this one is normalized.
+): string {
+  if (options.at !== undefined) return options.at;
   const moment = commitMoment(options.root);
   if (moment === undefined) {
-    return {
-      at: new Date().toISOString(),
-      note: "cannot read the commit's date, so the manifest is the newest " +
-        "there is rather than the one this tree was made against",
-    };
+    throw new Error(
+      `ci-lane: cannot read the date of the commit checked out at ` +
+        `\`${options.root}\`, which is the moment every lane testing it ` +
+        "resolves its manifest at; `--at` names another moment",
+    );
   }
-  return { at: moment.toISOString() };
+  // Git writes the committer's own offset, and manifest names carry UTC,
+  // so the two are only comparable once this one is normalized.
+  return moment.toISOString();
 }
 
 /** The files this change touched, as the repository names them. */
@@ -1240,8 +1244,7 @@ export interface LaneDeps {
 
 /**
  * The manifest the lanes testing this checkout's commit resolve, as the
- * store gave it, or why there is none. `say` is where a note about the
- * moment it was resolved at goes.
+ * store gave it, or why there is none.
  *
  * Anything that reads a manifest for a checkout resolves it here. One
  * that resolved it some other way could be describing a different
@@ -1251,11 +1254,8 @@ export interface LaneDeps {
 export async function resolveManifest(
   options: Pick<LaneOptions, "at" | "root">,
   deps: Pick<LaneDeps, "manifest">,
-  say: (note: string) => void,
 ): Promise<ManifestFetch> {
-  const moment = manifestMoment(options);
-  if (moment.note !== undefined) say(moment.note);
-  return await deps.manifest({ at: moment.at });
+  return await deps.manifest({ at: manifestMoment(options) });
 }
 
 /** What reading this tree against its manifest came to. */
@@ -1278,13 +1278,8 @@ async function read(
   options: LaneOptions,
   suites: readonly Suite[],
   deps: Pick<LaneDeps, "manifest">,
-  say: (line: string) => void,
 ): Promise<Reading> {
-  const manifest = await resolveManifest(
-    options,
-    deps,
-    (note) => say(`ci-lane: ${note}`),
-  );
+  const manifest = await resolveManifest(options, deps);
   // Every lane of a run packs its share of one plan, and the plan is only
   // one plan if every lane read the same manifest. A manifest never
   // changes once created, so lanes asking about one moment get one answer
@@ -1347,8 +1342,7 @@ export interface LanePlan extends Reading {
 /**
  * The plan every lane of a run computes over this tree: the manifest
  * this commit belongs to, the tree read against it, and what the tree
- * holds packed into `options.of` lanes. `say` is where a note about
- * resolving the manifest goes.
+ * holds packed into `options.of` lanes.
  *
  * A lane runs its own share of this. Anything that describes what a lane
  * would do computes it here rather than packing the tree again, so the
@@ -1358,9 +1352,8 @@ export async function lanePlan(
   options: LaneOptions,
   suites: readonly Suite[],
   deps: Pick<LaneDeps, "manifest">,
-  say: (line: string) => void,
 ): Promise<LanePlan> {
-  const reading = await read(options, suites, deps, say);
+  const reading = await read(options, suites, deps);
   return { ...reading, laid: packing(options, suites, reading.seen) };
 }
 
@@ -1374,7 +1367,7 @@ export async function lanePlan(
  * pull-request lanes do, so nothing about what runs passes through a job
  * output and there is no second packing to disagree with theirs.
  *
- * Notes about resolving the manifest go to the error stream, because
+ * Notes about what the count rests on go to the error stream, because
  * this answers on the standard one and a job reads the answer from
  * there.
  */
@@ -1398,7 +1391,7 @@ async function fullLanesNeeded(
   deps: LaneDeps,
 ): Promise<number> {
   const suites = await (deps.topology ?? loadTopology)(options.root);
-  const { seen } = await read(options, suites, deps, console.error);
+  const { seen } = await read(options, suites, deps);
   if (seen.unmeasured === seen.manifest.entries.length) {
     // Nothing at all has a measured cost, so a cost model here would be
     // arithmetic over a figure this invented, and the answer would be
@@ -1464,12 +1457,7 @@ export async function runLane(
   // no child of it inherits the token except through the capability.
   const githubToken = takeGithubToken();
   const suites = await (deps.topology ?? loadTopology)(options.root);
-  const { seen, fetched, laid } = await lanePlan(
-    options,
-    suites,
-    deps,
-    console.log,
-  );
+  const { seen, fetched, laid } = await lanePlan(options, suites, deps);
   const mine = laid.lanes.find((lane) => lane.lane === options.lane);
   if (mine === undefined) {
     // A lane outside the run it belongs to. Taking an empty share

@@ -77,6 +77,13 @@ command's `--lock` flag.
   directly, as `packages/dashboard/test/runner.ts` does with
   `--allow-run=${Deno.execPath()},git`.
 
+- End a child Deno that is done, or that waits only on input the test controls,
+  by closing that input, and then await its `status`. Do not signal it. The
+  child inherits `DENO_COVERAGE_DIR` and writes its coverage profiles as it
+  exits. A signal sent during that exit loses a profile or truncates one, and
+  one truncated profile makes `deno coverage` refuse every profile in the job.
+  "Tests that start Deno" in `docs/development/TESTING.md` has the detail.
+
 ## Common Tells
 
 Risky tests often contain `Deno.Command(Deno.execPath())`, `deno check`,

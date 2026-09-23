@@ -64,7 +64,13 @@ import {
   useCancelGroup,
   useDeferredCancelOwnership,
 } from "./cancel.ts";
-import { type Cell, createCell, isCell, syncCellForIdentity } from "./cell.ts";
+import {
+  type Cell,
+  createCell,
+  isCell,
+  schemaCellScope,
+  syncCellForIdentity,
+} from "./cell.ts";
 import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
@@ -228,7 +234,7 @@ import {
   setRunnableName,
 } from "./runner-utils.ts";
 import { normalizeSandboxResult } from "./sandbox/result-normalization.ts";
-import { isCellScope, narrowestScope } from "./scope.ts";
+import { narrowestScope } from "./scope.ts";
 import { SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
 import {
@@ -399,14 +405,6 @@ function schedulerActionInstanceKey(parts: {
     reads: (parts.reads ?? []).map(schedulerActionLinkIdentity),
     writes: (parts.writes ?? []).map(schedulerActionLinkIdentity),
   }).hashString.slice(0, 12);
-}
-
-function schemaCellScope(
-  schema: JSONSchema | undefined,
-): CellScope | undefined {
-  if (!isObjectNotArray(schema)) return undefined;
-  schema = resolveExternalRootRefForStructure(schema);
-  return isCellScope(schema.scope) ? schema.scope : undefined;
 }
 
 function patternDefaultScope(pattern: Pattern): CellScope | undefined {

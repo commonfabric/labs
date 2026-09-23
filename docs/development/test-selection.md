@@ -35,8 +35,8 @@ ask about them exactly.
 `--at <moment>`, in ISO 8601, reads the manifest that was current at that
 moment instead, which is how to ask about a manifest published after the
 checked-out commit was made. Where the commit's date cannot be read and no
-moment is named, the mode says so on the error stream and reads the newest
-manifest.
+moment is named, the mode stops and says so, because the manifest the lanes
+testing that commit would read is then unknown.
 
 ## The modes
 

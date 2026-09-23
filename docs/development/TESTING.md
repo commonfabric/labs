@@ -578,6 +578,19 @@ starts a child naming its own tests names those variables too, and
 [test-records.md](test-records.md#covering-a-new-test-surface) says which and
 what to set them to.
 
+The inherited environment includes `DENO_COVERAGE_DIR`, so under coverage a
+child Deno writes coverage profiles of its own as it exits. A signal that
+reaches a child while it is exiting either loses its profiles or leaves one
+truncated, and one truncated profile makes `deno coverage` refuse every profile
+in the job, which then reports no coverage at all. So a test whose child is
+done, or is waiting only on input the test controls, ends it by closing that
+input and then awaits its `status` rather than sending it a signal. A test
+whose subject is a child killed while it runs is not in that position: the
+kill loses that child's coverage, but it cannot truncate a profile. `packages/memory/test/inbox-store.test.ts`
+ends its writer processes by closing their input, and
+`packages/memory/test/inbox-store-child-coverage.test.ts` fails when any of them
+loses its profile.
+
 ### Test Structure
 
 - **Unit tests**: Use `@std/testing/bdd` (`describe`/`it`) with `@std/expect` for assertions

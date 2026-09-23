@@ -757,6 +757,28 @@ the absent answer a directory outside a repository produces. Nothing in that
 file runs a subprocess or reads the surrounding checkout, so every arm runs on
 every machine.
 
+### Modules a subprocess loads from V8's code cache
+
+A Deno process that a test starts inherits `DENO_COVERAGE_DIR` and writes a
+profile of its own. When that process loads a module from V8's code cache,
+which Deno keeps in its cache directory, V8 reports the module's top-level code
+as one range with a single count. Every line of that code then reads as
+covered, including a branch that never ran. `tasks/build-binaries.ts` ends with
+`if (import.meta.main) { await runBuildBinaries(Deno.args); }`. The test that
+runs the script expects that call to throw, so the closing brace is never
+reached. The brace counts as covered only when the script was loaded from the
+code cache.
+
+`deno run` writes a module into the code cache the first time it compiles it,
+so within one job a process that runs a module after another process has run it
+reads it from there. Which process that is can depend on which of two tests
+running at the same time starts first. A code cache carried over from an earlier
+run adds a dependence on history as well, because it holds only modules
+unchanged since it was saved: a pull request that edits a module loses coverage
+of its top-level branches that `main` was reporting. The `📦 Cache Deno dependencies` step in
+`.github/actions/deno-setup/action.yml` leaves the code cache out of what it
+saves, and `tasks/deno-setup-action.test.ts` holds it to that.
+
 ### What the check says when the regression is not the pull request's
 
 The gate compares whole-group counts, so a flapping line fails whichever pull
@@ -946,7 +968,11 @@ The gate reports a group total rather than a per-line diff, so localizing a rise
 means measuring the same group twice: once with the branch's tree, once with the
 tree it will merge onto. Set `DENO_COVERAGE_DIR` for each run and convert with
 `tasks/write-coverage-lcov.ts`, exactly as the CI jobs do, then compare the two
-LCOV reports' zero-hit lines across the files the branch changed.
+LCOV reports' zero-hit lines across the files the branch changed. Point
+`DENO_DIR` at a new empty directory for each run, since each CI job starts
+without V8's code cache. With your usual Deno cache directory, a module that a
+test runs in a subprocess reports its top-level lines as covered or not
+depending on whether something had run it before.
 
 Take both measurements from the same base. Rebasing between them straddles two
 trees and the delta stops meaning anything, so rebase first and measure after.

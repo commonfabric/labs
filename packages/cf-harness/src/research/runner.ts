@@ -45,10 +45,7 @@ import { findSectionPassage, rankSections } from "../docs-corpus/sections.ts";
 import { errorMessage } from "../error-message.ts";
 import { inputCellsContextMessage } from "../input-cells.ts";
 import { ORIENTATION_GUIDANCE } from "../orientation.ts";
-import {
-  PATTERN_AUTHORING_GUIDANCE,
-  PATTERN_COMPOSITION_GUIDANCE,
-} from "../pattern-authoring.ts";
+import { PATTERN_COMPOSITION_GUIDANCE } from "../pattern-authoring.ts";
 import { PIECE_TARGETING_GUIDANCE } from "../piece-targeting.ts";
 import type {
   HarnessModelAttemptDiagnostic,
@@ -539,7 +536,6 @@ const systemPrompt = (purpose?: HarnessResearchPurpose): string =>
       : "Produce the smallest complete recipe for the requested implementation using only the supplied tools.",
     "This is CF documentation, skills, pattern-index, source, dependency, and handle research; it is not web research.",
     PIECE_TARGETING_GUIDANCE,
-    PATTERN_AUTHORING_GUIDANCE,
     PATTERN_COMPOSITION_GUIDANCE,
     ...(purpose === "orient" ? [ORIENTATION_GUIDANCE] : []),
     "Search for the next unresolved fact. Search results are leads, not proof of applicability. Read exact evidence only when it changes the decision; do not keep searching after the question is answered.",

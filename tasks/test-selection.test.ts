@@ -83,7 +83,6 @@ function planned(
     },
     suites,
     { manifest: () => Promise.resolve({ manifest }) },
-    () => {},
   );
 }
 
@@ -728,7 +727,7 @@ describe("dispatch()", () => {
 
     it("asks for the moment a lane of the commit asks for, in every mode", async () => {
       const root = await committedAt("2026-09-01T10:41:59-07:00");
-      const lane = manifestMoment({ root }).at;
+      const lane = manifestMoment({ root });
       expect(lane).toBe("2026-09-01T17:41:59.000Z");
       for (
         const args of [
@@ -782,17 +781,41 @@ describe("dispatch()", () => {
       expect(store.asked).toEqual([]);
     });
 
-    it("reads the newest outside a repository, and says so", async () => {
+    it("stops outside a repository without asking the store, in every mode", async () => {
+      // With no commit to read a date from, the manifest its lanes would
+      // read is unknown, and any other answer would describe a plan
+      // those lanes are not following.
+
+      const root = await Deno.makeTempDir({ prefix: "test-selection-" });
+      roots.push(root);
+      for (
+        const args of [
+          ["coverage"],
+          ["explain", '["unit","memory","one"]'],
+          ["plan", "--dry-run"],
+          ["plan", "--verify"],
+        ]
+      ) {
+        const store = storeOf(["2026-08-31T00:00:00.000Z"]);
+        await expect(ran(args, store, root)).rejects.toThrow(
+          `cannot read the date of the commit checked out at \`${root}\``,
+        );
+        expect({ args, asked: store.asked }).toEqual({ args, asked: [] });
+      }
+    });
+
+    it("reads the one current at a moment `--at` names outside a repository", async () => {
       const root = await Deno.makeTempDir({ prefix: "test-selection-" });
       roots.push(root);
       const store = storeOf(["2026-08-31T00:00:00.000Z"]);
-      const before = new Date().toISOString();
-      const result = await ran(["plan", "--dry-run"], store, root);
+      const result = await ran(
+        ["plan", "--dry-run", "--at", "2026-09-01T00:00:00Z"],
+        store,
+        root,
+      );
       expect(result.code).toBe(0);
-      expect(result.err).toContain("cannot read the commit's date");
       expect(result.out).toContain("manifest of 2026-08-31T00:00:00.000Z");
-      expect(store.asked.length).toBe(1);
-      expect(store.asked[0]! >= before).toBe(true);
+      expect(store.asked).toEqual(["2026-09-01T00:00:00.000Z"]);
     });
   });
 

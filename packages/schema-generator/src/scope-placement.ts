@@ -3,11 +3,12 @@
  * author marked `PerUser`/`PerSession` cannot reach storage as shared
  * space-scoped data.
  *
- * The runtime reads a slot's scope from the top level of that slot's own
- * schema (`ContextualFlowControl.getSchemaScopeCap`). A declaration anywhere
- * else is not a weaker declaration, it is no declaration: no narrowing
- * redirect is written, the value lands on the space row, and every principal
- * reads one instance. Refusing the schema at generation time is what keeps
+ * The runtime reads a slot's scope from that slot's own schema — its top
+ * level, or the definition a `$ref` there names
+ * (`ContextualFlowControl.getSchemaScopeCap`). A declaration inside one of its
+ * compound branches is not a weaker declaration, it is no declaration: no
+ * narrowing redirect is written, the value lands on the space row, and every
+ * principal reads one instance. Refusing the schema at generation time is what keeps
  * that from being a silent outcome.
  *
  * The subject here is PLACEMENT. Which scope a slot should carry, and which
@@ -43,15 +44,16 @@ const CHILD_SLOT_SINGLE_KEYWORDS = [
 /**
  * Keywords that compose alternatives for the SAME slot. A scope declared at the
  * top level of one of these branches is invisible to the write path, which
- * reads only the slot schema's own top level.
+ * reads a slot's own schema and not its compound branches.
  */
 const SAME_SLOT_COMPOUND_KEYWORDS = ["anyOf", "oneOf", "allOf"] as const;
 
 /**
  * The scope a slot declares at its own top level: the outermost `asCell`
- * entry's scope if present, otherwise the top-level `scope`. Mirrors
- * `ContextualFlowControl.getSchemaScopeCap`, which is what the runtime's write
- * path consults to decide whether a write narrows into a scoped instance.
+ * entry's scope if present, otherwise the top-level `scope`. This is the
+ * precedence `ContextualFlowControl.getSchemaScopeCap` applies at one level;
+ * that reader also follows a `$ref` to its definition, which this one does not,
+ * since the walk visits each definition in `$defs` itself.
  */
 const topLevelScope = (schema: MutableJSONSchema): string | undefined => {
   if (!isObjectOrArray(schema)) return undefined;
@@ -145,8 +147,8 @@ const descendIntoChildSlots = (schema: MutableJSONSchema): void => {
  * Throws when a generated schema declares a scope somewhere the runtime's write
  * path cannot see it.
  *
- * A slot's scope is read from the top level of that slot's schema
- * (`ContextualFlowControl.getSchemaScopeCap`). A declaration buried in an
+ * A slot's scope is read from that slot's own schema — its top level, or the
+ * definition a `$ref` there names (`ContextualFlowControl.getSchemaScopeCap`). A declaration buried in an
  * `anyOf`/`oneOf`/`allOf` branch is therefore inert on the write side: no
  * narrowing redirect is written, the value lands on the shared space row, and
  * every principal reads the same instance. Failing at generation time is what

@@ -19,6 +19,7 @@ import {
   resetClone,
   verifyClone,
 } from "../clone.ts";
+import { FINGERPRINT_SCHEME } from "../fingerprint.ts";
 
 const SPACE = "did:key:z6MkExampleSpace";
 const SESSION = "session:did:key:zSpaceAAAA:11111111-2222-3333";
@@ -838,6 +839,105 @@ Deno.test("reset works on a clone that was never opened", async () => {
   });
 });
 
+Deno.test("a clone records the fingerprint scheme its baseline was taken under", async () => {
+  // Version 2 is what an older tool refuses; the scheme is what a newer one
+  // checks before comparing anything against the baseline.
+  await withDirs(async ({ source, clone }) => {
+    const manifest = await createClone({
+      source,
+      space: SPACE,
+      targetDir: clone,
+      now: NOW,
+    });
+
+    assert(manifest.version === 2, "a new clone writes version 2");
+    assertEquals(manifest.fingerprint.scheme, FINGERPRINT_SCHEME);
+    assertEquals(
+      (await verifyClone(clone)).uncertainty.scheme,
+      { manifest: FINGERPRINT_SCHEME, working: FINGERPRINT_SCHEME },
+    );
+  });
+});
+
+Deno.test("a clone fingerprinted under another scheme is refused, not compared", async () => {
+  // Two fingerprints computed different ways can differ with no change to the
+  // content, or agree across one. The reset is refused too, before restoring
+  // anything, since the verify that judges it would be.
+  await withDirs(async ({ source, clone }) => {
+    await createClone({ source, space: SPACE, targetDir: clone, now: NOW });
+    const manifestPath = `${clone}/clone.json`;
+    const manifest = JSON.parse(await Deno.readTextFile(manifestPath));
+    manifest.fingerprint.scheme = FINGERPRINT_SCHEME + 1;
+    await Deno.writeTextFile(manifestPath, JSON.stringify(manifest));
+    const working = clonePaths(clone, SPACE).workingPath;
+    mutate(working, [["of:input", { value: { title: "ATTEMPT" } }]]);
+    const before = await Deno.readFile(working);
+
+    await assertRejects(() => verifyClone(clone), Error, "cannot be compared");
+    await assertRejects(() => resetClone(clone), Error, "cannot be compared");
+    assertEquals(
+      await Deno.readFile(working),
+      before,
+      "the refused reset restored nothing",
+    );
+  });
+});
+
+Deno.test("a version-2 manifest without a scheme is refused as damaged", async () => {
+  // Only a version-1 clone may lack the scheme. A version-2 one without it
+  // would otherwise pass as unknown and be verified or reset under a scheme
+  // nobody can name.
+  await withDirs(async ({ source, clone }) => {
+    await createClone({ source, space: SPACE, targetDir: clone, now: NOW });
+    const manifestPath = `${clone}/clone.json`;
+    const manifest = JSON.parse(await Deno.readTextFile(manifestPath));
+    delete manifest.fingerprint.scheme;
+    await Deno.writeTextFile(manifestPath, JSON.stringify(manifest));
+    const working = clonePaths(clone, SPACE).workingPath;
+    mutate(working, [["of:input", { value: { title: "ATTEMPT" } }]]);
+    const before = await Deno.readFile(working);
+
+    await assertRejects(
+      () => verifyClone(clone),
+      Error,
+      "records no fingerprint scheme",
+    );
+    await assertRejects(
+      () => resetClone(clone),
+      Error,
+      "records no fingerprint scheme",
+    );
+    assertEquals(
+      await Deno.readFile(working),
+      before,
+      "the refused reset restored nothing",
+    );
+  });
+});
+
+Deno.test("a clone taken before the scheme was recorded verifies, and says so", async () => {
+  // Version-1 clones carry no scheme. They stay usable, but the result reports
+  // the baseline's scheme as unknown rather than as this tool's.
+  await withDirs(async ({ source, clone }) => {
+    await createClone({ source, space: SPACE, targetDir: clone, now: NOW });
+    const manifestPath = `${clone}/clone.json`;
+    const manifest = JSON.parse(await Deno.readTextFile(manifestPath));
+    delete manifest.fingerprint.scheme;
+    await Deno.writeTextFile(
+      manifestPath,
+      JSON.stringify({ ...manifest, version: 1 }),
+    );
+
+    const result = await verifyClone(clone);
+
+    assert(result.ok, "an untouched version-1 clone still verifies");
+    assertEquals(result.uncertainty.scheme, {
+      manifest: null,
+      working: FINGERPRINT_SCHEME,
+    });
+  });
+});
+
 Deno.test("a manifest from a future tool version is refused, not guessed at", async () => {
   // Reading a newer layout with older rules could reset to the wrong file or
   // compare against a fingerprint computed a different way.
@@ -847,13 +947,13 @@ Deno.test("a manifest from a future tool version is refused, not guessed at", as
     const manifest = JSON.parse(await Deno.readTextFile(manifestPath));
     await Deno.writeTextFile(
       manifestPath,
-      JSON.stringify({ ...manifest, version: 2 }),
+      JSON.stringify({ ...manifest, version: 3 }),
     );
 
     await assertRejects(
       () => readManifest(clone),
       Error,
-      "this tool understands 1",
+      "this tool understands 1 and 2",
     );
   });
 });

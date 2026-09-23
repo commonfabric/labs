@@ -1298,6 +1298,19 @@ discovery does not reliably reach — see above. That is a hint over a real gap,
 not over the wording, and it comes out when the gap closes rather than when the
 prompt is rephrased.
 
+**Demo 4 no longer names the fields to pair on.** Its prompt asked for pairing
+"using plain text rules on subject, sender and merchant name only", but the
+matcher the same prompt names also classifies a payment by its transaction name
+and its `category_primary` (`isBillPayment` in
+`packages/patterns/primitives/bills-this-month.tsx`). The two cannot both hold.
+Of three runs of that wording on `b70de3a53a`, one noticed: its research asked
+whether to replace the published matcher with a subject, sender and
+merchant-only one, and the run adapted the matcher to obey. The other two
+composed the matcher as published, as did every run behind §5c's proof, so those
+pages paired correctly while breaking the rule their prompt stated. The privacy
+clause stays: not sending mail or transactions to a model is what the reader
+needs, and the published matcher makes no model call.
+
 ### A defect the restored wording exposes
 
 Sorting a column replaces that header's caret with a policy placeholder, so it

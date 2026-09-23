@@ -8,18 +8,6 @@ import { Identity } from "@commonfabric/identity";
 import { InboxStore } from "../inbox-store.ts";
 import type { InboxPayload } from "../inbox.ts";
 
-function stopChild(child: Deno.ChildProcess): void {
-  try {
-    child.kill("SIGKILL");
-  } catch (error) {
-    if (
-      !(error instanceof Deno.errors.NotFound) &&
-      !(error instanceof TypeError &&
-        error.message === "Child process has already terminated")
-    ) throw error;
-  }
-}
-
 describe("InboxStore", () => {
   it("waits for independent writers to release their transactions without a success deadline", async () => {
     const directory = await Deno.makeTempDir();
@@ -135,11 +123,11 @@ describe("InboxStore", () => {
         stored.close();
       }
     } finally {
-      for (const child of children) {
-        stopChild(child);
-        await child.status;
-        await child.stdin.close();
-      }
+      // A writer waiting on its standard input reads the end of it and runs to
+      // completion, so each one exits on its own and finishes writing its
+      // coverage profile.
+      for (const child of children) await child.stdin.close();
+      for (const child of children) await child.status;
       for (const reader of readers) {
         await reader.cancel();
         reader.releaseLock();

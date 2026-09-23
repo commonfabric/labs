@@ -2909,9 +2909,10 @@ What the runner does, in order:
    child the lane spawns inherits what the lane holds, so this comes
    before the lane reads, plans, opens or runs anything, and a suite that
    declared `github-api` is given the token back through that capability.
-2. Resolve the manifest from the commit's date and fetch it. No manifest
-   at or before that date takes the fallback, and a store the lane could
-   not read fails the lane (see [Failure modes](#failure-modes)).
+2. Resolve the manifest from the commit's date and fetch it. A commit
+   whose date cannot be read stops the lane. No manifest at or before
+   that date takes the fallback, and a store the lane could not read
+   fails the lane (see [Failure modes](#failure-modes)).
 3. Enumerate every suite against the working tree, and read the manifest
    against that enumeration. The tree decides which tests exist and the
    manifest decides what each is worth and costs, so an entry naming a
@@ -3776,6 +3777,7 @@ is pinned to the commit's date. And if none of that settles it,
 | Two attempts of one run straddle a UTC midnight | The later attempt's relay writes the earlier attempt's records a second time, under the later day, and the publisher folds both. Not observed in the store so far; see [What the store is missing](#what-the-store-is-missing). |
 | A fork pull request | Works unchanged. The manifest is world-readable, and the existing member gate decides whether the fork's records ship. |
 | A re-run of one failed lane | Runs the same set, because the manifest is resolved by the commit's date, which no attempt changes. |
+| A lane cannot read the date of the commit it is testing | The lane fails and says why, and so does the job counting the full run's lanes. Reading the date can fail in one lane and not the next, and no other moment is one the lanes are sure to share, so this fails for the reason an unreachable store does. |
 | Both `pr-tests` and `full-tests` skip | `Status` fails. Its second clause requires one of them to have succeeded, so a pull request that ran no tests can never report green. |
 | A test too flaky for pull requests fails on `main` | The run stays green and the job summary names the failure and its identity. The records are scored as any others, so the failure feeds the share, the dashboard, and the deflake work queue. |
 | A batch on `main` does not account for every identity it was asked to run | The lane fails. Nothing has shown the failures it did record to be the whole of what went wrong, and missing evidence is read as a real failure. |

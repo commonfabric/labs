@@ -10,6 +10,37 @@ import {
 } from "../utils.ts";
 
 describe("Schema: CFC authoring aliases", () => {
+  it("pairs local alias arguments with their declared parameters", async () => {
+    const { checker, sourceFile } = await createTestProgram(`
+      type WriteAuthorizedBy<T, Writer> = T & { readonly __writer?: Writer };
+      const save = () => {};
+      function createName() {
+        type Protected<T> = WriteAuthorizedBy<T, typeof save>;
+        const name: Protected<string> = "";
+        return name;
+      }
+    `);
+    const scope = sourceFile.statements.find(ts.isFunctionDeclaration)!;
+    const declaration = scope.body!.statements.find(ts.isVariableStatement)!
+      .declarationList.declarations[0]!;
+    const node = declaration.type!;
+    const schema = new SchemaGenerator().generateSchema(
+      checker.getTypeFromTypeNode(node),
+      checker,
+      node,
+      { writerIdentityForSourceFile: (file) => ({ file }) },
+    );
+
+    expect(schema).toEqual({
+      type: "string",
+      ifc: {
+        writeAuthorizedBy: {
+          __ctWriterIdentityOf: { file: sourceFile.fileName, path: ["save"] },
+        },
+      },
+    });
+  });
+
   it("lowers AnyOf as one explicit confidentiality clause", async () => {
     const code = `
       type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
@@ -75,6 +106,119 @@ describe("Schema: CFC authoring aliases", () => {
     expect((schema.properties?.either as any).ifc?.confidentiality).toEqual([{
       anyOf: ["reader-a", "reader-b"],
     }]);
+  });
+
+  it("reads unrelated namespace metadata from its declaration", async () => {
+    const { type, checker } = await getTypeFromFiles(
+      {
+        "/other.ts": `
+          export type PolicyOf<T> = { label: "ordinary policy" };
+          export type AnyOf<T> = { label: "ordinary choice" };
+        `,
+        "/entry.ts": `
+          import * as other from "./other.ts";
+          type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+          declare const rules: unknown;
+          interface SchemaRoot {
+            policy: Cfc<string, { confidentiality: [other.PolicyOf<typeof rules>] }>;
+            choice: Cfc<string, { confidentiality: [other.AnyOf<["reader"]>] }>;
+          }
+        `,
+      },
+      "/entry.ts",
+      "SchemaRoot",
+    );
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker),
+    );
+    expect(schema.properties).toEqual({
+      policy: {
+        type: "string",
+        ifc: { confidentiality: [{ label: "ordinary policy" }] },
+      },
+      choice: {
+        type: "string",
+        ifc: { confidentiality: [{ label: "ordinary choice" }] },
+      },
+    });
+  });
+
+  it("lowers qualified Common Fabric metadata through renamed re-exports", async () => {
+    const { type, checker } = await getTypeFromFiles(
+      {
+        "/library/commonfabric.d.ts": `
+          export type PolicyOf<T> = { readonly __ct_cfc_policy_of__?: T };
+          export type AnyOf<T> = { readonly __ct_cfc_any_of__?: T };
+        `,
+        "/barrel.ts": `
+          export type { PolicyOf as Policy, AnyOf as Choice } from "./library/commonfabric";
+        `,
+        "/entry.ts": `
+          import * as cf from "./barrel.ts";
+          type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+          declare const rules: unknown;
+          interface SchemaRoot {
+            policy: Cfc<string, { confidentiality: [cf.Policy<typeof rules>] }>;
+            choice: Cfc<string, { confidentiality: [cf.Choice<["reader"]>] }>;
+          }
+        `,
+      },
+      "/entry.ts",
+      "SchemaRoot",
+    );
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker),
+    );
+    expect(schema.properties).toMatchObject({
+      policy: {
+        ifc: {
+          confidentiality: [{
+            type: "https://commonfabric.org/cfc/atom/Policy",
+            policyRefKind: "module",
+            __ctPolicyIdentityOf: { file: "/entry.ts", path: ["rules"] },
+            subject: { __ctOwningSpace: true },
+          }],
+        },
+      },
+      choice: { ifc: { confidentiality: [{ anyOf: ["reader"] }] } },
+    });
+  });
+
+  it("reads a qualified metadata wrapper's fixed policy binding", async () => {
+    const { type, checker } = await getTypeFromFiles(
+      {
+        "/library/commonfabric.d.ts": `
+          export type PolicyOf<T> = { readonly __ct_cfc_policy_of__?: T };
+        `,
+        "/wrapper.ts": `
+          import * as cf from "./library/commonfabric";
+          export declare const fixedRules: unknown;
+          export type PolicyOf<T> = cf.PolicyOf<typeof fixedRules>;
+        `,
+        "/entry.ts": `
+          import * as wrapped from "./wrapper.ts";
+          type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+          declare const unrelatedRules: unknown;
+          interface SchemaRoot {
+            policy: Cfc<string, { confidentiality: [wrapped.PolicyOf<typeof unrelatedRules>] }>;
+          }
+        `,
+      },
+      "/entry.ts",
+      "SchemaRoot",
+    );
+    const schema = asObjectSchema(
+      new SchemaGenerator().generateSchema(type, checker),
+    );
+    expect(schema.properties).toMatchObject({
+      policy: {
+        ifc: {
+          confidentiality: [{
+            __ctPolicyIdentityOf: { file: "/wrapper.ts", path: ["fixedRules"] },
+          }],
+        },
+      },
+    });
   });
 
   it("lowers Confidential and projection aliases through the canonical Cfc carrier", async () => {

@@ -4,7 +4,7 @@ import {
   assertRejects,
   assertStringIncludes,
 } from "@std/assert";
-import { dirname, fromFileUrl, join } from "@std/path";
+import { dirname, fromFileUrl, globToRegExp, join } from "@std/path";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 const ACTION_PATH = join(
@@ -125,5 +125,64 @@ Deno.test(
       cacheStep,
       "${{ steps.dependency-hash.outputs.hash }}",
     );
+  },
+);
+
+Deno.test(
+  "Deno setup leaves V8's code cache out of the dependency cache",
+  async () => {
+    // A process that loads a module from V8's code cache reports that module's
+    // top-level code to the coverage profiler as one function-wide range, so a
+    // restored code cache marks lines covered that never ran, and only for
+    // modules unchanged since the cache was saved.
+
+    const action = await Deno.readTextFile(ACTION_PATH);
+    const cacheStep = actionStep(action, "📦 Cache Deno dependencies");
+    const pathBlock = cacheStep.match(/\n {8}path: \|\n((?: {10}\S.*\n)+)/);
+    assert(pathBlock, "cache step `path` block not found");
+    const patterns = pathBlock[1].trim().split(/\s*\n\s*/);
+    const includes = patterns
+      .filter((pattern) => !pattern.startsWith("!"))
+      .map((pattern) => globToRegExp(pattern));
+    const exclusions = patterns
+      .filter((pattern) => pattern.startsWith("!"))
+      .map((pattern) => globToRegExp(pattern.slice(1)));
+    // `actions/cache` archives each path that an inclusion matches and no
+    // exclusion does, with everything beneath it. An exclusion is tested only
+    // against the paths the inclusions match, not against their contents.
+    const archived = (path: string) => {
+      const segments = path.split("/");
+      for (let length = segments.length; length > 0; length--) {
+        const prefix = segments.slice(0, length).join("/");
+        if (
+          includes.some((re) => re.test(prefix)) &&
+          !exclusions.some((re) => re.test(prefix))
+        ) {
+          return true;
+        }
+      }
+      return false;
+    };
+
+    for (const dir of ["~/.deno", "~/.cache/deno", "~/Library/Caches/deno"]) {
+      for (
+        const file of [
+          "v8_code_cache_v2",
+          "v8_code_cache_v2-shm",
+          "v8_code_cache_v2-wal",
+        ]
+      ) {
+        assert(!archived(`${dir}/${file}`), `${dir}/${file} is cached`);
+      }
+      for (
+        const file of [
+          "npm/registry.npmjs.org/react/19.1.0/package.json",
+          "remote/https/deno.land/std/mod.ts",
+          "dep_analysis_cache_v2",
+        ]
+      ) {
+        assert(archived(`${dir}/${file}`), `${dir}/${file} is not cached`);
+      }
+    }
   },
 );
