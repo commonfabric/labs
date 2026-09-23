@@ -693,6 +693,7 @@ export function getPreservedTypeForBindingElement(
       preserved,
       checker.getTypeFromTypeNode(declared),
       typeRegistry,
+      state,
     );
   }
 
@@ -710,7 +711,12 @@ export function getPreservedTypeForBindingElement(
     )
     : undefined;
   if (substituted) {
-    return registerForEmission(substituted, instantiated.type, typeRegistry);
+    return registerForEmission(
+      substituted,
+      instantiated.type,
+      typeRegistry,
+      state,
+    );
   }
 
   // The instantiated declared type still carries the wrapper. The binding's
@@ -766,8 +772,9 @@ function registerForEmission(
   typeNode: ts.TypeNode,
   type: ts.Type,
   typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
 ): PreservedBindingType {
-  const cloned = cloneTypeNodeDeepForEmission(typeNode, typeRegistry);
+  const cloned = cloneTypeNodeDeepForEmission(typeNode, typeRegistry, state);
   typeRegistry?.set(cloned, type);
   return { typeNode: cloned };
 }
@@ -1208,14 +1215,17 @@ export function shouldPreserveBindingDeclaredTypeNode(
  * synthetic, forcing the printer to print structurally (literals fall back
  * to their `.text`).
  *
- * Pass `typeRegistry` to carry each node's registered Type onto its clone.
+ * `typeRegistry` and `state` carry each node's registered type, and the type a
+ * print was printed from (`CrossStageState.printedFrom()`), onto its clone: a
+ * clone of a print stands for the same type.
  *
  * (Mirrors the helper of the same name on the lift-capture-shrink branch,
  * #4078 — whichever lands second keeps one copy.)
  */
 export function cloneTypeNodeDeepForEmission<T extends ts.TypeNode>(
   typeNode: T,
-  typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
 ): T {
   const nullContext = (ts as typeof ts & {
     nullTransformationContext?: ts.TransformationContext;
@@ -1243,6 +1253,10 @@ export function cloneTypeNodeDeepForEmission<T extends ts.TypeNode>(
     const registered = typeRegistry?.get(node);
     if (registered) {
       typeRegistry!.set(result, registered);
+    }
+    const printedFrom = state?.printedFrom(node);
+    if (printedFrom && ts.isTypeNode(result)) {
+      state!.recordPrintedFrom(result, printedFrom);
     }
     return result;
   };
