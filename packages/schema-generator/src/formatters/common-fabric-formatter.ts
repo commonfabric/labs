@@ -1294,36 +1294,6 @@ export class CommonFabricFormatter implements TypeFormatter {
     return valueSchema;
   }
 
-  #formatCfcAlias(
-    typeWithAlias: TypeWithInternals,
-    context: GenerationContext,
-    aliasName: string,
-  ): MutableJSONSchema {
-    const aliasArgs = typeWithAlias.aliasTypeArguments ?? [];
-    const baseType = aliasArgs[0];
-    if (!baseType) {
-      throw new Error(`${aliasName}<T> requires type argument`);
-    }
-
-    const baseTypeNode = this.#getAliasTypeArgumentNode(context, 0);
-    const baseSchema = this.#schemaGenerator.formatChildType(
-      baseType,
-      context,
-      baseTypeNode,
-    );
-
-    const ifc = this.#buildIfcMetadataForAlias(
-      aliasName,
-      aliasArgs,
-      context,
-    );
-    if (ifc === undefined) {
-      return baseSchema;
-    }
-
-    return this.#mergeIfcMetadata(baseSchema, ifc);
-  }
-
   #formatResolvedCfcAlias(
     resolved: ResolvedCfcAlias,
     context: GenerationContext,
@@ -1345,12 +1315,21 @@ export class CommonFabricFormatter implements TypeFormatter {
         resolved.substituted,
       );
     if (unsubstituted) context.uninterpretedTypeNodes?.push(baseTypeNode);
+    // A canonical alias reached by its own name resolves no argument nodes; the
+    // reference's own arguments are its nodes, the payload's as much as the
+    // labels' (`#buildIfcMetadataForAlias` reads them the same way). Read from
+    // its type alone, a generic alias in the payload has no argument to bind,
+    // and a label nested in it no `typeof` binding or `AnyOf` to recognize.
     const baseSchema = unsubstituted
       ? true
       : baseTypeNode
       ? this.#formatCfcAliasTypeNode(baseTypeNode, context) ??
         this.#schemaGenerator.formatChildType(baseType, context, baseTypeNode)
-      : this.#schemaGenerator.formatChildType(baseType, context, undefined);
+      : this.#schemaGenerator.formatChildType(
+        baseType,
+        context,
+        this.#getAliasTypeArgumentNode(context, 0),
+      );
 
     const ifc = this.#buildIfcMetadataForAlias(
       resolved.aliasName,
