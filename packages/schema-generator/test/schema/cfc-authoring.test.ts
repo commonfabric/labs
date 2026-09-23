@@ -1060,23 +1060,41 @@ describe("Schema: CFC authoring aliases", () => {
       expect(schema.ifc).toEqual({ confidentiality: ["x"] });
     });
 
-    it("reports a payload holding a parameter it cannot read, and keeps its structure", async () => {
+    it("reads a payload holding a parameter from the type it instantiates", async () => {
       const { schema, diagnostics } = await generate(`
         type Many<T> = Confidential<T[], readonly ["a"]>;
         interface Holder { value: Many<string> }
       `);
       expect(schema).toEqual({
         type: "array",
-        items: {},
+        items: { type: "string" },
+        ifc: { confidentiality: ["a"] },
+      });
+      expect(diagnostics).toEqual([]);
+    });
+
+    it("reports a payload holding a parameter it cannot read, and keeps its structure", async () => {
+      // The instantiation of an intersection payload has two members beside
+      // the metadata carrier, so it does not say which is the payload.
+      const { schema, diagnostics } = await generate(`
+        type Tagged<T> = Confidential<{ value: T } & { tag: string }, readonly ["a"]>;
+        interface Holder { value: Tagged<string> }
+      `);
+      expect(schema).toEqual({
+        type: "object",
+        properties: { value: {}, tag: { type: "string" } },
+        required: ["value", "tag"],
         ifc: { confidentiality: ["a"] },
       });
       expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
         "schema-type:unread",
       ]);
-      expect(diagnostics[0]!.message).toContain("`T[]`");
+      expect(diagnostics[0]!.message).toContain(
+        "`{ value: T; } & { tag: string; }`",
+      );
     });
 
-    it("keeps the labels beside a parameter it cannot read", async () => {
+    it("keeps the labels nested in a payload that holds a parameter", async () => {
       const { schema } = await generate(`
         type Outer<T> = Confidential<{
           data: T;

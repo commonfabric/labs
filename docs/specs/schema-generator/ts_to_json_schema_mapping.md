@@ -920,10 +920,17 @@ Mechanics:
   as usual. A chain entered with no argument nodes, as from a type whose print
   expands the alias, binds each parameter to its argument's type instead, by
   declaration: a bare reference to the parameter, as a payload, a label, a
-  label's element, or an argument of a nested alias, reads as that type. Any
-  other node holding one (`T[]`) is not rebuilt around the type: it keeps the
-  rest of its structure and metadata, the parameter's positions read as
-  accepting anything, and it is reported as not fully read. A `typeof` binding
+  label's element, or an argument of a nested alias, reads as that type. A
+  payload node holding one (`T[]`, `{ value: T }`) is read from the type the
+  chain instantiates. Every CFC alias adds its metadata to its payload as one
+  more member of an intersection, a carrier holding only `__ct_cfc__`, so the
+  intersection's other member is the innermost payload, the argument in
+  wherever the declaration wrote the parameter (`cfcPayloadOf`). Where that
+  cannot be told apart, in a payload that is itself an intersection or a
+  union, the node is not rebuilt around the type: it keeps the rest of its
+  structure and metadata, the parameter's positions read as accepting
+  anything, and it is reported as not fully read. A label reads a parameter it
+  holds as its type wherever the label reader pairs that position. A `typeof` binding
   supplied only as a type argument cannot be read from a type, so a
   `writeAuthorizedBy` claim whose binding arrives that way is not emitted; one
   written in the alias declaration itself is read from the declaration.

@@ -332,23 +332,78 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
       expect(input).toEqual({ confidentiality: [{ anyOf: [] }] });
     });
 
-    it("keeps the payload of a generic CFC alias in another's payload", async () => {
-      // Read from its type, `Sec<string>` binds `T` to `string` (#7995).
-      const files = await transformFiles({
-        "/main.tsx": `/// <cts-enable />
-import { Confidential, Integrity, pattern } from "commonfabric";
-type Sec<T> = Confidential<T, ["secret"]>;
-export default pattern<{ a: Integrity<Sec<string>, ["trusted"]> }>(({ a }) => ({ a }));`,
-      }, { types: COMMONFABRIC_TYPES, typeCheck: true });
-      const { input, output } = patternSchemas(
-        parseModule(files["/main.tsx"]!),
-      );
-      const expected = {
-        type: "string",
-        ifc: { confidentiality: ["secret"], integrity: ["trusted"] },
+    describe("a generic CFC alias read from its type", () => {
+      // Read from its type, a chain has no argument nodes; its payload is read
+      // from the type it instantiates, which holds `T`'s argument wherever the
+      // declaration wrote `T`.
+      const labelled = (
+        payload: Schema,
+        ifc: Schema = { confidentiality: ["secret"], integrity: ["trusted"] },
+      ) => ({ ...payload, ifc });
+      const strings = { type: "array", items: { type: "string" } };
+      const value = {
+        type: "object",
+        properties: { value: { type: "string" } },
+        required: ["value"],
       };
-      expect((input.properties as Schema).a).toEqual(expected);
-      expect((output.properties as Schema).a).toEqual(expected);
+      for (
+        const [spelling, declaration, a, expected] of [
+          [
+            "a bare parameter",
+            'type Sec<T> = Confidential<T, ["secret"]>;',
+            `Integrity<Sec<string>, ["trusted"]>`,
+            labelled({ type: "string" }),
+          ],
+          [
+            "an array of it",
+            'type Sec<T> = Confidential<T[], ["secret"]>;',
+            `Integrity<Sec<string>, ["trusted"]>`,
+            labelled(strings),
+          ],
+          [
+            "an object holding it",
+            'type Sec<T> = Confidential<{ value: T }, ["secret"]>;',
+            `Integrity<Sec<string>, ["trusted"]>`,
+            labelled(value),
+          ],
+          [
+            "a tuple of it",
+            'type Sec<T> = Confidential<[T], ["secret"]>;',
+            `Integrity<Sec<string>, ["trusted"]>`,
+            labelled(strings),
+          ],
+          [
+            "a mapped record of it",
+            `type Sec<T> = Confidential<Record<"value", T>, ["secret"]>;`,
+            `Integrity<Sec<string>, ["trusted"]>`,
+            labelled(value),
+          ],
+          [
+            "another generic alias holding it",
+            `type Sec<T> = Confidential<Integrity<T[], ["inner"]>, ["secret"]>;`,
+            `MaxConfidentiality<Sec<string>, ["top"]>`,
+            labelled(strings, {
+              integrity: ["inner"],
+              confidentiality: ["secret"],
+              maxConfidentiality: ["top"],
+            }),
+          ],
+        ] as const
+      ) {
+        it(`keeps a payload that is ${spelling}`, async () => {
+          const files = await transformFiles({
+            "/main.tsx": `/// <cts-enable />
+import { Confidential, Integrity, MaxConfidentiality, pattern } from "commonfabric";
+${declaration}
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+          }, { types: COMMONFABRIC_TYPES, typeCheck: true });
+          const { input, output } = patternSchemas(
+            parseModule(files["/main.tsx"]!),
+          );
+          expect((input.properties as Schema).a).toEqual(expected);
+          expect((output.properties as Schema).a).toEqual(expected);
+        });
+      }
     });
 
     describe("an object label with a member the syntax reader cannot name", () => {

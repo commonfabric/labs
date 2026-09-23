@@ -99,6 +99,12 @@ type ResolvedCfcAlias = {
   readonly substituted?: readonly ts.TypeParameterDeclaration[];
   /** The parameters along the chain given a type and no node. */
   readonly parameterTypes?: ParameterTypes;
+  /**
+   * The type a chain entered from its type, with no argument nodes,
+   * instantiates. It holds the innermost payload with every argument in
+   * (`cfcPayloadOf()`).
+   */
+  readonly instantiated?: ts.Type;
 };
 
 /**
@@ -303,6 +309,26 @@ const holdsTypeParameter = (
  * The type `parameterTypes` gives `node` when `node` is a bare reference to one
  * of its parameters.
  */
+/**
+ * The innermost payload of `type`, a CFC alias chain's instantiation, or
+ * `undefined` where it cannot be told apart. Every CFC alias adds its metadata
+ * to its payload as one more member of an intersection, a carrier holding only
+ * `__ct_cfc__`, so the intersection's one other member is the payload, its
+ * arguments in wherever the declaration wrote a parameter. A payload that is
+ * itself an intersection, or a union, which the intersection distributes over,
+ * has no one other member.
+ */
+const cfcPayloadOf = (type: ts.Type): ts.Type | undefined => {
+  if (!type.isIntersection()) return undefined;
+  const carries = (member: ts.Type) => {
+    const properties = member.getProperties();
+    return properties.length === 1 && properties[0]!.name === "__ct_cfc__";
+  };
+  // An intersection has two members at least, so one left means a carrier.
+  const rest = type.types.filter((member) => !carries(member));
+  return rest.length === 1 ? rest[0] : undefined;
+};
+
 const boundParameterType = (
   node: ts.TypeNode,
   checker: ts.TypeChecker,
@@ -1399,12 +1425,18 @@ export class CommonFabricFormatter implements TypeFormatter {
       // An authored node, formatted as the type it is, so a named type in the
       // payload stays a reference to its definition.
       ? this.#schemaGenerator.formatChildType(baseType, context, baseTypeNode)
-      : this.#formatCfcAliasTypeNode(baseTypeNode, context, parameterTypes) ??
+      : this.#formatCfcAliasTypeNode(
+        baseTypeNode,
+        context,
+        parameterTypes,
+        resolved.instantiated,
+      ) ??
         this.#formatDeclaredPayload(
           baseType,
           baseTypeNode,
           context,
           parameterTypes,
+          resolved.instantiated,
         );
 
     const ifc = this.#buildIfcMetadataForAlias(
@@ -1424,21 +1456,33 @@ export class CommonFabricFormatter implements TypeFormatter {
   /**
    * Helper for {@link #formatResolvedCfcAlias}, which formats a payload node
    * that is not itself a CFC alias. A node holding a parameter that has only a
-   * type, such as `T[]`, is not rebuilt around that type: it keeps the rest of
-   * its structure and metadata, the parameter's positions read as accepting
-   * any value, and it is reported as not fully read.
+   * type, such as `T[]`, is read from `instantiated`, the type the chain
+   * instantiates, which holds the payload with that parameter's argument in.
+   * Where there is no such type to read, the node is not rebuilt around the
+   * parameter's type: it keeps the rest of its structure and metadata, the
+   * parameter's positions read as accepting any value, and it is reported as
+   * not fully read.
    */
   #formatDeclaredPayload(
     baseType: ts.Type,
     baseTypeNode: ts.TypeNode,
     context: GenerationContext,
     parameterTypes: ParameterTypes,
+    instantiated: ts.Type | undefined,
   ): MutableJSONSchema {
     if (
       holdsTypeParameter(baseTypeNode, context.typeChecker, [
         ...parameterTypes.keys(),
       ])
     ) {
+      const payload = instantiated && cfcPayloadOf(instantiated);
+      if (payload) {
+        return this.#schemaGenerator.formatChildType(
+          payload,
+          context,
+          undefined,
+        );
+      }
       context.uninterpretedTypeNodes?.push(baseTypeNode);
     }
     return this.#schemaGenerator.formatChildType(
@@ -1452,6 +1496,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     typeNode: ts.TypeNode,
     context: GenerationContext,
     parameterTypes: ParameterTypes = NO_PARAMETER_TYPES,
+    instantiated?: ts.Type,
   ): MutableJSONSchema | undefined {
     if (
       ts.isParenthesizedTypeNode(typeNode) || ts.isTypeOperatorNode(typeNode)
@@ -1460,6 +1505,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         typeNode.type,
         context,
         parameterTypes,
+        instantiated,
       );
     }
     if (!ts.isTypeReferenceNode(typeNode)) {
@@ -1490,8 +1536,13 @@ export class CommonFabricFormatter implements TypeFormatter {
       [],
       parameterTypes,
     );
+    // A nested alias's payload is the chain's innermost payload, so the
+    // instantiated type holds it too.
     return resolved
-      ? this.#formatResolvedCfcAlias(resolved, context)
+      ? this.#formatResolvedCfcAlias(
+        instantiated ? { ...resolved, instantiated } : resolved,
+        context,
+      )
       : undefined;
   }
 
@@ -1541,13 +1592,17 @@ export class CommonFabricFormatter implements TypeFormatter {
       return undefined;
     }
 
-    return this.#resolveCfcAliasFromDeclaration(
+    const aliasArgNodes = this.#getAliasTypeArgumentNodes(context);
+    const resolved = this.#resolveCfcAliasFromDeclaration(
       aliasDeclaration,
       aliasArgs,
-      this.#getAliasTypeArgumentNodes(context),
+      aliasArgNodes,
       context,
       new Set([aliasDeclaration]),
     );
+    return resolved && !aliasArgNodes
+      ? { ...resolved, instantiated: typeWithAlias }
+      : resolved;
   }
 
   #resolveCfcAliasFromDeclaration(
