@@ -40,6 +40,7 @@ import { unionFoldedFrom } from "./schema-origins.ts";
 import { reportUnreadTypes } from "./unread-type-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
+import { stateReferencedIfcLabels } from "./ifc-labels.ts";
 
 /**
  * The default library's generic aliases the node-based analyzer applies
@@ -1050,6 +1051,7 @@ export class SchemaGenerator {
 
     if (unread.length > 0) reportUnreadTypes(context, unread);
 
+    stateReferencedIfcLabels(result);
     assertScopeDeclarationsAreReachable(result);
     return result;
   }

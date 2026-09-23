@@ -947,9 +947,21 @@ Mechanics:
   `{ anyOf: X }` and `PolicyOf<typeof rules>` as a policy atom containing
   `__ctPolicyIdentityOf: { file, path }`. Projection paths encode as JSON
   Pointers with `~0`/`~1` escaping (`encodeJsonPointerPath`).
-- `ifc` merges shallowly into the base schema's existing `ifc`
-  (`mergeIfcMetadata`); boolean schemas become `{ ifc }` /
-  `{ not: true, ifc }`.
+- `ifc` combines with the base schema's existing `ifc` one key at a time
+  (`combineIfcLabels`, `src/ifc-labels.ts`); boolean schemas become
+  `{ ifc }` / `{ not: true, ifc }`. Nested wrappers
+  (`Confidential<Confidential<T, A>, B>`) label one value twice.
+  `confidentiality` lists join, inner first, each atom kept once by value
+  equality. Every other key is kept from whichever wrapper declares it, and two
+  wrappers declaring it differently is a generation error: those keys have no
+  agreed combination, and keeping either one would drop the other silently.
+- A wrapper around a named type whose definition carries `ifc` writes its label
+  beside the `$ref`, and the runtime's resolver lets a keyword beside a `$ref`
+  replace the definition's, `ifc` as a whole. So after formatting,
+  `stateReferencedIfcLabels` rewrites the `ifc` beside each local `$ref` as
+  the labels of every definition along its root-reference chain, farthest
+  first, combined with its own by the same rule. A definition keeps its own
+  `ifc`, which is all a reference without one resolves to.
 - `WriteAuthorizedBy` writer identity resolves through import aliases to the
   declaring file. A transformer caller supplies
   `writerIdentityForSourceFile`, which maps that compile name to its authored
@@ -986,7 +998,8 @@ Mechanics:
   `ts-transformers/src/transformers/ui-helper-lowering.ts`.
 
 In-package coverage: `test/schema/cfc-authoring.test.ts` (13 tests), including
-renamed `AnyOf` / `PolicyOf` imports. Transformer-side policy compilation and
+renamed `AnyOf` / `PolicyOf` imports, and `test/ifc-labels.test.ts` for how
+labels combine. Transformer-side policy compilation and
 diagnostics are pinned by `packages/ts-transformers/test/cfc-authoring.test.ts`.
 
 The collection/opaque helpers `LengthPreservedFrom`, `FilteredFrom`,
@@ -1106,6 +1119,7 @@ Everything that throws, with source (test-pinned unless noted):
 | `DeepDefault` unknown key | `DeepDefault key "…" does not exist on the target object type.` | `union-formatter.ts` |
 | Nested scope wrappers | `Nested scope wrappers require a cell boundary between scopes.` | `common-fabric-formatter.ts` |
 | Scope wrapper as a union member | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
+| An `ifc` key other than `confidentiality` declared differently by nested wrappers, or by a `$ref` and its definition | ``One value declares `ifc.<key>` twice, as … and as ….`` | `ifc-labels.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |
 | Wrapper/scope/CFC alias without type argument | `<Kind><T> requires type argument` | `common-fabric-formatter.ts` (untested) |

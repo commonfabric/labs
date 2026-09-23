@@ -48,6 +48,7 @@ interface RunSpec {
   status?: string; // "completed" unless the run is still going
   ranMinutes?: number; // how long a completed run went on before it ended
   jobsStatus?: number; // the status its job-count read answers with
+  attempt?: number; // its latest attempt, 1 unless it was run again
 }
 
 interface RepoSpec {
@@ -177,6 +178,51 @@ async function withGitHub(
       }));
     }
 
+    // A run's id is its workflow's id times a hundred plus its place among
+    // the workflow's runs counted from the oldest, so a newer run has a larger
+    // id and a run keeps its id when a newer one is added.
+    const runJson = (repo: string, workflow: WorkflowSpec, index: number) => {
+      const workflowNumber = workflowId(repo, workflow.file);
+      const all = workflow.runs ?? [];
+      const run = all[index];
+      const id = workflowNumber * 100 + all.length - 1 - index;
+      startedJobsById.set(id, run.startedJobs ?? 0);
+      if (run.jobsStatus !== undefined) {
+        jobsStatusById.set(id, run.jobsStatus);
+      }
+      const createdAgo = run.minutesAgo ?? 0;
+      const completed = (run.status ?? "completed") === "completed";
+      const endedAgo = completed
+        ? Math.max(0, createdAgo - (run.ranMinutes ?? 10))
+        : 0;
+      return {
+        id,
+        status: run.status ?? "completed",
+        conclusion: completed ? run.conclusion : null,
+        run_attempt: run.attempt ?? 1,
+        event: run.event ?? "push",
+        head_sha: "sha",
+        display_title: workflow.name,
+        created_at: new Date(T0 - createdAgo * 60_000).toISOString(),
+        run_started_at: new Date(T0 - createdAgo * 60_000).toISOString(),
+        updated_at: new Date(T0 - endedAgo * 60_000).toISOString(),
+        html_url: `https://github.com/${repo}/actions/runs/${workflowNumber}`,
+        head_commit: null,
+      };
+    };
+
+    const single = url.pathname.match(/^\/repos\/(.+)\/actions\/runs\/(\d+)$/);
+    if (single) {
+      const id = Number(single[2]);
+      const workflow = (byFullName.get(single[1])!.workflows ?? []).find((
+        candidate,
+      ) => workflowId(single[1], candidate.file) === Math.floor(id / 100))!;
+      const index = (workflow.runs ?? []).length - 1 - id % 100;
+      return Promise.resolve(
+        Response.json(runJson(single[1], workflow, index)),
+      );
+    }
+
     const runs = url.pathname.match(
       /^\/repos\/(.+)\/actions\/workflows\/(\d+)\/runs$/,
     );
@@ -193,47 +239,19 @@ async function withGitHub(
       const branch = url.searchParams.get("branch");
       // GitHub filters on a status or a conclusion before it pages.
       const wanted = url.searchParams.get("status");
+      const page = Number(url.searchParams.get("page") ?? 1);
+      const perPage = Number(url.searchParams.get("per_page") ?? 30);
       return Promise.resolve(Response.json({
         workflow_runs: (workflow.runs ?? [])
-          .filter((run) => (run.branch ?? "main") === branch)
-          .filter((run) =>
+          .map((run, index) => ({ run, index }))
+          .filter(({ run }) => (run.branch ?? "main") === branch)
+          .filter(({ run }) =>
             wanted === null || (run.status ?? "completed") === wanted ||
             run.conclusion === wanted
           )
-          .map((run, index) => ({ run, index }))
           // A page holds as many runs as it was asked for, newest first.
-          .slice(
-            (Number(url.searchParams.get("page") ?? 1) - 1) *
-              Number(url.searchParams.get("per_page") ?? 30),
-            Number(url.searchParams.get("page") ?? 1) *
-              Number(url.searchParams.get("per_page") ?? 30),
-          )
-          .map(({ run, index }) => {
-            const id = Number(runs[2]) * 100 + index;
-            startedJobsById.set(id, run.startedJobs ?? 0);
-            if (run.jobsStatus !== undefined) {
-              jobsStatusById.set(id, run.jobsStatus);
-            }
-            const createdAgo = run.minutesAgo ?? 0;
-            const completed = (run.status ?? "completed") === "completed";
-            const endedAgo = completed
-              ? Math.max(0, createdAgo - (run.ranMinutes ?? 10))
-              : 0;
-            return {
-            id,
-            status: run.status ?? "completed",
-            conclusion: completed ? run.conclusion : null,
-            run_attempt: 1,
-            event: run.event ?? "push",
-            head_sha: "sha",
-            display_title: workflow.name,
-            created_at: new Date(T0 - createdAgo * 60_000).toISOString(),
-            run_started_at: new Date(T0 - createdAgo * 60_000).toISOString(),
-            updated_at: new Date(T0 - endedAgo * 60_000).toISOString(),
-            html_url: `https://github.com/${runs[1]}/actions/runs/${runs[2]}`,
-            head_commit: null,
-            };
-          }),
+          .slice((page - 1) * perPage, page * perPage)
+          .map(({ index }) => runJson(runs[1], workflow, index)),
       }));
     }
     throw new Error(`unexpected request ${url}`);
@@ -509,7 +527,7 @@ Deno.test("ci: a job gated off after it failed stops counting, while its runs go
     })),
     { conclusion: "failure", event: "schedule", minutesAgo: (days + 1) * 24 * 60 },
   ];
-  for (const days of [1, 5]) {
+  for (const days of [1, 30]) {
     await withGitHub(
       standingOrg(green, green, [{
         name: "gvisor",
@@ -530,15 +548,180 @@ Deno.test("ci: a job gated off after it failed stops counting, while its runs go
           new Request("http://dashboard/ci"),
           new URL("http://dashboard/ci"),
         )).text();
-        // While the failure is among the runs read, it says what happened;
-        // once five skipped runs have pushed it out, it says what they did.
-        assertStringIncludes(
-          page,
-          days === 1 ? "changed since it failed" : "recent runs judged nothing",
-        );
+        // However many skipped runs have piled up since, it says what
+        // happened to the failure behind them.
+        assertStringIncludes(page, "changed since it failed");
       },
     );
   }
+});
+
+Deno.test("ci: a job gated off after it passed stays green however many runs skip it", async () => {
+  // The same change after a pass: thirty daily runs have concluded skipped
+  // since, more than a page holds, and the pass behind them still stands.
+  const gated: RunSpec[] = [
+    ...Array.from({ length: 30 }, (_, day): RunSpec => ({
+      conclusion: "skipped",
+      minutesAgo: (day + 1) * 24 * 60,
+    })),
+    { conclusion: "success", minutesAgo: 31 * 24 * 60 },
+  ];
+  await withGitHub(
+    [
+      { name: REPO.split("/")[1], workflows: [labsCi(green)] },
+      {
+        name: LOOM_REPO.split("/")[1],
+        workflows: [{ ...loomCi(gated), fileChangedMinutesAgo: 30 * 24 * 60 }],
+      },
+    ],
+    async () => {
+      const view = await createCiHealth().collect(ctx());
+
+      assertEquals(view.status, "good");
+      assertEquals(view.value, "passing");
+      assertStringIncludes(view.aside ?? "", "2 jobs · 2 repos");
+      assertStringIncludes(
+        view.extra ?? "",
+        `<span class="dot green"></span>loom · Tests (fast)`,
+      );
+    },
+  );
+});
+
+Deno.test("ci: runs still going do not hide the verdict before them", async () => {
+  // A burst of pushes leaves more runs going at once than a page holds.
+  const going = Array.from({ length: 25 }, (_, index): RunSpec => ({
+    conclusion: null,
+    status: "in_progress",
+    minutesAgo: index + 1,
+  }));
+  await withGitHub(
+    standingOrg(green, [...going, { conclusion: "failure", minutesAgo: 60 }]),
+    async () => {
+      const view = await createCiHealth().collect(ctx());
+      assertEquals(view.status, "bad");
+      assertEquals(view.value, "loom failing");
+    },
+  );
+});
+
+Deno.test("ci: a verdict found far back is not read again on the next collection", async () => {
+  const runs: RunSpec[] = [
+    ...Array.from({ length: 25 }, (_, index): RunSpec => ({
+      conclusion: "skipped",
+      minutesAgo: (index + 2) * 60,
+    })),
+    { conclusion: "success", minutesAgo: 30 * 60 },
+  ];
+  await withGitHub(standingOrg(green, runs), async (wire) => {
+    const loomPages = () =>
+      wire.calls.filter((call) =>
+        call.startsWith(`/repos/${LOOM_REPO}/actions/workflows/`) &&
+        call.includes("/runs?")
+      ).length;
+    const loomRunReads = () =>
+      wire.calls.filter((call) =>
+        call.startsWith(`/repos/${LOOM_REPO}/actions/runs/`)
+      ).length;
+    const tile = createCiHealth();
+    assertEquals((await tile.collect(ctx())).value, "passing");
+    assertEquals(loomPages(), 2, "the pass is on the second page");
+
+    // One more run skips before the next collection, which reads down to the
+    // runs the first one settled and no further, and asks after the pass
+    // behind them on its own.
+    runs.unshift({ conclusion: "skipped", minutesAgo: 60 });
+    const view = await tile.collect(ctx());
+    assertEquals(view.value, "passing");
+    assertStringIncludes(
+      view.extra ?? "",
+      `<span class="dot green"></span>loom · Tests (fast)`,
+    );
+    assertEquals(loomPages(), 3, "the second collection reads one page");
+    assertEquals(loomRunReads(), 1, "and the pass once");
+  });
+});
+
+Deno.test("ci: a job that could not be read reads its runs afresh", async () => {
+  const runs: RunSpec[] = [
+    ...Array.from({ length: 25 }, (_, index): RunSpec => ({
+      conclusion: "skipped",
+      minutesAgo: (index + 2) * 60,
+    })),
+    { conclusion: "success", minutesAgo: 30 * 60 },
+  ];
+  const org = standingOrg(green, runs);
+  const loom = org.find((repo) => repo.name === LOOM_REPO.split("/")[1])!;
+  await withGitHub(org, async (wire) => {
+    const loomPages = () =>
+      wire.calls.filter((call) =>
+        call.startsWith(`/repos/${LOOM_REPO}/actions/workflows/`) &&
+        call.includes("/runs?")
+      ).length;
+    const tile = createCiHealth();
+    assertEquals((await tile.collect(ctx())).value, "passing");
+    assertEquals(loomPages(), 2);
+
+    loom.runsStatus = 503;
+    assertEquals((await tile.collect(ctx())).value, "1 unreadable");
+    assertEquals(loomPages(), 3);
+
+    // Nothing settled survives the failed read, so the pass is found again
+    // the way the first collection found it.
+    delete loom.runsStatus;
+    assertEquals((await tile.collect(ctx())).value, "passing");
+    assertEquals(loomPages(), 5);
+  });
+});
+
+Deno.test("ci: a failure run again and still going is no longer the verdict", async () => {
+  // The pages reach the failure itself, and nothing before it decides.
+  const runs: RunSpec[] = [
+    ...Array.from({ length: 3 }, (_, index): RunSpec => ({
+      conclusion: "skipped",
+      minutesAgo: (index + 1) * 20,
+    })),
+    { conclusion: "failure", event: "schedule", minutesAgo: 10 * 60 },
+  ];
+  await withGitHub(standingOrg(green, runs), async () => {
+    const tile = createCiHealth();
+    assertEquals((await tile.collect(ctx())).value, "loom failing");
+
+    runs[3] = {
+      ...runs[3],
+      conclusion: null,
+      status: "in_progress",
+      attempt: 2,
+    };
+    const view = await tile.collect(ctx());
+    assertEquals(view.status, "good");
+    assertStringIncludes(
+      view.extra ?? "",
+      `<span class="dot gray"></span>loom · Tests (fast)`,
+    );
+  });
+});
+
+Deno.test("ci: a failure far back that was run again and passed is read again", async () => {
+  // A nightly job fails, the pushes after it all skip it, and someone runs
+  // the failed run again, which keeps its place among the runs.
+  const runs: RunSpec[] = [
+    ...Array.from({ length: 25 }, (_, index): RunSpec => ({
+      conclusion: "skipped",
+      minutesAgo: (index + 1) * 20,
+    })),
+    { conclusion: "failure", event: "schedule", minutesAgo: 10 * 60 },
+    { conclusion: "success", event: "schedule", minutesAgo: 34 * 60 },
+  ];
+  await withGitHub(standingOrg(green, runs), async () => {
+    const tile = createCiHealth();
+    assertEquals((await tile.collect(ctx())).value, "loom failing");
+
+    runs[25] = { ...runs[25], conclusion: "success", attempt: 2 };
+    const view = await tile.collect(ctx());
+    assertEquals(view.status, "good");
+    assertEquals(view.value, "passing");
+  });
 });
 
 Deno.test("ci: a failure made after the workflow's last change still counts", async () => {
@@ -859,14 +1042,27 @@ Deno.test("ci: a job with no run carrying a verdict is not counted as failing", 
       }],
     }]),
     async () => {
-      const view = await createCiHealth().collect(ctx());
+      const tile = createCiHealth();
+      // The second collection starts from what the first one settled.
+      for (const collection of [1, 2]) {
+        const view = await tile.collect(ctx());
 
-      assertEquals(view.status, "good");
-      assertEquals(view.value, "passing");
-      // The job with no verdict is not one the headline speaks for, so the
-      // count leaves it out rather than folding it into "passing".
-      assertStringIncludes(view.aside ?? "", "2 jobs · 3 repos");
-      assert(!(view.extra ?? "").includes("Link check"));
+        assertEquals(view.status, "good", `collection ${collection}`);
+        assertEquals(view.value, "passing");
+        // The job with no verdict is not one the headline speaks for, so the
+        // count leaves it out rather than folding it into "passing".
+        assertStringIncludes(view.aside ?? "", "2 jobs · 3 repos");
+        assert(!(view.extra ?? "").includes("Link check"));
+
+        const page = await (await tile.routes![0].handler(
+          new Request("http://dashboard/ci"),
+          new URL("http://dashboard/ci"),
+        )).text();
+        assertStringIncludes(
+          page,
+          `Link check</a></td><td class="measure">no run judged anything</td>`,
+        );
+      }
     },
   );
 });

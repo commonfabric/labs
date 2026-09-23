@@ -114,8 +114,15 @@ gone.
 - Lower the base schema exactly as if `T` had been authored directly.
 - Evaluate `Meta` as a type-level object/tuple/literal payload.
 - Merge the evaluated metadata into `schema.ifc`.
-- If the base schema already contains `ifc`, the merge is additive/overwriting
-  by key, not replacement of the entire schema object.
+- If the base schema already contains `ifc`, the metadata combines with it key
+  by key rather than replacing the schema object. `confidentiality` lists join,
+  the base schema's atoms first and each atom once. Any other key both declare
+  must be declared alike, or lowering fails.
+- Where the base schema is a `$ref` to a definition carrying `ifc`, the `ifc`
+  written beside the `$ref` also carries the definition's labels, combined by
+  the same rule, because resolving the reference replaces the definition's
+  `ifc` with it. The mapping spec's §11
+  (`docs/specs/schema-generator/ts_to_json_schema_mapping.md`) has the details.
 
 ### Simple Wrapper Aliases
 

@@ -51,6 +51,7 @@ import {
 } from "../typescript/scope-brand.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 import { scopeInsideUnionError } from "../scope-placement.ts";
+import { combineIfcLabels } from "../ifc-labels.ts";
 
 type WrapperKind = CellWrapperKind;
 const CFC_ALIAS_NAMES: ReadonlySet<string> = new Set(CFC_CANONICAL_ALIAS_NAMES);
@@ -1944,13 +1945,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     const existingIfc = isObjectOrArray(schema.ifc) ? schema.ifc : {};
-    return {
-      ...schema,
-      ifc: {
-        ...existingIfc,
-        ...ifc,
-      },
-    };
+    return { ...schema, ifc: combineIfcLabels(existingIfc, ifc) };
   }
 
   #encodeJsonPointerPath(value: unknown): string | undefined {
