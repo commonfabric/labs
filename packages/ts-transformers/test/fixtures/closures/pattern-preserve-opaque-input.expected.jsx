@@ -21,25 +21,17 @@ const __cfLift_1 = __cfHelpers.lift<{
     type: "object",
     properties: {
         input: {
-            $ref: "#/$defs/State",
-            asCell: ["readonly"]
-        }
-    },
-    required: ["input"],
-    $defs: {
-        State: {
             type: "object",
             properties: {
                 foo: {
                     type: "string"
-                },
-                bar: {
-                    type: "string"
                 }
             },
-            required: ["foo", "bar"]
+            required: ["foo"],
+            asCell: ["readonly"]
         }
-    }
+    },
+    required: ["input"]
 } as const satisfies __cfHelpers.JSONSchema, {
     type: "string"
 } as const satisfies __cfHelpers.JSONSchema);

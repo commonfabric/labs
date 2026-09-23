@@ -145,6 +145,10 @@ present; no stage handles a missing one.
      printed node is read as its type and never as a node (§12). It is a plain
      identity lookup with **no** `getOriginalNode` fallback, since a node
      derived from a printed one says whatever its deriving changed.
+   - `printedWithin` — for a node the printer built below the root of a
+     print, that root; a node the printer reused from the source is authored
+     syntax and is not marked. `printPieceIn()` finds one held outside its
+     root, which SchemaGeneration refuses (§12). Same identity lookup.
 3. **Marker family** — node/symbol-keyed `WeakSet`s whose membership checks fall
    back through `getOriginalNode`, and whose mutators are coupled to the
    context's reactive-analysis cache invalidation (invalidation is a
@@ -1842,6 +1846,24 @@ adjustments:
   that candidate holds an authored `Default` (`getScopeWrapper` and
   `restoreDefault` in `transformers/type-shrinking.ts`;
   `test/shrunk-capture-wrappers.test.ts`)
+- a pass that reads the structure of a node printed from a type (node-driven
+  shrinking, the narrowing of cells to their observed capability, and the
+  application of identity-only paths) reads the print's unfolding in its
+  place: a node of the print's own kind built from the type it was printed
+  from, each type node below it printed afresh from its own type. A literal, a
+  union, an array (`T[]`, `readonly T[]`, `Array<T>`, `ReadonlyArray<T>`), and
+  a cell reference unfold, a union into one print for each of its members. A
+  print of any other kind is kept whole. A print thus goes through each pass as the authored node for its
+  type would, every part a pass keeps is read by its type, and no pass builds a
+  node from a piece of a print (`unfoldPrint` in
+  `transformers/type-shrinking.ts`; `test/printed-type-node-schema.test.ts`).
+  Three rules keep what a print says through the unfolding: a scoped cell is
+  not narrowed, as only its alias names its scope; a narrowed wrapper around a
+  nullable cell's value alternatives is not registered with the union's type,
+  which schema generation would read in the wrapper's place; and the declared
+  members of a generic declaration, written in terms of parameters an
+  instantiation binds, do not shrink that instantiation
+  (`resolveMembersFromDeclaration`)
 - tuple types and numeric-indexed object types are not rewritten to
   array-with-unknown-items during this optimization
 - after shrinking, `validateShrinkCoverage` checks that all requested property
@@ -2253,7 +2275,11 @@ Special path:
   resolve, an `import("…")` type, or the brand of an expanded `Default` never
   reaches node analysis, and a type the checker will not print is read from
   that type rather than from its `unknown` placeholder
-  (`test/printed-type-node-schema.test.ts`).
+  (`test/printed-type-node-schema.test.ts`). A type argument holding a type
+  node the printer built below a print, outside that print, is refused with an
+  error: the generator would read it as a node, and it says only part of what
+  the type does (`CrossStageState.printPieceIn()`; §10.7 says how the passes
+  that read inside a print avoid building one).
 - the generator uses its node-based path when the resolved type is `any` and
   the type-argument node is synthetic (`pos=-1,end=-1`), or when a type
   argument, synthetic or not, contains an `any` or `unknown` keyword anywhere,

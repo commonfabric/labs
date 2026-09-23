@@ -32,18 +32,18 @@ async function unreadWarnings(
 
 describe("unread-type-diagnostic", () => {
   it("warns where the value type of a captured cell is left unread", async () => {
-    // Node-based analysis leaves this generic the module exports unread, and
-    // the lift's input accepts any value in its place.
+    // The type path leaves `Reactive<any>` unread, and the lift's input
+    // accepts any value in its place.
     const warnings = await unreadWarnings({
-      "/test.tsx": `import { computed, pattern, Writable } from "commonfabric";
-        export interface Contact<T = number> { name: T }
-        ${readContact("Contact<string>")}`,
+      "/test.tsx":
+        `import { computed, pattern, type Reactive, Writable } from "commonfabric";
+        ${readContact("Reactive<any>")}`,
     });
 
     expect(warnings.length).toBe(1);
     expect(warnings[0]!.severity).toBe("warning");
     expect(warnings[0]!.fileName).toBe("/test.tsx");
-    expect(warnings[0]!.message).toContain("`Contact<string>`");
+    expect(warnings[0]!.message).toContain("`Reactive<any>`");
   });
 
   describe("a captured type declared as `any`", () => {

@@ -142,6 +142,22 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
           writerIdentityForSourceFile,
         };
 
+        // Schema generation reads a print by the type it was printed from,
+        // which says nothing of a piece taken out of it, so a node built from
+        // pieces would be read as a node.
+        const piece = context.state.printPieceIn(schemaTypeArg);
+        if (piece) {
+          const root = context.state.printedWithin(piece);
+          const printedType = root && context.state.printedFrom(root);
+          throw new Error(
+            `A piece of the type node printed from \`${
+              printedType ? checker.typeToString(printedType) : "?"
+            }\` reached schema generation outside that node. A printed ` +
+              `type node is read by its type, so no node may be built from ` +
+              `its parts.`,
+          );
+        }
+
         // If Type resolved to 'any' or the synthetic TypeNode intentionally
         // contains unknown, use the synthetic-node generator so the checker
         // does not recover a wider semantic type from the original source.
