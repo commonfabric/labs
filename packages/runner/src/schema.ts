@@ -1944,19 +1944,23 @@ function removeAsCellFromSchema(schema: JSONSchema): JSONSchema {
 }
 
 /**
- * Whether a compound schema holds a branch that declares `asCell` and
- * constrains nothing else — a true schema once its marker is removed, so a
- * reader that admits a handle over any value at all.
+ * Whether a compound admits a handle over any value at all, so that the
+ * schema a handle adopted from its link is the one the reader allowed. An
+ * `anyOf` does where any branch declares `asCell` and constrains nothing
+ * else — a true schema once its marker is removed. An `allOf` does where
+ * such a branch is joined only by branches that are true themselves, since
+ * an `allOf` of true branches is that bare branch; a branch that constrains
+ * something is a constraint the handle must keep, and the compound stays. A
+ * `oneOf` never reaches a merge with two matches.
  */
 function compoundHasBareAsCellBranch(schema: JSONSchemaObj): boolean {
-  const branches = [
-    ...(schema.anyOf ?? []),
-    ...(schema.oneOf ?? []),
-    ...(schema.allOf ?? []),
-  ];
-  return branches.some((branch) =>
+  const isBareAsCell = (branch: JSONSchema): boolean =>
     isObjectOrArray(branch) &&
     ContextualFlowControl.getAsCellValues(branch).length > 0 &&
-    ContextualFlowControl.isTrueSchema(removeAsCellFromSchema(branch))
-  );
+    ContextualFlowControl.isTrueSchema(removeAsCellFromSchema(branch));
+  const isTrue = (branch: JSONSchema): boolean =>
+    ContextualFlowControl.isTrueSchema(removeAsCellFromSchema(branch));
+  if ((schema.anyOf ?? []).some(isBareAsCell)) return true;
+  const parts = schema.allOf ?? [];
+  return parts.some(isBareAsCell) && parts.every(isTrue);
 }

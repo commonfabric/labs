@@ -565,11 +565,15 @@ function createObjectView(
       return readChild(runtime, tx, link, key, narrowed, cfcLabelView, synced);
     } catch (error) {
       if (!isSchemaMismatchError(error)) throw error;
-      // A combinator evaluated whole can dead-end at a doc the replica cannot
-      // serve. Nothing in it is known to be invalid, so neither the default
-      // nor absence answers for it, and the refusal stands. The property's own
-      // dead-end never arrives here with a default declared: the entry point
-      // stands the default in before it can refuse.
+      // A child can dead-end at a doc the replica cannot serve — inside a
+      // combinator evaluated whole, or at its own target. Nothing in it is
+      // known to be invalid, so nothing may be published in its place: a
+      // declared default is refused rather than stood in, and a required
+      // property refuses below. A property with neither reads as absent, as
+      // an eager read reads it, with the dead-end's read registered by the
+      // entry point so the reader runs again when the document arrives. The
+      // property's own dead-end never arrives here with a default declared:
+      // the entry point stands the default in before it can refuse.
       if (defaultSchema !== undefined && isUnresolvedInputError(error)) {
         throw error;
       }

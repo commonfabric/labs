@@ -462,6 +462,103 @@ describe("materialization-parity", () => {
     }
   });
 
+  describe("an unavailable link under an optional property that declares no default", () => {
+    // The two cases above pin the dead-end where something would otherwise be
+    // published in its place — a default, a substitute. An optional property
+    // with no default has nothing to publish: it reads as absent, as an eager
+    // read reads it, and the dead-end's read is registered so the reader runs
+    // again when the document arrives.
+
+    const readsAbsentAndRegisters = async (
+      cause: string,
+      missingId: string,
+      schema: JSONSchema,
+    ) => {
+      for (const lazy of [false, true]) {
+        const tx = runtime.edit();
+        if (lazy) tx.markLazyMaterialize(true);
+        try {
+          const value = runtime.getCell<{ p?: unknown; other?: number }>(
+            space,
+            cause,
+            schema,
+            tx,
+          ).get();
+          expect(value.p).toBeUndefined();
+          expect(tx.takeSchemaRefusal()).toBeUndefined();
+          const reads = [...(getTransactionReadActivities(tx) ?? [])];
+          expect(reads.some((activity) => activity.id === missingId)).toBe(
+            true,
+          );
+        } finally {
+          await tx.commit();
+        }
+      }
+    };
+
+    it("reads as absent, with the document's read registered, where the property's own target is unserved", async () => {
+      const write = runtime.edit();
+      const missing = runtime.getCell(
+        space,
+        "missing-target",
+        undefined,
+        write,
+      );
+      runtime.getCell(space, "optional-link", undefined, write).setRaw({
+        p: missing.getAsLink(),
+        other: 1,
+      });
+      await write.commit();
+      await readsAbsentAndRegisters(
+        "optional-link",
+        missing.getAsNormalizedFullLink().id,
+        {
+          type: "object",
+          properties: {
+            other: { type: "number" },
+            p: { type: "object", properties: { n: { type: "number" } } },
+          },
+        },
+      );
+    });
+
+    it("reads as absent, with the document's read registered, where a union evaluated whole dead-ends below it", async () => {
+      // Two object branches: the value's type settles nothing, so the union is
+      // evaluated whole and the dead-end is met inside the traverser.
+      const write = runtime.edit();
+      const missing = runtime.getCell(
+        space,
+        "missing-in-union",
+        undefined,
+        write,
+      );
+      runtime.getCell(space, "optional-union", undefined, write).setRaw({
+        p: { n: missing.getAsLink() },
+      });
+      await write.commit();
+      const branch = (extra: Record<string, JSONSchema>): JSONSchema => ({
+        type: "object",
+        properties: { n: { type: "number" }, ...extra },
+        required: ["n"],
+      });
+      await readsAbsentAndRegisters(
+        "optional-union",
+        missing.getAsNormalizedFullLink().id,
+        {
+          type: "object",
+          properties: {
+            p: {
+              anyOf: [
+                branch({ a: { type: "string" } }),
+                branch({ b: { type: "string" } }),
+              ],
+            },
+          },
+        },
+      );
+    });
+  });
+
   describe("where a view deliberately diverges from an eager read", () => {
     // Each case here is a decision, not a gap: an eager read decides a
     // fallback by evaluating the whole subtree, and a view decides it by what

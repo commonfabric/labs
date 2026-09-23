@@ -7,7 +7,7 @@ import "@commonfabric/utils/equal-ignoring-symbols";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { type Cell, isCell } from "../src/cell.ts";
-import { type JSONSchema } from "../src/builder/types.ts";
+import { type JSONSchema, type JSONSchemaObj } from "../src/builder/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -821,6 +821,122 @@ describe("Schema - Basic Types and References", () => {
       expect(isCell(outerNestedCell)).toBe(true);
       expect(isCell(innerStringCell)).toBe(true);
       expect(innerStringCell.get()).toBe("hello anyOf nested cell");
+    });
+
+    it("keeps an `allOf`'s constraint on a handle minted from its bare `asCell` branch", () => {
+      // Under `allOf` every branch is a constraint the handle must keep, so the
+      // handle carries the compound rather than the link's own schema: once the
+      // target stops satisfying the other branch, a read through the handle
+      // refuses.
+      const target = runtime.getCell<{ x?: number; y: number }>(
+        space,
+        "allof-handle-target",
+        {
+          type: "object",
+          properties: { x: { type: "number" }, y: { type: "number" } },
+        } as const satisfies JSONSchema,
+        tx,
+      );
+      target.set({ x: 1, y: 2 });
+      const holder = runtime.getCell<any>(
+        space,
+        "allof-handle-holder",
+        {
+          type: "object",
+          properties: {
+            p: {
+              allOf: [
+                { asCell: ["cell"] },
+                {
+                  type: "object",
+                  properties: { x: { type: "number" } },
+                  required: ["x"],
+                },
+              ],
+            },
+          },
+        } as const satisfies JSONSchema,
+        tx,
+      );
+      holder.setRaw({ p: target.getAsLink({ includeSchema: true }) });
+      const handle = holder.get().p;
+      expect(isCell(handle)).toBe(true);
+      expect(handle.get().x).toBe(1);
+      target.set({ y: 2 });
+      expect(handle.get()).toBeUndefined();
+    });
+
+    it("keeps the link's schema on a handle minted from an `allOf` of a bare `asCell` branch and a true one", () => {
+      // An `allOf` whose other branches constrain nothing is its bare `asCell`
+      // branch, and admits a handle over anything just as an `anyOf` does.
+      const target = runtime.getCell<{ x: number; y: number }>(
+        space,
+        "allof-true-handle-target",
+        {
+          type: "object",
+          properties: { x: { type: "number" }, y: { type: "number" } },
+        } as const satisfies JSONSchema,
+        tx,
+      );
+      target.set({ x: 1, y: 2 });
+      const holder = runtime.getCell<any>(
+        space,
+        "allof-true-handle-holder",
+        {
+          type: "object",
+          properties: { p: { allOf: [{ asCell: ["cell"] }, {}] } },
+        } as const satisfies JSONSchema,
+        tx,
+      );
+      holder.setRaw({ p: target.getAsLink({ includeSchema: true }) });
+      const handle = holder.get().p;
+      expect(isCell(handle)).toBe(true);
+      const schema = handle.schema as JSONSchemaObj;
+      expect(schema.allOf).toBeUndefined();
+      expect(schema.properties?.y).toEqual({ type: "number" });
+    });
+
+    it("keeps the link's schema on a handle minted from an `anyOf`'s bare `asCell` branch", () => {
+      // A bare `asCell` branch of an `anyOf` admits a handle over anything, so
+      // the handle keeps the schema it adopted from the link — the target's
+      // own, naming `y` — rather than the union, which never mentions `y`.
+      const target = runtime.getCell<{ x: number; y: number }>(
+        space,
+        "anyof-handle-target",
+        {
+          type: "object",
+          properties: { x: { type: "number" }, y: { type: "number" } },
+        } as const satisfies JSONSchema,
+        tx,
+      );
+      target.set({ x: 1, y: 2 });
+      const holder = runtime.getCell<any>(
+        space,
+        "anyof-handle-holder",
+        {
+          type: "object",
+          properties: {
+            p: {
+              anyOf: [
+                { asCell: ["cell"] },
+                {
+                  type: "object",
+                  properties: { x: { type: "number" } },
+                  required: ["x"],
+                },
+              ],
+            },
+          },
+        } as const satisfies JSONSchema,
+        tx,
+      );
+      holder.setRaw({ p: target.getAsLink({ includeSchema: true }) });
+      const handle = holder.get().p;
+      expect(isCell(handle)).toBe(true);
+      const schema = handle.schema as JSONSchemaObj;
+      expect(schema.anyOf).toBeUndefined();
+      expect(schema.properties?.y).toEqual({ type: "number" });
+      expect(handle.get()).toEqual({ x: 1, y: 2 });
     });
 
     it('should create nested default cells for asCell: ["cell", "cell"]', () => {

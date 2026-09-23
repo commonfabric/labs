@@ -119,7 +119,12 @@ eager read".
   `UnresolvedInputError` where the schema declares no default. An eager read
   reads the same position as `undefined`. This one is lazy-branch only by
   design; the runner's bindings, diffing and scheduler reads keep eager
-  semantics.
+  semantics. The refusal stands wherever something would otherwise be
+  published in the unknown value's place — the position read, a required
+  property, a declared default, an array substitute. An optional property
+  with no default has nothing to publish, and reads as absent there as it
+  does eagerly, the dead-end's read registered so the reader runs again when
+  the document arrives.
 
 The first three share one reason: deciding a fallback by evaluating a present
 subtree registers every read below it, and a pattern's optional inputs are

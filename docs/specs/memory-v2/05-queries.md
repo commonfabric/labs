@@ -202,7 +202,9 @@ function traverseWithSchema(value, schema):
         matches.push(match)
     return mergeAnyOfMatches(matches)
 
-  if schema.allOf:
+  if schema.allOf and schema.allOf is not empty:
+    // An empty allOf constrains nothing and is passed over; the keywords
+    // beside it decide the node below.
     // All must match, and their results merge the same way
     matches = []
     for each option in schema.allOf:
