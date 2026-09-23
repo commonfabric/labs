@@ -51,7 +51,7 @@ const policyOfSchema = {
   },
 } as const;
 
-describe("module-policy manifest install in a shared space", () => {
+describe("cfc-policy-manifest-shared-install", () => {
   // Two runtimes on one server model two participants of a shared space.
   // Each writes a value labeled with the same PolicyOf, so each installs the
   // same content-addressed manifest document beside its value. The second
@@ -136,6 +136,10 @@ describe("module-policy manifest install in a shared space", () => {
     expect(isRetryableCommitRejection(committed.error!)).toBe(true);
   });
 
+  // This case and the event case below prove only that the write lands: a
+  // blind overwrite of identical bytes would pass them too. The retryable
+  // conflict above and the collision case at the end are what show an
+  // install never overwrites.
   it("commits a second participant's first write once the manifest is already installed", async () => {
     expect((await writeLabeled(rtA, "a-brief")).error).toBeUndefined();
 
