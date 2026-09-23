@@ -204,9 +204,10 @@ export function float64BytesOf(value: number): Uint8Array {
 }
 
 /**
- * Feeder of one value's hash. An instance holds the hasher the value's bytes go
- * into and the path of containers enclosing the position being fed, so it
- * serves exactly one hash: it is made, fed a value, and asked for a digest.
+ * Computes the hash of one value. An instance holds the hasher the value's
+ * bytes go into and the path of containers enclosing the position being fed,
+ * so it serves exactly one hash: it is made, fed a value, and asked for a
+ * digest.
  */
 class ValueHasher {
   /** Hasher which receives the value's bytes. */

@@ -210,9 +210,9 @@ changes reactively:
 
 ### Hashing boundary (`packages/data-model/src/value-hash.ts`)
 
-Holes are hashed as themselves. `feedArray()` walks the array by index and,
-on reaching an absent one, coalesces the whole run of consecutive holes into a
-single hole entry carrying its length. A hole is therefore distinct from a
+Holes are hashed as themselves. `ValueHasher`'s `#feedArray()` walks the array
+by index and, on reaching an absent one, coalesces the whole run of consecutive
+holes into a single hole entry carrying its length. A hole is therefore distinct from a
 `null` or an `undefined` element in the hash, exactly as it is in storage, so
 two arrays that differ only in sparseness hash differently.
 
