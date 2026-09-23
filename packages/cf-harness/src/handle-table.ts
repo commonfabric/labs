@@ -365,8 +365,8 @@ export const mintReferentHandle = async (
  * @throws Error when the tables carry different salts, since their tokens
  * were then derived from different runs and cannot share a table; or when
  * two writers minting from one base drew different tokens for one address,
- * or one token for two different referents, neither of which either writer
- * could see of the other.
+ * or one token for two different addresses or referents, none of which
+ * either writer could see of the other.
  */
 export const mergeHarnessHandleTables = (
   current: HarnessHandleTable,
@@ -383,6 +383,11 @@ export const mergeHarnessHandleTables = (
       held.addressKey === entry.addressKey
     );
     if (index === -1) {
+      if (entries.some((held) => held.token === entry.token)) {
+        throw new Error(
+          `handle token ${entry.token} was minted for two different addresses`,
+        );
+      }
       entries.push(entry);
       continue;
     }

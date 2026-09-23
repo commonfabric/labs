@@ -43,9 +43,10 @@ permanently growing implementation plan.
   parent/model-facing artifact references.
 - Carry handle state across interactive sessions so tokens survive an
   interactive restart.
-- A turn's delegations run together and its other calls run in order; specify
-  budget and cancellation across turns, and the workspace isolation of children
-  that share the parent's sandbox, before scheduling more than that.
+- A turn's delegations run together, apart from a `browser` delegation, which
+  holds the calls after it, and its other calls run in order; specify budget and
+  cancellation across turns, and the workspace isolation of children that share
+  the parent's sandbox, before scheduling more than that.
 - Extend resume only where external side-effect replay semantics can be made
   explicit and testable.
 

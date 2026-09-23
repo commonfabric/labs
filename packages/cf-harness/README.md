@@ -289,8 +289,9 @@ What is not done yet:
   subagent profile
 - dynamic/model-driven Agent Skills activation
 - parallel child orchestration beyond one model turn: a turn's delegations run
-  together while its other calls run in order, and nothing schedules, budgets,
-  or cancels across turns
+  together, apart from a `browser` delegation, which holds the calls after it,
+  while its other calls run in order; nothing schedules, budgets, or cancels
+  across turns
 - app UI event provenance
 - streaming model responses
 - richer mid-turn resumability

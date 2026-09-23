@@ -2673,11 +2673,17 @@ export class CfHarnessEngine {
     const now = this.#now();
     // Taken before the await: two invocations prepared at once would
     // otherwise both count the contexts recorded so far and share a number,
-    // and the audit keys contexts by sequence.
+    // and the audit keys contexts by sequence. The recorded side is the
+    // highest number recorded, not the count: a number reserved for a context
+    // that was never recorded leaves a gap, and a resumed run counting from
+    // the length would hand out a number already in use.
     const sequence = Math.max(
-      (this.#runState.cfcInvocationContexts ?? []).length + 1,
-      this.#lastCfcInvocationSequence + 1,
-    );
+      0,
+      ...(this.#runState.cfcInvocationContexts ?? []).map((context) =>
+        context.sequence
+      ),
+      this.#lastCfcInvocationSequence,
+    ) + 1;
     this.#lastCfcInvocationSequence = sequence;
     const invocation = await createHarnessCfcInvocationContext({
       sequence,

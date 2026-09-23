@@ -137,6 +137,60 @@ describe("handle-table", () => {
       expect(merged.schemaSource).toBeUndefined();
     });
 
+    it("keeps a restriction and an acquisition the incoming copy lacks", async () => {
+      const base = (await mintAddressHandle(
+        createHarnessHandleTable("run-1"),
+        `of:fid1:${HASH_A}`,
+      )).table;
+      const restricted = await mintAddressHandle(base, `of:fid1:${HASH_A}`, {
+        capability: "skill-context",
+        acquisition: ACQUISITION,
+      });
+      const other = await mintAddressHandle(base, `of:fid1:${HASH_B}`);
+
+      const merged = mergeHarnessHandleTables(restricted.table, other.table);
+      const entry = merged.entries.find((held) =>
+        held.token === restricted.token
+      );
+
+      expect(entry?.capability).toBe("skill-context");
+      expect(entry?.acquisition).toEqual(ACQUISITION);
+    });
+
+    it("refuses one token minted for two different addresses", () => {
+      const entry = { kind: "address" as const, token: "cfh:a:22222" };
+      const held: HarnessHandleTable = {
+        ...createHarnessHandleTable("run-1"),
+        entries: [{ ...entry, ref: `/of:fid1:${HASH_A}`, addressKey: "key-a" }],
+      };
+      const incoming: HarnessHandleTable = {
+        ...createHarnessHandleTable("run-1"),
+        entries: [{ ...entry, ref: `/of:fid1:${HASH_B}`, addressKey: "key-b" }],
+      };
+
+      expect(() => mergeHarnessHandleTables(held, incoming)).toThrow(
+        "two different addresses",
+      );
+    });
+
+    it("keeps the referents two writers minted from one base", async () => {
+      const base = createHarnessHandleTable("run-1");
+      const row = (value: string) => ({
+        kind: "document" as const,
+        source: "loom:rows",
+        value,
+        label: { confidentiality: [] },
+        labelSource: "row" as const,
+      });
+      const first = await mintReferentHandle(base, row("first row"));
+      const second = await mintReferentHandle(base, row("second row"));
+
+      const merged = mergeHarnessHandleTables(first.table, second.table);
+
+      expect(merged.referents?.map((referent) => referent.token).toSorted())
+        .toEqual([first.token, second.token].toSorted());
+    });
+
     it("refuses one address recorded under two different tokens", () => {
       const entry = {
         kind: "address" as const,

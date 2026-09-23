@@ -152,6 +152,40 @@ Deno.test("CfHarnessEngine numbers CFC invocation contexts prepared at once apar
   );
 });
 
+Deno.test("CfHarnessEngine numbers a resumed run's next CFC invocation context past the highest recorded", async () => {
+  const first = new CfHarnessEngine({
+    sandboxRuntime: new FakeSandboxRuntime([
+      { stdout: "", stderr: "", exitCode: 0 },
+      { stdout: "", stderr: "", exitCode: 0 },
+    ]),
+    runId: "run-context-gap",
+  });
+  await first.invokeBuiltinTool("bash", { command: "printf one" });
+  await first.invokeBuiltinTool("bash", { command: "printf two" });
+  // A number reserved for a context that was never recorded leaves a gap:
+  // the run resumes holding only the context numbered 2.
+  const recorded = first.getRunState();
+  const resumed = new CfHarnessEngine({
+    sandboxRuntime: new FakeSandboxRuntime([
+      { stdout: "", stderr: "", exitCode: 0 },
+    ]),
+    runId: "run-context-gap",
+    runState: {
+      ...recorded,
+      cfcInvocationContexts: recorded.cfcInvocationContexts?.slice(1),
+    },
+  });
+
+  await resumed.invokeBuiltinTool("bash", { command: "printf three" });
+
+  assertEquals(
+    resumed.getRunState().cfcInvocationContexts?.map((context) =>
+      context.sequence
+    ),
+    [2, 3],
+  );
+});
+
 Deno.test("CfHarnessEngine keeps the handles of two mints recorded at once", async () => {
   const engine = new CfHarnessEngine({
     sandboxRuntime: new FakeSandboxRuntime(),
@@ -198,7 +232,7 @@ Deno.test("CfHarnessEngine refuses to record a table where two addresses drew on
   await assertRejects(
     () => engine.recordHandleTable(second.table),
     Error,
-    "duplicate token",
+    "two different addresses",
   );
   assertEquals(engine.handleTable?.entries.length, 1);
 });
