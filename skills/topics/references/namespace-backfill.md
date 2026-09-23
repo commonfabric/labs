@@ -158,9 +158,14 @@ Before the apply, take out the rows that need no move. A Topic filed through the
 board after step 1 runs the Topic code the board's own program carries, under a
 different identity from the standalone build the plan targets, and stores its
 number from creation. The apply cannot be undone ("Traps"), so settle these rows
-first. A Topic's `shortName` input read succeeds only when it stores a number —
-it fails on a Topic whose source does not declare the input, and on one that
-declares it and stores none — so that read is the test:
+first. The test is the Topic's `shortName` input read, which **exits non-zero
+unless the Topic stores a number**. On a Topic whose source does not declare the
+input it refuses the path,
+`property "shortName" not found in the current
+pattern's input schema`; on one
+that declares it and stores none it reports `property "shortName" not found` and
+lists the keys the input does hold. Both exit 1. A stored number prints and
+exits 0:
 
 ```bash
 : > "$PLAN.numbered"
@@ -170,6 +175,7 @@ for p in $(jq -r 'select(.op) | .piece' "$PLAN"); do
   fi
 done
 wc -l < "$PLAN.numbered"   # expect the Topics filed since step 1, and no others
+jq -c 'select(.op)' "$PLAN" | wc -l   # if the two counts match, stop: see below
 jq -c --rawfile skip "$PLAN.numbered" \
   '.piece as $p | if .op and (($skip | split("\n")) | index($p)) then del(.op) else . end' \
   "$PLAN" > "$PLAN.edited" && mv "$PLAN.edited" "$PLAN"
@@ -180,11 +186,14 @@ deno task cf piece retarget --plan "$PLAN" --group-size 25 --apply
 deno task cf piece survey --piece "$TOPICS_BOARD" --path topics --diff "$PLAN"
 ```
 
-A row without an operation is the plan format's own "leave this piece where it
-is", so the edited rows are reported as unchanged by the verdict rather than
-counted as missed. A run that stops partway is resumed by running the apply
-again, since a Topic already on the target reads as landed and is not rewritten.
-On a board the size of the Estuary one this is the bulk-CLI shape
+If every row reads as numbered, the read is not behaving as described, and the
+edit would empty the plan so that the apply moves nothing and reports success.
+Stop and look at one row's read by hand before editing anything. A row without
+an operation is the plan format's own "leave this piece where it is", so the
+edited rows are reported as unchanged by the verdict rather than counted as
+missed. A run that stops partway is resumed by running the apply again, since a
+Topic already on the target reads as landed and is not rewritten. On a board the
+size of the Estuary one this is the bulk-CLI shape
 `docs/history/topics-board-migration-2026-08-28.md` found unreliable from a
 laptop over the network, so treat a stopped run as a reason to resume rather
 than start over.
@@ -359,12 +368,14 @@ which the verb works. It is untidy rather than damaging, and step 2 before step
 # the step's own report, run after run. While numbers are hidden it reads every
 # Topic as storing nothing, so `named` is empty and `pending` holds them all:
 # what moves between runs is `assigned`.
-deno task cf piece call --cell "$TOPICS_BOARD" backfillNames '{"agentName":"Sol"}'
+deno task cf piece call --cell "$TOPICS_BOARD" --invocation '<id>' backfillNames \
+  '{"agentName":"Sol"}'
 # -> { "assigned": [], "named": [], "pending": ["1","2"] }
 
 # what Topic 2 actually stores, which no switch gates
 deno task cf cell get --cell "$TOPIC2" shortName --input
-# -> (absent, for a Topic that has not stored one)
+# -> fails, exit 1: Cannot access path "shortName" - property "shortName" not
+#    found. Available keys: ...   (a Topic that has not stored one)
 
 # and the number addresses the Topic anyway
 deno task cf cell get //<space>/top/2 title
