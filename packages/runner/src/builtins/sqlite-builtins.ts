@@ -1104,11 +1104,17 @@ export function sqliteQuery(
     const clearanceSession = inputs.readClearance && scope === "session"
       ? runIdentity?.sessionId
       : undefined;
-    // Detached from the input view before they are hashed: the ceiling is
-    // judged again after the query returns, when the transaction that read it
-    // has finished.
+    // Detached from the input view here, where the run reads them: the first
+    // two join the request hash, and both ceilings are judged again after the
+    // query returns, when the transaction that read them has finished. The
+    // row schema's is the typed alternative, `MaxConfidentiality<Row>`.
     const reactOn = snapshotQueryResult(inputs.reactOn);
     const declaredCeiling = snapshotQueryResult(inputs.maxConfidentiality);
+    const rowSchemaCeiling = snapshotQueryResult(
+      (inputs.rowSchema as {
+        ifc?: { maxConfidentiality?: CfcConfClause[] };
+      } | undefined)?.ifc?.maxConfidentiality,
+    );
     const hash = computeInputHashFromValue({
       databaseSpace,
       reader: crossSpace ? (actingReader ?? null) : null,
@@ -1523,9 +1529,6 @@ export function sqliteQuery(
             // spec, locates rule inputs by TRUE origin, evaluates the rule per
             // row, and decides fail/skip under the ceiling — every unresolvable
             // case refuses the query (fail closed), never under-labels.
-            const rowSchemaCeiling = (inputs.rowSchema as {
-              ifc?: { maxConfidentiality?: CfcConfClause[] };
-            } | undefined)?.ifc?.maxConfidentiality;
             if (
               declaredCeiling !== undefined &&
               rowSchemaCeiling !== undefined
