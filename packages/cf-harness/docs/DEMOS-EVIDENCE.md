@@ -349,11 +349,11 @@ empty with no error anywhere.
 Say which you mean. "After the reader reports `pending: false` and no error" is
 unambiguous and does not invite a vocabulary the data does not use.
 
-**Slugs.** `assign_slug` requires a slug, never makes one unique itself, and
-refuses one that already names another piece — and pieces are never deleted. A
-prompt naming a fixed slug therefore works once and stops to ask on every later
-run. Every prompt below ends with the sentence that authorizes the retry, which
-is what makes the same text work repeatedly and on someone else's console.
+**Slugs.** `assign_slug` never repoints a slug that already names another piece
+— and pieces are never deleted — so a prompt naming a fixed slug gets that word
+on the first run and the word with a counter (`-2`, `-3`, ...) on every later
+one. The receipt carries the name assigned; the run reads its address there and
+needs no retry.
 
 ## Checking an index entry is discoverable
 

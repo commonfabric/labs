@@ -389,18 +389,19 @@ The current package provides:
   out of the space's registered piece list, with run→piece provenance carried by
   the run's persisted artifacts. `assign_slug` names a piece afterwards, from
   any handle token referring to one: it validates the slug, fails closed on an
-  availability question the space cannot answer, refuses a slug already naming
-  another piece (one already naming the same piece answers ok), refuses a token
-  that names a position inside a piece, another space, or a document with no
-  pattern identity, and refuses a declared top-level pending read or an
-  unestablished UI. Otherwise it registers the piece in the space's piece list
-  and points the slug at it, returning the slug and, when composable without a
-  bare fabric identifier, an openable URL. Successful naming records a host-only
-  reference. Completed interactive turns retain those references atomically with
-  history for bare follow-ups, including after restart, and remint them through
-  the existing input-cell path. Explicit attachments, including an empty list,
-  take precedence and clear the retained targets when that turn completes
-  without naming a piece; failed turns leave them unchanged. Without the session
+  availability question the space cannot answer, appends a counter to a slug
+  already naming another piece and returns the name assigned in the receipt (one
+  already naming the same piece answers ok), refuses a token that names a
+  position inside a piece, another space, or a document with no pattern
+  identity, and refuses a declared top-level pending read or an unestablished
+  UI. Otherwise it registers the piece in the space's piece list and points the
+  slug at it, returning the slug and, when composable without a bare fabric
+  identifier, an openable URL. Successful naming records a host-only reference.
+  Completed interactive turns retain those references atomically with history
+  for bare follow-ups, including after restart, and remint them through the
+  existing input-cell path. Explicit attachments, including an empty list, take
+  precedence and clear the retained targets when that turn completes without
+  naming a piece; failed turns leave them unchanged. Without the session
   configuration both tools are absent from the tool surface, for a `default`- or
   `pattern-author`-profile subagent as much as for the parent — a child shares
   the one session the parent built; `--fabric-cfc-enforcement-mode` (the

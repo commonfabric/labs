@@ -2008,27 +2008,33 @@ reference into another space, and a document with no pattern identity are each
 refused with a structured error.
 
 The slug is validated, then checked for availability, before anything is
-written, so an unusable slug and a slug already naming another piece are both
-structured errors that change nothing. The availability question fails closed: a
-slug is free only on the outcomes that say nothing is there — no document, a
-malformed one, one that is not a piece, one carrying no piece id. A slug that
-resolves into a piece rather than to one names a collection, and is refused the
-way a taken name is: it is an address a person opens. Any other failure refuses
-the call saying the availability could not be established, because reporting a
-storage error as a free name would write over whatever is there. That check is
-what stops a caller from taking over a name a person already opens, and it is
-the narrower of the two rules in play: the assignment underneath refuses a name
-pointing anywhere at all, while this one competes only with pieces and
-collections, so a name whose document holds no usable redirect is free here and
-not there. The check's answer is carried into the write as the state to take the
-name from, not forced past the wider rule — forcing would spend the claim the
-assignment makes, and two calls that both read a name as free would both take
-it. Carried in, the write judges this rule against what it lands on, so a name
-bound between the check and the write is refused there instead. A slug that
-already points at the very piece the token names answers `ok` rather than a
-refusal: the request is already true. `assign_slug` sets the address, not the
-title: what the piece list displays is the pattern's own `NAME` result, so a
-pattern that wants a title sets `NAME` in its source.
+written, so an unusable slug is a structured error that changes nothing. A slug
+already naming another piece is never repointed and never refused: the tool
+appends a counter — `-2`, `-3`, and so on — to the requested word until it
+reaches a free name, or one already naming this piece, and the receipt's `slug`
+and `url` carry the name assigned, which is where the model reads the address it
+got. The availability question fails closed: a slug is free only on the outcomes
+that say nothing is there — no document, a malformed one, one that is not a
+piece, one carrying no piece id. A slug that resolves into a piece rather than
+to one names a collection, and is passed over the way a taken name is: it is an
+address a person opens. Any other failure refuses the call saying the
+availability could not be established, because reporting a storage error as a
+free name would write over whatever is there. That check is what stops a caller
+from taking over a name a person already opens, and it is the narrower of the
+two rules in play: the assignment underneath refuses a name pointing anywhere at
+all, while this one competes only with pieces and collections, so a name whose
+document holds no usable redirect is free here and not there. The check's answer
+is carried into the write as the state to take the name from, not forced past
+the wider rule — forcing would spend the claim the assignment makes, and two
+calls that both read a name as free would both take it. Carried in, the write
+judges this rule against what it lands on, so a name bound between the check and
+the write is passed over there instead, and the call moves on to the next
+counter. A slug that already points at the very piece the token names answers
+`ok`: the request is already true. Repointing an address is not something
+`assign_slug` does; the runtime has no primitive for releasing a slug, so
+neither does the harness. `assign_slug` sets the address, not the title: what
+the piece list displays is the pattern's own `NAME` result, so a pattern that
+wants a title sets `NAME` in its source.
 
 An invocation rejected by the retained-pattern preflight returns before opening
 Fabric or compiling, so it persists nothing. A `run_pattern` invocation that
@@ -2207,7 +2213,8 @@ concern reader and the runtime's UI schema. Unexpected pattern, result, or UI
 read failures retain their cause in the run's failure record and stop the call
 before registration or naming.
 
-A successful `assign_slug` returns `{ slug }`, plus `url` when the harness can
+A successful `assign_slug` returns `{ slug }` — the name assigned, which is the
+requested word or that word with a counter — plus `url` when the harness can
 compose one honestly, to the model. Its on-disk tool-output artifact also
 records `pieceId`, the slug's actual target. Join that field to the `pieceId` in
 a `run_pattern` artifact, across the run family's directories when a child
