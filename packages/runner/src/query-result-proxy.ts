@@ -811,6 +811,24 @@ function createViewProxy<T>(
         // the instance again when it is called. `constructor` comes back as
         // found: it names the class, and a wrapped copy is a different
         // function.
+        //
+        // That leaves a view saying one thing through `constructor` and
+        // another through its prototype, which is `Object.prototype`, so
+        // `instanceof` says plain object. It is inert today, because nothing
+        // in `data-model` trusts `constructor`: the codec registry resolves
+        // an object's class from its prototype, as `constructorOfObject()`
+        // does, so a view is encoded, hashed and compared as a plain object;
+        // and `codecOf()`, the one direct reader of `value.constructor`, is
+        // reached only behind `instanceof FabricInstance`, which a view
+        // fails. Code that dispatched on `value.constructor` directly would
+        // hand the view to the class's static members, which read private
+        // fields a proxy does not declare.
+        //
+        // TODO(danfuzz): provisional. Settle this with whether a view should
+        // pass `instanceof` at all (the marker above the proxy construction):
+        // either a view claims its class throughout, and every boundary into
+        // `data-model` unwraps it first, or it claims none, and `constructor`
+        // here reports `Object` to match the prototype.
         if (boundKind === "FabricInstance") {
           const current = currentValue(true) as FabricInstance;
           if (prop in current) {
