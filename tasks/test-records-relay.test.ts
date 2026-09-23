@@ -124,6 +124,21 @@ describe("test-records-relay", () => {
       expect(context.ci?.fork).toBe(false);
     });
 
+    it("carries the seed the job shuffled by, and none it did not report", () => {
+      const seeded = composeCiContext(
+        runFactsOfPayload(PAYLOAD),
+        { shuffleSeed: 20260922 },
+        "test-records-check",
+      );
+      expect(seeded.shuffleSeed).toBe(20260922);
+      const unseeded = composeCiContext(
+        runFactsOfPayload(PAYLOAD),
+        {},
+        "test-records-check",
+      );
+      expect(Object.hasOwn(unseeded, "shuffleSeed")).toBe(false);
+    });
+
     it("takes the producing attempt from the artifact name suffix", () => {
       const context = composeCiContext(
         runFactsOfPayload(PAYLOAD),
@@ -184,6 +199,7 @@ describe("test-records-relay", () => {
           os: "linux",
           arch: "x86_64",
           denoVersion: "2.9.4",
+          shuffleSeed: 20260922,
         }),
       );
       await Deno.writeTextFile(
@@ -248,6 +264,7 @@ describe("test-records-relay", () => {
       const context = JSON.parse(lines[0]!);
       expect(context.line).toBe("context");
       expect(context.ci.job).toBe("Check");
+      expect(context.shuffleSeed).toBe(20260922);
       expect(JSON.parse(lines[1]!).test.n).toBe("check-docs");
     });
 

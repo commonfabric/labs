@@ -413,6 +413,69 @@ describe("piece-link-input-visibility", () => {
     });
   });
 
+  it("accepts a candidate that stops declaring an input holding a retained link", async () => {
+    // The two candidates publish the SAME result and differ only in whether
+    // they declare the input, so what decides is the retained-link proof and
+    // not the ordinary schema comparison. `keep` also does not publish the
+    // path, which is what a consumer holding a board table looks like.
+    const keep = program(`
+      import { Default, pattern, ReadonlyCell } from "commonfabric";
+      interface Input {
+        title: string;
+        boardNames?: ReadonlyCell<string[] | Default<[]>>;
+      }
+      export default pattern<Input>(({ title }) => ({ title }));
+    `);
+    const drop = program(`
+      import { pattern } from "commonfabric";
+      export default pattern<{ title: string }>(({ title }) => ({ title }));
+    `);
+    const { target, seedLegacyLink } = await createPair(keep);
+    await seedLegacyLink();
+    expect(await target.input.get(["boardNames"])).toEqual(["Ada"]);
+
+    await withFreshPiece(target.id, async (reader) => {
+      const before = (await reader.input.getCell()).getRaw();
+      const report = await reader.checkPattern(drop);
+      expect(report.issues).toEqual({});
+      expect(report.compatible).toBe(true);
+      expect((await reader.input.getCell()).getRaw()).toEqual(before);
+      // And the apply goes through, leaving the link where it was: a candidate
+      // that declares no path there reaches it with neither a proof obligation
+      // nor a write, so the stored link survives, unreachable through the new
+      // projection.
+      expect((await reader.setPattern(drop)).status).toBe("committed");
+      const raw = (await reader.input.getCell()).getRaw() as {
+        boardNames: unknown;
+      };
+      expect(isLink(raw.boardNames)).toBe(true);
+      await expect(reader.input.get(["boardNames"])).rejects.toThrow(
+        "current pattern's input schema",
+      );
+    });
+  });
+
+  it("refuses a candidate that stops publishing a path it stops declaring", async () => {
+    // The bound on the case above, and the reason it is about the input alone:
+    // a candidate that also drops the RESULT field is refused, by the ordinary
+    // backward-compatibility check rather than by anything about the link.
+    const { target, seedLegacyLink } = await createPair();
+    await seedLegacyLink();
+    expect((await target.setPattern(newProgram)).refresh.status).toBe(
+      "completed",
+    );
+    await withFreshPiece(target.id, async (reader) => {
+      const before = (await reader.input.getCell()).getRaw();
+      const report = await reader.checkPattern(oldProgram);
+      expect(report.compatible).toBe(false);
+      expect(report.issues.schema).toContain(
+        "result.boardNames: existing result field was removed",
+      );
+      expect(report.issues.retainedLinks).toBeUndefined();
+      expect((await reader.input.getCell()).getRaw()).toEqual(before);
+    });
+  });
+
   it("applies the source update from a fresh replica over a legacy link", async () => {
     const { target, seedLegacyLink } = await createPair();
     await seedLegacyLink();

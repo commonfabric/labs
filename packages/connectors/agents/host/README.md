@@ -279,6 +279,26 @@ their affected session. The refresh still runs when the provider operation
 succeeded but terminal receipt publication failed. The ledger keeps that receipt
 pending for a later publication attempt.
 
+A `start` may name a `surface`. `headless`, the default, runs the first prompt
+in the host's process. `desktop` opens the Claude Code desktop app on the host's
+Mac (`claude://code/new`, the link the app's own Finder action uses) in the
+start's directory with the prompt ready to send; the app mints the session's id
+when the person sends, so the id the command named never exists, the receipt's
+`result.surface` says `desktop`, and no session refresh follows the command. On
+its next listing the Claude driver pairs the session the app made (that
+directory, made after the start, opening with the start's text) and publishes
+its index row with `startedAs`, the id the command named, and the start's title
+unless the person has titled it since, so the workbench that sent the start
+confirms it. The driver pairs them in its memory, and once the row is published
+with `startedAs` later publications keep it; a host restarted before the person
+sends no longer pairs them, and the session then shows as one started by hand.
+The session the app makes is one the driver had not listed before the start was
+sent; two pending starts that sent different texts sharing the prefix the SDK
+lists leave a session unpaired rather than guess. A desktop start takes no
+`mode`; the app's own permission setting applies, and the app asks the person to
+trust the folder each time. The Claude driver offers the surface on macOS only,
+in `capabilities.surfaces`.
+
 The command cell is a shallow action array. A valid element is either a command
 object or a JSON string containing that object. The debug pattern writes JSON
 strings so each append remains one inline action value. `CommandWorker` decodes

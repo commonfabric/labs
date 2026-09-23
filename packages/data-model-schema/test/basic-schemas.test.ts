@@ -5,14 +5,7 @@ import type { JSONSchemaTypes } from "@commonfabric/api";
 
 import { type FabricValue, isDeepFrozen } from "@commonfabric/data-model";
 
-import {
-  FabricBytes,
-  FabricEpochDay,
-  FabricEpochNsec,
-  FabricHash,
-  FabricRegExp,
-  FabricUnavailable,
-} from "@commonfabric/data-model/fabric-primitives";
+import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@commonfabric/data-model/for-testing-only";
 import { emptySchemaObject, schemaForValueType } from "@/basic-schemas.ts";
 import { isInternedSchema } from "@/schema-intern.ts";
 
@@ -48,13 +41,15 @@ describe("basic-schemas", () => {
     testType("null", null);
     testType("array", [1, 2, 3]);
     testType("object", { a: 1 });
-    // A `FabricPrimitive` gets its specific type name, not "object".
-    testType("FabricBytes", new FabricBytes(new Uint8Array([1])));
-    testType("FabricEpochDay", new FabricEpochDay(1n));
-    testType("FabricEpochNsec", new FabricEpochNsec(1n));
-    testType("FabricHash", new FabricHash(new Uint8Array(32), "fid1"));
-    testType("FabricRegExp", new FabricRegExp(/x/));
-    testType("FabricUnavailable", new FabricUnavailable("pending"));
+    // A `FabricPrimitive` gets the type name it reports, not "object". One
+    // example per class, from the set the data model keeps complete.
+    for (
+      const [example] of Object.values(
+        FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY,
+      )
+    ) {
+      testType(example.schemaType, example);
+    }
 
     describe("undefined", () => {
       it("returns `undefined`", () => {

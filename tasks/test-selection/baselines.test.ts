@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import {
+  BASELINE_LISTING_MAX_PAGES,
   type BaselineRun,
   type BaselineSource,
   collectCoverageBaselines,
@@ -12,6 +13,7 @@ import {
   coverageMetricForGroup,
   measuredSetCoverageMetric,
   PERF_METRICS_ARTIFACT_NAME,
+  type WorkflowRun,
 } from "../ci-check-lib.ts";
 import { LOCAL_COVERAGE_BASELINE_DAYS } from "./policy.ts";
 
@@ -308,22 +310,162 @@ describe("baselines", () => {
       // deno-lint-ignore no-explicit-any
     } as any);
 
+    /** One run, a successful push to `main` unless told otherwise. */
+    const run = (
+      over: Partial<WorkflowRun> & Pick<WorkflowRun, "id">,
+    ): WorkflowRun => ({
+      head_sha: `sha-${over.id}`,
+      created_at: "2026-09-09T10:00:00Z",
+      head_branch: "main",
+      event: "push",
+      conclusion: "success",
+      html_url: "",
+      ...over,
+    });
+
+    /**
+     * A page of `count` runs, `candidates` of them ones a baseline could come
+     * from. A page of 100 is a full one, which has another behind it.
+     */
+    const page = (
+      count: number,
+      candidates: number,
+      from: number,
+    ): WorkflowRun[] =>
+      Array.from({ length: count }, (_, at) =>
+        run({
+          id: from + at,
+          ...(at < candidates ? {} : { event: "pull_request" }),
+        }));
+
     it("names each run by its commit and the moment it was created", async () => {
+      const source = liveBaselineSource({
+        list: () => Promise.resolve({ workflow_runs: [run({ id: 7 })] }),
+      });
+      expect(await source.runs()).toEqual([
+        { id: 7, commit: "sha-7", createdAt: "2026-09-09T10:00:00Z" },
+      ]);
+    });
+
+    it("leaves out a run that is not a successful push to main", async () => {
       const source = liveBaselineSource({
         list: () =>
           Promise.resolve({
-            // deno-lint-ignore no-explicit-any
-            workflow_runs: [{
-              id: 7,
-              head_sha: "abc",
-              created_at: "2026-09-09T10:00:00Z",
-              // deno-lint-ignore no-explicit-any
-            }] as any,
+            workflow_runs: [
+              run({ id: 1, conclusion: "failure" }),
+              run({ id: 2, event: "pull_request" }),
+              run({ id: 3, head_branch: "topic" }),
+              run({ id: 4 }),
+            ],
           }),
       });
-      expect(await source.runs()).toEqual([
-        { id: 7, commit: "abc", createdAt: "2026-09-09T10:00:00Z" },
-      ]);
+      expect((await source.runs()).map((one) => one.id)).toEqual([4]);
+    });
+
+    it("asks for a listing carrying none of the indexed filters", async () => {
+      const asked: string[] = [];
+      const source = liveBaselineSource({
+        list: (path) => {
+          asked.push(path);
+          return Promise.resolve({ workflow_runs: [run({ id: 9 })] });
+        },
+      });
+      await source.runs();
+
+      expect(asked.length).toBe(1);
+      const query = new URLSearchParams(asked[0].split("?")[1]);
+      expect(query.get("page")).toBe("1");
+      // Any one of these has GitHub answer out of the search index, which
+      // serves a window of runs weeks old with nothing to mark it. Every run
+      // such a window names falls outside the publisher's own window, so the
+      // gathering would stop at the first of them.
+      for (
+        const filter of [
+          "actor",
+          "branch",
+          "check_suite_id",
+          "created",
+          "event",
+          "head_sha",
+          "status",
+        ]
+      ) {
+        expect(query.get(filter)).toBeNull();
+      }
+    });
+
+    it("reads another page while the last one was full", async () => {
+      const asked: string[] = [];
+      const source = liveBaselineSource({
+        list: (path) => {
+          asked.push(path);
+          const at = Number(path.match(/[?&]page=(\d+)/)?.[1]);
+          // Two full pages holding two candidates each, then a short one
+          // ending the listing.
+          return Promise.resolve({
+            workflow_runs: at <= 2 ? page(100, 2, at * 1000) : page(5, 1, 3000),
+          });
+        },
+      });
+      const runs = await source.runs();
+
+      expect(asked.length).toBe(3);
+      expect(runs.map((one) => one.id)).toEqual([1000, 1001, 2000, 2001, 3000]);
+    });
+
+    it("stops once it has gathered the runs one publish reads", async () => {
+      const asked: string[] = [];
+      const source = liveBaselineSource({
+        list: (path) => {
+          asked.push(path);
+          const at = Number(path.match(/[?&]page=(\d+)/)?.[1]);
+          return Promise.resolve({ workflow_runs: page(100, 50, at * 1000) });
+        },
+      });
+      const runs = await source.runs();
+
+      // The cap is reached partway through the second page, and no page is
+      // asked for behind it.
+      expect(runs.length).toBe(100);
+      expect(asked.length).toBe(2);
+    });
+
+    it("stops at the page budget on a listing that keeps going", async () => {
+      const asked: string[] = [];
+      const source = liveBaselineSource({
+        list: (path) => {
+          asked.push(path);
+          const at = Number(path.match(/[?&]page=(\d+)/)?.[1]);
+          // Full pages holding one candidate each, so neither the cap nor
+          // the end of the listing is what stops the reading. The listing
+          // ends well past the budget rather than never, so a reading that
+          // ignored the budget ends this case instead of hanging it.
+          return Promise.resolve({
+            workflow_runs: at <= 40 ? page(100, 1, at * 1000) : [],
+          });
+        },
+      });
+      const runs = await source.runs();
+
+      expect(asked.length).toBe(BASELINE_LISTING_MAX_PAGES);
+      expect(runs.length).toBe(BASELINE_LISTING_MAX_PAGES);
+    });
+
+    it("names a run once that two pages both list", async () => {
+      // A run created between the two reads pushes the ones behind it down a
+      // place, so run 1099, which ended the first page, heads the second.
+      const first = [...page(99, 1, 1000), run({ id: 1099 })];
+      const source = liveBaselineSource({
+        list: (path) => {
+          const at = Number(path.match(/[?&]page=(\d+)/)?.[1]);
+          if (at === 1) return Promise.resolve({ workflow_runs: first });
+          return Promise.resolve({
+            workflow_runs: [run({ id: 1099 }), run({ id: 2000 })],
+          });
+        },
+      });
+      expect((await source.runs()).map((one) => one.id))
+        .toEqual([1000, 1099, 2000]);
     });
 
     it("reads the uncovered count out of each metric the artifact holds", async () => {

@@ -27,6 +27,8 @@ import {
   extractLiteralValueOfSymbol,
   resolveAliasedSymbol,
 } from "../typescript/literal-value.ts";
+import { readAuthoredTypeNode } from "../typescript/type-node.ts";
+import { resolveWriterBinding } from "../typescript/writer-binding.ts";
 import {
   type CellWrapperKind,
   getCellBrand,
@@ -50,6 +52,11 @@ type ResolvedCfcAlias = {
   readonly aliasName: string;
   readonly aliasArgs: readonly ts.Type[];
   readonly aliasArgNodes?: readonly ts.TypeNode[];
+  /**
+   * The parameters, along the chain to `aliasName`, that an argument node was
+   * substituted for.
+   */
+  readonly substituted?: readonly ts.TypeParameterDeclaration[];
 };
 
 type ResolvedScopeWrapper = {
@@ -90,7 +97,8 @@ const CELL_CAPABILITY_KIND_MAP: Readonly<Record<CellWrapperKind, boolean>> = {
 const isCellCapabilityKind = (kind: WrapperKind): boolean =>
   CELL_CAPABILITY_KIND_MAP[kind];
 
-const resolveScopeWrapperNode = (
+/** Resolves the scope explicitly named by a type reference. */
+export const resolveScopeWrapperNode = (
   typeNode: ts.TypeNode | undefined,
 ): ResolvedScopeWrapper | undefined => {
   if (!typeNode || !ts.isTypeReferenceNode(typeNode)) {
@@ -115,6 +123,208 @@ const applyScopeToAsCellEntry = (
   }
   return entry;
 };
+
+/**
+ * `typeNode` with each reference to a parameter in `paramMap` replaced by its
+ * argument. A subtree holding a replaced reference is built afresh, with no
+ * original node, so the checker cannot read it back as the declaration's
+ * subtree with the parameter unbound. Any other subtree is returned as it is,
+ * and so is a kind this does not open, which may still hold a parameter.
+ */
+const substituteTypeNode = (
+  typeNode: ts.TypeNode,
+  paramMap: ReadonlyMap<string, ts.TypeNode>,
+): ts.TypeNode => {
+  if (paramMap.size === 0) {
+    return typeNode;
+  }
+  const f = ts.factory;
+  const substitute = (node: ts.TypeNode) => substituteTypeNode(node, paramMap);
+  const substituteEach = (nodes: readonly ts.TypeNode[]) => {
+    const substituted = nodes.map(substitute);
+    return substituted.some((node, index) => node !== nodes[index])
+      ? substituted
+      : undefined;
+  };
+  const substituteOne = (node: ts.TypeNode) => {
+    const substituted = substitute(node);
+    return substituted === node ? undefined : substituted;
+  };
+
+  if (ts.isTypeReferenceNode(typeNode)) {
+    const mapped = ts.isIdentifier(typeNode.typeName)
+      ? paramMap.get(typeNode.typeName.text)
+      : undefined;
+    if (mapped && !typeNode.typeArguments?.length) {
+      return mapped;
+    }
+    const args = typeNode.typeArguments &&
+      substituteEach(typeNode.typeArguments);
+    return args ? f.createTypeReferenceNode(typeNode.typeName, args) : typeNode;
+  }
+
+  if (ts.isTypeLiteralNode(typeNode)) {
+    const members = typeNode.members.map((member) => {
+      if (!ts.isPropertySignature(member) || !member.type) return member;
+      const type = substituteOne(member.type);
+      return type
+        ? f.createPropertySignature(
+          member.modifiers,
+          member.name,
+          member.questionToken,
+          type,
+        )
+        : member;
+    });
+    return members.some((member, index) => member !== typeNode.members[index])
+      ? f.createTypeLiteralNode(members)
+      : typeNode;
+  }
+
+  if (ts.isUnionTypeNode(typeNode)) {
+    const types = substituteEach(typeNode.types);
+    return types ? f.createUnionTypeNode(types) : typeNode;
+  }
+  if (ts.isIntersectionTypeNode(typeNode)) {
+    const types = substituteEach(typeNode.types);
+    return types ? f.createIntersectionTypeNode(types) : typeNode;
+  }
+  if (ts.isTupleTypeNode(typeNode)) {
+    const elements = substituteEach(typeNode.elements);
+    return elements ? f.createTupleTypeNode(elements) : typeNode;
+  }
+  if (ts.isNamedTupleMember(typeNode)) {
+    const type = substituteOne(typeNode.type);
+    return type
+      ? f.createNamedTupleMember(
+        typeNode.dotDotDotToken,
+        typeNode.name,
+        typeNode.questionToken,
+        type,
+      )
+      : typeNode;
+  }
+  if (ts.isOptionalTypeNode(typeNode)) {
+    const type = substituteOne(typeNode.type);
+    return type ? f.createOptionalTypeNode(type) : typeNode;
+  }
+  if (ts.isRestTypeNode(typeNode)) {
+    const type = substituteOne(typeNode.type);
+    return type ? f.createRestTypeNode(type) : typeNode;
+  }
+  if (ts.isArrayTypeNode(typeNode)) {
+    const element = substituteOne(typeNode.elementType);
+    return element ? f.createArrayTypeNode(element) : typeNode;
+  }
+  if (ts.isTypeOperatorNode(typeNode)) {
+    const operand = substituteOne(typeNode.type);
+    return operand
+      ? f.createTypeOperatorNode(typeNode.operator, operand)
+      : typeNode;
+  }
+  if (ts.isParenthesizedTypeNode(typeNode)) {
+    const inner = substituteOne(typeNode.type);
+    return inner ? f.createParenthesizedType(inner) : typeNode;
+  }
+
+  return typeNode;
+};
+
+/**
+ * Whether `node` holds a reference the checker binds to a type parameter, or,
+ * given `parameters`, to one of those.
+ */
+const holdsTypeParameter = (
+  node: ts.Node,
+  checker: ts.TypeChecker,
+  parameters?: readonly ts.TypeParameterDeclaration[],
+): boolean =>
+  (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) &&
+    (checker.getSymbolAtLocation(node.typeName)?.declarations?.some(
+      (declaration) =>
+        ts.isTypeParameterDeclaration(declaration) &&
+        (parameters === undefined || parameters.includes(declaration)),
+    ) ?? false)) ||
+  (ts.forEachChild(node, (child) =>
+    holdsTypeParameter(child, checker, parameters) || undefined) ?? false);
+
+/**
+ * Whether the CFC lowering, handed `args` for `declaration`'s parameters,
+ * reaches a CFC alias down `declaration`'s chain of aliases, each the whole
+ * body of the one before and followed at most once, with every parameter along
+ * the way replaced by an argument or, for one left out, its default.
+ */
+const lowersDownAliasChain = (
+  declaration: ts.TypeAliasDeclaration,
+  args: readonly ts.TypeNode[],
+  checker: ts.TypeChecker,
+  visited: ReadonlySet<string>,
+): boolean => {
+  if (CFC_ALIAS_NAMES.has(declaration.name.text)) return true;
+  const aliased = declaration.type;
+  if (
+    !ts.isTypeReferenceNode(aliased) || !ts.isIdentifier(aliased.typeName) ||
+    visited.has(aliased.typeName.text)
+  ) {
+    return false;
+  }
+  // An argument left out is its parameter's default, read with the arguments
+  // before it; a parameter with neither leaves the chain unlowered.
+  const paramMap = new Map<string, ts.TypeNode>();
+  for (
+    const [index, parameter] of (declaration.typeParameters ?? []).entries()
+  ) {
+    const arg = args[index] ??
+      (parameter.default && substituteTypeNode(parameter.default, paramMap));
+    if (!arg) return false;
+    paramMap.set(parameter.name.text, arg);
+  }
+  const substituted = (aliased.typeArguments ?? []).map((arg) =>
+    substituteTypeNode(arg, paramMap)
+  );
+  if (substituted.some((arg) => holdsTypeParameter(arg, checker))) {
+    return false;
+  }
+  const symbol = checker.getSymbolAtLocation(aliased.typeName);
+  const target = symbol &&
+    resolveAliasedSymbol(symbol, checker).declarations?.find(
+      ts.isTypeAliasDeclaration,
+    );
+  return target !== undefined &&
+    lowersDownAliasChain(
+      target,
+      substituted,
+      checker,
+      new Set([...visited, declaration.name.text]),
+    );
+};
+
+/**
+ * Whether this formatter lowers `reference`, to the generic `symbol`, from the
+ * reference's own type arguments: a scope wrapper naming its payload, which it
+ * reads from that argument, or an alias that is not itself a CFC alias and
+ * whose whole body references one, directly or through further such aliases,
+ * where substituting the reference's arguments down that chain leaves no
+ * parameter unbound.
+ */
+export function lowersFromReferenceArguments(
+  reference: ts.TypeReferenceNode,
+  symbol: ts.Symbol,
+  checker: ts.TypeChecker,
+): boolean {
+  if (resolveScopeWrapperNode(reference)) {
+    return (reference.typeArguments?.length ?? 0) > 0;
+  }
+  const declaration = symbol.declarations?.find(ts.isTypeAliasDeclaration);
+  return declaration !== undefined &&
+    !CFC_ALIAS_NAMES.has(declaration.name.text) &&
+    lowersDownAliasChain(
+      declaration,
+      reference.typeArguments ?? [],
+      checker,
+      new Set([declaration.name.text]),
+    );
+}
 
 /**
  * Formatter for Common Fabric-specific types (Cell<T>, Stream<T>, Reactive<T>, Default<T,V>)
@@ -202,6 +412,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         resolvedScopeWrapper.node,
         context,
         resolvedScopeWrapper.scope,
+        type,
       );
     }
 
@@ -258,18 +469,11 @@ export class CommonFabricFormatter implements TypeFormatter {
       ? resolveWrapperNode(n, context.typeChecker)
       : undefined;
 
-    // Handle Default via node (direct or alias)
+    // Handle Default via node, written in place or reached through
+    // parentheses or an alias without type parameters: the resolved reference
+    // is the `Default<T, V>` its author wrote, arguments and all.
     if (resolvedWrapper?.kind === "Default") {
-      // For Default, we need the node with concrete type arguments.
-      // If the original node has type arguments, use it.
-      // Otherwise, use the resolved node (for direct Default references).
-      const nodeForDefault = n && ts.isTypeReferenceNode(n) && n.typeArguments
-        ? n // Original has type args, use it for concrete types
-        : resolvedWrapper.node; // Direct reference or fallback
-
-      if (nodeForDefault && ts.isTypeReferenceNode(nodeForDefault)) {
-        return this.#formatDefaultType(nodeForDefault, context, type);
-      }
+      return this.#formatDefaultType(resolvedWrapper.node, context, type);
     }
 
     // Fallback: handle Default<T> detected via aliasSymbol when no type node is available.
@@ -325,7 +529,6 @@ export class CommonFabricFormatter implements TypeFormatter {
     const wrapperInfo = getCellWrapperInfo(type, context.typeChecker);
     if (
       resolvedWrapper &&
-      resolvedWrapper.kind !== "Default" &&
       wrapperInfo &&
       wrapperInfo.kind !== resolvedWrapper.kind &&
       this.#isSyntheticWrapperNode(resolvedWrapper.node)
@@ -362,11 +565,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     // Synthetic wrapper nodes (for example __cfHelpers.ReadonlyCell<...>) may
     // resolve to `any` in checker contexts created before helper injection.
     // In that case, fall back to node-driven wrapper formatting.
-    if (
-      resolvedWrapper &&
-      resolvedWrapper.kind !== "Default" &&
-      !wrapperInfo
-    ) {
+    if (resolvedWrapper && !wrapperInfo) {
       return this.#formatWrapperTypeFromNode(
         resolvedWrapper.node,
         context,
@@ -439,24 +638,29 @@ export class CommonFabricFormatter implements TypeFormatter {
     let innerType: ts.Type;
     try {
       innerType = context.typeRegistry?.get(innerTypeNode) ??
-        registeredWrapperInfo?.typeRef.typeArguments?.[0] ??
+        (registeredWrapperInfo &&
+          this.#firstTypeArgument(registeredWrapperInfo.typeRef, context)) ??
         context.typeChecker.getTypeFromTypeNode(innerTypeNode);
     } catch {
       innerType = context.typeChecker.getAnyType();
     }
 
-    // Only adopt the resolved type's inner when the node's inner is a bare named
-    // reference (a `TypeReferenceNode`) that degrades to `any` — the case where
-    // node-driven formatting can recover NOTHING and would emit `{}`, dropping
-    // the inner `$ref`/`$defs`. Structured inner nodes (unions, literals, arrays)
-    // carry recoverable shape even when the checker resolves them to `any` from a
-    // synthetic position, so the node-driven result must win there (e.g. a
-    // `string | undefined` inner whose `| undefined` lives only on the node).
+    // Ahead of formatting, adopt the resolved type's inner only when the node's
+    // inner is a bare named reference (a `TypeReferenceNode`) that degrades to
+    // `any` — the case where node-driven formatting can recover NOTHING and
+    // would emit `{}`, dropping the inner `$ref`/`$defs`. Structured inner nodes
+    // (unions, literals, arrays) carry recoverable shape even when the checker
+    // resolves them to `any` from a synthetic position, so the node-driven
+    // result is tried first there (e.g. a `string | undefined` inner whose
+    // `| undefined` lives only on the node).
     if (
       this.#isUnusableInnerType(innerType) && fallbackInnerTypeRef &&
       ts.isTypeReferenceNode(innerTypeNode)
     ) {
-      const fallbackInner = fallbackInnerTypeRef.typeArguments?.[0];
+      const fallbackInner = this.#firstTypeArgument(
+        fallbackInnerTypeRef,
+        context,
+      );
       if (fallbackInner && !this.#isUnusableInnerType(fallbackInner)) {
         innerType = fallbackInner;
       }
@@ -476,11 +680,36 @@ export class CommonFabricFormatter implements TypeFormatter {
       }
     }
 
-    const innerSchema = this.#schemaGenerator.formatChildType(
+    const uninterpreted: ts.TypeNode[] = [];
+    let innerSchema = this.#schemaGenerator.formatChildType(
       innerType,
-      childContext,
+      { ...childContext, uninterpretedTypeNodes: uninterpreted },
       innerTypeNode,
     );
+
+    // A structured inner node wins over the resolved type only while it can be
+    // read. The printer emits forms that node-based analysis cannot interpret
+    // from a synthetic position — `import("./mod.ts").T` for a name the
+    // emitting module does not import, and the `T & { [DEFAULT_MARKER]: V }`
+    // arm of an expanded `Default`. An unreadable member can turn a union into
+    // accept-anything; skipping a computed brand can lose its default metadata.
+    // The resolved wrapper's inner supplies the complete value schema instead,
+    // at the cost of any narrowing the node carried: the schema is then that
+    // of the whole stored value.
+    if (uninterpreted.length > 0) {
+      const resolvedInner = fallbackInnerTypeRef &&
+        this.#firstTypeArgument(fallbackInnerTypeRef, context);
+      if (resolvedInner && !this.#isUnusableInnerType(resolvedInner)) {
+        innerType = resolvedInner;
+        innerSchema = this.#schemaGenerator.formatChildType(
+          resolvedInner,
+          childContext,
+          undefined,
+        );
+      } else {
+        context.uninterpretedTypeNodes?.push(...uninterpreted);
+      }
+    }
 
     if (wrapperKind === "Stream") {
       if (typeof innerSchema === "boolean") {
@@ -510,15 +739,43 @@ export class CommonFabricFormatter implements TypeFormatter {
     return this.#applyWrapperSemantics(innerSchema, wrapperKind);
   }
 
+  /**
+   * Helper for `#formatWrapperTypeFromNode()`, which reads a wrapper's payload
+   * type. A reference whose arguments are still deferred carries none on the
+   * object and yields them through the checker.
+   */
+  #firstTypeArgument(
+    typeRef: ts.TypeReference,
+    context: GenerationContext,
+  ): ts.Type | undefined {
+    const typeArgs = typeRef.typeArguments ??
+      context.typeChecker.getTypeArguments(typeRef);
+    return typeArgs[0];
+  }
+
   #formatScopeWrapperTypeFromNode(
     typeRefNode: ts.TypeReferenceNode,
     context: GenerationContext,
     scope: SchemaScope,
+    type: ts.Type | undefined,
   ): MutableJSONSchema {
     const innerTypeNode = typeRefNode.typeArguments?.[0];
     if (!innerTypeNode) {
       throw new Error(`Scoped wrapper requires type argument`);
     }
+
+    // The payload carried by the wrapper's own type. A node the printer wrote
+    // from a type has no scope to resolve against, so the checker reads it as
+    // `any`, and a node-driven schema would then admit anything.
+    const typeWithAlias = type as TypeWithInternals | undefined;
+    const resolvedInner =
+      scopeForWrapperName(typeWithAlias?.aliasSymbol?.name) !== undefined
+        ? typeWithAlias?.aliasTypeArguments?.[0]
+        : undefined;
+    const usableResolvedInner = resolvedInner &&
+        !this.#isUnusableInnerType(resolvedInner)
+      ? resolvedInner
+      : undefined;
 
     let innerType: ts.Type;
     try {
@@ -528,11 +785,31 @@ export class CommonFabricFormatter implements TypeFormatter {
       innerType = context.typeChecker.getAnyType();
     }
 
-    const innerSchema = this.#schemaGenerator.formatChildType(
+    const uninterpreted: ts.TypeNode[] = [];
+    let innerSchema = this.#schemaGenerator.formatChildType(
       innerType,
-      context,
+      { ...context, uninterpretedTypeNodes: uninterpreted },
       innerTypeNode,
     );
+
+    // A payload node that node analysis had to guess at loses what it could
+    // not read. A node printed from a type is guessed at whole, since the
+    // names it spells resolve to nothing here; one read in part loses only
+    // what that part carried, and the `T & { [DEFAULT_MARKER]: V }` arm of an
+    // expanded `Default` carries the default. The wrapper's own payload
+    // supplies the value schema instead, at the cost of any narrowing the
+    // node carried.
+    if (uninterpreted.length > 0) {
+      if (usableResolvedInner) {
+        innerSchema = this.#schemaGenerator.formatChildType(
+          usableResolvedInner,
+          context,
+          undefined,
+        );
+      } else {
+        context.uninterpretedTypeNodes?.push(...uninterpreted);
+      }
+    }
 
     return this.#applyScopeWrapperSemantics(innerSchema, scope);
   }
@@ -1020,7 +1297,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       throw new Error(`${aliasName}<T> requires type argument`);
     }
 
-    const baseTypeNode = this.#getAliasTypeArgumentNode(context.typeNode, 0);
+    const baseTypeNode = this.#getAliasTypeArgumentNode(context, 0);
     const baseSchema = this.#schemaGenerator.formatChildType(
       baseType,
       context,
@@ -1049,7 +1326,20 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     const baseTypeNode = resolved.aliasArgNodes?.[0];
-    const baseSchema = baseTypeNode
+    // A payload still referring to a parameter that substitution had an
+    // argument for but did not reach would be read with that parameter
+    // unbound, so it is a guess.
+    const unsubstituted = baseTypeNode !== undefined &&
+      resolved.substituted !== undefined &&
+      holdsTypeParameter(
+        baseTypeNode,
+        context.typeChecker,
+        resolved.substituted,
+      );
+    if (unsubstituted) context.uninterpretedTypeNodes?.push(baseTypeNode);
+    const baseSchema = unsubstituted
+      ? true
+      : baseTypeNode
       ? this.#formatCfcAliasTypeNode(baseTypeNode, context) ??
         this.#schemaGenerator.formatChildType(baseType, context, baseTypeNode)
       : this.#schemaGenerator.formatChildType(baseType, context, undefined);
@@ -1133,7 +1423,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     return this.#resolveCfcAliasFromDeclaration(
       aliasDeclaration,
       aliasArgs,
-      this.#getAliasTypeArgumentNodes(context.typeNode),
+      this.#getAliasTypeArgumentNodes(context),
       context,
       new Set([aliasName]),
     );
@@ -1145,6 +1435,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     aliasArgNodes: readonly ts.TypeNode[] | undefined,
     context: GenerationContext,
     visited: Set<string>,
+    substituted: readonly ts.TypeParameterDeclaration[] = [],
   ): ResolvedCfcAlias | undefined {
     const aliasName = aliasDeclaration.name.text;
     if (CFC_ALIAS_NAMES.has(aliasName)) {
@@ -1152,6 +1443,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         aliasName,
         aliasArgs,
         ...(aliasArgNodes ? { aliasArgNodes } : {}),
+        ...(substituted.length > 0 ? { substituted } : {}),
       };
     }
 
@@ -1177,22 +1469,31 @@ export class CommonFabricFormatter implements TypeFormatter {
 
     const paramMap = new Map<string, ts.Type>();
     const paramNodeMap = new Map<string, ts.TypeNode>();
+    const substitutedHere: ts.TypeParameterDeclaration[] = [];
     for (let i = 0; i < (aliasDeclaration.typeParameters?.length ?? 0); i++) {
-      const paramName = aliasDeclaration.typeParameters?.[i]?.name.text;
+      const parameter = aliasDeclaration.typeParameters?.[i];
+      const paramName = parameter?.name.text;
       const actualArg = aliasArgs[i];
       if (paramName && actualArg) {
         paramMap.set(paramName, actualArg);
       }
-      const actualArgNode = aliasArgNodes?.[i];
-      if (paramName && actualArgNode) {
+      // An argument the reference leaves out is its parameter's default read
+      // with the arguments before it, as the checker instantiates one. With no
+      // argument nodes at all there is nothing to read that default with.
+      const actualArgNode = aliasArgNodes?.[i] ??
+        (aliasArgNodes && parameter?.default
+          ? substituteTypeNode(parameter.default, paramNodeMap)
+          : undefined);
+      if (parameter && paramName && actualArgNode) {
         paramNodeMap.set(paramName, actualArgNode);
+        substitutedHere.push(parameter);
       }
     }
 
     const resolvedArgs: ts.Type[] = [];
     const resolvedArgNodes: ts.TypeNode[] = [];
     for (const argNode of aliased.typeArguments ?? []) {
-      const resolvedArgNode = this.#substituteTypeNode(argNode, paramNodeMap);
+      const resolvedArgNode = substituteTypeNode(argNode, paramNodeMap);
       resolvedArgs.push(
         this.#resolveTypeNodeToType(resolvedArgNode, context, new Map()),
       );
@@ -1206,6 +1507,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       resolvedArgNodes,
       context,
       visited,
+      [...substituted, ...substitutedHere],
     );
   }
 
@@ -1247,88 +1549,6 @@ export class CommonFabricFormatter implements TypeFormatter {
     );
   }
 
-  #substituteTypeNode(
-    typeNode: ts.TypeNode,
-    paramMap: ReadonlyMap<string, ts.TypeNode>,
-  ): ts.TypeNode {
-    if (paramMap.size === 0) {
-      return typeNode;
-    }
-
-    if (
-      ts.isTypeReferenceNode(typeNode) && ts.isIdentifier(typeNode.typeName)
-    ) {
-      const mapped = paramMap.get(typeNode.typeName.text);
-      if (mapped && !typeNode.typeArguments?.length) {
-        return mapped;
-      }
-      if (typeNode.typeArguments?.length) {
-        return ts.factory.updateTypeReferenceNode(
-          typeNode,
-          typeNode.typeName,
-          ts.factory.createNodeArray(
-            typeNode.typeArguments.map((arg) =>
-              this.#substituteTypeNode(arg, paramMap)
-            ),
-          ),
-        );
-      }
-      return typeNode;
-    }
-
-    if (ts.isTypeLiteralNode(typeNode)) {
-      return ts.factory.updateTypeLiteralNode(
-        typeNode,
-        ts.factory.createNodeArray(
-          typeNode.members.map((member) => {
-            if (ts.isPropertySignature(member) && member.type) {
-              return ts.factory.updatePropertySignature(
-                member,
-                member.modifiers,
-                member.name,
-                member.questionToken,
-                this.#substituteTypeNode(member.type, paramMap),
-              );
-            }
-            return member;
-          }),
-        ),
-      );
-    }
-
-    if (ts.isTupleTypeNode(typeNode)) {
-      return ts.factory.updateTupleTypeNode(
-        typeNode,
-        typeNode.elements.map((element) =>
-          this.#substituteTypeNode(element, paramMap) as ts.TypeNode
-        ),
-      );
-    }
-
-    if (ts.isArrayTypeNode(typeNode)) {
-      return ts.factory.updateArrayTypeNode(
-        typeNode,
-        this.#substituteTypeNode(typeNode.elementType, paramMap),
-      );
-    }
-
-    if (ts.isTypeOperatorNode(typeNode)) {
-      return ts.factory.updateTypeOperatorNode(
-        typeNode,
-        this.#substituteTypeNode(typeNode.type, paramMap),
-      );
-    }
-
-    if (ts.isParenthesizedTypeNode(typeNode)) {
-      return ts.factory.updateParenthesizedType(
-        typeNode,
-        this.#substituteTypeNode(typeNode.type, paramMap),
-      );
-    }
-
-    return typeNode;
-  }
-
   #buildIfcMetadataForAlias(
     aliasName: string,
     aliasArgs: readonly ts.Type[],
@@ -1339,7 +1559,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       return this.#extractLiteralLikeValue(
         aliasArgs[index],
         aliasArgNodes?.[index] ??
-          this.#getAliasTypeArgumentNode(context.typeNode, index),
+          this.#getAliasTypeArgumentNode(context, index),
         context,
       );
     };
@@ -1443,7 +1663,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     const readValue = (index: number): unknown => {
       return this.#extractLiteralLikeValue(
         aliasArgs[index],
-        this.#getAliasTypeArgumentNode(context.typeNode, index),
+        this.#getAliasTypeArgumentNode(context, index),
         context,
       );
     };
@@ -1462,7 +1682,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     const sourceRefType = aliasArgs[0] as TypeWithInternals | undefined;
-    const sourceRefNode = this.#getAliasTypeArgumentNode(context.typeNode, 0);
+    const sourceRefNode = this.#getAliasTypeArgumentNode(context, 0);
     const nestedPathType = sourceRefType?.aliasTypeArguments?.[1];
     const nestedPathNode =
       sourceRefNode && ts.isTypeReferenceNode(sourceRefNode)
@@ -1524,8 +1744,10 @@ export class CommonFabricFormatter implements TypeFormatter {
     aliasArgNodes: readonly ts.TypeNode[] | undefined,
     bindingIndex: number,
   ): Record<string, unknown> | undefined {
+    // The binding itself must be a direct `typeof` (cfc_authoring_contract.md);
+    // `WriteAuthorizedByValidationTransformer` reports any other spelling.
     const bindingNode = aliasArgNodes?.[bindingIndex] ??
-      this.#getAliasTypeArgumentNode(context.typeNode, bindingIndex);
+      this.#getAliasTypeArgumentNode(context, bindingIndex);
     if (!bindingNode || !ts.isTypeQueryNode(bindingNode)) {
       return undefined;
     }
@@ -1548,23 +1770,13 @@ export class CommonFabricFormatter implements TypeFormatter {
     bindingName: ts.Identifier,
     normalizeFile = true,
   ): { file: string; path: string[]; moduleIdentity?: string } {
-    // Resolved here rather than through `resolveAliasedSymbol`: the file this
-    // lands on becomes the writer's module identity, and a hop that fell back
-    // to the importing file would attribute authority to the wrong module.
-    const symbol = context.typeChecker.getSymbolAtLocation(bindingName);
-    const declarationSymbol = symbol && (symbol.flags & ts.SymbolFlags.Alias)
-      ? context.typeChecker.getAliasedSymbol(symbol)
-      : symbol;
-    const declaration = declarationSymbol?.valueDeclaration ??
-      declarationSymbol?.declarations?.[0];
-    const declaredName = declaration && ts.isVariableDeclaration(declaration) &&
-        ts.isIdentifier(declaration.name)
-      ? declaration.name.text
-      : declaration && ts.isFunctionDeclaration(declaration) &&
-          declaration.name
-      ? declaration.name.text
-      : bindingName.text;
-    const sourceFileName = declaration?.getSourceFile().fileName ??
+    // The file this lands on becomes the writer's module identity, so the
+    // binding is resolved to its DECLARATION: a claim that fell back to the
+    // importing file would attribute authority to the wrong module. The
+    // fallback below is for a binding the checker cannot resolve at all.
+    const binding = resolveWriterBinding(bindingName, context.typeChecker);
+    const declaredName = binding?.name ?? bindingName.text;
+    const sourceFileName = binding?.fileName ??
       bindingName.getSourceFile().fileName ??
       context.sourceFileName ??
       "unknown";
@@ -1585,18 +1797,24 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   #getAliasTypeArgumentNode(
-    typeNode: ts.TypeNode | undefined,
+    context: GenerationContext,
     index: number,
   ): ts.TypeNode | undefined {
-    if (!typeNode || !ts.isTypeReferenceNode(typeNode)) {
-      return undefined;
-    }
-    return typeNode.typeArguments?.[index];
+    return this.#getAliasTypeArgumentNodes(context)?.[index];
   }
 
+  /**
+   * The type arguments written on the reference being formatted. The
+   * reference is read through parentheses and plain aliases
+   * (`readAuthoredTypeNode()`): `type Name = Owned<string, typeof setName>`
+   * holds the arguments that `Name` stands for, and a policy read from the
+   * bare `Name` would find none and drop the writer binding without a word.
+   */
   #getAliasTypeArgumentNodes(
-    typeNode: ts.TypeNode | undefined,
+    context: GenerationContext,
   ): readonly ts.TypeNode[] | undefined {
+    const typeNode = context.typeNode &&
+      readAuthoredTypeNode(context.typeNode, context.typeChecker);
     if (!typeNode || !ts.isTypeReferenceNode(typeNode)) {
       return undefined;
     }
@@ -1729,7 +1947,7 @@ export class CommonFabricFormatter implements TypeFormatter {
           }
           return this.#extractLiteralLikeValue(
             undefined,
-            this.#substituteTypeNode(aliasDeclaration.type, paramMap),
+            substituteTypeNode(aliasDeclaration.type, paramMap),
             context,
           );
         }

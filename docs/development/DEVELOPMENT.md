@@ -36,9 +36,11 @@ about one aspect of the runtime, are indexed in
   spellings. Naming the bare package name is worse than that. The entry point
   reaches every module the package exports, so naming it from inside completes
   a cycle, and the order in which the package's modules initialize starts to
-  depend on the order the entry point lists its exports. The
+  depend on the order the entry point lists its exports. An alias that reaches
+  the entry point's file, `@` or `@/index.ts` in a package that defines them,
+  is that same import under another name. The
   `cf-package/no-self-import` lint rule (`tasks/lint-self-import.ts`,
-  registered in the root `deno.jsonc`) reports both forms, so a plain
+  registered in the root `deno.jsonc`) reports all of these, so a plain
   `deno lint` catches them. It exempts a package's own tests, which name their
   package on purpose: the surface a consumer sees is the thing they are there
   to check.
@@ -440,6 +442,10 @@ come up.
 - Write descriptive error messages, marked up as
   [`code-comment-style.md`](code-comment-style.md#error-and-log-messages)
   describes.
+- Put a value into a message with the `debugStr` template tag, which quotes
+  the value's rendering and cuts it to length;
+  [`code-comment-style.md`](code-comment-style.md#putting-a-value-into-a-message)
+  says how.
 - Propagate errors using async/await.
 - Document possible errors in JSDoc.
 
@@ -973,7 +979,9 @@ export const set = (cache: Cache, key: string, value: string) =>
   the required test jobs are already in the same rough timing band.
 - Check typings with `deno task check`.
 - Run linter with `deno lint`.
-- Run all tests using `deno task test` (NOT `deno test`)
+- Run all tests using `deno task test` (NOT `deno test`). It is not a
+  substitute for `deno task check`: some packages' tests skip type checking
+  outright, and the rest check only the modules their tests reach.
 - To run a single test file use `deno test path/to/test.ts`.
 - To test a specific package, `cd` into the package directory and run
   `deno task test`.
@@ -996,18 +1004,23 @@ suite will break.
    `"test"` entry, naming the member; that check is what keeps a missing entry
    to a message rather than a CI timeout.
 
-   Use `"deno test"` for packages with tests, or `"echo 'No tests defined.'"` as
-   a stub for packages that don't have tests yet. A `"test"` task defined by its
-   `"dependencies"` alone counts too: what the check asks is whether the name
-   resolves in the package's own directory.
+   For a package with tests, `"test"` runs `tasks/run-member-tests.ts`, naming
+   the package's `"deno-test"` task, which runs the tests themselves — a
+   `deno test` for most packages, or a runner of the package's own; see
+   [TESTING.md](TESTING.md) for why. The `--allow-env` names the two variables
+   the test-records preload reads, as `docs/development/test-records.md`
+   explains. A package without tests yet uses `"echo 'No tests defined.'"`.
 
 3. **Minimal `deno.jsonc` example:**
 
-   ```json
+   ```jsonc
    {
      "name": "@commonfabric/my-package",
      "exports": { ".": "./mod.ts" },
-     "tasks": { "test": "deno test" }
+     "tasks": {
+       "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
+       "deno-test": "deno test --allow-env=CF_TEST_RECORDS_DIR,CF_TEST_SKIP_LIST"
+     }
    }
    ```
 

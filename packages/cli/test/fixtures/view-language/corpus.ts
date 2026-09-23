@@ -8,7 +8,7 @@ export interface HighlightEvidence {
   readonly className: TokenClass;
 }
 
-/** Selection paths exercised for one surveyed language fixture. */
+/** Selection paths exercised for a language, carried by one of its fixtures. */
 export interface SelectionCases {
   readonly filenames: readonly string[];
   readonly aliases: readonly string[];
@@ -34,7 +34,9 @@ export interface ViewLanguageFixture {
   readonly before: URL;
   readonly after: URL;
   readonly incomplete: URL;
-  readonly selection: SelectionCases;
+
+  /** Present on the fixture that carries the language's selection routes. */
+  readonly selection?: SelectionCases;
   readonly beforeEvidence: HighlightEvidence;
   readonly afterEvidence: HighlightEvidence;
   readonly incompleteEvidence: HighlightEvidence;
@@ -174,12 +176,16 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
     surveyRepository: "loom",
     surveyCommit: "43a4afe18fbfc37ab8a11da8fe5011f0be81f6e7",
     surveyPath: "src/bin/loom-size-report.py",
-    before: new URL("./python/before.py", import.meta.url),
-    after: new URL("./python/after.py", import.meta.url),
-    incomplete: new URL("./python/incomplete.py", import.meta.url),
+    before: new URL("./python-loom/before.py", import.meta.url),
+    after: new URL("./python-loom/after.py", import.meta.url),
+    incomplete: new URL("./python-loom/incomplete.py", import.meta.url),
     selection: {
       filenames: [
         "src/bin/loom-size-report.py",
+        "cfc/formal/scripts/check-architecture.py",
+        "src/probe/artifact_refs.py",
+        "bench/analyze.py",
+        "vdso/check_vdso.py",
         "src/loom/types.pyi",
         "tools/app.pyw",
       ],
@@ -188,11 +194,132 @@ export const VIEW_LANGUAGE_FIXTURES: readonly ViewLanguageFixture[] = [
         "#!/usr/bin/python3",
         "#!/usr/bin/env python",
         "#!/usr/bin/env pypy3",
+        "#!/usr/bin/env -S uv run --script",
       ],
     },
     beforeEvidence: { text: "count_items", className: "functionName" },
     afterEvidence: { text: "count_items", className: "functionName" },
     incompleteEvidence: { text: "count_items", className: "functionName" },
+  },
+  {
+    languageId: "python",
+    surveyRepository: "specs",
+    surveyCommit: "34fb8680caa9f68005a438854fa5dc2ef15ff953",
+    surveyPath: "cfc/formal/scripts/check-architecture.py",
+    before: new URL("./python-specs/before.py", import.meta.url),
+    after: new URL("./python-specs/after.py", import.meta.url),
+    incomplete: new URL("./python-specs/incomplete.py", import.meta.url),
+    beforeEvidence: { text: "closure", className: "functionName" },
+    afterEvidence: { text: "closure", className: "functionName" },
+    incompleteEvidence: { text: "closure", className: "functionName" },
+  },
+  {
+    languageId: "python",
+    surveyRepository: "legibility",
+    surveyCommit: "ff46a8e811e0f75246b2fe1cafa8e18954dede3f",
+    surveyPath: "src/probe/artifact_refs.py",
+    before: new URL("./python-legibility/before.py", import.meta.url),
+    after: new URL("./python-legibility/after.py", import.meta.url),
+    incomplete: new URL("./python-legibility/incomplete.py", import.meta.url),
+    beforeEvidence: { text: "display_date", className: "functionName" },
+    afterEvidence: { text: "display_date", className: "functionName" },
+    incompleteEvidence: { text: "display_date", className: "functionName" },
+  },
+  {
+    languageId: "python",
+    surveyRepository: "raia",
+    surveyCommit: "a9998da33e2a04df830d684cd6eef1a3ec2a4f59",
+    surveyPath: "bench/analyze.py",
+    before: new URL("./python-raia/before.py", import.meta.url),
+    after: new URL("./python-raia/after.py", import.meta.url),
+    incomplete: new URL("./python-raia/incomplete.py", import.meta.url),
+    beforeEvidence: { text: "fail_vec", className: "functionName" },
+    afterEvidence: { text: "fail_vec", className: "functionName" },
+    incompleteEvidence: { text: "fail_vec", className: "functionName" },
+  },
+  {
+    languageId: "python",
+    surveyRepository: "gvisor",
+    surveyCommit: "0da391ef9ab8d513fba6412f4b14680917a00556",
+    surveyPath: "vdso/check_vdso.py",
+    before: new URL("./python-gvisor/before.py", import.meta.url),
+    after: new URL("./python-gvisor/after.py", import.meta.url),
+    incomplete: new URL("./python-gvisor/incomplete.py", import.meta.url),
+    beforeEvidence: { text: "PageRoundDown", className: "functionName" },
+    afterEvidence: { text: "PageRoundDown", className: "functionName" },
+    incompleteEvidence: { text: "PageRoundDown", className: "functionName" },
+  },
+  {
+    languageId: "swift",
+    surveyRepository: "fabric-mobile",
+    surveyCommit: "94ae27c19a5accba06ccc84172a6e0f7bc16259c",
+    surveyPath:
+      "plugins/tauri-plugin-loom-location/ios/Sources/LoomLocationPlugin/LoomLocationPlugin.swift",
+    before: new URL("./swift-fabric-mobile/before.swift", import.meta.url),
+    after: new URL("./swift-fabric-mobile/after.swift", import.meta.url),
+    incomplete: new URL(
+      "./swift-fabric-mobile/incomplete.swift",
+      import.meta.url,
+    ),
+    selection: {
+      filenames: [
+        "plugins/tauri-plugin-loom-location/ios/Sources/LoomLocationPlugin/LoomLocationPlugin.swift",
+        "plugins/tauri-plugin-loom-location/ios/Package.swift",
+        "tools/cfc-sandbox/Package.swift",
+        "Package@swift-5.9.swift",
+        "icontact/extract-contacts.swift",
+        "ios/FabricBeacon/Beacon/Barometer.swift",
+      ],
+      aliases: ["swift"],
+      shebangs: [
+        "#!/usr/bin/swift",
+        "#!/usr/bin/env swift",
+        "#!/usr/bin/xcrun swift",
+        "#!/usr/bin/env xcrun swift",
+      ],
+    },
+    beforeEvidence: { text: "startBeacon", className: "functionName" },
+    afterEvidence: { text: "startBeacon", className: "functionName" },
+    incompleteEvidence: { text: "startBeacon", className: "functionName" },
+  },
+  {
+    languageId: "swift",
+    surveyRepository: "gvisor",
+    surveyCommit: "bb309e286c61e1a5a5f9893666443a9ea31c4f17",
+    surveyPath: "tools/cfc-sandbox/Package.swift",
+    before: new URL("./swift-gvisor/before.swift", import.meta.url),
+    after: new URL("./swift-gvisor/after.swift", import.meta.url),
+    incomplete: new URL("./swift-gvisor/incomplete.swift", import.meta.url),
+    beforeEvidence: { text: "package", className: "binding" },
+    afterEvidence: { text: "package", className: "binding" },
+    incompleteEvidence: { text: "package", className: "binding" },
+  },
+  {
+    languageId: "swift",
+    surveyRepository: "loom",
+    surveyCommit: "43a4afe18fbfc37ab8a11da8fe5011f0be81f6e7",
+    surveyPath: "src/services/loom-daemon/attention/usps_vision.swift",
+    before: new URL("./swift-loom/before.swift", import.meta.url),
+    after: new URL("./swift-loom/after.swift", import.meta.url),
+    incomplete: new URL("./swift-loom/incomplete.swift", import.meta.url),
+    beforeEvidence: { text: "guard", className: "controlKeyword" },
+    afterEvidence: { text: "guard", className: "controlKeyword" },
+    incompleteEvidence: { text: "guard", className: "controlKeyword" },
+  },
+  {
+    languageId: "swift",
+    surveyRepository: "loom-scripts",
+    surveyCommit: "fb0f2eb1031c548992b4e76bd79f79c30b7c548e",
+    surveyPath: "icontact/extract-contacts.swift",
+    before: new URL("./swift-loom-scripts/before.swift", import.meta.url),
+    after: new URL("./swift-loom-scripts/after.swift", import.meta.url),
+    incomplete: new URL(
+      "./swift-loom-scripts/incomplete.swift",
+      import.meta.url,
+    ),
+    beforeEvidence: { text: "labelString", className: "functionName" },
+    afterEvidence: { text: "labelString", className: "functionName" },
+    incompleteEvidence: { text: "labelString", className: "functionName" },
   },
   {
     languageId: "plain-text",

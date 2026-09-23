@@ -1,4 +1,4 @@
-import { env } from "@commonfabric/integration";
+import { env, type Page } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
@@ -14,6 +14,33 @@ import { waitForText } from "./cfc-browser-helpers.ts";
 import { defer, type Deferred } from "@commonfabric/utils/defer";
 
 const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+
+/**
+ * Opens the piece `pieceId` in the shell and waits until its counter has
+ * rendered, answering the page it landed on.
+ *
+ * Every test that drives the page opens it here, which is what makes two
+ * things true of each of them: no test depends on another having navigated,
+ * and the errors a navigation raises fall inside the test that caused them.
+ *
+ * Waiting for the counter is what keeps this from answering mid-load. A test
+ * handed a page that has not subscribed yet would write a value, see it on the
+ * first paint, and take that for live propagation.
+ */
+async function openPiece(
+  shell: ShellIntegration,
+  pieceId: string,
+  identity: Identity,
+): Promise<Page> {
+  await shell.goto({
+    frontendUrl: FRONTEND_URL,
+    view: { spaceName: SPACE_NAME, pieceId },
+    identity,
+  });
+  const page = shell.page();
+  await page.waitForSelector("#counter-result", { strategy: "pierce" });
+  return page;
+}
 
 describe("counter direct operations test", () => {
   const shell = new ShellIntegration();
@@ -82,15 +109,7 @@ describe("counter direct operations test", () => {
   });
 
   it("should load the counter piece and verify initial state", async () => {
-    const page = shell.page();
-    await shell.goto({
-      frontendUrl: FRONTEND_URL,
-      view: {
-        spaceName: SPACE_NAME,
-        pieceId: piece.id,
-      },
-      identity,
-    });
+    const page = await openPiece(shell, piece.id, identity);
 
     // Verify initial value is 0
     await waitForText(page, "#counter-result", "Counter is the 0th number");
@@ -99,11 +118,7 @@ describe("counter direct operations test", () => {
   });
 
   it("should update counter value via direct operation (live)", async () => {
-    const page = shell.page();
-
-    await page.waitForSelector("#counter-result", {
-      strategy: "pierce",
-    });
+    const page = await openPiece(shell, piece.id, identity);
 
     await piece.result.set(42, ["value"]);
 
@@ -114,24 +129,24 @@ describe("counter direct operations test", () => {
   });
 
   it("should update counter value and verify after page refresh", async () => {
-    const page = shell.page();
+    let page = await openPiece(shell, piece.id, identity);
 
-    console.log("Setting counter value to 42 via direct operation");
     await piece.result.set(42, ["value"]);
     await awaitResultValue(42);
 
-    // Now refresh the page by navigating to the same URL
-    console.log("Refreshing the page...");
-    await shell.goto({
-      frontendUrl: FRONTEND_URL,
-      view: {
-        spaceName: SPACE_NAME,
-        pieceId: piece.id,
-      },
-      identity,
-    });
+    // The open page has already taken the write live, so it reads "42nd"
+    // before the reload and a reload that did not happen would satisfy the
+    // assertion below as well as one that did. Stamp the document and require
+    // the stamp to be gone, so what is read afterwards is a document built
+    // from what was stored rather than the one that was already showing it.
+    await page.evaluate("globalThis.__beforeReload = true");
+    page = await openPiece(shell, piece.id, identity);
+    assertEquals(
+      await page.evaluate("globalThis.__beforeReload === true") as boolean,
+      false,
+      "Reloading should have replaced the document",
+    );
 
-    // Get the counter result element after refresh
     await waitForText(page, "#counter-result", "Counter is the 42nd number");
   });
 });

@@ -3,6 +3,10 @@ import {
   validateLoomAuthoringConfig,
 } from "./loom-authoring.ts";
 import {
+  type HarnessLoomRetrievalConfig,
+  validateLoomRetrievalConfig,
+} from "./loom-retrieval.ts";
+import {
   type CfcConfClause,
   type CfcEnforcementMode,
   cfcEnforcementStrictness,
@@ -32,6 +36,7 @@ import type {
 import type { HarnessBrowserAccessLease } from "./contracts/browser-access.ts";
 import type { HarnessDocsCorpusRecord } from "./contracts/docs-corpus.ts";
 import { resolveHarnessDocsCorpus } from "./docs-corpus/corpus.ts";
+import type { HarnessForeignSpaces } from "./foreign-spaces.ts";
 import { resolveHarnessSkillsRoot } from "./skills/root.ts";
 import type { DockerRunscSandboxConfig } from "./sandbox/types.ts";
 
@@ -76,12 +81,17 @@ export interface HarnessFabricSessionConfig {
   apiUrl: string;
   identityKeyPath: string;
   space: string;
+
+  /** Operator-admitted foreign space DIDs and their HTTP(S) host routes. */
+  foreignSpaces?: HarnessForeignSpaces;
+
   cfcEnforcementMode?: HarnessFabricCfcEnforcementMode;
   cfcFlowLabels?: HarnessFabricCfcFlowLabelsMode;
   cfcPosture?: CfcPosture;
 
   /**
-   * The read ceiling the session's runtime bounds every `sqliteQuery` by
+   * The read ceiling the session's runtime bounds cell payload reads and every
+   * `sqliteQuery` by
    * (`RuntimeOptions.cfcReadMaxConfidentiality`). Absent is no ceiling.
    */
   cfcReadMaxConfidentiality?: readonly CfcConfClause[];
@@ -246,6 +256,9 @@ interface HarnessCommonConfig {
   /** Explicit host command backing; never inferred from a model input. */
   loomAuthoring?: HarnessLoomAuthoringConfig;
 
+  /** Explicit host retrieval backing; never inferred from a model input. */
+  loomRetrieval?: HarnessLoomRetrievalConfig;
+
   patternIndex?: HarnessPatternIndexConfig;
   skillsSh?: HarnessSkillsShConfig;
   sandbox?: DockerRunscSandboxConfig;
@@ -321,6 +334,9 @@ export interface ResolveHarnessConfigOptions {
     | ResolvedHarnessFabricSessionConfig;
   /** Explicit host command backing; never inferred from a model input. */
   loomAuthoring?: HarnessLoomAuthoringConfig;
+
+  /** Explicit host retrieval backing; never inferred from a model input. */
+  loomRetrieval?: HarnessLoomRetrievalConfig;
 
   patternIndex?: HarnessPatternIndexConfig;
   skillsSh?: HarnessSkillsShConfig;
@@ -687,6 +703,9 @@ export const resolveHarnessConfig = (
   if (options.loomAuthoring !== undefined) {
     validateLoomAuthoringConfig(options.loomAuthoring);
   }
+  if (options.loomRetrieval !== undefined) {
+    validateLoomRetrievalConfig(options.loomRetrieval);
+  }
   const modelProvider = options.modelProvider ?? "openai-compatible-gateway";
   if (
     options.credentialOwner !== undefined &&
@@ -785,6 +804,9 @@ export const resolveHarnessConfig = (
     ...(fabricSession !== undefined ? { fabricSession } : {}),
     ...(options.loomAuthoring !== undefined
       ? { loomAuthoring: structuredClone(options.loomAuthoring) }
+      : {}),
+    ...(options.loomRetrieval !== undefined
+      ? { loomRetrieval: structuredClone(options.loomRetrieval) }
       : {}),
     ...(options.patternIndex !== undefined
       ? { patternIndex: options.patternIndex }

@@ -968,7 +968,7 @@ describe("deferred composition inputs and lazy registration (CT-1819)", () => {
 describe("parseSourceMap()", () => {
   it("throws naming what the document holds, given JSON that is not a source map", () => {
     expect(() => parseSourceMap('{"foo": 1}')).toThrow(
-      "Could not parse source map: {\n  foo: 1\n}",
+      "Could not parse source map: \n```\n{\n  foo: 1\n}\n```",
     );
   });
 });

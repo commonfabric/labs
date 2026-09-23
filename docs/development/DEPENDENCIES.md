@@ -410,6 +410,40 @@ Two things keep this off the table today. The fold happens only when minifying,
 and the shell is the only caller that minifies. The shell also lowers `using`,
 and the lowered form is not folded. esbuild fixed the underlying bug in 0.28.1.
 
+### Tree-sitter
+
+The CLI pins `web-tree-sitter` and `tree-sitter-python` exactly. `cf view`
+colors and navigates Python through them, and a grammar package ships a
+compiled parser whose binary interface has to match the runtime that loads it.
+A range on either would let an install pair a parser with a runtime that
+rejects it, which fails when a view opens a Python file rather than when the
+dependency resolves. Roll the two together, and run the `cf view` Python tests
+afterward.
+
+`tree-sitter-python` is reached in two ways, both of which have to keep
+working. `packages/cli/lib/view/languages/python/python.ts` imports its
+`package.json`, which is what makes the package present, and resolves the
+compiled grammar beside it with `import.meta.resolve`, which the adapter then
+reads as a file. A source run resolves that through the Deno cache, and
+`deno task build-binaries cf` embeds it in the binary with no step of its own.
+Neither path is exercised by type checking, so a change to either is checked by
+running `cf view` against a `.py` file.
+
+Swift reaches its grammar the same way, through
+`packages/cli/lib/view/languages/swift/swift.ts`, and the CLI pins
+`@binclusive/tree-sitter-swift-wasm` exactly as well. The Swift grammar is
+[`alex-pinkus/tree-sitter-swift`](https://github.com/alex-pinkus/tree-sitter-swift),
+whose own npm package ships no compiled WebAssembly grammar; its WebAssembly
+build is published only as an asset on each GitHub release. The pinned package
+contains that release asset and nothing the pager uses besides it. Version
+0.1.0 holds the 0.7.3 release's `tree-sitter-swift.wasm`, whose SHA-256 is
+`0258a7ef17303a8079ffe0748b3583d59656b5c3e8653fca7b6451b3e6689eb2`, the digest
+of the asset downloaded from the upstream release. Before rolling it, download
+the new release's asset from the upstream repository and confirm that the
+package's `wasm/tree-sitter-swift.wasm` has the same digest; the lockfile's
+integrity hash then holds the package to those bytes. Run the `cf view` Swift
+tests afterward, and `cf view` against a `.swift` file.
+
 ### Viz.js
 
 The scripts workspace pins `@viz-js/viz` exactly. `scripts/docs-links.ts`

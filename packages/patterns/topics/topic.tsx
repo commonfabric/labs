@@ -22,7 +22,7 @@ import {
 } from "commonfabric";
 import type {} from "commonfabric/schema";
 
-import { type NamesTableRow, ownName } from "../collection-naming/naming.ts";
+import { isMemberName } from "../collection-naming/allocator.ts";
 
 // ===== Shared types =====
 
@@ -445,15 +445,56 @@ export interface TopicInput {
    * a reader can see it, rather than leaving it to convention. */
   boardCrossrefs?: ReadonlyCell<TopicCrossrefRow[] | Default<[]>>;
 
-  /** The board's names table, one row per named topic. The topic reads its own
-   * row out of it and nothing else; absent, the topic has no number.
+  /**
+   * The number the board calls this topic by, stored here. The board's create
+   * allocates it over the board's namespace and passes it in, in the
+   * transaction that creates the topic; `recordName` writes it onto a topic
+   * filed before the board numbered anything. A number is permanent and never
+   * reused, so this copy stays the number the board's namespace holds for the
+   * topic.
    *
-   * Readable, not writable, for the reason `boardCrossrefs` states: the table
-   * is the board's derivation, and a topic has no business writing into it.
-   * Wired at creation by the board's create, and rewired onto a topic filed
-   * before the namespace as a one-time link-bind — the same operator step
-   * `mentionable` states for itself. */
-  boardNames?: ReadonlyCell<NamesTableRow[] | Default<[]>>;
+   * STORING a number and SHOWING one are separate, and only the showing is
+   * gated: `SHOW_TOPIC_NUMBERS` decides what the topic publishes, and while it
+   * is off this input still holds the number and `recordName` still writes it.
+   * Nothing published carries it then, which is what the board's numbering
+   * step loses and `BackfillNamesResult` in `./main.tsx` states.
+   *
+   * Absent on a topic nobody has numbered: one filed before the namespace
+   * existed and not yet recorded, and one composed with no board at all. Such
+   * a topic reports no number and renders without failing.
+   *
+   * Plain rather than `Writable`, because every reader of it wants the string
+   * — the topic's own report of its number, a board's row demand, a mention
+   * universe row. The one writer is `recordName`, which takes the writable
+   * handle in its own state schema, beside the write that needs it.
+   */
+  shortName?: string;
+}
+
+/** What `recordName` takes: the number the board allocated for this topic. */
+export interface RecordNameEvent {
+  /**
+   * The number to store, as the board's namespace holds it. Required, and
+   * checked against the name grammar rather than stored as given: a topic has
+   * no way to derive its own number, so a caller that could omit this would be
+   * asking the topic to invent one.
+   *
+   * No `agentName` accompanies it, unlike every authored-content verb here,
+   * and the absence is the honest one for the reason `MentionEvent` gives
+   * about itself: the number is the board's allocation, so a content-level
+   * signature would be accepted and then dropped. Fabric still records the
+   * principal that made the write.
+   */
+  name: string;
+}
+
+/** What `recordName` returns. */
+export interface RecordNameResult {
+  /** The number the topic stores once the call returns. */
+  name: string;
+
+  /** Whether this call wrote it; `false` when the topic already stored it. */
+  wrote: boolean;
 }
 
 /**
@@ -611,17 +652,20 @@ export interface TopicPiece extends TopicSummary {
    * remains authoritative until it does. */
   [NAME]: string | Default<""> | undefined;
 
-  /** The name the board calls this topic by, read out of the board's names
-   * table by identity. The display name stays the title, and this rides
-   * beside it: where a topic publishes one, its header and the board's card
-   * render it as a badge, and a mention universe carries it, which is what a
-   * mention pill and a `#42` query read.
+  /** The number the board calls this topic by, out of the `shortName` INPUT
+   * the topic stores. The display name stays the title, and this rides beside
+   * it: where a topic publishes one, its header and the board's card render it
+   * as a badge, and a mention universe carries it, which is what a mention
+   * pill and a `#42` query read.
    *
-   * Absent while `SHOW_TOPIC_NUMBERS` is off, for a topic no board has named,
-   * and for one wired to no board: the property is simply not there. Every
-   * consumer treats that as no name — the badge renders nothing, and the
-   * topic's universe row carries the empty name, which matches no `#42` query
-   * and gives a mention pill no number.
+   * Absent while `SHOW_TOPIC_NUMBERS` is off, and for a topic whose input
+   * holds no number: the property is simply not there. Every consumer treats
+   * that as no name — the badge renders nothing, and the topic's universe row
+   * carries the empty name, which matches no `#42` query and gives a mention
+   * pill no number.
+   *
+   * This is the number the topic SHOWS. `TopicInput.shortName` is the number
+   * it HOLDS, and the two part company whenever the switch is off.
    *
    * Optional rather than defaulted, and the difference is the compatibility
    * proof's: this is what a board's stored list is validated against, and a
@@ -729,10 +773,11 @@ export interface TopicPiece extends TopicSummary {
  * body in place, so what a reader shows is the array filtered rather than the
  * array itself. Sign every authored-content mutation with `agentName`:
  * Fabric records the human principal behind the key; the name says which
- * agent acted under it. Reference-only `mention` and `unmention` calls carry
- * no content signature. The session-draft cells and `submit*` streams below
- * belong to the rendered page, not the headless contract — they read state
- * only this session holds.
+ * agent acted under it. `mention`, `unmention` and `recordName` carry no
+ * content signature: the first two record where a reference points, and the
+ * third records a number the board allocated. The session-draft cells and
+ * `submit*` streams below belong to the rendered page, not the headless
+ * contract — they read state only this session holds.
  */
 export interface TopicOutput extends TopicPiece {
   [UI]: VNode;
@@ -819,6 +864,35 @@ export interface TopicOutput extends TopicPiece {
    * the projection for the reason `removeComment` states. */
   removeLink: Stream<RemoveLinkEvent, RemoveLinkResult>;
 
+  /**
+   * Store the number the board calls this topic by, which is the only way a
+   * number reaches a topic the board did not pass one to at create: a board
+   * writes a member's result and never a member's argument, so the topic has
+   * to make the write itself.
+   *
+   * Idempotent, and permanent: a call naming the stored number writes nothing
+   * and reports `wrote: false`, and a call naming a different one is refused.
+   * The board's `backfillNames` sends this verb one event per topic it holds
+   * that reports no number, and an operator can send it directly.
+   *
+   * THE NUMBER MUST BE THE ONE THE BOARD'S NAMESPACE HOLDS FOR THIS TOPIC, and
+   * the verb cannot check that: a topic holds no namespace to look itself up
+   * in, and giving it one is the board-derived table this design exists to
+   * remove — `shortName` above says why. So the check is the caller's, and
+   * `cf cell get --cell <board> names` is where the answer is. A number the
+   * board did not allocate is stored as readily as one it did, and a number is
+   * permanent: the step then allocates a different one, writes it into the
+   * namespace, and is refused here for as long as the disagreement stands, so
+   * `top/<n>` and the topic's own badge name different numbers and nothing in
+   * the board reconciles them. `skills/topics/references/namespace-backfill.md`
+   * carries that repair, which is by hand.
+   *
+   * Outside the projection for the reason `removeComment` states: a board
+   * stores `TopicPiece`, so a required verb added there would refuse every
+   * topic deployed before the verb existed.
+   */
+  recordName: Stream<RecordNameEvent, RecordNameResult>;
+
   /** Attribution of the last rename; unset until the first `setTitle`.
    * Beside `setTitle` rather than on the projection, for the same reason. */
   titleUpdatedBy?: TopicAuthor | undefined;
@@ -887,19 +961,53 @@ export const TOPICS_THEME = {
  * Off while only some topics have a number, because a number on some of a
  * board's topics and not on the rest confuses the people reading it. The board
  * numbers every topic it creates, but a topic filed before the board numbered
- * anything has no number until `backfillNames` names it and an operator binds
- * the board's `namesTable` onto its `boardNames`.
+ * anything has no number until `backfillNames` numbers it and that topic
+ * stores what it was asked to.
  *
  * Off, a topic publishes no `shortName`, and that is the whole mechanism:
  * every place a number shows reads a topic's `shortName` — its header, the
  * board's card and `index` row, and each entry of a mention universe, whether
- * the board's copies or a plain list of topics. The numbers themselves are
- * untouched. The board still allocates one on every create, records it in
- * `names`, and lists it beside its topic in `namesTable`, and a number still
+ * the board's copies or a plain list of topics. The gate sits on the
+ * publication rather than on each display because a universe handed the raw
+ * member list has no row to blank: `cf-code-editor` takes a mention's short
+ * name off the destination piece there, which
+ * `docs/specs/collection-naming.md` reserves for a universe row
+ * (https://github.com/commontoolsinc/labs/issues/7771).
+ *
+ * The numbers themselves are untouched. The board still allocates one on every
+ * create, records it in `names`, and lists it beside its topic in
+ * `namesTable`; a topic still stores its own in the `shortName` INPUT, which
+ * this does not gate, and `recordName` still writes it; and a number still
  * addresses its topic as `top/<n>`.
  *
+ * WHAT IT COSTS, which is the reason to turn it on rather than leave it:
+ * a topic's published `shortName` is the only signal the board's numbering
+ * step can read, so while this is off `backfillNames` cannot tell a topic that
+ * stores its number from one that does not. It asks every topic every run and
+ * reports every number under `pending`. Repeating it is safe and not idle: a
+ * topic that already stores the number declines it and writes nothing further,
+ * a topic whose number never landed stores it now, and the asking is itself a
+ * write either way. `BackfillNamesResult` in `./main.tsx` says what an operator
+ * reads instead, and `skills/topics/references/namespace-backfill.md` says what
+ * a re-run writes per topic.
+ *
+ * WHAT TURNING IT ON WILL NEED IN TESTS, which is the part nothing else will
+ * remind anyone of. This is a module constant, so a pattern test cannot vary
+ * it: it is baked into the compiled program, and every Topics test therefore
+ * runs the `false` branch only. Nothing today guards the `true` branch of the
+ * publication below, and nothing can. When this flips, three things become
+ * assertable and should be asserted in `./naming.test.tsx` in the same change:
+ * a topic publishing the number it stores; the board's `index` row and mention
+ * universe row carrying it; and `backfillNames` reporting a stored number
+ * under `named` with an empty `pending`, which is the report this switch
+ * currently costs. Several cases there read numbers out of cells the test
+ * supplies purely because nothing published carries one; those can then read
+ * the publication directly. The library's own already-recorded branch is held
+ * meanwhile in `../collection-naming/naming.test.tsx`, over stand-in members
+ * that publish a name, because Topics cannot reach it.
+ *
  * TODO(mike): Turn this on once every topic on the deployed Topics board has a
- * number.
+ * number. Doing so restores the step's report by itself; nothing else changes.
  */
 export const SHOW_TOPIC_NUMBERS: boolean = false;
 
@@ -1298,6 +1406,11 @@ const TITLE_WRITE_SCHEMA = toSchema<
 /** Generated object contract extended with the concrete legacy reader. */
 const MENTIONED_WRITE_SCHEMA = toSchema<
   TopicWriteState<"mentioned">
+>() as TopicObjectSchema;
+
+/** Generated object contract extended with the concrete legacy reader. */
+const RECORD_NAME_STATE_SCHEMA = toSchema<
+  RecordNameState
 >() as TopicObjectSchema;
 
 /** Bound state for `submitProfileComment`. */
@@ -2148,6 +2261,54 @@ const unmentionHandler = handler<UnmentionEvent, TopicWriteState<"mentioned">>(
   },
 );
 
+/** Bound state for `recordName`. */
+type RecordNameState = {
+  /** Shared upgrade handles for this Topic. */
+  upgrade: Writable<TopicUpgradeState>;
+
+  /** The topic's own stored number, absent until a call records one. The
+   * writable handle the write needs, over an input every other reader takes
+   * as the plain string it holds. */
+  shortName: Writable<string | undefined>;
+};
+
+/** Handles `recordName` after bringing durable Topic state up to date. */
+const recordNameHandler = handler<
+  RecordNameEvent,
+  RecordNameState,
+  RecordNameResult
+>(
+  toSchema<RecordNameEvent>(),
+  {
+    ...RECORD_NAME_STATE_SCHEMA,
+    properties: {
+      ...RECORD_NAME_STATE_SCHEMA.properties,
+      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
+    },
+  },
+  ({ name }, { upgrade, shortName }) => {
+    const given = (name ?? "").trim();
+    // The grammar is the whole of what a topic can check: it holds no
+    // namespace to look the number up in, which is what keeps this verb from
+    // reading its board — or, through a board table, every sibling topic.
+    if (!isMemberName(given)) {
+      rejectMutation("recordName", `name must be a member name: \`${given}\``);
+    }
+    const stored = shortName.get();
+    // A number is permanent and never reused, so a topic holding one holds
+    // it. Naming that same number is a caller's repeat — the board's step
+    // re-sends whatever it cannot see stored yet — and naming a different one
+    // is a mistake worth refusing rather than a correction to apply.
+    if (stored === given) return { name: given, wrote: false };
+    if (stored !== undefined && stored !== "") {
+      rejectMutation("recordName", `topic already stores \`${stored}\``);
+    }
+    upgradeTopicState(upgrade.get(), "recordName");
+    shortName.set(given);
+    return { name: given, wrote: true };
+  },
+);
+
 // ===== The pattern =====
 
 export default pattern<TopicInput, TopicOutput>(
@@ -2169,7 +2330,10 @@ export default pattern<TopicInput, TopicOutput>(
       references,
       mentioned,
       boardCrossrefs,
-      boardNames,
+      // The number this topic STORES; `shortName` below is what it shows.
+      // Named apart because `upgradeLegacyAuthors` already uses `storedName`
+      // for an author's name.
+      shortName: storedNumber,
       [SELF]: self,
     },
   ) => {
@@ -2203,13 +2367,12 @@ export default pattern<TopicInput, TopicOutput>(
     const profileAvatar = profileWish.result?.avatar ?? "";
     const hasProfile = profileName.trim().length > 0;
     const createdByView = createdByOf({ createdBy });
-    // The board has already derived the table; this is a lookup by identity,
-    // and it is written as one.
-    const boardName = ownName({ table: boardNames, self });
-    // The number the topic shows and publishes. Every reader of a topic's
-    // number reads this, so gating it here hides the number from all of them,
-    // whatever the topic's mention universe is wired to.
-    const shortName = SHOW_TOPIC_NUMBERS ? boardName : undefined;
+    // The number the topic shows and publishes, out of the number it stores.
+    // Every reader of a topic's number reads this, so gating it here hides the
+    // number from all of them, whatever the topic's mention universe is wired
+    // to. The store is untouched: `recordName` writes the input and reads it
+    // back to stay idempotent, both while the switch is off.
+    const shortName = SHOW_TOPIC_NUMBERS ? storedNumber : undefined;
 
     // --- Streams (external API; also usable headlessly via CLI) ---
 
@@ -2254,6 +2417,9 @@ export default pattern<TopicInput, TopicOutput>(
 
     /** Stop referencing a piece — every entry naming it. */
     const unmention = unmentionHandler({ upgrade, mentioned });
+
+    /** Store the number the board calls this topic by. */
+    const recordName = recordNameHandler({ upgrade, shortName: storedNumber });
 
     // --- UI-side actions (close over session drafts) ---
 
@@ -2809,6 +2975,7 @@ export default pattern<TopicInput, TopicOutput>(
       setTitle,
       mention,
       unmention,
+      recordName,
       commentDraft,
       bodyDraft,
       editingBody,

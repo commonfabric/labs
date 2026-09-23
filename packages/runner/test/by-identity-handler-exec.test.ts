@@ -9,14 +9,12 @@ import type { RuntimeProgram } from "../src/harness/types.ts";
 const signer = await Identity.fromPassphrase("by-identity-handler-exec");
 const space = signer.did();
 
-// CT-1623: a piece RESUMED from storage in a fresh runtime under the ESM loader
-// loads its pattern source-free BY IDENTITY and must still resolve + execute its
-// callable functions. The FUSE integration (cf exec <handler>) exposed a gap:
-// "JavaScript module is missing an executable implementation" (runner.ts
-// getFallbackJavaScriptImplementation). This uses the REAL fuse-exec fixture
-// (non-default export, schema handlers with asCell state, a patternTool) and
-// drives: create + run the piece → persist → resume in a fresh runtime → invoke
-// the `recordMessage` handler.
+// A piece RESUMED from storage in a fresh runtime under the ESM loader loads
+// its pattern source-free BY IDENTITY and must still resolve + execute its
+// callable functions. This uses the REAL fuse-exec fixture (non-default export,
+// schema handlers with asCell state, a patternTool) and drives: create + run
+// the piece → persist → resume in a fresh runtime → invoke the `recordMessage`
+// handler.
 const FIXTURE_SRC = Deno.readTextFileSync(
   new URL(
     "../../cli/integration/pattern/fuse-exec.tsx",
@@ -88,8 +86,7 @@ describe("resume the fuse-exec piece by identity and invoke its handler", () => 
       // Force the storage-rehydration path (as cf exec hits it): the resumed
       // piece's nodes come from the PERSISTED graph (module.implementation is a
       // ref, not a live function), so resolution relies solely on by-identity
-      // lookup (getVerifiedImplementation) — the path that fails under
-      // source-free by-identity.
+      // lookup (getVerifiedImplementation).
       await resultCell2.sync();
       const started = await rt2.start(resultCell2);
       expect(started).toBe(true);

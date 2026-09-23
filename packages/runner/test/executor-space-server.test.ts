@@ -619,6 +619,50 @@ describe("stage G SpaceServer recovery seams", () => {
     await awaitEach(cycles, () => created.watermark >= second.seq);
   });
 
+  it("abandons accepted runner callbacks when parking before their wave closes", async () => {
+    const created = newSpaceServer();
+    expect(await created.activate()).toBe(true);
+    const defer = created.deferSealedEffects.bind(created);
+    let parked: Promise<void> | undefined;
+    let acceptedBatches = 0;
+    let flushed = false;
+    let abandoned: unknown;
+    const handoff = stub(created, "deferSealedEffects", (tx, effects) => {
+      const owned = defer(tx, effects);
+      acceptedBatches = created.deferredEffectWaveCount;
+      // Park on the actual ownership handoff, before the serving loop can close
+      // this wave. No elapsed-time ordering decides which path the test covers.
+      parked = created.park("pending-runner-callback");
+      return owned;
+    });
+    try {
+      const tx = servingRuntime!.edit();
+      stampWaveRunContext(tx, {
+        actionId: "test/parked-runner-callback",
+        kind: "derivation",
+      });
+      tx.enqueuePostCommitEffect({
+        id: "runner-acceptance:parked",
+        kind: "runner-acceptance",
+        flush: () => {
+          flushed = true;
+        },
+        abandon: (reason) => {
+          abandoned = reason;
+        },
+      });
+      expect((await tx.commit()).error).toBeUndefined();
+      expect(acceptedBatches).toBe(1);
+      expect(parked).toBeDefined();
+      await parked;
+      expect(abandoned).toBe("pending-runner-callback");
+      expect(flushed).toBe(false);
+      expect(created.deferredEffectWaveCount).toBe(0);
+    } finally {
+      handoff.restore();
+    }
+  });
+
   it("fires an EFFECT-ONLY batch on a quiet space: an all-no-op tx's deferred effects close a vacuous wave instead of starving until park (round-2 thread 1)", async () => {
     // The §6-step-3 recovery shape: an activation re-run of an
     // effectful node whose claim is already durable seals an ALL-NO-OP
@@ -1445,11 +1489,12 @@ describe("stage G SpaceServer recovery seams", () => {
           "lt6-stream-early",
         ]
       ) {
-        const stream = creator.getCell<unknown>(space, name, undefined);
+        // A stream document holds no value, and nothing on it says what it
+        // is: the handle that reaches it declares the stream.
+        const stream = creator.getCell<unknown>(space, name, {
+          asCell: ["stream"],
+        });
         await stream.sync();
-        const tx = creator.edit();
-        stream.withTx(tx).setRaw({ $stream: true });
-        expect((await tx.commit()).error).toBeUndefined();
       }
       for (
         const name of [
@@ -1504,11 +1549,11 @@ describe("stage G SpaceServer recovery seams", () => {
       }): Promise<{
         entry: NonNullable<StreamEventsDocValue["entries"]>[number];
       }> => {
-        const streamCell = serving.getCell<unknown>(
-          space,
-          arm.stream,
-          undefined,
-        );
+        // The serving side's handle declares the stream: a send decides
+        // stream-or-write off the handle, and the document holds no value.
+        const streamCell = serving.getCell<unknown>(space, arm.stream, {
+          asCell: ["stream"],
+        });
         const probeCell = serving.getCell<{ handled?: number }>(
           space,
           arm.probe,

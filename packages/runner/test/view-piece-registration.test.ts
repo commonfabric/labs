@@ -9,7 +9,6 @@ import type { Cell } from "../src/cell.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { patternIdentityKey } from "../src/runner.ts";
 import { Runtime } from "../src/runtime.ts";
-import type { ISpaceReplica } from "../src/storage/interface.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 
 const signer = await Identity.fromPassphrase("stored view registration");
@@ -172,7 +171,9 @@ describe("view-piece-registration", () => {
     registration!();
   });
 
-  it("cancels a partial graph when its stored identity changes", async () => {
+  it("installs a handler node without reading its stream's document", async () => {
+    // A handler registers on the stream its `$event` names; nothing about the
+    // stream's document has to be locally available for the graph to install.
     const event = runtime.getCell(space, "unavailable event", undefined);
     await runtime.editWithRetry((tx) =>
       root.withTx(tx).setMetaRaw(
@@ -182,7 +183,11 @@ describe("view-piece-registration", () => {
       )
     );
     pattern.nodes.push({
-      module: { type: "javascript", implementation: () => {} },
+      module: {
+        type: "javascript",
+        wrapper: "handler",
+        implementation: () => {},
+      },
       inputs: { $event: { $alias: { cell: "argument", path: [] } } },
       outputs: {},
     });
@@ -193,22 +198,8 @@ describe("view-piece-registration", () => {
       () => true,
     );
     expect(registration).toBeDefined();
-    expect(registration!.graphIsInstalled()).toBe(false);
-    const replica = runtime.storageManager.open(space).replica as Required<
-      ISpaceReplica
-    >;
-    {
-      using _coverage = stub(replica, "hasLocalDocumentCoverage", () => false);
-      expect(registration!.resume()).toBe(true);
-      expect(registration!.graphIsInstalled()).toBe(false);
-    }
-    await runtime.editWithRetry((tx) =>
-      root.withTx(tx).setMetaRaw("patternIdentity", {
-        ...source,
-        identity: "replacement",
-      }, rawMetaWriteAuthorization)
-    );
-    expect(registration!.resume()).toBe(false);
+    expect(registration!.graphIsInstalled()).toBe(true);
+    registration!();
     expect(registration!.graphIsInstalled()).toBe(false);
     expect(root.get()).toEqual({ $UI: "confirmed" });
   });

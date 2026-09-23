@@ -5,6 +5,8 @@ import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 
 import {
+  openFileBackedRuntime,
+  readVintageManifest,
   strandedKeys,
   type VintageManifestEntry,
 } from "../packages/piece/test/state-continuity-harness.ts";
@@ -35,31 +37,37 @@ const entry: VintageManifestEntry = {
 const secondRoot = "of:fid1:qLOvr9VSkYDzl-vOQ4t0ztIxXKSIhgPVwtBcD-fihXU";
 
 describe("pattern-vintage-derived-corrections", () => {
-  it("replays the recorded lunch poll with both corrections accounted for", async () => {
-    const report = await replayVintage({
-      repoRoot,
-      patternsRoot: repoRoot + "/packages/patterns",
-      vintagesRoot: repoRoot + "/packages/piece/test/vintages",
-      signer: await Identity.fromPassphrase("pattern vintage fixture"),
-    }, fixture);
-    expect(report.targets).toBeGreaterThan(0);
-    expect(report.updated).toBeGreaterThan(0);
-    expect(report.failures).toEqual([]);
-    expect(report.stranded).toBe(0);
-    const unapproved = await replayVintage({
-      repoRoot,
-      patternsRoot: repoRoot + "/packages/patterns",
-      vintagesRoot: repoRoot + "/packages/piece/test/vintages",
-      signer: await Identity.fromPassphrase("pattern vintage fixture"),
-    }, { ...fixture, tier: "auto" });
-    expect(unapproved.stranded).toBe(2);
-    expect(unapproved.failures).toHaveLength(2);
-    expect(
-      unapproved.failures.every((failure) =>
-        failure.detail.includes("artSyncState")
-      ),
-    ).toBe(true);
+  it("finds one recorded instantiation for each approved root", async () => {
+    // `derivedCorrectionsFor` grades on an exact space, cell, source, symbol
+    // and identity, so the entry every grading test below hands it is read
+    // back from the fixture here rather than trusted: a literal that no longer
+    // matches what the fixture holds is a policy that forgives nothing while
+    // those tests still pass. Replaying the fixture under today's source
+    // belongs to the `pattern-vintage` gate, which fails on every approval
+    // `unused()` reports.
+
+    const dir = await Deno.makeTempDir({ prefix: "derived-corrections-" });
+    // The open is inside the try, because restoring the fixture is a way it
+    // throws and the temp copy it made by then is 3.5 MiB.
+    let vintage: Awaited<ReturnType<typeof openFileBackedRuntime>> | undefined;
+    let entries: readonly VintageManifestEntry[];
+    try {
+      vintage = await openFileBackedRuntime(
+        await Identity.fromPassphrase("pattern vintage fixture"),
+        dir,
+        fixture.path,
+      );
+      entries = (await readVintageManifest(vintage))?.entries ?? [];
+    } finally {
+      await vintage?.dispose().catch(() => {});
+      await Deno.remove(dir, { recursive: true }).catch(() => {});
+    }
+    expect(entries.filter((held) => held.cellId === entry.cellId))
+      .toEqual([entry]);
+    expect(entries.filter((held) => held.cellId === secondRoot))
+      .toEqual([{ ...entry, cellId: secondRoot }]);
   });
+
   it("reports approved transitions as changes while retaining authored losses", async () => {
     const policy = await derivedCorrectionsFor(fixture, repoRoot);
     expect(policy).toBeDefined();

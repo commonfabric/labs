@@ -9,7 +9,9 @@ export type InitialSinkName =
   | "llm"
   | "llmDialog"
   | "generateText"
-  | "generateObject";
+  | "generateObject"
+  | "agent"
+  | "sqliteQuery";
 
 /**
  * Every sink a deployment has to decide about, by hand.
@@ -22,6 +24,24 @@ export type InitialSinkName =
  * ship. The point is not the list: it is that a sink cannot reach a
  * deployment without someone deciding whether it carries a confidentiality
  * ceiling or releases ungated, and saying why.
+ *
+ * `agent` is the sink whose request is handed to an agent runner through an
+ * `AgentRun` record, on whichever host serves the requesting space: the
+ * request holds the task text and links to the cells the run may read, and
+ * the runner observes those cells under the run's own ceiling rather than
+ * receiving their values. {@link SINK_CLASSES} records that difference in
+ * what a release exposes as the class the egress gate mints for it.
+ *
+ * `sqliteQuery` is the sink whose request is a read handed to the storage
+ * provider holding a space's replicas: the statement, its parameters, and the
+ * database the query names. Its own space is the ordinary case, and there the
+ * parameters reach nobody the document's residency does not already name, so
+ * the bound this sink wants is the database's space rather than a clause
+ * list. The registry admits a static clause list per sink and nothing of that
+ * shape, the way it admits nothing of the `agent` sink's per-request shape,
+ * so `builtins/sqlite-builtins.ts` applies it: a query whose REQUEST carries
+ * confidentiality and whose database lies in another space is refused before
+ * that request is staged.
  */
 export const KNOWN_SINKS = [
   "fetchBinary",
@@ -34,10 +54,62 @@ export const KNOWN_SINKS = [
   "llmDialog",
   "generateText",
   "generateObject",
+  "agent",
+  "sqliteQuery",
 ] as const satisfies readonly InitialSinkName[];
 
 /** A sink the registry classifies. */
 export type KnownSinkName = (typeof KNOWN_SINKS)[number];
+
+/**
+ * The boundary class of a sink, minted as the `sinkClass` boundary-context
+ * atom at the egress gate so an exchange rule can scope itself to one class
+ * of release site (spec §8.10.5.2). `network` is a request leaving the
+ * runtime for a host on the network — a fetch, a stream, a model call.
+ * `agent` is a request handed to an agent runner acting as the requester,
+ * whose model observes the fabric through handles rather than receiving the
+ * request's values. `storage` is a request handed to the provider holding a
+ * space's replicas. For that space's OWN data it reaches nobody the
+ * destination document's residency does not already name, which is why a
+ * rule written for a release leaving the runtime has no business firing
+ * there. A request naming another space's database does leave; what keeps
+ * that out of the gate's hands is that the sqlite builtin refuses it before
+ * staging when the request carries a label, so the class says where a
+ * request goes rather than whether it may.
+ */
+export type SinkClass = "network" | "agent" | "storage";
+
+/**
+ * Every known sink's class. Total over {@link KNOWN_SINKS}, the same way the
+ * governance registry is: a sink added to the inventory without a class here
+ * is a compile error.
+ */
+export const SINK_CLASSES: Readonly<Record<KnownSinkName, SinkClass>> = Object
+  .freeze({
+    fetchBinary: "network",
+    fetchText: "network",
+    fetchJson: "network",
+    fetchJsonUnchecked: "network",
+    fetchProgram: "network",
+    streamData: "network",
+    llm: "network",
+    llmDialog: "network",
+    generateText: "network",
+    generateObject: "network",
+    agent: "agent",
+    sqliteQuery: "storage",
+  });
+
+/**
+ * The class the egress gate mints for `sink`. A sink outside the inventory
+ * is classed `network`: the gate reads sink names off recorded policy inputs,
+ * and a name nobody registered is a request leaving the runtime for
+ * somewhere no rule has been scoped to.
+ */
+export const sinkClassOf = (sink: string): SinkClass =>
+  Object.hasOwn(SINK_CLASSES, sink)
+    ? SINK_CLASSES[sink as KnownSinkName]
+    : "network";
 
 type UnregisteredSink = Exclude<InitialSinkName, KnownSinkName>;
 // If the next line errors, a sink name exists that the registry has not
@@ -97,6 +169,30 @@ const LLM_SINK_UNGATED: SinkUngatedRationale = Object.freeze({
     "a boundary-scoped admission mechanism exists — a public-only ceiling paired with an exchange rule admitting the material-risk family at llm-class boundaries",
 });
 
+/**
+ * The gap the `sqliteQuery` sink carries: it releases with no ceiling, so a
+ * query's statement and parameters reach the storage provider whatever
+ * confidentiality the transaction carries.
+ *
+ * Ungated rather than public-only because the bound a sqlite read wants is
+ * not a clause list: the provider a same-space query reaches holds every
+ * replica byte of the document the result lands in, so no audience the label
+ * excludes learns anything from the parameters, while a public-only ceiling
+ * would refuse every query a pattern parameterizes out of its own space's
+ * data. What the bound turns on is WHERE the database is, and the registry
+ * admits a static clause list per sink and nothing per request.
+ * `builtins/sqlite-builtins.ts` applies it instead, refusing a query whose
+ * REQUEST carries confidentiality and whose database lies in another space
+ * before that request is staged.
+ */
+const SQLITE_QUERY_SINK_UNGATED: SinkUngatedRationale = Object.freeze({
+  reason:
+    "the bound a sqlite read wants is the database's own space rather than a clause list, and a per-sink ceiling cannot express it",
+  owner: "CFC runtime (sink governance) with the sqlite builtin",
+  retirement:
+    "the gate reads a per-request bound off the request — measured on the transaction's flow join rather than the consumed set, which counts a query's reads of its own settled result — so the residency check the builtin applies before staging moves to the ceiling",
+});
+
 /** One posture's decision about every known sink. */
 export type SinkGovernanceRegistry = Readonly<
   Record<KnownSinkName, SinkGovernance>
@@ -130,6 +226,7 @@ const SINK_UNGATED_RATIONALE_TABLE = {
   llmDialog: LLM_SINK_UNGATED,
   generateText: LLM_SINK_UNGATED,
   generateObject: LLM_SINK_UNGATED,
+  sqliteQuery: SQLITE_QUERY_SINK_UNGATED,
 } as const satisfies Partial<Record<KnownSinkName, SinkUngatedRationale>>;
 
 /** A sink the inventory records a deliberate ungated rationale for. */

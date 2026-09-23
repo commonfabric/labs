@@ -56,6 +56,121 @@ interface PendingClaudePrompt {
   cancellation: "cancelled" | "stopped" | null;
 }
 
+/** A start sent to the desktop app, waiting for the session the app makes
+ * once the person sends the prompt. */
+interface DesktopStart {
+  text: string;
+  cwd: string;
+  title: string | null;
+  sentAt: number;
+  /** The sessions this driver had listed when the start was sent; none of
+   * them is the one the app makes for it. */
+  knownSessionIds: ReadonlySet<string>;
+}
+
+/** What a desktop start needs from the machine; injectable for tests. */
+export interface ClaudeDesktopDeps {
+  /** Whether the Claude Code desktop app is installed here. */
+  installed(): Promise<boolean>;
+  /** Opens a `claude://` link in the app; false when the open failed. */
+  openUrl(url: string): Promise<boolean>;
+  /** Whether `path` is a directory here: the app opens a session only in
+   * one. */
+  isDirectory(path: string): Promise<boolean>;
+  /** The platform, as `Deno.build.os` spells it. */
+  os: string;
+  now(): number;
+}
+
+const DESKTOP_APP_PATH = "/Applications/Claude.app";
+
+/** Whether the desktop app is installed at the path macOS keeps it. */
+export const desktopAppInstalled = async (
+  path = DESKTOP_APP_PATH,
+): Promise<boolean> => {
+  try {
+    await Deno.stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/** Opens a link through the platform's opener (`open` on macOS); false when
+ * the opener is missing or refuses the link. */
+export const openWithCommand = async (
+  command: string,
+  url: string,
+): Promise<boolean> => {
+  try {
+    const { code } = await new Deno.Command(command, {
+      args: [url],
+      stdout: "null",
+      stderr: "null",
+    }).output();
+    return code === 0;
+  } catch {
+    return false;
+  }
+};
+
+/** Whether `path` names a directory; false when it is missing or a file. */
+export const directoryExists = async (path: string): Promise<boolean> => {
+  try {
+    return (await Deno.stat(path)).isDirectory;
+  } catch {
+    return false;
+  }
+};
+
+const defaultDesktopDeps: ClaudeDesktopDeps = {
+  installed: () => desktopAppInstalled(),
+  openUrl: (url) => openWithCommand("open", url),
+  isDirectory: directoryExists,
+  os: Deno.build.os,
+  now: Date.now,
+};
+
+// The app reads at most this much of a `claude://code/new` prompt.
+const DESKTOP_PROMPT_LIMIT = 14336;
+// A desktop start the person never sends is forgotten after this long.
+const DESKTOP_START_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** The shape a prompt is compared in: whitespace collapsed, bounded. */
+const promptKey = (text: string): string =>
+  text.replace(/\s+/g, " ").trim().slice(0, 200);
+
+/** The listed first prompt as a comparable prefix: the SDK lists at most
+ * 200 characters of it and marks a cut with a trailing ellipsis, which is
+ * not part of the prompt. */
+const listedPromptKey = (text: string): string =>
+  promptKey(text.replace(/\s*…$/, ""));
+
+/** How much earlier than the start's sending a session may be created and
+ * still be the one the app made for it: the app and the host share this
+ * Mac's clock, so only a small skew between their timestamps is allowed. */
+const DESKTOP_START_CLOCK_SKEW_MS = 5_000;
+
+/** Whether a listed session could be the one a desktop start produced: not
+ * one this driver had listed before the start was sent, in the start's
+ * directory, made after the start was sent, opening with the start's text
+ * (the SDK may list a prefix of the first prompt). */
+const desktopStartMatches = (
+  start: DesktopStart,
+  info: ClaudeSessionInfo,
+): boolean => {
+  if (start.knownSessionIds.has(info.sessionId)) return false;
+  if (!info.cwd || resolve(info.cwd) !== resolve(start.cwd)) return false;
+  if (
+    info.createdAt !== undefined &&
+    info.createdAt < start.sentAt - DESKTOP_START_CLOCK_SKEW_MS
+  ) {
+    return false;
+  }
+  const first = listedPromptKey(info.firstPrompt ?? "");
+  return first.length > 0 && promptKey(start.text).startsWith(first);
+};
+
 export interface ClaudeSdkAdapter {
   listSessions(
     options?: { limit?: number; offset?: number; dir?: string },
@@ -211,14 +326,25 @@ export class ClaudeAgentSdkDriver implements AgentDriver {
   readonly #sessionCwds = new Map<string, string | null>();
   readonly #sessionModes = new Map<string, string>();
   readonly #sessionModels = new Map<string, string>();
+  readonly #desktop: ClaudeDesktopDeps;
+  /** Desktop starts sent and not yet paired with a session, by the id the
+   * start named. */
+  readonly #desktopStarts = new Map<string, DesktopStart>();
+  /** Sessions the app made for a desktop start, by their own id. */
+  readonly #reconciled = new Map<
+    string,
+    { startedAs: string; title: string | null }
+  >();
   #stopped = false;
 
   constructor(
     config: AgentSourceConfig,
     sdk: ClaudeSdkAdapter = defaultSdk as unknown as ClaudeSdkAdapter,
+    desktop: ClaudeDesktopDeps = defaultDesktopDeps,
   ) {
     this.#config = config;
     this.#sdk = sdk;
+    this.#desktop = desktop;
     // Short SDK calls temporarily mutate Deno.env under a global lock. Keep a
     // stable baseline so a concurrent prompt cannot snapshot another source's
     // temporary values into its explicit per-query environment.
@@ -243,6 +369,8 @@ export class ClaudeAgentSdkDriver implements AgentDriver {
           "auto",
           ...(config.allowDangerFullAccess ? ["bypassPermissions"] : []),
         ],
+        // The desktop app's link is a macOS entry point.
+        surfaces: ["headless", ...(desktop.os === "darwin" ? ["desktop"] : [])],
         configOptions: { model: { type: "string" } },
       },
     };
@@ -287,9 +415,10 @@ export class ClaudeAgentSdkDriver implements AgentDriver {
       })
     );
     for (const info of sessions) this.#rememberSessionCwd(info);
+    this.#reconcileDesktopStarts(sessions);
     return {
       sessions: sessions.map((info) =>
-        summaryFrom(info, activeSessionIds.has(info.sessionId))
+        this.#summaryOf(info, activeSessionIds.has(info.sessionId))
       ),
       nextCursor: sessions.length === PAGE_SIZE
         ? String(offset + PAGE_SIZE)
@@ -309,8 +438,9 @@ export class ClaudeAgentSdkDriver implements AgentDriver {
     );
     if (!info) throw new Error(`Claude session not found: ${nativeSessionId}`);
     this.#rememberSessionCwd(info);
+    this.#reconcileDesktopStarts([info]);
     return {
-      summary: summaryFrom(info, connectorQueryActive),
+      summary: this.#summaryOf(info, connectorQueryActive),
       events: messages.map((message) => asRaw(message)),
       normalizedMessages: messages.map((message, rawIndex) => ({
         id: message.uuid,
@@ -437,6 +567,14 @@ export class ClaudeAgentSdkDriver implements AgentDriver {
         },
       };
     }
+    if (input.surface !== undefined && input.surface !== "headless") {
+      if (input.surface !== "desktop") {
+        return unsupported(`unsupported start surface: ${input.surface}`);
+      }
+      // Nothing runs in this process for a desktop start, so there is
+      // nothing a cancel could reach; readiness is not signalled early.
+      return await this.#startOnDesktop(nativeSessionId, input, cwd);
+    }
     const pending: PendingClaudePrompt = { cancellation: null };
     this.#pendingPrompts.set(nativeSessionId, pending);
     try {
@@ -505,6 +643,151 @@ export class ClaudeAgentSdkDriver implements AgentDriver {
         this.#pendingPrompts.delete(nativeSessionId);
       }
     }
+  }
+
+  /**
+   * A start on the desktop surface: the Claude Code desktop app opens on
+   * this Mac with the prompt ready to send in the start's directory, and no
+   * turn runs here. The app mints the session's id when the person sends,
+   * so the session the start named never exists; the start is remembered
+   * and paired with the session the app makes (`#reconcileDesktopStarts`),
+   * which then carries `startedAs` and the start's title.
+   */
+  async #startOnDesktop(
+    nativeSessionId: string,
+    input: StartInput,
+    cwd: string,
+  ): Promise<CommandExecutionResult> {
+    if (!this.source.capabilities.surfaces?.includes("desktop")) {
+      return unsupported("the desktop surface needs macOS");
+    }
+    if (input.mode !== undefined) {
+      return {
+        status: "failed",
+        error: {
+          code: "claude-desktop-mode-unsupported",
+          message:
+            "a desktop start runs under the app's own permission mode; send no mode",
+          retryable: false,
+        },
+      };
+    }
+    if (input.text.length > DESKTOP_PROMPT_LIMIT) {
+      return {
+        status: "failed",
+        error: {
+          code: "claude-desktop-prompt-too-long",
+          message:
+            `the app reads at most ${DESKTOP_PROMPT_LIMIT} characters of a prompt; this one has ${input.text.length}`,
+          retryable: false,
+        },
+      };
+    }
+    if (!await this.#desktop.isDirectory(cwd)) {
+      return {
+        status: "failed",
+        error: {
+          code: "claude-desktop-cwd-not-directory",
+          message: `${cwd} is not a directory the app can open a session in`,
+          retryable: false,
+        },
+      };
+    }
+    if (!await this.#desktop.installed()) {
+      return {
+        status: "failed",
+        error: {
+          code: "claude-desktop-not-installed",
+          message: `Claude Desktop is not installed at ${DESKTOP_APP_PATH}`,
+          retryable: true,
+        },
+      };
+    }
+    const url = new URL("claude://code/new");
+    url.searchParams.set("folder", cwd);
+    url.searchParams.set("q", input.text);
+    if (!await this.#desktop.openUrl(url.toString())) {
+      return {
+        status: "failed",
+        error: {
+          code: "claude-desktop-open-failed",
+          message: "the Claude Desktop app did not open the link",
+          retryable: true,
+        },
+      };
+    }
+    this.#desktopStarts.set(nativeSessionId, {
+      text: input.text,
+      cwd,
+      title: input.title ?? null,
+      sentAt: this.#desktop.now(),
+      knownSessionIds: new Set(this.#sessionCwds.keys()),
+    });
+    return {
+      status: "succeeded",
+      result: {
+        nativeSessionId,
+        cwd,
+        title: input.title ?? null,
+        surface: "desktop",
+      },
+      affectedSession: null,
+    };
+  }
+
+  /**
+   * Pairs a session the app made with the desktop start it was made for:
+   * the session is in the start's directory, was not listed before the
+   * start was sent, was created after it, and opens with the start's text.
+   * When several pending starts fit one session, the newest claims it if
+   * they all sent the same text (the person sent the same start again after
+   * closing the app's New session UI, or declining its folder, and the
+   * workbench may have withdrawn the earlier record); starts that sent
+   * different texts sharing the prefix the SDK lists leave the session
+   * unpaired rather than guess. A pairing made here reaches the published
+   * row, which keeps it afterwards; only a start the person has not sent
+   * yet is forgotten when the host restarts.
+   */
+  #reconcileDesktopStarts(sessions: ClaudeSessionInfo[]): void {
+    if (this.#desktopStarts.size === 0) return;
+    const now = this.#desktop.now();
+    for (const [startedAs, start] of this.#desktopStarts) {
+      if (now - start.sentAt > DESKTOP_START_WINDOW_MS) {
+        this.#desktopStarts.delete(startedAs);
+      }
+    }
+    for (const info of sessions) {
+      if (this.#reconciled.has(info.sessionId)) continue;
+      const fitting = [...this.#desktopStarts].filter(([, start]) =>
+        desktopStartMatches(start, info)
+      );
+      if (fitting.length === 0) continue;
+      const [, first] = fitting[0];
+      if (fitting.some(([, start]) => start.text !== first.text)) continue;
+      const [startedAs, start] = fitting.reduce((newest, candidate) =>
+        candidate[1].sentAt > newest[1].sentAt ? candidate : newest
+      );
+      this.#reconciled.set(info.sessionId, {
+        startedAs,
+        title: start.title,
+      });
+      this.#desktopStarts.delete(startedAs);
+    }
+  }
+
+  /** The summary of a listed session, carrying the start it was made for
+   * and that start's title unless the person has titled it since. */
+  #summaryOf(info: ClaudeSessionInfo, active: boolean): SessionSummary {
+    const summary = summaryFrom(info, active);
+    const paired = this.#reconciled.get(info.sessionId);
+    if (!paired) return summary;
+    return {
+      ...summary,
+      startedAs: paired.startedAs,
+      ...(paired.title !== null && !info.customTitle
+        ? { title: paired.title }
+        : {}),
+    };
   }
 
   #refuseQuery(nativeSessionId: string): CommandExecutionResult | undefined {

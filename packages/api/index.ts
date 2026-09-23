@@ -88,6 +88,9 @@ export declare const TILE_UI: "$TILE_UI";
 export declare const CHIP_UI: "$CHIP_UI";
 export declare const FS: "$FS";
 export declare const TESTS: "$TESTS";
+// The single field under which a pattern offers named groups of facts and
+// streams a host may draw with its own toolkit. [UI] remains the floor.
+export declare const VIEWS: "$VIEWS";
 
 /**
  * The size/representation spectrum a piece can be rendered at (CT-1321):
@@ -2294,6 +2297,59 @@ export interface BuiltInGenerateTextState {
   groundingSources?: readonly BuiltInLLMGroundingSource[];
 }
 
+/**
+ * The request an `agent()` node submits: a task, the cells it may read, and
+ * the schema its answer takes. A runner the requester registered executes it
+ * as the requester; the builtin's cell follows the run's record.
+ */
+export interface BuiltInAgentParams {
+  /**
+   * What the run is for, as context rather than a command. Labeled data
+   * interpolated into this text becomes a value the request carries and the
+   * sink gate measures; pass the cell through `inputs` instead.
+   */
+  task: string;
+
+  /**
+   * The cells the run may read, by the names the model sees them under. Each
+   * reaches the request as a link, never as its value, so an entry has to be
+   * a cell.
+   */
+  inputs: Record<string, AnyCell<any> | AnyBrandedCell<any> | OpaqueCell<any>>;
+
+  /** The schema the run's structured result is validated against. */
+  resultSchema: JSONSchema;
+
+  /**
+   * Confidentiality clauses bounding what the run may observe. Absent, the
+   * run observes what the requester may see; declared, it can only tighten.
+   */
+  maxConfidentiality?: readonly JSONValue[];
+
+  /**
+   * Names of the tools the run may use, from the set the deployment
+   * publishes. A name the requester's registered runner does not offer fails
+   * the request before it is staged.
+   */
+  tools?: readonly string[];
+}
+
+/**
+ * What an `agent()` node holds. `result` is a link to the document the run's
+ * harness wrote; `run` is a link to the run's record, which a pattern reads
+ * for progress, outcome, and usage; `host` is the origin of the toolshed
+ * serving the record's space, carried beside `run` because a link resolves a
+ * space and not the host that serves it.
+ */
+export interface BuiltInAgentState<T> {
+  pending: boolean;
+  result?: T;
+  error?: string;
+  requestHash?: string;
+  run?: Record<string, any>;
+  host?: string;
+}
+
 export interface BuiltInCompileAndRunParams<T> {
   files: Array<{ name: string; contents: string }>;
   main: string;
@@ -2338,11 +2394,27 @@ export interface BuiltInCompileAndRunState<T> {
  * The reserved output fields the runtime reads off a pattern's result, each
  * typed so a value of the wrong shape under a reserved key is a compile error.
  * `[NAME]` and `[TYPE]` label the piece; `[UI]`, `[TILE_UI]` and `[CHIP_UI]`
- * are its renderings; `[FS]` is its filesystem projection. Those are each
+ * are its renderings; `[FS]` is its filesystem projection; `[VIEWS]` holds the
+ * named groups it offers a host to draw natively. Those are each
  * `FactoryInput`-wrapped, so a reactive value (a `computed()`, a cell) is
  * accepted alongside a plain one. `[TESTS]` is the exception: it holds a
  * `TestStep[]` written out at build time, not a reactive value, so it is not
  * wrapped.
+ *
+ * `[VIEWS]` is typed as an object and no further. What a group holds is the
+ * pattern's to declare and a consumer's to demand through a schema, so the
+ * framework types the field that carries them rather than their members — a
+ * value that is not a group map at all is the error worth catching here.
+ *
+ * `object` is the looser of two live choices, and what it buys is the
+ * `interface` idiom. It rejects a primitive and nothing else, so an array or a
+ * view node under this key compiles — pinned in `reserved-output-types.test.ts`
+ * so that narrowing the field later is a deliberate act rather than a silent
+ * one. `Record<string, unknown>` would reject both, and would also reject a
+ * group map declared as an `interface`, which has no implicit index signature.
+ * A `type` alias does satisfy it, so the stricter field is available for one
+ * keyword of author cost, at the price of a compile error on the declaration
+ * form a group is most naturally written in.
  */
 type ReservedOutput = {
   [NAME]?: FactoryInput<string>;
@@ -2352,6 +2424,7 @@ type ReservedOutput = {
   [CHIP_UI]?: FactoryInput<VNode> | JSXElement;
   [FS]?: FactoryInput<FsProjection>;
   [TESTS]?: TestStep[];
+  [VIEWS]?: FactoryInput<object>;
 };
 
 /**
@@ -2747,6 +2820,10 @@ export type GenerateTextFunction = (
   params: FactoryInput<BuiltInGenerateTextParams>,
 ) => Reactive<BuiltInGenerateTextState>;
 
+export type AgentFunction = <T = any>(
+  params: FactoryInput<BuiltInAgentParams>,
+) => Reactive<BuiltInAgentState<T>>;
+
 export type FetchOptions = {
   body?: JSONValue;
   headers?: Record<string, string>;
@@ -2841,23 +2918,37 @@ export type FetchJsonUncheckedFunction = (
  * Resolves with no `cell` when the URL addresses no cell — most URLs are web
  * pages, and being told no is an answer rather than a failure. `hosts` names
  * the hosts whose page URLs address cells; a page URL from anywhere else is a
- * link to a web page.
+ * link to a web page. `spaceHost` supplies the toolshed origin for a URL that
+ * explicitly names a space, so a cross-toolshed cell resolves there.
  */
-export type CellFromUrlFunction = (
-  params: FactoryInput<{
-    url: string;
-    hosts?: string[];
-  }>,
-) => Reactive<{
-  pending: boolean;
+export type CellFromUrlFunction = {
+  /** Resolves a writable handle; storage authorization still governs writes. */
+  <T = unknown>(
+    params: FactoryInput<{
+      url: string;
+      hosts?: string[];
+      spaceHost?: string;
+      writable: true;
+    }>,
+  ): Reactive<{ pending: boolean; cell?: Writable<T> }>;
 
-  /**
-   * The cell the URL named, once resolved, and absent when it named none. Its
-   * value is unconstrained: a URL addresses any cell, and resolution neither
-   * requires a piece nor supplies one's `[NAME]`.
-   */
-  cell?: ReadonlyCell<unknown>;
-}>;
+  (
+    params: FactoryInput<{
+      url: string;
+      hosts?: string[];
+      spaceHost?: string;
+    }>,
+  ): Reactive<{
+    pending: boolean;
+
+    /**
+     * The cell the URL named, once resolved, and absent when it named none. Its
+     * value is unconstrained: a URL addresses any cell, and resolution neither
+     * requires a piece nor supplies one's `[NAME]`.
+     */
+    cell?: ReadonlyCell<unknown>;
+  }>;
+};
 
 export type FetchProgramFunction = (
   params: FactoryInput<{ url: string }>,
@@ -2980,11 +3071,11 @@ export interface ISqliteQueryable {
       readClearance?: boolean;
 
       /** Scope of the result cell. A `session`-scoped result is one each
-       *  session reads alone, which a runtime-wide read ceiling
-       *  (`cfcReadMaxConfidentiality`) requires; absent, the result takes the
-       *  narrowest of the db's scope, the pattern's output scope, and — when
-       *  `readClearance` is set — `user`, since a cleared result is one
-       *  reader's view. */
+       *  session reads alone and filters under its runtime read ceiling. Shared
+       *  results retain their labels for cell-read enforcement. Absent, the
+       *  result takes the narrowest of the db's scope, the pattern's output
+       *  scope, and — when `readClearance` is set — `user`, since a cleared
+       *  result is one reader's view. */
       scope?: CellScope;
     },
   ): Reactive<
@@ -3074,9 +3165,9 @@ export type SqliteQueryFunction = {
   >;
 
   /** Bind the query's result cell to a scope: a `session`-scoped result is
-   *  one each session reads alone, which a runtime-wide read ceiling
-   *  (`cfcReadMaxConfidentiality`) requires. The `scope` option of
-   *  `db.query` is the same binding. */
+   *  one each session reads alone and filters under its runtime read ceiling.
+   *  Shared results retain their labels for cell-read enforcement. The `scope`
+   *  option of `db.query` is the same binding. */
   asScope(scope: CellScope): SqliteQueryFunction;
 };
 
@@ -3517,6 +3608,34 @@ export type ToIndentedDebugStringFunction = (
   value: unknown,
   options?: DebugValueOptions,
 ) => string;
+/**
+ * Composes a diagnostic message. A substitution is converted the way a
+ * template literal converts one, except that the conversion never throws, and
+ * except where a _directive_ comes right before it: a dollar sign and one or
+ * more comma-separated words, as in `$quote,long${value}`. The directive is
+ * removed from the text, and the value after it gets a debug rendering, cut to
+ * the size its size word names and quoted where it holds `quote`.
+ *
+ * - With no `indent`, the rendering is that of `toCompactDebugString()`, cut
+ *   to 50 characters, or with `long` to 500, or with `xlong` to 5000; `short`
+ *   names the default. With `quote` it is a Markdown code span.
+ * - With `indent`, the rendering is that of `toIndentedDebugString()`, cut to
+ *   5 lines, or with `long` to 50, or with `xlong` to 500. With `quote` it is
+ *   a Markdown fenced block on lines of its own.
+ *
+ * Either way the quoting survives a backtick in the value, which a
+ * hand-written pair of backticks does not. A backslash before the dollar sign,
+ * as in `\$quote${value}`, makes the text literal and the substitution an
+ * ordinary one. A directive holding any other word stays in the message as
+ * text, where the misspelling can be seen, and its value gets the default
+ * rendering.
+ *
+ * As with the renderers it calls, how a value renders is not a contract.
+ */
+export type DebugStrFunction = (
+  strings: TemplateStringsArray,
+  ...values: readonly unknown[]
+) => string;
 
 /**
  * Compare two cells or values for equality after resolving, i.e. after
@@ -3576,6 +3695,7 @@ export declare const llm: LLMFunction;
 export declare const llmDialog: LLMDialogFunction;
 export declare const generateObject: GenerateObjectFunction;
 export declare const generateText: GenerateTextFunction;
+export declare const agent: AgentFunction;
 export declare const cellFromUrl: CellFromUrlFunction;
 export declare const fetchBinary: FetchBinaryFunction;
 export declare const fetchText: FetchTextFunction;
@@ -3617,6 +3737,7 @@ export function getPatternEnvironment(): PatternEnvironment {
 }
 export declare const toCompactDebugString: ToCompactDebugStringFunction;
 export declare const toIndentedDebugString: ToIndentedDebugStringFunction;
+export declare const debugStr: DebugStrFunction;
 
 export interface UiActionProps {
   readonly as?: string;

@@ -138,15 +138,34 @@ readiness.
   tool and allowlisted skill scripts, bound to an explicit local CDP lease the
   harness attaches itself, and the `run_pattern` tool, which compiles
   model-authored pattern source and runs it against the configured Fabric space
-  over a lazy authorized session. The Fabric identity remains outside Docker,
-  the session is constrained to one configured space, and the separate
-  `assign_slug` tool registers a piece the run holds a handle to in that space's
-  piece list under a caller-chosen slug. Neither surface admits arbitrary host
-  commands, and both fabric-session tools are present only when a fabric session
-  is configured. Dedicated Loom tools additionally invoke three fixed command
-  ids through an operator-configured host CLI, using argv and stdin with pinned
-  routing and attribution. This is an authority-only host boundary, not a new
-  flow-aware store commit gate; see [LOOM_AUTHORING.md](LOOM_AUTHORING.md).
+  over a lazy authorized session. The Fabric identity remains outside Docker.
+  The session runs pieces in the configured space and admits input references
+  from that space or foreign DIDs the operator lists with their hosts. The
+  separate `assign_slug` tool registers a piece the run holds a handle to in
+  that space's piece list under a caller-chosen slug. Neither surface admits
+  arbitrary host commands, and both fabric-session tools are present only when a
+  fabric session is configured. Dedicated Loom tools additionally invoke three
+  fixed command ids through an operator-configured host CLI, using argv and
+  stdin with pinned routing and attribution. This is an authority-only host
+  boundary, not a new flow-aware store commit gate; see
+  [LOOM_AUTHORING.md](LOOM_AUTHORING.md). The agent result writer
+  (`src/result-writer.ts`) is a third trusted host path and not a model tool: a
+  host caller invokes it after a run reaches its structured result, and it
+  writes that result into the same configured space over the same session. Its
+  bounded authority is the session's (AH-TOOL-7): every handle the result names
+  must be one the run's table holds, a cell handle becomes a link and never a
+  copy, a non-cell referent becomes a document under the label its tool reported
+  when the result cites it, and an uncited referent passes the same write
+  admission in an isolated aborted transaction and contributes through an opaque
+  runtime CONTENT-observation receipt. The cells the run observed and the cited
+  referents are read through the writing transaction so the runner derives the
+  inline text's label without making uncited content durable. The write is
+  attributed to the `agent` builtin so the result carries the runtime-minted
+  `LlmDerived` family, and the run's observation ceiling is declared as the
+  result document's store policy so the runner's commit boundary — not the
+  writer — decides whether the derived join fits. A refusal reaches the caller
+  as a typed failure carrying the refusal code and the boundary's structured
+  detail, with no label atom in its message.
 - Network: explicit in configuration but still provisional. Sandboxed `bash`
   applies a direct-`curl` destination guard; `web_fetch` and web child profiles
   have their own bounded request policies.
@@ -169,43 +188,63 @@ readiness.
 Current selectable parent tools are `bash`, `read_file`, `view_image`,
 `web_fetch`, `read_skill_resource`, `run_skill_script`, `edit_file`,
 `write_file`, `delegate_task`, `describe_handle`, `run_pattern`, `assign_slug`,
-`search_patterns`, `record_feedback`, `search_skills`, `acquire_skill`, and
-`research`, `loom_compose`, `loom_inspect`, and `loom_authoring_context`.
-Individual runs receive only their configured subset; `web_fetch` and
-`run_skill_script` are not in the ordinary default surface. Optional tools are
-gated on the backing a run can supply — a fabric session for `run_pattern`,
-`assign_slug`, and `acquire_skill`, the pattern index for `search_patterns` and
-`record_feedback`, configured skills.sh discovery for `search_skills`, and a
-resolved documentation corpus or pattern index for `research`, and explicit host
-Loom configuration for the three Loom tools — and a tool the run cannot back is
-absent from the surface rather than present and failing, so an explicit
-allowlist naming it does not conjure it. `run_pattern` additionally requires the
-three `--fabric-*` session flags. `browser` exists only as a built-in used by
-the authorized browser child profile and cannot be selected as a parent CLI
-tool; it drives the host `agent-browser` CLI through a typed action vocabulary,
-with the Browser Access CDP endpoint attached by the harness rather than written
-by the model.
+`search_patterns`, `record_feedback`, `search_skills`, `acquire_skill`,
+`research`, `loom_compose`, `loom_inspect`, `loom_authoring_context`, and the
+eight read-only Loom tools `loom_search`, `loom_page_discover`,
+`loom_page_inspect`, `loom_page_read`, `loom_people`, `loom_calendar_list`,
+`loom_context`, and `loom_profile`, plus `submit_result`. Individual runs
+receive only their configured subset; `web_fetch` and `run_skill_script` are not
+in the ordinary default surface. Optional tools are gated on the backing a run
+can supply — a fabric session for `run_pattern`, `assign_slug`, and
+`acquire_skill`, the pattern index for `search_patterns` and `record_feedback`,
+configured skills.sh discovery for `search_skills`, and a resolved documentation
+corpus or pattern index for `research`, explicit host Loom authoring
+configuration for the three authoring tools, explicit host Loom retrieval
+configuration for the eight retrieval tools, and a configured structured-result
+schema for `submit_result` — and a tool the run cannot back is absent from the
+surface rather than present and failing, so an explicit allowlist naming it does
+not conjure it. `run_pattern` additionally requires the three `--fabric-*`
+session flags. `browser` exists only as a built-in used by the authorized
+browser child profile and cannot be selected as a parent CLI tool; it drives the
+host `agent-browser` CLI through a typed action vocabulary, with the Browser
+Access CDP endpoint attached by the harness rather than written by the model.
+
+`submit_result` is how a run returns its structured result without a sandbox
+write. It takes the value as its input, validates it with the structured-result
+validation the file-based path uses, and the host writes it to the configured
+structured-result file, so the post-run validation, the batch metadata, and the
+agent result writer read one place. A refused value returns a typed
+`invalid_result` error and the model submits again; a later valid submission
+replaces an earlier one. A handle token in the value stays a token, because the
+token is what the result writer resolves. The tool is admitted at every
+enforcement mode and under every prompt-slot role, with the policy reason
+`structured_result_return`: its authority is the host's configuration of a
+schema (AH-TOOL-4's explicit grant), it is absent from a run configured with
+none, and it reaches nothing but that run's own result file. A subagent run is
+not offered it. The model writing the file itself remains available to a run
+that holds a tool able to.
 
 `describe_handle` reports the referent's structural schema and path segments,
 never its data. It prefers the session Fabric's declared shape when available
 and otherwise uses a harness-captured schema, recursively removes value-bearing
 and descriptive schema fields, bounds disclosed property names, and scrubs bare
 Fabric identifiers. A referent that declares no schema and holds a SQLite
-database handle reports that database's tables and its columns' labels through
-the same reduction, which is the one value the tool reads. An unknown or
-shapeless token remains an ordinary bounded tool result rather than a
-dereference path.
+database handle reports that database's tables, and the distinct labels its
+columns carry, through the same reduction, which is the one value the tool
+reads. An unknown or shapeless token remains an ordinary bounded tool result
+rather than a dereference path.
 
 `run_pattern` accepts at most 256 KiB of inline source. It resolves whole-string
-LLM-friendly link inputs to live cells only within the configured space and
-checks declared inputs, opaque-link containment, and argument schemas before
-piece creation. Success returns the result reference and an optional
-schema-sanitized value while raw evidence stays in artifacts; the created piece
-stays out of the space's piece list. Naming is the separate `assign_slug` tool:
-it takes a handle token referring to a piece plus a slug, registers the piece in
-the list, points the slug at it, and returns the slug and, when possible, an
-openable URL. Cancellation of `run_pattern` stops the created piece. The session
-separately records its Fabric CFC enforcement and flow-label posture.
+LLM-friendly link inputs to live cells in the configured space and foreign
+spaces whose DID and host the operator admits at startup. It checks declared
+inputs, opaque-link containment, and argument schemas before piece creation.
+Success returns the result reference and an optional schema-sanitized value
+while raw evidence stays in artifacts; the created piece stays out of the
+space's piece list. Naming is the separate `assign_slug` tool: it takes a handle
+token referring to a piece plus a slug, registers the piece in the list, points
+the slug at it, and returns the slug and, when possible, an openable URL.
+Cancellation of `run_pattern` stops the created piece. The session separately
+records its Fabric CFC enforcement and flow-label posture.
 
 Current child profiles are `default`, `browser`, `web_fetch`, `web_search`, and
 `pattern-author`. Each profile supplies an exact tool/network/skill policy.
@@ -264,6 +303,27 @@ host is for local single-user Loom. A hosted multi-user adapter must inject an
 owner-bound credential resolver. Resume is not a general recovery system for an
 in-flight external side effect.
 
+## Delegation observation ceilings
+
+A child shares the parent's fabric session, carries its resolved observation
+ceiling, and records that inheritance in its delegation manifest. Resolving an
+inherited cell handle measures its stored label through the runtime read guard
+before returning payload. Absent a declared ceiling, the child inherits the
+owner's view. AUD-23 compares the parent and child runtime records and reports
+missing or inconsistent inheritance; it is a regression check, not a
+known-defect registration.
+
+## Runtime observation ceilings
+
+The runtime measures cell and transaction payload reads against its own ceiling
+met with the session ceiling carried by a served run. Shared query results
+retain one labeled materialization under the query's declared contract. Their
+array shape carries the join of all row labels, including skipped rows; a reader
+outside that label cannot observe payloads, membership, or counts.
+Session-scoped queries apply the runtime ceiling during row filtering. Ordinary
+cells require concrete clauses because database-owner and current-principal
+placeholders resolve only at the SQLite query boundary.
+
 ## Known deviations and retirement conditions
 
 1. **Dependency readiness.** The capability probe does not establish health for
@@ -304,15 +364,17 @@ in-flight external side effect.
    bound, enumerate, retain, and delete tool-created resources, and cancellation
    fully settles both registry membership and assigned names.
 6. **Side effects gated on authority rather than on flow.** Every side-effecting
-   tool except `run_pattern` is admitted by a check on the descriptor's static
-   effect class and on whether the run carries a direct-command binding. The
-   decision is recorded before the tool runs, so it is not a commit point, and
-   it consults no sink and no label. `run_pattern` is the exception and shows
-   the shape the rest want: a named sink, an explicit ceiling, and the runner's
-   commit boundary deciding. Owner: `cf-harness` and the CFC runtime.
-   Retirement: each side-effecting tool's effect is declared as a named sink
-   whose ceiling the runner's boundary commit evaluates, so that a refusal comes
-   back as structured evidence rather than as an allow recorded in advance.
+   tool except `run_pattern` — and `submit_result`, which has no effect outside
+   the run's own record and is admitted by its configuration — is admitted by a
+   check on the descriptor's static effect class and on whether the run carries
+   a direct-command binding. The decision is recorded before the tool runs, so
+   it is not a commit point, and it consults no sink and no label. `run_pattern`
+   is the exception and shows the shape the rest want: a named sink, an explicit
+   ceiling, and the runner's commit boundary deciding. Owner: `cf-harness` and
+   the CFC runtime. Retirement: each side-effecting tool's effect is declared as
+   a named sink whose ceiling the runner's boundary commit evaluates, so that a
+   refusal comes back as structured evidence rather than as an allow recorded in
+   advance.
 7. **Direct-command bindings not bound to a subject or a submitted value.** Both
    minting surfaces produce a binding from constants: the console's is a
    module-level value reused for every turn of every session, and the CLI's
@@ -322,41 +384,34 @@ in-flight external side effect.
    `subject`, `eventId`, `valueDigest`, `slotDigest`, `snapshotDigest`, and
    `targetPath`. Owner: `cf-harness`. Retirement: each surface mints per
    submission, over the submitted value's digest and an authenticated subject.
-8. **No confidentiality ceiling on a delegation.** A child profile attenuates
-   capabilities and not observation, so a child can read anything the
-   capabilities it was given can reach. Owner: `cf-harness` and the CFC runtime.
-   Retirement: a delegation carries an observation ceiling the runner's access
-   check consumes, and handle resolution into a child input is rejected when it
-   exceeds that ceiling.
 
-9. **The run's read ceiling gates session-scoped query results only.** The
-   ceiling a run carries — `--max-confidentiality`, or `cfc.maxConfidentiality`
-   in the run manifest, met into the fabric session's runtime as
-   `cfcReadMaxConfidentiality` — is applied by the runner's `db.query` builtin
-   at the query, not at the cell: a query whose result is session-scoped
-   (`PerSession<>`, `scope: "session"`, `.asScope("session")`, or a
-   session-scoped db) reads under the meet of its own ceiling and the run's; a
-   query with a space- or user-scoped result is refused before it is staged,
-   because that result is one cell every runtime on the space resolves and the
-   run's runtime cannot narrow it for itself. The refusal reaches the runtime's
-   error handlers, so an authored pattern that declares no scope fails on its
-   first query rather than reading under a wider view. What the option does not
-   reach is a shared cell another runtime already filled: that is protected by
-   the cell's own label under the commit-boundary gates, not by the run's
-   ceiling. Owner: `cf-harness` and the CFC runtime. Retirement: the ceiling is
-   carried into the runtime's cell read path (a labeled cell that does not fit
-   reads as withheld), and the served-execution arm carries a per-session
-   ceiling to the serving runtime, at which point the scope requirement and the
-   OFF-arm-only limit both retire.
+<!-- Deviation identifiers match the design and audit references. -->
+
+10. **Loom row labels assumed, not read.** A row a Loom retrieval tool returns
+    with no `ifc` field is given the label of the query that produced it — the
+    confidentiality of the tool call's input label, which is the run's
+    accumulated model-context label — and that assumed label is what is measured
+    against the run's ceiling, recorded as the observation, and available to
+    stamp on a document when the result cites the row. The pinned loom emits no
+    `ifc` on any retrieval payload, so this is the path every real row takes.
+    The assumption can under-label a row: what it holds is decided by its store,
+    not by who asked. A row whose `ifc` is present and unreadable is still
+    refused, and loom's own facet filtering still runs first on the host. The
+    rule is `labelForUnlabeledLoomRow()` in `src/tools/loom-retrieval.ts`; see
+    [Read-only Loom retrieval](LOOM_RETRIEVAL.md). Owner: `cf-harness` and loom.
+    Retirement: loom returns a label per row and the function reads it.
 
 ## Test evidence
 
 - `deno task test` — package contract suite.
 - Handle-table, prompt-loop-handle, cross-agent-handle, `describe_handle`,
   schema-shape, image-attachment, compaction, provenance, provider/auth,
-  `run_pattern`, Fabric-session-CFC, and local-Loom-host suites — model
-  boundary, observation integrity, context continuity, request attribution,
-  external side effects, and exact resume binding.
+  `run_pattern`, agent-result-writer, Fabric-session-CFC, and local-Loom-host
+  suites — model boundary, observation integrity, context continuity, request
+  attribution, external side effects, and exact resume binding. The
+  result-writer suite runs over an in-memory runtime at the fabric session's
+  enforcement rung and reads every label it asserts back through the runtime's
+  own label view.
 - Loom `tests/harness/` and dispatch tests — capability skew, commands,
   cancellation, mounts, structured results, interactive translation, and run
   review.

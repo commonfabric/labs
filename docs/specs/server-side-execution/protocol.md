@@ -194,7 +194,22 @@ Stated normatively, with anchors. Today every transaction
 comes from ONE client, so identity rides the ENVELOPE: the session
 carries the user principal and session id — established once, at
 session open, never sent per commit — and scoped writes inside the
-transaction name only the scope KIND (`scope: "user"`). It is the
+transaction name only the scope KIND (`scope: "user"`). The session
+carries one more thing established at open: its READ CEILING
+(`SessionDescriptor.readCeiling`, signed into the `session.open`
+invocation; memory-v2 04-protocol.md §4.1.2), the confidentiality
+bound every `db.query` served AS that session reads under — the
+client runtime's `cfcReadMaxConfidentiality`, which under this flag
+cannot bound queries where it sits because the serving runtime
+performs them. The memory server records it on the session (fresh
+per open; a resume re-declares it) and a server-assigned ceiling
+lands in the same record; the SpaceServer stamps it onto every run
+served as the session (serving-loop.md §3c) and the served query
+reads under it (sqlite-builtin 06-cfc.md, "Runtime read ceiling").
+A client with a ceiling REQUIRES the `sessionReadCeiling` protocol
+flag of the server it opens against: an older server would accept
+the descriptor and serve every query unbounded, so the client refuses
+to open the session. It is the
 memory server that maps kind → concrete `scope_key` at admission,
 derived from the session that had the commit (the shared
 `resolveScopeKey` in `packages/memory/v2.ts` — the wire-shape module

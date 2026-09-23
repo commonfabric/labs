@@ -1,7 +1,7 @@
 import { isObjectOrArray, isPlainObject } from "@commonfabric/utils/types";
 import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
-import { codecOf } from "@/codec-common/codecOf.ts";
+import { codecOf } from "@/codec-common";
 import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
 import {
   type FabricArray,
@@ -11,7 +11,7 @@ import {
   type FabricValue,
 } from "@/interface.ts";
 import { isFabricSpecialObject } from "@/types";
-import { toShortQuotedDebugString } from "@/value-debug";
+import { debugStr } from "@/value-debug";
 import { cachedHashStringOf, hashStringOf } from "@/value-hash.ts";
 
 /**
@@ -185,7 +185,7 @@ function objectSubtypeOf(
     return "plain";
   } else {
     throw new Error(
-      `Cannot compare value ${toShortQuotedDebugString(value)}`,
+      debugStr`Cannot compare value $quote${value}`,
     );
   }
 }

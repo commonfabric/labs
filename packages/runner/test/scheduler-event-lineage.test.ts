@@ -225,13 +225,13 @@ describe("scheduler event lineage", () => {
     const streamA = runtime.getCell<unknown>(
       space,
       "lineage duplication stream a",
-      undefined,
+      { asCell: ["stream"] },
       tx,
     );
     const streamB = runtime.getCell<unknown>(
       space,
       "lineage duplication stream b",
-      undefined,
+      { asCell: ["stream"] },
       tx,
     );
     const originWrites = runtime.getCell<number>(
@@ -246,8 +246,6 @@ describe("scheduler event lineage", () => {
       undefined,
       tx,
     );
-    streamA.set({ $stream: true });
-    streamB.set({ $stream: true });
     originWrites.set(0);
     payloads.set([]);
     await tx.commit();
@@ -300,13 +298,13 @@ describe("scheduler event lineage", () => {
     const streamA = runtime.getCell<unknown>(
       space,
       "lineage permanent stream a",
-      undefined,
+      { asCell: ["stream"] },
       tx,
     );
     const streamB = runtime.getCell<unknown>(
       space,
       "lineage permanent stream b",
-      undefined,
+      { asCell: ["stream"] },
       tx,
     );
     const originWrites = runtime.getCell<number>(
@@ -321,8 +319,6 @@ describe("scheduler event lineage", () => {
       undefined,
       tx,
     );
-    streamA.set({ $stream: true });
-    streamB.set({ $stream: true });
     originWrites.set(0);
     payloads.set([]);
     await tx.commit();
@@ -378,13 +374,13 @@ describe("scheduler event lineage", () => {
     const streamA = runtime.getCell<unknown>(
       space,
       "lineage presync race stream a",
-      undefined,
+      { asCell: ["stream"] },
       tx,
     );
     const streamB = runtime.getCell<unknown>(
       space,
       "lineage presync race stream b",
-      undefined,
+      { asCell: ["stream"] },
       tx,
     );
     const originWrites = runtime.getCell<number>(
@@ -393,8 +389,6 @@ describe("scheduler event lineage", () => {
       undefined,
       tx,
     );
-    streamA.set({ $stream: true });
-    streamB.set({ $stream: true });
     originWrites.set(0);
     await tx.commit();
     tx = runtime.edit();
@@ -468,13 +462,13 @@ describe("scheduler event lineage", () => {
     const streamA = runtime.getCell<unknown>(
       space,
       "lineage retry stream a",
-      undefined,
+      { asCell: ["stream"] },
       tx,
     );
     const streamB = runtime.getCell<unknown>(
       space,
       "lineage retry stream b",
-      undefined,
+      { asCell: ["stream"] },
       tx,
     );
     const originWrites = runtime.getCell<number>(
@@ -489,8 +483,6 @@ describe("scheduler event lineage", () => {
       undefined,
       tx,
     );
-    streamA.set({ $stream: true });
-    streamB.set({ $stream: true });
     originWrites.set(0);
     payloads.set([]);
     await tx.commit();
@@ -562,7 +554,7 @@ describe("scheduler event lineage", () => {
     const stream = runtime.getCell<unknown>(
       space,
       "lineage read-only origin stream",
-      undefined,
+      { asCell: ["stream"] },
       tx,
     );
     const payloads = runtime.getCell<unknown[]>(
@@ -571,7 +563,6 @@ describe("scheduler event lineage", () => {
       undefined,
       tx,
     );
-    stream.set({ $stream: true });
     payloads.set([]);
     await tx.commit();
     tx = runtime.edit();
@@ -610,13 +601,13 @@ describe("scheduler event lineage", () => {
     const streamA = runtime.getCell<unknown>(
       space,
       "lineage cross confirm stream a",
-      undefined,
+      { asCell: ["stream"] },
       tx,
     );
     const streamB = runtime.getCell<unknown>(
       secondSpace,
       "lineage cross confirm stream b",
-      undefined,
+      { asCell: ["stream"] },
       tx,
     );
     const originWrites = runtime.getCell<number>(
@@ -631,11 +622,9 @@ describe("scheduler event lineage", () => {
       undefined,
       tx,
     );
-    streamA.set({ $stream: true });
     originWrites.set(0);
     await tx.commit();
     tx = runtime.edit();
-    streamB.withTx(tx).set({ $stream: true });
     payloads.withTx(tx).set([]);
     await tx.commit();
     tx = runtime.edit();
@@ -694,13 +683,13 @@ describe("scheduler event lineage", () => {
     const streamA = runtime.getCell<unknown>(
       space,
       "lineage cross fail stream a",
-      undefined,
+      { asCell: ["stream"] },
       tx,
     );
     const streamB = runtime.getCell<unknown>(
       secondSpace,
       "lineage cross fail stream b",
-      undefined,
+      { asCell: ["stream"] },
       tx,
     );
     const originWrites = runtime.getCell<number>(
@@ -715,11 +704,9 @@ describe("scheduler event lineage", () => {
       undefined,
       tx,
     );
-    streamA.set({ $stream: true });
     originWrites.set(0);
     await tx.commit();
     tx = runtime.edit();
-    streamB.withTx(tx).set({ $stream: true });
     payloads.withTx(tx).set([]);
     await tx.commit();
     tx = runtime.edit();
@@ -778,7 +765,7 @@ describe("scheduler event lineage", () => {
     const stream = runtime.getCell<unknown>(
       space,
       "lineage committed-origin stream",
-      undefined,
+      { asCell: ["stream"] },
       tx,
     );
     const payloads = runtime.getCell<unknown[]>(
@@ -787,7 +774,6 @@ describe("scheduler event lineage", () => {
       undefined,
       tx,
     );
-    stream.set({ $stream: true });
     payloads.set([]);
     await tx.commit();
 
@@ -817,7 +803,7 @@ describe("scheduler event lineage", () => {
     const stream = runtime.getCell<unknown>(
       space,
       "lineage failed-origin stream",
-      undefined,
+      { asCell: ["stream"] },
       tx,
     );
     const payloads = runtime.getCell<unknown[]>(
@@ -826,7 +812,6 @@ describe("scheduler event lineage", () => {
       undefined,
       tx,
     );
-    stream.set({ $stream: true });
     payloads.set([]);
     await tx.commit();
 

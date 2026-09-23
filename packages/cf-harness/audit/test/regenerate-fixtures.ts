@@ -289,7 +289,7 @@ export const regenerateFixtures = async (
     prompt: "Read the notes and summarize them.",
     promptSlotBinding: OPERATOR_PROMPT_SLOT,
     contextMessages: [
-      `Input cells for this run, named by the operator:\n- ${token} — the operator's notes`,
+      `Input cells for this run:\n- ${token} — the operator's notes`,
     ],
   });
 

@@ -7,8 +7,12 @@
  *       --allow-env --no-check bench/hashing.bench.ts
  */
 
-import { hashOf } from "@/value-hash.ts";
-import { deepFreeze } from "@/deep-freeze.ts";
+import {
+  deepFreeze,
+  type FabricPlainObject,
+  type FabricValue,
+  hashOf,
+} from "@";
 
 //
 // Pre-generated test data
@@ -22,8 +26,8 @@ const smallObject = {
   tag: null,
 };
 
-function makeMediumObject() {
-  const obj: Record<string, unknown> = {};
+function makeMediumObject(): FabricPlainObject {
+  const obj: Record<string, FabricValue> = {};
   for (let i = 0; i < 15; i++) {
     obj[`key_${i}`] = {
       value: `value_${i}`,
@@ -38,11 +42,11 @@ const mediumObject = makeMediumObject();
 function makeLargeNestedTree(
   depth: number,
   breadth: number,
-): Record<string, unknown> {
+): FabricPlainObject {
   if (depth === 0) {
     return { leaf: true, value: 42.5, label: "leaf-node" };
   }
-  const children: Record<string, unknown> = {};
+  const children: Record<string, FabricValue> = {};
   for (let i = 0; i < breadth; i++) {
     children[`child_${i}`] = makeLargeNestedTree(depth - 1, breadth);
   }

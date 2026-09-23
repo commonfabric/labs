@@ -14,7 +14,7 @@
 
 import type { BenchWorkerAck } from "@commonfabric/test-support/bench-worker";
 
-import type { RealmEncodedValue } from "@/codec-realm/interface.ts";
+import type { RealmEncodedValue } from "@/codec-realm";
 import { fabricFromRealmValue } from "@/codecs.ts";
 
 /**

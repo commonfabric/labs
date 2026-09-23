@@ -42,6 +42,7 @@ import {
 } from "../src/link-utils.ts";
 import { findAllWriteRedirectCells } from "../src/pattern-binding.ts";
 import { Runtime } from "../src/runtime.ts";
+import type { Cell } from "../src/cell.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { machineryRead } from "../src/storage/reactivity-log.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -185,6 +186,141 @@ describe("cfc-reference-identity-reads", () => {
     expect((await tx.commit()).ok).toBeDefined();
     return tagsOf(derivedConfidentiality(out.getAsNormalizedFullLink().id));
   };
+
+  it("preserves foreign handle reference confidentiality through direct and eager reads", async () => {
+    const rt = makeRuntime();
+    const foreign =
+      (await Identity.fromPassphrase("reference-identity foreign")).did();
+    const target = rt.getCell(
+      foreign,
+      "unread-target",
+      undefined,
+      undefined,
+      "user",
+    )
+      .key("nested").getAsNormalizedFullLink();
+    const { schema: _targetSchema, ...targetAddress } = target;
+    const schema = {
+      type: "object",
+      properties: {
+        ref: { type: "unknown", asCell: ["cell"] },
+        refs: {
+          type: "array",
+          items: { type: "unknown", asCell: ["readonly"] },
+        },
+      },
+    } as const;
+    const seed = seeding(rt);
+    const holder = seed.write("foreign-reference-holder", {
+      ref: createSigilLinkFromParsedLink(target),
+      refs: [createSigilLinkFromParsedLink(target)],
+    }, [
+      pointerEntry(["ref"], "reference-secret"),
+      pointerEntry(["refs", "0"], "array-reference-secret"),
+    ]);
+    await seed.commit();
+    const targetSeed = rt.edit();
+    writeSeedEnvelopeDoc(targetSeed, foreign);
+    seedStoredEnvelope(targetSeed, {
+      space: foreign,
+      scope: "user",
+      id: target.id,
+      path: [],
+    }, {
+      value: { nested: "private target" },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [contentEntry(["nested"], "target-secret")],
+        },
+      },
+    });
+    expect((await targetSeed.commit()).ok).toBeDefined();
+    const directJoin = await flowJoinOf(rt, "foreign-direct-out", (tx) => {
+      const cell = rt.getCellFromLink<
+        { ref: Cell<unknown>; refs: Cell<unknown>[] }
+      >({
+        ...holder,
+        schema,
+      }).withTx(tx);
+      expect(cell.key("ref").get().getAsNormalizedFullLink()).toMatchObject(
+        targetAddress,
+      );
+      expect(tx.getNarrowestReadScope()).toBe("space");
+    });
+    expect(directJoin).toContain("reference-secret");
+    expect(directJoin).not.toContain("target-secret");
+    const eagerJoin = await flowJoinOf(rt, "foreign-eager-out", (tx) => {
+      const cell = rt.getCellFromLink<
+        { ref: Cell<unknown>; refs: Cell<unknown>[] }
+      >({
+        ...holder,
+        schema,
+      }).withTx(tx);
+      const value = cell.get({ traverseCells: true });
+      expect(value.ref.getAsNormalizedFullLink()).toMatchObject(targetAddress);
+      expect(value.refs[0].getAsNormalizedFullLink()).toMatchObject(
+        targetAddress,
+      );
+      expect(tx.getNarrowestReadScope()).toBe("space");
+    });
+    expect(eagerJoin).toContain("reference-secret");
+    expect(eagerJoin).toContain("array-reference-secret");
+    expect(eagerJoin).not.toContain("target-secret");
+    const targetJoin = await flowJoinOf(rt, "foreign-target-out", (tx) => {
+      const cell = rt.getCellFromLink<{ ref: Cell<unknown> }>({
+        ...holder,
+        schema,
+      }).withTx(tx);
+      const handle = cell.key("ref").get();
+      expect(tx.getNarrowestReadScope()).toBe("space");
+      expect(handle.asSchema<string>({ type: "string" }).get()).toBe(
+        "private target",
+      );
+      expect(tx.getNarrowestReadScope()).toBe("user");
+    });
+    expect(targetJoin).toContain("reference-secret");
+    expect(targetJoin).toContain("target-secret");
+    const localTarget = rt.getCell(
+      space,
+      "same-space-user-target",
+      undefined,
+      undefined,
+      "user",
+    );
+    const localSeed = seeding(rt);
+    const localHolder = localSeed.write("same-space-reference-holder", {
+      ref: createSigilLinkFromParsedLink(localTarget.getAsNormalizedFullLink()),
+    });
+    await localSeed.commit();
+    await flowJoinOf(rt, "same-space-reference-out", (tx) => {
+      const cell = rt.getCellFromLink<{ ref: Cell<unknown> }>({
+        ...localHolder,
+        schema,
+      }).withTx(tx);
+      expect(cell.key("ref").get().getAsNormalizedFullLink()).toMatchObject({
+        id: localTarget.getAsNormalizedFullLink().id,
+        space,
+        scope: "user",
+      });
+      expect(tx.getNarrowestReadScope()).toBe("space");
+    });
+    await flowJoinOf(rt, "same-space-eager-reference-out", (tx) => {
+      const cell = rt.getCellFromLink<{ ref: Cell<unknown> }>({
+        ...localHolder,
+        schema,
+      }).withTx(tx);
+      expect(cell.get({ traverseCells: true }).ref.getAsNormalizedFullLink())
+        .toMatchObject({
+          id: localTarget.getAsNormalizedFullLink().id,
+          space,
+          scope: "user",
+        });
+      expect(tx.getNarrowestReadScope()).toBe("space");
+    });
+  });
 
   describe("readMaybeLink()", () => {
     // The one-step hop `schema.ts` takes to mint a cell handle at an `asCell`

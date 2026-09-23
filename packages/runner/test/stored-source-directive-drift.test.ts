@@ -7,12 +7,11 @@ import {
   StorageManager,
 } from "./engine-test-support.ts";
 
-// CT-1916 (2026-07-28 estuary): a `@ts-expect-error` that was valid when a
-// pattern was AUTHORED becomes "unused" (TS2578) once the platform's vendored
-// types improve — and the same stored bytes then hard-failed recompile on
-// load, bricking every piece embedding them (loom-mobile patterns vs. a
-// jsx.d.ts that gained `label`; the space root died with "failed to load
-// piece"). The split contract under test:
+// A `@ts-expect-error` that was valid when a pattern was AUTHORED becomes
+// "unused" (TS2578) once the platform's vendored types improve (a `jsx.d.ts`
+// that gains a property, say). A hard failure on recompiling the same stored
+// bytes at load would stop every piece embedding them from loading. The split
+// contract under test:
 //
 // - the STORED-source reload path (`compileResolvedToRecordGraph`, the only
 //   compile of bytes nobody can re-author under a toolchain newer than the
@@ -35,7 +34,7 @@ const DRIFTED_SOURCE = [
   "",
 ].join("\n");
 
-describe("stored-source directive drift (CT-1916)", () => {
+describe("stored-source directive drift", () => {
   let runtime: Runtime;
   let engine: Engine;
   let storageManager: ReturnType<typeof StorageManager.emulate>;

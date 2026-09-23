@@ -1,15 +1,37 @@
 import type { CfcAtom } from "@commonfabric/api/cfc";
-import { isWalkableObjectOrArray } from "@commonfabric/data-model";
+import {
+  hashStringOf,
+  isWalkableObjectOrArray,
+} from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
-import { forEachSubschema } from "@commonfabric/data-model-schema/schema-walk";
+import {
+  formatExternalSchemaRef,
+  parseExternalSchemaRef,
+} from "@commonfabric/data-model-schema/schema-refs";
+import {
+  forEachSubschema,
+  mapSubschemas,
+} from "@commonfabric/data-model-schema/schema-walk";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
+import { utf8Compare } from "@commonfabric/utils/utf8";
 
 import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
+import { registerSchemaDocument } from "../schema-registry.ts";
 import type { CfcConfClause } from "./clause.ts";
 import { normalizeClause } from "./clause.ts";
+import {
+  bindCurrentPrincipalToStoredClauses,
+  isCurrentPrincipalUserClause,
+} from "./current-principal-confidentiality.ts";
 import { CfcSchemaMigrationError } from "./migration-reason.ts";
-import { hoistCfcSchemaDefs } from "./schema-refs.ts";
+import {
+  cfcSchemaResolvedRoot,
+  hoistCfcSchemaDefs,
+  localDefinitionName,
+  resolveCfcSchemaRefRoot,
+  resolveCfcSchemaRefs,
+} from "./schema-refs.ts";
 import { writerClaimFilesCorrespond } from "./writer-claim-correspondence.ts";
 
 /** Every `ifc` key the runtime understands. {@link IfcKey} names one of them. */
@@ -24,10 +46,10 @@ const IFC_KEYS = [
   "exactCopyOf",
   "projection",
   "collection",
-  // Reserved legacy key: no longer minted (the list builtins' per-element
+  // Reserved legacy key: minted by nothing (the list builtins' per-element
   // transactions make pointwise precision structural) and consumed by
-  // nothing, but already-persisted link schemas embed it, so merging must
-  // keep tolerating it.
+  // nothing, but already-persisted link schemas embed it, so merging
+  // tolerates it.
   "flowPrecisionClaim",
   "uiContract",
 ] as const;
@@ -111,9 +133,9 @@ const writerClaimWithoutStampAndFile = (
  * Reconcile two `writeAuthorizedBy` writer-identity claims that mean the same
  * binding. The binding a claim MEANS is `path` (+ `moduleIdentity` once
  * stamped); the `file` spelling is resolver-dependent (the same module spells
- * differently across piece-deploy and HTTP compiles — labs#4772, and the same
- * authored tree spells differently under the root each compile grounds it
- * at), so two claims reconcile when their paths match and everything outside
+ * differently across piece-deploy and HTTP compiles, and the same authored
+ * tree spells differently under the root each compile grounds it at), so
+ * two claims reconcile when their paths match and everything outside
  * file + stamp is equal. Two stamped claims consult the spelling not at all:
  * each stamp already names its module content-addressed. With at most one
  * stamp the spellings must additionally CORRESPOND (equal or
@@ -211,7 +233,7 @@ const mergeSetLikeIfcArray = (
         }
         return existing;
       }
-      // Confidentiality is CNF clauses (Epic A4): normalize each clause before
+      // Confidentiality is CNF clauses: normalize each clause before
       // the subset/merge comparison so two order-differing OR-clauses
       // (`{anyOf:[A,B]}` vs `{anyOf:[B,A]}`) presented across schema inputs or
       // successive writes compare EQUAL — otherwise the raw-`deepEqual` subset
@@ -224,9 +246,20 @@ const mergeSetLikeIfcArray = (
         ? (existing as readonly CfcConfClause[]).map(normalizeClause)
         : existing as readonly unknown[];
       const candidateArray = key === "confidentiality"
-        ? (candidate as readonly CfcConfClause[]).map(normalizeClause)
+        ? (bindCurrentPrincipalToStoredClauses(
+          candidate,
+          existingArray,
+        ) as readonly CfcConfClause[]).map(normalizeClause)
         : candidate as readonly unknown[];
-      if (!arraySubsetOf(existingArray, candidateArray)) {
+      // A transaction may combine its symbolic declaration with a concrete
+      // label before creator binding. Retain both constraints until prepare
+      // binds the symbolic one; accepting the concrete clause cannot remove it.
+      const comparableExisting = key === "confidentiality"
+        ? existingArray.filter((clause) =>
+          !isCurrentPrincipalUserClause(clause)
+        )
+        : existingArray;
+      if (!arraySubsetOf(comparableExisting, candidateArray)) {
         throw new Error(`${key} cannot be weakened at ${path || "/"}`);
       }
       return mergeArraySet(existingArray, candidateArray);
@@ -308,7 +341,7 @@ const mergeIfc = (
       path,
     );
   }
-  // `observes` (C5) is a scalar consumption class, not a set-like claim:
+  // `observes` is a scalar consumption class, not a set-like claim:
   // agreement keeps the class through the merge; any disagreement —
   // including one covering side — merges to covering, the widest
   // consumption (over-taint, fail-safe).
@@ -321,9 +354,9 @@ const mergeIfc = (
   return merged as JSONSchemaObj["ifc"];
 };
 
-// `$defs` bodies were part of this walk before the shared-walker move, so keep
-// descending them (`includeDefs`). This walk does not resolve `$ref`, so a
-// definition referenced but not inlined is only seen through `$defs`.
+// This walk descends `$defs` bodies (`includeDefs`). It does not resolve
+// `$ref`, so a definition referenced but not inlined is only seen through
+// `$defs`.
 const branchContainsIfc = (schema: JSONSchema): boolean => {
   if (!isObjectOrArray(schema)) return false;
   if ((schema as JSONSchemaObj).ifc !== undefined) return true;
@@ -339,8 +372,7 @@ const branchContainsIfc = (schema: JSONSchema): boolean => {
  * even though the strings differ. This is the ONLY such pair among the seven
  * JSON types — {null, boolean, object, array, string} are mutually
  * value-exclusive and each is exclusive with the numerics — so excluding this
- * one pair makes {@link syntacticallyTypeDisjoint} sound by its own criterion
- * (review F1 on PR #6178, 2026-08-21).
+ * one pair makes {@link syntacticallyTypeDisjoint} sound by its own criterion.
  */
 const NUMERIC_TYPE_STRINGS: ReadonlySet<string> = new Set([
   "integer",
@@ -348,17 +380,15 @@ const NUMERIC_TYPE_STRINGS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Syntactic, conservative type-disjointness (RULING 5, CFC owner,
- * 2026-08-21): both branches carry an explicit scalar `type` string, the
- * strings name VALUE-disjoint types, and NEITHER branch is itself a
- * combinator at its root. Everything unprovable — a missing `type`, a type
- * array, a boolean schema, a nested combinator, or the value-overlapping
- * `integer`/`number` pair — is NOT disjoint: treating "cannot prove
- * non-overlap" as disjoint would reopen the policy dodge (a labeled value
- * also matching an unlabeled sibling and reading unlabeled), the second of
- * #3263's two protected cases. Disjointness is decided over VALUE-sets, not
- * type STRINGS (F1); no semantic subtyping reasoning beyond the one fixed
- * numeric-subtype pair, by ruling.
+ * Syntactic, conservative type-disjointness: both branches carry an explicit
+ * scalar `type` string, the strings name VALUE-disjoint types, and NEITHER
+ * branch is itself a combinator at its root. Everything unprovable — a
+ * missing `type`, a type array, a boolean schema, a nested combinator, or the
+ * value-overlapping `integer`/`number` pair — is NOT disjoint: treating
+ * "cannot prove non-overlap" as disjoint would admit the policy dodge (a
+ * labeled value also matching an unlabeled sibling and reading unlabeled).
+ * Disjointness is decided over VALUE-sets, not type STRINGS, and the one
+ * subtype relation it reasons about is the fixed `integer`/`number` pair.
  */
 const syntacticallyTypeDisjoint = (
   left: JSONSchema,
@@ -409,18 +439,16 @@ const assertNoDivergentIfcBranches = (
   for (const [kind, branches] of branchGroups) {
     const ifcBranchCount = branches.filter(branchContainsIfc).length;
     if (ifcBranchCount === 0) continue;
-    // RULING 5 (CFC owner, 2026-08-21; verification-coverage.md OW49): a
-    // SINGLE ifc-carrying branch whose every sibling is syntactically
-    // type-disjoint from it is the POLICY CARRIER of an anyOf/oneOf
-    // presence union — the wish builtin's optional-result shape,
+    // A SINGLE ifc-carrying branch whose every sibling is syntactically
+    // type-disjoint from it is the POLICY CARRIER of an anyOf/oneOf presence
+    // union — the wish builtin's optional-result shape,
     // `anyOf[{type:"undefined"}, <ifc view>]` — and merges: there is no
-    // ambiguity (one carrier) and no dodge (no sibling a labeled value
-    // could also match). Everything else stays refused: more than one
-    // carrier is #3263's original ambiguity; a non-disjoint sibling is the
-    // policy dodge; and allOf is conjunctive — type-disjoint siblings are
-    // unsatisfiable-by-construction there, so no carrier reading exists.
-    // The recursion below still descends INTO the admitted carrier, so
-    // divergence nested deeper refuses exactly as before.
+    // ambiguity (one carrier) and no dodge (no sibling a labeled value could
+    // also match). Everything else is refused: more than one carrier is
+    // ambiguous; a non-disjoint sibling is the policy dodge; and allOf is
+    // conjunctive — type-disjoint siblings are unsatisfiable-by-construction
+    // there, so no carrier reading exists. The recursion below descends INTO
+    // the admitted carrier, so divergence nested deeper is refused too.
     if (kind !== "allOf" && ifcBranchCount === 1) {
       const carrierIndex = branches.findIndex(branchContainsIfc);
       const carrier = branches[carrierIndex]!;
@@ -434,11 +462,12 @@ const assertNoDivergentIfcBranches = (
     );
   }
 
-  // Recurse over the shared keyword vocabulary so a divergent-ifc shape
-  // cannot hide under a keyword this guard forgot (prefixItems and
-  // additionalProperties previously escaped it). Combinator members are
-  // technically redundant here — a member containing ifc anywhere already
-  // threw via branchContainsIfc above — but descending them is harmless.
+  // Recurse over the shared walker's default keyword vocabulary,
+  // `prefixItems` and `additionalProperties` included, so a divergent-ifc
+  // shape cannot hide under any keyword that walk visits. It passes no walk
+  // options, so `$defs` bodies are not descended here. The vocabulary
+  // includes the combinators, so this is also the descent into a carrier
+  // admitted above.
   forEachSubschema(object, (child, keyword, key, index) => {
     const childPath = keyword === "properties"
       ? `${path}/${key}`
@@ -593,8 +622,8 @@ const mergeSchemaNode = (
   }
 
   // Object-valued rest claims merge like items; boolean forms keep the
-  // spread's right-wins behavior (closed-object union semantics are
-  // CT-1898's question, not this merge's).
+  // spread's right-wins behavior: the right side's value when it has one,
+  // else the left's.
   let mergedAdditionalProperties = left.additionalProperties;
   if (leftAdditional !== undefined && rightAdditional !== undefined) {
     mergedAdditionalProperties = mergeSchemaNode(
@@ -689,11 +718,175 @@ const mergeSchemaNode = (
   };
 };
 
+/** Checks every reachable policy position without unfolding reference cycles. */
+function hasReachableConfidentiality(
+  schema: JSONSchema,
+  root: JSONSchema,
+): boolean {
+  const pending = [{ schema, root }];
+  const visited = new Map<object, Set<object>>();
+  while (pending.length > 0) {
+    const { schema, root } = pending.pop()!;
+    if (!isObjectNotArray(schema)) continue;
+    const rootKey = isObjectNotArray(root) ? root : schema;
+    let schemas = visited.get(rootKey);
+    if (schemas?.has(schema)) continue;
+    if (schemas === undefined) visited.set(rootKey, schemas = new Set());
+    schemas.add(schema);
+    const resolved = typeof schema.$ref === "string"
+      ? resolveCfcSchemaRefs(schema, root)
+      : schema;
+    // An unresolved reference cannot establish that its policy is public.
+    if (resolved === undefined) return true;
+    if (!isObjectNotArray(resolved)) continue;
+    if (
+      isObjectNotArray(resolved.ifc) &&
+      Array.isArray(resolved.ifc.confidentiality) &&
+      resolved.ifc.confidentiality.length > 0
+    ) return true;
+    const childRoot = resolved !== schema
+      ? cfcSchemaResolvedRoot(resolved, resolveCfcSchemaRefRoot(schema, root))
+      : root;
+    forEachSubschema(resolved, (child) => {
+      pending.push({ schema: child, root: childRoot });
+    }, { includeUnused: true, visitBooleans: true });
+  }
+  return false;
+}
+
+/**
+ * Exposes each referenced declaration at its use site before confidential
+ * schemas merge. Distinct stored readers of a reused definition then retain
+ * their own clauses instead of selecting the candidate's symbolic definition.
+ */
+function resolveConfidentialSchema(
+  schema: JSONSchema,
+  root: JSONSchema = schema,
+  active: readonly { schema: object; root: object }[] = [],
+  retainedRoot: JSONSchema = root,
+): JSONSchema {
+  if (!isObjectNotArray(schema)) return schema;
+  if (
+    typeof schema.$ref === "string" &&
+    !hasReachableConfidentiality(schema, root)
+  ) {
+    const definition = localDefinitionName(schema.$ref);
+    if (definition === undefined || root === retainedRoot) return schema;
+    // An expanded external body sits below a different document root. Keep
+    // its public references bound to their original definition namespace.
+    const { taggedHashString } = internSchema(root, true);
+    registerSchemaDocument(taggedHashString, root);
+    return {
+      ...schema,
+      $ref: formatExternalSchemaRef(taggedHashString, definition),
+    };
+  }
+  const rootObject = isObjectNotArray(root) ? root : schema;
+  if (
+    active.some((entry) => entry.schema === schema && entry.root === rootObject)
+  ) {
+    throw new Error("Recursive confidentiality schema merging is unsupported");
+  }
+  const resolved = typeof schema.$ref === "string"
+    ? resolveCfcSchemaRefs(schema, root)
+    : schema;
+  if (resolved === undefined) {
+    throw new Error("Confidentiality merging requires resolved schemas");
+  }
+  if (!isObjectNotArray(resolved)) return resolved;
+  const childRoot = resolved !== schema
+    ? cfcSchemaResolvedRoot(resolved, resolveCfcSchemaRefRoot(schema, root))
+    : root;
+  return mapSubschemas(
+    resolved,
+    (child) =>
+      resolveConfidentialSchema(child, childRoot, [
+        ...active,
+        { schema, root: rootObject },
+      ], retainedRoot),
+    { includeUnused: true, visitBooleans: true },
+  );
+}
+
+/**
+ * Policy declarations and reference edges, independent of public value shapes.
+ *
+ * This is a type alias, not an `interface`, because two of these are compared
+ * by hashing them, and what gets hashed is a `FabricValue`. An `interface` is
+ * never assignable to `FabricPlainObject`, however plain its members:
+ * TypeScript gives an anonymous object type the implicit index signature which
+ * that requires, and does not give one to an interface.
+ */
+type SchemaPolicyGraph = {
+  ifc: JSONSchemaObj["ifc"];
+  ref: string | undefined;
+  children: {
+    keyword: string;
+    key: string | undefined;
+    index: number | undefined;
+    policy: SchemaPolicyGraph;
+  }[];
+};
+
+/**
+ * Retains every structural policy position and definition namespace without
+ * expanding reference cycles. Label-view paths alone omit rest-property claims
+ * beside named fields, so they cannot establish that two policies are equal.
+ */
+function schemaPolicyGraph(
+  schema: JSONSchema,
+  activeRefs: ReadonlySet<string> = new Set(),
+): SchemaPolicyGraph | undefined {
+  if (!isObjectNotArray(schema)) return undefined;
+  if (
+    typeof schema.$ref === "string" &&
+    parseExternalSchemaRef(schema.$ref) !== undefined
+  ) {
+    if (activeRefs.has(schema.$ref)) {
+      return { ifc: schema.ifc, ref: "#recursive", children: [] };
+    }
+    const resolved = resolveCfcSchemaRefs(schema, schema);
+    if (resolved !== undefined && resolved !== schema) {
+      return schemaPolicyGraph(
+        resolved,
+        new Set([...activeRefs, schema.$ref]),
+      );
+    }
+  }
+  const children: SchemaPolicyGraph["children"] = [];
+  forEachSubschema(schema, (child, keyword, key, index) => {
+    const policy = schemaPolicyGraph(child, activeRefs);
+    if (policy !== undefined) children.push({ keyword, key, index, policy });
+  }, { includeDefs: true, includeUnused: true, visitBooleans: true });
+  if (
+    schema.ifc === undefined && schema.$ref === undefined &&
+    children.length === 0
+  ) return undefined;
+  children.sort((left, right) =>
+    utf8Compare(left.keyword, right.keyword) ||
+    utf8Compare(left.key ?? "", right.key ?? "") ||
+    (left.index ?? -1) - (right.index ?? -1)
+  );
+  return { ifc: schema.ifc, ref: schema.$ref, children };
+}
+
 export const mergeCfcSchemaEnvelopes = (
   existing: JSONSchema,
   candidate: JSONSchema,
   options: MergeCfcSchemaEnvelopeOptions = {},
 ): JSONSchema => {
+  assertNoDivergentIfcBranches(existing);
+  assertNoDivergentIfcBranches(candidate);
+  // Equal policies keep their reference graphs, including recursive ones,
+  // through data-shape migrations. Public field shapes do not change the
+  // reader or writer declarations enforced at a logical path.
+  if (
+    hashStringOf(schemaPolicyGraph(existing)) !==
+      hashStringOf(schemaPolicyGraph(candidate))
+  ) {
+    existing = resolveConfidentialSchema(existing);
+    candidate = resolveConfidentialSchema(candidate);
+  }
   assertNoDivergentIfcBranches(existing);
   assertNoDivergentIfcBranches(candidate);
   // The merged envelope is one document, so the two maps become one: a name
@@ -732,15 +925,12 @@ export interface CfcSchemaMergeIssue {
  * Would {@link mergeCfcSchemaEnvelopes} accept this candidate over this stored
  * envelope? `undefined` means yes.
  *
- * Why this exists: replacing a live piece's pattern source used to discover an
- * unmergeable envelope only by attempting the swap and taking a low-level
- * rejection from the setup commit. That is the failure `cf piece setsrc
- * --check` is supposed to predict, so the preflight drives THIS seam — the
- * same merge the commit runs, called in dry-run — rather than a second
- * implementation of the rules that would drift out of agreement with
- * enforcement and start green-lighting swaps the deploy then refuses. The
- * preflight reaches it through `storedCfcEnvelopeMergeIssue` (prepare.ts),
- * which puts the persist loop's merge-skipping fast paths in front of it.
+ * Replacing a live piece's pattern source with an unmergeable envelope fails
+ * as a rejection from the setup commit. `cf piece setsrc --check` predicts
+ * that failure by driving this seam, which is the same merge the commit runs,
+ * called as a dry run. The preflight reaches it through
+ * `storedCfcEnvelopeMergeIssue` (prepare.ts), which puts the persist loop's
+ * merge-skipping fast paths in front of it.
  *
  * Pure: no transaction, no writes, because the merge itself is.
  */

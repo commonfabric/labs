@@ -11,10 +11,11 @@ import {
   type BaselineSample,
   COVERAGE_SUGGESTION_MARKER,
   type CoverageCommentPayload,
+  GitHubRateLimitError,
   PERF_METRICS_ARTIFACT_NAME,
+  PERF_METRICS_FILE,
   type PRInfo,
   type WorkflowRun,
-  workflowRunsPathForBaseline,
 } from "./ci-check-lib.ts";
 import {
   appendJobSummary,
@@ -31,9 +32,12 @@ import {
   copyCoverageArtifactFiles,
   coverageOutcomeLine,
   type CoverageRatchetInput,
+  CoverageRateLimitedError,
   currentWorkflowRunFromEvent,
+  EXPECTED_COVERAGE_ARTIFACT_NAMES,
   fetchAncestorRanks,
   fetchArtifactsForRunBestEffort,
+  fetchCurrentRunArtifacts,
   fetchGroupsChangedOnBase,
   fetchLatestBaselineRunSha,
   fetchPRForCommitWithError,
@@ -41,7 +45,7 @@ import {
   formatErrorForLog,
   formatMetricDelta,
   formatMetricValueForTable,
-  githubApiOrSkip,
+  guardRateLimit,
   isComparableBaseline,
   main,
   metricTableRows,
@@ -154,7 +158,9 @@ Deno.test("copyCoverageArtifactFiles reads a pre-downloaded artifact in place", 
     }
     assertEquals(copiedLcov.sort(), ["pattern", "runtime"]);
     assertEquals(
-      await Deno.readTextFile(path.join(profileDir, "17-0-profile.json")),
+      await Deno.readTextFile(
+        path.join(profileDir, "coverage-profile-workspace-1-0-profile.json"),
+      ),
       "profile",
     );
     assert((await Deno.stat(sourceDir)).isDirectory);
@@ -407,6 +413,18 @@ async function withMockExit(
     throw error;
   } finally {
     Deno.exit = originalExit;
+  }
+}
+
+/**
+ * Runs `callback`, then removes the perf-metrics artifact a run that gave up on
+ * a rate limit writes into the working directory.
+ */
+async function withPerfArtifact<T>(callback: () => Promise<T>): Promise<T> {
+  try {
+    return await callback();
+  } finally {
+    await Deno.remove(PERF_METRICS_FILE).catch(() => {});
   }
 }
 
@@ -816,18 +834,6 @@ Deno.test("writeCoverageDebtSuggestion writes nothing when no coverage group res
   );
 
   assertEquals(payload, null);
-});
-
-Deno.test("baseline workflow path fetches successful main push runs", () => {
-  const path = workflowRunsPathForBaseline(20);
-  const query = new URLSearchParams(path.split("?")[1]);
-
-  assertStringIncludes(path, "/actions/workflows/deno.yml/runs?");
-  assertEquals(query.get("branch"), "main");
-  assertEquals(query.get("status"), "success");
-  assertEquals(query.get("event"), "push");
-  assertEquals(query.get("per_page"), "20");
-  assertEquals(query.get("created"), null);
 });
 
 Deno.test("fetchLatestBaselineRunSha reads the newest baseline run's head", async () => {
@@ -1257,42 +1263,44 @@ Deno.test("formatErrorForLog keeps the first line only", () => {
   assertEquals(formatErrorForLog("plain\nsecond"), "plain");
 });
 
-Deno.test("githubApiOrSkip writes the stamped artifact and exits on rate limits", async () => {
+Deno.test("guardRateLimit writes the stamped artifact and throws on rate limits", async () => {
   const metrics = new Map<string, BaselineSample>([
     ["job: Check", makeSample()],
   ]);
 
-  try {
+  await withPerfArtifact(async () => {
     const captured = await captureConsoleAsync(() =>
-      withMockExit(() =>
-        githubApiOrSkip(
-          "collecting test data",
-          () => Promise.reject(new Error("rate limit exceeded")),
-          { metrics, compileCacheStates: { "pattern-unit": "cold" } },
-        ).then(() => {})
+      assertRejects(
+        () =>
+          guardRateLimit(
+            "collecting test data",
+            () => Promise.reject(new Error("rate limit exceeded")),
+            { metrics, compileCacheStates: { "pattern-unit": "cold" } },
+          ),
+        CoverageRateLimitedError,
       )
     );
 
-    assertEquals(captured.result, 0);
+    // The caller that ends the check reads what the limit stopped off the
+    // message, so it names the read rather than the error it arrived as.
+    assertStringIncludes(captured.result.message, "collecting test data");
     assertStringIncludes(captured.warnings.join("\n"), "rate limit");
     assertStringIncludes(
       captured.logs.join("\n"),
-      "Wrote perf-metrics.json",
+      `Wrote ${PERF_METRICS_FILE}`,
     );
-    const file = JSON.parse(await Deno.readTextFile("perf-metrics.json"));
+    const file = JSON.parse(await Deno.readTextFile(PERF_METRICS_FILE));
     assertEquals(file.metrics[0].name, "job: Check");
-    // The skip path carries the compile cache stamp, so a later run reading
-    // this artifact still sees that this run was cold.
+    // A run the rate limit ends still carries the compile cache stamp, so a
+    // later run reading this artifact still sees that this run was cold.
     assertEquals(file.compileCacheStates, { "pattern-unit": "cold" });
-  } finally {
-    await Deno.remove("perf-metrics.json").catch(() => {});
-  }
+  });
 });
 
-Deno.test("githubApiOrSkip rethrows non-rate-limit errors", async () => {
+Deno.test("guardRateLimit rethrows non-rate-limit errors", async () => {
   await assertRejects(
     () =>
-      githubApiOrSkip(
+      guardRateLimit(
         "collecting test data",
         () => Promise.reject(new Error("plain failure")),
         { metrics: new Map() },
@@ -1727,6 +1735,245 @@ Deno.test("main reports no coverage data and exits cleanly without coverage arti
   } finally {
     await Deno.remove(eventPath).catch(() => {});
     await Deno.remove("perf-metrics.json").catch(() => {});
+  }
+});
+
+/** GitHub's answer when the token has spent its hourly request window. */
+function spentRateLimitWindow(): Response {
+  return new Response('{"message":"API rate limit exceeded for user"}', {
+    status: 403,
+    statusText: "Forbidden",
+    headers: { "x-ratelimit-remaining": "0" },
+  });
+}
+
+Deno.test("fetchCurrentRunArtifacts reads the downloaded artifacts when a rate limit refuses the listing", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "coverage-artifacts-" });
+  try {
+    await Deno.mkdir(path.join(dir, "coverage-profile-workspace-1"));
+    await Deno.mkdir(path.join(dir, "coverage-profile-runner-1"));
+    await Deno.writeTextFile(path.join(dir, "stray.txt"), "not an artifact");
+
+    const captured = await captureConsoleAsync(() =>
+      withMockFetch(
+        spentRateLimitWindow,
+        () => fetchCurrentRunArtifacts(123, dir),
+      )
+    );
+
+    assertEquals(
+      captured.result.sort((a, b) => a.name.localeCompare(b.name)),
+      [
+        makeArtifact(0, "coverage-profile-runner-1"),
+        makeArtifact(0, "coverage-profile-workspace-1"),
+      ].map((artifact) => ({ ...artifact, size_in_bytes: 0 })),
+    );
+    const warnings = captured.warnings.join("\n");
+    assertStringIncludes(
+      warnings,
+      "GitHub API rate limit while listing this run's artifacts; reading " +
+        `the ones downloaded to \`${dir}\` instead`,
+    );
+    assertStringIncludes(warnings, "403 Forbidden (rate limit)");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("the downloaded artifacts a rate-limited listing falls back to keep every shard's coverage", async () => {
+  // Shards upload files of the same name, and the artifacts read from their
+  // directories all carry the same id, so only the name tells them apart.
+  const dir = await Deno.makeTempDir({ prefix: "coverage-artifacts-" });
+  try {
+    for (
+      const [index, name] of [
+        "coverage-profile-runner-1",
+        "coverage-profile-runner-2",
+      ].entries()
+    ) {
+      await Deno.mkdir(path.join(dir, name));
+      await Deno.writeTextFile(
+        path.join(dir, name, "coverage.lcov"),
+        [
+          `SF:/home/runner/work/labs/labs/packages/example/src/shard-${index}.ts`,
+          "DA:1,1",
+          "end_of_record",
+        ].join("\n"),
+      );
+    }
+
+    const { lcov, sourceDescription } = await captureConsoleAsync(async () =>
+      combinedLcovFromArtifacts(
+        await withMockFetch(
+          spentRateLimitWindow,
+          () => fetchCurrentRunArtifacts(123, dir),
+        ),
+        dir,
+      )
+    ).then((captured) => captured.result);
+
+    assertStringIncludes(lcov, "packages/example/src/shard-0.ts");
+    assertStringIncludes(lcov, "packages/example/src/shard-1.ts");
+    assertEquals(sourceDescription, "2 LCOV report files");
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("fetchCurrentRunArtifacts rethrows a rate limit with no downloaded artifacts to read", async () => {
+  await withMockFetch(
+    spentRateLimitWindow,
+    () =>
+      assertRejects(
+        () => fetchCurrentRunArtifacts(123, undefined),
+        GitHubRateLimitError,
+      ),
+  );
+});
+
+Deno.test("fetchCurrentRunArtifacts rethrows a refusal that is not a rate limit", async () => {
+  const dir = await Deno.makeTempDir({ prefix: "coverage-artifacts-" });
+  try {
+    await Deno.mkdir(path.join(dir, "coverage-profile-workspace-1"));
+
+    // A refusal the token would meet again after any wait is not one the
+    // downloaded artifacts should paper over.
+    await withMockFetch(
+      () => new Response("forbidden", { status: 403, statusText: "Forbidden" }),
+      () =>
+        assertRejects(
+          () => fetchCurrentRunArtifacts(123, dir),
+          Error,
+          "GitHub API GET 403 Forbidden: /repos/",
+        ),
+    );
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("main measures the downloaded coverage when a rate limit refuses the current run's artifact listing", async () => {
+  const eventPath = await Deno.makeTempFile({ suffix: ".json" });
+  await Deno.writeTextFile(eventPath, JSON.stringify({ after: SHA_C }));
+  // Every expected artifact downloaded, each of them empty.
+  const dir = await Deno.makeTempDir({ prefix: "coverage-artifacts-" });
+  for (const name of EXPECTED_COVERAGE_ARTIFACT_NAMES) {
+    await Deno.mkdir(path.join(dir, name));
+  }
+
+  const currentRunId = 123;
+  try {
+    const captured = await captureConsoleAsync(() =>
+      withEnv(
+        {
+          GITHUB_TOKEN: "test-token",
+          GITHUB_RUN_ID: String(currentRunId),
+          GITHUB_EVENT_PATH: eventPath,
+          GITHUB_EVENT_NAME: "workflow_run",
+          GITHUB_SHA: SHA_C,
+          PR_NUMBER: "",
+          COVERAGE_ARTIFACTS_DIR: dir,
+        },
+        () =>
+          withMockFetch(
+            (input) =>
+              String(input).includes(`/actions/runs/${currentRunId}/artifacts`)
+                ? spentRateLimitWindow()
+                : jsonResponse({ workflow_runs: [] }),
+            () => withMockExit(() => main()),
+          ),
+      )
+    );
+
+    // Extraction got as far as reading the downloaded directories, which is
+    // what finds them empty; the listing's refusal stopped nothing.
+    const errors = captured.errors.join("\n");
+    assertStringIncludes(errors, "contained no profile or LCOV files.");
+    assertFalse(errors.includes("Could not fetch current run artifacts"));
+  } finally {
+    await Deno.remove(eventPath).catch(() => {});
+    await Deno.remove(dir, { recursive: true });
+    await Deno.remove(PERF_METRICS_FILE).catch(() => {});
+  }
+});
+
+Deno.test("main passes a pull request ungated when a rate limit refuses its artifact listing and then its baselines", async () => {
+  // The measurement reads the working directory as the repository root, so
+  // the run is given one of its own holding a single `tasks` source file.
+  const root = await Deno.makeTempDir({ prefix: "coverage-rate-limited-pr-" });
+  const originalCwd = Deno.cwd();
+  const source = path.join(root, "tasks", "limited.ts");
+  await Deno.mkdir(path.dirname(source));
+  await Deno.writeTextFile(source, "export const limited = 1;\n");
+
+  const artifactsDir = path.join(root, "coverage-artifacts");
+  for (const name of EXPECTED_COVERAGE_ARTIFACT_NAMES) {
+    await Deno.mkdir(path.join(artifactsDir, name), { recursive: true });
+    await Deno.writeTextFile(
+      path.join(artifactsDir, name, "coverage.lcov"),
+      `SF:${source}\nDA:1,0\nend_of_record\n`,
+    );
+  }
+
+  const eventPath = path.join(root, "event.json");
+  await Deno.writeTextFile(
+    eventPath,
+    JSON.stringify({ pull_request: { head: { sha: SHA_C }, body: "" } }),
+  );
+  const commentFile = path.join(root, "coverage-comment.json");
+
+  const prNumber = 7;
+  const currentRunId = 123;
+  try {
+    Deno.chdir(root);
+    const captured = await captureConsoleAsync(() =>
+      withEnv(
+        {
+          GITHUB_TOKEN: "test-token",
+          GITHUB_RUN_ID: String(currentRunId),
+          GITHUB_EVENT_PATH: eventPath,
+          GITHUB_EVENT_NAME: "pull_request",
+          GITHUB_SHA: SHA_C,
+          PR_NUMBER: String(prNumber),
+          COVERAGE_ARTIFACTS_DIR: artifactsDir,
+          COVERAGE_COMMENT_FILE: commentFile,
+          GITHUB_STEP_SUMMARY: undefined,
+        },
+        () =>
+          // The description and the changed files are read before the window
+          // is spent; every read after them meets the limit.
+          withMockFetch(
+            (input) => {
+              const url = String(input);
+              if (url.includes(`/pulls/${prNumber}/files`)) {
+                return jsonResponse([{ filename: "tasks/limited.ts" }]);
+              }
+              if (url.endsWith(`/pulls/${prNumber}`)) {
+                return jsonResponse({ body: "" });
+              }
+              return spentRateLimitWindow();
+            },
+            () => withMockExit(() => main()),
+          ),
+      )
+    );
+
+    assertEquals(captured.result, 0);
+    assertStringIncludes(
+      captured.logs.join("\n"),
+      "Extracted 2 coverage metrics from current run.",
+    );
+    const payload = JSON.parse(
+      await Deno.readTextFile(commentFile),
+    ) as CoverageCommentPayload;
+    assertEquals(payload.state, "ungated");
+    assertStringIncludes(
+      payload.body ?? "",
+      "| `tasks` | GitHub's API rate limit stopped this run reading",
+    );
+  } finally {
+    Deno.chdir(originalCwd);
+    await Deno.remove(root, { recursive: true });
   }
 });
 
@@ -3517,6 +3764,9 @@ async function runRatchet(options: {
 
   /** Reads the base-branch commit's ancestry from `github`, not from `RANKS`. */
   ownAncestry?: boolean;
+
+  /** Reads the base-branch commit's ancestry, in place of `RANKS`. */
+  readRanks?: () => Promise<Map<string, number>>;
 }) {
   const dir = await Deno.makeTempDir({ prefix: "coverage-ratchet-" });
   const commentFile = path.join(dir, "coverage-comment.json");
@@ -3586,7 +3836,7 @@ async function runRatchet(options: {
                   readBaseSha: () => Promise.resolve(SHA_C),
                   fetchRanks: options.ownAncestry
                     ? undefined
-                    : () => Promise.resolve(RANKS),
+                    : options.readRanks ?? (() => Promise.resolve(RANKS)),
                   // Nothing lies between a commit and itself, which is what
                   // `fetchGroupsChangedOnBase()` reports too.
                   fetchChangedGroups: (baselineSha, baseSha) =>
@@ -3861,6 +4111,174 @@ Deno.test("runCoverageRatchet resolves an earlier comment for a pull request it 
   assertEquals(reset.payload?.state, "resolved");
   assertEquals(reset.payload?.overridden, true);
   assertEquals(reset.payload?.groups, []);
+});
+
+/** Rejects the way GitHub's API reports a rate limit. */
+function rateLimited(): Promise<never> {
+  return Promise.reject(new Error("API rate limit exceeded"));
+}
+
+Deno.test("runCoverageRatchet passes a rate-limited pull request and says it gated nothing", async () => {
+  const ran = await withPerfArtifact(() =>
+    runRatchet({ listing: rateLimited })
+  );
+
+  assertEquals(ran.code, 0);
+  assertStringIncludes(
+    ran.warnings,
+    "GitHub API rate limit while reading the workflow's run listing",
+  );
+  assertStringIncludes(
+    ran.logs,
+    "!!! COVERAGE WAS NOT GATED for 1 changed source group(s): " +
+      "packages/runner !!!",
+  );
+  // A warning rather than an error: the job passed.
+  assertStringIncludes(ran.logs, "::warning title=Test coverage was NOT gated");
+  assertStringIncludes(
+    ran.logs,
+    "Passing without a coverage gate: GitHub API rate limits prevented " +
+      "reading the workflow's run listing.",
+  );
+  // Nothing was compared, so there is no table to read a verdict off.
+  assertFalse(ran.logs.includes("## Coverage debt metrics"));
+
+  assertEquals(ran.payload?.state, "ungated");
+  assertStringIncludes(
+    ran.payload?.body ?? "",
+    "| `packages/runner` | GitHub's API rate limit stopped this run reading " +
+      "the baseline data, so nothing was compared. |",
+  );
+  assertStringIncludes(
+    ran.payload?.body ?? "",
+    "https://github.com/commonfabric/labs/actions/runs/1050",
+  );
+  assertStringIncludes(
+    ran.summary ?? "",
+    "### ⚠️ Test coverage was NOT gated on this run",
+  );
+});
+
+Deno.test("runCoverageRatchet reports a rate limit the baseline walk ran into as one", async () => {
+  // The limit is reached after the listing, on a read the walk makes through
+  // its guard.
+  const ran = await withPerfArtifact(() =>
+    runRatchet({
+      listing: listingOf([RUN_AT_BASE]),
+      readings: [[
+        RUN_AT_BASE,
+        reading(RUN_AT_BASE, { [RUNNER_METRIC]: 5746 }),
+      ]],
+      readRanks: rateLimited,
+    })
+  );
+
+  assertEquals(ran.code, 0);
+  assertEquals(ran.payload?.state, "ungated");
+  assertStringIncludes(
+    ran.warnings,
+    "GitHub API rate limit while listing the base-branch commit's ancestry",
+  );
+  assertStringIncludes(
+    ran.payload?.body ?? "",
+    "GitHub's API rate limit stopped this run reading the baseline data",
+  );
+  // A run that gave up part way through has read no baseline, which is not the
+  // same as having looked for one and found none.
+  assertFalse(
+    (ran.payload?.body ?? "").includes("No successful `main` run within reach"),
+  );
+});
+
+Deno.test("runCoverageRatchet reports a rate-limited baseline artifact read as a rate limit", async () => {
+  // The listing succeeds and the limit is reached on the baseline run's own
+  // artifact listing, which the walk reads best-effort. Swallowed there it
+  // would report a run that measured nothing, and the group would read as one
+  // no `main` run has covered yet.
+  const ran = await withPerfArtifact(() =>
+    runRatchet({
+      listing: listingOf([RUN_AT_BASE]),
+      ownRunReader: true,
+      github: (url) =>
+        url.includes(`/actions/runs/${RUN_AT_BASE.id}/artifacts`)
+          ? new Response('{"message":"API rate limit exceeded for user"}', {
+            status: 403,
+            statusText: "Forbidden",
+            headers: { "x-ratelimit-remaining": "0" },
+          })
+          : jsonResponse([]),
+    })
+  );
+
+  assertEquals(ran.code, 0);
+  assertEquals(ran.payload?.state, "ungated");
+  assertStringIncludes(
+    ran.payload?.body ?? "",
+    "GitHub's API rate limit stopped this run reading the baseline data",
+  );
+  assertFalse(
+    (ran.payload?.body ?? "").includes("No successful `main` run within reach"),
+  );
+});
+
+Deno.test("runCoverageRatchet reports a rate-limited merged-pull-request lookup as a rate limit", async () => {
+  // The walk keeps an ordinary lookup failure as a value, which costs that
+  // commit's accepted debt and no more. A limit kept the same way would let the
+  // run hold a group against a baseline whose acceptance it never read.
+  const ran = await withPerfArtifact(() =>
+    runRatchet({
+      listing: listingOf([RUN_AT_BASE]),
+      ownRunReader: true,
+      github: (url) =>
+        url.includes(`/commits/${SHA_C}/pulls`)
+          ? new Response('{"message":"API rate limit exceeded for user"}', {
+            status: 403,
+            statusText: "Forbidden",
+            headers: { "x-ratelimit-remaining": "0" },
+          })
+          : jsonResponse({ total_count: 0, artifacts: [] }),
+    })
+  );
+
+  assertEquals(ran.code, 0);
+  assertEquals(ran.payload?.state, "ungated");
+  assertStringIncludes(
+    ran.payload?.body ?? "",
+    "GitHub's API rate limit stopped this run reading the baseline data",
+  );
+  assertFalse(ran.logs.includes("PR lookup failed"));
+});
+
+Deno.test("runCoverageRatchet passes a rate-limited main run with no comment to write", async () => {
+  const ran = await withPerfArtifact(() =>
+    runRatchet({ listing: rateLimited, prNumber: null })
+  );
+
+  assertEquals(ran.code, 0);
+  assertEquals(ran.payload, null);
+  assertEquals(ran.summary, undefined);
+  assertStringIncludes(ran.warnings, "skipping the baseline comparison");
+});
+
+Deno.test("runCoverageRatchet resolves an earlier comment for a rate-limited pull request it gates nothing for", async () => {
+  const ran = await withPerfArtifact(() =>
+    runRatchet({ listing: rateLimited, changed: [] })
+  );
+
+  assertEquals(ran.code, 0);
+  assertEquals(ran.payload?.state, "resolved");
+  assertEquals(ran.payload?.groups, []);
+});
+
+Deno.test("runCoverageRatchet rethrows a failure that is not a rate limit", async () => {
+  await assertRejects(
+    () =>
+      runRatchet({
+        listing: () => Promise.reject(new Error("the network is down")),
+      }),
+    Error,
+    "the network is down",
+  );
 });
 
 Deno.test("runCoverageRatchet finds the base commit's run across a page boundary before settling on an older ancestor", async () => {

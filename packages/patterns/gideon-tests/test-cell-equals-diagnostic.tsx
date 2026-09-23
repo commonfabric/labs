@@ -9,11 +9,11 @@
  * 3. Check if it creates links/aliases vs copies
  */
 import {
+  debugStr,
   Default,
   handler,
   NAME,
   pattern,
-  toCompactDebugString,
   toIndentedDebugString,
   UI,
   Writable,
@@ -60,7 +60,7 @@ const selectByIndex = handler<
     log.push(`items.get() returned array of length: ${itemsArray.length}`);
 
     const targetItem = itemsArray[index];
-    log.push(`itemsArray[${index}] = ${toCompactDebugString(targetItem)}`);
+    log.push(debugStr`itemsArray[${index}] = $quote,long${targetItem}`);
     log.push(`typeof targetItem: ${typeof targetItem}`);
     log.push(`targetItem constructor: ${targetItem?.constructor?.name}`);
 
@@ -74,11 +74,11 @@ const selectByIndex = handler<
 
     // Read back
     const readBack = selectedItem.get();
-    log.push(`selectedItem.get() = ${toCompactDebugString(readBack)}`);
+    log.push(debugStr`selectedItem.get() = $quote,long${readBack}`);
 
     // Check items again
     const itemsAfter = items.get();
-    log.push(`items after set: ${toCompactDebugString(itemsAfter)}`);
+    log.push(debugStr`items after set: $quote,long${itemsAfter}`);
   },
 );
 

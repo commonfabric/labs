@@ -31,6 +31,7 @@ import {
   TILE_UI,
   TYPE,
   UI,
+  VIEWS,
 } from "@commonfabric/utils/framework-result-keys";
 import type { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import type { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
@@ -56,7 +57,17 @@ import { AuthSchema, WebhookConfigSchema } from "./schema-lib.ts";
 // transformer that polices what a pattern may declare about them reads the
 // same list. They are re-exported here because this is the builder surface a
 // pattern sees them through.
-export { CHIP_UI, FRAMEWORK_RESULT_KEYS, FS, NAME, TESTS, TILE_UI, TYPE, UI };
+export {
+  CHIP_UI,
+  FRAMEWORK_RESULT_KEYS,
+  FS,
+  NAME,
+  TESTS,
+  TILE_UI,
+  TYPE,
+  UI,
+  VIEWS,
+};
 
 // Symbol for accessing self-reference in patterns
 export const SELF: typeof SELFSymbol = Symbol("SELF") as any;

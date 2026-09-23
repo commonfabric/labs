@@ -742,6 +742,37 @@ describe("the vintage gate, end to end", () => {
     expect(stranded).toBe(1);
   });
 
+  it("credits the accepted drop that forgave a loss, and passes", async () => {
+    // The forgiven half of the moved-key case above, over one capture so that
+    // the loss the entry forgives is the loss this test watched happen. The
+    // run reports which `(pattern, path)` pair did the forgiving:
+    // `pattern-vintage` fails an entry that forgave nothing anywhere, so an
+    // entry crediting itself is what keeps the exemption list judgeable.
+
+    await captureMissing(
+      roots,
+      [TEST_KEY],
+      new Date("2026-07-29T12:00:00.000Z"),
+    );
+    await setSource(MOVED_KEY);
+    const entry = {
+      pattern: KEY,
+      paths: ["items"],
+      capturedThrough: "2026-07-29T12-00-00.000Z",
+      reason: "the moved key this suite writes on purpose",
+      record: "docs/history/vintage-gate-subject-moved-key.md",
+    };
+
+    const unforgiven = await replayAll(roots);
+    const forgiven = await replayAll(roots, { acceptedDrops: [entry] });
+
+    expect(unforgiven.stranded).toBe(1);
+    expect(unforgiven.dropsApplied.size).toBe(0);
+    expect(forgiven.failures).toEqual([]);
+    expect(forgiven.stranded).toBe(0);
+    expect([...forgiven.dropsApplied]).toEqual([`${KEY} items`]);
+  });
+
   it("reports a vintage whose pattern no longer exists", async () => {
     // Deleting a pattern is legitimate — retiring it — but it must be visible
     // rather than silently reducing coverage to nothing.

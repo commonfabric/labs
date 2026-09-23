@@ -1,6 +1,10 @@
-import type { CfcAtom } from "@commonfabric/api/cfc";
-import { hashStringOf } from "@commonfabric/data-model";
-import { deepEqual } from "@commonfabric/utils/deep-equal";
+import type { CfcAtom, CfcJsonValue } from "@commonfabric/api/cfc";
+import {
+  type FabricValue,
+  hashStringOf,
+  isFabricPlainObject,
+  valueEqual,
+} from "@commonfabric/data-model";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
 import type { CfcConfClause } from "./clause.ts";
@@ -47,7 +51,9 @@ export const isCfcFieldCommitment = (
   typeof (value as { digestOf?: unknown }).digestOf === "string";
 
 /** The commitment form of one atom field value: its canonical digest, marked. */
-export const commitCfcFieldValue = (value: unknown): CfcFieldCommitment => ({
+export const commitCfcFieldValue = (
+  value: CfcJsonValue,
+): CfcFieldCommitment => ({
   digestOf: hashStringOf(value),
 });
 
@@ -60,8 +66,11 @@ export const commitCfcFieldValue = (value: unknown): CfcFieldCommitment => ({
  * and arrays compare fieldwise/elementwise so a committed field nested
  * inside an atom still matches its plaintext counterpart.
  */
-export const commitmentAwareEquals = (a: unknown, b: unknown): boolean => {
-  if (deepEqual(a, b)) return true;
+export const commitmentAwareEquals = (
+  a: FabricValue,
+  b: FabricValue,
+): boolean => {
+  if (valueEqual(a, b)) return true;
   const aIsCommitment = isCfcFieldCommitment(a);
   const bIsCommitment = isCfcFieldCommitment(b);
   if (aIsCommitment !== bIsCommitment) {
@@ -70,25 +79,18 @@ export const commitmentAwareEquals = (a: unknown, b: unknown): boolean => {
     return hashStringOf(plain) === commitment.digestOf;
   }
   if (aIsCommitment) {
-    // Both markers and not deepEqual: different digests.
+    // Both markers and not equal: different digests.
     return false;
   }
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length &&
       a.every((element, index) => commitmentAwareEquals(element, b[index]));
   }
-  if (
-    isObjectOrArray(a) && isObjectOrArray(b) && !Array.isArray(a) &&
-    !Array.isArray(b)
-  ) {
+  if (isFabricPlainObject(a) && isFabricPlainObject(b)) {
     const aKeys = Object.keys(a);
     if (aKeys.length !== Object.keys(b).length) return false;
     return aKeys.every((key) =>
-      Object.hasOwn(b, key) &&
-      commitmentAwareEquals(
-        (a as Record<string, unknown>)[key],
-        (b as Record<string, unknown>)[key],
-      )
+      Object.hasOwn(b, key) && commitmentAwareEquals(a[key], b[key])
     );
   }
   return false;
@@ -125,10 +127,10 @@ export const containsCfcFieldCommitment = (value: unknown): boolean => {
  * by reference.
  */
 const transformValue = (
-  value: unknown,
+  value: CfcJsonValue,
   contextAtom: unknown,
   pathInAtom: readonly string[],
-): unknown => {
+): CfcJsonValue => {
   if (isCfcFieldCommitment(value)) {
     return value;
   }
@@ -156,13 +158,13 @@ const transformValue = (
   const atom = isAtom ? value : contextAtom;
   const basePath = isAtom ? [] : pathInAtom;
   let changed = false;
-  const out: Record<string, unknown> = {};
+  const out: Record<string, CfcJsonValue> = {};
   for (const [key, field] of Object.entries(value)) {
     const fieldPath = [...basePath, key];
     const cls = atom === undefined
       ? undefined
       : classifyAtomField(atom, fieldPath);
-    let next: unknown;
+    let next: CfcJsonValue;
     if (cls === "commitment" && !isCfcFieldCommitment(field)) {
       next = commitCfcFieldValue(field);
     } else if (cls === "commitment" || cls === "public") {
@@ -191,7 +193,7 @@ const transformValue = (
  * and committed form from another (the documented mixed migration period)
  * counts as ONE shared witness.
  */
-export const cfcCommitmentNormalForm = (atom: unknown): unknown =>
+export const cfcCommitmentNormalForm = (atom: CfcAtom): CfcAtom =>
   transformValue(atom, undefined, []);
 
 /**

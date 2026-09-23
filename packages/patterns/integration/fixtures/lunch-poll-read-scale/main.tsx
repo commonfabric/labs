@@ -10,6 +10,7 @@ import {
   Writable,
 } from "commonfabric";
 import LunchPoll, {
+  type ClockOverride,
   type CozyPollOutput,
   type LunchProfile,
   type Option,
@@ -34,6 +35,11 @@ interface SeedEvent {
   requireExistingProfiles?: boolean;
 }
 
+/** An instant for the poll's clock, in milliseconds since the epoch. */
+interface ClockEvent {
+  at: number;
+}
+
 /** Observable controls and results shared by CLI and browser fixtures. */
 interface Output {
   /** Fixture title. */
@@ -48,6 +54,9 @@ interface Output {
   /** Selects the first synthetic voter. */
   claim: Stream<Record<string, unknown>>;
 
+  /** Puts the poll's clock at a chosen instant; seeded votes stamp from it. */
+  setClock: Stream<ClockEvent>;
+
   /** Production vote handler. */
   castVote: CozyPollOutput["castVote"];
 
@@ -59,6 +68,12 @@ interface Output {
 
   /** Number of roster members. */
   userCount: number;
+
+  /** Number of votes the poll counts as cast on its clock's day. */
+  todayVoteCount: number;
+
+  /** The day the poll's clock reads, or "" while the clock is unresolved. */
+  todayDate: string;
 
   /** Whether the synthetic viewer belongs to the roster. */
   isJoined: boolean;
@@ -74,10 +89,11 @@ const seed = handler<
     users: Writable<User[]>;
     options: Writable<Option[]>;
     votes: Writable<Vote[]>;
+    clock: Writable<ClockOverride>;
   }
 >((
   { voteCount, voterCount, optionCount, requireExistingProfiles },
-  { profiles, users, options, votes },
+  { profiles, users, options, votes, clock },
 ) => {
   if (
     !Number.isSafeInteger(voteCount) || voteCount < 1 ||
@@ -111,6 +127,12 @@ const seed = handler<
     }
     return { name, profile, color: "#2f6f4e" };
   }));
+  // A test that sets the poll's clock stamps its votes at that same instant,
+  // so what the poll counts as today's votes is fixed rather than depending on
+  // where the run falls against the local day boundary. The wall clock stands
+  // in otherwise, which is what keeps a seeded stamp distinct from the
+  // coarsened tick that recasting a vote writes.
+  const castAt = clock.get().at ?? Date.now();
   const seededVotes: Writable<Vote>[] = [];
   for (let index = 0; index < voteCount; index++) {
     const optionId = `option-${index % optionCount}`;
@@ -118,11 +140,17 @@ const seed = handler<
     const key = voteKeyFor(voter, optionId);
     if (key === undefined) throw new Error("Fixture voter has no identity");
     const vote = votes.elementById(key);
-    vote.set({ optionId, voter, voteType: "green", castAt: Date.now() });
+    vote.set({ optionId, voter, voteType: "green", castAt });
     seededVotes.push(vote);
   }
   votes.set(seededVotes);
 });
+
+const setClock = handler<ClockEvent, { clock: Writable<ClockOverride> }>(
+  ({ at }, { clock }) => {
+    clock.set({ at });
+  },
+);
 
 const claim = handler<Record<string, unknown>, {
   profiles: Writable<LunchProfile[]>;
@@ -137,7 +165,9 @@ export default pattern<{
   const users = new Writable.perSpace<User[]>([]);
   const options = new Writable.perSpace<Option[]>([]);
   const votes = new Writable.perSpace<Vote[]>([]);
-  const poll = LunchPoll({ users, options, votes });
+  // Empty leaves the poll on its `#now/300` wish; a test writes an instant.
+  const clock = new Writable.perSpace<ClockOverride>({});
+  const poll = LunchPoll({ users, options, votes, clock });
   const claimViewer = claim({ profiles, overrideViewer: poll.overrideViewer });
   return {
     [NAME]: "Lunch poll read benchmark",
@@ -149,12 +179,15 @@ export default pattern<{
         {poll[UI]}
       </div>
     ),
-    seed: seed({ profiles, users, options, votes }),
+    seed: seed({ profiles, users, options, votes, clock }),
     claim: claimViewer,
+    setClock: setClock({ clock }),
     castVote: poll.castVote,
     voteCount: poll.voteCount,
     optionCount: poll.optionCount,
     userCount: poll.userCount,
+    todayVoteCount: poll.todayVoteCount,
+    todayDate: poll.todayDate,
     isJoined: poll.isJoined,
     votes: poll.votes,
   };

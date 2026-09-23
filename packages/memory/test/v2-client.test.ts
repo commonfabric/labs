@@ -3903,3 +3903,65 @@ Deno.test("memory v2 client rejects outstanding commits when session ID changes 
     await client.close();
   }
 });
+
+Deno.test("memory v2 client refuses root expectations without server capability", async () => {
+  const client = await connect({
+    transport: handshakeTransport({
+      ...HELLO_OK,
+      flags: { ...HELLO_OK.flags, genesisRoot: false },
+    }),
+  });
+  try {
+    await assertRejects(
+      () =>
+        client.mount("did:key:unsupported-root-host", {
+          genesisRoot: {
+            source: "system:loom/main.tsx",
+            cause: "expected-root",
+          },
+        }),
+      Error,
+      "does not support a custom root intent",
+    );
+  } finally {
+    await client.close();
+  }
+});
+
+Deno.test("memory v2 client retains its original root intent across caller mutation and reopen", async () => {
+  const transport = handshakeTransport({
+    ...HELLO_OK,
+    flags: { ...HELLO_OK.flags, genesisRoot: true },
+  });
+  const send = transport.send.bind(transport);
+  const roots: unknown[] = [];
+  transport.send = (payload) => {
+    const message = decodeMemoryBoundary(payload) as {
+      type: string;
+      session?: { genesisRoot?: unknown };
+    };
+    if (message.type === "session.open") {
+      roots.push(message.session?.genesisRoot);
+    }
+    return send(payload);
+  };
+  const client = await connect({ transport });
+  const root = {
+    source: "system:loom/main.tsx",
+    cause: "retained-root",
+    argument: { title: "Original" },
+    sourceRoots: ["system:loom/main.test.tsx"],
+  };
+  try {
+    const session = await client.mount("did:key:retained-root", {
+      genesisRoot: root,
+    });
+    root.argument.title = "Mutated";
+    root.sourceRoots.push("system:unrelated.test.tsx");
+    await session.restore();
+    assertEquals(roots.length, 2);
+    assertEquals(roots[1], roots[0]);
+  } finally {
+    await client.close();
+  }
+});

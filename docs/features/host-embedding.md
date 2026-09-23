@@ -35,6 +35,7 @@ weeks later.
 | 5 | Guarded-define idiom | API | `ui` | yes | `src/v2/components/host-embedding-guarded-define.test.ts` |
 | 6 | Trusted-mark threat model | policy record | `runner` | n/a | `test/cfc-ui-contract.test.ts` — `host embedding contract: trusted-mark threat model` |
 | 7 | Pinning is owner-gated | policy record | `patterns` | n/a | `system/profile-home.owner-gated.test.ts` |
+| 8 | Snapshot sharing | trusted host API | `runtime-client`, `runner` | available | `runtime-client/test/backends/snapshot-share.test.ts`; `runtime-client/test/snapshot-share.test.ts` |
 
 ---
 
@@ -206,6 +207,16 @@ Calling `RuntimeClient.createPiece()` with an HTTP or HTTPS `URL` creates a
 followed piece. The runtime records the canonical URL and retained initial
 source in one creation transaction. Calling it with a source string or
 `Program` creates a detached piece when that source can be retained.
+
+For a persistent host UI piece, pass a stable `cause` in the options to
+`RuntimeClient.createPiece(source, space, options)` or
+`RuntimeInternals.createPiece(space, source, options)`. The cause derives the
+piece's identity within that space, so repeated calls address the same piece
+across reloads. Repeated creation requires the same pattern identity; supplying
+a different pattern is rejected, so a stable cause does not perform a source
+upgrade. Each call reapplies setup and inputs to the existing pattern; it is
+not a lookup that leaves an existing piece untouched. Omitting `cause`
+allocates a new identity. Use a distinct cause for each independent host piece.
 
 `updatePieceSource()` returns a one-use `confirmationToken` with an
 incompatibility warning. Passing that token back confirms only the reported
@@ -385,6 +396,51 @@ pin/arrange flows ride the UI-variants abstraction (`UI` / `CHIP_UI` /
 asserts against the real pattern sources that the pin writer carries no
 `uiContract` while the create surface does, and that `addPiece` is a
 `Stream`.
+
+---
+
+## 8. Trusted snapshot sharing
+
+`RuntimeClient.prepareSnapshotShare(sourceRef, { user: recipientRef })` prepares
+a JSON snapshot for one recipient. The recipient must carry one persisted
+principal attestation at the selected path. The alternative
+`{ space: destinationRef }` selects the space holding that cell. The response
+contains an opaque `id`, the exact `value`, and the verified `audience` atom.
+The worker reads stored policy; client-provided schema and label views grant no
+authority.
+
+The runtime uses its authenticated, bounded read ceiling when one is configured.
+Without a runtime-wide ceiling, preparation requires the source to fit the
+authenticated actor's own `User` ceiling. The default shell can therefore
+share an actor-private draft but cannot preview a source labeled only for
+another user. The source is read by the trusted worker before this check; the
+preview is returned only after it passes.
+
+The trusted host displays that value and audience and requires a trusted user
+confirmation before calling `RuntimeClient.commitSnapshotShare(id)`. The result
+is a new `CellHandle` naming the shared copy. The source remains unchanged. The
+runtime permits release only of the authenticated actor's own User clauses.
+Other clauses must already admit the recipient and remain on the copy. A changed
+source, recipient, or actor invalidates the preview. Each confirmation is
+consumed once, including on a failed commit.
+
+This is a trusted host capability. Authored patterns cannot obtain the worker's
+consent object or call this transport. The host's confirmation command supplies
+the renderer-trusted `ShareSnapshot` provenance; it accepts no authored event
+claims. An embedder exposing this command to untrusted content would delegate
+its release authority. The boundary protects against authored code and does not
+prove user intent against a malicious host.
+
+Previews belong to the client that prepared them. Another attached client cannot
+use the id. The host calls `RuntimeClient.cancelSnapshotShare(id)` when it
+closes or replaces a confirmation; client detachment and backend disposal also
+discard pending consent. The worker retains the consent object; only the preview
+crosses IPC.
+
+**Tests.** `packages/runtime-client/test/backends/snapshot-share.test.ts` covers
+source-schema rejection, preview binding, client isolation, one-use consent, and
+disposal. `packages/runtime-client/test/snapshot-share.test.ts` holds the public
+client API and wire shapes.
 
 ---
 

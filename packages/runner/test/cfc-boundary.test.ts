@@ -3,7 +3,7 @@ import { describe, it } from "@std/testing/bdd";
 
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
-import type { MemorySpace } from "@commonfabric/memory/interface";
+import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 
@@ -33,7 +33,9 @@ import {
   runtimeWritePolicyAuthorization,
 } from "../src/cfc/types.ts";
 import { diffAndUpdate } from "../src/data-updating.ts";
+import type { NormalizedFullLink } from "../src/link-types.ts";
 import {
+  createSigilLinkFromParsedLink,
   getDerivedInternalCellLink,
   getMetaLink,
   parseLink,
@@ -47,6 +49,10 @@ import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { internalVerifierRead } from "../src/storage/reactivity-log.ts";
 import type { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
+import type {
+  IExtendedStorageTransaction,
+  IMemorySpaceAddress,
+} from "../src/storage/interface.ts";
 import * as V2Storage from "../src/storage/v2.ts";
 import {
   TEST_MEMORY_SERVER_AUTH,
@@ -55,10 +61,6 @@ import {
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
 import { refuseAtCommitBoundary } from "./refused-commit.ts";
-import type {
-  IExtendedStorageTransaction,
-  IMemorySpaceAddress,
-} from "../src/storage/interface.ts";
 import type { FabricValue } from "@commonfabric/data-model";
 
 const signer = await Identity.fromPassphrase("runner-cfc-boundary-tests");
@@ -716,6 +718,179 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       await runtime.dispose();
       await storageManager.close();
     }
+  });
+
+  // A setup that runs a second time over its own stored projection — a cold
+  // start replaying the pattern a stored piece already names — re-stages the
+  // redirect the document holds. Every value it stages is the one already
+  // there, so the transaction ends with no write detail for the document,
+  // while the whole-document staging still registers an attempted write at
+  // the root and brings every uiContract field under it into the gate. The
+  // two tests below hold the line the marker draws there: what it exempts is
+  // the projection it names, and only where that projection really is.
+  describe("uiContract fields under a replayed setup projection", () => {
+    const projectedSchema = {
+      type: "object",
+      properties: {
+        savedTitle: {
+          type: "string",
+          ifc: {
+            uiContract: {
+              helper: "UiAction",
+              action: "TrustedSave",
+            },
+          },
+        },
+      },
+      required: ["savedTitle"],
+    } as const satisfies JSONSchema;
+
+    const sourceId = (runtime: Runtime) =>
+      runtime.getCell(signer.did(), "cfc-setup-replay-source", undefined)
+        .getAsNormalizedFullLink().id;
+
+    const setupProjectionMarker = (
+      projected: NormalizedFullLink,
+      source: URI,
+    ) => ({
+      kind: "structural-provenance" as const,
+      claim: CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
+      target: {
+        space: projected.space,
+        scope: "space" as const,
+        id: projected.id,
+        path: ["savedTitle"],
+      },
+      sources: [{
+        space: signer.did(),
+        scope: "space" as const,
+        id: source,
+        path: ["savedTitle"],
+      }],
+    });
+
+    // Instantiate the projection, then hand back what a replay re-stages: the
+    // document now holding a write redirect at its uiContract field, and that
+    // same redirect.
+    const instantiate = async (runtime: Runtime) => {
+      const tx = runtime.edit();
+      const source = runtime.getCell(
+        signer.did(),
+        "cfc-setup-replay-source",
+        { type: "object", properties: { savedTitle: { type: "string" } } },
+        tx,
+      );
+      source.set({ savedTitle: "" });
+      const projected = runtime.getCell(
+        signer.did(),
+        "cfc-setup-replay",
+        projectedSchema,
+        tx,
+      );
+      const projectedLink = projected.getAsNormalizedFullLink();
+      const redirect = createSigilLinkFromParsedLink(
+        source.key("savedTitle").getAsNormalizedFullLink(),
+        { overwrite: "redirect" },
+      );
+      diffAndUpdate(
+        runtime,
+        tx,
+        projectedLink,
+        { savedTitle: redirect },
+        projectedLink,
+      );
+      tx.recordCfcWritePolicyInput(
+        setupProjectionMarker(projectedLink, sourceId(runtime)),
+      );
+      tx.prepareCfc();
+      expect((await tx.commit()).error).toBeUndefined();
+      return { projectedLink, redirect };
+    };
+
+    // Stage the stored projection again the way `Runner`'s reuse path does:
+    // the whole argument through the cell, then the per-field diff.
+    const replay = (
+      runtime: Runtime,
+      tx: IExtendedStorageTransaction,
+      projectedLink: NormalizedFullLink,
+      redirect: unknown,
+    ) => {
+      runtime.getCellFromLink<unknown>(projectedLink, projectedSchema, tx).set({
+        savedTitle: redirect,
+      });
+      diffAndUpdate(
+        runtime,
+        tx,
+        projectedLink,
+        { savedTitle: redirect },
+        projectedLink,
+      );
+    };
+
+    it("admits a replay whose marker names the stored redirect", async () => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const { projectedLink, redirect } = await instantiate(runtime);
+
+        const tx = runtime.edit();
+        replay(runtime, tx, projectedLink, redirect);
+        tx.recordCfcWritePolicyInput(
+          setupProjectionMarker(projectedLink, sourceId(runtime)),
+        );
+        tx.prepareCfc();
+        expect((await tx.commit()).error).toBeUndefined();
+      } finally {
+        await runtime.dispose({ closeStorage: false });
+        await storageManager.close();
+      }
+    });
+
+    it("refuses a marked write that drops the field", async () => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const { projectedLink } = await instantiate(runtime);
+
+        // Staging the document without the field REMOVES the projection
+        // rather than replaying it, and a removal is a write like any other.
+        // It records no write detail at the path, the same as a replay that
+        // changed nothing; what separates them is that the gate reads the
+        // path THROUGH the transaction, so the removal reads as removed and
+        // the marker has no projection left to vouch for.
+        const tx = runtime.edit();
+        runtime.getCellFromLink<unknown>(projectedLink, undefined, tx).set({});
+        diffAndUpdate(runtime, tx, projectedLink, {}, projectedLink);
+        tx.recordCfcWritePolicyInput(
+          setupProjectionMarker(projectedLink, sourceId(runtime)),
+        );
+        tx.prepareCfc();
+        expect((await tx.commit()).error?.message).toContain(
+          "missing trusted-event policy input",
+        );
+      } finally {
+        await runtime.dispose({ closeStorage: false });
+        await storageManager.close();
+      }
+    });
+
+    it("refuses a replay whose marker names another document", async () => {
+      const { runtime, storageManager } = createRuntime();
+      try {
+        const { projectedLink, redirect } = await instantiate(runtime);
+
+        const tx = runtime.edit();
+        replay(runtime, tx, projectedLink, redirect);
+        tx.recordCfcWritePolicyInput(
+          setupProjectionMarker(projectedLink, "of:elsewhere" as URI),
+        );
+        tx.prepareCfc();
+        expect((await tx.commit()).error?.message).toContain(
+          "missing trusted-event policy input",
+        );
+      } finally {
+        await runtime.dispose({ closeStorage: false });
+        await storageManager.close();
+      }
+    });
   });
 
   it("allows setup to install alias-backed CFC pattern arguments", async () => {
@@ -2987,6 +3162,63 @@ describe("ExtendedStorageTransaction CFC gate", () => {
     }
   });
 
+  it("allows link writes that strengthen a stored confidentiality declaration", async () => {
+    const { runtime, storageManager } = createRuntime("enforce-explicit");
+    const targetSchema = (confidentiality: string[]): JSONSchema => ({
+      type: "object",
+      properties: {
+        linked: { type: "string", ifc: { confidentiality } },
+      },
+      required: ["linked"],
+    });
+    try {
+      const seed = runtime.edit();
+      const source = runtime.getCell(signer.did(), "strengthening source", {
+        type: "string",
+        ifc: { confidentiality: ["source-reader"] },
+      }, seed);
+      source.set("linked content");
+      const target = runtime.getCell(
+        signer.did(),
+        "strengthening target",
+        targetSchema(["source-reader"]),
+        seed,
+      );
+      target.set({ linked: "initial content" });
+      expect((await seed.commit()).error).toBeUndefined();
+
+      const tx = runtime.edit();
+      const strengthened = target.withTx(tx).asSchema(
+        targetSchema(["source-reader", "additional-reader"]),
+      );
+      strengthened.set({ linked: source.withTx(tx) } as never);
+      expect((await tx.commit()).error).toBeUndefined();
+
+      const verify = runtime.edit();
+      try {
+        expect(target.withTx(verify).key("linked").get()).toBe(
+          "linked content",
+        );
+        const metadata = readStoredCfcMetadata(
+          verify,
+          toMemorySpaceAddress(target.getAsNormalizedFullLink()),
+        );
+        const declared = metadata?.labelMap.entries.find((entry) =>
+          entry.path.join("/") === "linked" && entry.origin === "declared"
+        );
+        expect(declared?.label.confidentiality).toEqual([
+          "source-reader",
+          "additional-reader",
+        ]);
+      } finally {
+        verify.abort();
+      }
+    } finally {
+      await runtime.dispose();
+      await storageManager.close();
+    }
+  });
+
   it("validates link writes against affected stored schema claims", async () => {
     const { runtime, storageManager } = createRuntime();
     try {
@@ -3057,27 +3289,37 @@ describe("ExtendedStorageTransaction CFC gate", () => {
       });
       expect((await targetSeed.commit()).ok).toBeDefined();
 
-      const tx = runtime.edit();
-      tx.setCfcEnforcementMode("enforce-explicit");
-      const linkedSource = runtime.getCell(
-        signer.did(),
-        "cfc-link-write-guard-source",
-        undefined,
-        tx,
-      );
-      const guardedTarget = runtime.getCell(
-        signer.did(),
-        "cfc-link-write-guard-target",
-        undefined,
-        tx,
-      );
-      guardedTarget.key("linked").set(linkedSource as never);
+      for (
+        const schema of [
+          undefined,
+          {
+            type: "object",
+            properties: { linked: { type: "object" } },
+          } as const,
+        ]
+      ) {
+        const tx = runtime.edit();
+        tx.setCfcEnforcementMode("enforce-explicit");
+        const linkedSource = runtime.getCell(
+          signer.did(),
+          "cfc-link-write-guard-source",
+          undefined,
+          tx,
+        );
+        const guardedTarget = runtime.getCell(
+          signer.did(),
+          "cfc-link-write-guard-target",
+          schema,
+          tx,
+        );
+        guardedTarget.key("linked").set(linkedSource as never);
 
-      tx.prepareCfc();
-      const result = await tx.commit();
-      expect(result.error?.message).toContain(
-        "writeAuthorizedBy requires a trusted builtin identity at /linked",
-      );
+        tx.prepareCfc();
+        const result = await tx.commit();
+        expect(result.error?.message).toContain(
+          "writeAuthorizedBy requires a trusted builtin identity at /linked",
+        );
+      }
     } finally {
       await runtime.dispose();
       await storageManager.close();

@@ -59,7 +59,8 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   signature is carried in the same event as the content, avoiding shared mutable
   attribution state. `mention` and `unmention` carry no authored content, so
   they take only the referenced piece; Fabric still retains the authenticated
-  principal behind the edge.
+  principal behind the edge. `recordName` carries none either: the number it
+  stores is the board's allocation rather than something a caller authored.
 - **Mergeable writes everywhere users collide**: comments, links, and topics are
   `push` appends; concurrent writers all land. The body and the title are single
   strings (whole-value conflict semantics), so both edit through an explicit
@@ -104,27 +105,36 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   boundary, schema bindings, tests, and rollback limits. Legacy writers must be
   retired before rollout. Source rollback preserves stored data; only code that
   implements the version guard can refuse writes to a newer state version.
-- **The board names its members, and every reader reaches a name the same way.**
-  `addTopic` allocates the next name in the same transaction as the append, so
-  no reader observes a topic without its name and two concurrent creates
-  serialize on the map's keys rather than taking the same one; the browser
-  composer allocates through the same call. The namespace is one map cell,
+- **Each topic stores the number the board calls it by, and every reader reaches
+  it the same way.** `addTopic` allocates the next number and passes it into the
+  topic it is creating, in the same transaction as the append, so no reader
+  observes a topic without its number and two concurrent creates serialize on
+  the map's keys rather than taking the same one; the browser composer allocates
+  through the same call. The namespace is one map cell,
   `names: { "42": <topic> }`, written one key at a time and holding each topic
-  as an unread reference, so surveying its keys expands no topic. A topic reads
-  its own row out of the board's `namesTable` by identity and publishes the
-  result as `shortName` — one derivation — and every reader reaches the number
+  as an unread reference, so surveying its keys expands no topic. A topic
+  publishes what it stores as `shortName`, and every reader reaches the number
   through that one property: the survey row, the card badge, and the mention
   universe row, which a mention's pill and a `#42` query read. A topic publishes
   it only while `SHOW_TOPIC_NUMBERS` is on, so while that is off none of them
-  carries a number and the name is read from `namesTable` instead.
-  `backfillNames` names what the board held before it numbered anything, in
-  filing order, skipping what is already named; it writes the namespace and
-  nothing else, so on a board whose topics were filed past `addTopic` it has to
-  be paired with a one-time link-bind of `namesTable` onto each of them, the
-  same operator step `mentionable` states for itself. Until that bind the topic
-  is named — `names` and `namesTable` carry it — and its row still carries no
-  name. `naming` is what the board declares about those names, so a consumer
-  reads the promise rather than assuming one.
+  carries a number and the name is read from `namesTable` instead — the number
+  is stored all the same. A topic reads nothing of its board to hold its number,
+  which is what keeps a topic's reads out of its siblings.
+
+  `backfillNames` is the step for a board that held topics before it numbered
+  anything: it numbers every topic the namespace does not hold, in filing order,
+  and asks every topic reporting no number to store the one the namespace holds
+  for it, through that topic's own `recordName`. Asking is the most a board can
+  do — a board writes a member's result and never a member's argument — so the
+  step reports what it allocated and what it asked, and running it again
+  completes whichever asking did not land. While numbers are hidden it cannot
+  see what a topic stores, so it asks every topic every run. That repeat is safe
+  and not idle: `recordName` reads the ungated input, so a topic already storing
+  the number writes nothing further and one whose number never landed stores it
+  now, and the asking is itself a write either way. `naming` is what the board
+  declares about those numbers, so a consumer reads the promise rather than
+  assuming one, and `namesTable` is the reverse lookup a caller uses to find the
+  board's number for a topic by identity, including one that publishes none.
 
   Every demand for that property is declared OPTIONAL rather than defaulted, and
   the spelling is what lets the whole graft be applied over a board deployed
@@ -173,8 +183,9 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   mention pivot from it; `cardsByActivity` takes a single timestamp per topic
   and orders the cards by it; `mentionableIndex` takes the three display strings
   per topic and builds the mention universe; `namesTable` takes the namespace
-  map and builds one row per named member without reading through any of them.
-  None expands a topic's prose, thread, verbs, or rendered UI.
+  map and builds one row per numbered member, for a caller's reverse lookup,
+  without reading through any of them. None expands a topic's prose, thread,
+  verbs, or rendered UI.
 
   A lift's parameter and its result look like one type, which seems to force a
   choice: narrow the parameter to bound the read, and what comes out narrows
@@ -283,9 +294,15 @@ cf piece call --cell <board> addTopic \
 # -> { "result": { "name": "1", "topic": { "$link": "/of:fid1:..." } } }
 cf cell get --cell <board> names
 # -> { "1": {} }
-# Idempotent, so a board whose members are all named reports nothing written.
+# Idempotent. While `SHOW_TOPIC_NUMBERS` is off the step cannot see what a topic
+# stores, so `named` is empty and `pending` holds every topic however many runs
+# have gone by: re-run until `assigned` is empty, and read one topic's stored
+# number from its own input. The three lists below are what this returns once
+# numbers are shown again, with an empty `pending` as the finished state.
 cf piece call --cell <board> backfillNames '{"agentName":"Sol"}'
-# -> { "result": { "assigned": [] } }
+# -> { "result": { "assigned": [], "named": ["1","2"], "pending": [] } }
+cf cell get --cell <topic> shortName --input
+# -> "1"
 cf cell get --cell <board> topics --input \
   --select title,createdAt,lastActivityAt,commentCount
 cf piece call --cell <topic> addComment \
@@ -298,6 +315,14 @@ cf piece call --cell <topic> addLink \
   '{"url":"https://github.com/org/repo/pull/123","kind":"pr","label":"PR #123","agentName":"Sol"}'
 cf piece call --cell <topic> mention '{"topic":"/of:fid1:other-topic"}'
 cf piece call --cell <topic> unmention '{"topic":"/of:fid1:other-topic"}'
+# Store a number on one topic, which is what `backfillNames` asks each topic to
+# do. Idempotent, and refused where it disagrees with what the topic stores —
+# so against this flow's topic 1, which the create already numbered, the number
+# the namespace holds for it is the one that answers.
+cf piece call --cell <topic> recordName '{"name":"1"}'
+# -> { "result": { "name": "1", "wrote": false } }   already stored
+# `wrote: true` comes back only from a topic holding no number yet: one filed
+# before the board numbered anything, which is what `backfillNames` is for.
 cf piece call --cell <topic> removeLink \
   '{"url":"https://github.com/org/repo/pull/123","agentName":"Sol"}'
 ```
@@ -398,18 +423,22 @@ then searching the board for it. The result is declared through the index's row
 schema rather than the full topic: the declared schema bounds the default
 readback, and every name a verb's result publishes is permanent, so the create
 hands back the survey row plus the write-time facts only the pattern could
-resolve (`createdAt`, `createdBy`). `name` rides beside it — the name the create
-allocated, as written to the namespace — because the topic's own `shortName` is
-a lookup that may not have produced a value when the call returns — and produces
-none at all while numbers are hidden — and a caller must not have to wait for a
-derivation to learn what it just allocated. `backfillNames` returns the names it
-wrote, in filing order, and `[]` on a second run. `addComment` and `addLink`
-return the appended record, `setBody` the persisted body plus the attribution it
-wrote, `setTitle` the persisted title plus its attribution; each carries fields
-the pattern resolved that a caller cannot compute for itself. Counts are
-deliberately not returned: these appends are mergeable ops, so a length observed
-inside one handling is not a fact about the resulting list — read `commentCount`
-when you want the count.
+resolve (`createdAt`, `createdBy`). `name` rides beside it — the number the
+create allocated, as written to the namespace and passed into the topic — for
+two reasons: the row IS the created topic, so reading a property off a piece
+filed a moment ago waits for that piece to materialize, and the topic publishes
+no `shortName` at all while numbers are hidden. `backfillNames` returns three
+lists of numbers in filing order: `assigned`, what it wrote into the namespace;
+`named`, the topics it found already reporting theirs; and `pending`, the ones
+it asked, none of which it can confirm. While numbers are hidden `named` is
+always empty and `pending` holds every listed topic, which is what
+`BackfillNamesResult` states and what an operator reads around. `addComment` and
+`addLink` return the appended record, `setBody` the persisted body plus the
+attribution it wrote, `setTitle` the persisted title plus its attribution; each
+carries fields the pattern resolved that a caller cannot compute for itself.
+Counts are deliberately not returned: these appends are mergeable ops, so a
+length observed inside one handling is not a fact about the resulting list —
+read `commentCount` when you want the count.
 
 A returned value reaches the caller through the handling's receipt. A result
 carrying a piece (`addTopic`) travels the result-pattern projection path; the
@@ -426,9 +455,10 @@ rule, `docs/plans/pattern-verb-contract.md`). Body-at-create is not a body
 _update_: `bodyUpdatedBy`/`bodyUpdatedAt` stay unset.
 
 Invalid mutations **throw** instead of silently returning (verb contract rule
-4): an empty title, an empty comment body, a blank or non-http(s) link URL, and
-a blank `agentName` on an authored-content verb — `backfillNames` included,
-which writes the namespace on someone's behalf — all surface as a failed call —
-a nonzero CLI exit — never as apparent success. The UI composer wrappers keep
-their silent guards: an empty draft is a non-event in a composer, not a headless
-mutation.
+4): an empty title, an empty comment body, a blank or non-http(s) link URL, a
+blank `agentName` on an authored-content verb — `backfillNames` included, which
+writes the namespace on someone's behalf — and a `recordName` naming something
+outside the number grammar or disagreeing with the number the topic already
+stores, all surface as a failed call — a nonzero CLI exit — never as apparent
+success. The UI composer wrappers keep their silent guards: an empty draft is a
+non-event in a composer, not a headless mutation.

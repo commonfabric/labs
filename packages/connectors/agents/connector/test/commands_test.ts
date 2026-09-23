@@ -1651,6 +1651,96 @@ Deno.test("command worker dispatches `start` with its payload and refreshes the 
   }
 });
 
+Deno.test("command worker passes a start's surface through and skips the refresh of a session the driver says does not exist yet", async () => {
+  const dir = await Deno.makeTempDir();
+  const ledger = await CommandLedger.open(`${dir}/ledger.json`);
+  const statuses: string[] = [];
+  const refreshed: string[] = [];
+  const target: CommandTarget = {
+    publishReceipt: (receipt) => {
+      statuses.push(receipt.status);
+      return Promise.resolve();
+    },
+    refreshSession: (_driver, nativeSessionId) => {
+      refreshed.push(nativeSessionId);
+      return Promise.resolve();
+    },
+  };
+  const starts: unknown[] = [];
+  const driver = {
+    source: {
+      id: "claude:labs",
+      driver: "claude-agent-sdk",
+      capabilities: {
+        inventory: true,
+        read: true,
+        prompt: true,
+        startSession: true,
+        cancel: true,
+        rename: true,
+        setMode: false,
+        setConfigOption: false,
+        surfaces: ["headless", "desktop"],
+      },
+    },
+    startSession: (
+      nativeSessionId: string,
+      input: unknown,
+      options: CommandExecutionOptions,
+    ) => {
+      starts.push({ nativeSessionId, input });
+      options.onCancellationReady?.();
+      // The app makes the session once the person sends: nothing to read.
+      return Promise.resolve({
+        status: "succeeded" as const,
+        result: { nativeSessionId, surface: "desktop" },
+        affectedSession: null,
+      });
+    },
+  } as unknown as AgentDriver;
+  const worker = new CommandWorker(
+    new Map([[driver.source.id, driver]]),
+    [target],
+    ledger,
+    "did:key:test-owner",
+  );
+  try {
+    await worker.handle([{
+      schema: AGENT_CONNECTOR_SCHEMAS.command,
+      ownerDid: "did:key:test-owner",
+      id: "start-desktop-1",
+      createdAt: "2026-09-16T00:00:00.000Z",
+      sourceId: "claude:labs",
+      nativeSessionId: "6f1a3c0e-9d2b-4c7a-8e5f-0123456789ab",
+      type: "start",
+      payload: {
+        text: "Work on topic #7",
+        cwd: "/work/labs",
+        title: "topic #7",
+        surface: "desktop",
+      },
+    }]);
+    await worker.drain();
+    assertEquals(starts, [{
+      nativeSessionId: "6f1a3c0e-9d2b-4c7a-8e5f-0123456789ab",
+      input: {
+        text: "Work on topic #7",
+        cwd: "/work/labs",
+        title: "topic #7",
+        surface: "desktop",
+      },
+    }]);
+    assertEquals(statuses, ["in-flight", "succeeded"]);
+    assertEquals(refreshed, []);
+    assertEquals(ledger.get("start-desktop-1")?.result, {
+      nativeSessionId: "6f1a3c0e-9d2b-4c7a-8e5f-0123456789ab",
+      surface: "desktop",
+    });
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
 Deno.test("command worker refreshes the session after a start that failed", async () => {
   const dir = await Deno.makeTempDir();
   const ledger = await CommandLedger.open(`${dir}/ledger.json`);

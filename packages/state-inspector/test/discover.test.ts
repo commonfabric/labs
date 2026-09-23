@@ -3,6 +3,7 @@
 // and quick stats. Side-effect free.
 
 import { assert, assertEquals, assertThrows } from "@std/assert";
+import * as Path from "@std/path";
 import { Database } from "@db/sqlite";
 
 import {
@@ -165,8 +166,51 @@ Deno.test("candidateRoots orders env overrides before caches and cwd walk", () =
     // A bare relative DB_PATH filename resolves to ".", not an empty root.
     Deno.env.set("DB_PATH", "space.sqlite");
     assert(candidateRoots("/a/b").includes("."));
+
+    // The upward walk stops at the filesystem root rather than looping on it,
+    // which is a root being its own parent.
+    Deno.env.delete("DB_PATH");
+    Deno.env.delete("MEMORY_DIR");
+    const fromRoot = candidateRoots("/");
+    assertEquals(fromRoot.filter((r) => r === "/cache/memory").length, 1);
   } finally {
     restore("MEMORY_DIR");
     restore("DB_PATH");
+  }
+});
+
+Deno.test("discovery finds a space under a MEMORY_DIR written as a file URL", async () => {
+  // The form a server's own configuration uses: `packages/toolshed/env.ts`
+  // defaults MEMORY_DIR to a `file:` URL, and the server hands it to `new URL()`.
+  // Left as a URL it names no directory, so the walk finds nothing and every
+  // space in that store reads as absent — which is what this covers, by taking
+  // the same route `cf inspect <space>` takes to a store the environment names.
+  const saved = Deno.env.get("MEMORY_DIR");
+  const restore = () =>
+    saved === undefined
+      ? Deno.env.delete("MEMORY_DIR")
+      : Deno.env.set("MEMORY_DIR", saved);
+  const dir = await Deno.makeTempDir({ prefix: "cf-store-url-" });
+  try {
+    const engine = `${dir}/engine-v3/engine-v3`;
+    await Deno.mkdir(engine, { recursive: true });
+    const name = "state-inspector-url-space";
+    const did = await deriveSpaceDid(name);
+    makeSpace(`${engine}/${did}.sqlite`, 1);
+
+    // The trailing separator is the one the default carries.
+    Deno.env.set("MEMORY_DIR", Path.toFileUrl(`${dir}/`).href);
+    const found = discoverSpaceDbs({ cwd: dir });
+    assertEquals(await resolveSpace(name, found), `${engine}/${did}.sqlite`);
+
+    // A path written by hand reaches the same store, and the same file.
+    Deno.env.set("MEMORY_DIR", dir);
+    assertEquals(
+      await resolveSpace(name, discoverSpaceDbs({ cwd: dir })),
+      `${engine}/${did}.sqlite`,
+    );
+  } finally {
+    restore();
+    await Deno.remove(dir, { recursive: true });
   }
 });

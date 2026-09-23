@@ -20,6 +20,7 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type {
   ClientCommit,
@@ -40,7 +41,11 @@ import {
 } from "../src/storage/event-append-queue.ts";
 import { ArrivalLog } from "./support/serving-waits.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
-import { newSharedServer } from "./memory-v2-test-utils.ts";
+import {
+  newSharedServer,
+  TEST_MEMORY_SERVER_AUTH,
+  testPrincipalSessionOpenAuthFactory,
+} from "./memory-v2-test-utils.ts";
 import {
   flushMicrotasks,
   scriptedIntentManager,
@@ -66,6 +71,76 @@ const appendOf = (
 });
 
 describe("event-append queue (events.md §5, LT9)", () => {
+  it("settles a READ principal's authoritative append refusal without retrying it", async () => {
+    const server = new MemoryV2Server.Server({
+      sessionOpenAuth: TEST_MEMORY_SERVER_AUTH.sessionOpenAuth,
+      authorizeSessionOpen: (message) =>
+        (message.authorization as { principal: string }).principal,
+      acl: { mode: "enforce" },
+    });
+    const engine = await server.engineForSpace(space);
+    Engine.applyCommit(engine, {
+      sessionId: "read-append-genesis",
+      space,
+      principal: space,
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: `of:${space}`,
+          value: { value: { [space]: "OWNER", [aliceSigner.did()]: "READ" } },
+        }],
+      },
+    });
+    const client = await MemoryV2Client.connect({
+      transport: MemoryV2Client.loopback(server),
+    });
+    const session = await client.mount(
+      space,
+      {},
+      testPrincipalSessionOpenAuthFactory(aliceSigner),
+    );
+    const retried = Promise.withResolvers<"retried">();
+    let attempts = 0;
+    let refusal: unknown;
+    const queue = new EventAppendQueue({
+      space,
+      nextLocalSeq: () => ++attempts,
+      transact: async (commit) => {
+        if (attempts > 1) retried.resolve("retried");
+        try {
+          return await session.transact(commit);
+        } catch (error) {
+          refusal = error;
+          throw error;
+        }
+      },
+    });
+    try {
+      const result = await Promise.race([
+        queue.enqueue(appendOf("reader-denied")),
+        retried.promise,
+      ]);
+      expect(refusal).toMatchObject({
+        name: "AuthorizationError",
+        permanentEvidence: true,
+        aclRevision: 1,
+      });
+      expect(result).toEqual({
+        delivered: false,
+        refused: expect.stringContaining("lacks WRITE"),
+      });
+      expect(attempts).toBe(1);
+      expect(queue.pending).toHaveLength(0);
+      expect(Engine.serverSeq(engine)).toBe(1);
+    } finally {
+      queue.close();
+      await client.close();
+      await server.close();
+    }
+  });
+
   it("discharges in fired order, one in flight", async () => {
     const sent = new ArrivalLog<string>();
     let release: (() => void) | undefined;
@@ -160,6 +235,39 @@ describe("event-append queue (events.md §5, LT9)", () => {
     queue.close();
   });
 
+  it("retries authorization failures without a permanent current-ACL verdict", async () => {
+    for (
+      const details of [
+        {},
+        { permanentEvidence: true },
+        { permanentEvidence: true, aclRevision: 1, retriable: true },
+      ]
+    ) {
+      let attempts = 0;
+      const queue = new EventAppendQueue({
+        space,
+        nextLocalSeq: () => ++attempts,
+        transact: () =>
+          attempts === 1
+            ? Promise.reject(
+              Object.assign(
+                namedError("AuthorizationError", "session challenge"),
+                details,
+              ),
+            )
+            : Promise.resolve(),
+      });
+      try {
+        expect(await queue.enqueue(appendOf("auth-recovery"))).toEqual({
+          delivered: true,
+        });
+        expect(attempts).toBe(2);
+      } finally {
+        queue.close();
+      }
+    }
+  });
+
   it("duplicate-eventId fires each settle their own outcome (the per-entry keying — a per-id map would wedge the pending-commit barrier)", async () => {
     let calls = 0;
     const queue = new EventAppendQueue({
@@ -247,6 +355,54 @@ describe("event-append queue (events.md §5, LT9)", () => {
     expect((await store.load(space)).map((entry) => entry.eventId)).toEqual([
       "evt-late",
     ]);
+  });
+
+  it("recovers a failed persistence save without dropping or reordering pending events", async () => {
+    const durable = memoryEventAppendQueueStore();
+    const delivery = Promise.withResolvers<void>();
+    const arrivals = new ArrivalLog<string>();
+    let saves = 0;
+    let localSeq = 0;
+    const queue = new EventAppendQueue({
+      space,
+      pacing: false,
+      nextLocalSeq: () => ++localSeq,
+      store: {
+        load: (space) => durable.load(space),
+        save: async (space, entries) => {
+          if (++saves === 1) throw new Error("persistence adapter unavailable");
+          await durable.save(space, entries);
+        },
+      },
+      transact: async (commit) => {
+        expect(commit.eventAppends).toHaveLength(1);
+        arrivals.record(commit.eventAppends![0].eventId);
+        await delivery.promise;
+      },
+    });
+    try {
+      const first = queue.enqueue(appendOf("save-retry-first"));
+      await arrivals.reached(1);
+      await queue.persisted;
+      expect(await durable.load(space)).toEqual([]);
+      const second = queue.enqueue(appendOf("save-retry-second"));
+      await queue.loaded;
+      await queue.persisted;
+      expect((await durable.load(space)).map((entry) => entry.eventId))
+        .toEqual(["save-retry-first", "save-retry-second"]);
+      delivery.resolve();
+      expect(await first).toEqual({ delivered: true });
+      expect(await second).toEqual({ delivered: true });
+      expect(arrivals.entries).toEqual([
+        "save-retry-first",
+        "save-retry-second",
+      ]);
+      await queue.persisted;
+      expect(await durable.load(space)).toEqual([]);
+    } finally {
+      delivery.resolve();
+      queue.close();
+    }
   });
 
   it("saves serialize behind the PREVIOUS save (review 2026-08-11 m6/LT9): an async adapter can never complete snapshots out of order", async () => {

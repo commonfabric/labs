@@ -901,9 +901,10 @@ from. The dashboard's coverage debt tile
 (`packages/dashboard/coverage-debt-history.ts`) reads the
 `coverage-debt: workspace uncovered lines` record out of one `main` run a day,
 shows the newest of those figures, and charts the run of them. It skips a run
-whose compile cache states say it was cold, for the reason the ratchet does. So
-the metric name, the `durationSeconds` key and the `compileCacheStates` tag have
-a reader outside the gate, and a change to any of them is a change to the tile.
+any of whose compile cache states is cold, for the reason the ratchet does;
+"Compile cache state and cold runs" below says what records those states. So the
+metric name, the `durationSeconds` key and the `compileCacheStates` tag have a
+reader outside the gate, and a change to any of them is a change to the tile.
 
 A later PR run reads its ratchet baseline from the `perf-metrics` artifact of the
 `main` run for the base-branch commit it merged, or of the nearest ancestor of
@@ -926,6 +927,16 @@ script separately checks the expected artifact names
 (`EXPECTED_COVERAGE_ARTIFACT_NAMES`). It also rejects an artifact containing no
 coverage files. A manual run without the environment variable uses the GitHub API
 download path instead.
+
+The names the script checks come from the run's artifact listing, which is read
+through the GitHub API. When GitHub's rate limit refuses that listing, the
+subdirectories of `COVERAGE_ARTIFACTS_DIR` name the artifacts instead, so the run
+still measures its coverage; the files it measures are the downloaded ones
+either way. The compile cache states are not among the downloads, so such a run
+has none recorded, as when their artifacts are missing. A pull request's run
+without the environment variable has nothing to fall back on, and fails as it
+does for any other failure to read its own coverage, with the limit named in its
+log.
 
 ### Measuring a before/after locally
 
@@ -987,14 +998,31 @@ compile fingerprint: `tasks/compile-cache-state.ts` mirrors the `cc-*` key globs
 against the commit whose cache it would have restored — the pull request's own
 changed files, or the previous `main` run for a push. A family with no recorded
 state is filled cold when those paths changed. Recorded states are ground truth
-and always win. The rate-limit skip path writes the same stamped artifact, so a
-run cut short still tells later runs whether it was cold.
+and always win. A run a rate limit ends early writes the same stamped artifact
+before it stops, so it still tells later runs whether it was cold.
 
 Neither source is complete. Fingerprint inference cannot see non-fingerprint
 cold causes (cache eviction, cache-service outages), and a run whose cache-state
 artifacts and fingerprint comparison both failed publishes no stamp at all. A
 run with no recorded state is treated as not-cold and may still be used as a
 baseline.
+
+A CI lane records the state of the compile byte cache it restores
+(`COMPILE_CACHE_FILE` in `tasks/ci-capabilities.ts`) itself. A lane whose
+batches open that cache checks whether the file exists before its first batch
+runs, because the first pattern a batch compiles writes the file whatever the
+cache held. It writes `cold` or `warm` to `compile-cache-state.txt` at the top
+of the directory its coverage artifact holds. A file that exists reads as warm,
+which is sound only while the workflow keys the lanes' cache, and every restore
+key for it, on the compiler fingerprint, as it keys the jobs' caches: a file
+restored from a run of another compiler holds no bytes this one can use, and
+would read as warm all the same. `tasks/coverage-report.ts` reads
+every such record and publishes the run's state under the `compile-cache` key of
+`compileCacheStates`: cold when any record says `cold` or says something it
+does not recognize, warm when every record says `warm`, and absent when no lane
+opened the cache. The dashboard's repository-wide trend leaves a cold run out,
+so a fingerprint change does not show as a drop in debt that the next warm run
+takes back.
 
 ## Which `main` run the ratchet compares against
 
@@ -1106,18 +1134,41 @@ baseline, the run reports it in four places:
   and the next run that gates every changed group rewrites it into the
   collapsed summary.
 
-Each names the groups, and for each group one of three reasons:
+Each names the groups, and for each group one of four reasons:
 
 - No successful `main` run within reach measured the base-branch commit or an
   ancestor of it.
 - The base branch changed the group between the nearest measured ancestor and
   the base-branch commit, so the two totals count different code.
 - The base-branch commit could not be read from the checkout.
+- GitHub's API rate limit stopped the run reading the baseline data at all, so
+  no group was compared. A limit is read off the response — the status together
+  with the rate-limit headers — rather than off the wording of a refusal, whose
+  body the client cancels unread. The reads that treat an ordinary failure as
+  absent data, a run's artifact listing and the lookup of the pull request that
+  merged its commit among them, let a limit through instead: reported as absent
+  data it would become a claim that no `main` run has measured the group.
 
-A later run of the pull request gates those groups, once a `main` run has
-measured the commit it merges. Re-running the Coverage Check job is enough when
-that `main` run has finished since; updating the branch gives the next run a
-newer commit to merge.
+For the first three, a later run of the pull request gates those groups, once a
+`main` run has measured the commit it merges. Re-running the Coverage Check job
+is enough when that `main` run has finished since; updating the branch gives the
+next run a newer commit to merge.
+
+A run a rate limit stopped passes, and re-running the Coverage Check job once
+the limit has reset is the whole remedy. It passes rather than fails because the
+limit bounds what this repository may ask of GitHub in an hour: it is a property
+of the moment rather than of the pull request, and a re-run started straight
+away meets it again, so failing would hold the pull request on a condition its
+author has no way to clear. That is the one thing separating it from a run
+listing that is not current, whose remedy is a re-run that costs about a minute.
+What makes the pass safe to keep is that it is no longer a quiet one — the run
+reports through the same four places above, so a pull request that was never
+gated does not read as one that was.
+
+A limit reached before the comparison, on the listing of the run's own
+artifacts, does not stop the run measuring what it downloaded (see "Ratchet
+baselines and accepting debt"). The comparison then reads the API again, and a
+limit still in force there ends the run as above, naming the groups it measured.
 
 The table header in the job's log is the quick check. `excl` beside a group the
 pull request changed means that group was not compared, and a header reading

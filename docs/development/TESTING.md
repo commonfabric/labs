@@ -15,6 +15,20 @@ deno task test
 
 **Important:** Always use `deno task test` from the root, NOT `deno test`, as the task includes necessary flags.
 
+A package's `test` task is no substitute for a type check: some packages' tests
+skip checking outright, and the rest check only the modules their tests reach.
+`deno task check` at the root checks the whole workspace at once, so run both:
+
+```bash
+deno task check
+deno task test
+```
+
+A package with a `check` task of its own runs the same check over its own
+files, which is useful while working inside one package and is not a
+substitute: the root check is the one continuous integration runs, and it
+covers trees no package's own check reaches.
+
 ### Running one test by name
 
 Use `--filter` on a package's `test` task, not on the root one. The root task
@@ -29,29 +43,253 @@ deno task test --filter "test name"
 The flag is passed to the `deno test` that the package's own task invokes, so
 the preload, the permissions, and the file globs that package's tests need are
 all still applied. The same holds for the packages that run their tests through
-a script of their own, `packages/cli` and `packages/piece` among them. Each of
-those scripts passes on the arguments it receives.
+a script, `packages/cli` and `packages/piece` among them. Each of those scripts
+passes on the arguments it receives.
 
-`deno task` appends the extra arguments to the end of the task's command line,
-so the flag is passed to the last command on that line. Two kinds of task have
-something other than a `deno test` at the end, and both run their whole suite:
+`deno task` appends the extra arguments to the end of the task's command line.
+A package's `test` task runs `tasks/run-member-tests.ts`, which is handed the
+names of the package's tasks that make up its tests — its `deno-test`, and any
+others such as a browser half — and the order to run them in. That script gives
+the appended arguments to `deno-test` and to nothing else, so a filter reaches
+the tests:
 
-- A task that lists other tasks and has no command of its own. `packages/memory`
-  and `packages/static` are two. There is no command for the flag to be passed
-  to. Name the underlying task instead. In `packages/memory` that is
-  `deno task just-test --filter "test name"`.
-- A task that chains two commands with `&&`, as `packages/ui` does to run its
-  browser tests after its other tests. The flag is passed only to the second
-  command, so the first runs unfiltered. Run the command that holds the test
-  directly, using the flags the `test` task gives it.
+```bash
+deno task test --filter "test name"
+```
 
-The package's `test` task in its `deno.jsonc` says which kind it is.
-`deno task test` also prints the command line it runs, which shows where the
-flag was appended.
+The package's `test` task in its `deno.jsonc` names what it runs, and
+`deno task <name>` runs any one of them on its own. `deno task test` also
+prints each command line as it runs it, which shows where the flag was
+appended.
+
+A handful of packages run a test runner of their own — `packages/dashboard`
+and `packages/identity` among them — and appended arguments reach whatever that
+runner does with them, which its own source says.
 
 A test's name is also its identity in the run-record store, so a renamed test
 must be listed in `tasks/test-identity-aliases/` to keep its recorded
 history joined to its new name.
+
+### Every test has to pass on its own
+
+A continuous-integration lane selects individual tests, not whole files. A lane
+given one `it()` out of a file registers every other test in the file as
+ignored, and the file's `beforeAll` and `afterAll` hooks all still run —
+including those of a `describe()` whose every test was ignored, which pays for
+that suite's setup and runs none of its tests. Only `beforeEach` and
+`afterEach` narrow, to the surviving test. So what a test needs comes from a
+hook or from the test itself, and never from a test above it. A page another
+test navigated to a view, a cell another test set to a value, and a piece
+another test created are all things a test has to arrange for itself.
+[Test selection](test-selection.md) describes the machinery that picks them.
+
+Such a test fails by waiting. The waits an integration test uses resolve on an
+event, and the event never comes, so the wait runs to its stuck-condition
+safety net and the test costs five minutes. Selection then charges the test
+what it cost, and five minutes is more than a lane can hold. A lane may fill
+to `LANE_BUDGET_SECONDS`, and a lane running one test and nothing else may go
+up to `LANE_BOUND_SECONDS`, which is 300 — so a test charged more than that
+fits nowhere at all, and one charged between the two runs only while a change
+makes it mandatory. [Test selection](test-selection.md) has the packing rules;
+`tasks/test-selection/policy.ts` has the numbers.
+
+A page and a value are not equally easy to find missing. A page a test never
+navigated announces itself: the wait's diagnostics say `document URL:
+about:blank` and `globalThis.app: absent`, in the cause of whatever message the
+helper wrapping the wait reports. A value a test never wrote does not.
+The page is there, every diagnostic reads healthy, and the test waits out the
+same five minutes against the initial value. So give each test the value it
+asserts as well as the page it drives, or, where one test's expectation is
+another test's effect, make the two one test.
+
+Writing that value is what leaves the test waiting on a condition its own
+starting state satisfies, where the value is the one a neighbor wrote first.
+["A wait the initial state already satisfies establishes
+nothing"](waiting-in-tests.md#a-wait-the-initial-state-already-satisfies-establishes-nothing)
+covers that, including how to tell it from a test whose subject is the initial
+state. The part of it to carry away here: give such a test a value no other
+test in the file writes.
+
+Making a test stand alone has a third consequence in a browser test. What the
+page shows is now the effect of a write the page did not make, and an
+integration test holds no subscription that drives the page between a wait's
+checks, so a passive wait can sit on an unchanged DOM while the effect is
+ready to apply. Reach for a wait that settles
+the view on each check — `waitForSettledText` rather than `waitForText`, and a
+`waitForCondition` predicate that settles before it reads.
+[Waiting in tests](waiting-in-tests.md) covers the primitives.
+
+Of the two places a test's page can come from, give it to the test rather than
+to `beforeAll`. `ShellIntegration.bindLifecycle()` collects the browser's
+console errors and uncaught page exceptions, clears them in `beforeEach` and
+fails the test on them in `afterEach`, and `beforeAll` runs before the first
+`beforeEach`. So a navigation in `beforeAll` has everything the shell's
+bootstrap, login and first render reported thrown away before anything looks at
+it, while a navigation inside the test is covered. A helper each test calls
+keeps that check. It is one line per test to read and a whole `goto` to run —
+page load, state wait, and a login that rebuilds the worker runtime — so a
+suite of four tests pays for four of them, which is a cost a section about
+what selection charges should not leave out.
+
+Reproducing one of these locally takes the skip list rather than `--filter`.
+`--filter` matches the name of a `Deno.test`, which for a file using
+`describe()` and `it()` is a top-level `describe()`, so the least it can select
+is a whole suite. `CF_TEST_SKIP_LIST` names a JSON file mapping a
+repository-relative test file to the test names inside it to ignore, each
+written as its full describe chain:
+
+```json
+{
+  "packages/patterns/integration/cf-render.test.ts": [
+    "cf-render integration test > should load the nested counter piece and verify initial state"
+  ]
+}
+```
+
+Reading that file is the registration preload's job, and `tasks/integration.ts`
+hands `deno test` that preload only for a run that writes a JUnit report. So
+the run needs `--junit-dir` as well. The name after the package selects test
+files rather than tests:
+
+```bash
+HEADLESS=1 CF_TEST_SKIP_LIST=/tmp/skip.json \
+  deno task integration --junit-dir=/tmp/junit patterns cf-render
+```
+
+Check the output says `ignored (0ms)` beside each test the list names. Where
+nothing reads the list every test runs, and a file that still depends on a
+sibling passes.
+
+[Focused browser regressions](#focused-browser-regressions) states the same
+requirement one level up, for a file sharing a browser with the files beside
+it.
+
+### Every test run shuffles its order
+
+Every test run reorders the tests it runs, always, with no flag to remember.
+A test that quietly needs another test to have run before it passes for as
+long as nothing disturbs the order, and a runner left to itself walks its
+tests in the order they were declared, so such a dependence is otherwise found
+only when somebody moves or removes a test. Shuffling finds it on a schedule
+instead.
+
+This is a different failure from the one test selection finds. Selection
+leaves a test out, which breaks a test that needed it to run. Shuffling runs
+everything and changes the order, which breaks a test whose failure comes from
+another test having run before it, and also catches a test that needs a
+particular predecessor rather than merely some earlier state.
+
+The seed is the date on which the commit under test was committed, taken in
+the Pacific time zone and written `YYYYMMDD`. It is read from git as the
+committer date, not the author date, so a rebased commit takes the day it was
+rebased. Each runner prints it:
+
+```text
+Test order shuffled with seed 20260922. Set CF_TEST_SHUFFLE_SEED=20260922 to run this order again.
+```
+
+So one commit runs in one order wherever and whenever it runs. Every job of a
+continuous-integration run agrees, a re-run of that job days later agrees, and
+a checkout of the commit on a workstation agrees. The order moves on as commits
+are made, to a new one each Pacific day. Uncommitted edits run in the order of
+the commit they sit on. Outside a git checkout the seed is today's date.
+
+Setting `CF_TEST_SHUFFLE_SEED` to any non-negative integer runs that order
+instead, which is how a different order is tried against the same commit.
+
+It matters that a commit never runs in two orders. This repository decides a
+test is flaky by seeing it pass and fail at the same commit, and withholds a
+test that flakes often enough from pull requests. An order-dependent test run
+in two orders at one commit has exactly that signature, so the tests this is
+meant to surface would be withheld instead of fixed. With one order per commit,
+an order-dependent test fails every time its commit is run, until somebody
+fixes it. The test records carry the seed each run used, and
+[test selection](test-selection.md) compares outcomes only between runs that
+agree on it, so a run under an override is not read as a flake either.
+
+#### Tomorrow's seed, run a day ahead
+
+The order changes with the first commit of each Pacific day, so a test that
+the new order breaks starts failing on that commit, whatever the commit
+changed. The Tomorrow's Test Order workflow,
+`.github/workflows/test-order-tomorrow.yml`, runs the next day's seed a day
+ahead, so that such a test can be found and fixed before the day it would
+break.
+
+The workflow runs at 11:00 UTC every day. That is 04:00 in the Pacific zone in
+summer and 03:00 in winter, early on a Pacific day either way. It asks
+`deno task -q test-seed --tomorrow` for the seed of the next Pacific day, and
+calls the CI workflow at the head of `main` with that seed, which runs every CI
+test suite under it. When a test fails, the run fails. The run's checks on the
+commit are listed under "Tomorrow's order", apart from the checks of the
+commit's own run. The CI workflow skips its coverage and topology gates, and
+its attestation and deploy jobs, when another workflow calls it. The records
+relay follows the workflow, and its records carry the seed they ran under, so
+[test selection](test-selection.md) keeps them apart from the commit's own
+runs.
+
+The order a run takes depends on the set of test files as well as the seed:
+`deno test --shuffle` and the runners this repository owns permute the whole
+list, so adding or removing one test file can move every other file.
+The next day's commits therefore run the next day's seed over a set of files
+that commits made in between may have changed. What the run gives is one more
+order, on a day's notice, that no commit has taken yet.
+
+To run a failing order again locally, set `CF_TEST_SHUFFLE_SEED` to the seed
+the run printed.
+
+#### What gets reordered
+
+`deno test --shuffle=<seed>` reorders the files of a run, and within each file
+the top-level registrations — a `Deno.test()` call, or a top-level
+`describe()`. It does not reorder the steps inside a registration, and an
+`it()` inside a `describe()` is a step.
+
+What each of those can catch follows from how Deno runs a file. Each test file
+gets a realm of its own, with its own module instances, globals and built-in
+objects, so nothing held in JavaScript passes from one file to the next. File
+order therefore matters only for state the process holds: environment
+variables, the filesystem, the working directory, native libraries loaded
+through FFI, and network ports. Order among a file's top-level registrations
+reaches everything in that file's realm — module-level state, a singleton, a
+global a test replaced and did not put back — which is where the shuffle has
+found most of what it has found.
+
+A file written the way [unit-test-coding-style.md](unit-test-coding-style.md)
+asks, with a single top-level `describe()` holding everything, is one
+registration, so its cases keep their order. A dependence between two `it()`
+calls in one `describe()` is still the author's to avoid, and [Every test has to
+pass on its own](#every-test-has-to-pass-on-its-own) above is the rule that
+covers it.
+
+The runners this repository owns reach further, because their order is ours to
+choose:
+
+- `deno-web-test` shuffles both the files of a run and the tests inside each
+  file, since it drives the browser harness one test at a time and picks which.
+- `cf test` shuffles the `.test.tsx` files of a run and leaves the steps inside
+  one alone. A pattern test states its expectations as a sequence, each one
+  about the state the step before it left, so their order is the test rather
+  than an accident of it.
+- The CLI's shell harnesses under `packages/cli/integration/` run in a fixed
+  order for that same reason: each is one scenario driven end to end.
+
+#### Writing a task that runs tests
+
+A `deno test` written anywhere in this repository takes the seed from the root
+`test-seed` task. In a package, that is its `deno-test` task, which its `test`
+task runs through `tasks/run-member-tests.ts`:
+
+```json
+"deno-test": "deno test --shuffle=$(deno task -q test-seed) --allow-read test/"
+```
+
+`deno task -q test-seed` resolves to the root task from any directory inside
+the checkout, prints the seed on standard output and the line naming it on
+standard error. `deno task check-test-shuffle` fails when a command that
+starts a test runner does not carry a seed, and lists the runners this
+repository owns along with the ones whose order is the test.
+`packages/test-support/src/shuffle.ts` holds the seed and the permutation.
 
 ### Browser tests in agent sandboxes
 
@@ -318,10 +556,11 @@ under the other gets a report with every file missing.
 Deno resolves an allowlist entry of `deno` through `PATH` as well, so
 `--allow-run=deno` refuses the very binary the test is running under. Name that
 binary instead of widening the grant. A task line can compute it, because `deno`
-inside one runs the Deno running the task whatever `PATH` says:
+inside one runs the Deno running the task whatever `PATH` says. The quotes keep
+a path holding a space one argument:
 
 ```
---allow-run=$(deno eval "console.log(Deno.execPath())")
+--allow-run="$(deno eval "console.log(Deno.execPath())")"
 ```
 
 A test launched from a script can read `Deno.execPath()` directly, as
@@ -332,6 +571,12 @@ makes the computed form name the right binary, so
 `packages/test-support/src/isolated-deno.test.ts` holds it in place: it runs a
 task with a decoy `deno` as the only entry on the child's `PATH` and fails if the
 decoy is the one that runs.
+
+The child also inherits the environment of the run that started it, which in CI
+carries the recording variables, `CF_TEST_SKIP_LIST` among them. A test that
+starts a child naming its own tests names those variables too, and
+[test-records.md](test-records.md#covering-a-new-test-surface) says which and
+what to set them to.
 
 ### Test Structure
 

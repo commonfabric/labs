@@ -30,9 +30,9 @@ const signer = await Identity.fromPassphrase("piece named before start");
 const space = signer.did();
 
 // A host whose list maps each item onto a card carrying a handler. The
-// card's `{ "$stream": true }` marker is an internal cell of the card, which
-// a replica reading the card through the list does not receive: the card's
-// family belongs to whoever names it.
+// card's `bump` stream is an internal cell of the card, which a replica
+// reading the card through the list does not receive: the card's family
+// belongs to whoever names it.
 const CARD_SRC = [
   "import { pattern, computed, handler, type Stream, Writable } from 'commonfabric';",
   "const bump = handler<unknown, { count: Writable<number> }>((_, { count }) => {",

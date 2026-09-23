@@ -54,13 +54,27 @@ const metricsFile = (lines: number) =>
     compileCacheStates: { "pattern-unit": "warm" },
   });
 
-/** Answers every day with one run measuring `lines`, or fails every request. */
+/**
+ * Answers with one successful `main` run a day, each measuring `lines`, or
+ * fails every request. They fit on a page, and a page holding fewer runs than
+ * the listing serves is its last, so every day of them is a day read whole.
+ */
 function stubGitHub(lines: number | Error): CoverageDebtGitHub {
+  const runs = Array.from({ length: 70 }, (_, back) => ({
+    id: 1000 + back,
+    created_at: new Date(NOW - back * DAY_MS).toISOString(),
+    head_branch: "main",
+    event: "push",
+    conclusion: "success",
+  }));
   return {
     // deno-lint-ignore require-await
     json: async <T>(path: string): Promise<T> => {
       if (lines instanceof Error) throw lines;
-      if (path.includes("/runs?")) return { workflow_runs: [{ id: 7 }] } as T;
+      if (path.includes("/runs?")) {
+        const page = Number(path.match(/[?&]page=(\d+)/)?.[1] ?? 1);
+        return { workflow_runs: page === 1 ? runs : [] } as T;
+      }
       return {
         artifacts: [{ id: 7, name: "perf-metrics", expired: false }],
       } as T;

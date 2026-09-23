@@ -2,9 +2,8 @@
  * Pattern-visible declarations for the fabric value type system, and for the
  * options of the debug renderers over it, in the form that `@commonfabric/api`
  * re-exports to patterns. Everything here is an interface, a type, or a
- * `declare const`, except for the brand constants and the `FabricPrimitive`
- * schema `type` vocabulary with its predicate, so the module's only runtime
- * footprint is those.
+ * `declare`, except for the brand constants, so the module's only runtime
+ * footprint is those constants.
  *
  * The canonical implementations live in this module's siblings --
  * `interface.ts`, `fabric-primitives/FabricHash.ts`,
@@ -20,8 +19,8 @@
  * Every concrete `FabricPrimitive` subclass needs an instanceof-capable
  * declaration here, that being an interface, a constructor interface, and a
  * `declare const` combining the two. The interface narrows `.schemaType` to
- * the one name its class reports, and that name is listed in
- * `FABRIC_PRIMITIVE_SCHEMA_TYPES`.
+ * the one name its class reports, and the interface is a member of
+ * `ConcreteFabricPrimitive`.
  *
  * This module has no imports, and can have none. `@commonfabric/api`
  * re-exports it to patterns, and the script that builds the type file the
@@ -569,40 +568,38 @@ export declare const FabricUnavailable: FabricUnavailableConstructor;
 //
 
 /**
- * `FabricPrimitive` validation types -- a non-standard addition to the JSON
- * Schema `type` vocabulary. Each name identifies a concrete `FabricPrimitive`
- * class, being the name its instances report as `.schemaType`, and a value
- * matches by prototype (`instanceof`), not by structure. `"object"` also
- * accepts these values -- every `FabricPrimitive` is a subtype of `"object"`
- * the way an `"integer"` value satisfies a `"number"` schema -- so schemas
- * that do not use this vocabulary admit them all the same.
+ * Union of the concrete `FabricPrimitive` classes this module declares. Every
+ * type that ranges over those classes is derived from this one.
  */
-export const FABRIC_PRIMITIVE_SCHEMA_TYPES = Object.freeze(
-  [
-    "FabricBytes",
-    "FabricEpochDay",
-    "FabricEpochNsec",
-    "FabricHash",
-    "FabricKeyPair",
-    "FabricRegExp",
-    "FabricUnavailable",
-  ] as const,
-);
+export type ConcreteFabricPrimitive =
+  | FabricBytes
+  | FabricEpochDay
+  | FabricEpochNsec
+  | FabricHash
+  | FabricKeyPair
+  | FabricRegExp
+  | FabricUnavailable;
 
-/** One of the `FabricPrimitive` names in the schema `type` vocabulary. */
-export type FabricPrimitiveSchemaType =
-  typeof FABRIC_PRIMITIVE_SCHEMA_TYPES[number];
+/**
+ * One of the `FabricPrimitive` validation types -- a non-standard addition to
+ * the JSON Schema `type` vocabulary. Each name identifies a concrete
+ * `FabricPrimitive` class, being the name its instances report as
+ * `.schemaType`, and a value matches by prototype (`instanceof`), not by
+ * structure. `"object"` also accepts these values -- every `FabricPrimitive`
+ * is a subtype of `"object"` the way an `"integer"` value satisfies a
+ * `"number"` schema -- so schemas that do not use this vocabulary admit them
+ * all the same.
+ */
+export type FabricPrimitiveSchemaType = ConcreteFabricPrimitive["schemaType"];
 
-const FABRIC_PRIMITIVE_SCHEMA_TYPE_SET: ReadonlySet<string> = new Set(
-  FABRIC_PRIMITIVE_SCHEMA_TYPES,
-);
+/** Every `FabricPrimitiveSchemaType`, one entry per concrete class. */
+export declare const FABRIC_PRIMITIVE_SCHEMA_TYPES:
+  readonly FabricPrimitiveSchemaType[];
 
 /** Whether the given schema type names a `FabricPrimitive` class. */
-export function isFabricPrimitiveSchemaType(
+export declare function isFabricPrimitiveSchemaType(
   type: string,
-): type is FabricPrimitiveSchemaType {
-  return FABRIC_PRIMITIVE_SCHEMA_TYPE_SET.has(type);
-}
+): type is FabricPrimitiveSchemaType;
 
 //
 // Concrete `FabricInstance` classes

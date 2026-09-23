@@ -1,3 +1,4 @@
+import { shuffleFlag, shuffleSeed } from "@commonfabric/test-support/shuffle";
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import {
@@ -52,7 +53,7 @@ function twoParts() {
 
 describe("reading a configuration's skip registry", () => {
   it("takes a whole-file entry out and leaves a step entry's file in", () => {
-    const { whole, unavailable } = unavailableFrom([
+    const { excluded, unavailable } = unavailableFrom([
       { file: "a.test.ts", phase: "phase-3", reason: "not landed" },
       {
         file: "b.test.ts",
@@ -61,7 +62,7 @@ describe("reading a configuration's skip registry", () => {
         reason: "that step is not landed",
       },
     ], "packages/oven");
-    expect([...whole]).toEqual(["packages/oven/a.test.ts"]);
+    expect([...excluded]).toEqual(["packages/oven/a.test.ts"]);
     expect(unavailable.map((entry) => entry.leafName)).toEqual([
       undefined,
       "bakes > slowly",
@@ -199,6 +200,14 @@ describe("a suite of deno test files over several packages", () => {
     );
     expect(invocation!.command).not.toContain("--allow-write=/spool");
     expect(invocation!.command).toContain(preloadArgument());
+  });
+
+  it("hands the run's seed to every `deno test` it builds", async () => {
+    const [invocation] = await twoParts().command(
+      [{ unit: "packages/mill/integration/grind.test.ts", skip: [] }],
+      context,
+    );
+    expect(invocation!.command).toContain(shuffleFlag(shuffleSeed()));
   });
 
   it("builds nothing for a unit it does not hold", async () => {

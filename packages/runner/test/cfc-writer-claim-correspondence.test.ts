@@ -10,9 +10,9 @@ import { reportDroppedCfcRejectedWrite } from "../src/scheduler/cfc-rejection-re
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
 
 /**
- * labs#4772 / CT-1886: `writeAuthorizedBy` anchors on `moduleIdentity` +
- * `bindingPath`; the claim's file SPELLING is resolver-dependent (the same
- * module spells `/api/patterns/system/x.tsx` from a piece-deploy compile and
+ * `writeAuthorizedBy` anchors on `moduleIdentity` + `bindingPath`; the claim's
+ * file SPELLING is resolver-dependent (the same module spells
+ * `/api/patterns/system/x.tsx` from a piece-deploy compile and
  * `/patterns/system/x.tsx` from an HTTP-resolved one) and must not shear
  * authorization. These tests pin the spelling tolerance at the two sites
  * that read EXISTING stamps (verification, stored-claim reconciliation), pin

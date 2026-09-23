@@ -1,15 +1,10 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import type { Primitive } from "@commonfabric/utils/types";
-
-import { type FabricPrimitive } from "@/interface.ts";
 import {
-  type BaselineVisitResult,
-  BaseValueVisitor,
-  type LeafVisitorResult,
+  DefaultValueVisitor,
   makeVisitValueFunction,
-  RecursiveValueVisitor,
+  type VisitResult,
   visitValue,
 } from "@/value-visit";
 
@@ -23,7 +18,6 @@ describe("value-visit/impl", () => {
       visitValue([1], rec);
       expect(rec.names).toEqual([
         "value",
-        "container",
         "array",
         "value",
         "primitive",
@@ -35,21 +29,19 @@ describe("value-visit/impl", () => {
       expect(visitValue({ a: [1] }, new Recorder())).toBeUndefined();
     });
 
-    it("returns a `mainResult` typed by the visitor's `ResultType`", () => {
-      class FirstNumber extends RecursiveValueVisitor<never, number> {
-        override visitPrimitive(
-          value: Primitive | FabricPrimitive,
-        ): LeafVisitorResult<never, number> {
-          return (typeof value === "number") ? mainResult(value) : undefined;
+    it("returns a value of the visitor's `ResultType`", () => {
+      class FirstNumber extends DefaultValueVisitor<never, number> {
+        override visitNumber(value: number): VisitResult<never, number> {
+          return mainResult(value);
         }
       }
 
-      const result: BaselineVisitResult<number> = visitValue(
+      const result: number = visitValue(
         ["x", 7, 8],
         new FirstNumber(),
       );
 
-      expect(result).toEqual(mainResult(7));
+      expect(result).toBe(7);
     });
 
     it("refuses, at compile time, a value outside the visitor's domain, and throws at runtime", () => {
@@ -57,17 +49,17 @@ describe("value-visit/impl", () => {
       // call to type-check, the directive would be reported as unused and
       // the file would fail to compile. The line still runs, and the runtime
       // half is that the engine, told by `isPlusType()` that the value is
-      // outside the domain, throws the domain error rather than reaching
-      // `visitPlusType()`, whose base implementation throws a different one.
+      // outside the domain, hands it to the visitor with the tag `null`, on
+      // which `DefaultValueVisitor` throws.
 
-      class Strict extends BaseValueVisitor<never, number> {}
+      class Strict extends DefaultValueVisitor<never, number> {}
 
       const vis = new Strict();
       const date = new Date(0);
 
       // @ts-expect-error A `Date` is not in a `never`-extra domain.
       expect(() => visitValue(date, vis)).toThrow(
-        /Encountered a value outside of the visitor's domain: /,
+        /Cannot visit unrecognized value: /,
       );
     });
   });

@@ -18,7 +18,9 @@ describe("piece-targeting", () => {
 
   it("bounds named target selection to one released unique match without restricting listing tasks", () => {
     const prompt = PIECE_TARGETING_GUIDANCE;
-    expect(prompt).toContain("user supplied a piece name");
+    expect(prompt).toContain(
+      "user supplied only a display name rather than a slug",
+    );
     expect(prompt).toContain("at most one registry read");
     expect(prompt).toContain("across the parent and its children together");
     expect(prompt).toContain(
@@ -38,12 +40,21 @@ describe("piece-targeting", () => {
     );
   });
 
+  it("resolves a user-supplied slug before delegating in fresh and continued conversations", () => {
+    expect(PIECE_TARGETING_GUIDANCE).toContain(
+      "call resolve_piece before any author delegation or registry read",
+    );
+    expect(PIECE_TARGETING_GUIDANCE).toContain("change my recent-emails list");
+    expect(PIECE_TARGETING_GUIDANCE).toContain("the recent-emails one");
+    expect(PIECE_TARGETING_GUIDANCE).toContain("Do not author a name matcher");
+  });
+
   it("allows the parent to ask about an unspecified piece before inspecting grants", () => {
     expect(finishTaskTool.descriptor.description).toContain(
       "For an unspecified piece, ask the user to attach or name it without reading the registry",
     );
     expect(finishTaskTool.descriptor.description).toContain(
-      "When checking whether a named data source is available",
+      "Before asking the user to connect or attach a named data source",
     );
   });
 });

@@ -9,6 +9,23 @@ export const STATUS_DOT: Record<Status, string> = {
   unknown: "gray",
 };
 
+// good/warn/bad/unknown, worst last: the order a tile combines them in.
+export const STATUS_RANK: Record<Status, number> = {
+  good: 0,
+  unknown: 1,
+  warn: 2,
+  bad: 3,
+};
+
+/** The worst of several statuses, or `good` when there are none. */
+export function worstStatus(statuses: readonly Status[]): Status {
+  return statuses.reduce<Status>(
+    (worst, status) =>
+      STATUS_RANK[status] > STATUS_RANK[worst] ? status : worst,
+    "good",
+  );
+}
+
 export const escapeHtml = (s: string) =>
   s.replace(
     /[<>&"]/g,
@@ -46,6 +63,20 @@ export function compactSpan(ms: number): string {
   if (minutes < 60) return `${minutes}m`;
   const hours = Math.round(minutes / 60);
   return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;
+}
+
+/**
+ * How long something ran, to the precision a reader compares two of them at:
+ * seconds under a minute, then minutes and seconds, then hours and minutes.
+ */
+export function humanDuration(ms: number): string {
+  const seconds = Math.round(ms / 1_000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) {
+    return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`;
+  }
+  return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
 }
 
 export const DURATION_LABEL_HEIGHT = 9;

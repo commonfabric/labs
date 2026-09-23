@@ -1,10 +1,9 @@
 /**
  * Pins the schema/value alignment of the argument scheduler-read collector
  * (`collectArgumentSchedulerReadLinks`): write-redirect links bound in tuple
- * (prefixItems) slot positions must be visited like `items`-covered elements
- * (CT-1895 — prefixItems-only schemas previously skipped array elements
- * entirely, so links bound in tuple positions escaped scheduler read
- * tracking).
+ * (prefixItems) slot positions are visited like `items`-covered elements, so
+ * links bound in the tuple positions of a prefixItems-only schema stay under
+ * scheduler read tracking.
  */
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
@@ -71,7 +70,7 @@ describe("argument scheduler read links", () => {
   });
 
   it("visits items-covered elements past the tuple slots", () => {
-    // Parity pin: the rest region keeps its pre-existing items coverage.
+    // Parity pin: `items` covers the rest region beside `prefixItems`.
     const resultCell = runtime.getCell(space, "sched-read-rest-result");
     const sourceCell = runtime.getCell<number>(space, "sched-read-rest-src");
     const argumentSchema = {

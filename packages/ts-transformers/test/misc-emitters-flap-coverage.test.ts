@@ -5,7 +5,6 @@ import ts from "typescript";
 
 import { unwrapOpaqueLikeType } from "../src/ast/type-inference.ts";
 import { shouldTransformArrayMethod } from "../src/closures/strategies/array-method-policy.ts";
-import { symbolDeclaresCommonFabricDefault } from "../src/core/common-fabric-symbols.ts";
 import { TransformationContext } from "../src/core/context.ts";
 import { transformCfDirective } from "../src/mod.ts";
 import { emitElementAccessExpression } from "../src/transformers/expression-rewrite/emitters/element-access-expression.ts";
@@ -257,40 +256,6 @@ export const x = r;
   // the recursive type itself.
   assert(result !== undefined);
   assertEquals(result, recursiveType);
-});
-
-//
-// core/common-fabric-symbols.ts:159
-//
-// `symbolDeclaresCommonFabricDefault` bails out with `false` when the symbol has
-// no declarations. A synthetic property produced by a mapped type — e.g. the
-// `x` member of `Record<"x", number>` — is exactly such a symbol: it exists on
-// the type but `getDeclarations()` returns undefined.
-//
-
-Deno.test("common-fabric-symbols: a synthetic mapped-type property with no declarations is not a Common Fabric Default", () => {
-  const { program, sourceFile } = buildProgram(`
-declare const r: Record<"x", number>;
-export const y = r;
-`);
-  const checker = program.getTypeChecker();
-  const decl = find(
-    sourceFile,
-    ts.isVariableDeclaration,
-    (d) => ts.isIdentifier(d.name) && d.name.text === "y",
-  );
-  const recordType = checker.getTypeAtLocation(decl.name);
-  const syntheticProperty = checker.getPropertyOfType(recordType, "x");
-
-  // The mapped-type member is a real symbol but carries no declaration nodes.
-  assert(syntheticProperty !== undefined);
-  assertEquals(syntheticProperty!.getDeclarations(), undefined);
-
-  // With no declarations to inspect, the predicate reports it is not a Default.
-  assertEquals(
-    symbolDeclaresCommonFabricDefault(syntheticProperty, checker),
-    false,
-  );
 });
 
 //

@@ -29,6 +29,7 @@ import {
   isDefaultNodeWithUndefined,
   isOptionalSymbol,
 } from "../typescript/property-optionality.ts";
+import { unwrapTypeParentheses } from "../typescript/type-node.ts";
 import { attachUiContract, getUiContractHint } from "../ui-contract.ts";
 
 const logger = getLogger("schema-generator.object", {
@@ -108,22 +109,19 @@ function typeNodeExplicitlyDeclaresProperty(
   checker?: ts.TypeChecker,
 ): boolean {
   if (!typeNode) return false;
+  const node = unwrapTypeParentheses(typeNode);
 
-  if (ts.isParenthesizedTypeNode(typeNode)) {
-    return typeNodeExplicitlyDeclaresProperty(typeNode.type, propName, checker);
-  }
-
-  if (ts.isUnionTypeNode(typeNode)) {
-    return typeNode.types.some((member) =>
+  if (ts.isUnionTypeNode(node)) {
+    return node.types.some((member) =>
       typeNodeExplicitlyDeclaresProperty(member, propName, checker)
     );
   }
 
-  if (!ts.isTypeLiteralNode(typeNode)) {
+  if (!ts.isTypeLiteralNode(node)) {
     return false;
   }
 
-  return typeNode.members.some((member) =>
+  return node.members.some((member) =>
     (ts.isPropertySignature(member) || ts.isPropertyDeclaration(member)) &&
     !!member.name &&
     getPropertyNameText(member.name, checker) === propName
@@ -136,13 +134,10 @@ function getExplicitPropertyTypeNode(
   checker?: ts.TypeChecker,
 ): ts.TypeNode | undefined {
   if (!typeNode) return undefined;
+  const node = unwrapTypeParentheses(typeNode);
 
-  if (ts.isParenthesizedTypeNode(typeNode)) {
-    return getExplicitPropertyTypeNode(typeNode.type, propName, checker);
-  }
-
-  if (ts.isUnionTypeNode(typeNode)) {
-    for (const member of typeNode.types) {
+  if (ts.isUnionTypeNode(node)) {
+    for (const member of node.types) {
       const nested = getExplicitPropertyTypeNode(member, propName, checker);
       if (nested) {
         return nested;
@@ -151,11 +146,11 @@ function getExplicitPropertyTypeNode(
     return undefined;
   }
 
-  if (!ts.isTypeLiteralNode(typeNode)) {
+  if (!ts.isTypeLiteralNode(node)) {
     return undefined;
   }
 
-  for (const member of typeNode.members) {
+  for (const member of node.members) {
     if (
       (ts.isPropertySignature(member) || ts.isPropertyDeclaration(member)) &&
       !!member.name &&
@@ -172,18 +167,13 @@ function isExplicitPropertyShapeTypeNode(
   typeNode: ts.TypeNode | undefined,
 ): boolean {
   if (!typeNode) return false;
+  const node = unwrapTypeParentheses(typeNode);
 
-  if (ts.isParenthesizedTypeNode(typeNode)) {
-    return isExplicitPropertyShapeTypeNode(typeNode.type);
+  if (ts.isUnionTypeNode(node)) {
+    return node.types.some((member) => isExplicitPropertyShapeTypeNode(member));
   }
 
-  if (ts.isUnionTypeNode(typeNode)) {
-    return typeNode.types.some((member) =>
-      isExplicitPropertyShapeTypeNode(member)
-    );
-  }
-
-  return ts.isTypeLiteralNode(typeNode);
+  return ts.isTypeLiteralNode(node);
 }
 
 function shouldSkipInternalProperty(

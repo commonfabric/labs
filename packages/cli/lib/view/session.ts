@@ -3345,6 +3345,13 @@ export class Session {
     this.#ensureCursorVisible();
   }
 
+  /** Show `text` in the status line, where it stays until something replaces
+   * it. */
+  showMessage(text: string): void {
+    this.#message = text;
+    this.transientMessage = false;
+  }
+
   /** Take away a message that was set to go away on its own, once the driver has
    * left it up for its moment. Does nothing to a message that is not one of
    * those, so a later one is never cleared out from under itself. */
@@ -3371,9 +3378,10 @@ export class Session {
   /** Run the deferred full re-parse, refreshing the structure tree and
    * cross-references after the per-keystroke re-highlights (which keep the lines
    * current but not the structure). The incremental highlighter is discarded so
-   * the next edit re-seeds it from this authoritative parse. */
-  reparse(): void {
-    if (!this.#source || !this.#buffer || !this.needsReparse) return;
+   * the next edit re-seeds it from this authoritative parse. `force` re-parses
+   * when no edit asked for it, as when a language's parser has just loaded. */
+  reparse({ force = false }: { force?: boolean } = {}): void {
+    if (!this.#source || !this.#buffer || !(this.needsReparse || force)) return;
     this.#setSourceDocument(
       this.#source.parse(
         this.#buffer.text(),

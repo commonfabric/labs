@@ -1,22 +1,67 @@
 import { expect } from "@std/expect";
+import { parse as parseJsonc } from "@std/jsonc";
 import { describe, it } from "@std/testing/bdd";
-import { SKIP_LIST_VARIABLE } from "@commonfabric/test-support/records";
+import {
+  dropContainerCases,
+  parseJUnit,
+  RECORDS_DIR_VARIABLE,
+  SKIP_LIST_VARIABLE,
+} from "@commonfabric/test-support/records";
+import { shuffleFlag, shuffleSeed } from "@commonfabric/test-support/shuffle";
 import { loadUnitSuites } from "./unit.ts";
 import type { Suite } from "./suite.ts";
 import { EXCLUDED_FROM_COVERAGE_GATE } from "../test-selection/policy.ts";
 
+/** This repository's root. A fixture takes its import map from here. */
+const REPOSITORY = new URL("../../", import.meta.url);
+
+/**
+ * The import map the registration preload's modules resolve through. Deno
+ * takes `--preload` as a path rather than through the import map, so a
+ * fixture that runs the preload has to supply the specifiers it imports.
+ *
+ * The map is the repository's own, with each relative entry resolved against
+ * the repository so it still names the same file. The preload's
+ * `@commonfabric/` imports need no entry here, and the case that runs the
+ * preload shows that they resolve without one.
+ */
+async function preloadImports(): Promise<Record<string, string>> {
+  const manifest = parseJsonc(
+    await Deno.readTextFile(new URL("deno.jsonc", REPOSITORY)),
+  ) as { imports?: Record<string, string> };
+  const imports: Record<string, string> = {};
+  for (const [specifier, target] of Object.entries(manifest.imports ?? {})) {
+    imports[specifier] = target.startsWith(".")
+      ? new URL(target, REPOSITORY).href
+      : target;
+  }
+  return imports;
+}
+
 /** A workspace holding the members a case describes. */
 async function workspace(
-  members: Record<
-    string,
-    { tasks: Record<string, unknown>; files?: readonly string[] }
-  >,
+  members: Record<string, {
+    tasks: Record<string, unknown>;
+
+    /**
+     * The files the member holds. A record maps each file to its contents. A
+     * list gives empty files, for cases that only read the list of files.
+     */
+    files?: readonly string[] | Record<string, string>;
+  }>,
 ): Promise<string> {
   const root = await Deno.makeTempDir({ prefix: "unit-suite-" });
   await Deno.writeTextFile(
     `${root}/deno.jsonc`,
-    JSON.stringify({ workspace: Object.keys(members) }, null, 2),
+    JSON.stringify(
+      { workspace: Object.keys(members), imports: await preloadImports() },
+      null,
+      2,
+    ),
   );
+  // The preload names a registering file relative to the directory holding
+  // `.git`. Without one, no registration is attributed to a file.
+  await Deno.mkdir(`${root}/.git`, { recursive: true });
   for (const [member, contents] of Object.entries(members)) {
     const dir = `${root}/${member}`;
     await Deno.mkdir(dir, { recursive: true });
@@ -24,10 +69,13 @@ async function workspace(
       `${dir}/deno.json`,
       JSON.stringify({ tasks: contents.tasks }, null, 2),
     );
-    for (const file of contents.files ?? []) {
+    const files = Array.isArray(contents.files)
+      ? Object.fromEntries(contents.files.map((file) => [file, ""]))
+      : contents.files ?? {};
+    for (const [file, source] of Object.entries(files)) {
       const at = `${dir}/${file}`;
       await Deno.mkdir(at.slice(0, at.lastIndexOf("/")), { recursive: true });
-      await Deno.writeTextFile(at, "");
+      await Deno.writeTextFile(at, source as string);
     }
   }
   return root;
@@ -163,6 +211,21 @@ describe("the workspace unit suites", () => {
     ).toBeUndefined();
   });
 
+  it("hands the run's seed to every `deno test` it builds", async () => {
+    const root = await workspace({
+      "./packages/bakery": {
+        tasks: { test: "deno test test/glaze.test.ts" },
+        files: ["test/glaze.test.ts"],
+      },
+    });
+    const suite = workspaceUnit(await loadUnitSuites(root));
+    const [invocation] = await suite.command(
+      [{ unit: "packages/bakery/test/glaze.test.ts", skip: [] }],
+      { root, outputDir: "/out", spoolDir: "/spool" },
+    );
+    expect(invocation!.command).toContain(shuffleFlag(shuffleSeed()));
+  });
+
   it("runs the chosen files with the member's own flags", async () => {
     const root = await workspace({
       "./packages/bakery": {
@@ -181,6 +244,51 @@ describe("the workspace unit suites", () => {
     expect(invocation!.command).not.toContain("test/proof.test.ts");
     expect(invocation!.env?.ENV).toBe("test");
     expect(invocation!.junit?.[0]?.scope).toBe("bakery");
+  });
+
+  it("stops a listed test running, and leaves its neighbor alone", async () => {
+    // Running the invocation the suite built shows which key works. The preload
+    // looks a name up under the file that registered it, so a list keyed by
+    // anything else is never read.
+
+    const root = await workspace({
+      "./packages/bakery": {
+        tasks: { test: "deno test -A test/glaze.test.ts" },
+        files: {
+          "test/glaze.test.ts": 'Deno.test("sets overnight", () => {});\n' +
+            'Deno.test("proofs the dough", () => {});\n',
+        },
+      },
+    });
+    const suite = workspaceUnit(await loadUnitSuites(root));
+    const outputDir = await Deno.makeTempDir({ prefix: "unit-out-" });
+    const [invocation] = await suite.command(
+      [{
+        unit: "packages/bakery/test/glaze.test.ts",
+        skip: ["sets overnight"],
+      }],
+      { root, outputDir, spoolDir: `${outputDir}/spool` },
+    );
+    const run = await new Deno.Command(invocation!.command[0]!, {
+      args: invocation!.command.slice(1),
+      cwd: invocation!.cwd,
+      // The lane running this test has its own spool. Clearing the variable
+      // keeps the child's name map out of that lane's records.
+      env: { ...invocation!.env, [RECORDS_DIR_VARIABLE]: "" },
+      stdout: "piped",
+      stderr: "piped",
+    }).output();
+    expect(run.success).toBe(true);
+    const report = parseJUnit(
+      await Deno.readTextFile(invocation!.junit![0]!.path),
+    );
+    expect(
+      new Map(
+        dropContainerCases(report).map((leaf) => [leaf.name, leaf.outcome]),
+      ),
+    ).toEqual(
+      new Map([["sets overnight", "skip"], ["proofs the dough", "pass"]]),
+    );
   });
 
   it("names a skip list only where something inside a unit is skipped", async () => {
@@ -214,7 +322,11 @@ describe("the workspace unit suites", () => {
 });
 
 describe("running a member that cannot be handed a subset", () => {
-  it("runs the member's own task, and the skip list still reaches inside", async () => {
+  it("runs the member's own task, and registers nothing as ignored", async () => {
+    // The skip list the preload reads is keyed by the file that registered each
+    // test. This unit is the member's own directory, which is not such a file,
+    // so the lane writes no skip list for it.
+
     const root = await workspace({
       "./packages/bakery": {
         tasks: { test: "deno run --allow-read test/run-tests.ts" },
@@ -228,9 +340,142 @@ describe("running a member that cannot be handed a subset", () => {
       { root, outputDir, spoolDir: "/spool" },
     );
     expect(invocation!.command).toEqual([Deno.execPath(), "task", "test"]);
-    // The environment a task inherits is how the list reaches a member
-    // whose command line cannot be changed.
-    expect(invocation!.env?.[SKIP_LIST_VARIABLE]).toBeDefined();
+    expect(invocation!.env?.[SKIP_LIST_VARIABLE]).toBeUndefined();
+    expect(suite.whole).toContain("packages/bakery");
+  });
+
+  it("enumerates a member whose task runs the sharded runner", async () => {
+    // The runner walks a directory and runs the files assigned to its shard. A
+    // lane takes that directory and runs the files it chose, so the member is
+    // read a file at a time like any other.
+
+    const root = await workspace({
+      "./packages/bakery": {
+        tasks: {
+          test: "deno run --allow-read " +
+            "../../tasks/run-sharded-test-files.ts BAKERY_SHARD piece . " +
+            "-- --no-check -A",
+        },
+        files: ["test/glaze.test.ts", "test/proof.test.ts"],
+      },
+    });
+    const suite = workspaceUnit(await loadUnitSuites(root));
+    expect(suite.units).toEqual([
+      "packages/bakery/test/glaze.test.ts",
+      "packages/bakery/test/proof.test.ts",
+    ]);
+    expect(suite.whole).toEqual([]);
+  });
+
+  it("runs the files the runner sets apart in a `deno test` each", async () => {
+    // A serial file cannot run beside another test file in one process, and an
+    // all-access file needs every permission. A lane that selects some of each
+    // runs them apart, as the runner does, with a report and a skip list of
+    // their own.
+
+    const root = await workspace({
+      "./packages/bakery": {
+        tasks: {
+          test: "deno run --allow-read " +
+            "../../tasks/run-sharded-test-files.ts BAKERY_SHARD cli . " +
+            "--serial='**/*.serial.test.ts' --all-access=test/oven.test.ts " +
+            "-- --no-check --parallel --allow-read",
+        },
+        files: [
+          "test/glaze.test.ts",
+          "test/oven.test.ts",
+          "test/proof.serial.test.ts",
+        ],
+      },
+    });
+    const suite = workspaceUnit(await loadUnitSuites(root));
+    expect(suite.whole).toEqual([]);
+    const outputDir = await Deno.makeTempDir({ prefix: "unit-out-" });
+    const invocations = await suite.command(
+      [
+        { unit: "packages/bakery/test/proof.serial.test.ts", skip: ["rises"] },
+        { unit: "packages/bakery/test/oven.test.ts", skip: [] },
+        { unit: "packages/bakery/test/glaze.test.ts", skip: [] },
+      ],
+      { root, outputDir, spoolDir: "/spool" },
+    );
+    const files = invocations.map((invocation) =>
+      invocation.command.filter((word) => word.endsWith(".test.ts"))
+    );
+    expect(files).toEqual([
+      ["test/glaze.test.ts"],
+      ["test/oven.test.ts"],
+      ["test/proof.serial.test.ts"],
+    ]);
+    const [plain, allAccess, serial] = invocations;
+    expect(plain!.command).toContain("--parallel");
+    expect(plain!.command).toContain("--allow-read");
+    expect(allAccess!.command).toContain("--allow-all");
+    expect(allAccess!.command).not.toContain("--allow-read");
+    expect(serial!.command).not.toContain("--parallel");
+    expect(serial!.command).toContain("--allow-read");
+    expect(
+      new Set(invocations.map((invocation) => invocation.junit![0]!.path)).size,
+    ).toBe(3);
+    expect(plain!.env?.[SKIP_LIST_VARIABLE]).toBeUndefined();
+    expect(
+      JSON.parse(await Deno.readTextFile(serial!.env![SKIP_LIST_VARIABLE]!)),
+    ).toEqual({ "packages/bakery/test/proof.serial.test.ts": ["rises"] });
+  });
+
+  it("refuses a member whose serial glob names no file", async () => {
+    // Such a glob is a file renamed from under the task, which would
+    // otherwise run beside the rest under `--parallel`.
+
+    const root = await workspace({
+      "./packages/bakery": {
+        tasks: {
+          test: "deno run --allow-read " +
+            "../../tasks/run-sharded-test-files.ts BAKERY_SHARD cli . " +
+            "--serial=test/proof.serial.test.ts -- --no-check --parallel",
+        },
+        files: ["test/glaze.test.ts", "test/proof.test.ts"],
+      },
+    });
+    await expect(loadUnitSuites(root)).rejects.toThrow(
+      "No test file in `./packages/bakery` matches " +
+        "`test/proof.serial.test.ts`.",
+    );
+  });
+
+  it("builds one `deno test` where the files all need the same flags", async () => {
+    const root = await workspace({
+      "./packages/bakery": {
+        tasks: {
+          test: "deno run --allow-read " +
+            "../../tasks/run-sharded-test-files.ts BAKERY_SHARD cli . " +
+            "--serial='**/*.serial.test.ts' -- --no-check --parallel",
+        },
+        files: ["test/glaze.test.ts", "test/proof.serial.test.ts"],
+      },
+    });
+    const suite = workspaceUnit(await loadUnitSuites(root));
+    const invocations = await suite.command(
+      [{ unit: "packages/bakery/test/glaze.test.ts", skip: [] }],
+      { root, outputDir: "/out", spoolDir: "/spool" },
+    );
+    expect(invocations).toHaveLength(1);
+    expect(invocations[0]!.command).toContain("--parallel");
+  });
+
+  it("declares a browser half whole, since its runner takes no list", async () => {
+    const root = await workspace({
+      "./packages/bakery": {
+        tasks: {
+          test: { dependencies: ["deno-test", "browser-test"] },
+          "deno-test": "deno test --allow-read test/*.test.ts",
+          "browser-test": "deno run -A ../deno-web-test/cli.ts oven.test.ts",
+        },
+        files: ["test/glaze.test.ts"],
+      },
+    });
+    const suite = workspaceUnit(await loadUnitSuites(root));
+    expect(suite.whole).toEqual(["packages/bakery#browser-test"]);
   });
 
   it("accounts for the files the Deno-only half declines", async () => {

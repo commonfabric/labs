@@ -113,7 +113,6 @@ describe("lift event-emit gate", () => {
     cause: string,
   ) {
     const c = rt.getCell(space, cause, undefined, t);
-    c.set({ events: { $stream: true } });
     return c.asSchema(STREAM_SCHEMA).key("events");
   }
 

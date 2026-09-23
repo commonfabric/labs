@@ -104,7 +104,7 @@ describe("assert-record", () => {
   it("fails a value that is not a record, reporting what it read", () => {
     expect(assertionOutcome(undefined)).toEqual({
       passed: false,
-      error: "Expected true, got undefined",
+      error: "Expected true, got `undefined`",
     });
   });
 });

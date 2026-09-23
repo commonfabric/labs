@@ -132,10 +132,10 @@ describe("CFC wildcard policy value conditions on `FabricPrimitive` types", () =
 });
 
 describe("CFC policy value-conditions on tuple (prefixItems) schemas", () => {
-  // CT-1895: policySchemaMatchesValue validated arrays only against `items`, so
-  // a tuple-shaped (prefixItems) value condition vacuously matched ANY array —
-  // the policy entry applied where its condition should have excluded it, or
-  // vice versa.
+  // `policySchemaMatchesValue` validates an array against `prefixItems` as
+  // well as `items`, so a tuple-shaped value condition matches only the arrays
+  // its slots admit, and the policy entry applies exactly where its condition
+  // says it does.
 
   const space = "did:key:tuple-policy" as const;
   const target = { space, id: "of:guarded" as const, scope: "space" as const };
@@ -159,9 +159,9 @@ describe("CFC policy value-conditions on tuple (prefixItems) schemas", () => {
   });
 
   it("a closed tuple (items: false) rejects extra elements", () => {
-    // PR #4969 review: the shared matcher skipped boolean `items`, so a
-    // closed tuple vacuously accepted arrays with extra elements — the
-    // policy entry applied where its condition excluded the value shape.
+    // The shared matcher honors a boolean `items`: a closed tuple matches no
+    // array with extra elements, so the policy entry does not apply to a
+    // value shape its condition excludes.
     const schema = {
       type: "array",
       prefixItems: [{ const: "cmd" }],

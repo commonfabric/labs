@@ -1,9 +1,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { isCodecTypeTag } from "@/codec-common/isCodecTypeTag.ts";
-import { CODEC_META_TAGS } from "@/codec-interface/codec-meta-tags.ts";
-import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
+import {
+  CODEC_META_TAGS,
+  CODEC_TYPE_TAGS,
+  isCodecTypeTag,
+} from "@/codec-common";
 
 describe("isCodecTypeTag", () => {
   it("returns `true` for every tag in `CODEC_TYPE_TAGS`", () => {

@@ -9,7 +9,7 @@ reason: "Current-main diagnosis of eager nullable reads and an intermittent wron
 
 This investigation continues the
 [reload evidence](2026-09-14-lazy-materialization-reload-evidence.md) for the
-[fast-follow plan](../../../plans/lazy-materialization-fast-follow.md). It
+[fast-follow plan](../../plans/lazy-materialization-fast-follow.md). It
 identifies the eager error's input and one stalled browser's selected piece. It
 does not establish the cause of every earlier stall or authorize flag
 retirement.
@@ -111,7 +111,7 @@ navigate back to the expected notebook or relax the seven-note assertion.
 
 ## Remaining acceptance work
 
-The [fast-follow plan](../../../plans/lazy-materialization-fast-follow.md)
+The [fast-follow plan](../../plans/lazy-materialization-fast-follow.md)
 remains open. The next navigation investigation must correlate the created
 notebook, final Create event, navigation intent, URL, and selected piece across
 the reload boundary. A passing default-on run is not an explanation of a

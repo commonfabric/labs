@@ -74,7 +74,11 @@ import {
   WORKFLOW_FILE,
   type WorkflowRun,
 } from "./ci-check-lib.ts";
-import { capabilitiesBySuite, loadTopology } from "./test-topology.ts";
+import {
+  capabilitiesBySuite,
+  loadTopology,
+  wholeUnits,
+} from "./test-topology.ts";
 import type { Suite } from "./test-topology/suite.ts";
 import { census } from "./test-selection/census.ts";
 import { coverageGateFor, measuredSetName } from "./test-selection/coverage.ts";
@@ -417,6 +421,7 @@ export function manifestView(
     manifest: seen.manifest,
     mandatory: seen.mandatory,
     capabilities: capabilitiesBySuite(suites),
+    wholeUnits: wholeUnits(suites),
   });
   const selected = new Set<string>();
   for (const lane of packed.lanes) {

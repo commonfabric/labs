@@ -6,7 +6,7 @@ import type {
   FabricConvertibleJsValue,
   FabricValue,
   FabricValueLayer,
-} from "@/interface.ts";
+} from "@";
 
 // The assertions in this file are made when it is type-checked, which the
 // package's `test` task does before it runs anything, not when it runs. Each

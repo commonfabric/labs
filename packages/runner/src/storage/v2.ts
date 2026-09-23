@@ -42,6 +42,7 @@ import {
   type EntityIdListOptions,
   type EntityIdListResult,
   type EventAttentionResolveResult,
+  type GenesisRoot,
   getCommitPreconditionsConfig,
   getServerExecutionConfig,
   isScopeKey,
@@ -53,6 +54,7 @@ import {
   type ScopeKey,
   type ScopeKeyIdentity,
   type SessionHolding,
+  type SessionReadCeiling,
   type SessionSync,
   type SessionSyncUpsert,
   type SqliteDbRef,
@@ -104,7 +106,7 @@ import {
 import { isCellScope, normalizeCellScope } from "../scope.ts";
 import { normalizeSpaceHost, SpaceHostValidationError } from "../space-host.ts";
 import type { RuntimeTelemetryMarker } from "../telemetry.ts";
-import { combineOptionalSchema } from "../traverse.ts";
+import { combineOptionalSchema, isUnknownCellSchema } from "../traverse.ts";
 import { recordCommitLocalSeq, recordCommitSeq } from "./commit-identity.ts";
 import * as Differential from "./differential.ts";
 import {
@@ -1164,6 +1166,9 @@ export class StorageManager implements IStorageManager {
 
   #settings: IRemoteStorageProviderSettings;
   #providers = new Map<MemorySpace, Provider>();
+  #spaceAccessErrors = new Map<MemorySpace, Error>();
+  #spaceAccessObservers = new Set<(space: MemorySpace, error: Error) => void>();
+  #spaceAccessChangeObservers = new Set<(space: MemorySpace) => void>();
   #subscription = SubscriptionManager.create();
   #crossSpacePromises = new Set<Promise<void>>();
 
@@ -1218,6 +1223,11 @@ export class StorageManager implements IStorageManager {
   /** Phase 5: the serving manager's home space (Options.servingHomeSpace). */
   #servingHomeSpace?: MemorySpace;
 
+  /** The read ceiling every session this manager opens declares
+   * (`setSessionReadCeiling`); undefined on a manager whose sessions read
+   * unbounded. */
+  #sessionReadCeiling?: SessionReadCeiling;
+
   #spaceIdentities = new Map<MemorySpace, Signer>();
 
   /** Genesis ACL documents registered beside a space identity — the exact
@@ -1233,7 +1243,7 @@ export class StorageManager implements IStorageManager {
    * `#createInitializedSession`). */
   #spaceGenesisAcls = new Map<
     MemorySpace,
-    { document: ACL; supplied: boolean }
+    { document: ACL; supplied: boolean; root?: GenesisRoot }
   >();
 
   /** Resume options for a space's manager-wide session that
@@ -1561,11 +1571,14 @@ export class StorageManager implements IStorageManager {
    */
   registerSpaceIdentity(
     identity: Signer,
-    options?: { owner?: string; genesisAcl?: ACL },
+    options?: { owner?: string; genesisAcl?: ACL; genesisRoot?: GenesisRoot },
   ): void {
     const space = identity.did() as MemorySpace;
     const owner = options?.owner;
     const genesisAcl = options?.genesisAcl;
+    if (options?.genesisRoot !== undefined && genesisAcl === undefined) {
+      throw new Error("genesisRoot requires an explicit genesisAcl");
+    }
     if (owner !== undefined && genesisAcl !== undefined) {
       throw new Error(
         `registerSpaceIdentity(${space}): supply either owner or genesisAcl, ` +
@@ -1606,6 +1619,9 @@ export class StorageManager implements IStorageManager {
       // caller's object holds by the time the space is first opened.
       this.#spaceGenesisAcls.set(space, {
         document: { ...genesisAcl },
+        ...(options?.genesisRoot === undefined
+          ? {}
+          : { root: cloneIfNecessary(options.genesisRoot, { frozen: false }) }),
         supplied: true,
       });
     }
@@ -1627,6 +1643,38 @@ export class StorageManager implements IStorageManager {
     return this.#servingHomeSpace !== undefined
       ? { actingAs: "space-owner" }
       : {};
+  }
+
+  /**
+   * The descriptor fields every session this manager opens carries beyond
+   * its id: the serving binding and the declared read ceiling. One place,
+   * so a reopen, a resume and a fresh mount all declare the same session.
+   */
+  #sessionDescriptorFields(space: MemorySpace): {
+    genesisRoot?: GenesisRoot;
+    actingAs?: "space-owner";
+    readCeiling?: SessionReadCeiling;
+  } {
+    return {
+      ...(this.#spaceGenesisAcls.get(space)?.root === undefined
+        ? {}
+        : { genesisRoot: this.#spaceGenesisAcls.get(space)!.root }),
+      ...this.#servingActingAs(),
+      ...(this.#sessionReadCeiling !== undefined
+        ? { readCeiling: this.#sessionReadCeiling }
+        : {}),
+    };
+  }
+
+  /** See `IStorageManager.setSessionReadCeiling`. */
+  setSessionReadCeiling(ceiling: SessionReadCeiling): void {
+    if (this.#providers.size > 0) {
+      throw new Error(
+        "setSessionReadCeiling: a session is already open; a ceiling " +
+          "declared now would leave it reading unbounded",
+      );
+    }
+    this.#sessionReadCeiling = ceiling;
   }
 
   /** The serving manager's HOME space (Options.servingHomeSpace) —
@@ -1768,11 +1816,37 @@ export class StorageManager implements IStorageManager {
           : (_routeGeneration, routeSignal) =>
             this.#sessionFactory.create(space, signer, {
               sessionId: this.#sessionId,
-              ...this.#servingActingAs(),
+              ...this.#sessionDescriptorFields(space),
             }, routeSignal),
         syncReplayDependencies: (document) =>
           this.#syncCfcSchemaDocument(space, document),
         getTelemetry: () => this.#telemetry,
+        onAccessChange: (error) => {
+          const alreadyDenied = this.#spaceAccessErrors.has(space);
+          if (error === undefined) {
+            this.#spaceAccessErrors.delete(space);
+          } else {
+            this.#spaceAccessErrors.set(space, error);
+            if (!alreadyDenied) {
+              for (const observer of [...this.#spaceAccessObservers]) {
+                try {
+                  observer(space, error);
+                } catch (cause) {
+                  console.error("space-access-loss subscriber threw:", cause);
+                }
+              }
+            }
+          }
+          if (alreadyDenied !== (error !== undefined)) {
+            for (const observer of [...this.#spaceAccessChangeObservers]) {
+              try {
+                observer(space);
+              } catch (cause) {
+                console.error("space-access-change subscriber threw:", cause);
+              }
+            }
+          }
+        },
         eventAppendQueueStore: this.#eventAppendQueueStore,
         eventAppendPacing: this.#eventAppendPacing,
       });
@@ -1860,7 +1934,10 @@ export class StorageManager implements IStorageManager {
           signer,
           detached !== undefined && detached.routeGeneration === routeGeneration
             ? detached.options
-            : { sessionId: this.#sessionId, ...this.#servingActingAs() },
+            : {
+              sessionId: this.#sessionId,
+              ...this.#sessionDescriptorFields(space),
+            },
           routeSignal,
         ),
       );
@@ -1877,7 +1954,7 @@ export class StorageManager implements IStorageManager {
         ...(normal.session.sessionToken !== undefined
           ? { sessionToken: normal.session.sessionToken }
           : {}),
-        ...this.#servingActingAs(),
+        ...this.#sessionDescriptorFields(space),
       };
       this.#detachedSessionResumes.set(space, {
         options: resumeNormal,
@@ -1990,15 +2067,21 @@ export class StorageManager implements IStorageManager {
       while (bootstrapSessionId === this.#sessionId) {
         bootstrapSessionId = crypto.randomUUID();
       }
-      const bootstrap = track(
-        await this.#sessionFactory.create(
-          space,
-          spaceIdentity,
-          { sessionId: bootstrapSessionId },
-          routeSignal,
-        ),
-      );
+      let bootstrap: OpenedSpaceSession | undefined;
       try {
+        bootstrap = track(
+          await this.#sessionFactory.create(
+            space,
+            spaceIdentity,
+            {
+              sessionId: bootstrapSessionId,
+              ...(registered?.root === undefined
+                ? {}
+                : { genesisRoot: registered.root }),
+            },
+            routeSignal,
+          ),
+        );
         assertCurrentRoute();
         const current = await bootstrap.session.queryGraph({
           roots: [{ id: aclId, selector: { path: [], schema: false } }],
@@ -2031,7 +2114,18 @@ export class StorageManager implements IStorageManager {
             const bootstrapAcl = isHomeSpace
               ? { [signer.did()]: "OWNER" }
               : registered?.document ?? defaultGenesisAcl(signer.did());
+            if (
+              registered?.root !== undefined &&
+              bootstrap.client.serverFlags?.genesisRoot !== true
+            ) {
+              throw new Error(
+                "Host does not support genesis root reservations",
+              );
+            }
             await bootstrap.session.transact({
+              ...(registered?.root === undefined
+                ? {}
+                : { genesisRoot: registered.root }),
               localSeq: 1,
               reads: {
                 confirmed: [{
@@ -2071,9 +2165,34 @@ export class StorageManager implements IStorageManager {
             }
           }
         }
+      } catch (error) {
+        if (
+          registered?.root === undefined || !(error instanceof Error) ||
+          !["ConflictError", "AuthorizationError", "SessionRevokedError"]
+            .includes(error.name)
+        ) throw error;
+        // A winning genesis can remove the bootstrap key's own READ access.
+        // Verify its immutable root and exact ACL through the management
+        // principal before treating that lost authority as a completed race.
+        const winner = track(
+          await this.#sessionFactory.create(
+            space,
+            signer,
+            resumeNormal,
+            routeSignal,
+          ),
+        );
+        const current = await winner.session.queryGraph({
+          roots: [{ id: aclId, selector: { path: [], schema: false } }],
+        });
+        assertCurrentRoute();
+        assertDemandedOwnershipStands(aclSnapshotOf(current.entities), "race");
+        return handOff(winner);
       } finally {
-        activeClients.delete(bootstrap.client);
-        await bootstrap.client.close();
+        if (bootstrap !== undefined) {
+          activeClients.delete(bootstrap.client);
+          await bootstrap.client.close();
+        }
       }
 
       assertCurrentRoute();
@@ -2124,6 +2243,7 @@ export class StorageManager implements IStorageManager {
         throw (rejected as PromiseRejectedResult).reason;
       }
       this.#providers.clear();
+      this.#spaceAccessErrors.clear();
       this.#dataURISyncs.clear();
       this.#sessionId = crypto.randomUUID();
     } finally {
@@ -2149,6 +2269,7 @@ export class StorageManager implements IStorageManager {
         throw (rejected as PromiseRejectedResult).reason;
       }
       this.#providers.clear();
+      this.#spaceAccessErrors.clear();
       this.#dataURISyncs.clear();
       this.#sessionId = crypto.randomUUID();
     } finally {
@@ -2201,6 +2322,25 @@ export class StorageManager implements IStorageManager {
    */
   authorizationError(space: MemorySpace): Error | undefined {
     return this.#providers.get(space)?.authorizationError();
+  }
+
+  /** @inheritDoc */
+  spaceAccessError(space: MemorySpace): Error | undefined {
+    return this.#spaceAccessErrors.get(space);
+  }
+
+  /** @inheritDoc */
+  subscribeSpaceAccessLoss(
+    observer: (space: MemorySpace, error: Error) => void,
+  ): Cancel {
+    this.#spaceAccessObservers.add(observer);
+    return () => this.#spaceAccessObservers.delete(observer);
+  }
+
+  /** @inheritDoc */
+  subscribeSpaceAccessChange(observer: (space: MemorySpace) => void): Cancel {
+    this.#spaceAccessChangeObservers.add(observer);
+    return () => this.#spaceAccessChangeObservers.delete(observer);
   }
 
   trackPendingCommit(promise: Promise<unknown>): void {
@@ -2870,6 +3010,12 @@ export class StorageManager implements IStorageManager {
     identity: ScopeKeyIdentity | undefined,
   ): void {
     const space = link.space ?? base.space!;
+    // A handle with no declared value shape transfers only its
+    // address. Loading its target requires a read through that handle.
+    if (
+      !hasDataUriScheme(link.id) && link.overwrite !== "redirect" &&
+      isUnknownCellSchema(schema)
+    ) return;
     const scope = normalizeCellScope(link.scope as CellScope | undefined);
     if (hasDataUriScheme(link.id)) {
       const dataBase: NormalizedLink = { space, id: link.id, scope, path: [] };
@@ -2980,6 +3126,7 @@ type ProviderOptions = {
   space: MemorySpace;
   settings: IRemoteStorageProviderSettings;
   subscription: IStorageSubscription;
+  onAccessChange?: (error: Error | undefined) => void;
 
   /**
    * The owning manager's authenticated session identity
@@ -3870,6 +4017,8 @@ export class SpaceReplica
    * silent absent read.
    */
   #lastAuthorizationError: IAuthorizationError | null = null;
+  #onAccessChange?: (error: Error | undefined) => void;
+  #cancelAccessLoss: Cancel | undefined;
 
   readonly #routeState: ProviderRouteState;
   readonly #routeGeneration: number;
@@ -3899,6 +4048,7 @@ export class SpaceReplica
   constructor(options: SpaceReplicaOptions) {
     this.#space = options.space;
     this.#subscription = options.subscription;
+    this.#onAccessChange = options.onAccessChange;
     this.#scopeKeyIdentity = options.scopeKeyIdentity;
     this.#createSession = options.createSession;
     this.#getTelemetry = options.getTelemetry ?? (() => undefined);
@@ -4281,6 +4431,9 @@ export class SpaceReplica
         (result.error as { retriable?: unknown }).retriable !== true
       ) {
         this.#lastAuthorizationError = result.error as IAuthorizationError;
+        this.#onAccessChange?.(
+          authorizationErrorToThrow(this.#lastAuthorizationError),
+        );
       }
       return;
     }
@@ -5047,6 +5200,8 @@ export class SpaceReplica
   }
 
   async close(): Promise<void> {
+    this.#cancelAccessLoss?.();
+    this.#cancelAccessLoss = undefined;
     this.#localCoverageObservers.clear();
     this.#viewPlanObservers.clear();
     this.#cancelViewCapabilityLost?.();
@@ -5222,6 +5377,8 @@ export class SpaceReplica
   }
 
   closeNow(): void {
+    this.#cancelAccessLoss?.();
+    this.#cancelAccessLoss = undefined;
     this.#localCoverageObservers.clear();
     this.#viewPlanObservers.clear();
     this.#cancelViewCapabilityLost?.();
@@ -9062,6 +9219,16 @@ export class SpaceReplica
           }
           this.#sessionClient = resolved.client;
           this.#sessionSession = resolved.session;
+          this.#lastAuthorizationError = null;
+          this.#onAccessChange?.(undefined);
+          this.#cancelAccessLoss?.();
+          this.#cancelAccessLoss = resolved.session.subscribeAccessLoss(
+            (error) => {
+              if (!this.#closed && this.#sessionSession === resolved.session) {
+                this.#onAccessChange?.(error);
+              }
+            },
+          );
           // Session replacement resets the marker epoch: markers for the
           // parked accepts' localSeqs can never arrive from the fresh
           // session, so apply them immediately (the same rule as consumer
@@ -9084,6 +9251,11 @@ export class SpaceReplica
       ).catch((error) => {
         if (this.#sessionHandle === handle) {
           this.#sessionHandle = undefined;
+          if (
+            !this.#closed && error instanceof Error &&
+            error.name === "AuthorizationError" &&
+            (error as { retriable?: unknown }).retriable !== true
+          ) this.#onAccessChange?.(error);
         }
         throw error;
       });

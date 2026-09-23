@@ -1,4 +1,3 @@
-import { isFabricPrimitiveSchemaType } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/api";
 import {
   CFC_ATOM_TYPE,
@@ -30,6 +29,7 @@ import {
   refuseFabricInstance,
   valueEqual,
 } from "@commonfabric/data-model";
+import { isFabricPrimitiveSchemaType } from "@commonfabric/data-model/fabric-primitives";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { STREAM_ENTRIES_DOC_PREFIX } from "@commonfabric/memory/v2";
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
@@ -55,6 +55,12 @@ import {
 import { storedLabelMapEntries } from "./label-documents.ts";
 import { readStoredCfcMetadata, StoredCfcMetadataError } from "./metadata.ts";
 import {
+  assertStoredPrincipalConfidentialityBound,
+  bindCurrentPrincipalConfidentiality,
+  bindCurrentPrincipalToStoredClauses,
+  isCurrentPrincipalUserClause,
+} from "./current-principal-confidentiality.ts";
+import {
   isPrimitiveCellLink,
   isWriteRedirectLink,
   parseLink,
@@ -72,11 +78,15 @@ import {
   isInternalVerifierRead,
   isLinkResolutionProbe,
   isMachineryRead,
+  isReadMarkedAsAttemptedWrite,
   isSchedulerDependencyRead,
   isWriteDestinationRead,
   stableInternalVerifierRead,
 } from "../storage/reactivity-log.ts";
-import { getTransactionWriteAttempts } from "../storage/transaction-inspection.ts";
+import {
+  getTransactionReadActivities,
+  getTransactionWriteAttempts,
+} from "../storage/transaction-inspection.ts";
 import { atomPropagationClass } from "./atom-classes.ts";
 import {
   canonicalizeCfcMetadata,
@@ -140,6 +150,7 @@ import {
 import { CFC_POLICY_MANIFEST_ID_PREFIX } from "./policy.ts";
 import { createTxCfcModulePolicyResolver } from "./policy-resolver.ts";
 import { cfcSchemaEntries } from "./schema-label-view.ts";
+import { sinkClassOf } from "./sink-inventory.ts";
 import {
   type CfcSchemaMergeIssue,
   cfcSchemaMergeIssue,
@@ -153,7 +164,6 @@ import {
 } from "./schema-refs.ts";
 import { createTrustResolver } from "./trust.ts";
 import {
-  CFC_STRUCTURAL_PROVENANCE_SEED_MATERIALIZATION,
   CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION,
   type CfcAddress,
   cfcEnforcementStrictness,
@@ -971,7 +981,12 @@ const setupProjectionSourceMatchesValue = (
   if (projection === undefined) {
     return false;
   }
-  const targetValue = writeValueForTarget(tx, { ...target, path });
+  // The marker names the redirect this setup projects; the value the
+  // transaction leaves at the path is what says the projection is really
+  // there. A replayed setup re-stages the redirect the document already
+  // holds, which writes nothing, so reading only this transaction's writes
+  // would deny a projection it did establish.
+  const targetValue = effectiveValueForTarget(tx, { ...target, path });
   if (!isWriteRedirectLink(targetValue)) {
     return false;
   }
@@ -1006,51 +1021,13 @@ const setupProjectionSourceMatchesValue = (
 // This is safe because the marker is recorded ONLY by the runtime's result
 // projection — never by an arbitrary `cell.set` — and only when the projection
 // STRUCTURE is established (instantiation), not on value edits (which leave the
-// projection unchanged and so record no marker). Direct untrusted writes, no-op
-// re-writes, and later field edits therefore remain fully enforced; the slot the
-// pattern result is placed into is independently gated by its own
+// projection unchanged and so record no marker). What the exemption follows is
+// the marker, not the presence of a write: a setup replayed over a document
+// that already holds the projected redirect writes nothing and is still the
+// trusted creation step, while a write bearing no marker — a direct untrusted
+// write, a no-op re-write, a later field edit — remains fully enforced. The
+// slot the pattern result is placed into is independently gated by its own
 // `writeAuthorizedBy`, and the owner binding by `currentPrincipalIntegrityReason`.
-// `writeAuthorizedBy` gates *modification* of an existing owner-protected
-// value (§8.15.10); the runtime materializing a runtime-constructed cell's
-// initial value (`Writable(initialValue)` in a lift/handler frame — the CTS
-// wraps derived initializers this way) is the trusted initialization step
-// (§8.15.4), like the projection-marker case above. It is not (and cannot be)
-// the claim-referenced edit handler. Recognize it by BOTH signals together:
-// the seed-materialization marker — recorded ONLY by the runtime's
-// cell-serialization path (data-updating.ts BRANCH_CELL), never reachable
-// from arbitrary `cell.set` — AND the write creating the doc (a root-level
-// write whose previousValue is undefined, the same signal
-// `derivePersistedLinkLabel` uses for same-tx child docs). Edits to existing
-// docs and direct unmarked writes stay fully enforced; ownerPrincipal /
-// integrity minting is gated separately (`currentPrincipalIntegrityReason`
-// runs before this).
-const writeIsSeedMaterialization = (
-  tx: IExtendedStorageTransaction,
-  target: {
-    space: MemorySpace;
-    id: URI;
-    scope: ReturnType<typeof normalizeCellScope>;
-  },
-): boolean => {
-  const marked = tx.getCfcState().writePolicyInputs.some((input) =>
-    input.kind === "structural-provenance" &&
-    input.claim === CFC_STRUCTURAL_PROVENANCE_SEED_MATERIALIZATION &&
-    input.sources.some((source) =>
-      source.space === target.space && source.id === target.id &&
-      normalizeCellScope(source.scope) === target.scope
-    )
-  );
-  if (!marked) {
-    return false;
-  }
-  return [...(tx.getWriteDetails?.(target.space) ?? [])].some((detail) =>
-    detail.address.id === target.id &&
-    normalizeCellScope(detail.address.scope) === target.scope &&
-    detail.address.path.length <= 1 &&
-    detail.previousValue === undefined
-  );
-};
-
 const writeIsPatternSetupInitialization = (
   tx: IExtendedStorageTransaction,
   target: {
@@ -1082,6 +1059,129 @@ const writeIsPatternSetupInitialization = (
         canonicalizeLogicalPath(source.path),
       );
     })
+  );
+};
+
+/** A runtime initialization covers one absent slot and its exact final value. */
+const writeIsRuntimeInitialization = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean => {
+  const input = tx.getCfcState().writePolicyInputs.find((input) =>
+    input.kind === "initialization" && tx.isRuntimeWritePolicyInput(input) &&
+    input.target.space === target.space && input.target.id === target.id &&
+    normalizeCellScope(input.target.scope) === target.scope &&
+    concretePathHasPrefix(path, input.target.path)
+  );
+  if (input?.kind !== "initialization") return false;
+  const stored = loadStoredCfcEnvelope(tx, target);
+  if (stored.status === "unreadable") return false;
+  if (
+    stored.status === "loaded" &&
+    cfcSchemaEntries(stored.schema).some((entry) =>
+      pathPatternsOverlap(entry.path, path) &&
+      isObjectOrArray(entry.schema) &&
+      entry.schema.ifc?.writeAuthorizedBy !== undefined
+    )
+  ) return false;
+  const addressPath = ["value", ...input.target.path];
+  const details = tx.getWriteDetailsForTarget?.(target) ??
+    tx.getWriteDetails?.(target.space) ?? [];
+  const covering = [...details].filter((detail) =>
+    detail.address.id === target.id &&
+    normalizeCellScope(detail.address.scope) === target.scope &&
+    concretePathHasPrefix(addressPath, detail.address.path.map(String))
+  );
+  // Overlapping write paths can capture different intermediate states. Every
+  // covering snapshot must agree on absence; the deepest alone is insufficient.
+  const absent = covering.length > 0 && covering.every((detail) => {
+    if (detail.previousPresent === undefined) return false;
+    if (!detail.previousPresent) return true;
+    let previous = detail.previousValue;
+    const remaining = addressPath.slice(detail.address.path.length);
+    for (const segment of remaining) {
+      if (!isWalkableObjectOrArray(previous) || isWriteRedirectLink(previous)) {
+        return false;
+      }
+      if (!Object.hasOwn(previous, segment)) return true;
+      previous = (previous as Record<string, FabricValue>)[segment];
+    }
+    return false;
+  });
+  return absent && valueEqual(
+    tx.readValueOrThrow({ ...target, path: [...input.target.path] }, {
+      meta: INTERNAL_VERIFIER_META,
+    }),
+    input.value,
+  );
+};
+
+/** A single runtime output attempt may preserve an existing root reference. */
+const writePreservesRuntimeOutput = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): boolean => {
+  const sameTarget = (
+    address: {
+      space: MemorySpace;
+      id: string;
+      scope?: ReturnType<typeof normalizeCellScope>;
+    },
+  ) =>
+    address.space === target.space && address.id === target.id &&
+    normalizeCellScope(address.scope) === target.scope;
+  const input = tx.getCfcState().writePolicyInputs.find((input) =>
+    input.kind === "preserved-output" && tx.isRuntimeWritePolicyInput(input) &&
+    sameTarget(input.target) && input.target.path.length === 0
+  );
+  if (input?.kind !== "preserved-output") return false;
+  const writes = getTransactionWriteAttempts(tx);
+  if (writes === undefined || writes.some(sameTarget)) return false;
+  const attemptedReads = [...getTransactionReadActivities(tx)].filter((read) =>
+    sameTarget(read) && isReadMarkedAsAttemptedWrite(read.meta)
+  );
+  return attemptedReads.length === 1 &&
+    canonicalizeLogicalPath(attemptedReads[0].path.map(String)).length === 0 &&
+    valueEqual(
+      tx.readValueOrThrow({ ...target, path: [] }, {
+        meta: INTERNAL_VERIFIER_META,
+      }),
+      input.value,
+    );
+};
+
+/** An owner adoption accepts only the unchanged bytes at its exact target. */
+const writeIsOwnerAdoption = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): boolean => {
+  return tx.getCfcState().writePolicyInputs.some((input) =>
+    input.kind === "owner-adoption" && tx.isRuntimeWritePolicyInput(input) &&
+    input.owner === tx.getCfcState().trustSnapshot?.actingPrincipal &&
+    input.target.space === target.space && input.target.id === target.id &&
+    normalizeCellScope(input.target.scope) === target.scope &&
+    arraysEqual(input.target.path, path) &&
+    loadStoredCfcEnvelope(tx, target).status === "none" &&
+    valueEqual(
+      tx.readValueOrThrow({ ...target, path: [...path] }, {
+        meta: INTERNAL_VERIFIER_META,
+      }),
+      input.value,
+    )
   );
 };
 
@@ -2746,6 +2846,26 @@ const deriveFlowJoinImpl = (
     labeledSpaces?.add(observation.target.space);
     atoms.push(...observation.confidentiality);
   }
+  for (
+    const observation of tx.getCfcState().externalContentObservations ?? []
+  ) {
+    if (
+      labeledSpaces !== undefined &&
+      ((observation.flow.confidentiality?.length ?? 0) > 0 ||
+        (observation.flow.integrity?.length ?? 0) > 0)
+    ) {
+      for (const space of observation.labeledSpaces) labeledSpaces.add(space);
+    }
+    atoms.push(...(observation.flow.confidentiality ?? []));
+    const hereditary = (observation.flow.integrity ?? []).filter((atom) =>
+      atomPropagationClass(atom) === "hereditary"
+    );
+    hereditaryMeet = hereditaryMeet === undefined
+      ? [...hereditary]
+      : hereditaryMeet.filter((kept) =>
+        hereditary.some((atom) => deepEqual(atom, kept))
+      );
+  }
   const confidentiality = uniqueCfcAtoms(atoms);
   const integrity: CfcAtom[] = [...(hereditaryMeet ?? [])];
   // Derivation provenance (§8.9.3 TransformedBy, staged: identity binding
@@ -2926,7 +3046,7 @@ const linkWritePolicyOnlySchema = (
   return Object.keys(ifc).length === 0 ? {} : { ifc } as JSONSchema;
 };
 
-const storedSchemaClaimsForLinkWrites = (
+const schemaClaimsForLinkWrites = (
   schema: JSONSchema,
   inputs: readonly LinkWritePolicyInput[],
 ): JSONSchema => {
@@ -3424,6 +3544,43 @@ const previousWriteValueForTarget = (
   },
 ): FabricValue => writeDetailValueForTarget(tx, target, "previousValue");
 
+/**
+ * The value this transaction leaves at `target`: its own write where it made
+ * one, and what it reads there otherwise.
+ *
+ * A staged write carrying the value the document already holds records no
+ * write detail, so the write log alone answers `undefined` at a path the
+ * transaction did touch — the reactivity log's attempted writes carry that
+ * path, but not a value to go with it. A gate asking what a path ends the
+ * transaction holding reads past that gap; one asking whether the transaction
+ * wrote at all reads the write log directly.
+ *
+ * The fallback reads THROUGH the transaction, which is what lets a gate rest
+ * a decision on the answer: a write that changed the path, removed it, or put
+ * something else there is the value that comes back, so the fallback reaches
+ * only a path the transaction leaves as it found it. It is a runtime-internal
+ * verifier read besides, so it stays out of the commit's conflict set and out
+ * of reactivity (spec §18.6.2, §8.9.4). An absent path returns `undefined`,
+ * as does one that descends through a value with no keys; the read decides
+ * both. Any other read failure propagates, so a gate never treats a path it
+ * could not read as one holding nothing.
+ */
+const effectiveValueForTarget = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+    path: readonly string[];
+  },
+): FabricValue => {
+  const written = writeValueForTarget(tx, target);
+  if (written !== undefined) {
+    return written;
+  }
+  return tx.readValueOrThrow(target, { meta: INTERNAL_VERIFIER_META });
+};
+
 const writeInstallsInitialSchemaDefault = (
   tx: IExtendedStorageTransaction,
   target: {
@@ -3796,8 +3953,16 @@ const ifcEntryAppliesToAttemptedWrite = (
 ): boolean => {
   const wildcardIndex = path.indexOf("*");
   if (wildcardIndex === -1) {
-    const writes = [...(tx.getWriteDetails?.(target.space) ?? [])];
-    let touched = false;
+    const writes = tx.getWriteDetailsForTarget?.(target) ??
+      tx.getWriteDetails?.(target.space) ?? [];
+    // Owner adoption changes policy while retaining the stored bytes. It is
+    // still a policy attempt and must pass every ordinary requirement gate.
+    let touched = tx.getCfcState().writePolicyInputs.some((input) =>
+      input.kind === "owner-adoption" && tx.isRuntimeWritePolicyInput(input) &&
+      input.target.space === target.space && input.target.id === target.id &&
+      normalizeCellScope(input.target.scope) === target.scope &&
+      arraysEqual(input.target.path, path)
+    );
     for (const write of writes) {
       if (write.address.id !== target.id) continue;
       if (normalizeCellScope(write.address.scope) !== target.scope) continue;
@@ -3831,16 +3996,7 @@ const ifcEntryAppliesToAttemptedWrite = (
       return false;
     }
     const pathTarget = { ...target, path };
-    const written = writeValueForTarget(tx, pathTarget);
-    const value = written !== undefined ? written : (() => {
-      try {
-        return tx.readValueOrThrow(pathTarget, {
-          meta: INTERNAL_VERIFIER_META,
-        });
-      } catch {
-        return undefined;
-      }
-    })();
+    const value = effectiveValueForTarget(tx, pathTarget);
     if (path.length === 0) {
       return value === undefined ||
         wildcardPolicyMatchesValue(tx, target, schema, value, root);
@@ -3871,13 +4027,14 @@ const ifcEntryAppliesToAttemptedWrite = (
         tx,
         target,
         schema,
-        writeValueForTarget(tx, { ...target, path: writePath }),
+        effectiveValueForTarget(tx, { ...target, path: writePath }),
         root,
       )
     );
   }
 
-  const writes = [...(tx.getWriteDetails?.(target.space) ?? [])];
+  const writes = tx.getWriteDetailsForTarget?.(target) ??
+    tx.getWriteDetails?.(target.space) ?? [];
   let sawTargetWrite = false;
   const prefix = path.slice(0, wildcardIndex);
   for (const write of writes) {
@@ -4228,6 +4385,9 @@ const verifyInputRequirements = (
   // accumulated across the boundary pass. undefined — the default, whenever
   // no onPrefixProvenance hook is installed — skips all measurement.
   provenance?: CfcPrefixProvenanceSummary,
+  // A preserved runtime output defers only its writer refusal. The persist
+  // loop must prove the final envelope unchanged before discarding this reason.
+  deferWriterRefusal?: (reason: string) => boolean,
   // `verdict` says whether the failure is a VERDICT on the data (see
   // cfc/verdict-reason.ts): every check here is, except a `maxConfidentiality`
   // miss whose policy evaluation could not resolve a manifest or grant — the
@@ -4352,6 +4512,24 @@ const verifyInputRequirements = (
         label: { confidentiality: [...observation.confidentiality] },
       });
     }
+    for (
+      const observation of tx.getCfcState().externalContentObservations ?? []
+    ) {
+      const gateLabel: IFCLabel = {
+        confidentiality: observation.flow.confidentiality,
+        integrity: observation.consumed.integrity,
+      };
+      if (!hasLabelValues(gateLabel)) continue;
+      gatedReads.push({
+        ...observation.source,
+        id: observation.source.id as URI,
+        path: canonicalizeLogicalPath(observation.source.path),
+        type: "application/json",
+        meta: {},
+        journalIndex: -Infinity,
+        label: gateLabel,
+      });
+    }
     return gatedReads;
   };
   let gatedReadsMemo: ReturnType<typeof buildGatedReads> | undefined;
@@ -4414,9 +4592,15 @@ const verifyInputRequirements = (
       target,
       entry.path,
     ) || writeIsPatternSetupInitialization(tx, target, entry.path) ||
-      writeIsSeedMaterialization(tx, target);
+      writeIsRuntimeInitialization(tx, target, entry.path) ||
+      writeIsOwnerAdoption(tx, target, entry.path);
     if (writeAuthorizedByFailure !== undefined && !setupProjection) {
-      return { reason: writeAuthorizedByFailure, verdict: true };
+      if (
+        entry.path.length !== 0 ||
+        deferWriterRefusal?.(writeAuthorizedByFailure) !== true
+      ) {
+        return { reason: writeAuthorizedByFailure, verdict: true };
+      }
     }
     const requiredIntegrity = ifc?.requiredIntegrity ?? [];
     const maxConfidentiality = ifc?.maxConfidentiality;
@@ -5210,6 +5394,18 @@ const setupResultSchemaFor = (
   });
 };
 
+/** Resolves carried reader placeholders against the authoritative link source. */
+function bindLinkCurrentPrincipalClauses<Clause>(
+  candidate: readonly Clause[],
+  stored: readonly Clause[],
+): readonly Clause[] | undefined {
+  const bound = bindCurrentPrincipalToStoredClauses(candidate, stored);
+  if (bound.some(isCurrentPrincipalUserClause)) {
+    return undefined;
+  }
+  return bound;
+}
+
 // `sourceMetadata` is returned alongside the derived label so the persist
 // loop can re-derive the source's sub-path entries from the same stored
 // state without a second store read (inv-12 Stage 0, see the loop).
@@ -5235,8 +5431,37 @@ const derivePersistedLinkLabel = (
       input.source.scope,
       "application/json",
     );
+  if (sourceMetadata !== undefined) {
+    try {
+      assertStoredPrincipalConfidentialityBound(
+        loadEnvelopeSchema(tx, input.source.space, sourceMetadata),
+        sourceMetadata.labelMap.entries.map((entry) => entry.label),
+      );
+    } catch (error) {
+      return {
+        sourceMetadata,
+        reason: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
   let pendingSourceSchema = candidateSchemas.get(targetKey(input.source)) ??
     setupResultSchemaFor(tx, input.source);
+  if (
+    pendingSourceSchema !== undefined &&
+    cfcSchemaEntries(pendingSourceSchema).some((entry) =>
+      entry.label.confidentiality?.some(isCurrentPrincipalUserClause)
+    )
+  ) {
+    pendingSourceSchema = bindCurrentPrincipalConfidentiality(
+      sourceMetadata === undefined
+        ? pendingSourceSchema
+        : mergeCfcSchemaEnvelopes(
+          loadSchemaDocument(tx, input.source.space, sourceMetadata.schemaHash),
+          pendingSourceSchema,
+        ),
+      tx.getCfcState().trustSnapshot?.actingPrincipal,
+    );
+  }
   let pendingSourceLabel = pendingSourceSchema !== undefined
     ? persistedLabelFromSchemaAtPath(
       tx,
@@ -5265,10 +5490,13 @@ const derivePersistedLinkLabel = (
     if (sourceCreatedInThisTx) {
       const targetCandidate = candidateSchemas.get(targetKey(input.target));
       if (targetCandidate !== undefined) {
-        pendingSourceSchema = targetCandidate;
+        pendingSourceSchema = bindCurrentPrincipalConfidentiality(
+          targetCandidate,
+          tx.getCfcState().trustSnapshot?.actingPrincipal,
+        );
         pendingSourceLabel = persistedLabelFromSchemaAtPath(
           tx,
-          targetCandidate,
+          pendingSourceSchema,
           input.target.path,
           input.target.space,
         );
@@ -5352,10 +5580,21 @@ const derivePersistedLinkLabel = (
     },
     authoringIdentity,
   ).integrity;
+  const boundLinkConfidentiality = bindLinkCurrentPrincipalClauses(
+    linkSchemaLabel.confidentiality ?? [],
+    sourceLabel.confidentiality ?? [],
+  );
+  if (boundLinkConfidentiality === undefined) {
+    return {
+      reason: verdictReason(
+        "Link CurrentPrincipal confidentiality requires a concrete stored reader",
+      ),
+    };
+  }
   const label: IFCLabel = {
     confidentiality: mergeLabelValues(
       sourceLabel.confidentiality,
-      linkSchemaLabel.confidentiality,
+      boundLinkConfidentiality,
     ),
     integrity: mergeLabelValues(
       gatedIntegrity,
@@ -5661,8 +5900,9 @@ const loadEnvelopeSchema = (
  * - `loaded` — the metadata's `schemaHash` resolved to a content-verified
  *   schema document; `metadata` rides along for callers (the commit path) that
  *   also need the stored label map.
- * - `unreadable` — metadata EXISTS but its envelope cannot be loaded (missing
- *   cid document, content-hash mismatch). The commit path records `reason` and
+ * - `unreadable` — metadata EXISTS but its envelope cannot be loaded or carries
+ *   an unresolved stored creator (missing cid document, content-hash mismatch,
+ *   or persisted CurrentPrincipal confidentiality). The commit path records `reason` and
  *   rejects the write in enforcing modes, so a preflight must report it as a
  *   blocker and never as "nothing stored" — treating it as absent is exactly
  *   how a check green-lights an update the real commit then refuses.
@@ -5709,9 +5949,14 @@ export const loadStoredCfcEnvelope = (
   }
   if (metadata === undefined) return { status: "none" };
   try {
+    const schema = loadEnvelopeSchema(tx, target.space, metadata);
+    assertStoredPrincipalConfidentialityBound(
+      schema,
+      metadata.labelMap.entries.map((entry) => entry.label),
+    );
     return {
       status: "loaded",
-      schema: loadEnvelopeSchema(tx, target.space, metadata),
+      schema,
       metadata,
     };
   } catch (error) {
@@ -5759,7 +6004,7 @@ const collectConsumedLabelImpl = (
   // snapshot per document here; another collection observes its current view.
   const labelIndexes = new Map<string, ConsumedLabelIndex | undefined>();
   const noteSource = (
-    atom: unknown,
+    atom: CfcConfClause,
     read: CfcAddress,
     labelPath: readonly string[],
   ): void => {
@@ -5882,6 +6127,21 @@ const collectConsumedLabelImpl = (
     atoms.push(...observation.confidentiality);
     for (const atom of observation.confidentiality) {
       noteSource(atom, observation.target, observation.target.path);
+    }
+  }
+  for (
+    const observation of tx.getCfcState().externalContentObservations ?? []
+  ) {
+    atoms.push(...(observation.consumed.confidentiality ?? []));
+    integrityAtoms.push(...(observation.consumed.integrity ?? []));
+    for (const source of observation.sources) {
+      noteSource(source.atom, source.read, source.labelPath);
+      for (const reference of modulePolicyReferencesIn(source.atom)) {
+        const key = modulePolicyArtifactKey(reference);
+        const spaces = modulePolicySpaces.get(key) ?? new Set<MemorySpace>();
+        spaces.add(source.read.space);
+        modulePolicySpaces.set(key, spaces);
+      }
     }
   }
   // Structural dedup (deep-equal) — the same dedup the rest of CFC uses.
@@ -6113,12 +6373,11 @@ const verifySinkRequestCeilings = (
     let verdict = true;
     if (mode !== "off") {
       // Boundary context for this release site (spec §8.10.5 / §15.4): the
-      // sink name plus its class. Every sink in the initial inventory is a
-      // NETWORK egress (fetch*/stream/llm*/generate*); the display class
-      // arrives with H3b's render-ceiling work.
+      // sink name plus its class, read off the sink inventory so a rule
+      // scoped to one class fires at that class's sinks and no other.
       const boundary = [
         cfcAtom.boundaryContext("sink", sink),
-        cfcAtom.boundaryContext("sinkClass", "network"),
+        cfcAtom.boundaryContext("sinkClass", sinkClassOf(sink)),
       ];
       // The sink egress gate is a consuming site for single-use grants
       // (design §2.2) under the enforce dial — the rewritten label decides
@@ -6452,10 +6711,22 @@ const verifyWriteFloor = (
   return failures;
 };
 
+/** Runs every boundary check synchronously. */
 export const prepareBoundaryCommit = (
   tx: IExtendedStorageTransaction,
   instrumentation?: CfcPrepareInstrumentation,
 ): string[] => {
+  const steps = prepareBoundaryCommitSteps(tx, instrumentation);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+};
+
+/** Runs the boundary checks with suspension points between target documents. */
+export function* prepareBoundaryCommitSteps(
+  tx: IExtendedStorageTransaction,
+  instrumentation?: CfcPrepareInstrumentation,
+): Generator<void, string[]> {
   // WATCH(cfc-verdict): every reason recorded here decides whether the commit
   // is retried. A reason that says policy REFUSED this data — deterministic,
   // so an identical re-run refuses identically — must be wrapped in
@@ -6701,6 +6972,7 @@ export const prepareBoundaryCommit = (
   }
   const metadataResolver = new VerifierMetadataResolver(tx);
   for (const key of targetKeys) {
+    yield;
     const candidateSchema = candidates.get(key);
     const schema = candidateSchema ?? emptySchemaObject();
     const undefinedCandidate = candidateSchema === undefined;
@@ -6790,18 +7062,34 @@ export const prepareBoundaryCommit = (
       }
     }
 
+    try {
+      mergedSchema = bindCurrentPrincipalConfidentiality(
+        mergedSchema,
+        state.trustSnapshot?.actingPrincipal,
+      );
+    } catch (error) {
+      reasons.push(verdictReason(
+        error instanceof Error ? error.message : String(error),
+      ));
+      continue;
+    }
+
     const linkWriteInputs = linkWrites.get(key) ?? [];
+    // The full stored-to-candidate merge validates migrations above. Its
+    // affected claims overlay the candidate for input verification; the
+    // policy-only fragment does not carry a document's required-field shape.
     const verificationSchema = storedSchema !== undefined &&
         linkWriteInputs.length > 0
       ? undefinedCandidate
-        ? storedSchemaClaimsForLinkWrites(storedSchema, linkWriteInputs)
+        ? schemaClaimsForLinkWrites(storedSchema, linkWriteInputs)
         : mergeCfcSchemaEnvelopes(
           schema,
-          storedSchemaClaimsForLinkWrites(storedSchema, linkWriteInputs),
+          schemaClaimsForLinkWrites(mergedSchema, linkWriteInputs),
           { generatedOutputPaths: generatedOutputPaths.get(key) },
         )
       : schema;
 
+    let deferredWriterRefusal: string | undefined;
     const requirementFailure = verifyInputRequirements(
       tx,
       verificationSchema,
@@ -6810,6 +7098,13 @@ export const prepareBoundaryCommit = (
       prefixBounds,
       metadataResolver,
       prefixProvenance,
+      stored.status === "loaded"
+        ? (reason) => {
+          if (!writePreservesRuntimeOutput(tx, target)) return false;
+          deferredWriterRefusal ??= reason;
+          return true;
+        }
+        : undefined,
     );
     // A verification failure records a reason (which rejects the whole commit
     // in enforcing modes) and skips persisting this target's declared label.
@@ -7419,6 +7714,17 @@ export const prepareBoundaryCommit = (
         }
         const entryPath = canonicalizeLogicalPath(entry.path);
         const cover = authoritativeCoverFor(entryPath);
+        const bound = bindLinkCurrentPrincipalClauses(
+          gated.confidentiality ?? [],
+          cover?.confidentiality ?? [],
+        );
+        if (bound === undefined) {
+          reasons.push(verdictReason(
+            "Link CurrentPrincipal confidentiality requires a concrete stored reader",
+          ));
+          continue;
+        }
+        gated.confidentiality = [...bound];
         persistedLabelEntries.push(markLinkEntry({
           path: [...targetPath, ...entryPath],
           label: cover !== undefined ? mergeLabels(cover, gated) : gated,
@@ -8150,6 +8456,9 @@ export const prepareBoundaryCommit = (
       coalescedLabelEntries.length === 0 && !flowCleared && !remintCleared &&
       !droppedLabelMetadataTemplates
     ) {
+      if (deferredWriterRefusal !== undefined) {
+        reasons.push(verdictReason(deferredWriterRefusal));
+      }
       continue;
     }
 
@@ -8212,6 +8521,14 @@ export const prepareBoundaryCommit = (
       continue;
     }
 
+    // A repeated initializer may reuse its reference only when SC-11 proved
+    // the entire envelope unchanged. Changed schemas or labels require the
+    // ordinary writer authority, even when no value bytes changed.
+    if (deferredWriterRefusal !== undefined) {
+      reasons.push(verdictReason(deferredWriterRefusal));
+      continue;
+    }
+
     if (envelopeRoot === undefined) {
       ensureSchemaDocument(
         tx,
@@ -8263,10 +8580,10 @@ export const prepareBoundaryCommit = (
   reasons.push(...verifySinkRequestCeilings(tx));
   // Single-use grant consumption (design §2.2): stage every claim the
   // consuming gates above registered — the receipt write plus its
-  // create-only mark — into THIS transaction, inside the privileged scope
-  // prepareCfc wraps this whole pass in (the receipt is reserved-namespace
-  // policy state; the unprivileged arm is the S18 gate). After every gate so
-  // all resolutions are registered; before the return so a claim that cannot
+  // create-only mark — into THIS transaction, inside this step's privileged
+  // scope (the receipt is reserved-namespace policy state; the unprivileged
+  // arm is the S18 gate). After every gate so all resolutions are registered;
+  // before the return so a claim that cannot
   // stage fails closed as a prepare reason. The staged write rides the
   // releasing commit: consumption is atomic with the release, a failed
   // commit consumes nothing (spec §6.5.2 no-consume-on-failure), and the
@@ -8279,7 +8596,7 @@ export const prepareBoundaryCommit = (
     instrumentation!.onPrefixProvenance!(prefixProvenance);
   }
   return reasons;
-};
+}
 
 const cfcLogger = getLogger("cfc", { enabled: false });
 

@@ -8,8 +8,7 @@
  * rather than one inside each of them.
  */
 
-import { constructorOfObject } from "@commonfabric/utils/objects";
-import { isPlainObject, typeOfIncludingNull } from "@commonfabric/utils/types";
+import { isPlainObject } from "@commonfabric/utils/types";
 
 import {
   BaseFabricPrimitive,
@@ -25,7 +24,7 @@ import {
   FABRIC_PRIMITIVE_VALUE_TAGS,
   type FabricPrimitiveValueTag,
 } from "@/fabric-primitives/interface.ts";
-import { toShortQuotedDebugString } from "@/value-debug";
+import { debugStr } from "@/value-debug";
 
 import { type PlusTypePredicate } from "./interface.ts";
 import {
@@ -49,8 +48,7 @@ export function tagOfFabricPrimitive(
     return result;
   }
 
-  const desc = toShortQuotedDebugString(value);
-  throw new Error(`Not a valid \`FabricPrimitive\`: ${desc}`);
+  throw new Error(debugStr`Not a valid \`FabricPrimitive\`: $quote${value}`);
 }
 
 /**
@@ -97,13 +95,42 @@ function tagOfUnknownElseNull<PlusType = never>(
   value: unknown,
   isPlusType?: PlusTypePredicate<PlusType> | undefined,
 ): FabricValuePlusTag | null {
-  const jsType = typeOfIncludingNull(value);
+  const jsType = typeof value;
 
-  if (jsType === VALUE_TAGS.function) {
-    return isPlusType?.(value) ? VALUE_TAGS.PlusType : null;
-  } else if (jsType !== "object") {
-    return jsType;
-  } else if (Array.isArray(value)) {
+  switch (jsType) {
+    case "function": {
+      // Values of type `function` are _never_ `FabricValue`s: `FabricValue`
+      // contractually represents that its contents are inert, and `function` is
+      // about as "ert" as a value can get. However, the `PlusType` may accept
+      // `function`s, so we check that to make a final determination as to tag.
+      return isPlusType?.(value) ? VALUE_TAGS.PlusType : null;
+    }
+
+    case "object": {
+      if (value === null) {
+        return VALUE_TAGS.null;
+      }
+      break; // ...and handle non-null objects after the `switch`.
+    }
+
+    case "symbol": {
+      // Only _interned_ symbols are allowed as `FabricValue`. However, the
+      // `PlusType` may accept uninterned symbols, so we check that to make a
+      // final determination as to tag.
+      const isInterned = Symbol.keyFor(value as symbol) !== undefined;
+      if (isInterned) {
+        return VALUE_TAGS.symbol;
+      } else {
+        return isPlusType?.(value) ? VALUE_TAGS.PlusType : null;
+      }
+    }
+
+    default: {
+      return jsType;
+    }
+  }
+
+  if (Array.isArray(value)) {
     return VALUE_TAGS.Array;
   } else if (isPlainObject(value)) {
     return VALUE_TAGS.Object;
@@ -151,8 +178,9 @@ export function tagOfFabricValue<PlusType = never>(
     return result;
   }
 
-  const desc = toShortQuotedDebugString(value);
-  throw new Error(`Not possibly a valid \`FabricValue\`: ${desc}`);
+  throw new Error(
+    debugStr`Not possibly a valid \`FabricValue\`: $quote${value}`,
+  );
 }
 
 /**
@@ -190,9 +218,12 @@ export function tagOfFabricValueElseNull<PlusType = never>(
  * `Error.isError()` and _not_ by looking at the prototype chain.
  *
  * Note: The other `FabricConvertibleJsObject` classes are recognized by
- * constructor identity, which is a per-realm question: another realm's `Map`
+ * prototype identity, which is a per-realm question: another realm's `Map`
  * is a different `Map`, and is not this one. Such a value comes back `null`,
- * unrecognized rather than misidentified.
+ * unrecognized rather than misidentified. The global constructor bindings do
+ * not enter into it: SES lockdown replaces the global `Date` and `RegExp` with
+ * constructors of its own that keep the original prototypes, so an instance
+ * made before lockdown, after it, or inside a compartment is recognized alike.
  */
 export function tagOfConvertibleJsValueElseNull(
   value: unknown,
@@ -229,9 +260,17 @@ export function tagOfConvertibleJsValueElseNull(
       return null;
     }
 
+    case "symbol": {
+      // A unique (uninterned) symbol: `tagOfUnknownElseNull()` refused it, and
+      // there is no class to ask about. A registry-interned symbol never gets
+      // here, having been tagged above.
+      return null;
+    }
+
     case "object": {
       // As of this writing, `value` must be a non-null value of type `object`
-      // here due to how `tagOfUnknownElseNull()` works. This is more of a
+      // here due to how `tagOfUnknownElseNull()` works: every other `typeof`
+      // is either tagged there or handled by a case above. This is more of a
       // defense-in-depth or separation of concerns.
       if (value === null) {
         // deno-coverage-ignore-start
@@ -250,26 +289,24 @@ export function tagOfConvertibleJsValueElseNull(
       // deno-coverage-ignore-stop
   }
 
-  const constructor = constructorOfObject(value);
-
-  switch (constructor) {
-    case Map: {
+  switch (Object.getPrototypeOf(value)) {
+    case Map.prototype: {
       return VALUE_TAGS.JsMap;
     }
 
-    case Set: {
+    case Set.prototype: {
       return VALUE_TAGS.JsSet;
     }
 
-    case Date: {
+    case Date.prototype: {
       return VALUE_TAGS.JsDate;
     }
 
-    case Uint8Array: {
+    case Uint8Array.prototype: {
       return VALUE_TAGS.JsUint8Array;
     }
 
-    case RegExp: {
+    case RegExp.prototype: {
       return VALUE_TAGS.JsRegExp;
     }
 

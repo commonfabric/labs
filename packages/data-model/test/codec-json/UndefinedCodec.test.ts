@@ -11,9 +11,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { CODEC_TYPE_TAGS, NULL_LIVE_ENVIRONMENT } from "@/codec-common";
 import { UndefinedCodec } from "@/codec-json/UndefinedCodec.ts";
-import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
 
 describe("UndefinedCodec", () => {
   const codec = new UndefinedCodec();

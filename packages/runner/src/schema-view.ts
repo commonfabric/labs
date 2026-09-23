@@ -56,7 +56,7 @@ import {
   rebaseCfcLabelView,
 } from "./cfc/label-view-state.ts";
 import { dataUriFromValueWithResolvedLinks } from "./data-uri.ts";
-import { type NormalizedFullLink } from "./link-utils.ts";
+import { declareStreamSchema, type NormalizedFullLink } from "./link-utils.ts";
 import { type Runtime } from "./runtime.ts";
 import {
   createOpaqueReference,
@@ -392,8 +392,12 @@ export function materializeSchemaView(
     const narrowed = childSchema(schema, key);
     if (!Object.hasOwn(value, key)) {
       // A declared default stands in for an absent required key, exactly as it
-      // does for an eager read.
-      if (getPropertyDefaultSchema(schema, key) !== undefined) continue;
+      // does for an eager read, and so does a declared stream: its handle is
+      // minted from the schema alone.
+      if (
+        getPropertyDefaultSchema(schema, key) !== undefined ||
+        ContextualFlowControl.declaresStream(narrowed)
+      ) continue;
       return mismatch(`missing required property ${JSON.stringify(key)}`);
     }
     // A required property the schema does not select cannot be satisfied while
@@ -419,8 +423,11 @@ export function materializeSchemaView(
   );
 }
 
-/** The keys a reader sees: the data's own keys the schema selects, plus any
- * declared property that is absent but carries a default. */
+/**
+ * The keys a reader sees: the data's own keys the schema selects, plus any
+ * declared property that is absent but carries a default or declares a
+ * stream.
+ */
 const visibleKeys = (
   schema: JSONSchema | undefined,
   value: Record<string, FabricValue>,
@@ -431,7 +438,10 @@ const visibleKeys = (
   if (isObjectOrArray(schema) && isObjectOrArray(schema.properties)) {
     for (const key of Object.keys(schema.properties)) {
       if (Object.hasOwn(value, key)) continue;
-      if (getPropertyDefaultSchema(schema, key) === undefined) continue;
+      if (
+        getPropertyDefaultSchema(schema, key) === undefined &&
+        !ContextualFlowControl.declaresStream(childSchema(schema, key))
+      ) continue;
       keys.push(key);
     }
   }
@@ -554,7 +564,29 @@ function createObjectView(
         rebaseCfcLabelView(cfcLabelView, [key]),
       );
     if (!Object.hasOwn(value, key)) {
+      // Register the read even though there is nothing there. An absent key is
+      // usually a computed that has not produced yet, and the reader has to run
+      // again when it does — a container read alone does not carry that, since
+      // the value arrives at the child's own path. This is the same obligation
+      // a refusal carries, for the case that is not a refusal: the schema does
+      // not require this key, so reading it is an ordinary miss, not a mismatch.
       tx.readValueOrThrow({ ...link, path: [...link.path, key] });
+      // A declared stream's handle is minted from the schema alone, whether or
+      // not the data names the key. The declaration is restated at the
+      // schema's root, as the eager read restates it, since a union or a
+      // reference that declares it has no value here for its branches to be
+      // read against.
+      if (ContextualFlowControl.declaresStream(narrowed)) {
+        return readChild(
+          runtime,
+          tx,
+          link,
+          key,
+          declareStreamSchema(narrowed),
+          cfcLabelView,
+          synced,
+        );
+      }
       return applyDefault();
     }
     try {
@@ -669,8 +701,8 @@ function createArrayView(
   const schema = link.schema;
   const resolveElement = (index: number): unknown => {
     const key = String(index);
-    const itemSchema = childSchema(schema, key);
     const item = value[index];
+    const itemSchema = childSchema(schema, key);
     const slotLink: NormalizedFullLink = {
       ...link,
       path: [...link.path, key],

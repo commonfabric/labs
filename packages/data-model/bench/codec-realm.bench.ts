@@ -55,8 +55,8 @@
  * change to what `decode()` retains is a reason to revisit this file.
  */
 
+import type { FabricValue } from "@";
 import { fabricFromRealmValue, realmFromFabricValue } from "@/codecs.ts";
-import type { FabricValue } from "@/interface.ts";
 import {
   ARRAYS,
   BIGINTS,

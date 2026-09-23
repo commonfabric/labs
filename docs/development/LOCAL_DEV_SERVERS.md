@@ -346,6 +346,54 @@ bundles, which is quicker than a restart.
 
 ---
 
+## Agent Runner (Optional)
+
+`cf agent runner` runs the agent requests a pattern makes with `agent()`. The
+builtin is enabled by default through the `agentBuiltin` experimental flag;
+requests stay queued until a runner claims them
+([`EXPERIMENTAL_OPTIONS.md`](EXPERIMENTAL_OPTIONS.md)).
+
+The runner holds one user's identity, so it takes the identity whose requests
+it should run, and the toolshed serving that identity's home space. Against
+`dev-local` on a port offset of 100:
+
+```bash
+# Shown for illustration only.
+./scripts/start-local-dev.sh --port-offset=100
+
+deno task cf agent runner \
+  --identity ./my.key \
+  --api-url http://localhost:8100
+```
+
+On start the runner creates the identity's home pattern if the home space has
+none, writes its `agentRunner` entry into the home space's agent queue, and then
+follows the queue. It prints a line when it claims a run and when the run ends,
+and it runs until interrupted. The model provider is the one `cf-harness` is
+configured with under `CF_HARNESS_HOME`; `--model` names a model, and
+`--loom-retrieval-config` names the host-owned file backing the read-only Loom
+tools. A run's workspace and artifacts go under `--work-root`, which defaults to
+`$CF_HARNESS_HOME/agent-runs`.
+
+A run's sandbox is the harness's Docker `runsc-cfc` sandbox, so
+`CF_HARNESS_RUNSC_CFC_RESULT_DIR` and
+`CF_HARNESS_RUNSC_CFC_INVOCATION_CONTEXT_DIR` name the two sidecar directories
+Docker's `runsc-cfc` runtime is registered with. A run's task is bound to the
+prompt-slot role `context`, and the run returns its structured result through
+the harness's `submit_result` tool, which the harness's default
+`enforce-strict` mode admits under that role. Under that mode and role every
+other tool is refused, reads included, so a run that should use its tools — a
+Loom search, `describe_handle` — needs the runner started with
+`CF_HARNESS_CFC_ENFORCEMENT_MODE=enforce-explicit`, which admits read tools.
+That dial covers the harness's tool policy and sandbox; the fabric session's
+own enforcement is a separate setting and is unchanged by it.
+
+When the home space and the runner's own toolshed are different deployments,
+`--api-url` names the first and `--local-api-url` the second. The
+[CLI README](../../packages/cli/README.md#agent-runner) describes the command.
+
+---
+
 ## Background Piece Service (Optional)
 
 The background-piece-service polls registered pieces and triggers their `bgUpdater` handlers server-side. This is **optional** - only needed if you're testing background/scheduled piece execution.

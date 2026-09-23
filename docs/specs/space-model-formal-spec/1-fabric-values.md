@@ -208,8 +208,10 @@ exposes none of them and a walk stops there (Section 8.6).
 >   via their registry key. **Unique** symbols (`Symbol(desc)`, where
 >   `Symbol.keyFor(s)` returns `undefined`) have no portable representation and
 >   are rejected. The TypeScript `symbol` type cannot express this distinction,
->   so it is enforced at runtime by the conversion, hashing, and encoding
->   boundaries (Sections 4.9, 6, and 5). Symbol-keyed *properties* on plain
+>   so it is enforced at runtime by membership, by the tag dispatch (which tags
+>   a unique symbol `null`, as it does a function), and by the conversion,
+>   hashing, and encoding boundaries (Sections 4.9, 6, and 5). Symbol-keyed
+>   *properties* on plain
 >   objects are a separate matter — see Section 1.5 (Plain Containers /
 >   Objects).
 > - `function` — Functions are opaque closures with no portable representation.
@@ -904,8 +906,8 @@ one axis: whether the data model treats an instance as a primitive. A
 caller sees of it, is that a `FabricInstance` may hold and expose arbitrary
 outgoing `FabricValue` references, and a `FabricPrimitive` may not.
 
-At runtime the two classes extend one memberless root, `BaseFabricSpecialObject`
-in `fabric-bases/`, so that `isFabricSpecialObject()` recognizes either with a
+At runtime the two classes extend one root, `BaseFabricSpecialObject` in
+`fabric-bases/`, so that `isFabricSpecialObject()` recognizes either with a
 single `instanceof`, narrowing to the union. The root is not a type a caller
 names, and the data model defines no other subclass of it; an instance of one
 defined elsewhere is not a `FabricValue`.
@@ -3616,8 +3618,10 @@ The implementation is split across several files for separation of concerns:
 | `api-agreement.ts` | Asserts that each of the three base classes and its `api.ts` declaration are mutually assignable. Nothing imports it; it exists to be type-checked, and everything in it erases at compile time. |
 | `convertible-js.ts` | Conversion: `fabricFromConvertibleJsValue`, `shallowFabricFromConvertibleJsValue`, `convertibleJsFromFabricValue`, `isValidFabricConvertibleJsValue` |
 | `fabric-bases/` | The abstract bases a concrete `FabricValue` extends, one per branch of the type hierarchy: `BaseFabricInstance.ts`, `BaseFabricPrimitive.ts` (plus an `index.ts` barrel). These are the implementer's half of the hierarchy; `interface.ts` is the client's, and reaching it does not reach these. |
-| `fabric-instances/` | Concrete `FabricInstance` subclasses, each in its own file: `FabricNativeWrapper.ts`, `FabricError.ts`, `FabricLink.ts`, `FabricMap.ts`, `FabricSet.ts` (plus an `index.ts` barrel). `UnknownValue` and `ProblematicValue` are `FabricInstance`s too, but live in `codec-common/`, existing only as products of a decode fault. |
-| `fabric-primitives/` | Concrete `FabricPrimitive` subclasses, each in its own file: `FabricBytes.ts`, `FabricHash.ts`, `FabricEpochNsec.ts`, `FabricEpochDay.ts`, `FabricKeyPair.ts`, `FabricRegExp.ts` (plus an `index.ts` barrel). |
+| `fabric-instances/` | Concrete `FabricInstance` subclasses, each in its own file: `FabricNativeWrapper.ts`, `FabricError.ts`, `FabricLink.ts`, `FabricMap.ts`, `FabricSet.ts`. `impl.ts` holds the set of instance classes and what derives from it, `codecClasses()` among them, and `index.ts` is the barrel. `UnknownValue` and `ProblematicValue` are `FabricInstance`s too, and members of that set, but live in `codec-common/`, existing only as products of a decode fault. |
+| `fabric-primitives/` | Concrete `FabricPrimitive` subclasses, each in its own file: `FabricBytes.ts`, `FabricHash.ts`, `FabricEpochNsec.ts`, `FabricEpochDay.ts`, `FabricKeyPair.ts`, `FabricRegExp.ts`, `FabricUnavailable.ts`. `interface.ts` holds the tag vocabularies that range over those classes and imports nothing, the classes being its importers; `impl.ts` holds the set of classes and what derives from it, `codecClasses()` and the schema `type` names among them; and `index.ts` is the barrel. |
+| `for-testing-only.ts` | What the package offers to tests alone, under an export-map entry of its own and in no barrel: makers of examples of every concrete `FabricPrimitive` and `FabricInstance` class, each table typed so that a class with no entry stops the build, and one shared instance per primitive maker. The makers keep a stated contract: a new object per call, equal objects from one maker, and unequal objects from two makers of one class, of which every class has at least two. A test that ranges over the classes takes its values from here and holds no table of its own. It also offers internal steps of the package that a test of the public surface cannot reach dependably, each under a name ending `ForTestingOnly`: `float64BytesOfForTestingOnly()` is `value-hash.ts`'s number-to-bytes step, whose `NaN` arm a test of `hashOf()` can exercise only where the engine keeps a `NaN`'s payload. Loading it also loads `value-debug/`, which is how a unit test that imports a module by its path gets the debug renderers installed. |
+| `value-debug-internal.ts` | The debug renderers as the package's own modules reach them, and what the import-map key `@/value-debug` names: one forwarder per renderer, each calling the renderer of the same name which `value-debug/` installs as it loads. It imports nothing at run time, so any module may import it without a circular load-time dependency, the root class in `fabric-bases/` included. A forwarder throws until `value-debug/` has loaded. Every export-map entry which loads a module that renders loads `value-debug/` too, by way of the `fabric-bases/` barrel, so a program which imports the package has the renderers; `index.ts` re-exports them from `value-debug/` itself. |
 
 ---
 
@@ -3662,6 +3666,7 @@ four categories by high nibble:
 |:------------------|:-------|:--------|:--------------------------------|
 | `TAG_END`         | `0x00` | 0       | end-of-sequence sentinel         |
 | `TAG_HOLE`        | `0x01` | 1       | sparse array holes (run-length) |
+| `TAG_CYCLE`       | `0x02` | 2       | cycle reference to a container on the path |
 
 **Compound tags (`0x1N`)** — containers whose children are tagged values:
 
@@ -3816,6 +3821,12 @@ export function hashOf(value: unknown): FabricHash {
   //                        where `codec` is `codecOf(v)` -- the class's
   //                        `[CODEC]` (Section 2.4), the same source of
   //                        truth the codec layer uses.
+  // - cycle:               an array, object, or `FabricInstance` that is
+  //                        already on the path from the root (by identity)
+  //                        is hashed as hash(TAG_CYCLE, leb128(distance)),
+  //                        where `distance` counts up the path from this
+  //                        position: 1 for the enclosing container. See
+  //                        the byte-level spec, Section 4.19.
   //
   // The JS object wrappers and temporal types are hashed as follows:
   //
@@ -3939,8 +3950,15 @@ Otherwise, an iterative comparison visits each distinct object pair once and
 skips identical descendants. Sharing is not itself content: one shared child can
 equal multiple independent copies. Cycles compare the contents reached through
 corresponding edges; a mismatch reachable after a back edge still makes the
-values unequal. Equality therefore supports cyclic values even when the hash
-encoding does not.
+values unequal. Equality therefore supports cyclic values.
+
+For a cyclic value, though, this comparison and the content hash can disagree,
+because the hash also distinguishes where a cycle closes
+(`2-hash-byte-format.md` Section 4.19): `a = {x: a}` and `b = {x: {x: b}}`
+compare equal by the walk above, and hash differently. Since available hashes
+settle a comparison, the result for such a pair also depends on whether both
+of its hashes are cached. That is an exception to the governing principle, and
+to the statement below that caching a hash does not change an equality result.
 
 **UTF-8 representation.** Container equality preserves the hash encoding's
 replacement of lone UTF-16 surrogates with U+FFFD in strings, symbol registry
@@ -4008,7 +4026,9 @@ in the layers above it. The two get there by different routes, and the
 difference matters to anyone tracing a value through the wire format.
 
 - **`$stream` is an ordinary key.** The JSON layer attaches no meaning to it: a
-  record carrying it round-trips as the record it is.
+  record carrying it round-trips as the record it is. Nothing writes it any
+  more — a stream position is declared by its schema and stores no value — so
+  what remains of it is the documents written before that.
 - **The link-ref envelope is not.** `/` is reserved — the prefix is wholly owned
   by the encoding system in the wire format (Section 9 of `3-json-encoding.md`),
   so a `/`-keyed record reaching the wire is a tagged value, a built-in escape,
@@ -4027,12 +4047,14 @@ from the very rule that gives `/` its meaning.
 | Convention | Where Produced and Recognized | Example | Unified Form |
 |------------|-------------------------------|---------|--------------|
 | Link-ref envelope | Links (`runner/src/sigil-types.ts`, chokepointed on `data-model/cell-rep`) | `{ "/": { "link@1": { id, path, space } } }` | `{ "/Link@1": { id, path, space } }` |
-| `$stream` marker | Streams (`runner/src/builder/types.ts`) | `{ "$stream": true }` | `{ "/Stream@1": null }` |
+| `$stream` marker | Retired; still recognized as a fallback by the readers that classify a position from its stored value, until no stored document holds one (`runner/src/builder/types.ts`, `runner/src/query-result-proxy.ts`, `runner/src/cell.ts`, `fuse/callables.ts`, `cli/lib/shuttle/listing.ts`, `state-inspector/model.ts`) | `{ "$stream": true }` | none — the schema declares the stream |
 
-> **Note on `$stream`:** `$stream` is a stateless marker — it signals that a
-> cell path is a stream endpoint rather than carrying decodable state. Under the
-> unified encoding it becomes `{ "/Stream@1": null }` (a stateless tagged type
-> per Section 5 of `3-json-encoding.md`), preserving its marker semantics.
+> **Note on `$stream`:** the marker is retired rather than renamed. A stream
+> position is declared by `asCell: ["stream"]` on its schema — carried by the
+> links that reach it, and by the manifest link its owner keeps for it — and
+> stores nothing, so no `/Stream@1` tagged type replaces it. What the wire
+> still meets is the sentinel in documents written before the declaration was
+> stored, and readers recognize that until none remain.
 
 > **The link-ref envelope has a named owner.** `sigil-types.ts` states that the
 > envelope and its tag belong to `data-model/cell-rep`, the chokepoint that
@@ -4215,9 +4237,11 @@ export function fabricFromConvertibleJsValue(
 > and whatever the value's prototype names: an `Error` re-pointed at
 > `Object.prototype` is still `"JsError"`.
 > Then the `typeof` question, ahead of every object question: a primitive,
-> and `null`, is tagged by its `typeof` name, and a function comes back
-> `null`, whatever its prototype names, since a function is never asked an
-> object question.
+> and `null`, is tagged by its `typeof` name; a function comes back `null`,
+> whatever its prototype names, since a function is never asked an object
+> question; and a symbol is tagged `"symbol"` only when it is
+> registry-interned, a unique symbol coming back `null` for the reason
+> Section 1.3 gives.
 > An array is tagged next, by `Array.isArray()`, so a subclass instance, a
 > severed-prototype array, and a cross-realm array all reach array handling and
 > are handled by the array rule of Section 1.5, rather than being rejected as
@@ -4228,17 +4252,21 @@ export function fabricFromConvertibleJsValue(
 > lets the object rule of Section 1.5 reject the value by name rather than as
 > some unrecognized class. Then a `FabricPrimitive`, by the tag its instance
 > reports, one of `FABRIC_PRIMITIVE_VALUE_TAGS`, and a `FabricInstance`, by
-> class. What remains is a JS class instance, decided last by its class, read
-> from its prototype, by a `switch` on constructor identity; a
+> class. What remains is a JS class instance, decided last by its class, by a
+> `switch` on the identity of its prototype; a
 > recognized one is a value the conversion has yet to import, the heavier
 > path, so the lookup's cost sits on it alone. That `switch` names only the
 > classes no earlier question decides: an object merely built on a plain
 > object, or on the prototype of `Array` or of an `Error` class, is none of
 > those by the test that decides it, and comes back `null`, unrecognized
-> rather than misidentified. Constructor identity is a per-realm question, so
+> rather than misidentified. Prototype identity is a per-realm question, so
 > a `Map`, `Set`, `Date`, `Uint8Array`, or `RegExp` from another realm comes
 > back `null` the same way, where an array or an error from another realm is
-> decided by the earlier test that holds across realms. A
+> decided by the earlier test that holds across realms. The realm's global
+> constructor bindings do not enter into it: SES lockdown replaces the global
+> `Date` and `RegExp` with constructors of its own that keep the original
+> prototypes, so an instance made before lockdown, after it, or inside a
+> compartment is recognized alike. A
 > `FabricPrimitive` subclass that reports no tag of its own is tagged as its
 > parent, which is a defect in that subclass rather than one the dispatch
 > guards against.

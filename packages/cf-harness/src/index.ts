@@ -7,6 +7,7 @@ export * from "./interactive-chat-stdio.ts";
 export * from "./loom-local-host.ts";
 export * from "./session-store.ts";
 export * from "./structured-result.ts";
+export * from "./result-writer.ts";
 export * from "./subagent-return.ts";
 export * from "./artifacts.ts";
 export * from "./cli.ts";

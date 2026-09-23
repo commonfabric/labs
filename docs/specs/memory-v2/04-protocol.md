@@ -58,7 +58,8 @@ The client MUST declare its protocol version in the first WebSocket message:
     "entityIdListing": true,
     "entityIdPagination": true,
     "entityIdLookup": true,
-    "sessionHoldings": true
+    "sessionHoldings": true,
+    "sessionReadCeiling": true
   }
 }
 ```
@@ -78,7 +79,8 @@ If the server accepts the protocol, it returns:
     "entityIdListing": true,
     "entityIdPagination": true,
     "entityIdLookup": true,
-    "sessionHoldings": true
+    "sessionHoldings": true,
+    "sessionReadCeiling": true
   },
   "sessionOpen": {
     "audience": "did:key:z6Mk...",
@@ -252,6 +254,17 @@ declares no holdings is unaffected: its sessions restore on the
 declaration-less paths (a resumed session diffed against the server's memory, a
 fresh one delivered in full) on any server.
 
+`sessionReadCeiling` advertises that the server records a session's declared
+read ceiling — the `readCeiling` of the signed `session.open` descriptor
+(section 4.1.2) — and that runs served as that session read their `db.query`
+results under it (server-side execution `protocol.md` §1; sqlite-builtin
+`06-cfc.md`, "Runtime read ceiling"). It is build-inherent and defaults to
+`false` when absent. A client whose session declares a ceiling REQUIRES it: an
+older server would accept the descriptor and serve every query unbounded, so
+the client refuses to open the session against a server that does not
+advertise it, before signing a `session.open`. A client declaring none is
+unaffected on any server.
+
 ### 4.1.2 Logical Sessions and Resume
 
 Pending-read resolution, idempotent replay, and live sync are scoped to a
@@ -270,6 +283,10 @@ interface SessionOpenRequest {
     sessionId?: SessionId;
     seenSeq?: number;
     sessionToken?: string;
+    // The read ceiling every `db.query` served as this session reads
+    // under (see the rules). Inside the signed descriptor: a bound on
+    // what the session is served, declared by the session itself.
+    readCeiling?: SessionReadCeiling;
   };
   invocation?: SessionOpenInvocation;
   authorization?: {
@@ -294,6 +311,18 @@ interface SessionHolding {
   branch?: BranchId;
   seq: number;
   deleted?: true;
+}
+
+// A session's declared read ceiling: a non-empty conjunction of
+// confidentiality clauses — an atom, or `{ anyOf: [atom, …] }` — and the
+// mode a query without an `onExceed` of its own falls back to. The same
+// shape, validated by the same rule, as the runtime option
+// `cfcReadMaxConfidentiality`; a malformed one refuses the message.
+type CfcAtom = string | { [key: string]: unknown };
+
+interface SessionReadCeiling {
+  maxConfidentiality: (CfcAtom | { anyOf: CfcAtom[] })[];
+  onExceed?: "fail" | "skip";
 }
 
 interface SessionOpenInvocation {
@@ -348,6 +377,11 @@ Rules:
   confirmed state
 - `resumed: true` means the server found an existing logical session for the
   supplied `(space, sessionId)` pair
+- a session's `readCeiling` is taken from the descriptor of its LAST open,
+  never inherited: a resume that declares none reads unbounded, and one that
+  re-declares reads under what it re-declared. The server records it on the
+  session and the serving runtime reads it per run; a server may also assign
+  a session a ceiling of its own, which lands in the same record
 - the server rotates `sessionToken` on every successful `session.open`
 - at most one connection may own a given `(space, sessionId)` at a time
 - a successful resume transfers ownership to the new connection, invalidates the
@@ -410,6 +444,7 @@ interface HelloMessage {
     entityIdPagination?: boolean;
     entityIdLookup?: boolean;
     sessionHoldings?: boolean;
+    sessionReadCeiling?: boolean;
   };
 }
 

@@ -2,6 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 import { SchemaGenerator } from "../src/schema-generator.ts";
+import { getPrimarySymbol } from "../src/type-utils.ts";
 import { asObjectSchema, createTestProgram, getTypeFromCode } from "./utils.ts";
 
 describe("SchemaGenerator flap coverage", () => {
@@ -252,5 +253,17 @@ interface Root<T> { field: Narrow<T>; }
     const schema = generator.generateSchema(anyType, checker, indexedNode);
 
     expect(schema).toEqual({ type: "string" });
+  });
+
+  it("returns the symbol of a reference's target when the reference carries none of its own", () => {
+    // type-utils.ts getPrimarySymbol: the fallback from a type with no
+    // `.symbol` to the one on its reference target. A reference the checker
+    // builds carries its target's symbol as its own, and a tuple's reference
+    // and target both carry none, so no compiled type takes this return. The
+    // type here is built by hand to have exactly the shape that does.
+    const symbol = { escapedName: "Target" } as unknown as ts.Symbol;
+    const reference = { target: { symbol } } as unknown as ts.Type;
+
+    expect(getPrimarySymbol(reference)).toBe(symbol);
   });
 });

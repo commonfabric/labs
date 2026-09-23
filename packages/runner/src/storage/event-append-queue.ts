@@ -523,7 +523,18 @@ export class EventAppendQueue {
           attempt = 0;
           continue;
         }
-        if (REFUSED_ERROR_NAMES.has(name)) {
+        const verdict = error as {
+          permanentEvidence?: unknown;
+          aclRevision?: unknown;
+          retriable?: unknown;
+        } | undefined;
+        // A current ACL denial proves this append was not admitted. A
+        // session challenge race remains retryable and carries no such basis.
+        const aclRefusal = name === "AuthorizationError" &&
+          verdict?.permanentEvidence === true &&
+          typeof verdict.aclRevision === "number" &&
+          verdict.retriable !== true;
+        if (REFUSED_ERROR_NAMES.has(name) || aclRefusal) {
           logger.warn("event-append-refused", () => [
             `event append ${next.eventId} refused deterministically; ` +
             "dropped from the queue",

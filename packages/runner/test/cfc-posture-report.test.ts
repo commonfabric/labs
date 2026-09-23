@@ -226,9 +226,9 @@ describe("the CFC posture record", () => {
     });
 
     it("stamps a resolved parent's record the same way", async () => {
-      // What CT-2195 lands on: the parent's record becomes an attestation,
-      // and the inheriting host carries the attested values without this
-      // code changing.
+      // A resolved parent's record is an attestation, and the inheriting
+      // host carries the attested values across the way it carries projected
+      // ones.
       const options = runtimePresets.remoteClient({
         apiUrl: new URL(import.meta.url),
         storageManager: StorageManager.emulate({ as: signer }),

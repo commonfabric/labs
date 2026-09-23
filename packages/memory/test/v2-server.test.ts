@@ -1,9 +1,6 @@
 import { assertEquals, assertExists } from "@std/assert";
 import { FakeTime } from "@std/testing/time";
-import {
-  taggedHashStringOf,
-  toCompactDebugString,
-} from "@commonfabric/data-model";
+import { debugStr, taggedHashStringOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { FabricValue } from "@commonfabric/api";
 import { parseClientMessage, Server, SessionRegistry } from "../v2/server.ts";
@@ -1311,11 +1308,9 @@ Deno.test("memory v2 server rejects handshakes when modernCellRep flags disagree
       requestId: "handshake",
       error: {
         name: "ProtocolError",
-        message: `memory flag mismatch: client=${
-          toCompactDebugString({
-            modernCellRep: !HELLO_FLAGS.modernCellRep,
-          })
-        } server=${toCompactDebugString(HELLO_FLAGS)}`,
+        message: debugStr`memory flag mismatch: client=$quote,long${{
+          modernCellRep: !HELLO_FLAGS.modernCellRep,
+        }} server=$quote,long${HELLO_FLAGS}`,
       },
     });
   } finally {

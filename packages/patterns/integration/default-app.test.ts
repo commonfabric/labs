@@ -1,3 +1,4 @@
+import { debugStr } from "@commonfabric/data-model";
 import {
   attachWorkerProfiler,
   awaitViewSettled,
@@ -497,9 +498,8 @@ describe("default-app flow test", () => {
         await shell.waitForState({ view: { spaceName }, identity });
       } catch (error) {
         throw new Error(
-          `Space-link navigation did not reach ${spaceName}; current state: ${
-            JSON.stringify(await shell.state())
-          }`,
+          `Space-link navigation did not reach ${spaceName}; ` +
+            debugStr`current state: $quote,long${await shell.state()}`,
           { cause: error },
         );
       }

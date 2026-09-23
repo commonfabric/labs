@@ -1,6 +1,5 @@
 import {
   env,
-  Page,
   type ProbeApi,
   waitForCondition,
 } from "@commonfabric/integration";
@@ -14,26 +13,41 @@ import {
   PieceController,
   PiecesController,
 } from "./pieces-controller.ts";
-import { clickNthCfButton, waitForText } from "./cfc-browser-helpers.ts";
+import {
+  clickNthCfButton,
+  readTextProbe,
+  settleView,
+  waitForSettledText,
+  waitForText,
+} from "./cfc-browser-helpers.ts";
 import { defer, type Deferred } from "@commonfabric/utils/defer";
-import { toIndentedDebugString } from "@commonfabric/data-model";
-
-/** The text of every rendered `#counter-result`, for failure reporting. */
-function readCounterTexts(page: Page): Promise<string[]> {
-  return page.evaluate(() => {
-    function collect(root: Document | ShadowRoot, out: Element[]): void {
-      for (const element of root.querySelectorAll("*")) {
-        if (element.matches("#counter-result")) out.push(element);
-        if (element.shadowRoot) collect(element.shadowRoot, out);
-      }
-    }
-    const matches: Element[] = [];
-    collect(document, matches);
-    return matches.map((element) => (element.textContent ?? "").trim());
-  });
-}
+import { debugStr } from "@commonfabric/data-model";
 
 const { API_URL, FRONTEND_URL, SPACE_NAME } = env;
+
+/**
+ * Opens `piece`'s view in `shell`'s page as `identity`.
+ *
+ * Every test that drives the view calls this, and calls it inside its own
+ * body. A run can be given one test of this file and none of its neighbors,
+ * and the suite's console-error check covers the shell's bootstrap and login
+ * only for a navigation a test performs: `ShellIntegration` clears what it has
+ * collected before each test and inspects it after.
+ */
+function gotoPiece(
+  shell: ShellIntegration,
+  piece: PieceController,
+  identity: Identity,
+): Promise<void> {
+  return shell.goto({
+    frontendUrl: FRONTEND_URL,
+    view: {
+      spaceName: SPACE_NAME,
+      pieceId: piece.id,
+    },
+    identity,
+  });
+}
 
 describe("cf-render integration test", () => {
   const shell = new ShellIntegration();
@@ -100,14 +114,7 @@ describe("cf-render integration test", () => {
 
   it("should load the nested counter piece and verify initial state", async () => {
     const page = shell.page();
-    await shell.goto({
-      frontendUrl: FRONTEND_URL,
-      view: {
-        spaceName: SPACE_NAME,
-        pieceId: piece.id,
-      },
-      identity,
-    });
+    await gotoPiece(shell, piece, identity);
 
     await waitForText(page, "#counter-result", "Counter is the 0th number");
 
@@ -117,6 +124,7 @@ describe("cf-render integration test", () => {
 
   it("should click the increment button and update the counter", async () => {
     const page = shell.page();
+    await gotoPiece(shell, piece, identity);
 
     // Click increment button (second button - first is decrement)
     await clickNthCfButton(page, "[data-cf-button]", 1);
@@ -128,6 +136,11 @@ describe("cf-render integration test", () => {
 
   it("should update counter value via direct operations and verify UI", async () => {
     const page = shell.page();
+    await gotoPiece(shell, piece, identity);
+    // `gotoPiece` returns once the view matches and the login lands, which is
+    // before the view is drawn. Settling is what puts the write after a drawn
+    // view rather than racing it.
+    await settleView(page);
 
     await piece.result.set(5, ["value"]);
 
@@ -138,37 +151,52 @@ describe("cf-render integration test", () => {
       "Value should be 5 in backend",
     );
 
-    // Navigate to the piece to see if UI reflects the change
-    await shell.goto({
-      frontendUrl: FRONTEND_URL,
-      view: {
-        spaceName: SPACE_NAME,
-        pieceId: piece.id,
-      },
-      identity,
-    });
-
-    await waitForText(page, "#counter-result", "Counter is the 5th number");
+    // The display is the effect of a write this page did not make, so the wait
+    // settles the page on each check rather than only watching the DOM. The
+    // counter is at 0 or at 1 when this test starts, so the wait has a change
+    // to observe.
+    await waitForSettledText(
+      page,
+      "#counter-result",
+      "Counter is the 5th number",
+    );
   });
 
   it("should verify exactly THREE counters display", async () => {
     const page = shell.page();
 
-    // The piece renders one counter through cf-render and two others; all
-    // three must be present, and the first must show the updated value.
-    const expected = "Counter is the 5th number";
+    // The view is opened and drawn before the write, and the order matters on
+    // both counts. Under server execution a write issued before this suite has
+    // navigated is refused, its read basis naming speculative overlay layers
+    // that exist only in this process. And a wait reads its condition once
+    // when it is installed, so a write that landed first would leave nothing
+    // for the wait below to observe. 7 is this test's own value, which no
+    // other test in the file writes.
+    await gotoPiece(shell, piece, identity);
+    await settleView(page);
+    await piece.result.set(7, ["value"]);
+
+    // The piece renders one counter three ways: inline, as a component, and
+    // through cf-render. All three read the same cell, so all three are
+    // present and reading the written value, which is what makes the
+    // cf-render route equivalent to the other two.
+    const expected = "Counter is the 7th number";
     try {
-      await waitForCondition(page, (probe: ProbeApi, want: string) => {
+      await waitForCondition(page, async (probe: ProbeApi, want: string) => {
+        const settle = (globalThis as typeof globalThis & {
+          commonfabric?: { viewSettled?: () => Promise<void> };
+        }).commonfabric?.viewSettled;
+        if (!settle) return false;
+        await settle();
         const results = probe.collect("#counter-result");
         return results.length === 3 &&
-          probe.deepText(results[0]).trim() === want;
+          results.every((result) => probe.deepText(result).trim() === want);
       }, { args: [expected] });
     } catch (cause) {
-      const seen = await readCounterTexts(page).catch(() => undefined);
+      const seen = await readTextProbe(page, "#counter-result")
+        .catch(() => undefined);
       throw new Error(
-        `Expected three #counter-result elements with the first reading ${
-          JSON.stringify(expected)
-        }; saw ${toIndentedDebugString(seen)}`,
+        debugStr`Expected three #counter-result elements reading $quote${expected}; saw $quote,indent,long${seen}`,
         { cause },
       );
     }
@@ -222,14 +250,7 @@ describe("cf-render subpath handling", () => {
     // Before the fix, cf-render would wait forever for undefined subpath cells
     // like .key("sidebarUI") to become defined, blocking the main UI.
     const page = shell.page();
-    await shell.goto({
-      frontendUrl: FRONTEND_URL,
-      view: {
-        spaceName: SPACE_NAME,
-        pieceId: piece.id,
-      },
-      identity,
-    });
+    await gotoPiece(shell, piece, identity);
 
     // The main UI should render despite sidebarUI being undefined
     await waitForText(page, "#main-ui", "This is the main UI");
@@ -253,16 +274,7 @@ describe("cf-render subpath handling", () => {
     // is not defined (or defined as undefined). The cf-render fix ensures
     // that subpath cells like .key("sidebarUI") don't block the main render.
     const page = shell.page();
-
-    // Navigate to the piece
-    await shell.goto({
-      frontendUrl: FRONTEND_URL,
-      view: {
-        spaceName: SPACE_NAME,
-        pieceId: piece.id,
-      },
-      identity,
-    });
+    await gotoPiece(shell, piece, identity);
 
     // The main UI should be visible - this proves rendering wasn't blocked
     await waitForText(page, "#main-ui", "This is the main UI");

@@ -1,3 +1,4 @@
+import { unwrapTypeParentheses } from "@commonfabric/schema-generator/type-node";
 import { FUNCTION_HARDENING_HELPER_NAME } from "@commonfabric/utils/sandbox-contract";
 import ts from "typescript";
 
@@ -28,11 +29,12 @@ import {
   widenLiteralType,
 } from "../ast/mod.ts";
 import {
-  cloneTypeNode,
   createRegisteredTypeLiteral,
-  getDeclaredTypeNodeForBindingElement,
+  getConstructedCellTypeNode,
+  getPreservedTypeForBindingElement,
+  namesValueBinding,
+  type PreservedBindingType,
   reportUnknownReactiveType,
-  shouldPreserveBindingDeclaredTypeNode,
 } from "../ast/type-building.ts";
 import {
   type CapabilityParamSummary,
@@ -50,6 +52,7 @@ import {
   applyShrinkAndWrap,
   type CapabilitySummaryApplicationMode,
   containsAnyOrUnknownTypeNode,
+  getAuthoredCellValueTypeNode,
   isCellLikeTypeNode,
   overlayContractCapabilities,
   preservedWrapperFor,
@@ -137,15 +140,6 @@ function shouldDropFallbackTypeForSchema(
 
 function normalizeTypeNodeText(text: string): string {
   return text.replace(/\s+/g, "");
-}
-
-function extractCellLikeInnerTypeNode(
-  node: ts.TypeNode,
-): ts.TypeNode | undefined {
-  if (!isCellLikeTypeNode(node)) return undefined;
-  if (!ts.isTypeReferenceNode(node)) return undefined;
-  if (!node.typeArguments || node.typeArguments.length === 0) return undefined;
-  return node.typeArguments[0];
 }
 
 function parameterUsesCellLikeMethods(
@@ -349,14 +343,19 @@ function applyCapabilitySummaryToArgument(
     }
     return overlaid;
   }
-  const innerTypeNode = extractCellLikeInnerTypeNode(argumentNode) ??
-    typeToSchemaTypeNode(
-      argumentType && isCellLikeType(argumentType, checker)
-        ? unwrapCellLikeType(argumentType, checker)
-        : undefined,
-      checker,
-      sourceFile,
-    );
+  let innerTypeNode = getAuthoredCellValueTypeNode(argumentNode, checker);
+  if (!innerTypeNode && argumentType && isCellLikeType(argumentType, checker)) {
+    // A cell whose wrapper no node writes out, such as one reached through a
+    // generic alias, has no authored value node, so its value type is printed.
+    // Schema generation can read some prints only from the type behind them —
+    // a name the emitting module does not import, the brand arm of an expanded
+    // `Default` — so the node is registered with its type.
+    const valueType = unwrapCellLikeType(argumentType, checker);
+    innerTypeNode = typeToSchemaTypeNode(valueType, checker, sourceFile);
+    if (innerTypeNode && valueType) {
+      context?.state.typeRegistry.set(innerTypeNode, valueType);
+    }
+  }
   const shouldWrap = !!innerTypeNode;
   const preservedWrapper = shouldWrap
     ? preservedWrapperFor(argumentNode, argumentType, checker)
@@ -446,7 +445,7 @@ function applyCapabilitySummaryToParameter(
     return overlaid;
   }
 
-  const innerTypeNode = extractCellLikeInnerTypeNode(parameterNode);
+  const innerTypeNode = getAuthoredCellValueTypeNode(parameterNode, checker);
   const shouldWrap = !!innerTypeNode;
   const preservedWrapper = shouldWrap
     ? preservedWrapperFor(parameterNode, parameterType, checker)
@@ -669,7 +668,7 @@ function collectFunctionSchemaTypeNodes(
     context &&
     unwrappedReturnExpr &&
     ts.isObjectLiteralExpression(unwrappedReturnExpr) &&
-    objectLiteralHasExplicitScopeValueTypeNodes(unwrappedReturnExpr, checker)
+    objectLiteralHasPreservedValueTypeNodes(unwrappedReturnExpr, checker)
   ) {
     const scopedResult = buildObjectLiteralReturnTypeNode(
       unwrappedReturnExpr,
@@ -880,17 +879,14 @@ function normalizeSchemaInjectionTypeNode(
 }
 
 function typeNodeContainsWrapperSemantics(typeNode: ts.TypeNode): boolean {
-  if (ts.isParenthesizedTypeNode(typeNode)) {
-    return typeNodeContainsWrapperSemantics(typeNode.type);
-  }
-
-  if (ts.isUnionTypeNode(typeNode)) {
-    return typeNode.types.some((member) =>
+  const unwrapped = unwrapTypeParentheses(typeNode);
+  if (ts.isUnionTypeNode(unwrapped)) {
+    return unwrapped.types.some((member) =>
       typeNodeContainsWrapperSemantics(member)
     );
   }
 
-  return isCellLikeTypeNode(typeNode);
+  return isCellLikeTypeNode(unwrapped);
 }
 
 function inferSchemaContextualType(
@@ -1967,12 +1963,16 @@ function buildObjectLiteralReturnTypeNode(
       return undefined;
     }
 
-    const valueTypeNode = getExplicitValueTypeNode(valueExpr, checker) ??
+    const explicit = getExplicitValueTypeNode(valueExpr, checker, typeRegistry);
+    const valueTypeNode = explicit?.typeNode ??
       typeToSchemaTypeNode(valueType, checker, sourceFile);
     if (!valueTypeNode) {
       return undefined;
     }
-    typeRegistry?.set(valueTypeNode, valueType);
+    // A node printed from a type is read by that type: the names it spells
+    // resolve to nothing here, and the type carries the wrappers the body's
+    // view of the binding has stripped. An authored node reads on its own.
+    typeRegistry?.set(valueTypeNode, explicit?.printedFrom ?? valueType);
     const valueHint = context
       ? getUiContractHintFromNode(valueExpr, context)
       : undefined;
@@ -1996,10 +1996,14 @@ function buildObjectLiteralReturnTypeNode(
   );
 }
 
+/** The authored type of a returned cell expression or identifier declaration. */
 function getExplicitValueTypeNode(
   valueExpr: ts.Expression,
   checker: ts.TypeChecker,
-): ts.TypeNode | undefined {
+  typeRegistry?: WeakMap<ts.Node, ts.Type>,
+): PreservedBindingType | undefined {
+  const cellType = getConstructedCellTypeNode(valueExpr, checker, typeRegistry);
+  if (cellType) return { typeNode: cellType };
   if (!ts.isIdentifier(valueExpr)) {
     return undefined;
   }
@@ -2013,21 +2017,19 @@ function getExplicitValueTypeNode(
       shorthandValueSymbol?.declarations?.[0];
   }
   if (declaration && ts.isVariableDeclaration(declaration)) {
-    return declaration.type;
+    return declaration.type ? { typeNode: declaration.type } : undefined;
   }
   if (declaration && ts.isBindingElement(declaration)) {
-    const typeNode = getDeclaredTypeNodeForBindingElement(
+    return getPreservedTypeForBindingElement(
       declaration,
       checker,
+      typeRegistry,
     );
-    return typeNode && shouldPreserveBindingDeclaredTypeNode(typeNode)
-      ? cloneTypeNode(typeNode)
-      : undefined;
   }
   return undefined;
 }
 
-function objectLiteralHasExplicitScopeValueTypeNodes(
+function objectLiteralHasPreservedValueTypeNodes(
   expr: ts.ObjectLiteralExpression,
   checker: ts.TypeChecker,
 ): boolean {
@@ -2042,8 +2044,16 @@ function objectLiteralHasExplicitScopeValueTypeNodes(
     const valueExpr = ts.isPropertyAssignment(property)
       ? unwrapExpression(property.initializer)
       : property.name;
-    const valueTypeNode = getExplicitValueTypeNode(valueExpr, checker);
-    if (valueTypeNode && typeNodeContainsScopeWrapper(valueTypeNode)) {
+    const explicit = getExplicitValueTypeNode(valueExpr, checker);
+    // Inference can erase a scope wrapper or print a writer binding as a
+    // structural function type. Authored syntax retains both declarations.
+    if (
+      explicit &&
+      (namesValueBinding(explicit.typeNode, checker) ||
+        typeNodeContainsScopeWrapper(explicit.typeNode) ||
+        (explicit.preservedTypeNode &&
+          typeNodeContainsScopeWrapper(explicit.preservedTypeNode)))
+    ) {
       return true;
     }
   }
@@ -2052,7 +2062,7 @@ function objectLiteralHasExplicitScopeValueTypeNodes(
 }
 
 function typeNodeContainsScopeWrapper(typeNode: ts.TypeNode): boolean {
-  const unwrapped = unwrapParenthesizedSchemaTypeNode(typeNode);
+  const unwrapped = unwrapTypeParentheses(typeNode);
   if (ts.isTypeReferenceNode(unwrapped)) {
     const name = ts.isIdentifier(unwrapped.typeName)
       ? unwrapped.typeName.text
@@ -2087,7 +2097,7 @@ function propagateUiContractHintsFromObjectLiteral(
     return undefined;
   }
 
-  const target = unwrapParenthesizedSchemaTypeNode(resultNode);
+  const target = unwrapTypeParentheses(resultNode);
   let resultHint:
     | UiContractHint
     | undefined;
@@ -2256,14 +2266,6 @@ function extractUiContractFromLoweredJsx(
 
   const kind = getLiteralAttr("data-ui-disclosure-kind");
   return kind ? { helper: "UiDisclosure", kind } : undefined;
-}
-
-function unwrapParenthesizedSchemaTypeNode(node: ts.TypeNode): ts.TypeNode {
-  let current = node;
-  while (ts.isParenthesizedTypeNode(current)) {
-    current = current.type;
-  }
-  return current;
 }
 
 function getObjectLiteralPropertyName(
@@ -2690,19 +2692,11 @@ function detectSchemaArguments(
   return schemas;
 }
 
-function unwrapParenthesizedTypeNode(node: ts.TypeNode): ts.TypeNode {
-  let current = node;
-  while (ts.isParenthesizedTypeNode(current)) {
-    current = current.type;
-  }
-  return current;
-}
-
 function isTopLevelAnyOrUnknownTypeNode(
   node: ts.TypeNode | undefined,
 ): boolean {
   if (!node) return false;
-  const current = unwrapParenthesizedTypeNode(node);
+  const current = unwrapTypeParentheses(node);
   return current.kind === ts.SyntaxKind.AnyKeyword ||
     current.kind === ts.SyntaxKind.UnknownKeyword;
 }
@@ -2777,7 +2771,7 @@ function reportUnknownPatternResult(
 function collectUnknownResultPaths(resultNode: ts.TypeNode): string[] {
   const paths: string[] = [];
   const walk = (typeNode: ts.TypeNode, path: string): void => {
-    const unwrapped = unwrapParenthesizedTypeNode(typeNode);
+    const unwrapped = unwrapTypeParentheses(typeNode);
     if (unwrapped.kind === ts.SyntaxKind.UnknownKeyword) {
       paths.push(path || "(result)");
       return;

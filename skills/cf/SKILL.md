@@ -152,6 +152,16 @@ answer composes into the next command.
   the first positional — `cf cell get /tracker items/0/title`. A reference
   begins with `/` and a relative path never does, so the two cannot collide.
   This is the spelling to reach for.
+- `cf piece call` follows a path on its target to the piece linked there:
+  `cf piece call //space/of:fid1:…/inbox/piece receive '{…}'` calls `receive` on
+  the piece `inbox.piece` links to, in whatever space that link names (opened
+  under the same identity; that space's ACL and CFC decide). Never read a
+  `$link` and rebuild an address for this. Note that `--select 'inbox.piece@'`
+  prints the address of the _position_ (`/of:…/inbox/piece`), not of the linked
+  piece — which is exactly the reference to hand `cf piece call`. A path with no
+  link stored at it exits 1 with `names no piece` in the message; a link naming
+  a cell rather than a piece exits 1 with `links to a cell inside a piece`.
+  Every other piece-only command refuses a path on a handle.
 - `--cell <reference|id|slug>` takes the same target where a flag suits better,
   and is where the bare id and slug spellings go — there no path competes for
   the position. `--piece` is a deprecated name for that same flag: still

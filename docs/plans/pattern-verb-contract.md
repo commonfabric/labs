@@ -407,12 +407,15 @@ designed. So the subset check is the default and the interim, not an argument
 that the named mechanism is unnecessary.
 
 What is **not** yet true is the premise all of that rests on: that a piece's
-verbs can be identified from its schema. Verb-ness has three independent
+verbs can be identified from its schema. Verb-ness had three independent
 encodings — the cell's construction kind, `asCell: ["stream"]` in the schema,
 and a stored `{$stream: true}` value — and `Cell.isStream` accepts any one of
-them (`Cell.isStream`, `packages/runner/src/cell.ts`). A conformance check filtering on
-the schema marker therefore misses verbs carried only by the stored one, and
-the CLI keeps a forced-stream fallback specifically to dispatch such handlers.
+them (`Cell.isStream`, `packages/runner/src/cell.ts`). The stored one is
+retired (`docs/plans/stream-markers-out-of-stored-data.md`): nothing writes it,
+and the schema now rides on every link that reaches a stream. A conformance
+check filtering on the schema marker still misses a verb whose stored links
+predate that stamp, and the CLI keeps a forced-stream fallback specifically to
+dispatch such handlers until the stored value is no longer read at all.
 Note where this does and does not bite: schema *generation* is not exposed to
 it, because schema-generator decides stream-ness from the TypeScript type and
 emits the marker as its own output — the divergence is a property of schemas

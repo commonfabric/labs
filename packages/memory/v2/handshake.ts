@@ -1,4 +1,4 @@
-import { toCompactDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 
 import {
   compatibleMemoryProtocolFlags,
@@ -46,9 +46,7 @@ export const respondToHello = (
       requestId: "handshake",
       error: toError(
         "ProtocolError",
-        `memory flag mismatch: client=${
-          toCompactDebugString(message.flags)
-        } server=${toCompactDebugString(expectedFlags)}`,
+        debugStr`memory flag mismatch: client=$quote,long${message.flags} server=$quote,long${expectedFlags}`,
       ),
     };
   }

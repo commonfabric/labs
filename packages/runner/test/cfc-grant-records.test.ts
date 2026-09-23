@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
+import type { FabricValue } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
@@ -419,7 +420,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
       ])).toBe(true);
     });
 
-    it("grant on clause k leaves independent clause j untouched (CT-1874 / inv-11)", () => {
+    it("leaves independent clause j untouched when a grant lands on clause k (inv-11)", () => {
       // Both clauses match the appliesTo pattern (each binds its own $owner);
       // the resolver holds a grant for ALICE only. The rewrite must land on
       // Alice's clause alone — a grant discovered from clause k must not widen
@@ -1055,6 +1056,12 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
       expect(attempt({ ...base, resource: "" })).toThrow(/resource/);
     });
 
+    it("rejects a resource that is not a `FabricValue`", () => {
+      expect(attempt({ ...base, resource: new Date(0) })).toThrow(
+        /resource must be a `FabricValue`/,
+      );
+    });
+
     it("rejects malformed timestamps and intent ids", () => {
       expect(attempt({ ...base, grantedAt: Number.NaN })).toThrow(/grantedAt/);
       expect(attempt({ ...base, grantedAt: "soon" })).toThrow(/grantedAt/);
@@ -1252,7 +1259,7 @@ describe("CFC grant records (§8.12.7 route 2a)", () => {
       await withRuntime({}, (runtime) => {
         const tx = runtime.edit();
         const resolver = createTxCfcGrantResolver(tx);
-        const cyclic: Record<string, unknown> = {};
+        const cyclic: Record<string, FabricValue> = {};
         cyclic.self = cyclic;
         expect(
           resolver({

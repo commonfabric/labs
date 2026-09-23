@@ -461,10 +461,11 @@ describe("local-read-policy", () => {
     it(`finishes an event once when an unavailable input is encountered in ${phase}`, async () => {
       const output = runtime.getCell(space, "event result", undefined);
       const missing = runtime.getCell(space, "event missing", undefined);
-      const event = runtime.getCell(space, "event stream", undefined);
+      const event = runtime.getCell<unknown>(space, "event stream", {
+        asCell: ["stream"],
+      });
       await runtime.editWithRetry((tx) => {
         output.withTx(tx).set("confirmed");
-        event.withTx(tx).set({ $stream: true });
       });
       await output.sync();
       await event.sync();
@@ -531,10 +532,11 @@ describe("local-read-policy", () => {
 
   it("does not retry a rejected event after its local condition expires", async () => {
     const output = runtime.getCell(space, "rejected event", undefined);
-    const event = runtime.getCell(space, "rejected event stream", undefined);
+    const event = runtime.getCell<unknown>(space, "rejected event stream", {
+      asCell: ["stream"],
+    });
     await runtime.editWithRetry((tx) => {
       output.withTx(tx).set("confirmed");
-      event.withTx(tx).set({ $stream: true });
     });
     await output.sync();
     await event.sync();

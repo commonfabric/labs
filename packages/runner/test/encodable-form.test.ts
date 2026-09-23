@@ -709,7 +709,7 @@ describe("encodable-form", () => {
     });
   });
 
-  describe("a query result holding a stream marker", () => {
+  describe("a query result holding a stream", () => {
     let runtime: Runtime;
     let storageManager: ReturnType<typeof StorageManager.emulate>;
     let tx: IExtendedStorageTransaction;
@@ -731,7 +731,7 @@ describe("encodable-form", () => {
 
     it("encodes a stream member as the link naming the cell", () => {
       // A query result is not uniformly a leaf to the walk. Reading a member
-      // that holds a stream marker yields a `Cell`, which has no fabric
+      // declared a stream yields a `Cell`, which has no fabric
       // representation of its own and reaches the conversion only as the link
       // naming it. So a caller that goes on to serialize what it gets back
       // reads into a query result rather than claiming it with `isLeaf`.
@@ -744,7 +744,13 @@ describe("encodable-form", () => {
         undefined,
         tx,
       );
-      cell.set({ handler: { $stream: true }, other: 1 });
+      const handler = runtime.getCell<unknown>(
+        space,
+        "encodable-form-stream",
+        { asCell: ["stream"] },
+        tx,
+      );
+      cell.set({ handler, other: 1 });
       const view = cell.get() as unknown as {
         handler: { toSigilLinkOrNull(): unknown };
       };

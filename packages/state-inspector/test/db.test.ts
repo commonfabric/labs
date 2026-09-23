@@ -3,7 +3,7 @@
 // with a TEMP VIEW supplying a constant 'space' scope so scope-aware queries
 // (which all filter `scope_key = 'space'`) work unchanged on those DBs.
 
-import { assertEquals } from "@std/assert";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import { Database } from "@db/sqlite";
 
 import { openSpace } from "../db.ts";
@@ -87,6 +87,59 @@ Deno.test("scope_key shim: a DB without scope_key still inspects", async () => {
     } finally {
       space.close();
     }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("statements: a read issued per entity is prepared once per space", async () => {
+  // A statement prepared per call stays alive until the database closes, so a
+  // space-wide walk that prepares per entity holds millions of them.
+  const dir = await Deno.makeTempDir({ prefix: "state-inspector-db-" });
+  const dbPath = `${dir}/legacy.sqlite`;
+  try {
+    seed(dbPath);
+    const space = openSpace(dbPath);
+    try {
+      const prepare = space.db.prepare.bind(space.db);
+      const prepared = new Map<string, number>();
+      space.db.prepare = ((sql: string) => {
+        prepared.set(sql, (prepared.get(sql) ?? 0) + 1);
+        return prepare(sql);
+      }) as typeof space.db.prepare;
+      for (let i = 0; i < 3; i++) {
+        reconstructDocument(space, { id: "of:a" });
+        reconstructDocument(space, { id: "of:b" });
+      }
+      assert(prepared.size > 0, "the reads went through the space");
+      assertEquals(
+        [...prepared].filter(([, count]) => count > 1),
+        [],
+      );
+    } finally {
+      space.close();
+    }
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("statements: a read after close is refused with an error", async () => {
+  // The cached statements are finalized on close, and using one after that
+  // crashes the process. The space refuses the read before it gets there.
+  const dir = await Deno.makeTempDir({ prefix: "state-inspector-db-" });
+  const dbPath = `${dir}/legacy.sqlite`;
+  try {
+    seed(dbPath);
+    const space = openSpace(dbPath);
+    reconstructDocument(space, { id: "of:a" });
+    space.close();
+    assertThrows(
+      () => reconstructDocument(space, { id: "of:a" }),
+      Error,
+      "is closed",
+    );
+    space.close();
   } finally {
     await Deno.remove(dir, { recursive: true });
   }

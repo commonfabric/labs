@@ -8,7 +8,7 @@ reason: "Browser reload checks of eager materialization and default-on controls.
 # Lazy materialization: notebook reload evidence
 
 These runs extend the [integration evidence](2026-09-14-lazy-off-integration.md)
-for the [fast-follow plan](../../../plans/lazy-materialization-fast-follow.md).
+for the [fast-follow plan](../../plans/lazy-materialization-fast-follow.md).
 They do not establish posture equivalence or complete the retirement gate.
 
 ## Scope and method

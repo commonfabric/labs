@@ -1,0 +1,1 @@
+{"date":"2026-09-18","from":{"k":"unit","s":"runner","n":"SpaceServer > instance members > activate() > settles a piece created during confirmation before covering its input"},"to":{"k":"unit","s":"runner","n":"SpaceServer > instance members > activate() > settles a piece created during a structure load before covering its input"}}

@@ -1,0 +1,1 @@
+{"date":"2026-09-21","from":{"k":"unit","s":"cf-harness","n":"connector-grants > resolveConnectorGrants() > reports a handle whose contract declares more than one class"},"to":{"k":"unit","s":"cf-harness","n":"connector-grants > resolveConnectorGrants() > grants a handle with all classes its contract declares"}}

@@ -179,7 +179,9 @@ function shouldFilterNestedLocalsForCallWrapper(
   const reactiveContext = context.getReactiveContext(expression);
   if (
     reactiveContext.kind !== "pattern" ||
-    (reactiveContext.owner !== "pattern" && reactiveContext.owner !== "render")
+    (reactiveContext.owner !== "pattern" &&
+      reactiveContext.owner !== "render" &&
+      reactiveContext.owner !== "array-method")
   ) {
     return false;
   }

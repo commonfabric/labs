@@ -1,4 +1,4 @@
-import { toCompactDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 import type { Cell, Runtime } from "@commonfabric/runner";
 import { stuckNet } from "@commonfabric/test-support/stuck-net";
 import { defer } from "@commonfabric/utils/defer";
@@ -62,18 +62,14 @@ export async function waitForCellValue<T>(
     }
   } catch (cause) {
     const { space, id, path, scope } = cell.getAsNormalizedFullLink();
+    const renderedValue = lastRead === undefined
+      ? "<not read>"
+      : debugStr`$quote,long${lastRead.value}`;
     const error = new Error(
       `${describeThrown(cause)}\n` +
-        `Cell: ${
-          toCompactDebugString({ space, id, path, scope }, { maxLength: 4096 })
-        }\n` +
+        debugStr`Cell: $quote,long${{ space, id, path, scope }}\n` +
         `Predicate: ${predicate.toString().slice(0, 4096)}\n` +
-        `Last read value (rendered at failure): ${
-          lastRead === undefined ? "<not read>" : toCompactDebugString(
-            lastRead.value,
-            { maxDepth: 2, maxLength: 4096 },
-          )
-        }`,
+        `Last read value (rendered at failure): ${renderedValue}`,
       { cause },
     );
     if (cause instanceof Error) error.name = cause.name;

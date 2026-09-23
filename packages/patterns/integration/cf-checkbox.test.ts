@@ -21,6 +21,26 @@ const testComponents = [
   { name: "cf-checkbox-cell", file: "examples/cf-checkbox-cell.tsx" },
 ];
 
+/**
+ * Opens a piece's view in the browser. Each case that reads a rendered piece
+ * calls this for itself, so that the case runs alone and so that whatever its
+ * page reports while loading belongs to that case.
+ */
+const openPiece = async (
+  shell: ShellIntegration,
+  pieceId: string,
+  identity: Identity,
+) => {
+  await shell.goto({
+    frontendUrl: FRONTEND_URL,
+    view: {
+      spaceName: SPACE_NAME,
+      pieceId,
+    },
+    identity,
+  });
+};
+
 testComponents.forEach(({ name, file }) => {
   describe(`${name} integration test`, () => {
     const shell = new ShellIntegration();
@@ -49,7 +69,6 @@ testComponents.forEach(({ name, file }) => {
       );
       pieceId = piece.id;
 
-      // Add permissions for ANYONE in the first test
       await new ACLManager(cc.runtime, cc.getSpace()).set(ANYONE_USER, "WRITE");
     });
 
@@ -58,19 +77,14 @@ testComponents.forEach(({ name, file }) => {
     });
 
     it(`should load the ${name} piece`, async () => {
-      const page = shell.page();
-      await shell.goto({
-        frontendUrl: FRONTEND_URL,
-        view: {
-          spaceName: SPACE_NAME,
-          pieceId,
-        },
-        identity,
-      });
-      await page.waitForSelector("cf-checkbox", { strategy: "pierce" });
+      await openPiece(shell, pieceId, identity);
+
+      await shell.page().waitForSelector("cf-checkbox", { strategy: "pierce" });
     });
 
     it("should show disabled content initially", async () => {
+      await openPiece(shell, pieceId, identity);
+
       await waitForText(
         shell.page(),
         "#feature-status",
@@ -78,19 +92,29 @@ testComponents.forEach(({ name, file }) => {
       );
     });
 
-    it("should toggle to enabled content when checkbox is clicked", async () => {
+    it("toggles the bound content on and back off when the checkbox is clicked", async () => {
       // The first cf-checkbox in the piece is bound to the cell that
       // #feature-status reflects; the click helper settles the view, clicks
-      // the host element once, and waits for the bound text to update.
+      // the host element once, and waits for the bound text to update. One
+      // case covers both clicks: the second click's expectation is the state
+      // the first click leaves. The helper returns without clicking when the
+      // text it waits for is already present, so each step asserts the state
+      // it starts from, and the first step asserts it here.
+
+      await openPiece(shell, pieceId, identity);
+
+      await waitForText(
+        shell.page(),
+        "#feature-status",
+        "⚠ Feature is disabled",
+      );
+
       await clickCfButtonAndWaitForText(
         shell.page(),
         "cf-checkbox",
         "#feature-status",
         "✓ Feature is enabled!",
       );
-    });
-
-    it("should toggle back to disabled content when checkbox is clicked again", async () => {
       await clickCfButtonAndWaitForText(
         shell.page(),
         "cf-checkbox",
@@ -141,14 +165,7 @@ describe("cf-checkbox waitForDisabled fallback integration test", () => {
 
   it("resolves both the enabled and disabled readings of a control with no inner button", async () => {
     const page = shell.page();
-    await shell.goto({
-      frontendUrl: FRONTEND_URL,
-      view: {
-        spaceName: SPACE_NAME,
-        pieceId,
-      },
-      identity,
-    });
+    await openPiece(shell, pieceId, identity);
     await page.waitForSelector("#probe-checkbox", { strategy: "pierce" });
 
     // The checkbox starts enabled; the helper must read the host fallback and

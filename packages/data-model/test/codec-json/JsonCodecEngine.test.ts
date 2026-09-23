@@ -25,38 +25,39 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { JsonCodecEngine } from "@/codec-json/JsonCodecEngine.ts";
+import { FabricInstance, type FabricValue, isDeepFrozen } from "@";
+import {
+  BaseLiveEnvironment,
+  BaseNonterminalCodec,
+  BaseTerminalCodec,
+  CodecRegistry,
+  ProblematicStateError,
+  ProblematicValue,
+  UnknownValue,
+} from "@/codec-common";
+import { JsonCodecEngine } from "@/codec-json";
+import { JSON_FORMAT, type JsonCodecValue } from "@/codec-json/interface.ts";
 import {
   createDefaultJsonRegistry,
   jsonFromFabricValue,
   newDefaultJsonCodecEngine,
 } from "@/codecs.ts";
-import { FabricInstance, type FabricValue } from "@/interface.ts";
-import { JSON_FORMAT, type JsonCodecValue } from "@/codec-json/interface.ts";
-import { UnknownValue } from "@/codec-common/UnknownValue.ts";
-import { ProblematicStateError } from "@/codec-common/ProblematicStateError.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
 import {
   BaseFabricInstance,
   DEEP_CLONE_CORE,
   DEEP_FREEZE,
   IS_DEEP_FROZEN,
   SHALLOW_UNFROZEN_CLONE,
-} from "@/fabric-bases/BaseFabricInstance.ts";
-import { FabricEpochDay } from "@/fabric-primitives/FabricEpochDay.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
+} from "@/fabric-bases";
+import { FabricError } from "@/fabric-instances";
 import {
+  FabricBytes,
+  FabricEpochDay,
+  FabricEpochNsec,
+  FabricRegExp,
   FabricUnavailable,
   UNAVAILABLE_PENDING,
-} from "@/fabric-primitives/FabricUnavailable.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { isDeepFrozen } from "@/deep-freeze.ts";
-import { BaseLiveEnvironment } from "@/codec-interface/BaseLiveEnvironment.ts";
-import { CodecRegistry } from "@/codec-common/CodecRegistry.ts";
-import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
-import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
+} from "@/fabric-primitives";
 import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 /**

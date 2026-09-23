@@ -32,6 +32,7 @@ import { markdownLanguage } from "./markdown/language.ts";
 import { jsonLanguage, jsonLinesLanguage } from "./json/language.ts";
 import { yamlLanguage } from "./yaml/language.ts";
 import { pythonLanguage } from "./python/language.ts";
+import { swiftLanguage } from "./swift/language.ts";
 import { binaryLanguage } from "./binary/language.ts";
 import { plainTextLanguage } from "./plain-text/language.ts";
 import type { LineEndingProvenance } from "../editbuffer.ts";
@@ -188,8 +189,18 @@ export interface HunkStructureContext {
   readonly definitions: Map<string, Definition[]>;
 }
 
-/** An exact executable basename or regular expression for a shebang. */
-export type InterpreterPattern = string | RegExp;
+/** One word of a shebang command: an exact spelling or a regular expression. */
+export type InterpreterWordPattern = string | RegExp;
+
+/**
+ * A shebang command a language claims. A single pattern matches the executable
+ * basename on its own. A list matches that basename and the words that follow
+ * it, so a launcher such as `uv run` is told apart from the launcher's other
+ * subcommands.
+ */
+export type InterpreterPattern =
+  | InterpreterWordPattern
+  | readonly InterpreterWordPattern[];
 
 /**
  * An extension that several syntaxes use, such as `.cfg`. The language claims
@@ -209,7 +220,8 @@ export interface SharedExtension {
  * Declarative names that select a language. Extensions include their leading
  * dot and compare without case. Exact filenames and regular-expression
  * patterns match a path's basename. Aliases name explicit language overrides.
- * Interpreters match executable basenames extracted from shebangs. Shared
+ * Interpreters match the command words extracted from a shebang, whose first
+ * word is the executable's basename. Shared
  * extensions name syntaxes that one extension cannot tell apart, and pair each
  * with the source evidence that settles it.
  */
@@ -229,7 +241,8 @@ export interface LanguageMetadata {
 export interface Language {
   /**
    * Stable identifier, such as `"typescript"`, `"markdown"`, `"json"`,
-   * `"json-lines"`, `"yaml"`, `"python"`, `"binary"`, or `"plain-text"`.
+   * `"json-lines"`, `"yaml"`, `"python"`, `"swift"`, `"binary"`, or
+   * `"plain-text"`.
    */
   readonly id: string;
 
@@ -239,6 +252,16 @@ export interface Language {
   /** Filename, shared-extension, explicit-name, and shebang selectors for
    * this language. */
   readonly metadata: LanguageMetadata;
+
+  /**
+   * Load whatever this language needs before any of the synchronous methods
+   * below run, such as a parser that is fetched and compiled. A view prepares
+   * the languages it has selected. A synchronous method reached before this
+   * has finished shows the source as plain text and starts the load; see
+   * {@link onGrammarLoad}. Repeated calls share one load. A language with
+   * nothing to load omits this.
+   */
+  prepare?(): Promise<void>;
 
   /** Parse `text` into the full document model: colored lines, a structure
    * tree, and a name → definition index. `fileName` is advisory. */
@@ -317,6 +340,21 @@ export interface Language {
     options: SemanticsOptions,
   ): Semantics | undefined;
 }
+
+/** Load the parsers these languages need, so their parsing can stay
+ * synchronous. Repeats are free, and a language with nothing to load is
+ * skipped. */
+export function prepareLanguages(
+  languages: Iterable<Language>,
+): Promise<void> {
+  return Promise.all(
+    [...languages].map((language) => language.prepare?.()),
+  ).then(() => {});
+}
+
+// A language used before its parser has loaded shows its source as plain text
+// and starts the load, so a view that opens files as it runs listens for loads.
+export { onGrammarLoad } from "./treesitter/adapter.ts";
 
 /** Whether a renderer can be projected onto line-aligned diff content. */
 export function canRenderDiffLines(language: Language): boolean {
@@ -418,6 +456,7 @@ function allLanguages(): readonly Language[] {
     jsonLinesLanguage,
     yamlLanguage,
     pythonLanguage,
+    swiftLanguage,
     binaryLanguage,
     plainTextLanguage,
   ];
@@ -637,15 +676,30 @@ function basename(path: string): string {
 }
 
 function languageForShebang(text: string): Language | undefined {
-  const interpreter = shebangInterpreter(text);
-  if (interpreter === undefined) return undefined;
+  const command = shebangCommand(text);
+  if (command === undefined) return undefined;
   return allLanguages().find((language) =>
     language.metadata.interpreters.some((pattern) =>
-      typeof pattern === "string"
-        ? pattern === interpreter
-        : regularExpressionMatches(pattern, interpreter)
+      interpreterMatches(pattern, command)
     )
   );
+}
+
+/** Whether a claimed command is the start of the shebang's command words. */
+function interpreterMatches(
+  pattern: InterpreterPattern,
+  command: readonly string[],
+): boolean {
+  const words: readonly InterpreterWordPattern[] =
+    typeof pattern === "string" || pattern instanceof RegExp
+      ? [pattern]
+      : pattern;
+  return words.length <= command.length &&
+    words.every((word, index) =>
+      typeof word === "string"
+        ? word === command[index]
+        : regularExpressionMatches(word, command[index])
+    );
 }
 
 function regularExpressionMatches(pattern: RegExp, value: string): boolean {
@@ -656,10 +710,11 @@ function regularExpressionMatches(pattern: RegExp, value: string): boolean {
 }
 
 /**
- * Extract the executable basename from a direct shebang or an `env` shebang.
- * `env -S` supplies the command after the split-string flag.
+ * Extract the command words from a direct shebang or an `env` shebang, with
+ * the executable reduced to its basename. `env -S` supplies the command after
+ * the split-string flag.
  */
-function shebangInterpreter(text: string): string | undefined {
+function shebangCommand(text: string): string[] | undefined {
   const end = text.indexOf("\n");
   const firstLine = (end < 0 ? text : text.slice(0, end)).replace(/\r$/, "");
   if (!firstLine.startsWith("#!")) return undefined;
@@ -667,14 +722,15 @@ function shebangInterpreter(text: string): string | undefined {
   if (command.length === 0) return undefined;
   const separator = command.search(/\s/);
   const executable = separator < 0 ? command : command.slice(0, separator);
+  const rest = separator < 0 ? "" : command.slice(separator);
   const direct = basename(executable);
-  if (direct !== "env") return direct;
-  return envCommandFromShebang(
-    separator < 0 ? "" : command.slice(separator),
-  );
+  if (direct !== "env") {
+    return [direct, ...[...rest.matchAll(/\S+/g)].map((match) => match[0])];
+  }
+  return envCommandFromShebang(rest);
 }
 
-function envCommandFromShebang(input: string): string | undefined {
+function envCommandFromShebang(input: string): string[] | undefined {
   const matches = [...input.matchAll(/\S+/g)];
   let options = true;
   for (let index = 0; index < matches.length; index++) {
@@ -706,7 +762,10 @@ function envCommandFromShebang(input: string): string | undefined {
       options = false;
       continue;
     }
-    return basename(word);
+    return [
+      basename(word),
+      ...matches.slice(index + 1).map((following) => following[0]),
+    ];
   }
   return undefined;
 }
@@ -731,7 +790,7 @@ function envOptionTakesFollowingWord(word: string): boolean {
   return grouped !== null && grouped[1].length === 0;
 }
 
-function splitEnvCommand(input: string): string | undefined {
+function splitEnvCommand(input: string): string[] | undefined {
   const words = splitShebangWords(input);
   return words === undefined ? undefined : envCommand(words);
 }
@@ -776,7 +835,7 @@ function splitEnvWord(word: EnvWord): EnvWord[] | undefined {
   return word.stable ? [word] : splitShebangWords(word.text);
 }
 
-function envCommand(initialWords: readonly EnvWord[]): string | undefined {
+function envCommand(initialWords: readonly EnvWord[]): string[] | undefined {
   const frames: EnvWordFrame[] = [{ words: initialWords, index: 0 }];
   let options = true;
   for (;;) {
@@ -819,7 +878,12 @@ function envCommand(initialWords: readonly EnvWord[]): string | undefined {
       options = false;
       continue;
     }
-    return basename(text);
+    const command = [basename(text)];
+    for (;;) {
+      const following = nextEnvWord(frames);
+      if (following === undefined) return command;
+      command.push(following.text);
+    }
   }
 }
 

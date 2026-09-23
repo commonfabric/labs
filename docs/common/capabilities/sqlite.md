@@ -250,11 +250,14 @@ export const liveOrders = (orders: SqliteDb) => ({
 ## Session-scoped results
 
 Where the runtime carries a read ceiling — a lens on what this particular run
-may observe — the result of every query it issues has to be **session-scoped**,
-and a query whose result is broader is refused before anything is written. A
-space- or user-shared result is one cell that every runtime on the space
-resolves, so one runtime cannot narrow it for itself; a session-scoped result
-is the run's own.
+may observe — a **session-scoped** result filters its rows under that ceiling.
+A space- or user-shared result materializes independently of runtime ceilings.
+Its array shape and rows retain their confidentiality labels, and a read
+outside the observing runtime's ceiling is withheld. A shared result containing
+private rows can therefore withhold the whole array, including its length.
+That membership label retains its confidentiality across refreshes, even after
+rows are removed or relabeled. An addressed row's payload keeps its own label
+without inheriting the array's membership label.
 
 Declare the scope on the query:
 
@@ -269,8 +272,8 @@ export const recentOrders = (orders: SqliteDb) =>
 
 `PerSession<>` on the result field and `.asScope("session")` on the query do
 the same thing, and a session-scoped database makes its queries session-scoped
-without a declaration. A run under a ceiling that gets a refusal instead of
-rows is usually a query that declared no scope.
+without a declaration. Use a session-scoped result when each session needs its
+own filtered row set.
 
 ## Labeled columns
 
@@ -283,13 +286,14 @@ and dropping the rows that exceed it.
 
 Where the label lands decides where to look for it. Each result row splits into
 its own entity doc and the column's label sits on that doc, at the column's own
-path; the query's own document holds `pending`, `result` and `requestHash` and
-carries no label at any path. So a probe of the query document reports a fully
-labeled result as unlabeled, and the read that answers is one that follows the
-links the path crosses — `cf cell get-label <cell> <path>/result/<i>/<col>`
-does, and reports the column's label from the row's own doc. Inside a pattern
-nothing has to be asked for: a consumer inherits the label from the
-dereferences its read traverses.
+path. The query document labels `result` membership with the join of every
+source-row label, including rows skipped by the query contract, and labels the
+`withheld` count with that same join. A reader outside the join therefore
+cannot observe the array's membership, length, or withheld count. An addressed
+row's payload retains only that row's own labels. `cf cell get-label <cell>
+<path>/result/<i>/<col>` follows the links the path crosses and reports the
+column's label from the row's own doc. Inside a pattern nothing has to be asked
+for: a consumer inherits the label from the dereferences its read traverses.
 
 ## The rest of the API
 

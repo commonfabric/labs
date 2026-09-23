@@ -1,0 +1,1 @@
+{"date":"2026-09-20","from":{"k":"unit","s":"runner","n":"schemaWithOpenObjects > opens object schemas inside prefixItems slots (CT-1895)"},"to":{"k":"unit","s":"runner","n":"schemaWithOpenObjects > opens object schemas inside `prefixItems` slots"}}

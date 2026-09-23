@@ -28,6 +28,7 @@
 // controller (a fresh controller is a fresh session until protocol
 // §5's client-side session persistence lands — OW20's trigger).
 
+import { debugStr } from "@commonfabric/data-model";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import { env } from "@commonfabric/integration";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
@@ -145,9 +146,8 @@ describe("sx2 effect channel (Phase 4 gates)", () => {
       // very gate meant to catch it.
       assert(
         value === undefined,
-        `no effects instance may exist in the OFF arm; got ${
-          JSON.stringify(value)
-        }`,
+        `no effects instance may exist in the OFF arm; got ` +
+          debugStr`$quote,long${value}`,
       );
       return;
     }
@@ -217,8 +217,8 @@ describe("sx2 effect channel (Phase 4 gates)", () => {
       await effectsCell.sync().catch(() => {});
       throw new Error(
         `${(error as Error).message}\n  sawIntent=${sawIntent}` +
-          `\n  sidecar=${JSON.stringify(sidecarCell.get())?.slice(0, 500)}` +
-          `\n  effects=${JSON.stringify(effectsCell.get())?.slice(0, 300)}`,
+          debugStr`\n  sidecar=$quote,long${sidecarCell.get()}` +
+          debugStr`\n  effects=$quote,long${effectsCell.get()}`,
       );
     }
 
@@ -234,9 +234,8 @@ describe("sx2 effect channel (Phase 4 gates)", () => {
     assertEquals(
       navigations.length,
       1,
-      `the journey converged by nonce — no re-enactment; navigated to ${
-        JSON.stringify(navigations)
-      }`,
+      `the journey converged by nonce — no re-enactment; ` +
+        debugStr`navigated to $quote,long${navigations}`,
     );
 
     // The ack was counted (serving-loop.md §7's effectAcks — the

@@ -325,10 +325,10 @@ describe("cell-handle", () => {
     });
 
     it("does not serialize the ref-carried label view into sigil links", () => {
-      // Inv-12 Stage 0: the link a handle names itself by re-enters the worker
-      // without passing getCell/cellRefToSigilLink, so the ref's display view
-      // must not ride it (codex/cubic review on the Stage 0 PR). Like
-      // toWireString, only addressing fields (+schema) go.
+      // The link a handle names itself by re-enters the worker without passing
+      // `getCell()` or `cellRefToSigilLink()`, so the ref's display view must
+      // not be on it. The link holds the addressing fields and the schema. Like
+      // the string `toWireString()` encodes, it holds no view.
 
       const runtime = {
         [$conn]: () => ({
@@ -733,7 +733,7 @@ describe("cell-handle", () => {
   describe("CellHandle $alias records stay plain data", () => {
     // `$alias` records are Pattern-binding vocabulary, only meaningful inside
     // Pattern objects the client never interprets. In data they are inert plain
-    // values: hydration must not turn them into CellHandles (PR #4895).
+    // values: hydration must not turn them into CellHandles.
 
     const makeRuntime = () =>
       ({
@@ -2379,12 +2379,12 @@ describe("cell-handle", () => {
 
   describe("CellHandle carries a special object", () => {
     // A `FabricSpecialObject` is a `ClientCellValue` -- a cell holds one like
-    // any other value -- and it now crosses as itself. What this pins is that
-    // `serialize()` hands a `FabricPrimitive` on WHOLE rather than walking it:
-    // rebuilding one from its enumerable own properties would put `{}` on the
-    // wire in place of the bytes, which is what the ordering of the checks
-    // prevents. A `FabricInstance` is refused instead, being a container this
-    // walk cannot descend.
+    // any other value -- and the connection's encoding carries one as itself.
+    // What this pins is that `serialize()` hands a `FabricPrimitive` on WHOLE
+    // rather than walking it: rebuilding one from its enumerable own
+    // properties would put `{}` on the wire in place of the bytes, which is
+    // what the ordering of the checks prevents. A `FabricInstance` is refused
+    // instead, being a container this walk cannot descend.
 
     const makeRuntime = () =>
       ({
@@ -2481,8 +2481,7 @@ describe("cell-handle", () => {
     });
 
     it("returns a `bigint` and a `symbol` as themselves", () => {
-      // Both are `FabricValue` arms that the connection used to refuse
-      // outright, for want of anywhere to put them.
+      // Both are `FabricValue` arms, and neither has a JSON form.
 
       const marker = Symbol.for("a-marker");
 
@@ -2547,7 +2546,7 @@ describe("cell-handle", () => {
     it("surfaces the failure to the caller rather than swallowing it", async () => {
       // An object forged onto a `FabricPrimitive`'s prototype is a
       // `FabricValue` by every check and still has no encoding, so it is what
-      // can fail a send now that the domain's real members all cross. The
+      // can fail a send, since the domain's real members all cross. The
       // caller has to learn that their write never happened; the alternative
       // is a `set()` that resolves over a value the runtime never saw.
       //

@@ -5,6 +5,12 @@ import {
   FragmentWriter,
   repositoryRelativePath,
 } from "@commonfabric/test-support/records";
+import {
+  shuffled,
+  shuffledPaths,
+  shuffleNotice,
+  shuffleSeed,
+} from "@commonfabric/test-support/shuffle";
 
 import { Manifest } from "./manifest.ts";
 import { summarize } from "./utils.ts";
@@ -62,8 +68,15 @@ export class Runner {
     const recordsFragment = FragmentWriter.openForRun();
     const scope = await packageScope();
 
+    // Files and the tests inside them both run in the order the seed
+    // puts them in, which is finer than `deno test --shuffle` reaches:
+    // that flag reorders a file's top-level registrations, and a file
+    // whose tests are steps of one registration keeps them in place.
+    const seed = shuffleSeed();
+    console.log(shuffleNotice(seed));
+
     try {
-      for (const tsTestPath of this.manifest.tests) {
+      for (const tsTestPath of shuffledPaths(this.manifest.tests, seed)) {
         const results: TestFileResults = {
           fileName: tsTestPath,
           tests: [],
@@ -80,9 +93,12 @@ export class Runner {
         const testCount = await this.browser.getTestCount();
         this.reporter.onFileStart(tsTestPath, testCount);
 
-        // Run tests while there's work to do
-        while (true) {
-          const testResult = await this.browser.runNextTest();
+        const order = shuffled(
+          Array.from({ length: testCount }, (_, index) => index),
+          seed,
+        );
+        for (const index of order) {
+          const testResult = await this.browser.runTest(index);
           if (!testResult) {
             break;
           }

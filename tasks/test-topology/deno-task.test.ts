@@ -4,7 +4,10 @@ import {
   memberTasks,
   memberTestFiles,
   parseTestTask,
+  readShardedRunnerArguments,
   taskEnvironment,
+  testBatches,
+  unmatchedGlobs,
   unquote,
 } from "./deno-task.ts";
 
@@ -62,6 +65,37 @@ describe("reading a member's test task", () => {
     expect(parsed?.flags).toEqual(["--allow-run=/usr/bin/deno"]);
   });
 
+  it("keeps a quoted execPath substitution one flag when the path has a space", () => {
+    const parsed = parseTestTask(
+      'deno test --allow-run="$(deno eval "console.log(Deno.execPath())")" a.test.ts',
+      "/Users/Some One/bin/deno",
+    );
+    expect(parsed?.flags).toEqual(["--allow-run=/Users/Some One/bin/deno"]);
+    expect(parsed?.paths).toEqual(["a.test.ts"]);
+  });
+
+  it("takes the seed substitution out rather than refusing it", () => {
+    // A suite builds the run's own `--shuffle` from the seed it settled
+    // on, so what the task writes is taken out here rather than carried
+    // through; what matters is that its `$(...)` does not cost the
+    // member its per-file granularity.
+    const parsed = parseTestTask(
+      "deno test --shuffle=$(deno task -q test-seed) --no-check test/a.test.ts",
+    );
+    expect(parsed?.flags).toEqual(["--no-check"]);
+    expect(parsed?.paths).toEqual(["test/a.test.ts"]);
+  });
+
+  it("takes both substitutions out of one task", () => {
+    const parsed = parseTestTask(
+      "deno test --shuffle=$(deno task -q test-seed) " +
+        '--allow-run=$(deno eval "console.log(Deno.execPath())") .',
+      "/usr/bin/deno",
+    );
+    expect(parsed?.flags).toEqual(["--allow-run=/usr/bin/deno"]);
+    expect(parsed?.paths).toEqual(["."]);
+  });
+
   it("strips shell quoting from inside a flag's value", () => {
     // Several members write `--allow-env=API_URL,"TSC_*",NODE_ENV`. The
     // quotes are the shell's; a flag passed through with them names a
@@ -90,6 +124,264 @@ describe("reading a member's test task", () => {
   it("refuses a task that is not a deno test at all", () => {
     expect(parseTestTask("deno run test/runner.ts")).toBeUndefined();
     expect(parseTestTask("echo 'No tests defined.'")).toBeUndefined();
+  });
+});
+
+describe("reading a task that runs the sharded runner", () => {
+  // The runner walks a directory, keeps the files assigned to its shard, and
+  // runs `deno test` over them with the flags written after the separator. A
+  // lane is pointed at files rather than at a shard, so it needs only that
+  // directory and those flags.
+
+  const TASK = "deno run --allow-env --allow-read " +
+    '--allow-run="$(deno eval "console.log(Deno.execPath())")" ' +
+    "../../tasks/run-sharded-test-files.ts PIECE_TEST_SHARD piece . " +
+    "-- --no-check --allow-ffi";
+
+  it("returns the directory the runner walks as the path to enumerate", () => {
+    expect(parseTestTask(TASK, "/usr/bin/deno")?.paths).toEqual(["."]);
+  });
+
+  it("reads the runner past a Deno path holding a space", () => {
+    expect(parseTestTask(TASK, "/Users/Some One/deno")?.paths).toEqual(["."]);
+  });
+
+  it("returns the flags after the separator and not the wrapper's own", () => {
+    // The permissions before the runner apply to the runner itself. The tests
+    // run under the flags after the separator, and those are the flags a lane
+    // has to reproduce.
+    expect(parseTestTask(TASK, "/usr/bin/deno")?.flags).toEqual([
+      "--no-check",
+      "--allow-ffi",
+    ]);
+  });
+
+  it("returns the assignments standing in front of the command", () => {
+    expect(parseTestTask(`ENV=test ${TASK}`, "/usr/bin/deno")?.env).toEqual({
+      ENV: "test",
+    });
+  });
+
+  it("refuses a path written among the flags after the separator", () => {
+    // The runner appends its chosen files after those words, so a path there
+    // would run alongside whatever a lane asked for.
+    expect(
+      parseTestTask(
+        "deno run -A ../../tasks/run-sharded-test-files.ts X piece . " +
+          "-- --no-check extra.test.ts",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("refuses a run of the runner with no separator where one belongs", () => {
+    expect(
+      parseTestTask(
+        "deno run -A ../../tasks/run-sharded-test-files.ts X piece .",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("reads the files the runner's options give flags of their own", () => {
+    const parsed = parseTestTask(
+      "deno run -A ../../tasks/run-sharded-test-files.ts X cli . " +
+        "--serial='**/*.serial.test.ts' --all-access=a.test.ts,b.test.ts " +
+        "-- --parallel",
+    );
+    expect(parsed?.serial).toEqual(["**/*.serial.test.ts"]);
+    expect(parsed?.allAccess).toEqual(["a.test.ts", "b.test.ts"]);
+    expect(parsed?.flags).toEqual(["--parallel"]);
+  });
+
+  it("gives a run with no options no files that need flags of their own", () => {
+    const parsed = parseTestTask(TASK, "/usr/bin/deno");
+    expect(parsed?.serial).toEqual([]);
+    expect(parsed?.allAccess).toEqual([]);
+  });
+
+  it("takes an `--ignore` after the separator as files to leave out", () => {
+    // The runner walks the directory itself and hands `deno test` the files
+    // it chose, so what the flag leaves out has to come out of the walk.
+    const parsed = parseTestTask(
+      "deno run -A ../../tasks/run-sharded-test-files.ts X cli . " +
+        "-- --no-check --ignore='**/*.test.tsx',fixtures/",
+    );
+    expect(parsed?.ignores).toEqual(["**/*.test.tsx", "fixtures/"]);
+    expect(parsed?.flags).toEqual(["--no-check"]);
+  });
+
+  it("refuses a second separator among the flags", () => {
+    // Every word after it, the files the runner appends included, would be
+    // an argument to the test modules rather than to `deno test`.
+    expect(
+      parseTestTask(
+        "deno run -A ../../tasks/run-sharded-test-files.ts X cli . " +
+          "-- --no-check -- --parallel",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("refuses an option the runner does not take", () => {
+    expect(
+      parseTestTask(
+        "deno run -A ../../tasks/run-sharded-test-files.ts X cli . " +
+          "--parallel -- --no-check",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("refuses a deno run naming no script", () => {
+    expect(parseTestTask("deno run --allow-read")).toBeUndefined();
+  });
+
+  it("refuses a deno run of any other script", () => {
+    expect(parseTestTask("deno run -A ./test/runner.ts a b . -- --no-check"))
+      .toBeUndefined();
+  });
+});
+
+describe("reading the sharded runner's own arguments", () => {
+  it("keeps a flag's value that follows it as a word of its own", () => {
+    // What the runner is handed at run time includes whatever a caller
+    // appended, and `--filter "a name"` is two words. Only a task line is
+    // held to flags alone.
+    expect(
+      readShardedRunnerArguments(
+        ["X", "cli", ".", "--", "--no-check", "--filter", "a name"],
+      )?.test.flags,
+    ).toEqual(["--no-check", "--filter", "a name"]);
+  });
+
+  it("names the shard variable and the profile", () => {
+    const args = readShardedRunnerArguments(["CLI_SHARD", "cli", "test", "--"]);
+    expect(args?.shardVariable).toBe("CLI_SHARD");
+    expect(args?.profile).toBe("cli");
+    expect(args?.test.paths).toEqual(["test"]);
+  });
+
+  it("refuses a second separator", () => {
+    // Every word after it, the files the runner appends included, would be
+    // an argument to the test modules rather than to `deno test`.
+    expect(
+      readShardedRunnerArguments(["X", "cli", ".", "--", "-A", "--", "x"]),
+    ).toBeUndefined();
+  });
+
+  it("refuses arguments with no separator", () => {
+    expect(readShardedRunnerArguments(["X", "cli", ".", "--no-check"]))
+      .toBeUndefined();
+    expect(readShardedRunnerArguments(["X", "cli"])).toBeUndefined();
+  });
+});
+
+describe("splitting a member's files by the flags they need", () => {
+  const TASK = {
+    flags: ["--no-check", "--parallel", "--allow-read", "--allow-net=a.b"],
+    serial: ["**/*.serial.test.ts"],
+    allAccess: ["test/proc.test.ts"],
+  };
+
+  it("runs a serial file without `--parallel`, apart from the rest", () => {
+    expect(
+      testBatches(TASK, ["test/a.test.ts", "test/b.serial.test.ts"]),
+    ).toEqual([
+      { flags: TASK.flags, files: ["test/a.test.ts"] },
+      {
+        flags: ["--no-check", "--allow-read", "--allow-net=a.b"],
+        files: ["test/b.serial.test.ts"],
+      },
+    ]);
+  });
+
+  it("runs an all-access file under `--allow-all` alone", () => {
+    expect(
+      testBatches(TASK, ["test/proc.test.ts", "test/a.test.ts"]),
+    ).toEqual([
+      { flags: TASK.flags, files: ["test/a.test.ts"] },
+      {
+        flags: ["--no-check", "--parallel", "--allow-all"],
+        files: ["test/proc.test.ts"],
+      },
+    ]);
+  });
+
+  it("replaces short permission flags, and keeps flags granting none", () => {
+    expect(
+      testBatches(
+        {
+          flags: ["-R", "-N=a.b", "--allow-scripts", "--deny-net=c.d"],
+          serial: [],
+          allAccess: ["proc.test.ts"],
+        },
+        ["proc.test.ts"],
+      )[0]!.flags,
+    ).toEqual(["--allow-scripts", "--deny-net=c.d", "--allow-all"]);
+  });
+
+  it("gives a file both options name both changes", () => {
+    expect(
+      testBatches(
+        { ...TASK, allAccess: ["test/proc.serial.test.ts"] },
+        ["test/proc.serial.test.ts"],
+      ),
+    ).toEqual([
+      {
+        flags: ["--no-check", "--allow-all"],
+        files: ["test/proc.serial.test.ts"],
+      },
+    ]);
+  });
+
+  it("keeps files that need the same flags together, in their own order", () => {
+    expect(
+      testBatches(TASK, [
+        "test/c.serial.test.ts",
+        "test/b.test.ts",
+        "test/a.serial.test.ts",
+        "test/a.test.ts",
+      ]).map((batch) => batch.files),
+    ).toEqual([
+      ["test/b.test.ts", "test/a.test.ts"],
+      ["test/c.serial.test.ts", "test/a.serial.test.ts"],
+    ]);
+  });
+
+  it("gives a plain task one batch under its own flags", () => {
+    expect(
+      testBatches(
+        { flags: ["-A", "--parallel"], serial: [], allAccess: [] },
+        ["a.test.ts", "b.serial.test.ts"],
+      ),
+    ).toEqual([
+      { flags: ["-A", "--parallel"], files: ["a.test.ts", "b.serial.test.ts"] },
+    ]);
+  });
+
+  it("gives no files no batches", () => {
+    expect(testBatches(TASK, [])).toEqual([]);
+  });
+});
+
+describe("finding the globs that name no test file", () => {
+  it("names each glob no test file matches, and none that one does", async () => {
+    const dir = await member({}, [
+      "rise.serial.test.ts",
+      "oven.test.ts",
+      "fixture.test.tsx",
+    ]);
+    expect(
+      await unmatchedGlobs(dir, ["."], [
+        "**/*.serial.test.ts",
+        "oven.test.ts",
+        "**/*.test.tsx",
+      ]),
+    ).toEqual([]);
+    expect(
+      await unmatchedGlobs(dir, ["."], [
+        "**/*.serial.test.ts",
+        "gone.test.ts",
+        "moved/",
+      ]),
+    ).toEqual(["gone.test.ts", "moved/"]);
   });
 });
 

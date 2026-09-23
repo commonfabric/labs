@@ -1,6 +1,5 @@
 import type { FabricValue } from "@/interface.ts";
-import { BaseEncodeAct } from "@/codec-common/BaseEncodeAct.ts";
-import type { CodecEngineConfig } from "@/codec-common/CodecEngineConfig.ts";
+import { BaseEncodeAct, type CodecEngineConfig } from "@/codec-common";
 import type { LiveEnvironment } from "@/codec-interface/interface.ts";
 import {
   REALM_FORMAT_VERSION,

@@ -98,15 +98,15 @@ export class BrowserController extends EventTarget {
       .ok;
   }
 
-  async runNextTest(): Promise<TestResult | void> {
+  /** Runs the loaded file's test at `index`, numbered as it registered. */
+  async runTest(index: number): Promise<TestResult | void> {
     if (!this.#page) {
       throw new Error("No page loaded.");
     }
 
-    return (await this.#page.evaluate(() =>
+    return (await this.#page.evaluate((at: number) =>
       // @ts-ignore This is defined in the JS harness
-      globalThis.__denoWebTest.runNext()
-    )).ok;
+      globalThis.__denoWebTest.runAt(at), { args: [index] })).ok;
   }
 
   async #waitUntilReady() {

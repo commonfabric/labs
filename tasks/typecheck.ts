@@ -1,9 +1,9 @@
 /**
  * The repository type check, run per package. Each owning scope's paths are
  * checked as their own `deno check` invocation, timed and recorded as that
- * scope's `typecheck`-kind test, the way cfcheck already shards pattern
- * type-checking; the invocations run concurrently and any failure fails
- * the whole task. tasks/check.sh owns the Deno version gate and delegates
+ * scope's `typecheck`-kind test, the way cfcheck records each pattern it
+ * checks; the invocations run concurrently and any failure fails the whole
+ * task. tasks/check.sh owns the Deno version gate and delegates
  * here.
  *
  * This list is the only type check a path gets whose tests run under

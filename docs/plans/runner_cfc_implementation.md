@@ -228,9 +228,21 @@ The prepared digest is a stable hash of:
 - canonical consumed reads
 - canonical `attemptedWrites`
 - canonical `writes`
+- the ordered write-attempt log
+- dereference traces and trigger reads
 - canonical write-policy inputs
 - implementation identity
 - trust snapshot identity
+- module delegations
+- the policy snapshot
+- consulted grants and module-policy manifests
+- label-metadata observations
+- external-content observations admitted through opaque runtime receipts
+
+Optional sets are omitted when empty. In particular,
+`externalContentObservations: []` has the same digest spelling as an absent
+field, preserving the digest of a transaction that observed no external
+content.
 
 Any change to that material invalidates preparation.
 

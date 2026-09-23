@@ -12,11 +12,7 @@ import {
   validateSchemaDefinition,
   validateSchemaValue,
 } from "@commonfabric/runner/cfc";
-import {
-  FABRIC_PRIMITIVE_SCHEMA_TYPES,
-  type FabricPrimitiveSchemaType,
-  isFabricPrimitiveSchemaType,
-} from "@commonfabric/api";
+import type { FabricPrimitiveSchemaType } from "@commonfabric/api";
 import { FABRIC_SPECIAL_OBJECT_BRAND } from "@commonfabric/runner/fabric-special-object-brand";
 import {
   isObjectNotArray,
@@ -36,7 +32,11 @@ import {
   fabricAwareEqual,
   isKeyableObjectOrArray,
 } from "@commonfabric/data-model";
-import { fabricPrimitiveClassOfSchemaType } from "@commonfabric/data-model/fabric-primitives";
+import {
+  FABRIC_PRIMITIVE_SCHEMA_TYPES,
+  fabricPrimitiveClassOfSchemaType,
+  isFabricPrimitiveSchemaType,
+} from "@commonfabric/data-model/fabric-primitives";
 
 type SchemaObject = Exclude<JSONSchema, boolean>;
 type SchemaRole = "argument" | "result";
@@ -49,6 +49,9 @@ interface CompatibilityContext {
   targetRoot: JSONSchema;
   role: SchemaRole;
   activePairs: ActivePairsByRoot;
+
+  /** Depth of supplementary nested-union splits along this proof path. */
+  sourceUnionSplitDepth: number;
 
   /**
    * Piece evolution deliberately permits a small set of non-subset changes
@@ -94,9 +97,11 @@ type ActivePairsByRoot = WeakMap<
 >;
 
 /**
- * The annotations that describe a schema to a reader or to a listing and take
- * no part in any comparison this module makes. Two schemas that differ only in
- * these say the same thing, and {@link schemaSubtreesEqual} reads past them.
+ * The annotations omitted by keyword and equality comparisons. Two schemas
+ * that differ only in these compare equally through {@link schemaSubtreesEqual}.
+ * Nested-union splitting keeps `$comment` wrappers opaque because the runner
+ * reserves some comment values for traversal markers;
+ * {@link sourceAlternativeAcceptedBy} says why that covers every comment.
  *
  * {@link ANNOTATION_KEYS} extends this set with four keywords the subset proof
  * likewise treats as annotations but the equality walk still compares:
@@ -652,6 +657,7 @@ export function assertPatternSchemasBackwardCompatible(
       targetRoot: candidate.argumentSchema,
       role: "argument",
       activePairs: new WeakMap(),
+      sourceUnionSplitDepth: 0,
       allowEvolutionPolicy: true,
       allowEvolutionDefaults: true,
       allowTargetDefaults: false,
@@ -669,6 +675,7 @@ export function assertPatternSchemasBackwardCompatible(
       targetRoot: previousResultSchema,
       role: "result",
       activePairs: new WeakMap(),
+      sourceUnionSplitDepth: 0,
       allowEvolutionPolicy: true,
       allowEvolutionDefaults: true,
       allowTargetDefaults: false,
@@ -735,6 +742,7 @@ export function assertSchemaSubset(
     // object fields. Link materialization may also fill valid target defaults.
     role: "argument",
     activePairs: new WeakMap(),
+    sourceUnionSplitDepth: 0,
     allowEvolutionPolicy: false,
     allowEvolutionDefaults: true,
     allowTargetDefaults: true,
@@ -875,15 +883,14 @@ function schemaSubsetIssue(
       const sources = schemaAlternatives(source, "source", context);
       const targets = schemaAlternatives(target, "target", context);
       for (const sourceAlternative of sources) {
-        const accepted = targets.some((targetAlternative) =>
-          schemaConjunctionSubsetIssue(
+        if (
+          !sourceAlternativeAcceptedBy(
             sourceAlternative,
-            targetAlternative,
+            targets,
             path,
             context,
-          ) === undefined
-        );
-        if (!accepted) {
+          )
+        ) {
           return `${path}: a schema alternative accepted previously is not accepted by the candidate`;
         }
       }
@@ -1492,13 +1499,20 @@ function arraySubsetIssue(
   return schemaSubsetIssue(sourceItems, targetItems, `${path}[]`, context);
 }
 
+/**
+ * Checks target literal restrictions against explicit source literals or the
+ * finite value set of a boolean or null source type.
+ */
 function literalSubsetIssue(
   source: SchemaObject,
   target: SchemaObject,
   path: string,
 ): string | undefined {
-  const sourceValues = allowedLiteralValues(source) ??
-    (source.type === "null" ? [null] : undefined);
+  let sourceValues = allowedLiteralValues(source);
+  if (sourceValues === undefined) {
+    if (source.type === "boolean") sourceValues = [false, true];
+    else if (source.type === "null") sourceValues = [null];
+  }
   const targetValues = allowedLiteralValues(target);
   if (!targetValues) return undefined;
   if (!sourceValues) {
@@ -1714,10 +1728,15 @@ function schemaMayProduceType(
  *
  * Source enums expand by type through {@link ownEnumPartitions} and
  * {@link sourceEnumAlternatives}, including beside a `type` list or inside
- * `anyOf`. Branch partitions stay beside their base in the conjunction, so
+ * `anyOf`. A `type` list expands through {@link ownTypePartitions}, at this
+ * node and inside a source branch alike, so a union written as a list proves
+ * like the same union written as branches; that helper and
+ * {@link sourceEnumAlternatives} name the nodes whose list stays whole.
+ * Branch partitions stay beside their base in the conjunction, so
  * their node-level keywords are compared at the branch boundary. Target enums
- * stay whole: a source alternative has to fit inside a single target
- * alternative, and one listing values of several types can fit the whole enum.
+ * stay whole so an alternative listing values of several types can fit the
+ * whole enum. Transparent nested source unions can split further through
+ * {@link sourceAlternativeAcceptedBy}.
  */
 function schemaAlternatives(
   schema: SchemaObject,
@@ -1734,29 +1753,17 @@ function schemaAlternatives(
         : anyOf;
       return branches.map((alternative) => [base, alternative]);
     }
-    if (Array.isArray(fragment.type)) {
-      const { type: types, ...untyped } = fragment;
-      if (!types.includes("object")) {
-        return types.map((type) => [{ ...fragment, type }]);
-      }
-      // The runtime checks `required` on a `FabricPrimitive` when the type list
-      // includes `object`, and would not check it under a branch typed by a
-      // `FabricPrimitive` name or by `unknown` alone. `object` admits every
-      // `FabricPrimitive` already, so those names add no branch of their own,
-      // and `unknown` becomes the untyped branch, which admits every value and
-      // is checked.
-      return types.filter((type) => !isFabricPrimitiveSchemaType(type))
-        .map((type) => [type === "unknown" ? untyped : { ...untyped, type }]);
-    }
-    return [[fragment]];
+    return ownTypePartitions(fragment).map((partition) => [partition]);
   });
 }
 
 /**
  * Helper for {@link schemaAlternatives}, which partitions source enums by
- * their admitted literal types, retaining sibling constraints and branch-level
- * defaults and extensions. Distributes partitions inside `anyOf` through its
- * enclosing nodes. Enums containing an unclassified value stay whole, and
+ * their admitted literal types and source `type` lists by their named types,
+ * retaining sibling constraints and branch-level defaults and extensions. A
+ * branch that also carries an `anyOf` keeps its list whole for the proof at
+ * that branch, as a node does. Distributes partitions inside `anyOf` through
+ * its enclosing nodes. Enums containing an unclassified value stay whole, and
  * references remain for the scoped proof to resolve. During evolution, a branch
  * stays whole if any partition changes the effective default it supplies. Link
  * proofs compare target defaults only, so source defaults do not limit splitting.
@@ -1775,7 +1782,12 @@ function sourceEnumAlternatives(
       narrowed = branches.map((branch) => ({ ...schema, anyOf: [branch] }));
     }
   }
-  narrowed ??= ownEnumPartitions(schema);
+  // A branch carrying both a list and an `anyOf` keeps its list whole, as a
+  // node carrying both does: the list stays beside the base of that branch's
+  // own alternatives and is compared at its boundary.
+  narrowed ??= schema.anyOf === undefined
+    ? ownEnumPartitions(schema).flatMap(ownTypePartitions)
+    : ownEnumPartitions(schema);
   if (
     context.defaultComparison === "evolution" &&
     narrowed.length > 1 &&
@@ -1813,6 +1825,37 @@ function ownEnumPartitions(schema: SchemaObject): SchemaObject[] {
 }
 
 /**
+ * Partitions a node's `type` list into one branch per named type, keeping its
+ * other keywords intact. A node naming a single type, or none, stays whole.
+ * The partitions cover every value the list admitted, so proving each of them
+ * proves the list. {@link schemaAlternatives} applies this at the node for
+ * either side; {@link sourceEnumAlternatives} applies it inside a source
+ * branch, where a target's list instead stays whole with its branch.
+ *
+ * A node still carrying a `$ref` stays whole too. The reference resolves with
+ * this node's keywords laid over the referenced schema, so this node's list
+ * overrides a referenced `type`. The untyped partition below drops `type`,
+ * which would let the referenced one return and cover fewer values than the
+ * list admitted.
+ */
+function ownTypePartitions(schema: SchemaObject): SchemaObject[] {
+  const types = schema.type;
+  if (!Array.isArray(types) || schema.$ref !== undefined) return [schema];
+  if (!types.includes("object")) {
+    return types.map((type) => ({ ...schema, type }));
+  }
+  // The runtime checks `required` on a `FabricPrimitive` when the type list
+  // includes `object`, and would not check it under a branch typed by a
+  // `FabricPrimitive` name or by `unknown` alone. `object` admits every
+  // `FabricPrimitive` already, so those names add no branch of their own,
+  // and `unknown` becomes the untyped branch, which admits every value and
+  // is checked.
+  const { type: _types, ...untyped } = schema;
+  return types.filter((type) => !isFabricPrimitiveSchemaType(type))
+    .map((type) => type === "unknown" ? untyped : { ...untyped, type });
+}
+
+/**
  * The keywords a node states about itself as a whole, which
  * {@link schemaSubsetIssue} judges once at the node before it expands the
  * node's alternatives: the `default`, checked for validity or for change
@@ -1839,6 +1882,94 @@ function withoutNodeLevelKeywords(schema: SchemaObject): SchemaObject {
     }
   }
   return fragment as SchemaObject;
+}
+
+/**
+ * The supplementary union proof retries whole branches after each split.
+ * Bounding its depth limits repeated work on long union spines; the ordinary
+ * whole-branch proof remains available at every depth.
+ */
+const MAX_SOURCE_UNION_SPLIT_DEPTH = 8;
+
+/**
+ * Proves a source conjunction against the target alternatives. A transparent
+ * nested `anyOf` can send each child to a different target alternative while
+ * retaining the source's other conjuncts. Wrappers carrying constraints or
+ * semantic metadata stay at their own proof boundary. During evolution, each
+ * child must also preserve the wrapper's effective default in its owning root.
+ */
+function sourceAlternativeAcceptedBy(
+  sourceAlternative: readonly JSONSchema[],
+  targets: readonly (readonly JSONSchema[])[],
+  path: string,
+  context: CompatibilityContext,
+): boolean {
+  // Keep whole-branch proofs first, including comparisons of matching nested
+  // contracts whose defaults or metadata require the existing boundaries.
+  if (
+    targets.some((target) =>
+      schemaConjunctionSubsetIssue(sourceAlternative, target, path, context) ===
+        undefined
+    )
+  ) return true;
+
+  // Splitting only adds a proof when children can choose different targets.
+  // A single target is already checked recursively by the whole-branch proof;
+  // retrying it at each wrapper would repeat the same work exponentially.
+  if (
+    targets.length < 2 ||
+    context.sourceUnionSplitDepth >= MAX_SOURCE_UNION_SPLIT_DEPTH
+  ) return false;
+
+  return sourceAlternative.some((fragment, index) => {
+    if (
+      typeof fragment === "boolean" || fragment.anyOf === undefined ||
+      Object.keys(fragment).some((key) =>
+        key !== "anyOf" &&
+        // `$comment` is descriptive to this module but not to the runner,
+        // which reads a few reserved values (`emptyProperties`,
+        // `missingProperty`, `rejectedProperty`) as traversal markers. It
+        // recognizes them by the string alone, on any node, including a
+        // hand-written property schema that carries other keywords beside
+        // the marker, and treats such a node as a marker rather than as a
+        // schema to validate against. Splitting that wrapper would prove its
+        // branches while the runtime never checks them.
+        //
+        // Every `$comment` stays opaque, not only the reserved values. The
+        // runner keeps no shared list of them: `schema-view.ts` and
+        // `traverse.ts` each test their own, and the two do not test the
+        // same values, so a value check here would be a third private copy
+        // to drift. Narrowing this should wait for a runner-owned
+        // classifier. The cost is that an ordinary descriptive comment also
+        // stops this split; whole-branch and equality proofs are unaffected.
+        (key === "$comment" || !DESCRIPTIVE_ANNOTATION_KEYS.has(key))
+      )
+    ) return false;
+    if (
+      context.defaultComparison === "evolution" &&
+      fragment.anyOf.some((branch) =>
+        !schemaDefaultsResolveEqually(fragment, branch, {
+          sourceRoot: context.sourceRoot,
+          targetRoot: context.sourceRoot,
+        })
+      )
+    ) return false;
+    return fragment.anyOf.every((branch) =>
+      sourceAlternativeAcceptedBy(
+        [
+          ...sourceAlternative.slice(0, index),
+          branch,
+          ...sourceAlternative.slice(index + 1),
+        ],
+        targets,
+        path,
+        {
+          ...context,
+          sourceUnionSplitDepth: context.sourceUnionSplitDepth + 1,
+        },
+      )
+    );
+  });
 }
 
 /**

@@ -225,18 +225,16 @@ function takeSnapshot(token: string, guildId: string): Promise<Snapshot | null> 
 }
 
 export const discordOnline: Tile = {
-  id: "discord-online",
+  label: "discord online",
   // A fresh gateway connect per poll; keep this well above the snapshot timeout.
   // The bot needs the privileged Server Members and Presence intents enabled in
   // the Discord developer portal.
   intervalMs: 300_000,
   async collect(ctx): Promise<TileView> {
-    const label = "discord online";
     const token = ctx.env("DISCORD_BOT_TOKEN");
     const guildId = ctx.env("DISCORD_GUILD_ID");
     if (!token || !guildId) {
       return {
-        label,
         status: "unknown",
         value: "—",
         sub: "set DISCORD_BOT_TOKEN + DISCORD_GUILD_ID (presences + members intents)",
@@ -248,12 +246,11 @@ export const discordOnline: Tile = {
       snap = await takeSnapshot(token, guildId);
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
-      return { label, status: "unknown" as Status, value: "—", sub: escapeHtml(reason).slice(0, 80) };
+      return { status: "unknown" as Status, value: "—", sub: escapeHtml(reason).slice(0, 80) };
     }
 
     if (!snap) {
       return {
-        label,
         status: "unknown",
         value: "—",
         sub:
@@ -291,7 +288,6 @@ export const discordOnline: Tile = {
       : `<p class="sub" title="team ${snap.team} + visitors ${snap.visitors}">${swatch(teamSeries.color)} team ${snap.team} + ${swatch(visitorSeries.color)} visitors ${snap.visitors}</p>`;
 
     return {
-      label,
       status: "good",
       value: String(snap.online),
       extra: subline + chart,

@@ -73,11 +73,19 @@ export class IntersectionFormatter implements TypeFormatter {
       checker,
     );
     if (failureReason) {
-      return {
+      const schema: MutableJSONSchemaObj = {
         type: "object",
         additionalProperties: true,
         $comment: `Unsupported intersection pattern: ${failureReason}`,
       };
+      context.schemaOrigins?.set(schema, {
+        kind: "intersection",
+        parts: () =>
+          parts.map((part) =>
+            this.#schemaGenerator.formatChildType(part, context)
+          ),
+      });
+      return schema;
     }
 
     const merged = this.#mergeIntersectionParts(partsToProcess, context);

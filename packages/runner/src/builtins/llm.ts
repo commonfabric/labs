@@ -4,13 +4,8 @@ import {
   BuiltInLLMMessage,
   BuiltInLLMParams,
 } from "@commonfabric/api";
-import { cfcAtom } from "@commonfabric/api/cfc";
 import type { Schema } from "@commonfabric/api/schema";
-import {
-  internSchema,
-  toDeepFrozenSchema,
-} from "@commonfabric/data-model-schema";
-import { mapSubschemas } from "@commonfabric/data-model-schema/schema-walk";
+import { toDeepFrozenSchema } from "@commonfabric/data-model-schema";
 import { hashOf } from "@commonfabric/data-model";
 import {
   DEFAULT_GENERATE_OBJECT_MODEL,
@@ -30,7 +25,7 @@ import {
 import { getLogger } from "@commonfabric/utils/logger";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
 
-import type { CellScope, JSONSchema, JSONSchemaObj } from "../builder/types.ts";
+import type { CellScope, JSONSchema } from "../builder/types.ts";
 import { type Cell, isCell } from "../cell.ts";
 import type { CfcConfClause } from "../cfc/clause.ts";
 import { cfcLabelViewForCellFailClosed } from "../cfc/label-view.ts";
@@ -61,12 +56,15 @@ import {
   GenerateObjectResultSchema,
   GenerateTextParamsSchema,
   GenerateTextResultSchema,
-  LLM_DERIVED_RESULT_STAMP_SCHEMA,
   LLMParamsSchema,
   LLMResultSchema,
   LLMToolSchema,
 } from "./llm-schemas.ts";
 import { ownedCell } from "./runtime-owned-store.ts";
+import {
+  LLM_DERIVED_RESULT_STAMP_SCHEMA,
+  withLlmDerivedStamp,
+} from "../cfc/llm-derived-stamp.ts";
 
 const logger = getLogger("llm", {
   enabled: true,
@@ -134,68 +132,6 @@ function setStampedModelOutput(
     ? resultCell.key(field)
     : resultCell.key(field).asSchema(LLM_DERIVED_RESULT_STAMP_SCHEMA);
   cell.withTx(tx).set(value);
-}
-
-/** Merge `LlmDerived` into one schema node's `ifc.addIntegrity`, idempotently. */
-function mergeLlmDerivedIntoNode(
-  node: Record<string, unknown>,
-): Record<string, unknown> {
-  const ifc = isObjectOrArray(node.ifc) ? node.ifc : {};
-  const addIntegrity = Array.isArray(ifc.addIntegrity) ? ifc.addIntegrity : [];
-  const stamp = cfcAtom.llmDerived();
-  const already = addIntegrity.some((atom) =>
-    isObjectOrArray(atom) && isObjectOrArray(stamp) && atom.type === stamp.type
-  );
-  return {
-    ...node,
-    ifc: {
-      ...ifc,
-      addIntegrity: already ? addIntegrity : [...addIntegrity, stamp],
-    },
-  };
-}
-
-/**
- * Deep-merge the `LlmDerived` stamp into every object subschema in a
- * generateObject result schema. Storage-addressable nodes (properties,
- * additional properties, items / prefix items, compound branches, and `$defs`
- * targets) need the stamp so it rides the possibly custom / injection-safe
- * resultSchema to wherever the model bytes land, whether inline at `["result"]`
- * or in a SPLIT CHILD DOCUMENT. The shared walker's complete vocabulary is
- * stamped too: this runs once per model result, so defensive completeness for
- * caller-supplied schemas has no noticeable cost and preserves provenance if
- * more keywords become storage-addressable later.
- *
- * A root-only merge is not enough: when a nested value redirects/splits into its
- * own document (an `asCell` field, an ID-anchored array item), the child write
- * descends via `ContextualFlowControl.getSchemaAtPath`, which carries ancestor
- * confidentiality but NOT `ifc.addIntegrity`. The child doc that stores the
- * model bytes would then persist as unstamped/ordinary output and the D1b
- * provenance guarantee would be lost for structured results (codex P1). Stamping
- * every node keeps `getSchemaAtPath` at any split-child path carrying the mark,
- * so `walkIfcSchema` mints the `LlmDerived` labelMap entry on that child doc too.
- *
- * The merge is idempotent (an injection-safe schema that already carries the
- * stamp on a node is left unchanged). The recursion follows the finite, acyclic
- * JSON-Schema tree — `$ref` is a string this function does not dereference, so a
- * recursive `$defs` self-reference is a leaf here — and the result is interned.
- * An absent resultSchema defaults to a plain object schema.
- */
-function withLlmDerivedStamp(schema: JSONSchema | undefined): JSONSchema {
-  // Stamp this node, then every structural subschema, including `$defs` and the
-  // keywords our generators do not currently emit. `$ref` is a string, not a
-  // subschema, so a `$defs` self-reference stays a leaf.
-  const stampNode = (node: Record<string, unknown>): JSONSchema =>
-    mapSubschemas(
-      mergeLlmDerivedIntoNode(node) as JSONSchemaObj,
-      (child) => (isObjectOrArray(child) ? stampNode(child) : child),
-      { includeDefs: true, includeUnused: true },
-    );
-
-  const base: Record<string, unknown> = isObjectOrArray(schema)
-    ? schema
-    : { type: "object" };
-  return internSchema(stampNode(base));
 }
 
 /**

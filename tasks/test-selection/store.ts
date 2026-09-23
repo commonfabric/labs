@@ -81,6 +81,23 @@ export function stateObjectName(
 }
 
 /**
+ * The day in an aggregate state object's name. Undefined for a name that
+ * is not one, which is what an unrelated object under the prefix looks
+ * like.
+ *
+ * The state segment is part of the match, so a name carrying the day in
+ * a folder of its own is not one of these. Such an object is nothing the
+ * publisher wrote — `stateObjectName` puts the day straight under the
+ * segment — and reading one as an aggregate would have a run refuse over
+ * a body nobody claimed was one.
+ */
+export function stateDayOf(objectName: string): string | undefined {
+  return objectName.match(
+    /\/state\/(\d{4}-\d{2}-\d{2})-[^/]+\.json\.gz$/,
+  )?.[1];
+}
+
+/**
  * The generation time in a manifest's object name. Undefined for a name
  * that is not one, which is what an unrelated object under the prefix
  * looks like.
@@ -146,15 +163,26 @@ export interface ManifestFetch {
 
   /** Why there is no manifest, for the lane's job summary. */
   absent?: string;
+
+  /**
+   * Set where there is no manifest because the store could not be asked,
+   * rather than because it answered that there is none.
+   */
+  unreachable?: true;
 }
 
 /**
  * Fetches the newest manifest at or before a moment.
  *
- * Every way this can go wrong ends the same way: no manifest, with a
- * sentence saying so. A lane with no manifest runs the mandatory set plus
- * a deterministic slice rather than failing, so a store that is
- * unreachable slows selection down and stops nothing.
+ * There are two ways to come away with no manifest, and they differ in
+ * whether every reader comes away the same way. The store can answer that
+ * it holds none at or before the moment, or that what it holds is nothing
+ * this reader understands, and it gives every reader that answer, so the
+ * lanes of a run all pack without a manifest together. Or the store can
+ * fail to answer — a listing or a read refused or never completed, or a
+ * listing with no creation time to order by — and that happens to one
+ * reader and not to the next, so it is marked `unreachable` for the
+ * caller to refuse rather than to pack by.
  */
 export async function fetchManifest(options: {
   at: string;
@@ -176,7 +204,7 @@ export async function fetchManifest(options: {
       ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
     });
   } catch (error) {
-    return { absent: `listing ${prefix} failed: ${error}` };
+    return { absent: `listing ${prefix} failed: ${error}`, unreachable: true };
   }
   const candidates = newestFirstAtOrBefore(objects, options.at)
     .slice(0, MANIFESTS_LOOKED_BACK);
@@ -193,13 +221,17 @@ export async function fetchManifest(options: {
       if (!response.ok) {
         return {
           absent: `reading ${objectName} failed: HTTP ${response.status}`,
+          unreachable: true,
         };
       }
       // The store serves these with transcoding, so a plain fetch has
       // already decoded the gzip the object is stored under.
       text = await response.text();
     } catch (error) {
-      return { absent: `reading ${objectName} failed: ${error}` };
+      return {
+        absent: `reading ${objectName} failed: ${error}`,
+        unreachable: true,
+      };
     }
     // One parse for both questions, because a manifest is the whole
     // corpus and this asks them of every candidate.

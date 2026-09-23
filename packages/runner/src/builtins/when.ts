@@ -7,6 +7,7 @@ import { ownedCell } from "./runtime-owned-store.ts";
 import { ownedResultCause, resolvedCellScope } from "./scope-policy.ts";
 import { parseLink } from "../link-utils.ts";
 import type { RawNodeCause } from "../module.ts";
+import { ContextualFlowControl } from "../cfc.ts";
 
 /**
  * when(condition, value) - && semantics
@@ -44,8 +45,13 @@ export function when(
       ? inputsWithLog.key("value").getAsLink({ base: result })
       : inputsWithLog.key("condition").getAsLink({ base: result });
     const resolvedRef = resolveLink(runtime, tx, parseLink(ref, result));
+    // A stream is declared by its link's schema and holds no value, so the
+    // reference written here carries that schema along; a reader following
+    // it to the stream's document would otherwise find nothing that says
+    // what the position is.
     const serializedRef = runtime.getCellFromLink(resolvedRef).getAsLink({
       base: result,
+      includeSchema: ContextualFlowControl.declaresStream(resolvedRef.schema),
     });
 
     resultWithLog.setRawUntyped(serializedRef);

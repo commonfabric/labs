@@ -32,12 +32,14 @@ import type {
   EntityIdListOptions,
   EntityIdListResult,
   EventAttentionResolveResult,
+  GenesisRoot,
   OperationFieldQuery,
   OperationFieldSnapshot,
   PatchOp,
   ReleaseOpFieldOperation,
   ScopeKey,
   ScopeKeyIdentity,
+  SessionReadCeiling,
   SessionSyncUpsert,
   SqliteDbRef,
   SqliteOperation,
@@ -61,6 +63,7 @@ import type {
   CfcDecomposedEnvelopes,
   CfcDereferenceTrace,
   CfcEnforcementMode,
+  CfcExternalContentObservation,
   CfcFlowLabelsMode,
   CfcGrantWriteInput,
   CfcLabelMetadataObservation,
@@ -172,7 +175,7 @@ export const toReplicaLoadFailureError = (
 /**
  * Metadata that can be attached to read operations
  */
-export interface Metadata extends Record<PropertyKey, unknown> {}
+export interface Metadata extends Record<PropertyKey, FabricValue> {}
 
 /**
  * Options for read operations
@@ -303,6 +306,19 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   openedSpaces?(): MemorySpace[];
 
   /**
+   * Declares the read ceiling every session this manager opens carries in
+   * its signed `session.open` descriptor (`SessionDescriptor.readCeiling`),
+   * so a space server serving this runtime's queries bounds them by it. A
+   * flag-ON client runtime configured with `cfcReadMaxConfidentiality`
+   * calls this at construction; a manager without the method cannot carry
+   * a ceiling, and the runtime refuses to be built with one over it.
+   *
+   * @throws If a session is already open: a ceiling declared after the
+   * fact would leave that session reading unbounded.
+   */
+  setSessionReadCeiling?(ceiling: SessionReadCeiling): void;
+
+  /**
    * Record a runtime-learned HTTP or HTTPS host hint for a space
    * (federation site table). Optional: managers without remote resolution
    * (emulated/test) simply don't implement it. Returns true when the
@@ -341,10 +357,15 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * not once the space's first mount has begun. A manager that cannot
    * bootstrap an ACL refuses it rather than accept a document it would
    * never write.
+   *
+   * `options.genesisRoot` requires an explicit `genesisAcl`. Its complete
+   * source, cause, arguments, and attached source roots are snapshotted in
+   * the genesis receipt and authenticated on every mount. Later mounts must
+   * match that immutable reservation.
    */
   registerSpaceIdentity?(
     identity: Signer,
-    options?: { owner?: string; genesisAcl?: ACL },
+    options?: { owner?: string; genesisAcl?: ACL; genesisRoot?: GenesisRoot },
   ): void;
 
   /**
@@ -423,6 +444,25 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * managers may omit it.
    */
   authorizationError?(space: MemorySpace): Error | undefined;
+
+  /** The latest authoritative access loss for a space, cleared on reopening. */
+  spaceAccessError?(space: MemorySpace): Error | undefined;
+
+  /**
+   * Observes authoritative access loss synchronously. Transient connection
+   * failures and normal closure do not emit; `spaceAccessError()` supplies
+   * the current snapshot for subscriptions installed after a loss.
+   */
+  subscribeSpaceAccessLoss?(
+    observer: (space: MemorySpace, error: Error) => void,
+  ): Cancel;
+
+  /**
+   * Observes authoritative denial and recovery after an authorized reopen.
+   * Read `spaceAccessError()` for the current verdict. Initial successful
+   * opens and transient connection failures do not emit.
+   */
+  subscribeSpaceAccessChange?(observer: (space: MemorySpace) => void): Cancel;
 
   /**
    * Register an in-flight commit so the durability barrier
@@ -2074,6 +2114,13 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   prepareForCommit(): void;
 
   /**
+   * Runs the same preparation with cooperative yields between targets.
+   * Cancellation aborts the uncommitted transaction. The caller must await
+   * completion before committing; activity during a yield aborts the attempt.
+   */
+  prepareForCommitCooperatively(signal: AbortSignal): Promise<void>;
+
+  /**
    * Runs CFC boundary verification for this transaction and records the
    * prepared digest. Takes no caller-supplied input: the commit-time digest
    * recheck only confirms the prepared input matches real activity, so an
@@ -2242,6 +2289,12 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    */
   recordCfcLabelMetadataObservation(
     observation: CfcLabelMetadataObservation,
+  ): void;
+
+  /** Records one runtime-authorized external CONTENT observation. */
+  recordCfcExternalContentObservation(
+    observation: CfcExternalContentObservation,
+    authorization?: RuntimeWritePolicyAuthorization,
   ): void;
 
   /**
@@ -2496,6 +2549,13 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
     variant: string,
     value: unknown,
   ): void;
+
+  /**
+   * Drops memoized reads of the transaction's current instant. A caller uses
+   * this after an asynchronous load fills a document that an earlier read
+   * could not traverse; reads at an issued epoch retain their fixed snapshot.
+   */
+  resetCurrentReadMemoization(): void;
 
   /**
    * Optional diagnostics for the transaction-local `Cell.get()` cache.
@@ -3277,7 +3337,9 @@ export interface TransactionWriteDetail {
    * absent slot from a present slot holding `undefined`, which
    * `previousValue` alone cannot (the storage write path keeps presence
    * distinct from value). Optional: transactions that cannot compute it
-   * omit it, and consumers fall back to `previousValue` definedness.
+   * omit it. Consumers that only need approximate presence may fall back
+   * to `previousValue` definedness; authorization requiring proven absence
+   * must refuse unknown presence.
    */
   previousPresent?: boolean;
 }

@@ -1,8 +1,8 @@
 import type { JSONSchemaObj } from "@commonfabric/api";
 import {
+  debugStr,
   hashStringOf,
   isWalkableObjectOrArray,
-  toCompactDebugString,
 } from "@commonfabric/data-model";
 import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectNotArray, isObjectOrArray } from "@commonfabric/utils/types";
@@ -21,6 +21,7 @@ import type { ImplementationIdentity } from "../cfc/types.ts";
 import { createRef } from "../create-ref.ts";
 import { defineAuthoredDebugAccessors } from "../harness/authored-debug-source.ts";
 import {
+  declareStreamSchema,
   externalizeSchema,
   getStableInternalPathSegment,
   KeepAsCell,
@@ -245,9 +246,7 @@ export function patternFromFrame<T, R>(
 export function assertNoReservedCauseKeys(cause: unknown): void {
   if (isObjectOrArray(cause) && "$generated" in cause) {
     throw new Error(
-      `Cannot use cause ${
-        toCompactDebugString(cause)
-      }: top-level key "$generated" is reserved\n` +
+      debugStr`Cannot use cause $quote${cause}: top-level key "$generated" is reserved\n` +
         `help: "$generated" marks system-generated cell causes; rename the key`,
     );
   }
@@ -380,7 +379,7 @@ function factoryFromPattern<T, R>(
     return isStream ? { ...generated, $kind: "stream" } : generated;
   };
   allCells.forEach((cell) => {
-    const { cell: top, path, value, name, external } = cell.export();
+    const { cell: top, path, kind, name, external } = cell.export();
     if (
       external || path.length > 0 || cellNameForCell(cell) !== undefined ||
       assignedInternalPartialCauses.has(top)
@@ -388,7 +387,7 @@ function factoryFromPattern<T, R>(
       return;
     }
 
-    const isStream = isObjectOrArray(value) && value.$stream === true;
+    const isStream = kind === "stream";
     let partialCause: JSONValue;
     if (name === undefined) {
       partialCause = nextAnonymousPartialCause(isStream);
@@ -417,13 +416,18 @@ function factoryFromPattern<T, R>(
   const cellReferenceForCell = (
     cell: ICell<unknown> | OpaqueCell<any> | Reactive<any>,
   ): AliasBinding["$alias"] | undefined => {
-    const { cell: top, path, external, scope, schema } = cell.export();
+    const { cell: top, path, external, scope, schema, kind } = cell.export();
     // If we have an external id, don't bother with all this
     if (external) return undefined;
 
+    // A stream's alias says so in its schema, which is what lets a link built
+    // from the alias resolve as a stream with nothing read at its target.
+    const aliasSchema = kind === "stream"
+      ? declareStreamSchema(schema)
+      : schema;
     const commonAliasProps = {
       path,
-      ...(schema !== undefined && { schema }),
+      ...(aliasSchema !== undefined && { schema: aliasSchema }),
     };
     // See if we're one of the special cells (result or argument)
     const cellName = cellNameForCell(cell);
@@ -460,7 +464,7 @@ function factoryFromPattern<T, R>(
   allCellsAndInternalRoots.forEach((cell) => {
     // Only process roots of extra cells:
     if (cell === (inputs as unknown)) return;
-    const { cell: top, path, value, schema, scope, external } = cell.export();
+    const { cell: top, path, schema, scope, external, kind } = cell.export();
     if (path.length > 0 || external) return;
 
     const cellReference = cellReferenceForCell(cell);
@@ -470,7 +474,9 @@ function factoryFromPattern<T, R>(
       cellReference.path.length === 0
     ) {
       const partialCause = cellReference.partialCause!;
-      const descriptorSchema = schemaWithDefault(schema, value);
+      const descriptorSchema = kind === "stream"
+        ? declareStreamSchema(schema)
+        : schema;
       derivedInternalPartialCausesByRoot.set(top, partialCause);
       derivedInternalCells.push({
         partialCause,
@@ -1050,8 +1056,7 @@ function assignComputedCellKinds(
     if (writers === undefined || writers.length === 0) return;
     if (writers.some(writerDisqualifies)) return;
     if (disqualified.has(root)) return;
-    const { value } = root.export();
-    if (isObjectOrArray(value) && value.$stream === true) return;
+    if (root.export().kind === "stream") return;
     const descriptor = derivedInternalCells.find((candidate) =>
       deepEqual(candidate.partialCause, partialCause)
     );
@@ -1242,22 +1247,3 @@ export function getTopFrame(): Frame | undefined {
 
 /** The full type of the `pattern` function including all overloads. */
 export type PatternBuilder = typeof pattern;
-
-function schemaWithDefault(
-  schema: JSONSchema | undefined,
-  value: unknown,
-): JSONSchema | undefined {
-  if (value === undefined) return schema;
-  if (schema === true || schema === undefined) {
-    return { default: value as JSONValue };
-  }
-  if (schema === false) {
-    return { not: true, default: value as JSONValue };
-  }
-  if (isObjectOrArray(schema)) {
-    return schema.default === undefined
-      ? { ...schema, default: value as JSONValue }
-      : schema;
-  }
-  return schema;
-}

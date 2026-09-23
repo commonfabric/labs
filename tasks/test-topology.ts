@@ -84,6 +84,18 @@ export function capabilitiesBySuite(
   return new Map(suites.map((suite) => [suite.id, suite.needs]));
 }
 
+/**
+ * Every unit whose runner runs each identity in it whatever it is asked,
+ * written as `<suite>\t<unit>`. The packer places each of these as one choice.
+ */
+export function wholeUnits(suites: readonly Suite[]): Set<string> {
+  return new Set(
+    suites.flatMap((suite) =>
+      suite.whole.map((unit) => `${suite.id}\t${unit}`)
+    ),
+  );
+}
+
 /** One suite's claim on a record. */
 export interface Claim {
   suite: Suite;

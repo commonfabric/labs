@@ -28,18 +28,19 @@
 // snapshot across operators).
 
 import { Command, ValidationError } from "@cliffy/command";
+import { configuredStorePath } from "@commonfabric/memory/v2/storage-path";
 import {
   clonePaths,
   contentFingerprint,
   createClone,
   openSpace,
-  readManifest,
   resetClone,
   resolveSpace,
   verifyClone,
   type VerifyResult,
 } from "@commonfabric/state-inspector";
 
+import { buildSpaceInviteCommand } from "./space-invites.ts";
 import { hasJsonArgument } from "../lib/json-output.ts";
 import { buildRecreateRootCommand, buildSetHomeCommand } from "./piece.ts";
 
@@ -56,25 +57,13 @@ function out(json: boolean, data: unknown, render: () => void): void {
 function liveStoreDirs(): string[] {
   const dirs: string[] = [];
   const memoryDir = Deno.env.get("MEMORY_DIR");
-  if (memoryDir) {
-    dirs.push(
-      memoryDir.startsWith("file://") ? fromFileUrl(memoryDir) : memoryDir,
-    );
-  }
+  if (memoryDir) dirs.push(configuredStorePath(memoryDir));
   const dbPath = Deno.env.get("DB_PATH");
   if (dbPath) dirs.push(dbPath.replace(/\/[^/]*$/, ""));
   // The toolshed's default when neither is set is `./cache/memory/` relative to
   // its working directory; a clone landing there would be served unintentionally.
   dirs.push(`${Deno.cwd()}/cache/memory`);
   return dirs;
-}
-
-function fromFileUrl(url: string): string {
-  try {
-    return decodeURIComponent(new URL(url).pathname);
-  } catch {
-    return url;
-  }
 }
 
 /**
@@ -242,8 +231,8 @@ function verifyUncertaintyNote(u: VerifyResult["uncertainty"]): string {
 export const space = new Command()
   .name("space")
   .description(
-    "Commands that act on a space: its root and home patterns, and rehearsal " +
-      "clones of its store.",
+    "Commands that act on a space: its root and home patterns, access " +
+      "invitations, and rehearsal clones of its store.",
   )
   .default("help")
   .error((error, command) => {
@@ -258,8 +247,8 @@ export const space = new Command()
   // `--from`/`--to` are required in substance but NOT declared `required`:
   // cliffy appends required options to the usage line, which would break the
   // repo invariant that a command's usage ends with its positional arguments
-  // (see main-command.test.ts). Validating here also gives a more actionable
-  // message than cliffy's generic one.
+  // (see main-command.serial.test.ts). Validating here also gives a more
+  // actionable message than cliffy's generic one.
   .option(
     "--from <source:string>",
     "Snapshot to clone: a .sqlite path, or an https URL to download.",
@@ -410,18 +399,31 @@ export const space = new Command()
     "Restore the working copy from the pristine snapshot, discarding the attempt.",
   )
   .action(async (options, dir) => {
-    const before = await readManifest(dir);
-    await resetClone(dir);
+    const { manifest: before, removedStores, removedCellDatabases } =
+      await resetClone(dir);
     const after = await verifyClone(dir);
-    out(!!options.json, { manifest: before, verify: after }, () => {
-      console.log(
-        `reset ${before.space} to its baseline (${before.createdAt})\n` +
-          `  commits back to ${after.counts.working.commits}\n` +
-          `  content  ${
-            after.fingerprint.match ? "matches baseline" : "STILL DIFFERS"
-          }`,
-      );
-    });
+    out(
+      !!options.json,
+      { manifest: before, removedStores, removedCellDatabases, verify: after },
+      () => {
+        console.log(
+          `reset ${before.space} to its baseline (${before.createdAt})\n` +
+            `  commits back to ${after.counts.working.commits}\n` +
+            `  content  ${
+              after.fingerprint.match ? "matches baseline" : "STILL DIFFERS"
+            }` +
+            (removedStores.length === 0
+              ? ""
+              : `\n  removed  ${removedStores.length} store(s) the attempt created for other spaces:\n` +
+                removedStores.map((space) => `           ${space}`).join(
+                  "\n",
+                )) +
+            (removedCellDatabases.length === 0
+              ? ""
+              : `\n  removed  ${removedCellDatabases.length} cell database(s) the attempt created`),
+        );
+      },
+    );
     if (!after.ok) Deno.exit(1);
   })
   /* space fingerprint */
@@ -482,4 +484,5 @@ export const space = new Command()
     buildRecreateRootCommand("space recreate-root"),
   )
   /* space set-home */
-  .command("set-home", buildSetHomeCommand("space set-home"));
+  .command("set-home", buildSetHomeCommand("space set-home"))
+  .command("invite", buildSpaceInviteCommand());

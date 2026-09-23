@@ -16,6 +16,10 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import { isValidFabricValue } from "@";
+import type { FabricValue } from "@";
+import { BaseLiveEnvironment } from "@/codec-common";
+import { JsonCodecEngine } from "@/codec-json";
 import {
   createDefaultJsonRegistry,
   fabricFromJsonValue,
@@ -23,12 +27,8 @@ import {
   plainObjectFromJson,
   realmFromFabricValue,
 } from "@/codecs.ts";
-import { FabricKeyPair } from "@/fabric-primitives/FabricKeyPair.ts";
-import { isValidFabricValue } from "@/index.ts";
-import { JsonCodecEngine } from "@/codec-json/JsonCodecEngine.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import type { FabricValue } from "@/index.ts";
-import { BaseLiveEnvironment } from "@/codec-interface/BaseLiveEnvironment.ts";
+import { FabricError } from "@/fabric-instances";
+import { FabricKeyPair } from "@/fabric-primitives";
 
 /** Mock runtime for decode calls. */
 class MockRuntime extends BaseLiveEnvironment {

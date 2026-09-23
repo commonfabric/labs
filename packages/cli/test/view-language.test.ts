@@ -36,6 +36,7 @@ import {
 } from "../lib/view/languages/json/language.ts";
 import { yamlLanguage } from "../lib/view/languages/yaml/language.ts";
 import { pythonLanguage } from "../lib/view/languages/python/language.ts";
+import { swiftLanguage } from "../lib/view/languages/swift/language.ts";
 import { binaryLanguage } from "../lib/view/languages/binary/language.ts";
 import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
 import {
@@ -131,6 +132,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   assertEquals(languageForName("yml"), yamlLanguage);
   assertEquals(languageForName("python"), pythonLanguage);
   assertEquals(languageForName("py"), pythonLanguage);
+  assertEquals(languageForName("swift"), swiftLanguage);
   expect(languageForName("binary")).toBe(binaryLanguage);
   expect(languageForName("bytes")).toBe(binaryLanguage);
   assertEquals(languageForName("plain-text"), plainTextLanguage);
@@ -144,6 +146,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "json-lines",
     "yaml",
     "python",
+    "swift",
     "binary",
     "plain-text",
   ]);
@@ -163,6 +166,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "yml",
     "python",
     "py",
+    "swift",
     "binary",
     "bytes",
     "plain-text",
@@ -405,6 +409,39 @@ Deno.test("languageForSource: filenames precede direct and env shebangs", () => 
   );
 });
 
+Deno.test("languageForSource: a launcher shebang is claimed by its subcommand", () => {
+  for (
+    const shebang of [
+      "#!/usr/bin/env -S uv run --script",
+      "#!/usr/bin/env -S uv run",
+      "#!/usr/bin/env -S uv run --with rich python",
+      "#!/usr/bin/env uv run --script",
+      "#!/usr/bin/uv run --script",
+      "#!/opt/homebrew/bin/uv run",
+    ]
+  ) {
+    assertEquals(
+      languageForSource("tool", `${shebang}\nprint('inline script')\n`),
+      pythonLanguage,
+      shebang,
+    );
+  }
+  for (
+    const shebang of [
+      "#!/usr/bin/env -S uv",
+      "#!/usr/bin/env -S uv tool run ruff",
+      "#!/usr/bin/env -S uv pip install",
+      "#!/usr/bin/env -S uvx ruff",
+    ]
+  ) {
+    assertEquals(
+      languageForSource("tool", `${shebang}\nnot python\n`),
+      plainTextLanguage,
+      shebang,
+    );
+  }
+});
+
 Deno.test("languageForSource: malformed and option-only shebangs fall back safely", () => {
   assertEquals(languageForSource("tool", "#!   \n"), plainTextLanguage);
   assertEquals(
@@ -493,6 +530,7 @@ Deno.test("distinctLanguages: dedupes in first-seen order", () => {
     "events.jsonl",
     "e.yaml",
     "f.py",
+    "Package.swift",
     "image.png",
     "LICENSE",
     undefined,
@@ -505,6 +543,7 @@ Deno.test("distinctLanguages: dedupes in first-seen order", () => {
       "json-lines",
       "yaml",
       "python",
+      "swift",
       "binary",
       "plain-text",
     ],

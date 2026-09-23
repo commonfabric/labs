@@ -16,7 +16,8 @@ mapped in [`../README.md`](../README.md).
 - [`code-comment-style.md`](code-comment-style.md) — how a comment is written:
   what earns one, the rule that a comment describes the system as it stands and
   the shapes that break it, the Markdown markup comments and error messages
-  share, and what a doc comment carries
+  share, the `debugStr` template tag for putting a value into a message, and
+  what a doc comment carries
 - [`imports.md`](imports.md) — why a file's dependencies belong in its import
   list, the two lint rules that keep them there, and what earns a deferred
   `import()` the ignore directive that keeps it

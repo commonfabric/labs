@@ -18,8 +18,8 @@
  * `b.start()` / `b.end()`.
  */
 
+import type { FabricValue } from "@";
 import { fabricFromJsonValue, jsonFromFabricValue } from "@/codecs.ts";
-import type { FabricValue } from "@/interface.ts";
 import {
   ARRAYS,
   BIGINTS,

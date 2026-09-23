@@ -1,5 +1,5 @@
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
-import { toCompactDebugString } from "@commonfabric/data-model";
+import { cloneIfNecessary, debugStr } from "@commonfabric/data-model";
 import { getLogger } from "@commonfabric/utils/logger";
 import {
   isObjectNotArray,
@@ -18,6 +18,7 @@ import {
   type EntityIdLookupResult,
   type EntitySnapshot,
   type EventAttentionResolveResult,
+  type GenesisRoot,
   getMemoryProtocolFlags,
   type GraphQuery,
   type GraphQueryResult,
@@ -33,6 +34,7 @@ import {
   type SessionOpenAuthMetadata,
   type SessionOpenChallenge,
   type SessionOpenResult,
+  type SessionReadCeiling,
   type SessionRevokedMessage,
   type SessionSync,
   type SqliteDbRef,
@@ -91,6 +93,8 @@ export type ConnectionState =
   | "closed";
 
 export type MountOptions = {
+  /** Require the space's complete persisted custom-root intent. */
+  genesisRoot?: GenesisRoot;
   sessionId?: string;
   seenSeq?: number;
   sessionToken?: string;
@@ -101,6 +105,12 @@ export type MountOptions = {
    * principals only. Carried on reopen so a route replacement keeps
    * the binding. */
   actingAs?: "space-owner";
+
+  /** The session's declared read ceiling (the wire
+   * `SessionDescriptor.readCeiling`): set by a client runtime under server
+   * execution that is configured with one, and carried on every reopen so
+   * a resumed session is bounded exactly as the first open was. */
+  readCeiling?: SessionReadCeiling;
 };
 
 export type SessionOpenAuth = {
@@ -289,6 +299,12 @@ export class Client {
     openAuthFactory?: SessionOpenAuthFactory,
     signal?: AbortSignal,
   ): Promise<SpaceSession> {
+    options = {
+      ...options,
+      ...(options.genesisRoot === undefined ? {} : {
+        genesisRoot: cloneIfNecessary(options.genesisRoot, { frozen: false }),
+      }),
+    };
     const auth = await runWithAbortSignal(
       signal,
       "memory session mount cancelled",
@@ -324,6 +340,8 @@ export class Client {
       openAuthFactory,
       signal,
       options.actingAs,
+      options.readCeiling,
+      options.genesisRoot,
     );
     this.#spaces.add(session);
     return session;
@@ -394,6 +412,29 @@ export class Client {
     auth?: SessionOpenAuth,
     holdings?: SessionHolding[],
   ): Promise<SessionOpenResult> {
+    // Every open passes through here — a first mount and each reopen after
+    // a dropped connection alike — so this is where a declared ceiling is
+    // held to the server it is declared to. A server that does not
+    // advertise `sessionReadCeiling` would accept the descriptor and serve
+    // every query unbounded.
+    if (
+      session.readCeiling !== undefined &&
+      this.serverFlags?.sessionReadCeiling !== true
+    ) {
+      throw protocolError(
+        "memory server does not record a session's read ceiling " +
+          "(`sessionReadCeiling` is not among its protocol flags), so a " +
+          "session declaring one cannot be bounded by it",
+      );
+    }
+    if (
+      session.genesisRoot !== undefined &&
+      this.serverFlags?.genesisRoot !== true
+    ) {
+      throw protocolError(
+        "memory server does not support a custom root intent",
+      );
+    }
     const result = await this.request<SessionOpenResult>({
       type: "session.open",
       requestId: this.#nextRequestId(),
@@ -559,9 +600,7 @@ export class Client {
           // reconnect that hits it gives up rather than retrying a doomed
           // handshake.
           const error = permanentProtocolError(
-            `memory flag mismatch: client=${
-              toCompactDebugString(expectedFlags)
-            } server=${toCompactDebugString(helloOk.flags)}`,
+            debugStr`memory flag mismatch: client=$quote,long${expectedFlags} server=$quote,long${helloOk.flags}`,
           );
           this.#helloPending.reject(error);
           return;
@@ -789,6 +828,7 @@ export class SpaceSession {
   #viewIntentVersion = 0;
   #restoreComplete: PromiseWithResolvers<void> | undefined;
   #viewCapabilityLostObservers = new Set<() => void>();
+  #accessLossObservers = new Set<(error: Error) => void>();
   #watchSpecPositions = new Map<string, number[]>();
   #watchView: WatchView | null = null;
   #precedingWatchSyncs: SessionSync[] = [];
@@ -866,6 +906,8 @@ export class SpaceSession {
   readonly #openAuthFactory?: SessionOpenAuthFactory;
   readonly #routeSignal?: AbortSignal;
   readonly #actingAs?: "space-owner";
+  readonly #readCeiling?: SessionReadCeiling;
+  readonly #genesisRoot?: GenesisRoot;
 
   constructor(
     client: Client,
@@ -876,11 +918,17 @@ export class SpaceSession {
     openAuthFactory?: SessionOpenAuthFactory,
     routeSignal?: AbortSignal,
     actingAs?: "space-owner",
+    readCeiling?: SessionReadCeiling,
+    genesisRoot?: GenesisRoot,
   ) {
     this.#client = client;
     this.#openAuthFactory = openAuthFactory;
     this.#routeSignal = routeSignal;
     this.#actingAs = actingAs;
+    this.#readCeiling = readCeiling;
+    this.#genesisRoot = genesisRoot === undefined
+      ? undefined
+      : cloneIfNecessary(genesisRoot, { frozen: false });
     this.#sessionId = sessionId;
     this.#sessionToken = sessionToken;
     this.#serverSeq = serverSeq;
@@ -1196,6 +1244,25 @@ export class SpaceSession {
   subscribeViewCapabilityLost(observer: () => void): () => void {
     this.#viewCapabilityLostObservers.add(observer);
     return () => this.#viewCapabilityLostObservers.delete(observer);
+  }
+
+  /**
+   * Observes an authoritative loss of this session's access. A permanent
+   * denial is replayed synchronously to late observers; normal closure,
+   * takeover, and transient connection failures do not report access loss.
+   */
+  subscribeAccessLoss(observer: (error: Error) => void): () => void {
+    if (isPermanentAuthorizationError(this.#closeError)) {
+      try {
+        observer(this.#closeError!);
+      } catch (cause) {
+        console.error("session-access-loss subscriber threw:", cause);
+      }
+      return () => {};
+    }
+    if (this.#closed) return () => {};
+    this.#accessLossObservers.add(observer);
+    return () => this.#accessLossObservers.delete(observer);
   }
 
   /**
@@ -1564,6 +1631,7 @@ export class SpaceSession {
     this.#replaceWatchSpecs([]);
     this.#viewInterests = [];
     this.#viewCapabilityLostObservers.clear();
+    this.#accessLossObservers.clear();
     this.#watchView?.close();
     this.#watchView = null;
   }
@@ -1573,7 +1641,9 @@ export class SpaceSession {
       return;
     }
     const error = new Error(`memory session revoked: ${reason}`);
-    error.name = "SessionRevokedError";
+    error.name = reason === "unauthorized"
+      ? "AuthorizationError"
+      : "SessionRevokedError";
     this.#terminateSession(error);
   }
 
@@ -1603,6 +1673,17 @@ export class SpaceSession {
     this.#viewCapabilityLostObservers.clear();
     this.#watchView?.close();
     this.#watchView = null;
+    const observers = [...this.#accessLossObservers];
+    this.#accessLossObservers.clear();
+    if (isPermanentAuthorizationError(error)) {
+      for (const observer of observers) {
+        try {
+          observer(error);
+        } catch (cause) {
+          console.error("session-access-loss subscriber threw:", cause);
+        }
+      }
+    }
   }
 
   /** Terminates the session when its client cannot restore the connection. */
@@ -1880,12 +1961,21 @@ export class SpaceSession {
   async #reopen(): Promise<SessionOpenResult> {
     const oldSessionId = this.#sessionId;
     const session = {
+      ...(this.#genesisRoot === undefined
+        ? {}
+        : { genesisRoot: this.#genesisRoot }),
       sessionId: this.#sessionId,
       seenSeq: this.#serverSeq,
       sessionToken: this.#sessionToken,
       // The delegated READ binding survives a route replacement (OW31):
       // a reopen without it would silently drop to envelope-only READ.
       ...(this.#actingAs !== undefined ? { actingAs: this.#actingAs } : {}),
+      // The server takes a session's ceiling from the descriptor of its
+      // LAST open: a reopen without it would leave the session reading
+      // unbounded from the first dropped connection on.
+      ...(this.#readCeiling !== undefined
+        ? { readCeiling: this.#readCeiling }
+        : {}),
     };
     const auth = await runWithAbortSignal(
       this.#routeSignal,

@@ -112,7 +112,7 @@ describe("waitForCellValue()", () => {
     expect(error.cause).toBe(cause);
     expect(error.message).toContain("Cannot inspect the member.");
     expect(error.message).toContain(
-      "Last read value (rendered at failure): undefined",
+      "Last read value (rendered at failure): `undefined`",
     );
     expect(f.listeners.size).toBe(0);
   });
@@ -164,13 +164,13 @@ describe("waitForCellValue()", () => {
       const value = {
         title: "Observed title",
         shortName: "2",
-        nested: { deeper: { omitted: "Deep detail" } },
         ...Object.fromEntries(
           Array.from({ length: 100 }, (_, index) => [
             `detail${index}`,
             "x".repeat(200),
           ]),
         ),
+        last: "Beyond the cut",
       };
       const cell = runtime.getCell<typeof value>(signer.did(), "member");
       await runtime.editWithRetry((tx) => {
@@ -185,12 +185,13 @@ describe("waitForCellValue()", () => {
       if (!(error instanceof Error)) throw new Error("Expected a failed wait.");
       expect(error.message).toContain('title:"Observed title"');
       expect(error.message).toContain('shortName:"2"');
-      expect(error.message).not.toContain("Deep detail");
+      expect(error.message).not.toContain("Beyond the cut");
       const rendered = error.message.split(
         "Last read value (rendered at failure): ",
       )[1];
-      expect(rendered.length).toBeLessThanOrEqual(4096);
-      expect(rendered).toMatch(/\.\.\.$/);
+      // A long rendering is cut to 500 characters, inside its code span.
+      expect(rendered.length).toBeLessThanOrEqual(502);
+      expect(rendered).toMatch(/\.\.\.`$/);
     } finally {
       await runtime.dispose();
       await storageManager.close();

@@ -1,13 +1,11 @@
 import { isArrayIndexPropertyName } from "@commonfabric/utils/arrays";
 import { isPlainObject, isUnsafeObjectKey } from "@commonfabric/utils/types";
 
-// Imported from its own module rather than the package barrel, deliberately:
-// the barrel pulls in every codec, and three of those import
-// `ProblematicValue` -- a `BaseFabricInstance` subclass. Going through the
-// barrel would make this module part of a cycle with the fabric base classes,
-// whose custom inspectors import it, and an `extends` clause evaluated inside
-// that cycle fails with "Cannot access 'BaseFabricInstance' before
-// initialization". `codecOf.ts` itself is a leaf.
+// Imported from its own module rather than the `codec-common` barrel,
+// deliberately. The barrel loads every codec, the codecs load the
+// `fabric-bases` barrel, and that barrel loads `value-debug` so as to install
+// the debug renderers. Going through the barrel would therefore cause a
+// circular load-time dependency. `codecOf.ts` itself is a leaf.
 import { codecOf } from "@/codec-common/codecOf.ts";
 import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
 import {

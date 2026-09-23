@@ -22,6 +22,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
+import { debugStr } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import {
   MultiRuntimeHarness,
@@ -81,11 +82,13 @@ describe("cellset last-write-wins for scalar $value (own-write race)", () => {
       ]);
       assert(
         a.ok,
-        `alice scalar set ${i} should not conflict: ${JSON.stringify(a.error)}`,
+        `alice scalar set ${i} should not conflict: ` +
+          debugStr`$quote,long${a.error}`,
       );
       assert(
         b.ok,
-        `tab2 scalar set ${i} should not conflict: ${JSON.stringify(b.error)}`,
+        `tab2 scalar set ${i} should not conflict: ` +
+          debugStr`$quote,long${b.error}`,
       );
     }
   });
@@ -103,15 +106,13 @@ describe("cellset last-write-wins for scalar $value (own-write race)", () => {
       ]);
       assert(
         a.ok,
-        `alice array set ${i} should be a blind write (no conflict): ${
-          JSON.stringify(a.error)
-        }`,
+        `alice array set ${i} should be a blind write (no conflict): ` +
+          debugStr`$quote,long${a.error}`,
       );
       assert(
         b.ok,
-        `tab2 array set ${i} should be a blind write (no conflict): ${
-          JSON.stringify(b.error)
-        }`,
+        `tab2 array set ${i} should be a blind write (no conflict): ` +
+          debugStr`$quote,long${b.error}`,
       );
     }
   });

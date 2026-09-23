@@ -82,4 +82,4 @@ separate from the passing validation above.
 The eager nullable-read failure and its rollback implications remain as recorded
 in the earlier diagnosis. The flag-owner decision and the remaining matched
 acceptance measurements stay open in the
-[fast-follow plan](../../../plans/lazy-materialization-fast-follow.md).
+[fast-follow plan](../../plans/lazy-materialization-fast-follow.md).

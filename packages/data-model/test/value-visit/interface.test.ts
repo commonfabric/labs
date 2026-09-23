@@ -5,7 +5,6 @@ import {
   DO_RECURSE_KEYS,
   DO_RECURSE_KEYS_VALUES,
   DO_RECURSE_VALUES,
-  DO_VISIT_SUBTYPE,
   type RecurseForm,
 } from "@/value-visit";
 
@@ -23,10 +22,5 @@ describe("value-visit/interface", () => {
         expect(form).toEqual({ type: "recurse", doKeys, doValues });
       });
     }
-
-    it("makes `DO_VISIT_SUBTYPE` a frozen `visitSubtype` form", () => {
-      expect(Object.isFrozen(DO_VISIT_SUBTYPE)).toBe(true);
-      expect(DO_VISIT_SUBTYPE).toEqual({ type: "visitSubtype" });
-    });
   });
 });

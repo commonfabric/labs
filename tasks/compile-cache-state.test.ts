@@ -3,7 +3,6 @@ import {
   changedPathsOf,
   classifyCacheKeyState,
   classifyRunAgainstPredecessor,
-  COMPILE_CACHE_KEY_GLOBS,
   fillMissingFamiliesFromFingerprint,
   inferCurrentRunFallbackState,
   matcherForGlob,
@@ -13,6 +12,7 @@ import {
   COMPILE_CACHE_FAMILIES,
   type CompileCacheStates,
 } from "./ci-check-lib.ts";
+import { COMPILE_FINGERPRINT_INPUTS } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 
 async function captureLogs(fn: () => void | Promise<void>): Promise<string[]> {
   const logs: string[] = [];
@@ -45,8 +45,8 @@ Deno.test("pathTouchesCompileCacheKey matches exact-file entries exactly", () =>
   assert(
     pathTouchesCompileCacheKey("packages/runner/src/pattern-coverage.ts"),
   );
-  // hashFiles('deno.lock') matches only the workspace-root file, and an
-  // exact-file entry must not swallow name-prefixed siblings.
+  // The fingerprint resolves `deno.lock` against the repository root, so an
+  // exact-file entry must not swallow a same-named file elsewhere.
   assert(!pathTouchesCompileCacheKey("packages/toolshed/deno.lock"));
   assert(
     !pathTouchesCompileCacheKey("packages/runner/src/pattern-coverage.test.ts"),
@@ -109,36 +109,26 @@ Deno.test("classifyRunAgainstPredecessor fails open to unknown", async () => {
   );
 });
 
-Deno.test("COMPILE_CACHE_KEY_GLOBS matches the cc-* cache keys in deno.yml", async () => {
-  // The drift guard: COMPILE_CACHE_KEY_GLOBS mirrors the FIRST hashFiles(...)
-  // argument list of every cc-* compile-cache key in the workflow. If this
-  // fails, update the constant and the workflow together (and matcherForGlob if
-  // a new glob shape appeared).
+Deno.test("COMPILE_CACHE_KEY_GLOBS covers every compiler fingerprint input", async () => {
+  // The globs decide which changed file makes a run cold, and the fingerprint
+  // in the cache key decides which change rolls the key. They answer the same
+  // question, so the globs are rendered from the fingerprint's own input list
+  // rather than written out again. What is left to check is that the rendering
+  // covers what the fingerprint hashes, which is every file under a directory
+  // input and the file itself for a file input. Which of the two an input is
+  // comes from the filesystem, so that a rendering reading the shape off the
+  // path some other way is still held to the same coverage.
 
-  const workflow = await Deno.readTextFile(
-    new URL("../.github/workflows/deno.yml", import.meta.url),
-  );
-  const keyLines = workflow.split("\n").filter((line) =>
-    line.includes("cc-") && line.includes("hashFiles(")
-  );
-  assert(
-    keyLines.length >= 3,
-    `expected at least 3 cc-* cache key lines in deno.yml, found ${keyLines.length}`,
-  );
-
-  const expected = [...COMPILE_CACHE_KEY_GLOBS].sort();
-  for (const line of keyLines) {
-    const firstGroup = line.match(/hashFiles\(([^)]*)\)/);
-    assert(firstGroup, `no hashFiles(...) group in: ${line.trim()}`);
-    const globs = [...firstGroup[1].matchAll(/'([^']+)'/g)]
-      .map((match) => match[1])
-      .sort();
-    assertEquals(
-      globs,
-      expected,
-      `compile-cache key inputs drifted from COMPILE_CACHE_KEY_GLOBS in:\n${line.trim()}`,
+  for (const input of COMPILE_FINGERPRINT_INPUTS) {
+    const info = await Deno.stat(new URL(`../${input}`, import.meta.url));
+    const changed = info.isDirectory ? `${input}/nested/file.ts` : input;
+    assert(
+      pathTouchesCompileCacheKey(changed),
+      `the fingerprint hashes ${changed}, which no compile-cache glob matches`,
     );
   }
+  assert(!pathTouchesCompileCacheKey("docs/development/CI_PERFORMANCE.md"));
+  assert(!pathTouchesCompileCacheKey("packages/runner/src/cell.ts"));
 });
 
 Deno.test("pattern integration cache follows sources and shard selector", async () => {

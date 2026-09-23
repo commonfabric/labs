@@ -8,6 +8,7 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import { hashStringOf } from "@commonfabric/data-model";
 import { sha256 } from "@commonfabric/content-hash";
 import {
   ENTITY_URI_SCHEMES,
@@ -27,10 +28,15 @@ import {
   HARNESS_HANDLE_TABLE_TYPE,
   type HarnessHandleCapability,
   type HarnessHandleEntry,
+  type HarnessHandleReferent,
+  type HarnessHandleReferentDraft,
   type HarnessHandleTable,
   MIN_HANDLE_TOKEN_SUFFIX_LENGTH,
+  REFERENT_HANDLE_TOKEN_PREFIX,
+  REFERENT_TOKEN_PATTERN,
 } from "./contracts/handle-table.ts";
 import type { HarnessSkillAcquisition } from "./contracts/skill.ts";
+import { isCfcLabelShape } from "./cfc-label-shape.ts";
 
 /** Acquisition fields every recorded provenance must carry as a non-empty string. */
 const ACQUISITION_STRING_FIELDS = [
@@ -269,6 +275,90 @@ export const mintAddressHandle = async (
   };
 };
 
+/** Helper for minting, which names a referent by everything but its token. */
+const referentIdentityKey = (
+  referent: Pick<
+    HarnessHandleReferent,
+    "kind" | "source" | "value" | "label" | "labelSource"
+  >,
+): string =>
+  hashStringOf([
+    "referent",
+    referent.kind,
+    referent.source,
+    referent.value,
+    referent.label,
+    referent.labelSource,
+  ]);
+
+/**
+ * A referent of `referent`'s kind with its token removed, for minting it into
+ * another table under that table's own salt.
+ */
+export const referentDraft = (
+  referent: HarnessHandleReferent,
+): HarnessHandleReferentDraft =>
+  referent.kind === "document"
+    ? {
+      kind: referent.kind,
+      source: referent.source,
+      value: referent.value,
+      label: referent.label,
+      labelSource: referent.labelSource,
+    }
+    : {
+      kind: referent.kind,
+      source: referent.source,
+      value: referent.value,
+      label: referent.label,
+      labelSource: referent.labelSource,
+    };
+
+/**
+ * Mints a referent handle for `referent` — content a tool observed, or an
+ * admitted research kit, as its `kind` says — returning the updated table and
+ * the token. Minting is idempotent per referent: the same kind, source,
+ * content, label, and label source share one token, so a row a run retrieves
+ * twice is held once, and a document and a research kit with the same content
+ * are two referents. The suffix is derived the way an address handle's is.
+ */
+export const mintReferentHandle = async (
+  table: HarnessHandleTable,
+  referent: HarnessHandleReferentDraft,
+  options: { hasher?: HandleTokenHasher } = {},
+): Promise<{ table: HarnessHandleTable; token: string }> => {
+  const hasher = options.hasher ?? sha256Hasher;
+  const referents = table.referents ?? [];
+  const key = referentIdentityKey(referent);
+  const existing = referents.find((held) => referentIdentityKey(held) === key);
+  if (existing !== undefined) return { table, token: existing.token };
+  let attempt = 0;
+  let suffix = await deriveTokenSuffix(table.salt, key, attempt, hasher);
+  while (
+    referents.some((held) =>
+      held.token === REFERENT_HANDLE_TOKEN_PREFIX + suffix
+    )
+  ) {
+    attempt += 1;
+    suffix = await deriveTokenSuffix(table.salt, key, attempt, hasher);
+  }
+  const token = REFERENT_HANDLE_TOKEN_PREFIX + suffix;
+  return {
+    table: {
+      ...table,
+      referents: [...referents, { token, ...referent }],
+    },
+    token,
+  };
+};
+
+/** Returns the referent holding `token`, or `undefined` when none does. */
+export const resolveReferentToken = (
+  table: HarnessHandleTable,
+  token: string,
+): HarnessHandleReferent | undefined =>
+  table.referents?.find((held) => held.token === token);
+
 /** Returns the entry holding `token`, or `undefined` when none does. */
 export const resolveHandleToken = (
   table: HarnessHandleTable,
@@ -482,6 +572,78 @@ export const swapTokensForRefs = (
 /** Token grammar accepted by {@link assertValidHarnessHandleTable}. */
 const FULL_TOKEN_PATTERN = new RegExp(`^${HANDLE_TOKEN_PATTERN.source}$`);
 
+/** Referent token grammar accepted by the same check. */
+const FULL_REFERENT_TOKEN_PATTERN = new RegExp(
+  `^${REFERENT_TOKEN_PATTERN.source}$`,
+);
+
+/** Helper for the table check, which validates the referents it holds. */
+const assertValidReferents = (referents: unknown): void => {
+  if (referents === undefined) return;
+  if (!Array.isArray(referents)) {
+    throw new Error("invalid handle table: referents must be an array");
+  }
+  const tokens = new Set<string>();
+  const identities = new Set<string>();
+  for (const referent of referents) {
+    if (!isObjectNotArray(referent)) {
+      throw new Error("invalid handle table: referent is not an object");
+    }
+    const { token, kind, source, label, labelSource } = referent;
+    if (
+      typeof token !== "string" || !FULL_REFERENT_TOKEN_PATTERN.test(token)
+    ) {
+      throw new Error(
+        `invalid handle table: malformed referent token \`${String(token)}\``,
+      );
+    }
+    if (kind !== "document" && kind !== "research") {
+      throw new Error(
+        `invalid handle table: referent kind must be \`document\` or \`research\`, got \`${
+          String(kind)
+        }\``,
+      );
+    }
+    if (typeof source !== "string" || source.length === 0) {
+      throw new Error(
+        `invalid handle table: referent \`${token}\` has an empty source`,
+      );
+    }
+    if (!isCfcLabelShape(label)) {
+      throw new Error(
+        `invalid handle table: referent \`${token}\` has a malformed label`,
+      );
+    }
+    // A label source belongs to a kind: a row or a query labels a document,
+    // and only research labels research. A record pairing them otherwise was
+    // not minted by this module.
+    if (
+      kind === "document"
+        ? labelSource !== "row" && labelSource !== "query"
+        : labelSource !== "research"
+    ) {
+      throw new Error(
+        `invalid handle table: referent \`${token}\` has an unknown labelSource \`${
+          String(labelSource)
+        }\``,
+      );
+    }
+    if (tokens.has(token)) {
+      throw new Error(`invalid handle table: duplicate token \`${token}\``);
+    }
+    tokens.add(token);
+    const identity = referentIdentityKey(
+      referent as unknown as HarnessHandleReferent,
+    );
+    if (identities.has(identity)) {
+      throw new Error(
+        `invalid handle table: duplicate referent identity at \`${token}\``,
+      );
+    }
+    identities.add(identity);
+  }
+};
+
 /**
  * Asserts that `table` is a well-formed version-1 handle table, guarding the
  * seams that adopt one from persisted state: a version this code does not
@@ -513,6 +675,7 @@ export const assertValidHarnessHandleTable = (
   if (!Array.isArray(raw.entries)) {
     throw new Error("invalid handle table: entries must be an array");
   }
+  assertValidReferents(raw.referents);
   const tokens = new Set<string>();
   const addressKeys = new Set<string>();
   for (const entry of table.entries) {

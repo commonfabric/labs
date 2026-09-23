@@ -2,17 +2,11 @@
   "name": "@commonfabric/memory",
   "tasks": {
     "check": "deno check .",
-    "just-test": {
+    "deno-test": {
       "description": "Run unit tests",
-      "command": "deno test --allow-read --allow-write --allow-net --allow-ffi --allow-env --allow-run"
+      "command": "deno test --shuffle=$(deno task -q test-seed) --allow-read --allow-write --allow-net --allow-ffi --allow-env --allow-run"
     },
-    "test": {
-      "description": "Type check & run tests",
-      "dependencies": [
-        "check",
-        "just-test"
-      ]
-    },
+    "test": "deno run --allow-read --allow-run=\"$(deno eval \"console.log(Deno.execPath())\")\" ../../tasks/run-member-tests.ts deno-test",
     "bench": {
       "description": "Run memory benchmarks",
       "command": "deno bench --allow-read --allow-write --allow-net --allow-ffi --allow-env"
@@ -23,6 +17,10 @@
     }
   },
   "exports": {
+    "./inbox-store": "./inbox-store.ts",
+    "./inbox": "./inbox.ts",
+    "./v2/invites": "./v2/invites.ts",
+    "./space-invites": "./space-invites.ts",
     "./acl": "./acl.ts",
     "./interface": "./interface.ts",
     "./v2": "./v2.ts",
@@ -31,6 +29,7 @@
     "./v2/operation-codec": "./v2/operation-codec.ts",
     "./v2/client": "./v2/client.ts",
     "./v2/message-compression": "./v2/message-compression.ts",
+    "./v2/genesis-root": "./v2/genesis-root.ts",
     "./v2/engine": "./v2/engine.ts",
     "./v2/execution-lease": "./v2/execution-lease.ts",
     "./v2/execution-outbox": "./v2/execution-outbox.ts",

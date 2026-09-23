@@ -17,6 +17,7 @@ import {
   mergeSamples,
   type Observation,
   parseContext,
+  percentile90,
   readCostsForward,
   sampledPercentile90,
   sampleDuration,
@@ -391,6 +392,86 @@ describe("score", () => {
     });
   });
 
+  describe("the order a run's tests were shuffled into", () => {
+    it("reads a pass and a failure at one commit in two orders as no flake", () => {
+      // An order-dependent test passes in one order and fails in another.
+      // That is a bug in the test, not chance, and a flake rate high
+      // enough would withhold it from pull requests rather than get it
+      // fixed.
+      const state = stateFrom([
+        saw("pass", { seed: 20260921, place: "pr", source: "branch" }),
+        saw("fail", { seed: 20260922, place: "pr", source: "branch" }),
+      ]);
+      expect(state.flakesByDay["2026-08-20"] ?? 0).toBe(0);
+      expect(flakeRate(state, "2026-08-20")).toBe(0);
+    });
+
+    it("still reads a pass and a failure in one order as a flake", () => {
+      const state = stateFrom([
+        saw("pass", { seed: 20260922, place: "pr", source: "branch" }),
+        saw("fail", { seed: 20260922, place: "pr", source: "branch" }),
+      ]);
+      expect(state.flakesByDay["2026-08-20"]).toBe(1);
+    });
+
+    it("keeps a seeded run apart from one in declaration order", () => {
+      // A run with no seed ran its tests in the order they were declared,
+      // which is an order of its own.
+      const state = stateFrom([
+        saw("pass", { place: "pr", source: "branch" }),
+        saw("fail", { seed: 20260922, place: "pr", source: "branch" }),
+      ]);
+      expect(state.flakesByDay["2026-08-20"] ?? 0).toBe(0);
+    });
+
+    it("credits no catch to a failure on main that a new order ended", () => {
+      // The order moved on and the test stopped failing, which says
+      // nothing about whether any change fixed it.
+      const state = stateFrom([
+        saw("fail", { day: "2026-08-19", commit: "c0", seed: 20260819 }),
+        saw("pass", { commit: "c1", seed: 20260820 }),
+      ]);
+      expect(state.mainCatches).toBe(0);
+      expect(state.pendingMain).toEqual([]);
+      expect(flakeRate(state, "2026-08-20")).toBe(0);
+    });
+
+    it("judges a failure in the pass's order beside one in another", () => {
+      // An older failure in another order is dropped, and does not take
+      // the same-order failure after it down with it.
+      const state = stateFrom([
+        saw("fail", { day: "2026-08-19", commit: "c0", seed: 20260819 }),
+        saw("fail", { day: "2026-08-20", commit: "c1", seed: 20260820 }),
+        saw("pass", { commit: "c2", seed: 20260820 }),
+      ]);
+      expect(state.mainCatches).toBe(1);
+      expect(state.lastCatch).toBe("2026-08-20");
+      expect(state.pendingMain).toEqual([]);
+    });
+
+    it("still credits a catch to a failure a later commit in one order ended", () => {
+      const state = stateFrom([
+        saw("fail", { day: "2026-08-20", commit: "c0", seed: 20260820 }),
+        saw("pass", { commit: "c1", seed: 20260820 }),
+      ]);
+      expect(state.mainCatches).toBe(1);
+    });
+
+    it("reads a rerun of one commit in another order as neither flake nor catch", () => {
+      const state = stateFrom([
+        saw("fail", { commit: "c1", seed: 20260820 }),
+        saw("pass", {
+          commit: "c1",
+          seed: 20260821,
+          day: "2026-08-21",
+          startedAt: "2026-08-21T00:00:00.000Z",
+        }),
+      ]);
+      expect(state.mainCatches).toBe(0);
+      expect(state.flakesByDay["2026-08-20"] ?? 0).toBe(0);
+    });
+  });
+
   describe("variants", () => {
     it("scores a variant apart from the default it shadows", () => {
       const marked = { ...TEST, v: "server-execution" };
@@ -602,10 +683,11 @@ describe("score", () => {
 });
 
 /**
- * The ninetieth percentile of a list, by nearest rank, over the whole list
- * rather than a bounded sample of it.
+ * The ninetieth percentile of a list, by nearest rank, worked out here
+ * rather than through the module under test so that the two are two
+ * answers to compare.
  */
-function percentile90(values: readonly number[]): number {
+function exactPercentile90(values: readonly number[]): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
   return sorted[Math.max(0, Math.ceil(0.9 * sorted.length) - 1)]!;
@@ -667,7 +749,8 @@ describe("a day's bounded sample of its slowest runs", () => {
     const durations = Array.from({ length: 20 }, (_, i) => (i + 1) * 10);
     const samples = empty();
     for (const ms of durations) sampleDuration(samples, ms);
-    expect(sampledPercentile90(samples)).toBe(percentile90(durations));
+    expect(sampledPercentile90(samples))
+      .toBe(exactPercentile90(durations));
   });
 
   it("over-estimates rather than under-estimates past what it kept", () => {
@@ -680,6 +763,38 @@ describe("a day's bounded sample of its slowest runs", () => {
   });
 });
 
+describe("the ninetieth percentile of a population", () => {
+  it("answers over the whole of one given whole", () => {
+    // What a caller holding every value asks for. Each size is checked
+    // against the nearest rank worked out separately, since an
+    // off-by-one here moves every cost the model reads.
+    for (let size = 1; size <= 40; size++) {
+      const values = Array.from({ length: size }, (_, i) => (i + 1) * 10);
+      expect(percentile90(values, values.length))
+        .toBe(exactPercentile90(values));
+    }
+  });
+
+  it("takes the rank over the population and not over what it holds", () => {
+    // A population of ten, of which only the slowest four are given.
+    // Those four are the seventh to the tenth, and the ninetieth
+    // percentile of ten is the ninth, so it is among them: 90. Reading
+    // the rank over the four given instead would answer 100.
+    expect(percentile90([70, 80, 90, 100], 10)).toBe(90);
+  });
+
+  it("gives the smallest it holds where the rank falls outside them", () => {
+    // The ninetieth of a thousand is the nine hundredth, and only the
+    // slowest four are here. Answering with the smallest of those
+    // over-estimates, which is the direction a budget survives.
+    expect(percentile90([970, 980, 990, 1000], 1000)).toBe(970);
+  });
+
+  it("has no percentile for a population of nothing", () => {
+    expect(percentile90([], 0)).toBe(0);
+  });
+});
+
 describe("mergeSamples()", () => {
   it("keeps the slowest of the union and the count of both", () => {
     const a = samplesOf([10, 40]);
@@ -687,13 +802,39 @@ describe("mergeSamples()", () => {
     expect(mergeSamples(a, b)).toEqual({ slowest: [10, 20, 30, 40], count: 4 });
   });
 
-  it("keeps what accumulating the whole would have kept", () => {
-    const whole = Array.from({ length: 3 * COST_SAMPLE_CAP }, (_, i) => i + 1);
-    const at = COST_SAMPLE_CAP + 7;
-    const merged = mergeSamples(
-      samplesOf(whole.slice(0, at)),
-      samplesOf(whole.slice(at)),
+  it("keeps what accumulating the whole would have kept, at every cut", () => {
+    // The property a fold reading a day in parts rests on, shown over a
+    // population rather than asserted: what the merge keeps cannot
+    // depend on where the day was divided. Four times the cap, drawn so
+    // every value appears twice, which puts duplicates on the boundary
+    // the cap falls at.
+    const whole = Array.from(
+      { length: 4 * COST_SAMPLE_CAP },
+      (_, i) => (i * 37) % (2 * COST_SAMPLE_CAP) + 1,
     );
+    const direct = samplesOf(whole);
+    for (let at = 0; at <= whole.length; at++) {
+      expect(
+        mergeSamples(samplesOf(whole.slice(0, at)), samplesOf(whole.slice(at))),
+      ).toEqual(direct);
+    }
+  });
+
+  it("keeps the same over any number of parts", () => {
+    // A fold merges each batch into what it holds, so the parts arrive
+    // one at a time and every merge but the first is against a merge.
+    const whole = Array.from(
+      { length: 4 * COST_SAMPLE_CAP },
+      (_, i) => (i * 37) % (2 * COST_SAMPLE_CAP) + 1,
+    );
+    const cuts = [0, 1, 13, COST_SAMPLE_CAP, COST_SAMPLE_CAP + 1, whole.length];
+    let merged = samplesOf([]);
+    for (let part = 1; part < cuts.length; part++) {
+      merged = mergeSamples(
+        merged,
+        samplesOf(whole.slice(cuts[part - 1], cuts[part])),
+      );
+    }
     expect(merged).toEqual(samplesOf(whole));
   });
 

@@ -621,6 +621,45 @@ describe("FsTree", () => {
         expect(() => tree.transplantSubtree(dir, 9_999n)).toThrow();
       });
 
+      it("throws, naming the replacement's inode, when a name in both directories has no node in the replacement", () => {
+        // Drops the replacement child's node through the exposed inode map
+        // while leaving its entry listed, which is the state the check reports.
+
+        const tree = new FsTree();
+        const oldIno = build(tree, tree.rootIno, "input", {
+          dir: { data: { file: "old" } },
+        });
+        const pendingIno = tree.addDir(tree.rootIno, ".input.pending");
+        const pendingChildIno = tree.addFile(
+          pendingIno,
+          "data",
+          "new",
+          "string",
+        );
+        tree.inodes.delete(pendingChildIno);
+
+        expect(() => tree.transplantSubtree(oldIno, pendingIno)).toThrow(
+          `Transplant child "data" names inode ${pendingChildIno}, which does not exist`,
+        );
+      });
+
+      it("throws, naming the live inode, when a name in both directories has no node in the live tree", () => {
+        // Drops the live child's node through the exposed inode map while
+        // leaving its entry listed, which is the state the check reports.
+
+        const tree = new FsTree();
+        const oldIno = tree.addDir(tree.rootIno, "input");
+        const oldChildIno = tree.addFile(oldIno, "data", "old", "string");
+        const pendingIno = build(tree, tree.rootIno, ".input.pending", {
+          dir: { data: { file: "new" } },
+        });
+        tree.inodes.delete(oldChildIno);
+
+        expect(() => tree.transplantSubtree(oldIno, pendingIno)).toThrow(
+          `Transplant child "data" names inode ${oldChildIno}, which does not exist`,
+        );
+      });
+
       it("removes a vanished child's CFC directory entry", () => {
         const tree = new FsTree();
         const annotator = new CfcProjectionAnnotator(tree, {

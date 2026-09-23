@@ -1,4 +1,4 @@
-import type { CellKind, LinkScope } from "@commonfabric/api";
+import type { CellKind, FabricValue, LinkScope } from "@commonfabric/api";
 import { fabricAwareEqual, taggedHashStringOf } from "@commonfabric/data-model";
 import { schemaWithProperties } from "@commonfabric/data-model-schema";
 import { getLogger } from "@commonfabric/utils/logger";
@@ -101,7 +101,7 @@ interface PieceCellIo {
   get(path?: CellPath): Promise<unknown>;
   set(value: unknown, path?: CellPath): Promise<void>;
   edit(
-    produce: (stored: unknown) => { value: unknown } | undefined,
+    produce: (stored: FabricValue) => { value: unknown } | undefined,
     path?: CellPath,
   ): Promise<{ wrote: boolean }>;
   getCell(path?: CellPath): Promise<Cell<unknown>>;
@@ -1619,11 +1619,12 @@ export function durableSourceContract(
   );
   const relativePath = (
     producerLink: ReturnType<Cell<unknown>["getAsNormalizedFullLink"]>,
+    matchScope: LinkScope | undefined = sourceLink.scope,
   ): (string | number)[] | undefined => {
     if (
       producerLink.space !== sourceLink.space ||
       producerLink.id !== sourceLink.id ||
-      (producerLink.scope ?? "space") !== (sourceLink.scope ?? "space") ||
+      (producerLink.scope ?? "space") !== (matchScope ?? "space") ||
       producerLink.path.length > sourceLink.path.length ||
       producerLink.path.some((segment, index) =>
         segment !== sourceLink.path[index]
@@ -1719,7 +1720,12 @@ export function durableSourceContract(
             parsed.schema,
             linkedCell.tx,
           ).getAsNormalizedFullLink();
-          const suffix = relativePath(target);
+          // A projection is matched at the instance the link names. A result
+          // alias reading a scoped input addresses the input's base slot and
+          // reaches the scoped value through its redirect, so it is not
+          // collected for a scoped source; the argument contract above
+          // governs that value.
+          const suffix = relativePath(target, rawSourceLink.scope);
           if (suffix !== undefined) {
             projected.push({
               root: ownerSchema,
@@ -3175,7 +3181,7 @@ class PiecePropIo implements PieceCellIo {
    * read, the way a write's caller verifies the write.
    */
   async edit(
-    produce: (stored: unknown) => { value: unknown } | undefined,
+    produce: (stored: FabricValue) => { value: unknown } | undefined,
     path?: CellPath,
   ): Promise<{ wrote: boolean }> {
     const pieces = this.#cc.pieces();
@@ -3214,7 +3220,9 @@ class PiecePropIo implements PieceCellIo {
       // Build the path with transaction context
       const txCell = targetCell.withTx(tx).key(...(path ?? []));
 
-      const decision = produce(txCell.getRaw({ lastNode: "value" }));
+      const decision = produce(
+        txCell.getRawUntyped({ lastNode: "value" }),
+      );
       if (decision === undefined) return { wrote: false };
       const value = decision.value;
 
@@ -4071,6 +4079,33 @@ export class PieceController<T = unknown> {
   }
 
   /**
+   * The piece's current pattern where it loads, and its stored pattern pointer
+   * alone where it does not, with what the load threw as `failure`.
+   *
+   * A source change names its predecessor by the pointer and compares a
+   * candidate with the loaded pattern, so a pattern that does not load costs
+   * that comparison and nothing else. Whether a change may go ahead without
+   * the comparison is the caller's to decide.
+   *
+   * @throws Error when the piece carries no pattern pointer, which leaves a
+   * change nothing to name as its predecessor.
+   */
+  async #loadCurrentPatternOrPointer(
+    options: { projectResult?: boolean; repairCache?: boolean } = {},
+  ): Promise<
+    & { ref: { identity: string; symbol: string } }
+    & ({ pattern: Pattern } | { pattern: undefined; failure: unknown })
+  > {
+    try {
+      return await this.#loadCurrentPattern(options);
+    } catch (failure) {
+      const ref = this.#patternPointer();
+      if (ref === undefined) throw failure;
+      return { pattern: undefined, ref, failure };
+    }
+  }
+
+  /**
    * The pattern's authored source program, recovered from the content-addressed
    * `pattern:<identity>` source-doc closure in the piece's space. Replaces the
    * deleted meta cell's `program`. `main` is the executable entry filename;
@@ -4216,8 +4251,28 @@ export class PieceController<T = unknown> {
     if (!isPieceSourceAction(action)) {
       throw new Error("unsupported piece source action");
     }
-    const { pattern: previousPattern, ref: previousRef } = await this
-      .#loadCurrentPattern();
+    // A piece whose current pattern does not load is the piece a change of
+    // source rescues: a stored identity only a retired bundle could resolve
+    // strands it otherwise. The pointer still names the predecessor, which is
+    // all a transition records of it, and all a detach needs. What an action
+    // that adopts a candidate loses is the comparison of that candidate with
+    // what the piece ran. The review below reports the loss as an
+    // incompatibility, so such a change applies only once confirmed.
+    const previous = await this.#loadCurrentPatternOrPointer();
+    const previousRef = previous.ref;
+    // Why the load failed is in no review, since a review has to read the
+    // same on the call that confirms it. A confirmation repeats a load that
+    // was already reported, so only the reviewing call logs it.
+    if (
+      previous.pattern === undefined && options.confirmedChange === undefined
+    ) {
+      pieceUpdateLogger.warn("change-source-current-unloadable", () => [
+        "the current pattern failed to load; reviewing the source change",
+        `against the stored identity ref ${previousRef.identity}#` +
+        `${previousRef.symbol} alone (${this.#cell.space})`,
+        previous.failure,
+      ]);
+    }
     const expected = getPieceSourceSnapshot(
       this.#cell,
       this.#pieces.runtime.runner.sessionPatternPointerFor(this.#cell),
@@ -4331,7 +4386,7 @@ export class PieceController<T = unknown> {
       candidate = loaded;
       prepared = confirmed;
       const currentReview = await pieceSourceCompatibilityReview(
-        previousPattern,
+        previous,
         candidate,
         this.#cell,
         this.#pieces,
@@ -4363,10 +4418,18 @@ export class PieceController<T = unknown> {
         acceptedReview = confirmed.review;
       }
     } else {
+      // A piece with no source history and no origin predates both, and its
+      // space may hold no source for what it runs. It takes the transition's
+      // displaced-identity arm, as it does under `setPattern`. A piece that
+      // recorded how it got its pattern keeps its claim to a restorable
+      // current source, so the baseline still refuses one that has none.
       const baseline = await preparePieceSourceTransitionBaseline(
         this.#pieces.runtime,
         this.#cell,
         expected,
+        expected.revisionId === null && expected.origin === null
+          ? { allowUnavailable: true }
+          : {},
       );
       let program: RuntimeProgram;
       let origin: string | null;
@@ -4477,7 +4540,7 @@ export class PieceController<T = unknown> {
         ...(selectedRevisionId === undefined ? {} : { selectedRevisionId }),
       };
       const review = await pieceSourceCompatibilityReview(
-        previousPattern,
+        previous,
         candidate,
         this.#cell,
         this.#pieces,
@@ -4550,7 +4613,7 @@ export class PieceController<T = unknown> {
                     argumentCell,
                     argumentSchema,
                     this.#pieces,
-                    previousPattern.argumentSchema,
+                    previous.pattern?.argumentSchema,
                   );
                 } catch (error) {
                   const message = error instanceof Error
@@ -4614,7 +4677,7 @@ export class PieceController<T = unknown> {
       }
       if (isOverridableArgumentCompatibilityError(error)) {
         const review = await pieceSourceCompatibilityReview(
-          previousPattern,
+          previous,
           candidate,
           this.#cell,
           this.#pieces,
@@ -4649,8 +4712,8 @@ export class PieceController<T = unknown> {
   async checkPattern(
     program: RuntimeProgram,
   ): Promise<PatternCompatibilityReport> {
-    const { pattern: previousPattern } = await this
-      .#loadCurrentPattern({ repairCache: false });
+    const previous = await this
+      .#loadCurrentPatternOrPointer({ repairCache: false });
     const candidate = await this.#pieces.runtime.patternManager.compilePattern(
       program,
       { space: this.#pieces.getSpace(), persist: false },
@@ -4661,7 +4724,7 @@ export class PieceController<T = unknown> {
       throw new Error("the candidate source has no pattern identity");
     }
     const review = await pieceSourceCompatibilityReview(
-      previousPattern,
+      previous,
       candidate,
       this.#cell,
       this.#pieces,
@@ -4768,27 +4831,25 @@ export class PieceController<T = unknown> {
         // retained baseline: the stored ref serves only as the concurrency
         // guard and the candidate's predecessor entry, both of which name an
         // identity without loading it.
-        let previousPattern: Pattern | undefined;
-        let previousRef: { identity: string; symbol: string };
+        //
         // A served update repairs no cache: a write the load would seal
         // into the serving wave is not one the update's own commit
         // should rest on or answer for.
-        const repairCache = options?.served === undefined;
-        try {
-          ({ pattern: previousPattern, ref: previousRef } = await this
-            .#loadCurrentPattern({ repairCache }));
-        } catch (error) {
-          if (!options?.dangerouslyAllowIncompatibleSchema) throw error;
-          await this.#cell.sync();
-          const storedRef = getPatternIdentityRef(this.#cell);
-          if (!storedRef) throw error;
+        const previous = await this.#loadCurrentPatternOrPointer({
+          repairCache: options?.served === undefined,
+        });
+        const previousPattern = previous.pattern;
+        const previousRef = previous.ref;
+        if (previous.pattern === undefined) {
+          if (!options?.dangerouslyAllowIncompatibleSchema) {
+            throw previous.failure;
+          }
           pieceUpdateLogger.warn("set-pattern-current-unloadable", () => [
             "the current pattern failed to load; replacing source from the",
-            `stored identity ref ${storedRef.identity}#${storedRef.symbol}`,
+            `stored identity ref ${previousRef.identity}#${previousRef.symbol}`,
             `under dangerouslyAllowIncompatibleSchema (${this.#cell.space})`,
-            error,
+            previous.failure,
           ]);
-          previousRef = storedRef;
         }
         const expected = getPieceSourceSnapshot(
           this.#cell,
@@ -5118,7 +5179,7 @@ function assertPieceSourceRetainedLinksCompatible(
   argumentCell: Cell<unknown>,
   candidateSchema: JSONSchema,
   pieces: PiecesController,
-  priorArgumentSchema: JSONSchema,
+  priorArgumentSchema: JSONSchema | undefined,
 ): void {
   try {
     assertSuppliedLinkSchemasCompatible(
@@ -5144,7 +5205,7 @@ function pieceSourceArgumentEvidence(
   argumentCell: Cell<unknown>,
   pieces: PiecesController,
 ): string {
-  const raw = argumentCell.getRaw();
+  const raw = argumentCell.getRawUntyped();
   const links = suppliedLinks(raw).map((suppliedLink) => {
     let linkBase = argumentCell;
     for (const segment of suppliedLink.path) {
@@ -5190,17 +5251,37 @@ function pieceSourceArgumentEvidence(
   return taggedHashStringOf({ raw, links });
 }
 
+/**
+ * Every reason `candidate` cannot replace what `piece` runs, with the evidence
+ * the stored argument was judged on.
+ *
+ * `previous.pattern` is `undefined` for a piece whose current pattern does not
+ * load. Nothing can then say whether the candidate keeps the contract the piece
+ * ran under, which is itself an incompatibility: the review reports it under
+ * `schema`, naming the pattern by `previous.ref`, and judges retained links
+ * against the candidate alone. The stored argument and the CFC envelopes are
+ * judged as they always are, since neither consults the current pattern.
+ */
 async function pieceSourceCompatibilityReview(
-  previousPattern: Pattern,
+  previous: {
+    pattern: Pattern | undefined;
+    ref: { identity: string; symbol: string };
+  },
   candidate: Pattern,
   piece: Cell<unknown>,
   pieces: PiecesController,
 ): Promise<NonNullable<PreparedPieceSourceChange["review"]>> {
   const issues: PieceSourceCompatibilityIssues = {};
-  try {
-    assertPatternSchemasBackwardCompatible(previousPattern, candidate);
-  } catch (error) {
-    issues.schema = error instanceof Error ? error.message : String(error);
+  if (previous.pattern === undefined) {
+    issues.schema = `the piece's current pattern ` +
+      `\`${previous.ref.identity}#${previous.ref.symbol}\` cannot be loaded, ` +
+      `so the candidate cannot be compared with it`;
+  } else {
+    try {
+      assertPatternSchemasBackwardCompatible(previous.pattern, candidate);
+    } catch (error) {
+      issues.schema = error instanceof Error ? error.message : String(error);
+    }
   }
 
   const argumentCell = pieces.getArgument(piece);
@@ -5223,7 +5304,7 @@ async function pieceSourceCompatibilityReview(
       argumentCell,
       candidate.argumentSchema,
       pieces,
-      previousPattern.argumentSchema,
+      previous.pattern?.argumentSchema,
     );
   } catch (error) {
     issues.retainedLinks = error instanceof Error

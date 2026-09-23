@@ -1,4 +1,4 @@
-import { toIndentedDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 import { LRUCache } from "@commonfabric/utils/cache";
 import { MappedPosition, SourceMapConsumer } from "source-map-js";
 
@@ -580,7 +580,7 @@ export function parseSourceMap(stringMap: string): SourceMap {
   }
   if (!isSourceMap(sourceMap)) {
     throw new Error(
-      `Could not parse source map: ${toIndentedDebugString(sourceMap)}`,
+      debugStr`Could not parse source map: $quote,indent${sourceMap}`,
     );
   }
   return sourceMap;

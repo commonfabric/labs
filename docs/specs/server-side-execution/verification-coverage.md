@@ -32,6 +32,7 @@ The status corrections in this register are bounded to the rows below:
 | OW56 finding 2 | Closed: source following has one owner, the opener. ON upload and instantiate run on the serving runtime; source updates, other client creation paths, and compiled-byte trust remain separate OW56 work. |
 | OW58 | Closed: resolved-error notice commits release the drain guard. |
 | OW60 | Open: unresolved flag-ON client echoes are still skipped. |
+| OW64 | Closed: a client's read ceiling rides its signed `session.open` descriptor, the SpaceServer stamps it onto every run served as that session, and the served `sqliteQuery` reads under it; pinned end to end. |
 
 The [coverage status audit](../../history/plans/server-execution-v2/optimize/coverage-status-audit-2026-09-09.md)
 records the investigation's inspected head, provenance, probes, and limits.
@@ -1353,13 +1354,15 @@ nod, 2026-08-07; recorded in the plan's stage list):**
   server's root-existence coverage are recorded by OW18 below.
   The `executor/space-server-terminal-structure.test.ts` controls observe the
   real engine's durable result at every covering commit for creation during
-  confirmation, across a flush deadline, at each deadline check the settle
+  a structure load, across a flush deadline, at each deadline check the settle
   loop makes once its input barrier has passed — the re-armed structure retry
   and the scheduler probe — through an owning backlink, and with sealed
   writes pending. `executor/space-server-terminal-confirmation.test.ts`
-  covers traversed-address demand, departure and return, sync failure, and
-  teardown. `ensure-piece-running-scope.test.ts` distinguishes same-ID links
-  across scopes from true cycles under both execution postures.
+  covers the engine-settled confirmation and its traversed-address demand,
+  the re-ask a replica behind the store still gets, departure and return,
+  sync failure, and teardown. `ensure-piece-running-scope.test.ts`
+  distinguishes same-ID links across scopes from true cycles under both
+  execution postures.
 
 - OW18 — CLOSED as a move-everything obligation. Tenure activation ensures
   that the space root exists without following the root's source. Source
@@ -10144,6 +10147,81 @@ supply; OW29/OW32/OW34 closed):
     one. Unpinned and unmeasured; structural from the code only
     (`wake-shaping.ts`'s per-group `pending` + window tick, and the
     drain's per-entry `queueEvent`).
+  - **OW64 — the runtime read ceiling does not travel with a demand
+    (minted 2026-09-18 from the ON-default rehearsal's one failing
+    unit test, `pieces-controller-connection.test.ts`).**
+    `RuntimeOptions.cfcReadMaxConfidentiality`
+    (`docs/specs/sqlite-builtin/06-cfc.md`, "Runtime read ceiling")
+    bounds only the runtime it is set on. Under the ON arm a client
+    runtime executes no `db.query` of its own — the serving runtime
+    performs it, under ITS option — so a ceiling accepted on a
+    flag-ON client would read as a bounded session whose reads
+    nothing bounds. The constructor refuses that combination
+    (`packages/runner/src/runtime.ts`; pinned in
+    `packages/runner/test/sqlite-runtime-read-ceiling.test.ts`),
+    which made the pieces controller's forwarding test fail at an ON
+    default: the test depended on the ambient default for its arm.
+    **CLOSED (2026-09-18, the same change): the ceiling travels with
+    the session.** RULED by the owner ("do this the right way"; the
+    ceiling is wanted for ordinary client sessions too, where the
+    server will sometimes assign it). Mechanism: the client runtime
+    hands its ceiling to its storage manager before any session
+    opens (`IStorageManager.setSessionReadCeiling`, refused after a
+    session is open), the manager declares it in every session's
+    signed `session.open` descriptor (`SessionDescriptor.readCeiling`,
+    memory-v2 04-protocol.md §4.1.2) and refuses a server that does
+    not advertise the `sessionReadCeiling` protocol flag, the memory
+    server records it on the session (fresh per open; a resume
+    re-declares) and exposes it through `Server.sessionReadCeiling` —
+    the ONE seam a server-assigned ceiling reaches the run through as
+    well — and the SpaceServer's `#stampRun` reads it for the run's
+    `scopeKeyIdentity.sessionId` and carries it as
+    `WaveRunContext.readCeiling`. The sqlite builtin resolves ONE
+    effective ceiling per run (`effectiveReadCeiling`: the serving
+    runtime's option met with the carried one, `onExceed` meeting
+    toward `fail`) and uses it where it used the runtime's option:
+    the session-scoped query request hash (`runtimeReadCeiling`),
+    the row meet and the mode default. Ordinary cell reads meet the
+    carried session ceiling with the runtime ceiling as well. The
+    constructor refusal is retired; what it refuses now is a manager
+    that cannot carry the ceiling. Pinned: wire parse, registry and
+    flag in `packages/memory/test/v2-session-read-ceiling.test.ts`;
+    the memory client re-declaring the ceiling on every reopen after a
+    dropped connection (the server takes it fresh per open, so a
+    reopen without it would read unbounded) and refusing, at every
+    open, a server without the flag, in
+    `packages/memory/test/v2-client-read-ceiling.test.ts`; the same
+    refusal through the remote session factory and the
+    late-declaration refusal in
+    `packages/runner/test/memory-v2-remote-session.test.ts`; the
+    constructor handoff and the effective-ceiling meet in
+    `packages/runner/test/sqlite-runtime-read-ceiling.test.ts`; end
+    to end — a bounded and an unbounded client of one space served
+    their own session instances of one `PerSession` query from one
+    labeled row set, and a shared materialization whose labeled rows
+    are withheld from the bounded client —
+    in `packages/runner/test/executor-sqlite-read-ceiling.test.ts`;
+    the controller's forwarding on both arms in
+    `packages/piece/test/pieces-controller-connection.test.ts`.
+    cf-harness needs nothing: its `--max-confidentiality` bounds the
+    session on either arm, and its bounded-as-configured attestation
+    over the client runtime's fields stays true because the carried
+    value is those fields. Shared query results retain the complete
+    labels of their materialized rows and array shape; each cell read
+    enforces its runtime and carried session ceiling. The cell guard
+    is pinned in `packages/runner/test/cfc-cell-read-ceiling.test.ts`,
+    and shared result shape, aggregate and diagnostic protection in
+    `packages/runner/test/sqlite-shared-read-ceiling.test.ts`. One
+    residual, fail-OPEN and therefore owed: the stamp reads the LIVE
+    session record, so a run served as a session whose record has
+    expired — an event a bounded client fired and then stayed
+    disconnected past the session's retention — finds no ceiling and
+    reads under the serving runtime's option alone, into that
+    session's instance. A detached session inside its retention keeps
+    its ceiling; past it the server no longer knows the session was
+    bounded. The candidate close is the server-assigned source this
+    seam exists for: a ceiling keyed by principal (or persisted with
+    the event's `firedAt` pair) rather than by a live session.
 
 ## 4. Standing rule
 

@@ -11,8 +11,8 @@ import {
   isPlainObject,
   isUnsafeObjectKey,
 } from "@commonfabric/utils/types";
-import { FabricHash } from "@/fabric-primitives/index.ts";
-import { FabricLink } from "@/fabric-instances/FabricLink.ts";
+import { FabricHash } from "@/fabric-primitives";
+import { FabricLink } from "@/fabric-instances";
 import type { FabricPlainObject } from "@/interface.ts";
 
 //

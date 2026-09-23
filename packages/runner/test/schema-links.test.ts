@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import "@commonfabric/utils/equal-ignoring-symbols";
 
+import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import { registerSchemaDocument } from "../src/schema-registry.ts";
+import type { Cell } from "../src/cell.ts";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { isObjectOrArray } from "@commonfabric/utils/types";
@@ -15,7 +18,11 @@ import { type JSONSchema } from "../src/builder/types.ts";
 import { createCell, isCell } from "../src/cell.ts";
 import { diffAndUpdate } from "../src/data-updating.ts";
 import { dataUriFromValueWithResolvedLinks } from "../src/data-uri.ts";
-import { areLinksSame, parseLink } from "../src/link-utils.ts";
+import {
+  areLinksSame,
+  parseLink,
+  schemaForSpaceCrossing,
+} from "../src/link-utils.ts";
 import { CellResult } from "../src/query-result-proxy.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -44,6 +51,49 @@ describe("Schema - Link Resolution", () => {
     await tx.commit();
     await runtime?.dispose();
     await storageManager?.close();
+  });
+
+  it("returns self-contained schemas on direct foreign handles", () => {
+    const shape = {
+      type: "string",
+      title: "opaque crossing nested schema",
+    } as const;
+    const hash = internSchemaAsTaggedHashString(shape);
+    registerSchemaDocument(hash, shape);
+    const handleSchema = {
+      type: "unknown",
+      asCell: ["cell"],
+      properties: { name: { $ref: `cid:${hash}` } },
+    } as const;
+    const target = runtime.getCell(
+      space2,
+      "foreign-schema-target",
+      undefined,
+      tx,
+    );
+    const stored = runtime.getCell(
+      space,
+      "foreign-schema-source",
+      undefined,
+      tx,
+    );
+    stored.set({ ref: target });
+    const source = stored.asSchema<{ ref: Cell<unknown> }>({
+      type: "object",
+      properties: { ref: handleSchema },
+    });
+    const direct = source.key("ref").get();
+    const normalized = schemaForSpaceCrossing(tx, space, handleSchema);
+    expect(normalized).not.toBe(false);
+    const { asCell: _asCell, ...normalizedValue } = normalized as Record<
+      string,
+      unknown
+    >;
+    expect(direct.getAsNormalizedFullLink().schema).toEqual(normalizedValue);
+    expect(direct.getAsNormalizedFullLink()).toMatchObject({
+      space: space2,
+      id: target.getAsNormalizedFullLink().id,
+    });
   });
 
   describe("Array element link resolution", () => {
@@ -98,11 +148,10 @@ describe("Schema - Link Resolution", () => {
       });
     });
 
-    it("warns (not silently) when a narrower-scope link follow is blocked (CT-1642)", () => {
+    it("logs at warn level when a narrower-scope link follow is blocked", () => {
       // Same setup as above: a session-scoped cell read through a user-scoped
-      // schema. The follow is correctly blocked (-> undefined); CT-1642 is that
-      // it used to log only at logger.info, which the traverse logger (level
-      // "warn") swallowed. Assert the drop now surfaces at warn level.
+      // schema. The follow is blocked (-> undefined), and the drop is logged at
+      // `warn` level, which is the level the traverse logger lets through.
       const traverseLogger = (globalThis as {
         commonfabric?: {
           logger?: Record<string, {

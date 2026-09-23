@@ -1,7 +1,6 @@
 // Covers the no-op (unchanged-value) branches of applyMutablePathWrite,
-// including Fabric-aware equality for FabricPrimitive elements (CT-1770): an
-// equal FabricBytes must be recognized as a no-op, and a different one as a
-// change.
+// including Fabric-aware equality for FabricPrimitive elements: an equal
+// FabricBytes must be recognized as a no-op, and a different one as a change.
 
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";

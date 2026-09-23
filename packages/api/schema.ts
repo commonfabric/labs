@@ -18,13 +18,8 @@ import type {
   AsCellType,
   Cell,
   ComparableCell,
-  FabricBytes,
-  FabricEpochDay,
-  FabricEpochNsec,
-  FabricHash,
-  FabricKeyPair,
-  FabricRegExp,
-  FabricUnavailable,
+  ConcreteFabricPrimitive,
+  FabricPrimitiveSchemaType,
   FactoryInput,
   HandlerFactory,
   JSONSchema,
@@ -53,6 +48,13 @@ export type Mutable<T> = T extends ReadonlyArray<infer U> ? Mutable<U>[]
   : T;
 
 type IsAny<T> = 0 extends (1 & T) ? true : false;
+
+/**
+ * The `FabricPrimitive` interface whose instances report `Name` as their
+ * `.schemaType`, or the union of them where `Name` is a union.
+ */
+type FabricPrimitiveOfSchemaType<Name extends FabricPrimitiveSchemaType> =
+  Extract<ConcreteFabricPrimitive, { readonly schemaType: Name }>;
 
 //
 // JSON Pointer Path Resolution Utilities
@@ -192,13 +194,8 @@ type SchemaCore<
   : T extends { type: "number" | "integer" } ? number
   : T extends { type: "boolean" } ? boolean
   : T extends { type: "null" } ? null
-  : T extends { type: "FabricBytes" } ? FabricBytes
-  : T extends { type: "FabricEpochDay" } ? FabricEpochDay
-  : T extends { type: "FabricEpochNsec" } ? FabricEpochNsec
-  : T extends { type: "FabricHash" } ? FabricHash
-  : T extends { type: "FabricKeyPair" } ? FabricKeyPair
-  : T extends { type: "FabricRegExp" } ? FabricRegExp
-  : T extends { type: "FabricUnavailable" } ? FabricUnavailable
+  : T extends { type: infer Name extends FabricPrimitiveSchemaType }
+    ? FabricPrimitiveOfSchemaType<Name>
   : T extends { type: "array" }
     ? T extends { items: infer I } ? SchemaArrayItems<I, Root, Depth, WrapCells>
     : unknown[]
@@ -287,10 +284,9 @@ type SchemaInner<
  * - $ref resolution (both "#" and "#/path/to/def")
  * - anyOf unions
  * - Primitive types (string, number, boolean, null)
- * - `FabricPrimitive` types ("FabricBytes", "FabricEpochDay",
- *   "FabricEpochNsec", "FabricHash", "FabricKeyPair", "FabricRegExp",
- *   "FabricUnavailable"), each inferring the corresponding `FabricPrimitive`
- *   interface from this package
+ * - `FabricPrimitive` types (every `FabricPrimitiveSchemaType`, "FabricBytes"
+ *   among them), each inferring the `FabricPrimitive` interface from this
+ *   package whose instances report that name as `.schemaType`
  * - Arrays with typed items
  * - Objects with typed properties (required and optional)
  * - Cell and Stream wrapping via asCell/asStream

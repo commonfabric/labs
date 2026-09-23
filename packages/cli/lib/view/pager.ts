@@ -16,7 +16,7 @@ import { decodeKeys } from "./keys.ts";
 import { cursorScreenPos, renderFrame, type ViewState } from "./render.ts";
 import { Session, type SessionOptions } from "./session.ts";
 import { ui } from "./theme.ts";
-import type { Semantics } from "./languages/language.ts";
+import { onGrammarLoad, type Semantics } from "./languages/language.ts";
 import type { EditableSource } from "./editsource.ts";
 import { realFileGateway } from "./filegateway.ts";
 import { ViewError } from "./errors.ts";
@@ -71,6 +71,12 @@ export interface PagerDeps {
    * that then tears the screen down, where a cancellable timer has nothing left
    * to run in. */
   delay(ms: number): Promise<void>;
+
+  /**
+   * Call `listener` each time a language's parser load ends, with the reason
+   * when it failed; returns a function that stops the calls.
+   */
+  onGrammarLoad(listener: (failure?: string) => void): () => void;
 }
 
 /** The real terminal and process operations. */
@@ -90,6 +96,7 @@ export function realPagerDeps(): PagerDeps {
       return () => clearTimeout(id);
     },
     delay: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    onGrammarLoad,
   };
 }
 
@@ -288,6 +295,16 @@ export async function runPager(
   } catch { /* not on this platform */ }
   deps.addSignalListener("SIGINT", onInterrupt);
   deps.addSignalListener("SIGTERM", onTerminate);
+  // A file opened in a language whose parser has not loaded is drawn as plain
+  // text and starts the load; once it loads, parse the document again.
+  const stopParserListener = deps.onGrammarLoad((failure) => {
+    if (failure === undefined) {
+      session.reparse({ force: true });
+    } else {
+      session.showMessage(`${failure} Its files are shown as plain text.`);
+    }
+    draw();
+  });
 
   const buf = new Uint8Array(4096);
   let leftover: Uint8Array = new Uint8Array(0);
@@ -350,6 +367,7 @@ export async function runPager(
       if (session.needsReparse) scheduleReparse();
     }
   } finally {
+    stopParserListener();
     stopReveal();
     stopExpiry();
     stopPush();

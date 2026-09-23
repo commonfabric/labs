@@ -97,7 +97,7 @@ cell means none confirmed — check the component source before assuming.
 |-----|---------|----------------|
 | `cf-accordion` | Container for collapsible content panels | |
 | `cf-accordion-item` | Individual accordion panel | |
-| `cf-alert` | Alert message with variants and dismissible option | |
+| `cf-alert` | Alert message with `status` (`info`, `error`, `warning`, `success`) and dismissible option | |
 | `cf-area-mark` | Filled area mark rendered inside `cf-chart` | `$data` |
 | `cf-aspect-ratio` | Maintains a fixed aspect ratio for its content | |
 | `cf-attachments-bar` | Displays pinned cells as a horizontal list of chips | |
@@ -114,7 +114,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-card` | Content container with header/content/footer (built-in 1rem padding) | |
 | `cf-cell-link` | Renders a link or cell as a clickable, draggable pill | |
 | `cf-cfc-authorship` | Shows trusted authorship state for CFC-labeled content | `$value`, `$author` |
-| `cf-cfc-label` | Renders the CFC label of a bound cell value | `$value` |
+| `cf-cfc-label` | Renders the CFC label of a bound cell value; `variant="badge"` shows a compact pill for whether an integrity atom matches the `atom`/`kind` filter | `$value` |
 | `cf-chart` | SVG charting container for line/area/bar/dot marks (see [cf-chart](#cf-chart)) | `$marks` (marks: `$data`) |
 | `cf-chat` | Chat container handling message flow and tool-call correlation | `$messages` |
 | `cf-chat-message` | Single chat message with markdown support | |
@@ -160,6 +160,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-message-input` | Input + send button combo for chat-style item entry; emits a synthetic (untrusted) `cf-send` event, so use `cf-submit-input` when the submit must authorize an owner-protected write | |
 | `cf-modal` | Accessible modal dialog with bottom-sheet presentation mode | `$open` |
 | `cf-oauth` | Generic OAuth authentication | `$auth` |
+| `cf-owner-view` | Sets a per-user presentation predicate from the runtime's acting principal and a stored creator attestation (see [owner view](#cf-owner-view)) | `$originator`, `$result` |
 | `cf-picker` | Carousel selection over cells with `[UI]` | `$items`, `$selectedIndex` |
 | `cf-piece` | Provides piece context to child components | |
 | `cf-plaid-link` | Plaid banking integration | `$auth` |
@@ -179,6 +180,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-secret-viewer` | Trusted UI for revealing secret strings | `$value` |
 | `cf-select` | Dropdown taking `{ label, value }` items — not `<option>` elements | `$value` |
 | `cf-separator` | Visual divider line between content sections | |
+| `cf-share-snapshot` | Native confirmation of an exact JSON snapshot and runtime-verified audience (see [snapshot sharing](#cf-share-snapshot)) | `$source`, `$recipient`, `$result` |
 | `cf-skeleton` | Animated loading placeholder | |
 | `cf-slider` | Range input slider | |
 | `cf-space-link` | Renders a space as a clickable navigation pill | |
@@ -449,6 +451,93 @@ See `packages/patterns/examples/ui-variants-demo.tsx` for a full example.
 > application-level conventions; the shell does not consume `fabUI`. A vended
 > `uiVariant()` helper for render paths outside `cf-render` is a planned
 > follow-up and does not exist yet.
+
+### Views a host draws itself
+
+A rendering is not the only thing a piece can offer. `[VIEWS]` is a single
+output key holding **named groups of facts and streams** for a host that draws
+with its own toolkit instead of rendering VDOM — a native application, say, or
+one built on a different renderer. It is a sibling concept to the variants
+above rather than a member of them: not a size, and not a shell slot.
+
+One key rather than one key per view is what keeps discovery cheap: a host
+learns what is on offer in one round, where probing well-known names one at a
+time would make the common case slow. Two different schemas carry that, and
+telling them apart is the thing to get right.
+
+- **The pattern's own result schema** names every group and everything in it.
+  A pattern declares `[VIEWS]` as the groups it offers — `{ inboxView:
+  InboxView }` — and the emitted schema carries each group by name, each
+  member's type, and each `Stream<T>`'s payload schema, which is where a host
+  reads the event contract from. Declaring the field `unknown` instead is a
+  compile error at the root of a result, for the same reason it is one under
+  `[UI]`: see [`unknown`](../concepts/types-and-schemas/unknown.md).
+- **A consumer's demand schema** is what that host reads with, and it is free
+  to ask for less. Below the root, a consumer may describe a group as
+  `unknown` and receive an opaque reference in place of the derived value —
+  which is how a host learns *which* groups are on offer without the runtime
+  computing any of them, and then reads for real only the one it will draw.
+
+```tsx
+import {
+  handler,
+  NAME,
+  pattern,
+  type Stream,
+  UI,
+  VIEWS,
+  type Writable,
+} from "commonfabric";
+
+interface ThreadRow {
+  at: number;
+  title: string;
+}
+
+interface InboxView {
+  threads: ThreadRow[];
+  forQuery: string;
+  setSearch: Stream<{ query: string }>;
+}
+
+const setSearch = handler<{ query: string }, { query: Writable<string> }>(
+  ({ query }, state) => state.query.set(query),
+);
+
+export default pattern<
+  { threads: ThreadRow[]; query: Writable<string> },
+  { [NAME]: string; [VIEWS]: { inboxView: InboxView } }
+>((state) => ({
+  [NAME]: "Inbox",
+  // The floor, reading the same values a host would draw itself.
+  [UI]: <div>{state.query}</div>,
+  // Every offered group, under one key.
+  [VIEWS]: {
+    inboxView: {
+      threads: state.threads,
+      forQuery: state.query,
+      setSearch: setSearch(state),
+    },
+  },
+}));
+```
+
+`pattern()` types `[VIEWS]` as an object and no further: what a group holds is
+the pattern's to declare and its consumer's to demand through a schema. Two
+properties of a group follow from who draws it.
+
+- **`[UI]` stays the floor.** A host that knows none of the offered groups —
+  or holds a schema the value does not satisfy — renders `[UI]`, so a piece
+  that offers a group exports a complete `[UI]` as well.
+- **A group carries facts, not renderings.** A timestamp beside any label it
+  also offers, a count beside any "show 40 earlier", a named tint rather than a
+  colour. A host that formats in its own idiom needs the fact; one that cannot
+  still has the label.
+
+A group is named output like any other, so nothing here needs a new mechanism:
+TypeScript checks it, `resultSchema` carries it — streams and their payload
+schemas included — and a member declared for one host under design reaches no
+other host, because a reader receives only what its own demand declares.
 
 ### The piece context menu
 
@@ -946,6 +1035,41 @@ const profileWish = wish({ query: "#profile" }); // resolves the viewer's profil
   static wrapper. Repro: `packages/patterns/scope-bug-computed-vnode-blank/`.
 
 ---
+
+## cf-owner-view
+
+`cf-owner-view` checks whether the runtime's authenticated principal matches
+the single root `represents-principal` attestation on `$originator`. It writes
+the result to the per-user boolean `$result` cell and renders no content of its
+own. A missing, unreadable, or conflicting attestation leaves the result false.
+The component does not use the selected `#profile`, which may represent a
+different persona. The predicate selects presentation; CFC labels govern reads.
+
+## cf-share-snapshot
+
+`cf-share-snapshot` reviews a copy of a source cell before releasing that copy
+to another user or space. Bind `$source` to the JSON value to review,
+`$recipient` to a live profile or space cell, and `$result` to a writable cell
+that will receive the released cell link. In pattern JSX, set `audienceKind` to
+`user` (the default) or `space`. The native HTML attribute is `audience-kind`.
+
+The authenticated host checks the source against its runtime read ceiling. When
+the host has no runtime-wide ceiling, the source must fit the confirming user's
+own `User` ceiling. This permits the default shell to share the user's private
+draft while refusing a source labeled only for another user.
+
+The host displays the exact snapshot and the audience verified by the runtime in
+a native modal dialog. Its disclosure and preview are fixed host UI. The user
+must confirm with a trusted browser gesture; a scripted click cannot publish.
+The source stays private, and future changes are not included in the copy. JSON
+values containing links are refused.
+
+Changing a binding, dismissing the dialog, or disconnecting the component
+invalidates its preview. The runtime refuses a commit when the source or
+verified audience changed after preparation. Once the released link is stored
+successfully, the component emits `cf-shared` with no payload. A consuming
+handler reads its bound result cell; the event does not carry source values or
+identity claims.
 
 ## CFC Authorship
 

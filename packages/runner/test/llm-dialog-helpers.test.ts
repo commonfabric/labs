@@ -769,8 +769,8 @@ Deno.test("executeToolCalls wraps denied, present-result, pin, and error results
   const runtime = {
     // The stub tx carries an inner `tx` like the real
     // IExtendedStorageTransaction: effect-completion marking keys its
-    // WeakMap on `tx.tx` (round-2 thread 18 — wrappers share the inner
-    // tx), so a bare `{}` would throw on the WeakMap set.
+    // WeakMap on `tx.tx` (wrappers share the inner tx), so a bare `{}` would
+    // throw on the WeakMap set.
     editWithRetry: (fn: (tx: unknown) => void) => {
       fn({ tx: {} });
       return true;
@@ -1115,8 +1115,8 @@ Deno.test("simplifySchemaForContext preserves items schema for arrays", () => {
 });
 
 Deno.test("simplifySchemaForContext preserves and simplifies prefixItems tuple slots", () => {
-  // CT-1895: prefixItems used to be dropped wholesale, leaving the LLM a bare
-  // { type: "array" } for tuple schemas.
+  // Tuple slots go through the same simplification as any subschema. Without
+  // them the LLM would see a bare `{ type: "array" }` for this schema.
   const schema: any = {
     type: "array",
     prefixItems: [
@@ -1133,9 +1133,8 @@ Deno.test("simplifySchemaForContext preserves and simplifies prefixItems tuple s
 });
 
 Deno.test("simplifySchemaForContext simplifies subschemas under not and additionalProperties", () => {
-  // Both are in the emitted keyword tier: `not` used to be dropped, and an
-  // object-valued additionalProperties used to be copied verbatim ($ref and
-  // all). Both now go through the same simplification as any subschema.
+  // Both are in the emitted keyword tier, and both go through the same
+  // simplification as any subschema.
   const schema: any = {
     type: "object",
     not: { type: "string", $ref: "#/$defs/Foo" },
@@ -1190,7 +1189,7 @@ Deno.test("simplifySchemaForContext applies the depth cap inside prefixItems", (
 });
 
 Deno.test("simplifySchemaForContext handles Stream with nested detail structure", () => {
-  // This is the exact case from the bug report: Stream<{ detail: { value: string }}>
+  // The `editContent` property is a `Stream<{ detail: { value: string } }>`.
   const schema: any = {
     type: "object",
     properties: {

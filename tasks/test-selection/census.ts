@@ -29,6 +29,7 @@ import {
 } from "./manifest.ts";
 import type { SelectionReason } from "./plan.ts";
 import { UNMEASURED_COST_SECONDS, VALUE_FLOOR } from "./policy.ts";
+import { percentile90 } from "./score.ts";
 
 /** How a stand-in's name is built, and what recognizes one again. */
 const UNRECORDED = "unrecorded ";
@@ -65,18 +66,22 @@ export function isStandIn(entry: ManifestEntry): boolean {
 }
 
 /**
- * The middle value of a set of numbers, or nothing where the set is
- * empty. The middle rather than the mean because measured test costs are
- * extremely skewed: a tenth of them hold nine tenths of the time, so a
- * mean says what the slowest few cost rather than what a test costs.
+ * What one unit nothing has measured is charged, from what the suite's
+ * measured units cost, or nothing where the suite has none: the larger of
+ * their mean and their ninetieth percentile.
+ *
+ * Both readings, because a lane holding one such unit is packed against a
+ * single figure and a lane holding twenty against their total, and
+ * neither reading covers the other's case. Which of the two is larger is
+ * decided by the suite's tail. `docs/specs/test-selection.md` carries the
+ * argument, beside what a measured test's own cost is read at.
  */
-function median(values: readonly number[]): number | undefined {
+function standInCost(values: readonly number[]): number | undefined {
   if (values.length === 0) return undefined;
   const sorted = [...values].sort((a, b) => a - b);
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 === 1
-    ? sorted[middle]!
-    : (sorted[middle - 1]! + sorted[middle]!) / 2;
+  const mean = sorted.reduce((total, one) => total + one, 0) / sorted.length;
+  const p90 = percentile90(sorted, sorted.length);
+  return Math.max(mean, p90);
 }
 
 /**
@@ -84,13 +89,14 @@ function median(values: readonly number[]): number | undefined {
  * only for tests that ran, so a unit with none is new or renamed, and
  * both have to run.
  *
- * It is charged what the middle unit of its own suite costs. The suites
+ * It is charged from what its own suite's units cost, since the suites
  * are orders of magnitude apart — a unit test is milliseconds and a
  * pattern integration test is tens of seconds — so one figure for all of
  * them would misjudge most of them, and a suite's own units are the best
- * guess there is at what a new one will take. Charging nothing, which is
- * what a stand-in used to cost, made the packer treat every new test as
- * free and put the whole of a new suite in the first lane it offered.
+ * evidence there is about what a new one will take.
+ *
+ * `standInCost` is what that comes to. A suite with nothing measured at
+ * all has no such evidence and takes `UNMEASURED_COST_SECONDS`.
  */
 export function standIn(
   suite: Suite,
@@ -101,7 +107,7 @@ export function standIn(
     test: unknownIdentity(suite, unit),
     suite: suite.id,
     unit,
-    cost: median(suiteCosts) ?? UNMEASURED_COST_SECONDS,
+    cost: standInCost(suiteCosts) ?? UNMEASURED_COST_SECONDS,
     score: VALUE_FLOOR,
     inputs: { catches: 0, sources: 0, churn: 0 },
     flakeRate: 0,

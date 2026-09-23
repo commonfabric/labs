@@ -3005,6 +3005,7 @@ interface CFFieldElement extends CFHTMLElement {}
 interface CFTextElement extends CFHTMLElement {}
 interface CFAvatarElement extends CFHTMLElement {}
 interface CFProfileBadgeElement extends CFHTMLElement {}
+interface CFShareSnapshotElement extends CFHTMLElement {}
 interface CFBadgeElement extends CFHTMLElement {}
 interface CFChipElement extends CFHTMLElement {}
 interface CFEmptyStateElement extends CFHTMLElement {}
@@ -3610,6 +3611,8 @@ interface CFCFCLabelAttributes<T> extends CFHTMLAttributes<T> {
   "value"?: unknown;
   "atom"?: string;
   "kind"?: string;
+  "variant"?: "full" | "badge";
+  "text"?: string;
 }
 
 interface CFCFCAuthorshipAttributes<T> extends CFHTMLAttributes<T> {
@@ -4316,6 +4319,29 @@ interface CFProfileBadgeAttributes<T> extends CFHTMLAttributes<T> {
    * as properties, so a lower-cased name would miss the reactive property.)
    */
   "noNavigate"?: boolean;
+}
+
+interface CFShareSnapshotAttributes<T> extends CFHTMLAttributes<T> {
+  /** Source JSON cell reviewed by the trusted host. */
+  "$source"?: CellLike<unknown>;
+  /** Runtime-verified profile or space audience. */
+  "$recipient"?: CellLike<unknown>;
+  /** Writable destination receiving the released cell link. */
+  "$result"?: CellLike<unknown>;
+  /** Visitor history receiving references from the reviewed copy. */
+  "$recommended"?: CellLike<unknown>;
+  /** Creator inbox receiving references from the reviewed copy. */
+  "$received"?: CellLike<unknown>;
+  /** Matches the element property; JSX props are assigned as properties. */
+  audienceKind?: "user" | "space";
+  "oncf-shared"?: EventHandler<{}>;
+}
+
+interface CFOwnerViewAttributes<T> extends CFHTMLAttributes<T> {
+  /** Persisted creator identity whose attested owner is checked by the host. */
+  "$originator"?: CellLike<unknown>;
+  /** Per-user presentation result. */
+  "$result"?: CellLike<boolean | null>;
 }
 
 interface CFChipAttributes<T> extends CFHTMLAttributes<T> {
@@ -5360,6 +5386,14 @@ declare global {
       "cf-profile-badge": CFDOM.DetailedHTMLProps<
         CFProfileBadgeAttributes<CFProfileBadgeElement>,
         CFProfileBadgeElement
+      >;
+      "cf-share-snapshot": CFDOM.DetailedHTMLProps<
+        CFShareSnapshotAttributes<CFShareSnapshotElement>,
+        CFShareSnapshotElement
+      >;
+      "cf-owner-view": CFDOM.DetailedHTMLProps<
+        CFOwnerViewAttributes<CFHTMLElement>,
+        CFHTMLElement
       >;
       "cf-chip": CFDOM.DetailedHTMLProps<
         CFChipAttributes<CFChipElement>,

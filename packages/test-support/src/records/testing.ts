@@ -18,8 +18,9 @@ import { RECORDS_DIR_VARIABLE } from "./paths.ts";
  *
  * The variable it sets is the whole process's, so a test file calling this
  * runs alone. Under a runner that puts several test files on threads of one
- * process — `deno test --parallel`, which `packages/cli/test/run-tests.ts`
- * uses — the file belongs on that runner's serial list.
+ * process — `deno test --parallel`, which `packages/cli` runs its tests
+ * under — the file belongs among the ones that runner's `--serial` option
+ * names.
  */
 export async function recordsSpooledBy(
   body: () => Promise<unknown>,

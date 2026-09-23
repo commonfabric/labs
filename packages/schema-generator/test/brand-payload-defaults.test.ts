@@ -194,6 +194,36 @@ describe("brand-payload recovery on the expanded path (no typeNode)", () => {
     expect(schema.default).toBe("a");
   });
 
+  for (
+    const empty of ["{}", "Record<string, never>", "Record<PropertyKey, never>"]
+  ) {
+    it(`recovers an empty object default from \`Default<${empty}>\` without a warning`, async () => {
+      // The plain arm of such a `Default` has no properties, which is also
+      // what a brand arm looks like once its symbol key is set aside. Only
+      // the arm carrying the marker is one.
+      const { type, checker } = await getTypeFromCode(
+        `${FAITHFUL_PRELUDE}
+         interface S {
+           alone: Default<${empty}>;
+           beside: { name?: string } | Default<${empty}>;
+         }`,
+        "S",
+      );
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      const schemaOf = (name: string) =>
+        transformer.generateSchema(
+          checker.getTypeOfSymbol(type.getProperty(name)!),
+          checker,
+          undefined,
+          { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
+        ) as Record<string, unknown>;
+
+      expect(schemaOf("alone").default).toEqual({});
+      expect(schemaOf("beside").default).toEqual({});
+      expect(diagnostics).toEqual([]);
+    });
+  }
+
   it("bails (no default) when two distinct defaults disagree in one union", async () => {
     // `Default<"a">` and `Default<"b">` each contribute a branded member with
     // a DIFFERENT payload — ambiguous, must never resolve to a guess.

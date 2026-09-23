@@ -94,6 +94,7 @@ import {
   getCellValue,
   getPieceView,
   inspectPiece,
+  LinkedPieceRefusal,
   linkPieces,
   linkSqliteDiskSource,
   LinkValidationError,
@@ -621,6 +622,7 @@ Source Origin: ${pieceData.patternRef?.source.origin ?? "<unknown>"}
 export function renderPieceSummaries(
   pieces: Array<{
     id: string;
+    reference: string;
     name?: string;
     patternRef?: PiecePatternRef;
     error?: string;
@@ -631,6 +633,7 @@ export function renderPieceSummaries(
     render(
       pieces.map((piece) => ({
         id: piece.id,
+        reference: piece.reference,
         name: piece.name ?? null,
         patternRef: piece.patternRef ?? null,
       })),
@@ -640,11 +643,12 @@ export function renderPieceSummaries(
   }
 
   const rows = [
-    ["ID", "NAME", "PATTERN"],
+    ["ID", "NAME", "PATTERN", "REFERENCE"],
     ...pieces.map((piece) => [
       piece.id,
       piece.error ? `<error: ${piece.error}>` : (piece.name ?? "<unnamed>"),
       piece.error ? "" : formatPatternRef(piece.patternRef),
+      piece.reference,
     ]),
   ];
   if (rows.length > 1) render(Table.from(rows).toString());
@@ -789,7 +793,9 @@ export function verbInputErrorReport(
   return {
     message: error.message,
     hint: cliText(
-      `TIP: Run 'cf piece verbs --cell ${opts.piece} --json' to see each verb's expected input.`,
+      `TIP: Run 'cf piece verbs --cell ${
+        error.linkedPiece ?? opts.piece
+      } --json' to see each verb's expected input.`,
     ),
   };
 }
@@ -1810,7 +1816,11 @@ argument is present.
 ADDRESS: The target is best written before the callable name, as a reference
 (it begins with "/"): cf ${spelling} /tracker addItem '{"title":"Milk"}'. A
 reference names the piece by handle or by slug, and may carry the space
-(//my-space/tracker). --cell takes the same word when a flag suits better.`,
+(//my-space/tracker). --cell takes the same word when a flag suits better.
+A path on the reference is followed through the link stored there, and the
+call goes to the piece that link names, in whichever space it names:
+cf ${spelling} //my-space/of:fid1:abc.../inbox/piece receive '{...}'. A path
+with no link to a piece at it is refused ("names no piece").`,
     )
     .usage(`${pieceUsage} [address] <callable> [input]`)
     .example(
@@ -2387,6 +2397,10 @@ export const piece = targetOptions(
     `Create a piece and take "project-notes" from whatever it names now.`,
   )
   .arguments("<main:string>")
+  .option(
+    "--request-key <key:string>",
+    "Reuse a serving deployment's creation request after an uncertain result.",
+  )
   .option("--no-start", "Only set up the piece without starting it")
   .option(
     "--main-export <export:string>",
@@ -2607,6 +2621,12 @@ command refuses, since the served update takes no origin.`,
     `Make "${EX_PIECE}" follow the deployment's profile pattern.`,
   )
   .option("-c,--cell, --piece <cell:string>", PIECE_OPTION_HELP)
+  .option(
+    "--dangerously-allow-incompatible-schema",
+    "Accept the reviewed incompatibility, including a current pattern " +
+      "that cannot be loaded. Stored-input validation and " +
+      "source-transition protections still apply.",
+  )
   .arguments("<origin:string>")
   .action(async (options, origin) => {
     setQuietMode(!!options.quiet);
@@ -3620,11 +3640,14 @@ export async function callFromCommand(
   }
   try {
     const invocation = pieceCallInvocation(tail);
+    // A path on the target is kept rather than refused: the dispatch follows
+    // the link stored there to the piece it names, and refuses a path that
+    // leads to none.
     const pieceConfig = parsePieceOptions({
       ...options,
       ...(cell !== undefined && { cell }),
       json: invocation.jsonOutput,
-    });
+    }, { acceptsPath: true });
     const result = await boundedSettlement(
       (deps.executePieceCallable ?? executePieceCallable)(
         pieceConfig,
@@ -3650,6 +3673,11 @@ export async function callFromCommand(
           ),
         },
       ).catch((error) => {
+        if (error instanceof LinkedPieceRefusal) {
+          observer.finish("failed");
+          suppressDeferredSkewNote();
+          exitWithDataError({ message: error.message }, dataErrorSinks);
+        }
         if (error instanceof UnknownPieceVerbError) {
           observer.finish("failed");
           suppressDeferredSkewNote();
@@ -3672,7 +3700,7 @@ export async function callFromCommand(
       observer,
       result,
       callableName,
-      pieceConfig.piece,
+      result.resolved?.linkedPiece ?? pieceConfig.piece,
       deps,
       { detached: waitControl.mode === "commit", invocation: identity },
     );
@@ -4872,6 +4900,9 @@ export async function newPieceFromCommand(
       start: options.start,
       slug: options.slug,
       force: !!options.force,
+      ...(options.requestKey === undefined
+        ? {}
+        : { requestKey: options.requestKey }),
     },
   );
   render(pieceId);
@@ -5073,16 +5104,32 @@ export async function followPieceSourceAction(
   const result = await (deps.followPieceSource ?? followPieceSource)(
     config,
     trimmed,
+    {
+      dangerouslyAllowIncompatibleSchema:
+        options.dangerouslyAllowIncompatibleSchema,
+    },
   );
   if (result.status === "incompatible") {
     (deps.printError ?? console.error)(
       `The source ${trimmed} serves now cannot replace what ${config.piece} ` +
         `runs: ${result.message}`,
     );
+    if (!options.dangerouslyAllowIncompatibleSchema) {
+      (deps.printError ?? console.error)(
+        "Review the incompatibility before retrying with " +
+          "--dangerously-allow-incompatible-schema. Existing links may no " +
+          "longer fit the new pattern.",
+      );
+    }
     (deps.setExitCode ?? ((code: number) => {
       Deno.exitCode = code;
     }))(1);
     return;
+  }
+  if (result.acceptedIncompatibility !== undefined) {
+    (deps.render ?? render)(
+      `Accepted incompatibility: ${result.acceptedIncompatibility}`,
+    );
   }
   (deps.render ?? render)(`${config.piece} now follows ${trimmed}`);
   if (result.executionWarning !== undefined) {

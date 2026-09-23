@@ -3,17 +3,13 @@ import { expect } from "@std/expect";
 import { labelResultSchema } from "../src/builtins/sqlite-builtins.ts";
 
 describe("CFC sqlite aggregate column integrity", () => {
-  // Regression guard for aggregate/null-origin column integrity (CT-1668 /
-  // W2.17).
-  //
-  // A null-origin result column (aggregate, expression, literal) inherited the
-  // runtime's mergeLabel union over every labeled db column — for
-  // confidentiality that is a sound over-approximation, but for INTEGRITY it
-  // over-claims: a COUNT(*) would claim an integrity atom held by a single
-  // column. §8.17.1 requires a class-aware meet (never union) for integrity;
-  // with propagation classes still pending, the conservative result is empty
-  // integrity (an aggregate is a new computed value with no inherited
-  // evidence).
+  // A null-origin result column (aggregate, expression, literal) takes the
+  // confidentiality union over every labeled db column, which is a sound
+  // over-approximation. For INTEGRITY the same union over-claims: a COUNT(*)
+  // would claim an integrity atom held by a single column. §8.17.1 requires a
+  // class-aware meet (never union) for integrity; with propagation classes
+  // still pending, the conservative result is empty integrity (an aggregate
+  // is a new computed value with no inherited evidence).
 
   it("gives a null-origin column the confidentiality union but no integrity", () => {
     // deno-lint-ignore no-explicit-any

@@ -13,7 +13,7 @@
  *
  * This module imports nothing, so that any module can import it without
  * creating a circular dependency. The classes themselves import it, which is
- * why the list of them is in `index.ts` and not here.
+ * why the set of them, and what derives from it, is in `impl.ts` and not here.
  */
 
 /**

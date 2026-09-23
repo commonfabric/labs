@@ -43,6 +43,7 @@ import {
   comparableEntityHash,
   fabricRuntimeObservations,
 } from "../fabric-observations.ts";
+import { admitsFabricReference } from "../foreign-spaces.ts";
 import { defineOwnEntry } from "../handle-table.ts";
 import {
   dedupedObservedOutputs,
@@ -97,14 +98,19 @@ export interface RunPatternToolSuccessOutput {
   /** Canonical LLM-friendly link to the piece's result cell. */
   resultRef: string;
 
+  /** Declared pending read in the captured root; omitted if the fit refuses it. */
+  pending?: boolean;
+
+  /** Declared failure in the captured root; omitted if the fit refuses it. */
+  hasError?: boolean;
+
   /**
    * What the release boundary decided about this call's own result: released,
    * observed, or withheld, with the sink and ceiling it was fitted against
    * and what the fit refused. Artifact-only, like `releaseObservation`: the
    * prompt loop strips it from the model-facing rendering and appends it to
    * the run's policy trace, where a decision a label drove sits beside the
-   * decisions authority drove. Absent on a run that asked for no values,
-   * since nothing was measured.
+   * decisions authority drove. Every captured result is measured for status.
    */
   releaseDecision?: HarnessReleaseDecision;
 
@@ -113,8 +119,7 @@ export interface RunPatternToolSuccessOutput {
    * not reject it on. Artifact-only, like the other fields the prompt loop
    * strips: the values went out, so the model has nothing to act on, while an
    * operator staging the ladder has the population that raising it would
-   * start withholding. Absent, like `policyRefusal`, on a run that asked for
-   * no values, since nothing was measured.
+   * start withholding.
    */
   releaseObservation?: HarnessPolicyRefusal;
 
@@ -204,12 +209,8 @@ export interface RunPatternToolSuccessOutput {
   rawCauseMessage?: string;
 
   /**
-   * What the outputs of the patterns this run materialized say about the
-   * reads behind them: a failure an output reports, and an output that holds
-   * no rows. Present only when there is something to say, and a DISCLOSURE
-   * rather than a refusal — the run succeeded, and this is the reason to
-   * look. `run-pattern-output-concerns.ts` carries why no text travels with
-   * one.
+   * Best-effort concerns from declared top-level outputs of readable retained
+   * instances. Policy refusals suppress pending concerns; absence is inconclusive.
    */
   outputConcerns?: readonly RunPatternOutputConcern[];
 }
@@ -219,12 +220,15 @@ export interface RunPatternToolSuccessOutput {
  * applied. The tool returns before the session flush sends it to the index,
  * so this report records intent at tool return, never an acknowledgment.
  *
- * Every field is pinned to a fixed set — a status, a reason and a boolean, with
- * `message` drawn from `PATTERN_PUBLICATION_MESSAGES` and never composed. See
- * `pattern-index/publish-render-gate.ts` for why nothing derived from the
- * rendered DOM may join them.
+ * The identity comes from the compiled source. The verdict fields are pinned
+ * to fixed sets, with `message` drawn from `PATTERN_PUBLICATION_MESSAGES` and
+ * never composed. See `pattern-index/publish-render-gate.ts` for why nothing
+ * derived from the rendered DOM may join them.
  */
 export interface RunPatternPublicationReport {
+  /** The exact entry identity staged by this attempt, retained after revision. */
+  patternId: string;
+
   status: "queued";
   reason: PatternPublicationReason;
   message: string;
@@ -345,7 +349,7 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
   toolId: "run_pattern",
   title: "Run Pattern",
   description:
-    `Compile and run a Common Fabric pattern in the configured space, returning a reference to its live result cell. Give it either your own sourceText or the patternId of a pattern search_patterns found. Source you write imports the runtime from "${RUNTIME_MODULE_SPECIFIER}" and from no other module — every pattern opens with a line of the form ${RUNTIME_MODULE_IMPORT_LINE} — and no package named after the product resolves. When the run's session reads under a confidentiality ceiling, every db.query result must be declared per session (PerSession<> on the result type, or the query's { scope: "session" } option); a query left space-scoped is refused under a ceiling rather than read. Bound every query's rows with a LIMIT — a few hundred is a sensible ceiling for a view — because every result row is materialized as its own document in the space, so an unbounded query over a large store writes a document per row it returns, and a re-run writes again only the rows that changed, except that a labeled result keys its rows on position and so also rewrites the rows a change displaced, and re-keys every row when the query's projection or the handle's tables change; an aggregate returning one row per group — count(*), sum(), a GROUP BY — is bounded by its own shape and needs no LIMIT. A pattern composing another passes on what the composed one reports: expose its error branch and its row count under your own result and render them, or the run answers over figures derived from a read that failed, and the result carries an outputConcerns entry naming the output you did not read. A query over a served store is still in flight when this call answers, so a sound read returns no rows here and lands them on the piece; the absent error is what says it is sound. The piece stays out of the space's piece list; assign_slug names and lists it when it deserves a public address.`,
+    `Compile and run a Common Fabric pattern in the configured space, returning a reference to its live result cell. Give it either your own sourceText or the patternId of a pattern search_patterns found. Import runtime APIs from "${RUNTIME_MODULE_SPECIFIER}" and published components from "cf:pattern:<patternId>". A runtime import has the form ${RUNTIME_MODULE_IMPORT_LINE}; no package named after the product resolves. The run's confidentiality ceiling bounds cell reads. Shared db.query results retain complete labeled row sets and withhold the array, including its row count, when the ceiling does not admit every row. Declare query results per session (PerSession<> on the result type, or the query's { scope: "session" } option) to filter rows under the runtime's ceiling at the query boundary. Bound every query's rows with a LIMIT — a few hundred is a sensible ceiling for a view — because every result row is materialized as its own document in the space, so an unbounded query over a large store writes a document per row it returns, and a re-run writes again only the rows that changed, except that a labeled result keys its rows on position and so also rewrites the rows a change displaced, and re-keys every row when the query's projection or the handle's tables change; an aggregate returning one row per group — count(*), sum(), a GROUP BY — is bounded by its own shape and needs no LIMIT. A pattern composing another passes on what the composed one reports: expose its error branch and its row count under your own result and render them, or the run answers over figures derived from a read that failed, and the result carries an outputConcerns entry naming the output you did not read. A query over a served store may still be pending when this call answers. Pending counts and rows are placeholders, not data. Expose pending along with the error branch and counts. The host returns pending and hasError from the captured declared top-level outputs when the release fit admits them. Reread the held resultRef if it is pending; do not author a replacement page to wait for data. If a settled filtered result is empty, compare it with a count without the uncertain predicate and present both counts, naming the filter; an empty subset does not mean the source is empty. The piece stays out of the space's piece list; assign_slug names and lists it when it deserves a public address.`,
   effectClass: "side-effect",
   inputSchema: RUN_PATTERN_INPUT_SCHEMA,
   outputSchema: {
@@ -355,6 +359,8 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
         outputId: { type: "string" },
         status: { type: "string", enum: ["ok"] },
         resultRef: { type: "string" },
+        pending: { type: "boolean" },
+        hasError: { type: "boolean" },
         resultRefSchema: {},
         pieceId: { type: "string" },
         value: {},
@@ -365,6 +371,7 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
         patternPublication: {
           type: "object",
           properties: {
+            patternId: { type: "string" },
             status: {
               type: "string",
               enum: ["queued"],
@@ -385,6 +392,7 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
             syntheticInputsComplete: { type: "boolean" },
           },
           required: [
+            "patternId",
             "status",
             "reason",
             "message",
@@ -400,7 +408,7 @@ export const runPatternToolDescriptor: HarnessToolDescriptor = {
             properties: {
               concern: {
                 type: "string",
-                enum: ["error-branch", "no-rows"],
+                enum: ["error-branch", "no-rows", "pending"],
               },
               key: { type: "string" },
               patternId: { type: "string" },
@@ -495,10 +503,8 @@ const RUN_PATTERN_ANSWER_SINK = "run_pattern";
  *
  * What crosses the sink is a VALUE. The result reference the tool returns is
  * an opaque handle: it names the result without carrying it, and holding it
- * discloses nothing (AH-CFC-18), so the ceiling is consulted only for a call
- * that asks for values through `resultSchema`, and what a refusal withholds
- * is those values and never the reference. The model composes work out of
- * names it cannot read; that is what lets it route data it never sees.
+ * discloses nothing (AH-CFC-18). The ceiling gates the host's status booleans
+ * and the values a `resultSchema` asks for, never the reference.
  *
  * Empty rather than absent, and the difference is the point. A sink absent
  * from the inventory goes ungated because a deployment has not decided about
@@ -1020,11 +1026,11 @@ export const runPatternTool: HarnessToolDefinition<
     // Whole-string LLM-friendly links become live cell references; the
     // prompt loop has already resolved any handle tokens, so the strings
     // seen here carry canonical addresses. Non-link strings and non-strings
-    // pass through as plain JSON. A link that resolves outside the session's
-    // configured space is refused before anything is created: the session's
-    // authority ends at its own space. So is a value carrying a sealed
-    // opaque link anywhere within it, which is a redaction the model copied
-    // back out of an earlier result rather than a reference to anything.
+    // pass through as plain JSON. A link outside the local and
+    // operator-admitted spaces is refused before anything is created. So is a
+    // value carrying a sealed opaque link anywhere within it, which is a
+    // redaction the model copied back out of an earlier result rather than a
+    // reference to anything.
     let pieceInput: Record<string, unknown> | undefined;
     const liveCellInputs: Array<{ key: string; cell: Cell<unknown> }> = [];
     const plainInputs: Array<{ key: string; value: unknown }> = [];
@@ -1052,10 +1058,12 @@ export const runPatternTool: HarnessToolDefinition<
             // Not a parseable link after all — keep the plain string.
           }
           if (link !== undefined) {
-            if (link.space !== space) {
+            if (
+              !admitsFabricReference(link.space, space, session.foreignSpaces)
+            ) {
               return errorOutput(
                 "error",
-                `run_pattern input "${key}" reference targets another space; only references into the configured session space are allowed`,
+                `run_pattern input "${key}" reference targets another space; the operator must admit its DID and host with --fabric-foreign-spaces`,
               );
             }
             const linkHash = comparableEntityHash(link.id);
@@ -1501,16 +1509,11 @@ export const runPatternTool: HarnessToolDefinition<
     // that read rather than a second one: a result the reactive graph
     // advances between two reads would otherwise let a later clean state
     // answer for an earlier labeled one. The read is host-side and discloses
-    // nothing by itself. What the answer discloses is the VALUES a
-    // `resultSchema` asks for, and those are an egress: they are read by a
-    // model, outside every space the fabric labels. A pattern's own egresses
-    // are sink requests the commit boundary gates, and this one records
-    // none, so it is measured here, and only when values were asked for —
-    // the transaction's consumed join, the result document and every
-    // computed cell the result links to, against the ceiling a model's
-    // context carries. The result reference goes out either way: it names
-    // the result without carrying it, and a name is not a release
-    // (AH-CFC-18). Nothing is committed.
+    // nothing by itself. Status booleans and any `resultSchema` values are
+    // model-facing, so the transaction's consumed join is fitted against
+    // the ceiling a model's context carries. The result reference goes out
+    // either way: it names the result without carrying it, and a name is not
+    // a release (AH-CFC-18). Nothing is committed.
     //
     // A second transaction reads the piece's argument document and the
     // caller's own live inputs, and only that transaction does. Every input
@@ -1561,14 +1564,12 @@ export const runPatternTool: HarnessToolDefinition<
         }
         // Copied before the abort below, which clears them.
         attributionTraces = [...inputsTx.getCfcState().dereferenceTraces];
-        return parsedResultSchema === undefined
-          ? undefined
-          : describeSinkReleaseRefusal(
-            releaseTx,
-            inputsTx,
-            RUN_PATTERN_ANSWER_SINK,
-            RUN_PATTERN_ANSWER_CEILING,
-          );
+        return describeSinkReleaseRefusal(
+          releaseTx,
+          inputsTx,
+          RUN_PATTERN_ANSWER_SINK,
+          RUN_PATTERN_ANSWER_CEILING,
+        );
       } finally {
         releaseTx.abort("run_pattern release measurement");
         inputsTx.abort("run_pattern release attribution");
@@ -1607,17 +1608,14 @@ export const runPatternTool: HarnessToolDefinition<
     const measured = withheld ?? releaseObservation;
     /**
      * The same measurement said as a decision, which is what reaches the
-     * run's policy trace. Present exactly where a measurement happened — a
-     * call that asked for no values measured nothing, and a decision about a
-     * boundary nothing crossed would be a record of an event that did not
-     * occur.
+     * run's policy trace, including a host-initiated status fit.
      *
      * The ceiling is stated whichever way the decision went. A released
      * answer and a withheld one differ in what the same ceiling admitted, and
      * an operator reading only the refusals would be reading the ladder's
      * effect without its terms.
      */
-    releaseDecision = parsedResultSchema === undefined ? undefined : {
+    releaseDecision = {
       reasonCode: withheld !== undefined
         ? "cfc_release_withheld"
         : releaseObservation !== undefined
@@ -1747,10 +1745,10 @@ export const runPatternTool: HarnessToolDefinition<
         };
       }
     }
-    // What every pattern this run materialized says about its own reads,
-    // read off each one's result rather than off the single value this call
-    // answers with. A composed reader exposes its failure and its emptiness
-    // as outputs, and a pattern composing it need pass neither on — which is
+    // The run's exact captured result seeds the report alongside the
+    // materialized results retained in the instantiation window. A composed
+    // reader exposes its failure, pending state, and emptiness
+    // as outputs, and a pattern composing it need not pass them on — which is
     // how a run answers `ok` over a result of zeros. The reads are
     // host-side and nothing they find travels as text, so they are not part
     // of the release measurement above and are taken on a transaction of
@@ -1766,7 +1764,8 @@ export const runPatternTool: HarnessToolDefinition<
     // same output many times, and `dedupedObservedOutputs` states each once.
     const ownCellHash = comparableEntityHash(piece.id);
     const concernsTx = pieces.runtime.edit();
-    const found: ObservedOutput[] = [];
+    const capturedOutputs = observedOutputsIn(rawValue, pattern.resultSchema);
+    const found: ObservedOutput[] = [...capturedOutputs];
     const scan = (async () => {
       for (
         const record of session.instantiations?.since(instantiationStart) ?? []
@@ -2015,6 +2014,7 @@ export const runPatternTool: HarnessToolDefinition<
             reason: "recorded-automatically" as const,
           };
         publication = {
+          patternId: entryIdentity,
           status: "queued",
           reason: publicationVerdict.reason,
           message: PATTERN_PUBLICATION_MESSAGES[publicationVerdict.reason],
@@ -2061,7 +2061,11 @@ export const runPatternTool: HarnessToolDefinition<
         }
       }
     }
-    const outputConcerns = observedOutputs.map((one) => one.concern);
+    const refusedValues = parsedResultSchema !== undefined &&
+      withheld !== undefined;
+    const outputConcerns = observedOutputs.flatMap(({ concern }) =>
+      refusedValues && concern.concern === "pending" ? [] : [concern]
+    );
     const retainedCauses = [
       withheldRefusal?.reason,
       probeThrown,
@@ -2075,7 +2079,17 @@ export const runPatternTool: HarnessToolDefinition<
       resultRef,
       resultRefSchema: pattern.resultSchema,
       pieceId: piece.id,
-      ...(withheld !== undefined
+      ...(withheld === undefined
+        ? {
+          pending: capturedOutputs.some(({ concern }) =>
+            concern.concern === "pending"
+          ),
+          hasError: capturedOutputs.some(({ concern }) =>
+            concern.concern === "error-branch"
+          ),
+        }
+        : {}),
+      ...(refusedValues
         ? {
           valueError: policyRefusalMessage(withheld, "release"),
           policyRefusal: withheld,

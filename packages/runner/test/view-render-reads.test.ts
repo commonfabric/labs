@@ -30,7 +30,9 @@ describe("view render reads", () => {
         type: "object",
         properties: { label: { type: "string" } },
       });
-      const event = runtime.getCell(space, "click event", undefined);
+      const event = runtime.getCell<unknown>(space, "click event", {
+        asCell: ["stream"],
+      });
       const root = runtime.getCell(space, "view", undefined);
       await runtime.editWithRetry((tx) => {
         draft.withTx(tx).set("text");
@@ -38,7 +40,6 @@ describe("view render reads", () => {
         label.withTx(tx).set("visible");
         payloadLabel.withTx(tx).set("payload only");
         payload.withTx(tx).set({ label: payloadLabel });
-        event.withTx(tx).set({ $stream: true });
         root.withTx(tx).set({
           $UI: {
             type: "vnode",

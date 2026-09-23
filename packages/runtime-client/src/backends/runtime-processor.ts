@@ -1,9 +1,9 @@
 import type { JSONSchema } from "@commonfabric/api";
 import {
   cloneIfNecessary,
+  debugStr,
   fabricFromConvertibleJsValue,
   type FabricValue,
-  toLongQuotedDebugString,
   toStructuredDebugValue,
 } from "@commonfabric/data-model";
 import { newDefaultJsonCodecEngine } from "@commonfabric/data-model/codecs";
@@ -18,6 +18,7 @@ import {
   normalizeRenderDeclassificationPolicy,
   type RenderConfidentialityCeiling,
   type RenderDeclassificationPolicy,
+  type SpaceAccessProvider,
   WorkerReconciler,
 } from "@commonfabric/html/worker";
 import { DID, Identity, type Session } from "@commonfabric/identity";
@@ -26,6 +27,7 @@ import type { Program } from "@commonfabric/js-compiler";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { setLLMUrl } from "@commonfabric/llm";
 import { type ACL, isACLUser, isCapability } from "@commonfabric/memory/acl";
+import type { MemorySpace } from "@commonfabric/memory/interface";
 import {
   dbNeedsColumnProvenance,
   eventAttentionEntryKey,
@@ -89,11 +91,17 @@ import {
   cfcLabelViewForCell,
   createRenderConfidentialityResolver,
   createRuntimeSpaceMembershipProvider,
+  markRendererTrustedEvent,
   redactCaveatSourcesForDisplay,
   type RenderConfidentialityResolver,
   type SpaceMembershipProvider,
   stripSigilCfcLabelViews,
 } from "@commonfabric/runner/cfc";
+import {
+  commitSnapshotShare,
+  prepareSnapshotShare,
+  type SnapshotShareConsent,
+} from "@commonfabric/runner/cfc/share-snapshot";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
 import {
   NameSchema,
@@ -119,6 +127,7 @@ import {
 } from "@commonfabric/utils/types";
 
 import { postToClient } from "./post-to-client.ts";
+import { preloadProfiles } from "./preload-profiles.ts";
 import {
   postContextualRuntimeError,
   runtimeErrorPost,
@@ -146,6 +155,7 @@ import {
   type CellInitializeRequest,
   type CellPullRequest,
   type CellPushRequest,
+  type CellRef,
   type CellResolveAsCellRequest,
   CellResponse,
   type CellSendRequest,
@@ -159,6 +169,7 @@ import {
   type EnsureHomePatternRunningRequest,
   type EventAttentionListResponse,
   type EventAttentionResolveResponse,
+  type EventIntentOutcomeNotification,
   type EventNeedsAttentionNotification,
   type GetActionRunTraceRequest,
   type GetCellRequest,
@@ -232,6 +243,9 @@ import {
   type SlugReferenceResponse,
   type SlugResolveRequest,
   type SlugResponse,
+  type SnapshotShareCommitRequest,
+  type SnapshotSharePrepareRequest,
+  type SnapshotSharePreview,
   type SpaceAclResponse,
   type SpaceGetAclRequest,
   type SpaceRemoveAclEntryRequest,
@@ -260,14 +274,26 @@ import {
 } from "@/shared/security-context.ts";
 import { cellRefToKey, describeFailure } from "@/shared/utils.ts";
 
-/** Subscribe the worker bridge to complete terminal-attention outcomes. Keeping
+/** Subscribe the worker bridge to attention and refused-admission outcomes. Keeping
  * the filter and wire projection here makes the host boundary independently
  * testable without booting a worker runtime. */
 export function subscribeEventAttentionNotifications(
   runtime: Pick<Runtime, "subscribeEventIntentOutcomes">,
   post: (notification: EventNeedsAttentionNotification) => void = postToClient,
+  postRefusal: (notification: EventIntentOutcomeNotification) => void =
+    postToClient,
 ): Cancel {
   return runtime.subscribeEventIntentOutcomes((outcome: EventIntentOutcome) => {
+    if (outcome.kind === "refused") {
+      postRefusal({
+        type: NotificationType.EventIntentOutcome,
+        space: outcome.space,
+        eventId: outcome.eventId,
+        kind: "refused",
+        reason: "admission-refused",
+      });
+      return;
+    }
     if (
       outcome.kind !== "needs-attention" ||
       outcome.sidecarId === undefined ||
@@ -497,8 +523,8 @@ export function browserWorkerParamsFromInitializationData(
 }
 
 /**
- * Builds the H3b display-boundary resolver for a worker's renders. When a
- * ceiling is in force, each render egress resolves principal-form atoms
+ * Builds the display-boundary resolver for a worker's renders. When a ceiling
+ * is in force, each render egress resolves principal-form atoms
  * (Space-via-HasRole) RUNNER-side; the reconciler only fits the result.
  *
  * Reader membership is sourced ONLY from verified facts, never from a cell's
@@ -546,7 +572,7 @@ export function renderConfidentialityResolverFor(
     actingPrincipal,
     trustConfig: runtime.cfcTrustConfig,
     memberSpaces,
-    // Share the reconciler's provider instance when supplied (so Stage-2 ACL
+    // Share the reconciler's provider instance when supplied (so ACL
     // subscriptions and the resolver's reads observe the same cells); else
     // build a private one — both read the same underlying runtime documents.
     membershipProvider: membershipProvider ??
@@ -558,9 +584,9 @@ export function renderConfidentialityResolverFor(
  * The §4.9.3 membership provider for a worker's renders — the reactive half of
  * the render lookup. Built once per worker (same lifetime as the resolver) and
  * threaded to BOTH `renderConfidentialityResolverFor` (as the resolver's
- * lookup) and the reconciler (for Stage-2 ACL-change subscriptions), so the two
- * share one instance. Undefined when no ceiling is configured — no render
- * gating, so no membership lookup. Service DIDs are not threaded to the worker
+ * lookup) and the reconciler (for ACL-change subscriptions), so the two share
+ * one instance. Undefined when no ceiling is configured — no render gating, so
+ * no membership lookup. Service DIDs are not threaded to the worker
  * (design §9), so service principals fail closed.
  */
 export function renderMembershipProviderFor(
@@ -668,6 +694,23 @@ export const hasExplicitSubscriptionSchema = (schema: unknown): boolean =>
   (schema !== undefined && schema !== false &&
     isObjectOrArray(schema) &&
     Object.keys(schema).length > 0);
+
+/** Connects render boundaries to authoritative access verdict changes. */
+export function renderSpaceAccessProviderFor(
+  runtime: Pick<Runtime, "storageManager">,
+): SpaceAccessProvider {
+  const storage = runtime.storageManager;
+  return {
+    error: (space) => storage.spaceAccessError?.(space as MemorySpace),
+    subscribe: (space, onChange) => {
+      const changed = (changedSpace: MemorySpace) => {
+        if (changedSpace === space) onChange();
+      };
+      return storage.subscribeSpaceAccessChange?.(changed) ??
+        storage.subscribeSpaceAccessLoss?.(changed) ?? (() => {});
+    },
+  };
+}
 
 /**
  * Where a mount's render errors go: the client that mounted it, and no other.
@@ -778,6 +821,8 @@ export class RuntimeProcessor {
     string,
     { token: string; prepared: PreparedPieceSourceChange }
   >();
+  #snapshotShares = new Map<string, SnapshotShareConsent>();
+  #snapshotShareDetachedClients = new WeakSet<WorkerClient>();
   #telemetry: RuntimeTelemetry;
 
   /**
@@ -789,6 +834,7 @@ export class RuntimeProcessor {
 
   #telemetryEnabled = false;
   #intentOutcomeCancel: Cancel | undefined;
+  #profilePreloadCancel: Cancel | undefined;
 
   /**
    * VDOM mounts, by the mounting client's scoped mount id. A mount id comes
@@ -829,6 +875,7 @@ export class RuntimeProcessor {
    * ceiling is in force.
    */
   #renderMembershipProvider?: SpaceMembershipProvider;
+  #cancelSpaceAccessLoss?: Cancel;
 
   private constructor(
     runtime: Runtime,
@@ -837,6 +884,7 @@ export class RuntimeProcessor {
     identity: Identity,
     telemetry: RuntimeTelemetry,
     securityContext: RuntimeSecurityContext,
+    clients: () => Iterable<WorkerClient> = () => [ownerClient],
   ) {
     this.#runtime = runtime;
     this.#cc = cc;
@@ -845,6 +893,12 @@ export class RuntimeProcessor {
     this.#telemetry = telemetry;
     this.#telemetry.addEventListener("telemetry", this.#onTelemetry);
     this.#securityContext = securityContext;
+    this.#cancelSpaceAccessLoss = runtime.storageManager
+      ?.subscribeSpaceAccessLoss?.((space) => {
+        for (const client of clients()) {
+          client.post({ type: NotificationType.SpaceAccessLost, space });
+        }
+      });
   }
 
   /**
@@ -1093,7 +1147,11 @@ export class RuntimeProcessor {
       this.#telemetry.removeEventListener("telemetry", this.#onTelemetry);
       try {
         this.#intentOutcomeCancel?.();
+        this.#cancelSpaceAccessLoss?.();
+        this.#cancelSpaceAccessLoss = undefined;
         this.#intentOutcomeCancel = undefined;
+        this.#profilePreloadCancel?.();
+        this.#profilePreloadCancel = undefined;
         this.#siteTableCancel?.();
         this.#siteTableCancel = undefined;
         for (const cancel of this.#subscriptions.values()) {
@@ -1107,6 +1165,7 @@ export class RuntimeProcessor {
         this.#operationSubscriptions.clear();
         this.#operationSessions.clear();
         this.#pieceSourceConfirmations.clear();
+        this.#snapshotShares.clear();
 
         // Clean up VDOM mounts
         for (const { reconciler, cancel } of this.#vdomMounts.values()) {
@@ -1176,6 +1235,10 @@ export class RuntimeProcessor {
    */
   disposeClient(client: WorkerClient): void {
     const prefix = clientKeyPrefix(client);
+    this.#snapshotShareDetachedClients.add(client);
+    for (const key of this.#snapshotShares.keys()) {
+      if (key.startsWith(prefix)) this.#snapshotShares.delete(key);
+    }
 
     for (const [key, cancel] of [...this.#subscriptions]) {
       if (!key.startsWith(prefix)) continue;
@@ -1208,6 +1271,16 @@ export class RuntimeProcessor {
     }
   }
 
+  #snapshotShareCell(ref: CellRef): Cell<unknown> {
+    // The host selects an address; stored policy owns its schema and label.
+    return getCell(this.#runtime, {
+      space: ref.space,
+      id: ref.id,
+      path: ref.path,
+      scope: ref.scope,
+    });
+  }
+
   /**
    * Resolve the piece context for a space. The space the worker was
    * initialized with gets the context built at initialize; any other
@@ -1217,8 +1290,9 @@ export class RuntimeProcessor {
    * user — no per-space signer, matching the storage connections.
    *
    * `space` is required: piece operations carry their space explicitly,
-   * with no implicit default at this layer. (The runtime guard catches
-   * out-of-date callers that still omit it.)
+   * with no implicit default at this layer. A request arrives as data, so
+   * its `space` can be missing despite the type. This method throws when it
+   * is.
    */
   #getSpaceCtx(space: DID): PiecesController {
     const target: DID | undefined = space;
@@ -1254,16 +1328,18 @@ export class RuntimeProcessor {
   handleCellGet(
     request: CellGetRequest,
   ): CellGetResponse {
-    // Fail closed on the retired raw label-metadata seam (inv-12 Stage 0 /
-    // SC-14 / SC-25): `meta: "cfc"` used to return the raw `["cfc"]` envelope
-    // (unredacted Caveat.source and other principal identities) via
-    // getMetaRaw. "cfc" is no longer a MetaField, but the wire is untyped
-    // JSON — reject the request rather than serve raw metadata. Display
-    // label views are served redacted via `includeCfcLabel` / CellGetCfcLabel.
+    // `MetaField` does not include `cfc`. A request arrives as data, though,
+    // and checking its fields is this handler's job. As a result, `meta` can
+    // be `cfc`. The branch below passes any `meta` that is not a link field to
+    // `getMetaRaw()`. `getMetaRaw()` reads whichever document-root field it is
+    // given. The `cfc` field holds the raw label metadata, `Caveat.source`
+    // included. So we refuse the request here. A label for display comes from
+    // `includeCfcLabel` on a `CellGet` request or from a `CellGetCfcLabel`
+    // request. Both return the label with `Caveat.source` removed.
     if ((request.meta as string | undefined) === "cfc") {
       throw new Error(
-        'cell/get meta "cfc" is not served over IPC (inv-12); ' +
-          "use getCfcLabel for the redacted display view",
+        'A `CellGet` request with `meta: "cfc"` is not served; ' +
+          "use `CellHandle.getCfcLabel()` for the redacted display view",
       );
     }
     let cell = getCell(this.#runtime, request.cell);
@@ -1305,8 +1381,9 @@ export class RuntimeProcessor {
     if (!request.includeCfcLabel) {
       return { value: converted, ...refField };
     }
-    // Same display-label read as handleCellGetCfcLabel: pure store read, then
-    // redact Caveat.source for display (audit 28b). One round-trip for both.
+    // This reads the display label with `cfcLabelViewForCell()` and redacts
+    // `Caveat.source` from it, as `handleCellGetCfcLabel()` does. Returning
+    // the label with the value saves the caller a second round trip.
     const cfcLabel = cfcLabelViewForCell(cell);
     return {
       value: converted,
@@ -1802,6 +1879,72 @@ export class RuntimeProcessor {
     };
   }
 
+  /** Keeps release authority in this backend while the host shows a preview. */
+  async handleSnapshotSharePrepare(
+    request: SnapshotSharePrepareRequest,
+    client: WorkerClient = ownerClient,
+  ): Promise<SnapshotSharePreview> {
+    if (this.#isDisposed || this.#snapshotShareDetachedClients.has(client)) {
+      throw new Error("Snapshot sharing is unavailable");
+    }
+    const source = this.#snapshotShareCell(request.source);
+    const audience = request.audience;
+    if (
+      !isObjectNotArray(audience) ||
+      ("user" in audience) === ("space" in audience)
+    ) throw new Error("Snapshot sharing requires one audience");
+    const audienceCell = this.#snapshotShareCell(
+      "user" in audience ? audience.user : audience.space,
+    );
+    const appendBooksTo = request.appendBooksTo && {
+      recommended: this.#snapshotShareCell(
+        request.appendBooksTo.recommended,
+      ),
+      received: this.#snapshotShareCell(request.appendBooksTo.received),
+    };
+    await Promise.all([
+      source.sync(),
+      audienceCell.sync(),
+      appendBooksTo?.recommended.sync(),
+      appendBooksTo?.received.sync(),
+    ]);
+    if (this.#isDisposed || this.#snapshotShareDetachedClients.has(client)) {
+      throw new Error("Snapshot sharing is unavailable");
+    }
+    const prepared = prepareSnapshotShare(
+      source,
+      "user" in audience ? { user: audienceCell } : { space: audienceCell },
+      appendBooksTo,
+    );
+    const id = crypto.randomUUID();
+    this.#snapshotShares.set(clientScopedKey(client, id), prepared.consent);
+    return { id, value: prepared.value, audience: prepared.audience };
+  }
+
+  /** Consumes one preview through the dedicated trusted host transport. */
+  async handleSnapshotShareCommit(
+    request: SnapshotShareCommitRequest,
+    client: WorkerClient = ownerClient,
+  ): Promise<CellResponse> {
+    const key = clientScopedKey(client, request.id);
+    const consent = this.#snapshotShares.get(key);
+    this.#snapshotShares.delete(key);
+    if (consent === undefined) {
+      throw new Error("Snapshot share confirmation is unavailable");
+    }
+    const event = {
+      type: "click",
+      provenance: {
+        origin: "dom",
+        trusted: true,
+        ui: { pattern: "ShareSnapshot" },
+      },
+    };
+    markRendererTrustedEvent(event);
+    const shared = await commitSnapshotShare(consent, event);
+    return { cell: createCellRef(shared) };
+  }
+
   handleCellGetCfcLabel(
     request: CellGetCfcLabelRequest,
   ): CfcLabelViewResponse {
@@ -1809,17 +1952,14 @@ export class RuntimeProcessor {
     // schema is client-supplied view context, not trusted label provenance.
     const { schema: _schema, ...cellRef } = request.cell;
     const cell = getCell(this.#runtime, cellRef);
-    // Pure, non-blocking read of the CURRENT local store — no sync. getCfcLabel
-    // is the display-label seam, and its only callers are reactive UI components
-    // (cf-cfc-label, cf-cfc-authorship, cf-profile-badge) that subscribe to the
-    // cell and re-read the label whenever it changes. They own liveness: a
-    // not-yet-loaded doc is also not rendered, so an empty label is the correct
-    // deferred answer and self-heals when the subscription delivers the doc
-    // (which carries its `cfc` metadata). The earlier per-call source-chain sync
-    // re-loaded already-present docs and, under multi-writer churn, blocked on
-    // in-flight watch refreshes — ~99.97% of this IPC's cost, p95 >1s at 4
-    // browsers. The enforcement path reads labels through other seams; here we
-    // only redact `Caveat.source` for display (audit item 28b, inv-12).
+    // This reads the label with `cfcLabelViewForCell()`, which reads what the
+    // store holds now and does not sync the cell. When the store holds no
+    // label metadata for the cell, `cfcLabel` in the response is `undefined`.
+    // That covers a document the store has not loaded as well as a cell with
+    // no label. Keeping the cell current is the caller's job. A caller that
+    // needs the label as it changes subscribes with `includeCfcLabel`, and
+    // each update then carries the label as read for that update. We redact
+    // `Caveat.source` from the label for display.
     const totalStart = performance.now();
     const cfcLabel = cfcLabelViewForCell(cell);
     const response = {
@@ -2148,9 +2288,7 @@ export class RuntimeProcessor {
       // an array and `null` an `object` and so says nothing about either. It
       // is bounded because the argument is a caller's data.
       throw new Error(
-        `A piece's argument must be a record, not: ${
-          toLongQuotedDebugString(argument)
-        }`,
+        debugStr`A piece's argument must be a record, not: $quote,long${argument}`,
       );
     }
 
@@ -2732,8 +2870,8 @@ export class RuntimeProcessor {
       // Best-effort source view for LIVE patterns: resolve the running
       // pattern by identity and read its authored files (source is per
       // module, so the symbol only selects a representative artifact). A
-      // source-free by-identity reload carries no program — omit it (same
-      // graceful degradation as the prior meta-cell read's try/catch).
+      // source-free by-identity reload carries no program, so that pattern is
+      // omitted.
       const program = this.#runtime.patternManager.getPatternProgramBySync(
         ref.identity,
         ref.symbol,
@@ -2761,9 +2899,10 @@ export class RuntimeProcessor {
   async handleUploadBlob(
     request: UploadBlobRequest,
   ): Promise<UploadBlobResponse> {
-    // Guard for untyped callers: the request must name the blob's space
-    // (required since the federation work) — fail with a named error
-    // rather than a confusing server 404 on /undefined/blobs/….
+    // A request arrives as data, so its `space` is checked here. A request
+    // whose `space` is not a DID fails with an error that says so. Without the
+    // check, a request with no `space` would build an upload URL whose path
+    // begins `/undefined/blobs/`.
     if (!isDID(request.space)) {
       throw new Error("uploadBlob requires a space DID");
     }
@@ -2914,6 +3053,13 @@ export class RuntimeProcessor {
         return this.handleCellResolveAsCell(request);
       case RequestType.CellGetCfcLabel:
         return await this.handleCellGetCfcLabel(request);
+      case RequestType.SnapshotSharePrepare:
+        return await this.handleSnapshotSharePrepare(request, client);
+      case RequestType.SnapshotShareCommit:
+        return await this.handleSnapshotShareCommit(request, client);
+      case RequestType.SnapshotShareCancel:
+        this.#snapshotShares.delete(clientScopedKey(client, request.id));
+        return;
       case RequestType.OperationQuery:
         return await this.handleOperationQuery(request, client);
       case RequestType.OperationCapabilities:
@@ -3089,10 +3235,10 @@ export class RuntimeProcessor {
       return;
     }
 
-    // CustomEvent.detail was JSON.stringify'd on the main thread (invoking
-    // CellHandle.toJSON), so sigil links in it bypass getCell /
-    // cellRefToSigilLink — strip any main-thread cfcLabelView copies before
-    // a handler can write them (inv-12 Stage 0; codex/cubic review).
+    // `request.event` comes from the main thread and can hold sigil links. A
+    // sigil link is not a `CellRef`, so it passes through neither `getCell()`
+    // nor `cellRefToSigilLink()`, which are what drop a ref's `cfcLabelView`.
+    // We strip the view from each link here, before a handler can write one.
     const dispatched = mount.reconciler.dispatchEvent(
       request.handlerId,
       stripSigilCfcLabelViews(request.event) as typeof request.event,
@@ -3135,6 +3281,7 @@ export class RuntimeProcessor {
       renderConfidentialityCeiling: this.#renderConfidentialityCeiling,
       resolveRenderConfidentiality: this.#renderConfidentialityResolver,
       membershipProvider: this.#renderMembershipProvider,
+      spaceAccess: renderSpaceAccessProviderFor(this.#runtime),
       onOps: (ops: VDomOp[]) => {
         const batchId = this.#vdomBatchIdCounter++;
         // `mountId` as the client sent it: the scoping is this worker's
@@ -3265,9 +3412,13 @@ export class RuntimeProcessor {
    * Rejects when the runtime's server-execution posture diverges from what
    * the host declared, or when the API host fails its health check. The
    * returned processor handles requests at once; a caller that needs storage
-   * and pieces to have converged waits on `synced()`.
+   * and pieces to have converged waits on `synced()`. `clients` resolves the
+   * current authorized recipients of runtime-wide access-loss notifications.
    */
-  static async initialize(data: InitializationData): Promise<RuntimeProcessor> {
+  static async initialize(
+    data: InitializationData,
+    clients: () => Iterable<WorkerClient> = () => [ownerClient],
+  ): Promise<RuntimeProcessor> {
     const apiUrlObj = new URL(data.apiUrl);
     const identity = await Identity.fromKeyPair(
       data.identity,
@@ -3346,10 +3497,9 @@ export class RuntimeProcessor {
 
       pieceCreatedCallback: (piece) => {
         const writeContext = runtime.getWriteDebugContext();
-        // Register the piece in ITS space's list: a piece created by a
-        // running foreign-space pattern routes to that space's controller
-        // (the context exists — it started the pattern). Fallback to
-        // the home controller, the sole pre-multi-space behavior.
+        // Register the piece in its own space's list. The piece goes to the
+        // controller serving its space, when there is one. Otherwise it goes
+        // to the home controller.
         const pieces = (piece.space && processor?.piecesFor(piece.space)) ??
           homePieces;
         if (!pieces) return;
@@ -3386,6 +3536,7 @@ export class RuntimeProcessor {
       identity,
       telemetry,
       securityContextFrom(data, identity.did()),
+      clients,
     );
     // InitializationData crosses postMessage with no runtime validation, so a
     // typo'd host config or version-skewed peer must fail CLOSED, not open:
@@ -3408,12 +3559,21 @@ export class RuntimeProcessor {
     );
     processor.#intentOutcomeCancel = subscribeEventAttentionNotifications(
       runtime,
+      undefined,
+      (notification) => {
+        for (const client of clients()) client.post(notification);
+      },
     );
     // The home-space site table carries space-to-host hints, which the
     // runtime reads as its live host lookup. A seeded route or earlier hint
     // can reject an entry. A default-host provider is provisional. Failures
     // here must not block worker boot.
     processor.watchSiteTable();
+    try {
+      processor.#profilePreloadCancel = preloadProfiles(runtime);
+    } catch (error) {
+      console.warn("[RuntimeProcessor] Could not preload profiles:", error);
+    }
     return processor;
   }
 }

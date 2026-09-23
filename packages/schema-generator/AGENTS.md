@@ -4,8 +4,9 @@ Converts TypeScript types to Common Fabric JSON Schemas (2020-12 dialect + repo
 extensions). Consumed at compile time by `packages/ts-transformers`
 (SchemaGeneratorTransformer constructs a `SchemaGenerator`); also the repo's
 wrapper-type vocabulary oracle — ts-transformers imports `cell-brand`,
-`wrapper-names`, `property-name`, `property-optionality`, `numeric-expression`
-via subpath exports. Entry point is `src/index.ts` (not `mod.ts`).
+`common-fabric-symbols`, `default-brand`, `wrapper-names`, `property-name`,
+`property-optionality`, `numeric-expression`, `type-node` via subpath exports.
+Entry point is `src/index.ts` (not `mod.ts`).
 
 ## Where answers live
 
@@ -30,9 +31,10 @@ via subpath exports. Entry point is `src/index.ts` (not `mod.ts`).
   → `false`; `void` → `{ asCell: ["opaque"] }`; `undefined` survives in unions
   (`{ type: "undefined" }`). The `unknown`/`undefined` type values are
   deliberate non-standard extensions, as are the `FabricPrimitive` type names
-  (`{ type: "FabricBytes" }` and friends — see `FABRIC_PRIMITIVE_SCHEMA_TYPES`
-  in `packages/data-model/src/api.ts`), emitted for fields authored against
-  those classes.
+  (`{ type: "FabricBytes" }` and friends — each the `.schemaType` its class
+  reports, listed at runtime by `FABRIC_PRIMITIVE_SCHEMA_TYPES` in
+  `packages/data-model/src/fabric-primitives/impl.ts`), emitted for fields
+  authored against those classes.
 - Fail-loud inventory: `Map`/`Set`/`WeakMap`, `Cell<Stream<T>>`,
   `Default<undefined>`, unresolvable DeepDefault keys, and circular aliases
   THROW rather than degrade. An unformattable type also throws (complete

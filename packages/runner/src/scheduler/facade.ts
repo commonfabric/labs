@@ -1146,10 +1146,15 @@ export class Scheduler {
    * completion whose terminal step writes nothing the action journals — the
    * only remaining signal that the action must run again is the completion
    * itself (e.g. a list coordinator's owed element setup after every awaited
-   * result document confirmed absent). No-op for an unsubscribed action.
+   * result document confirmed absent). Set `retry` when resuming an unfinished
+   * computation after a wait: its wait supplies the delay, so debounce and
+   * throttle must not strand a one-shot pull. No-op for an unsubscribed action.
    */
-  invalidateAction(action: Action): void {
-    this.#markAndScheduleInvalidAction(action);
+  invalidateAction(
+    action: Action,
+    options?: Pick<MarkInvalidOptions, "retry">,
+  ): void {
+    this.#markAndScheduleInvalidAction(action, undefined, options);
   }
 
   /**
@@ -3423,7 +3428,7 @@ export class Scheduler {
       this.#gates.releaseForRetry(action);
       return;
     }
-    // Trailing computation debounce re-arms on every other invalidation
+    // Trailing computation debounce re-arms when no retry is owed
     // (§8.1: debounceReadyAt resets while gated). Arming here — in the one
     // invalid-setter — covers every path (channel, registration), so gate
     // QUERIES stay side-effect-free.
@@ -3448,10 +3453,14 @@ export class Scheduler {
   #markAndScheduleInvalidAction(
     action: Action,
     cause?: IMemorySpaceAddress,
+    options?: Pick<MarkInvalidOptions, "retry">,
   ): void {
-    this.#markActionInvalid(action, cause);
+    this.#markActionInvalid(action, cause, options);
 
-    if (this.#nodes.effects.has(action) && this.#gates.getDebounce(action)) {
+    if (
+      this.#nodes.effects.has(action) &&
+      this.#gates.getDebounce(action)
+    ) {
       this.#scheduleWithDebounce(action);
       return;
     }

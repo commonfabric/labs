@@ -14,6 +14,7 @@ import {
   type HarnessChatTurnStatus,
 } from "./contracts/interactive-chat.ts";
 import type { HarnessTranscriptMessage } from "./contracts/transcript.ts";
+import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
 import {
   createHarnessTranscriptOmissions,
   isHarnessTranscriptOmissions,
@@ -44,6 +45,7 @@ CREATE TABLE IF NOT EXISTS chat_session (
   status      TEXT NOT NULL,
   transcript  TEXT NOT NULL,
   research_context TEXT,
+  assigned_pieces TEXT,
   transcript_omissions TEXT,
   created_at  TEXT NOT NULL,
   updated_at  TEXT NOT NULL,
@@ -95,6 +97,7 @@ type SessionRow = {
   status: string;
   transcript: string;
   research_context: string | null;
+  assigned_pieces: string | null;
   transcript_omissions: string | null;
 };
 
@@ -237,6 +240,7 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
         status,
         transcript,
         research_context,
+        assigned_pieces,
         transcript_omissions,
         created_at,
         updated_at,
@@ -247,6 +251,7 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
         :status,
         :transcript,
         :research_context,
+        :assigned_pieces,
         :transcript_omissions,
         :created_at,
         :updated_at,
@@ -256,6 +261,7 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
         status = :status,
         transcript = :transcript,
         research_context = :research_context,
+        assigned_pieces = :assigned_pieces,
         transcript_omissions = :transcript_omissions,
         updated_at = :updated_at,
         closed_at = :closed_at
@@ -269,6 +275,9 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
       research_context: snapshot.researchContext === undefined
         ? null
         : JSON.stringify(snapshot.researchContext),
+      assigned_pieces: snapshot.assignedPieces === undefined
+        ? null
+        : JSON.stringify(snapshot.assignedPieces),
       created_at: snapshot.session.createdAt,
       updated_at: snapshot.session.updatedAt,
       closed_at: snapshot.session.closedAt ?? null,
@@ -279,7 +288,7 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
     sessionId: string,
   ): HarnessChatSessionSnapshot | undefined {
     const row = this.database.prepare(`
-      SELECT status, transcript, research_context, transcript_omissions
+      SELECT status, transcript, research_context, assigned_pieces, transcript_omissions
       FROM chat_session
       WHERE session_id = :session_id
     `).get({ session_id: sessionId }) as SessionRow | undefined;
@@ -288,7 +297,7 @@ export class SqliteHarnessChatSessionStore implements HarnessChatSessionStore {
 
   listSessions(): readonly HarnessChatSessionSnapshot[] {
     return (this.database.prepare(`
-      SELECT status, transcript, research_context, transcript_omissions
+      SELECT status, transcript, research_context, assigned_pieces, transcript_omissions
       FROM chat_session
       ORDER BY created_at ASC, session_id ASC
     `).all() as SessionRow[]).map(decodeSessionRow);
@@ -563,6 +572,12 @@ const decodeSessionRow = (row: SessionRow): HarnessChatSessionSnapshot => {
         "chat_session.research_context",
       ),
     }),
+    ...(row.assigned_pieces == null ? {} : {
+      assignedPieces: parseJsonColumn<HarnessAssignedPiece[]>(
+        row.assigned_pieces,
+        "chat_session.assigned_pieces",
+      ),
+    }),
     session: parseJsonColumn<HarnessChatSessionStatus>(
       row.status,
       "chat_session.status",
@@ -664,6 +679,11 @@ export const openSqliteHarnessChatSessionStore = async (
         if (!columns.some((column) => column.name === "research_context")) {
           database.exec(
             "ALTER TABLE chat_session ADD COLUMN research_context TEXT",
+          );
+        }
+        if (!columns.some((column) => column.name === "assigned_pieces")) {
+          database.exec(
+            "ALTER TABLE chat_session ADD COLUMN assigned_pieces TEXT",
           );
         }
         if (!columns.some((column) => column.name === "transcript_omissions")) {

@@ -1527,10 +1527,9 @@ Deno.test(
       const streamCell = runtime.getCell<unknown>(
         signer.did(),
         "static-event-stream",
-        undefined,
+        { asCell: ["stream"] },
         tx,
       );
-      streamCell.setRaw({ $stream: true });
 
       const eventTargetCell = runtime.getCell<unknown>(
         signer.did(),

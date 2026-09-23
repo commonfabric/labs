@@ -8,9 +8,8 @@
  * do the walking.
  */
 
-import { BaseLiveEnvironment } from "@/codec-interface/BaseLiveEnvironment.ts";
-import type { FabricValue } from "@/interface.ts";
-import { deepFreeze, isDeepFrozen } from "@/deep-freeze.ts";
+import { deepFreeze, type FabricValue, isDeepFrozen } from "@";
+import { BaseLiveEnvironment } from "@/codec-common";
 
 /** Dummy live environment for tests. */
 export class DummyLiveEnvironment extends BaseLiveEnvironment {

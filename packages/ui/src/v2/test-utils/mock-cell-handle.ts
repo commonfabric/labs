@@ -163,7 +163,7 @@ function createMockConnection(
 }
 
 /**
- * Create a mock RuntimeClient that only provides `[$conn]()`.
+ * Create a mock RuntimeClient with a connection and a live lifetime signal.
  *
  * CellHandle's constructor only accesses `worker[$conn]()` — it doesn't call
  * any other RuntimeClient methods — so this minimal mock is sufficient.
@@ -171,7 +171,10 @@ function createMockConnection(
 function createMockRuntimeClient(
   conn: InitializedRuntimeConnection,
 ): RuntimeClient {
-  return { [$conn]: () => conn } as unknown as RuntimeClient;
+  return {
+    [$conn]: () => conn,
+    signal: new AbortController().signal,
+  } as unknown as RuntimeClient;
 }
 
 /**

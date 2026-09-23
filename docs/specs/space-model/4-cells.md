@@ -68,11 +68,11 @@ The implementation distinguishes cells by their change detection behavior:
 
 | Aspect | Value Cell | Stream Cell |
 |--------|------------|-------------|
-| Stored value | Actual data | `{ $stream: true }` marker |
-| Read | `get()` returns value | `get()` returns marker (not useful) |
+| Stored value | Actual data | Nothing; the schema declares the stream |
+| Read | `get()` returns value | `get()` returns the stream handle |
 | Write | `set()` stores value | `send()` dispatches event |
 | Change detection | Content comparison | Every send is distinct |
-| Persistence | Value persisted | Only marker persisted; events ephemeral |
+| Persistence | Value persisted | Only the declaration persists; events ephemeral |
 
 The essential difference is **duplicate handling**:
 
@@ -151,8 +151,8 @@ Event endpoints for occurrences:
 - Signals between pieces
 
 Events are ephemeral — only the most recent matters for triggering handlers.
-The `{ $stream: true }` marker persists to preserve the stream's identity,
-but event payloads do not persist.
+The stream's identity is its document, which persists along with the schema
+that declares it a stream; event payloads do not persist.
 
 ### Cross-Cutting Observations
 

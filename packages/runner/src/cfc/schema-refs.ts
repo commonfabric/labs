@@ -1,8 +1,8 @@
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import {
+  debugStr,
   fabricAwareEqual,
   isDeepFrozen,
-  toCompactDebugString,
 } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 import {
@@ -40,8 +40,20 @@ import {
   noteExternalResolutionMiss,
   onSchemaRegistryClear,
 } from "../schema-registry.ts";
+import {
+  cfcSchemaToObject,
+  isRootDefsSchemaPointer,
+  localDefinitionName,
+} from "./schema-primitives.ts";
 
 export { isEmbeddedCfcSchemaRef };
+export {
+  cfcSchemaIsFalse,
+  cfcSchemaIsInternalKey,
+  cfcSchemaIsTrue,
+  cfcSchemaToObject,
+  localDefinitionName,
+} from "./schema-primitives.ts";
 
 const logger = getLogger("cfc");
 
@@ -89,17 +101,6 @@ const resolvedRefCache = new WeakMap<
   Map<string, JSONSchema | undefined>
 >();
 
-const isRootDefsSchemaPointer = (pathToDef: readonly string[]): boolean =>
-  pathToDef.length === 3 && pathToDef[0] === "#" && pathToDef[1] === "$defs" &&
-  pathToDef[2].length > 0;
-
-export const cfcSchemaToObject = (schema?: JSONSchema): JSONSchemaObj =>
-  (schema === true || schema === undefined)
-    ? {}
-    : schema === false
-    ? { not: true }
-    : schema;
-
 const hasDefinitionMap = (
   schema: JSONSchema,
 ): schema is JSONSchemaObj & { $defs: SchemaDefinitions } =>
@@ -132,31 +133,6 @@ export const cfcSchemaResolvedRoot = (
     !(isObjectOrArray(owningRoot) && resolved.$defs === owningRoot.$defs)
     ? resolved
     : owningRoot;
-
-export const cfcSchemaIsInternalKey = (key: string): boolean =>
-  key === "ifc" || key === "asCell" || key === "asStream" ||
-  key === "scope";
-
-export const cfcSchemaIsTrue = (schema: JSONSchema): boolean => {
-  if (schema === true) {
-    return true;
-  }
-  return isObjectOrArray(schema) &&
-    Object.keys(schema).every((key) =>
-      cfcSchemaIsInternalKey(key) || key === "default" || key === "$defs"
-    );
-};
-
-export const cfcSchemaIsFalse = (schema: JSONSchema): boolean =>
-  schema === false ||
-  (isObjectOrArray(schema) && Object.hasOwn(schema, "not") &&
-    cfcSchemaIsTrue(schema["not"]!));
-
-const localDefinitionName = (schemaRef: string): string | undefined => {
-  if (!schemaRef.startsWith("#")) return undefined;
-  const path = decodeJsonPointer(schemaRef);
-  return isRootDefsSchemaPointer(path) ? path[2] : undefined;
-};
 
 const encodedLocalDefinitionRef = (name: string): string =>
   encodeJsonPointer(["#", "$defs", name]);
@@ -1089,9 +1065,7 @@ export const resolveCfcSchemaRefsOrThrow = (
   if (resolved === undefined) {
     const ref = Object.hasOwn(schemaObj, "$ref")
       ? schemaObj.$ref
-      : toCompactDebugString(
-        schemaObj,
-      );
+      : debugStr`$quote${schemaObj}`;
     throw new Error(
       `Failed to resolve $ref: ${ref}. ` +
         (typeof ref === "string" && ref.startsWith("http")
@@ -1099,7 +1073,7 @@ export const resolveCfcSchemaRefsOrThrow = (
             `If you added a new native type to NATIVE_TYPE_SCHEMAS in ` +
             `packages/schema-generator/src/formatters/native-type-formatter.ts, ` +
             `add its schema to embeddedSchemas as well.`
-          : `Schema: ${toCompactDebugString(schemaObj)}`),
+          : debugStr`Schema: $quote,long${schemaObj}`),
     );
   }
   return resolved;

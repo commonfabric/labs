@@ -3372,7 +3372,7 @@ describe("cell-bridge", () => {
           const handlerCell: FakeCell = {
             schema: { type: "object" },
             get: () => handlerLink,
-            getRaw: () => ({ $stream: true }),
+            getRaw: () => undefined,
             asSchemaFromLinks() {
               return this;
             },
@@ -3474,7 +3474,7 @@ describe("cell-bridge", () => {
           const streamCell = (schema: unknown): FakeCell => ({
             schema: schema as FakeCell["schema"],
             get: () => handlerLink,
-            getRaw: () => ({ $stream: true }),
+            getRaw: () => undefined,
             asSchemaFromLinks() {
               return this;
             },
@@ -3658,18 +3658,20 @@ describe("cell-bridge", () => {
         });
 
         it("labels void handlers as no-arg callables in `.handlers`", async () => {
+          // The stream's document holds no value: the result schema's
+          // declaration is all that says `onAddContact` is a handler.
           const tree = new FsTree();
           const bridge = new CellBridge(tree, "/tmp/cf-exec");
           const state = buildTestSpace(bridge, "home", []);
 
           const onAddContactCell = makeCell(
-            { $stream: true },
+            undefined,
             { asCell: ["stream"] },
             {},
             { isStream: true },
           );
           const resultCell = makeCell(
-            { onAddContact: { $stream: true } },
+            {},
             {
               type: "object",
               properties: {
@@ -3688,7 +3690,7 @@ describe("cell-bridge", () => {
             },
             result: {
               getCell: () => Promise.resolve(resultCell),
-              get: () => Promise.resolve({ onAddContact: { $stream: true } }),
+              get: () => Promise.resolve({}),
             },
           };
 

@@ -3,6 +3,21 @@ import type {
   LoomComposeToolInput,
   LoomReadToolInput,
 } from "./tools/loom-authoring.ts";
+import type {
+  LoomCalendarListInput,
+  LoomContextInput,
+  LoomPageDiscoverInput,
+  LoomPageTargetInput,
+  LoomPeopleInput,
+  LoomProfileInput,
+  LoomSearchInput,
+} from "./loom-retrieval.ts";
+import type { JSONSchema } from "@commonfabric/api";
+import type { LoomRetrievalToolOutput } from "./tools/loom-retrieval.ts";
+import type {
+  SubmitResultInput,
+  SubmitResultOutput,
+} from "./tools/submit-result.ts";
 import {
   dirname,
   join as joinHostPath,
@@ -11,6 +26,7 @@ import {
 } from "@std/path";
 import { normalize as normalizeSandboxPath } from "@std/path/posix";
 
+import type { FabricValue } from "@commonfabric/data-model";
 import {
   type CfcConfClause,
   type CfcLabelView,
@@ -20,6 +36,7 @@ import {
   mergeCfcLabelViews,
 } from "@commonfabric/runner/cfc";
 import { mergeLabel } from "@commonfabric/runner/cfc/label-view-core";
+import { deepEqual } from "@commonfabric/utils/deep-equal";
 import { isObjectOrArray } from "@commonfabric/utils/types";
 
 import {
@@ -43,7 +60,11 @@ import {
 import type { HarnessResearchRunner } from "./research/runner.ts";
 import type { HarnessToolContext } from "./tools/types.ts";
 import type { HarnessDocsCorpusRecord } from "./contracts/docs-corpus.ts";
-import type { HarnessResearchRunSummary } from "./contracts/research.ts";
+import {
+  type HarnessResearchHandleValue,
+  type HarnessResearchRunSummary,
+  isHarnessResearchHandleValue,
+} from "./contracts/research.ts";
 import {
   createHarnessCfcInvocationContext,
   createHarnessPromptSlotInfluenceLabels,
@@ -58,7 +79,11 @@ import {
   type HarnessCfcModelContextObservationInput,
 } from "./contracts/cfc-model-context.ts";
 import type { HarnessCfcPolicySnapshot } from "./contracts/cfc-policy-snapshot.ts";
-import type { HarnessHandleTable } from "./contracts/handle-table.ts";
+import type {
+  HarnessDocumentReferentDraft,
+  HarnessHandleReferentDraft,
+  HarnessHandleTable,
+} from "./contracts/handle-table.ts";
 import {
   createHarnessPolicyDecisionRecord,
   type HarnessPolicyDecisionRecord,
@@ -117,6 +142,7 @@ import {
   assertValidHarnessHandleTable,
   createHarnessHandleTable,
   mintAddressHandle,
+  mintReferentHandle,
 } from "./handle-table.ts";
 import {
   cacheHarnessPatternIndexClientFactory,
@@ -139,6 +165,10 @@ import {
 } from "./skills-sh/search-client.ts";
 import type { HandleValueResolutionContext } from "./tools/handle-values.ts";
 import type {
+  ResolvePieceToolInput,
+  ResolvePieceToolOutput,
+} from "./tools/resolve-piece.ts";
+import type {
   HarnessConnectorGrantSpec,
   HarnessWellKnownGrant,
 } from "./contracts/well-known-grants.ts";
@@ -152,6 +182,7 @@ import type {
   HarnessInputCellSpec,
 } from "./contracts/input-cells.ts";
 import { mintInputCellHandles } from "./input-cells.ts";
+import type { HarnessAssignedPiece } from "./contracts/assigned-piece.ts";
 import { resolvePieceAddress } from "@commonfabric/piece";
 import type {
   HarnessPatternRef,
@@ -283,6 +314,7 @@ export interface BuiltinToolInputMap {
   read_piece_source: ReadPieceSourceToolInput;
   revise_piece: RevisePieceToolInput;
   assign_slug: AssignSlugToolInput;
+  resolve_piece: ResolvePieceToolInput;
   describe_handle: DescribeHandleToolInput;
   finish_task: FinishTaskInput;
   search_patterns: SearchPatternsToolInput;
@@ -293,6 +325,15 @@ export interface BuiltinToolInputMap {
   loom_compose: LoomComposeToolInput;
   loom_inspect: LoomReadToolInput;
   loom_authoring_context: LoomReadToolInput;
+  loom_search: LoomSearchInput;
+  loom_page_discover: LoomPageDiscoverInput;
+  loom_page_inspect: LoomPageTargetInput;
+  loom_page_read: LoomPageTargetInput;
+  loom_people: LoomPeopleInput;
+  loom_calendar_list: LoomCalendarListInput;
+  loom_context: LoomContextInput;
+  loom_profile: LoomProfileInput;
+  submit_result: SubmitResultInput;
 }
 
 export interface BuiltinToolOutputMap {
@@ -310,6 +351,7 @@ export interface BuiltinToolOutputMap {
   read_piece_source: ReadPieceSourceToolOutput;
   revise_piece: RevisePieceToolOutput;
   assign_slug: AssignSlugToolOutput;
+  resolve_piece: ResolvePieceToolOutput;
   describe_handle: DescribeHandleToolOutput;
   finish_task: FinishTaskOutput;
   search_patterns: SearchPatternsToolOutput;
@@ -320,10 +362,25 @@ export interface BuiltinToolOutputMap {
   loom_compose: LoomAuthoringToolOutput;
   loom_inspect: LoomAuthoringToolOutput;
   loom_authoring_context: LoomAuthoringToolOutput;
+  loom_search: LoomRetrievalToolOutput;
+  loom_page_discover: LoomRetrievalToolOutput;
+  loom_page_inspect: LoomRetrievalToolOutput;
+  loom_page_read: LoomRetrievalToolOutput;
+  loom_people: LoomRetrievalToolOutput;
+  loom_calendar_list: LoomRetrievalToolOutput;
+  loom_context: LoomRetrievalToolOutput;
+  loom_profile: LoomRetrievalToolOutput;
+  submit_result: SubmitResultOutput;
 }
 
 interface ToolOutputWithId {
   outputId: string;
+}
+
+/** A structured-result schema and the host path its JSON file is kept at. */
+export interface HarnessStructuredResultTarget {
+  schema: JSONSchema;
+  path: string;
 }
 
 export interface CreateHarnessEngineOptions
@@ -424,9 +481,18 @@ export interface CreateHarnessEngineOptions
   taskText?: string;
 
   /**
-   * Operator input cells to mint handles for at run start; see
-   * `establishInputCells`. Requires a fabric session — the cells live in
-   * its space.
+   * The structured result this run ends on: the schema it is validated
+   * against and the host path of the JSON file that holds it. Configured, the
+   * run offers `submit_result`, which writes that file host-side; the model
+   * writing the file itself stays a second way to the same place. A subagent
+   * run takes none: the result is the root run's to return.
+   */
+  structuredResult?: HarnessStructuredResultTarget;
+
+  /**
+   * Host-supplied attachments or session-retained targets to mint handles for
+   * at run start; see `establishInputCells`. Requires a fabric session — the
+   * cells live in its space.
    */
   inputCells?: readonly HarnessInputCellSpec[];
 
@@ -582,6 +648,8 @@ export class CfHarnessEngine {
   #researchRunner?: HarnessResearchRunner;
   #patternIndexLedger?: PatternIndexLedger;
   readonly #taskText?: string;
+  readonly #structuredResult?: HarnessStructuredResultTarget;
+  #structuredResultRecorded = false;
   readonly #inputCells: readonly HarnessInputCellSpec[];
   readonly #connectorGrants: readonly HarnessConnectorGrantSpec[];
   readonly #patternRefs: readonly HarnessPatternRefSpec[];
@@ -789,6 +857,20 @@ export class CfHarnessEngine {
           skillsShAcquisitionClientFactory,
         );
     this.#taskText = options.taskText;
+    const recordedStructuredResult = options.runState?.structuredResult;
+    if (
+      recordedStructuredResult !== undefined &&
+      options.structuredResult !== undefined &&
+      !deepEqual(recordedStructuredResult, options.structuredResult)
+    ) {
+      throw harnessResumeRefusal(
+        "resumed run structured-result configuration does not match the recorded configuration",
+      );
+    }
+    this.#structuredResult = options.lineage === undefined &&
+        options.runState?.lineage === undefined
+      ? structuredClone(recordedStructuredResult ?? options.structuredResult)
+      : undefined;
     this.#inputCells = options.inputCells ?? [];
     this.#connectorGrants = options.connectorGrants ?? [];
     this.#patternRefs = options.patternRefs ?? [];
@@ -1035,6 +1117,9 @@ export class CfHarnessEngine {
         credentialOwner: this.config.credentialOwner,
         harnessHomeIdentity: this.config.harnessHomeIdentity,
         artifactRoot: this.artifactStore?.runRoot,
+        ...(this.#structuredResult !== undefined
+          ? { structuredResult: this.#structuredResult }
+          : {}),
         runManifest: this.config.runManifest,
         runManifestPath: this.config.runManifestPath,
         docsCorpus: this.config.docsCorpus,
@@ -1536,6 +1621,77 @@ export class CfHarnessEngine {
     return minted.token;
   }
 
+  /** Whether this run was configured with a structured-result schema. */
+  get structuredResultAvailable(): boolean {
+    return this.#structuredResult !== undefined;
+  }
+
+  /**
+   * Helper for `submit_result`, which writes a validated result to the
+   * configured file, replacing whatever an earlier submission left.
+   */
+  async #recordStructuredResult(
+    value: unknown,
+  ): Promise<{ replaced: boolean }> {
+    const { path } = this.#structuredResult!;
+    let replaced = this.#structuredResultRecorded;
+    if (!replaced) {
+      try {
+        await Deno.stat(path);
+        replaced = true;
+      } catch (error) {
+        if (!(error instanceof Deno.errors.NotFound)) throw error;
+      }
+    }
+    await Deno.mkdir(dirname(path), { recursive: true });
+    await Deno.writeTextFile(path, `${JSON.stringify(value, null, 2)}\n`);
+    this.#structuredResultRecorded = true;
+    return { replaced };
+  }
+
+  /**
+   * Mints and records a handle for content a tool observed that is not a
+   * cell, so a result naming the token can link a document minted from it.
+   */
+  async mintReferentHandle(
+    referent: HarnessDocumentReferentDraft,
+  ): Promise<string> {
+    return await this.#mintReferent({ kind: "document", ...referent });
+  }
+
+  /**
+   * Mints and records the handle for an admitted research kit, under the
+   * kit's own label. This is the one path that mints a research referent, and
+   * the research tool's admission is the one caller: a value that is not a
+   * research handle's content is refused rather than held as one.
+   *
+   * @throws Error when `value` is not the content of a research handle.
+   */
+  async mintResearchHandle(
+    value: HarnessResearchHandleValue,
+    label: IFCLabel,
+  ): Promise<string> {
+    if (!isHarnessResearchHandleValue(value)) {
+      throw new Error("a research handle holds an admitted kit's projection");
+    }
+    return await this.#mintReferent({
+      kind: "research",
+      source: "research",
+      labelSource: "research",
+      value: value as unknown as FabricValue,
+      label,
+    });
+  }
+
+  async #mintReferent(referent: HarnessHandleReferentDraft): Promise<string> {
+    const minted = await mintReferentHandle(
+      this.handleTable ?? createHarnessHandleTable(this.#runState.runId),
+      referent,
+    );
+    await this.recordHandleTable(minted.table);
+    return minted.token;
+  }
+
   async persistRunState(): Promise<string | undefined> {
     return await this.artifactStore?.persistRunState(this.#runState);
   }
@@ -1595,16 +1751,16 @@ export class CfHarnessEngine {
   }
 
   /**
-   * Establishes the run's operator input cells: mints a token for each
-   * `--input-cell` reference into the handle table, records the cells in
-   * run state, and returns them. Idempotent across resume, like the
-   * well-known grants: cells already recorded are returned as they stand.
+   * Establishes the run's input cells: mints tokens for host-supplied attachments
+   * or session-retained targets, records them in run state, and returns them.
+   * Idempotent across resume, like the well-known grants: cells already recorded
+   * are returned as they stand.
    *
-   * Unlike a grant, an input cell is explicit operator configuration, so
-   * failure is closed and loud rather than tolerated: cells configured on a
+   * An input cell names a task target, so failure is closed and loud rather
+   * than tolerated: cells configured on a
    * run with no fabric session, a reference that does not parse, a reference
-   * targeting another space, and a named piece address whose slug this space
-   * does not hold all throw before anything is recorded.
+   * targeting an unadmitted space, and a named piece address whose slug this
+   * space does not hold all throw before anything is recorded.
    */
   async establishInputCells(): Promise<HarnessInputCell[]> {
     if (this.#runState.inputCells !== undefined) {
@@ -1633,6 +1789,7 @@ export class CfHarnessEngine {
           ? { spaceName: session.pieces.getSpaceName() }
           : {}),
         resolvePiece: (slug) => resolvePieceAddress(session.pieces, slug),
+        foreignSpaces: session.foreignSpaces,
       },
     );
     await this.recordHandleTable(minted.table);
@@ -2607,9 +2764,27 @@ export class CfHarnessEngine {
         : {}),
       researchRuns: this.#runState.researchRuns ?? [],
       researchGoal: this.#runState.researchGoal,
-      ...(researchTaskCfcLabel !== undefined ? { researchTaskCfcLabel } : {}),
+      wellKnownGrants: this.#runState.wellKnownGrants ?? [],
+      ...(researchTaskCfcLabel !== undefined
+        ? {
+          researchTaskCfcLabel,
+          // A research task and any other model-authored argument have the
+          // same provenance, so they carry the same label.
+          toolInputCfcLabel: researchTaskCfcLabel,
+        }
+        : {}),
       patternRefs: this.#runState.patternRefs ?? [],
       inputCells: this.#runState.inputCells ?? [],
+      recordAssignedPiece: (piece: HarnessAssignedPiece) => {
+        this.#runState = patchHarnessRunState(this.#runState, {
+          assignedPieces: [
+            ...(this.#runState.assignedPieces ?? []).filter((existing) =>
+              existing.ref !== piece.ref
+            ),
+            structuredClone(piece),
+          ],
+        }, this.#now());
+      },
       recordResearchRun: (run: HarnessResearchRunSummary) => {
         this.recordResearchRun(run);
       },
@@ -2632,6 +2807,27 @@ export class CfHarnessEngine {
       sandbox: this.sandbox,
       hostProcessRunner: this.hostProcessRunner,
       loomAuthoring: this.config.loomAuthoring,
+      loomRetrieval: this.config.loomRetrieval,
+      mintReferentHandle: (referent: HarnessDocumentReferentDraft) =>
+        this.mintReferentHandle(referent),
+      mintResearchHandle: (
+        value: HarnessResearchHandleValue,
+        label: IFCLabel,
+      ) => this.mintResearchHandle(value, label),
+      ...(this.#structuredResult !== undefined
+        ? {
+          structuredResult: {
+            schema: this.#structuredResult.schema,
+            record: (value: unknown) => this.#recordStructuredResult(value),
+          },
+        }
+        : {}),
+      ...(this.config.fabricSession?.cfcReadMaxConfidentiality !== undefined
+        ? {
+          cfcReadMaxConfidentiality:
+            this.config.fabricSession.cfcReadMaxConfidentiality,
+        }
+        : {}),
       resolvePath: (path: string) =>
         this.sandbox.resolvePath(path, this.#runState.currentDir),
       resolveHostPath: (path: string) => this.#resolveHostPath(path),

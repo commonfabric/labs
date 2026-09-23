@@ -13,6 +13,18 @@ describes the agent runtime used by the operation.
 
 ## Status
 
+Design, and likely to be superseded before it is built. The
+[archived agent requests design](../history/plans/agent-requests-and-work-queue.md)
+records a
+general way for a pattern, acting for its user, to hand work to a `cf-harness`
+run and track it through a per-user queue; revising a piece from a request is
+one such run under the harness's existing `pattern-author` profile, and the
+harness is now capable of the authoring that this document specified a service
+for. The live [agent capability](../common/capabilities/agent.md) describes the
+implemented request surface. Whoever picks this up should treat the entry points, the
+session state machine, and the publication gate below as requirements to carry
+into that design rather than as a second service to build.
+
 Design. Labs contains the agent harness, authoring guidance, source lifecycle,
 and source replacement machinery needed by this design. It does not yet expose
 a hosted authoring service or the product entry points specified here. Local
@@ -24,7 +36,7 @@ authored-program manifest still required by the piece source lifecycle.
 
 ## Last updated
 
-2026-08-13
+2026-09-20
 
 ## Goal
 

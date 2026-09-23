@@ -1,0 +1,150 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "BudgetRow": {
+        "properties": {
+          "budget": {
+            "type": "number"
+          },
+          "category": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "budget"
+        ],
+        "type": "object"
+      },
+      "SpendRow": {
+        "properties": {
+          "category": {
+            "type": "string"
+          },
+          "total": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "category",
+          "total"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "budgets": {
+        "default": [],
+        "description": "The budgets to report against.",
+        "items": {
+          "$ref": "#/$defs/BudgetRow"
+        },
+        "type": "array"
+      },
+      "spend": {
+        "default": [],
+        "description": "What was actually spent, by category.",
+        "items": {
+          "$ref": "#/$defs/SpendRow"
+        },
+        "type": "array"
+      },
+      "useAliases": {
+        "default": true,
+        "description": "Whether the published alias table may be used. It may by default.",
+        "type": "boolean"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "primitives/budget-vs-actual.tsx",
+  "resultSchema": {
+    "$defs": {
+      "ComparisonRow": {
+        "properties": {
+          "actual": {
+            "type": "number"
+          },
+          "budget": {
+            "type": "number"
+          },
+          "budgetNames": {
+            "description": "The budget names that fed it, joined by `+` when more than one did.",
+            "type": "string"
+          },
+          "category": {
+            "description": "The spending category this row reports on.",
+            "type": "string"
+          },
+          "delta": {
+            "description": "`budget - actual`. Negative is over.",
+            "type": "number"
+          },
+          "matchedVia": {
+            "description": "`exact`, `normalized`, or `alias` — how the two sides were joined.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "category",
+          "budgetNames",
+          "budget",
+          "actual",
+          "delta",
+          "matchedVia"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "overCount": {
+        "description": "How many rows are over their budget.",
+        "type": "number"
+      },
+      "rows": {
+        "description": "Every budget that found spending, largest overspend first.",
+        "items": {
+          "$ref": "#/$defs/ComparisonRow"
+        },
+        "type": "array"
+      },
+      "totalActual": {
+        "type": "number"
+      },
+      "totalBudget": {
+        "type": "number"
+      },
+      "unmatchedBudgets": {
+        "description": "Budget names that matched no spending category.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      },
+      "unmatchedSpend": {
+        "description": "Spending categories that matched no budget.",
+        "items": {
+          "type": "string"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "rows",
+      "unmatchedBudgets",
+      "unmatchedSpend",
+      "totalBudget",
+      "totalActual",
+      "overCount",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

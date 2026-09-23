@@ -40,6 +40,7 @@ describe("cellFromUrl builtin", () => {
   async function resolve(
     url: string,
     hosts?: string[],
+    spaceHost?: string,
   ): Promise<
     {
       pending: unknown;
@@ -50,7 +51,12 @@ describe("cellFromUrl builtin", () => {
   > {
     const builtin = byRef("cellFromUrl");
     const testPattern = pattern<{ url: string }>(
-      ({ url }) => builtin(hosts ? { url, hosts } : { url }),
+      ({ url }) =>
+        builtin({
+          url,
+          ...(hosts ? { hosts } : {}),
+          ...(spaceHost ? { spaceHost } : {}),
+        }),
     );
 
     const resultCell = runtime.getCell(
@@ -142,6 +148,37 @@ describe("cellFromUrl builtin", () => {
     );
 
     expect(resolved).toBe(id);
+  });
+
+  it("registers an explicit toolshed before resolving a cross-space address", async () => {
+    const id = anExistingCell();
+    const routes: Array<[string, string]> = [];
+    runtime.registerSpaceHost = (routedSpace, host) => {
+      routes.push([routedSpace, host]);
+      return true;
+    };
+
+    const { id: resolved } = await resolve(
+      `//${space}/${id}`,
+      undefined,
+      "https://remote.example",
+    );
+
+    expect(resolved).toBe(id);
+    expect(routes).toEqual([[space, "https://remote.example"]]);
+  });
+
+  it("returns no cell when an explicit toolshed conflicts with the fixed route", async () => {
+    const id = anExistingCell();
+    runtime.registerSpaceHost = () => false;
+
+    const { id: resolved } = await resolve(
+      `//${space}/${id}`,
+      undefined,
+      "https://remote.example",
+    );
+
+    expect(resolved).toBeUndefined();
   });
 
   it("resolves a slug to the document that redirects to the piece", async () => {

@@ -195,6 +195,21 @@ export const COMPILE_CACHE_FAMILIES = [
 export type CompileCacheFamily = (typeof COMPILE_CACHE_FAMILIES)[number];
 
 /**
+ * The key a run's CI lanes publish the state of their pattern compile byte
+ * cache under. Every lane restores the same cache, so a run has one state for
+ * it, which is cold when any lane found the cache missing. Baseline files
+ * carry the key, so it stays the same whatever the lanes' capabilities are
+ * named.
+ */
+export const LANE_COMPILE_CACHE = "compile-cache";
+
+/**
+ * What a run's compile cache states are keyed by: a job family, or the cache
+ * the CI lanes restore.
+ */
+export type CompileCacheKey = CompileCacheFamily | typeof LANE_COMPILE_CACHE;
+
+/**
  * Compile cache state for one job family in one run. Cold means the cache
  * missed entirely (full recompile); warm covers both exact and restore-key
  * hits, since any hit implies the compiler fingerprint is unchanged.
@@ -202,12 +217,13 @@ export type CompileCacheFamily = (typeof COMPILE_CACHE_FAMILIES)[number];
 export type CompileCacheState = "cold" | "warm";
 
 /**
- * Per-family compile cache states for a run. An absent family is unknown (a
- * run whose cache-state artifact never recorded or could not be read) and is
- * treated as not-cold: it is not excluded from the coverage ratchet baseline.
+ * Compile cache states for a run, by the job family or lane cache they
+ * describe. An absent key is unknown (a run whose cache state was never
+ * recorded or could not be read) and is treated as not-cold: it is not
+ * excluded from the coverage ratchet baseline.
  */
 export type CompileCacheStates = Partial<
-  Record<CompileCacheFamily, CompileCacheState>
+  Record<CompileCacheKey, CompileCacheState>
 >;
 
 /**
@@ -232,8 +248,8 @@ export interface CoverageBaselineFile {
   metrics: MetricRecord[];
 
   /**
-   * Per-family compile cache states for the run this file describes. Absent
-   * when no cache-state artifact recorded for the run.
+   * Compile cache states for the run this file describes. Absent when
+   * nothing in the run recorded one.
    */
   compileCacheStates?: CompileCacheStates;
 }
@@ -348,15 +364,94 @@ export function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/**
+ * GitHub refusing because the token is over one of its request limits, as
+ * against refusing for any other reason. A caller that has to tell the two
+ * apart reads this type rather than the message, which names only the status
+ * and the path.
+ */
+export class GitHubRateLimitError extends Error {}
+
+/**
+ * Whether `resp` is GitHub applying a request limit. It answers both its
+ * primary and its secondary limits with 403 or 429, and the two statuses are
+ * read differently because only one of them means anything else.
+ *
+ * 429 is too many requests and nothing besides, so the status settles it. The
+ * rate-limit headers are documented as optional, and a response carrying none
+ * of them is still a limit.
+ *
+ * 403 is also how GitHub refuses a request the token may not make, and an
+ * artifact download reaches storage that answers 403 for a signed URL that has
+ * expired. So there the evidence has to come from somewhere: no requests left
+ * in the window, a wait to observe, or `body` saying outright that this is a
+ * limit, which is how GitHub words a secondary limit that carries neither
+ * header. A 403 offering none of the three is taken at its word as a refusal,
+ * because reporting a permission failure as a limit would promise the author a
+ * re-run that clears it.
+ */
+function isRateLimitResponse(resp: Response, body: string): boolean {
+  if (resp.status === 429) return true;
+  if (resp.status !== 403) return false;
+  return isOverPrimaryRateLimit(resp) ||
+    resp.headers.get("retry-after") !== null ||
+    RATE_LIMIT_BODY.test(body);
+}
+
+/**
+ * How GitHub words a limit in the body of a refusal that carries none of the
+ * rate-limit headers. Consulted only for a 403, where the status settles
+ * nothing on its own.
+ */
+const RATE_LIMIT_BODY = /\b(rate limit|abuse detection)\b/i;
+
+/**
+ * Whether `resp` spent the last request of its window. Such a limit resets
+ * minutes to an hour out, so no retry within one job can clear it.
+ */
+function isOverPrimaryRateLimit(resp: Response): boolean {
+  return resp.headers.get("x-ratelimit-remaining") === "0";
+}
+
+/**
+ * Whether `resp` is a limit that asks for a wait rather than one that has
+ * spent the window. Such a limit often clears inside the job, so it is worth
+ * another attempt whichever status it arrives under — and an attempt that
+ * succeeds is a pull request held to its baseline rather than passed ungated.
+ */
+function isSecondaryRateLimit(resp: Response, body: string): boolean {
+  return isRateLimitResponse(resp, body) && !isOverPrimaryRateLimit(resp);
+}
+
+/**
+ * Helper for the GitHub client, which composes the error a refusal raises. A
+ * limit says so in its message as well as in its type, because a caller that
+ * treats every failure alike still logs the message, and a 403 read there
+ * would otherwise pass for a permission failure.
+ */
 function githubApiError(
   resp: Response,
   path: string,
   method: "GET" | "POST" | "PATCH",
+  body: string,
 ): Error {
   const statusText = resp.statusText ? ` ${resp.statusText}` : "";
-  return new Error(
-    `GitHub API ${method} ${resp.status}${statusText}: ${path}`,
-  );
+  const rateLimited = isRateLimitResponse(resp, body);
+  const message = `GitHub API ${method} ${resp.status}${statusText}${
+    rateLimited ? " (rate limit)" : ""
+  }: ${path}`;
+  return rateLimited ? new GitHubRateLimitError(message) : new Error(message);
+}
+
+/**
+ * Whether `error` is GitHub applying a request limit. The client above raises
+ * a {@link GitHubRateLimitError} outright; the text match answers for a limit
+ * reported by something else that reads the API.
+ */
+export function isGitHubRateLimitError(error: unknown): boolean {
+  if (error instanceof GitHubRateLimitError) return true;
+  const message = error instanceof Error ? error.message : String(error);
+  return /\b(rate limit|rate-limited|ratelimit)\b/i.test(message);
 }
 
 /**
@@ -370,11 +465,71 @@ export function isNotFound(error: unknown): boolean {
   );
 }
 
-async function cancelResponseBody(resp: Response): Promise<void> {
+/** How much of a refusal's body is read to tell what kind of refusal it is. */
+const MAX_REFUSAL_BODY_BYTES = 4096;
+
+/**
+ * How long that body has to arrive. Reaching the end of it costs the check
+ * nothing: the classification falls back to what the status and the headers
+ * say, which is the whole of the evidence anywhere else. So this bounds an
+ * enrichment rather than an operation whose success anything waits on, and a
+ * refusal that never arrives cannot leave the check hanging on a connection
+ * the runner would otherwise hold open to the job's own limit.
+ */
+const REFUSAL_BODY_BUDGET_MS = 2_000;
+
+/** Reads up to {@link MAX_REFUSAL_BODY_BYTES} of `reader`, decoded. */
+async function drainRefusalBody(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<string> {
+  const chunks: Uint8Array[] = [];
+  let read = 0;
+  while (read < MAX_REFUSAL_BODY_BYTES) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    read += value.length;
+  }
+
+  const prefix = new Uint8Array(read);
+  let at = 0;
+  for (const chunk of chunks) {
+    prefix.set(chunk, at);
+    at += chunk.length;
+  }
+  return new TextDecoder().decode(prefix);
+}
+
+/**
+ * Takes a refusal's body, far enough to tell what kind of refusal it is. The
+ * text is evidence for {@link isRateLimitResponse} and reaches no message: an
+ * error names the status and the path, so a body holding an upstream request,
+ * a data URI or a page of markup is never copied into a log.
+ *
+ * Answers with the empty string wherever the body cannot be had — absent,
+ * unreadable, or slower than its budget — which leaves the status and the
+ * headers to classify the refusal on their own.
+ */
+async function readRefusalBody(resp: Response): Promise<string> {
+  const reader = resp.body?.getReader();
+  if (!reader) return "";
+
+  let expire: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<string>((resolve) => {
+    expire = setTimeout(() => resolve(""), REFUSAL_BODY_BUDGET_MS);
+  });
+
   try {
-    await resp.body?.cancel();
+    return await Promise.race([drainRefusalBody(reader), budget]);
   } catch {
-    // The GitHub status error remains the reported failure.
+    return "";
+  } finally {
+    clearTimeout(expire);
+    // Ask the connection to release, and settle a read still outstanding
+    // against a body that never arrived. Do not wait for an underlying source
+    // whose cancellation itself never settles: that would escape the budget
+    // this cleanup follows.
+    void reader.cancel().catch(() => {});
   }
 }
 
@@ -392,12 +547,19 @@ export async function githubGet<T>(path: string): Promise<T> {
 
     if (resp.ok) return resp.json();
 
-    await cancelResponseBody(resp);
+    const refusal = await readRefusalBody(resp);
+    // A secondary limit is worth another attempt whatever status carries it,
+    // which is why it is named here beside the statuses that are retried by
+    // their own nature. A spent window is not, and an ordinary refusal will
+    // not answer differently for being asked again.
+    const worthRetrying = RETRYABLE_GITHUB_STATUSES.has(resp.status) ||
+      isSecondaryRateLimit(resp, refusal);
     if (
-      !RETRYABLE_GITHUB_STATUSES.has(resp.status) ||
+      !worthRetrying ||
+      isOverPrimaryRateLimit(resp) ||
       attempt === GITHUB_GET_MAX_ATTEMPTS
     ) {
-      throw githubApiError(resp, path, "GET");
+      throw githubApiError(resp, path, "GET", refusal);
     }
 
     await sleep(githubRetryDelayMs(attempt, resp));
@@ -416,8 +578,7 @@ export async function githubPost<T>(
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
-    await cancelResponseBody(resp);
-    throw githubApiError(resp, path, "POST");
+    throw githubApiError(resp, path, "POST", await readRefusalBody(resp));
   }
   return resp.json();
 }
@@ -432,8 +593,7 @@ export async function githubPatch<T>(
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
-    await cancelResponseBody(resp);
-    throw githubApiError(resp, path, "PATCH");
+    throw githubApiError(resp, path, "PATCH", await readRefusalBody(resp));
   }
   return resp.json();
 }
@@ -487,30 +647,6 @@ export function newestArtifactsByName(artifacts: Artifact[]): Artifact[] {
   return [...byName.values()];
 }
 
-/**
- * The API path listing the runs a coverage baseline could come from:
- * successful pushes to the default branch, newest first.
- *
- * One path rather than one per reader, because the workflow the runs
- * belong to has to be the same for everything that compares against a
- * baseline, and a second copy is a second place to update when the run
- * moves to another workflow.
- *
- * GitHub serves a listing that carries a filter from a search index, and that
- * index can return a window of runs that ended weeks ago with no error to say
- * so. A reader that cannot tolerate that reads {@link workflowRunsPagePath}
- * and applies {@link isBaselineCandidateRun} itself.
- */
-export function workflowRunsPathForBaseline(perPage: number): string {
-  const params = new URLSearchParams({
-    branch: "main",
-    status: "success",
-    event: "push",
-    per_page: String(perPage),
-  });
-  return `/repos/${REPO}/actions/workflows/${WORKFLOW_FILE}/runs?${params}`;
-}
-
 /** Runs on one page of {@link workflowRunsPagePath}: GitHub's maximum. */
 export const WORKFLOW_RUNS_PAGE_SIZE = 100;
 
@@ -518,10 +654,19 @@ export const WORKFLOW_RUNS_PAGE_SIZE = 100;
  * The API path of one page of every run of the workflow, newest first, with
  * `1` as the first page.
  *
- * It carries no filter, which is what keeps GitHub from serving it out of the
- * search index {@link workflowRunsPathForBaseline} describes. The pull request
- * details are left out because nothing here reads them and they are most of
- * the response.
+ * One path rather than one per reader, because the workflow the runs belong to
+ * has to be the same for everything that compares against a baseline, and a
+ * second copy is a second place to update when the run moves to another
+ * workflow.
+ *
+ * It carries no filter, which is what keeps GitHub from serving it out of a
+ * search index. A listing that carries any of the `actor`, `branch`,
+ * `check_suite_id`, `created`, `event`, `head_sha` or `status` parameters is
+ * answered from that index, which can return a window of runs that ended weeks
+ * ago with a success status and no error to say so. A reader that wants only
+ * some of these runs applies {@link isBaselineCandidateRun} itself. The pull
+ * request details are left out because nothing here reads them and they are
+ * most of the response.
  */
 export function workflowRunsPagePath(page: number): string {
   const params = new URLSearchParams({
@@ -534,8 +679,7 @@ export function workflowRunsPagePath(page: number): string {
 
 /**
  * Returns whether a run could serve as a coverage baseline: a push to the
- * default branch that concluded successfully. The same runs
- * {@link workflowRunsPathForBaseline} asks GitHub to select.
+ * default branch that concluded successfully.
  */
 export function isBaselineCandidateRun(
   run: Pick<WorkflowRun, "event" | "head_branch" | "conclusion">,
@@ -591,12 +735,17 @@ const COMPILE_CACHE_FAMILY_SET: ReadonlySet<string> = new Set(
   COMPILE_CACHE_FAMILIES,
 );
 
+const COMPILE_CACHE_KEY_SET: ReadonlySet<string> = new Set<CompileCacheKey>([
+  ...COMPILE_CACHE_FAMILIES,
+  LANE_COMPILE_CACHE,
+]);
+
 /**
  * Parse a baseline artifact file into its metrics and its optional compile
  * cache states. A metric record missing a field the ratchet reads fails the
  * whole file, because a baseline that silently lost a metric would read as a
- * group with no debt to beat. Unknown cache families and invalid state values
- * are dropped instead, so a malformed tag degrades to "unknown" rather than
+ * group with no debt to beat. Unknown cache keys and invalid state values are
+ * dropped instead, so a malformed tag degrades to "unknown" rather than
  * losing the run's metrics.
  */
 export function parseCoverageBaselineDetailed(
@@ -634,10 +783,10 @@ export function parseCoverageBaselineDetailed(
 
   const compileCacheStates: CompileCacheStates = {};
   if (typeof rawStates === "object") {
-    for (const [family, state] of Object.entries(rawStates)) {
-      if (!COMPILE_CACHE_FAMILY_SET.has(family)) continue;
+    for (const [key, state] of Object.entries(rawStates)) {
+      if (!COMPILE_CACHE_KEY_SET.has(key)) continue;
       if (state !== "cold" && state !== "warm") continue;
-      compileCacheStates[family as CompileCacheFamily] = state;
+      compileCacheStates[key as CompileCacheKey] = state;
     }
   }
   return { metrics, compileCacheStates };
@@ -733,11 +882,23 @@ export async function downloadAndExtractArtifact(
 
     if (!resp.ok) {
       const statusText = resp.statusText ? ` ${resp.statusText}` : "";
-      recordFailure(
-        attempt,
-        `GitHub artifact download ${resp.status}${statusText}: ${artifactPath}`,
+      const failure =
+        `GitHub artifact download ${resp.status}${statusText}: ${artifactPath}`;
+      recordFailure(attempt, failure);
+      const rateLimited = isRateLimitResponse(
+        resp,
+        await readRefusalBody(resp),
       );
-      await cancelResponseBody(resp);
+      const overPrimaryLimit = isOverPrimaryRateLimit(resp);
+      // A limit is the one refusal this must not report as a missing artifact:
+      // a caller told the artifact is absent holds its metric against no
+      // baseline, which is a verdict about coverage rather than about GitHub.
+      if (
+        rateLimited &&
+        (overPrimaryLimit || attempt === GITHUB_GET_MAX_ATTEMPTS)
+      ) {
+        throw new GitHubRateLimitError(failure);
+      }
       if (
         attempt === GITHUB_GET_MAX_ATTEMPTS ||
         !RETRYABLE_ARTIFACT_DOWNLOAD_STATUSES.has(resp.status)
@@ -1508,7 +1669,9 @@ export type CoverageNotGatedReason =
   /** No `main` run within reach measured that commit or an ancestor of it. */
   | "no-baseline"
   /** The base branch changed the group since the nearest measured ancestor. */
-  | "base-branch-moved";
+  | "base-branch-moved"
+  /** GitHub's API rate limit stopped the run reading any baseline data. */
+  | "rate-limited";
 
 /** A source group the pull request changed and the gate did not hold. */
 export interface CoverageNotGatedGroup {
@@ -1546,6 +1709,15 @@ export function coverageListingNotCurrent(
   return groups.some((group) => group.reason === "listing-not-current");
 }
 
+/**
+ * Returns whether `groups` went ungated because a GitHub API rate limit stopped
+ * the run reading the data a comparison needs. That reason is the one whose
+ * remedy waits on GitHub rather than on this repository.
+ */
+function coverageRateLimited(groups: CoverageNotGatedGroup[]): boolean {
+  return groups.some((group) => group.reason === "rate-limited");
+}
+
 /** The headline every surface reporting an ungated run opens with. */
 export const COVERAGE_NOT_GATED_HEADLINE =
   "Test coverage was NOT gated on this run";
@@ -1579,7 +1751,27 @@ function coverageNotGatedReasonText(
       return "`main` changed this group between the nearest measured " +
         `ancestor${ancestor} and ${baseCommitPhrase(baseSha)}.`;
     }
+    case "rate-limited":
+      return "GitHub's API rate limit stopped this run reading the baseline " +
+        "data, so nothing was compared.";
   }
+}
+
+/** What the reader is asked to do about a run that gated nothing. */
+function coverageNotGatedRemedy(groups: CoverageNotGatedGroup[]): string {
+  if (coverageListingNotCurrent(groups)) {
+    return "Re-run the **Coverage Check** job to ask GitHub for the listing " +
+      "again.";
+  }
+  if (coverageRateLimited(groups)) {
+    return "Re-run the **Coverage Check** job once GitHub's API rate limit " +
+      "has reset. The limit is a property of the moment rather than of this " +
+      "pull request, so a re-run started straight away meets it again.";
+  }
+  return "A later run of this pull request gates these groups, once a `main` " +
+    "run has measured the commit it merges. Re-running the **Coverage " +
+    "Check** job is enough when that `main` run has finished since; " +
+    "updating the branch gives the next run a newer commit to merge.";
 }
 
 /**
@@ -1610,14 +1802,7 @@ export function coverageNotGatedNotice(input: CoverageNotGatedInput): string[] {
     );
   }
   out.push("");
-  out.push(
-    listingNotCurrent
-      ? "Re-run the **Coverage Check** job to ask GitHub for the listing again."
-      : "A later run of this pull request gates these groups, once a `main` " +
-        "run has measured the commit it merges. Re-running the **Coverage " +
-        "Check** job is enough when that `main` run has finished since; " +
-        "updating the branch gives the next run a newer commit to merge.",
-  );
+  out.push(coverageNotGatedRemedy(input.groups));
   if (input.measurement?.runUrl) {
     out.push("");
     out.push(`Measured by ${input.measurement.runUrl}.`);

@@ -787,7 +787,7 @@ export class CellHandle<T = unknown> {
    * The ref-carried `cfcLabelView` is deliberately not included, as
    * `toWireString()` omits it: what this produces re-enters the worker without
    * passing `getCell()` or `cellRefToSigilLink()`, and a main-thread display
-   * copy must not ride back in as label state (inv-12 Stage 0).
+   * copy must not go back in as label state.
    */
   toSigilLink(): SigilLink {
     return linkRefFrom<CfcCellLinkRefPayload>({
@@ -904,11 +904,10 @@ export class CellHandle<T = unknown> {
     // a `CellHandle` belongs.
     //
     // Nothing reaches this today, de facto rather than by construction. The
-    // transport no longer helps: the envelope's encoding carries an instance
-    // across with its class, where structured cloning used to strip it. What
-    // keeps it unreachable is the refusal at each of the other ends of the
-    // crossing -- `convertCellsToLinks()` on the way out of the worker, and
-    // `serialize()` below on the way in.
+    // transport does not stop an instance: the envelope's encoding carries one
+    // across with its class. What keeps it unreachable is the refusal at each
+    // of the other ends of the crossing -- `convertCellsToLinks()` on the way
+    // out of the worker, and `serialize()` below on the way in.
     if (value instanceof FabricInstance) {
       refuseFabricInstance(value, "when hydrating a value off the connection");
     }

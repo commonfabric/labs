@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { decode } from "@commonfabric/utils/encoding";
 import {
   listPiecesFromCommand,
@@ -6,6 +7,14 @@ import {
   renderPieceSummaries,
   searchPiecesFromCommand,
 } from "../commands/piece.ts";
+
+const referenceFor = (id: string) =>
+  createLLMFriendlyLink({
+    space: "did:key:z6MkjchhfUsD6JcKaEBBHXC8mYtTBhQtTBFbGHqCRJRaqF6J",
+    id: id as `${string}:${string}`,
+    scope: "space",
+    path: [],
+  });
 
 function captureStdout(fn: () => void): string {
   let captured = "";
@@ -23,6 +32,12 @@ function captureStdout(fn: () => void): string {
 }
 
 Deno.test("piece summaries render human and JSON output", () => {
+  const reference = createLLMFriendlyLink({
+    space: "did:key:z6MkjchhfUsD6JcKaEBBHXC8mYtTBhQtTBFbGHqCRJRaqF6J",
+    id: "of:notes",
+    scope: "user",
+    path: ["embedded"],
+  });
   const identity = "R".repeat(43);
   const patternRef = {
     identity,
@@ -36,23 +51,34 @@ Deno.test("piece summaries render human and JSON output", () => {
 
   const json = captureStdout(() =>
     renderPieceSummaries([
-      { id: "of:notes", name: "Notes", patternRef },
-      { id: "of:unnamed" },
+      { id: "of:notes", reference, name: "Notes", patternRef },
+      { id: "of:unnamed", reference: referenceFor("of:unnamed") },
     ], true)
   );
   expect(JSON.parse(json)).toEqual([
-    { id: "of:notes", name: "Notes", patternRef },
-    { id: "of:unnamed", name: null, patternRef: null },
+    { id: "of:notes", reference, name: "Notes", patternRef },
+    {
+      id: "of:unnamed",
+      reference: referenceFor("of:unnamed"),
+      name: null,
+      patternRef: null,
+    },
   ]);
 
   const table = captureStdout(() =>
     renderPieceSummaries([
-      { id: "of:notes", name: "Notes", patternRef },
-      { id: "of:unreadable", error: "stored data is unavailable" },
-      { id: "of:unnamed" },
+      { id: "of:notes", reference, name: "Notes", patternRef },
+      {
+        id: "of:unreadable",
+        reference: referenceFor("of:unreadable"),
+        error: "stored data is unavailable",
+      },
+      { id: "of:unnamed", reference: referenceFor("of:unnamed") },
     ], false)
   );
   expect(table).toContain("ID");
+  expect(table).toContain("REFERENCE");
+  expect(table).toContain(reference);
   expect(table).toContain("of:notes");
   expect(table).toContain("Notes");
   expect(table).toContain(
@@ -78,7 +104,11 @@ Deno.test("piece registers its list and search command handlers", () => {
 });
 
 Deno.test("piece search command parses options and renders matches", async () => {
-  const matches = [{ id: "of:notes", name: "Notes" }];
+  const matches = [{
+    id: "of:notes",
+    reference: referenceFor("of:notes"),
+    name: "Notes",
+  }];
   let searched:
     | {
       config: {
@@ -158,7 +188,11 @@ Deno.test("piece search command parses options and renders matches", async () =>
 });
 
 Deno.test("piece list command parses options and renders pieces", async () => {
-  const pieces = [{ id: "of:tasks", name: "Tasks" }];
+  const pieces = [{
+    id: "of:tasks",
+    reference: referenceFor("of:tasks"),
+    name: "Tasks",
+  }];
   let listedConfig: {
     apiUrl: string;
     space: string;

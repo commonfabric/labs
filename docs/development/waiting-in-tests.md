@@ -3,9 +3,10 @@
 A test wait should resolve on a real event, not a poll loop or a fixed delay.
 This note is the working guidance for doing that: why polling waits flake,
 which primitives to reach for instead, how the packages that control time in
-their tests do it, how to prove a negative, the check that keeps new polling
-`waitFor` out of the integration suites, and the specific places where a
-bounded `waitFor` poll is still the right tool.
+their tests do it, why a wait the initial state already satisfies is not
+evidence, how to prove a negative, the check that keeps new polling `waitFor`
+out of the integration suites, and the specific places where a bounded
+`waitFor` poll is still the right tool.
 
 A companion document, [Test waits: rationale and case
 studies](waiting-in-tests-rationale.md), holds the analysis behind these
@@ -123,7 +124,14 @@ Waits split into two groups with different primitives.
   value back to the caller in the same binding notification, so it must be a
   `PageConditionValue`: a plain JSON value. Maps, functions, class instances,
   cycles, and other lossy JSON inputs are rejected at the boundary instead of
-  being changed silently.
+  being changed silently. A wait that runs out reports the page it ran out
+  against: the predicate source and its arguments, the document URL and title,
+  `x-root-view`, whether `globalThis.app` is present and the view it holds,
+  outstanding runtime requests, and a console tail. That report is
+  `waitForCondition`'s own message, so a helper that wraps the failure with a
+  message of its own carries the report one level down, in the cause. Read the
+  cause before adding a probe of your own; what it prints is usually the thing
+  the probe was going to collect.
 - `awaitViewSettled(page)` resolves once the worker has settled reactively, the
   resulting vdom batch has crossed to the main thread and been applied, and Lit
   has finished its update cycle. This is the "is the control interactive yet"
@@ -1026,6 +1034,67 @@ CPU-bound spin, and `unrefTimer` detaches a real Deno timer from the event loop'
 ref-count. This is the lighter tool: reach for the preload harness when a whole
 suite should be held to controlled time, and for a directly-imported `FakeTime`
 when only a test or two measures a delay.
+
+## A wait the initial state already satisfies establishes nothing
+
+A wait is evidence only while its condition cannot hold before the thing it
+waits on has happened. One that can hold earlier returns at once, and
+everything after it reads a state the test never established. Nothing reports
+that: the wait returns, the assertions run, and the case is green.
+
+Test selection is what makes this more than a redundant line. A case running
+after a sibling inherits the sibling's effect, so an early-satisfiable wait
+costs it nothing; the same case selected alone
+([the selection plan](../plans/pull-request-test-selection.md)) has only its
+hooks behind it, and the wait is then the whole of what stands between the
+case and a state nothing produced. So the shape is most dangerous exactly
+where an independence check would have to catch it, and that check cannot:
+running the case by itself is what produces the green.
+
+`clickCfButtonAndWaitForText` in
+`packages/patterns/integration/cfc-browser-helpers.ts` is the browser
+instance. It returns when the expected text is already present, which is what
+an idempotent re-entry wants and what a case whose expected text is also an
+initial state must not have: that case passes having clicked nothing. Such a
+case wants an expectation only its own click can produce, or wants to be one
+case with whichever case produces it.
+
+The setup wait in
+`packages/patterns/integration/sqlite-read-clearance-multi-runtime.test.ts` is
+the other side of the rule, and needs no page. Each of its `STEADY_ROWS`
+entries requires a query to have settled with no error and on a stated row
+count, and the state before the seed is neither: a read of a row-rule-bearing
+SQLite database that no write has created yet refuses for want of column
+provenance, so the result document carries an `error` and no rows. Neither
+half of the condition is reachable early.
+
+Making a case independent is what most often creates this, which is worth
+knowing before applying the rule to another file. A case given its own write
+so that it can stand alone then writes a value some neighbor also writes, and
+in file order the wait is handed the state it was going to observe.
+`waitForCondition` evaluates its predicate once as it installs
+(`packages/integration/utils.ts`, "Check immediately; the condition may
+already hold"), so the case observes nothing, and the propagation it appears
+to check is being checked by the neighbor. Give such a case a value no other
+case in the file writes, and its wait has a change to observe in either
+ordering.
+
+Run that rather than reason about it: delete the write, run the case alone,
+and confirm it fails reporting the value its wait names. A failure naming
+anything else means the wait was not resting on that write.
+
+Whether the case claims to observe a change is the boundary. A case whose
+subject is the initial state — named for the state it asserts, asserting the
+state the page loads in — is not this defect, and giving it a value of its own
+to write would take away what it tests.
+
+Both properties come from one choice — name the exact state the case expects,
+not a weaker fact that state implies. A wait for "settled" alone is satisfied
+by a settled emptiness; a wait for "settled on alice's two rows" is satisfied
+neither by the state before the write nor by a cleared query returning a row
+it should have withheld. The second fails setup naming the reader and the
+query; the first would let the case run on and read a state it did not
+establish.
 
 ## Proving a negative
 

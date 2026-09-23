@@ -22,7 +22,7 @@ that case is a per-write question, which SC-23 left transaction-global.
 
 ## The class
 
-Two reads on the way to one `Cell.set()` carry `writeDestinationRead`
+The write machinery reads below carry `writeDestinationRead`
 ([`reactivity-log.ts`](../../packages/runner/src/storage/reactivity-log.ts)),
 and `deriveFlowJoin()` in
 [`prepare.ts`](../../packages/runner/src/cfc/prepare.ts) drops a read
@@ -50,12 +50,37 @@ value a caller handed to `set()` against what is stored at the destination and
 emits a change for each path where the two differ. The read it makes of the
 destination to do that carries the marker.
 
+**The array append snapshot.** `Cell.push()` reads the destination array to
+build its tail-relative append. The snapshot carries `writeDestinationRead`
+and `mergeableOpRead`: its existing entries stay at the same destination, and
+only caller-supplied entries are appended. The method returns no value, so
+neither existing content nor the array's length reaches the caller. This lets
+a writer append a scalar or a held cell reference to an owner-confidential
+array without observing its membership. The destination's write policy still
+applies, and explicit source reads still contribute their labels. Object
+anchoring's ancestry reads retain their ordinary classification. Value-dependent
+operations such as `addUnique()` still observe the destination and require its
+read ceiling.
+
+**The SQLite publication comparison.** A query snapshots its raw destination
+record before staging a request and compares that snapshot with the destination
+when an abandoned publication settles. Both reads carry `writeDestinationRead`:
+they decide whether the write still owns this exact destination state, without
+dereferencing row links or carrying a destination value into the query or its
+output. The initial snapshot and the pending publication's destination diff
+also suppress scheduling dependencies: the query's inputs trigger another
+request, while the previous output does not. Keeping that comparison out of
+scheduling prevents a previous result's membership label from tainting the
+public pending flag through a trigger read. Conflict detection remains in
+force. This lets trusted publication machinery update a shared result whose
+shape label withholds it from the observing runtime.
+
 The marker is opt-in at a call site, never derived from the shape of a read,
 which is what makes the failure direction the safe one: a destination read
 nobody marks stays in the join and over-taints, where a marker reaching a
 read that should keep its label would under-taint silently.
 
-The marker goes on those two call sites, not on the walk. Every other read
+The marker goes on those call sites, not on the walk. Every other read
 `normalizeAndDiff()` makes joins as an ordinary read does, which matters
 because the walk takes reads for two other reasons:
 

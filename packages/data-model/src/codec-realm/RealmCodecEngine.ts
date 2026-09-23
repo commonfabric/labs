@@ -1,4 +1,4 @@
-import { BaseCodecEngine } from "@/codec-common/BaseCodecEngine.ts";
+import { BaseCodecEngine } from "@/codec-common";
 
 import type { LiveEnvironment } from "@/codec-interface/interface.ts";
 import { RealmDecodeAct } from "./RealmDecodeAct.ts";

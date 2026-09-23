@@ -177,9 +177,10 @@ wrong. These rules hold that agreement:
 - **Object property defaults follow filtering.** A missing or rejected
   declared property takes its non-null default, including when it is required.
   A property default of `null` does not fill an absent or rejected property.
-  At the top level an absent value can take a `null` default. Both paths share
-  the property-default selector in `traverse.ts`. What counts as rejected is
-  where the two paths part, and that is listed under the divergences below.
+  At the top level an absent value can take a `null` default. Both paths apply
+  the same rule, which `getPropertyDefaultSchema` in `traverse.ts` states. What
+  counts as rejected is where the two paths part, and that is listed under the
+  divergences below.
 - **Invalid array items take a permitted substitute.** `undefined` takes
   precedence over `null`; when neither is permitted, the mismatch refuses.
   Both paths use the same fallback selector. An unavailable linked document

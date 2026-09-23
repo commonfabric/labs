@@ -27,6 +27,7 @@ export {
   transformCfcLabelForCrossSpacePersist,
 } from "./label-representation.ts";
 export {
+  cfcLabelViewForAddress,
   cfcLabelViewForCell,
   cfcLabelViewForCellFailClosed,
   cfcLabelViewForCellFailClosedWithStatus,
@@ -52,6 +53,7 @@ export type {
   CfcDecomposedEnvelopes,
   CfcDereferenceTrace,
   CfcEnforcementMode,
+  CfcExternalContentObservation,
   CfcFlowLabelsMode,
   CfcLabelMetadataObservation,
   CfcLabelMetadataProtectionMode,
@@ -318,12 +320,15 @@ export {
   INITIAL_SINK_INVENTORY,
   isInitialSinkInventoryName,
   KNOWN_SINKS,
+  SINK_CLASSES,
   SINK_UNGATED_RATIONALES,
   sinkCeilingsOf,
+  sinkClassOf,
   ungatedSink,
 } from "./sink-inventory.ts";
 export type {
   KnownSinkName,
+  SinkClass,
   SinkGovernance,
   SinkGovernanceRegistry,
   SinkMaxConfidentiality,
@@ -333,6 +338,7 @@ export type {
 export {
   buildCfcReadCeiling,
   type CfcReadCeiling,
+  CfcReadCeilingError,
   type CfcReadCeilingLabels,
   type CfcReadCeilingOptions,
   type CfcReadOnExceed,
@@ -384,6 +390,10 @@ export {
   resolveCfcSchemaRefsOrThrow,
   selectReferencedCfcSchemaDefs,
 } from "./schema-refs.ts";
+export {
+  LLM_DERIVED_RESULT_STAMP_SCHEMA,
+  withLlmDerivedStamp,
+} from "./llm-derived-stamp.ts";
 export {
   type SchemaOpaqueLinkSanitizationResult,
   type StructuredResultReservedKeys,

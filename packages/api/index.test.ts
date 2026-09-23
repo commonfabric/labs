@@ -2,17 +2,15 @@
  * The api package is the public type surface for `commonfabric`. Most of it
  * is ambient type and `declare const` material with no runtime footprint, but
  * the module itself still evaluates its concrete re-exports when imported.
- * Loading it here exercises that evaluation, and pins the vocabulary the
- * primitive predicate accepts along with the fetch result surface.
+ * Loading it here exercises that evaluation, and pins the fetch result
+ * surface.
  */
 
 import { expect } from "@std/expect";
 import {
   CFC_CANONICAL_ALIAS_NAMES,
-  FABRIC_PRIMITIVE_SCHEMA_TYPES,
   type FabricBytes,
   type FetchBinaryResult,
-  isFabricPrimitiveSchemaType,
 } from "@commonfabric/api";
 
 Deno.test("api module loads and re-exports the CFC canonical alias names", () => {
@@ -21,17 +19,6 @@ Deno.test("api module loads and re-exports the CFC canonical alias names", () =>
   for (const name of CFC_CANONICAL_ALIAS_NAMES) {
     expect(typeof name).toBe("string");
   }
-});
-
-Deno.test("isFabricPrimitiveSchemaType accepts exactly the `FabricPrimitive` vocabulary", () => {
-  expect(FABRIC_PRIMITIVE_SCHEMA_TYPES.length).toBeGreaterThan(0);
-  for (const name of FABRIC_PRIMITIVE_SCHEMA_TYPES) {
-    expect(isFabricPrimitiveSchemaType(name)).toBe(true);
-  }
-  // The standard vocabulary and arbitrary names stay outside the predicate.
-  expect(isFabricPrimitiveSchemaType("object")).toBe(false);
-  expect(isFabricPrimitiveSchemaType("integer")).toBe(false);
-  expect(isFabricPrimitiveSchemaType("FabricNope")).toBe(false);
 });
 
 Deno.test("FetchBinaryResult describes bytes plus a media type", () => {

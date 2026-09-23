@@ -100,12 +100,14 @@ import {
   getMetaLink,
   matchLLMFriendlyLink,
   type NormalizedFullLink,
+  ownerStreamSchema,
   parseLink,
   parseLLMFriendlyLink,
   sanitizeSchemaForLinks,
 } from "../link-utils.ts";
 import type { RawBuiltinResult } from "../module.ts";
 import { getResultCellWithSourceSchema } from "../piece-helpers.ts";
+import { writeResultSchemaMeta } from "../result-schema-meta.ts";
 import {
   getCellOrThrow,
   isCellResultForDereferencing,
@@ -305,7 +307,11 @@ function resolveRefsForLLM(
     const result: any = {};
     for (const [key, value] of Object.entries(nodeObj)) {
       if (key === "$defs") continue; // strip $defs from output
-      if (Array.isArray(value)) {
+      if (key === "additionalProperties" && value === false) {
+        // This keyword controls object openness; converting `false` to an
+        // object would permit the extra properties the schema forbids.
+        result[key] = value;
+      } else if (Array.isArray(value)) {
         result[key] = value.map((item) =>
           isWalkableObjectOrArray(item) || typeof item === "boolean"
             ? resolve(item, refDepth, activeRefs)
@@ -2061,9 +2067,35 @@ function resolveToolCall(
       };
     }
 
+    // A path arrives as an address with no schema, and a stream holds nothing,
+    // so something stored has to say what the target is. Three things can. A
+    // path through a piece's result crosses a stored link that declares the
+    // stream. A path into a result document that keeps its result schema (a
+    // builtin's handlers are fields of its own result document) is typed from
+    // that schema. A path an observation handed out names a stream's own
+    // document, and its owner's manifest declares it.
+    //
+    // They are tried in that order because the handle chosen is also what the
+    // integrity gate reads its floors from (`integrityGateTarget`): a stored
+    // link and a manifest link carry the handler's event schema, floors
+    // included, where a result schema may say no more than "a stream". The
+    // handle returned carries that schema on its own link.
+    const streamHandle = (): Cell<unknown> | undefined => {
+      const resolved = cellRef.resolveAsCell();
+      if (isStream(resolved)) return resolved;
+      const typedRef = getResultCellWithSourceSchema(cellRef);
+      if (isStream(typedRef.resolveAsCell())) return typedRef;
+      const ownerSchema = ownerStreamSchema(resolved);
+      return ownerSchema === undefined
+        ? undefined
+        : cellRef.asSchema(ownerSchema);
+    };
+    const handler = streamHandle();
+    const targetsStream = handler !== undefined;
+
     if (name === READ_TOOL_NAME) {
       // Get cell reference from the link - works for any valid handle
-      if (isStream(cellRef.resolveAsCell())) {
+      if (targetsStream) {
         throw new Error(`Path resolves to a handler; use invoke() instead.`);
       }
 
@@ -2074,10 +2106,12 @@ function resolveToolCall(
       };
     }
 
-    if (isStream(cellRef.resolveAsCell())) {
+    if (targetsStream) {
       return {
         type: "invoke",
-        handler: cellRef as unknown as Stream<any>,
+        // A send decides stream or write off the handle, so the handle
+        // carries the declaration that was found for it.
+        handler: handler as unknown as Stream<any>,
         call: {
           id,
           name,
@@ -2594,6 +2628,7 @@ export const llmDialogTestHelpers = {
   simplifySchemaForContext,
   prepareSchemaForLLM,
   resolveRefsForLLM,
+  resolveToolCall,
   toolAllowsObservedConfidentiality,
 };
 
@@ -3900,16 +3935,18 @@ export function llmDialog(
     }
     const { result, internal } = cells;
 
-    // Stream markers belong to every resolved instance; an initialized
-    // symbolic handle does not establish another actor's stored state.
+    // An empty `pinnedCells` belongs to every resolved instance; an
+    // initialized symbolic handle does not establish another actor's stored
+    // state.
     result.withTx(tx).setRawUntyped({
       ...result.withTx(tx).getRaw(),
-      addMessage: { $stream: true },
-      cancelGeneration: { $stream: true },
-      pinCell: { $stream: true },
-      unpinAllCells: { $stream: true },
       pinnedCells: result.withTx(tx).key("pinnedCells").get() ?? [],
     } as FabricValue);
+    // The dialog's handlers are fields of this document, and a stream holds
+    // nothing, so the document keeps its result schema the way a piece's
+    // result document does: an address into it that arrives with no schema,
+    // as a tool call's does, is typed from there.
+    writeResultSchemaMeta(result.withTx(tx), resultSchema);
 
     sendResult(tx, result);
     recordPublication(

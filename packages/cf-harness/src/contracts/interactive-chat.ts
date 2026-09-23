@@ -219,7 +219,9 @@ export interface HarnessChatStartTurnParams {
    * Cells the caller attaches to this turn by reference, each under a name the
    * model sees. A turn is its own run with its own handle table, so input
    * cells are named per turn rather than per session: the tokens the model is
-   * given are the ones this turn's run minted.
+   * given are the ones this turn's run minted. Omission reuses session-retained
+   * named targets; an explicit empty list attaches none and clears those targets
+   * when the turn completes without naming a new piece.
    */
   inputCells?: readonly HarnessInputCellSpec[];
 
@@ -334,6 +336,16 @@ export interface HarnessChatTurnStatus {
   cancelReason?: string;
   error?: HarnessChatError;
 }
+
+/** Elapsed wall time on the durable turn clock, when both stamps are valid. */
+export const harnessChatTurnElapsedMs = (
+  startedAt: string | undefined,
+  observedAt: string | undefined,
+): number | undefined => {
+  if (startedAt === undefined || observedAt === undefined) return undefined;
+  const elapsed = Date.parse(observedAt) - Date.parse(startedAt);
+  return Number.isFinite(elapsed) && elapsed >= 0 ? elapsed : undefined;
+};
 
 export interface HarnessChatSessionStatus {
   sessionId: string;
@@ -463,6 +475,13 @@ export type HarnessChatStructuredEvent =
   | {
     kind: "browser_access_required";
     reason: string;
+  }
+  | {
+    /** Cumulative turn usage after one parent, research, or child model call. */
+    kind: "turn_usage";
+    turnId: string;
+    usage?: HarnessChatGatewayUsage;
+    elapsedMs?: number;
   }
   | {
     kind: "turn_canceled";

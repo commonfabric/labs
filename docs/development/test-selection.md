@@ -121,6 +121,14 @@ and what packing the stand-ins asks for — and says on the error stream
 that it did so, since a projection from costs nobody has measured would
 be arithmetic over an invented figure.
 
+Whichever way it gets its answer, it answers no more than
+`FULL_LANES_MAX`, so that one push's full run leaves runners for the
+changes waiting behind it. A run that needs more takes that many and says
+so on the error stream. Every test still runs when that happens. A test
+whose repeated runs fit in no lane runs fewer times, down to once, and a
+test that fits nowhere even once goes into the lane it leaves shortest,
+so the lanes run past their budget instead.
+
 ## The coverage gate
 
 A **measured set** is one suite's units over one workspace member's lines.
@@ -146,7 +154,7 @@ where the directory holds the lanes' uploaded coverage. It prints a row
 per set — the baseline, this run's count, the change, and the outcome —
 and stops with a non-zero status on a rise nothing accepted.
 
-Four things are worth knowing before reading a failure.
+Five things are worth knowing before reading a failure.
 
 - **Each set is on its own.** A member with two measured sets has two
   numbers, and neither pays the other down. Nor does the source group over
@@ -163,11 +171,18 @@ Four things are worth knowing before reading a failure.
   ordinary rules; it is the run-the-whole-set part that stops. A set some
   run measured anyway is still scored, so a pull request labelled
   `ci: full`, which measures every set, is gated whatever the cap says.
-- **A run with a failing test is reported rather than gated.** Coverage
-  measured through a failure says nothing about whether the change was
-  tested, and the failing test is what to fix. So is a set whose reports
+- **A run with a failing test reports rather than gates every set a lane
+  reported.** Coverage measured through a failure says nothing about
+  whether the change was tested, and the failing test is what to fix. So is a set whose reports
   name no line of its member: that is a conversion that produced
   nothing, not a set that covered nothing.
+- **A forced set that no lane reported fails**, in a run with a failing
+  test as in any other. The change was made to measure that set, and a
+  lane that stopped before writing its report, an upload that carried
+  nothing, and a download that found nothing all arrive at the gate
+  looking the same. The row says a rise cannot be ruled out. A set the
+  cap left unforced has nothing asking for it to be measured, so one no
+  run measured is reported rather than failed.
 
 Nothing about coverage fails a run on `main`. That run measures every set,
 which is where the baselines come from, and merges every report into the
@@ -183,6 +198,12 @@ deno run -A tasks/coverage-report.ts --reports <directory> \
 The run's identity is required rather than defaulted, because the gate
 looks a baseline up by the commit it was measured at and a figure stamped
 with none matches nothing.
+
+The report also publishes whether the run's compile byte cache was cold,
+read from the record each lane that opened the cache leaves beside its
+coverage, so that the dashboard can leave a cold run out of its trend.
+[Compile cache state and cold runs](COVERAGE.md#compile-cache-state-and-cold-runs)
+says why a cold run's figure differs.
 
 One set can come out of that with no baseline. A lane that saw a unit of
 a measured set fail writes a marker beside that set's report, and the
@@ -237,8 +258,9 @@ rather than a setting to fix.
 | `LANE_BUDGET_SECONDS` | 230 | seconds | derived | Nothing edits this. It is the bound less the prologue and the safety margin, so a budget that does not fit inside its own bound cannot be written down. |
 | `FULL_LANE_BOUND_SECONDS` | 600 | seconds | chosen | Up when the run on `main` uses more jobs than it needs; down when `main` takes too long to say something broke. |
 | `FULL_LANE_BUDGET_SECONDS` | 530 | seconds | derived | Nothing edits this. It is the full run's bound less the same prologue and safety margin a pull request's lane pays, since a lane of either run is the same job doing the same setup on the same runner. |
+| `FULL_LANES_MAX` | 30 | lanes | chosen | Up when the organization's runner limit rises; down when a push's full run crowds out the pull requests behind it. A full run needing more lanes than this takes this many, and a lane may then run past its budget. |
 | `FULL_RUN_LABEL` | ci: full | a label | chosen | Not a quantity. Change it only if the label collides with one the repository already uses for something else. |
-| `UNMEASURED_COST_SECONDS` | 1 | seconds | chosen | Up when a lane holding new tests runs long; down when it finishes early. It is reached for only by a suite with no measured test at all, since a suite that has any charges an unmeasured one what its middle test costs. |
+| `UNMEASURED_COST_SECONDS` | 1 | seconds | chosen | Up when a lane holding new tests runs long; down when it finishes early. It is reached for only by a suite with no measured unit at all, since a suite that has any charges an unmeasured one the larger of its units' mean and their ninetieth percentile. |
 | `VALUE_FLOOR` | 0.05 | score | chosen | Up when the cheap tail is not being swept up; down when it crowds out tests with a record of catching things. |
 | `WEIGHT_PROVEN` | 0.55 | share of the score | chosen | Up when a record of catching things should count for more. The three weights are shares of one score, so what this gains the other two lose. |
 | `WEIGHT_BREADTH` | 0.25 | share of the score | chosen | Up when a test that several distinct sources have hit should count for more; down when breadth is mostly telling you about the environment rather than the test. |
@@ -289,8 +311,8 @@ and therefore cheap, and a flake that appears in the morning should not
 wait until the small hours to be prioritized. Manual dispatch is there so
 that somebody who has just fixed something can refresh without waiting.
 
-Each run reads the newest aggregate, fetches only the objects whose runs
-are not already folded into it, folds them, ages the counters, scores
+Each run reads the newest aggregate it can, fetches only the objects whose
+runs are not already folded into it, folds them, ages the counters, scores
 everything, and creates one manifest object and one aggregate object. It
 reads and folds two hundred objects at a time, so what it holds is bounded
 by the number of tests rather than by the number of runs.
@@ -355,7 +377,7 @@ still the newest one and consumers keep using it. A manifest going stale
 degrades selection quality slowly rather than failing anything, which is
 the right direction for a system nothing should gate on.
 
-That is why a run that cannot read the aggregate a previous run left
+That is why a run that cannot read any aggregate a previous run left
 refuses to publish rather than starting from nothing. The aggregate is
 where a test's catches live, and they accumulate over unbounded history:
 a run that lost it and carried on would publish a manifest scoring every
@@ -363,10 +385,43 @@ test at the floor, and because it succeeded that manifest would be the
 one every lane obeys. A stale manifest is recoverable; a confident wrong
 one is not.
 
+Refusing over the newest state alone would be permanent, though. Nothing
+but the publisher creates a state object, and it creates one only where
+it folded, so a newest state it cannot read is one every later run comes
+to in the same condition: a body written in a shape from further ahead,
+which is what lowering `MANIFEST_SCHEMA_VERSION` leaves behind, or a
+body that arrives and is not an aggregate, which the store's create-only
+credentials mean nothing can replace. So a run passes over a state it
+cannot read and folds onto the newest one behind it that it can, saying
+which it passed over and why.
+
+A read that does not arrive is neither of those and is refused, the same
+as a listing that fails. It says nothing about the object, and a run
+that passed over on it would write a state superseding the one it
+skipped, turning one bad read into a permanent one.
+
+The days the run reads are what bound the walk. What a passed-over state
+folded and the one behind it did not comes back from the records, so a
+state named for a day before the first day of the window is not one the
+walk reaches, and `--days` is what reaches it. That bound is what the
+run can state rather than an exact account of the gap: the runs that
+wrote the passed-over states read windows of their own, reaching a day
+earlier than their own day for as many days as their window held, and a
+record that arrived for one of those earlier days after the state behind
+it was written is outside what this run reads. The run says so where it
+happens, naming what it passed over and what it folded onto. The newest
+state is read whatever day it carries, since taking it is not a choice
+between two aggregates.
+
 A cold start cannot read the whole window in one job, and is asked for
 deliberately: the bootstrap is a manual dispatch with the bootstrap input
 set, run once, and an incremental run that finds no aggregate at all says
-so and stops. After that the incremental path keeps up.
+so and stops. After that the incremental path keeps up. A store holding
+no aggregate is the whole of what asks for a bootstrap. A change to what
+a manifest or an aggregate holds does not, and neither does a stored
+aggregate this publisher cannot read: both leave the catches where they
+are, and a bootstrap would publish from an empty aggregate and drop
+them.
 
 A bootstrap replaces the score history rather than extending it. It folds
 into an empty aggregate, so the state object it creates holds what its
@@ -415,10 +470,39 @@ run without the file. The file is what leaves room for the corpus to grow
 into.
 
 The temporary file is removed when the day finishes or the read fails.
-A shard that cannot be read ends the publisher run without writing a
-manifest or aggregate. The previous manifest stays newest. Completed
-days are recorded, so no later run over a wide window folds their raw
-objects on top and doubles every catch in them.
+A day whose shards will not read is read from its raw objects instead,
+which is how a day with no rollup at all is read, and the run says which
+day it read that way and what stopped the rollup. The fold takes nothing
+from the shards that did read, so no part of the day is counted twice,
+and the day is left open rather than recorded, so later runs read it the
+same way. Completed days are recorded, so no later run over a wide window
+folds their raw objects on top and doubles every catch in them.
+
+Falling back rather than ending the run is what keeps a shard from
+stopping the publisher for good. The store holds create and nothing else,
+so a shard that will not read stays where it is, and a run that ended
+there would leave the day unrecorded for the next run to end on in the
+same place.
+
+Reading a day the long way costs more than the one run it happens on.
+Every object of that day goes into the aggregate's list of folded
+objects, where the rollup path would have written one receipt, and that
+list is carried in every state object written from then on. The day is
+also folded after the rollup days that follow it, because every rollup
+day is read before the raw pass begins. The rules that decide whether a
+failure is a catch look a day or two either side of it, and the fold has
+by then aged its cross-batch context past the day being folded, so that
+evidence is not in view. Every local submission of every day is folded
+after every rollup day for the same reason. The day's own records are all
+there and none of them is counted twice; what the day loses is some of
+the evidence that would have classified them.
+
+What the fallback rests on is that the shards that did read reached the
+batch and nothing else. Replaying the spooled observations is a read of
+the temporary file, and a failure there drives the fold, so part of the
+day is already counted when it is raised. Reading that day again by any
+route would count that part twice, and the run refuses there rather than
+falling back.
 
 A rollup is a derived cache of one closed day rather than the full-fidelity
 record of that day, so
@@ -502,13 +586,41 @@ replaces score history with only the selected window.
   Then require the three acceptance checks above. A change to what a manifest
   or an aggregate holds is not a cold start: the area is named rather than
   numbered, so it does not move, and both are read forward.
-- If listing or pagination fails, the newest state cannot be read, or its schema
-  is invalid, that is not absence. The publisher refuses to write by design.
-  Leave the append-only manifests and state objects intact: they and the raw
-  record history are the recovery sources. The current tool has no operator
-  option to select or restore an older state, so recovery requires a reviewed
-  path that reads preserved state and folds forward, landed on `main`; do not
-  improvise one with object deletion, renaming, or bootstrap.
+- If the run's log names a state it passed over and a state it folded onto,
+  that pair says which aggregate the run took and nothing more: it is printed
+  before the run reads a record or creates anything, so a later listing,
+  read, or creation that failed leaves the pair in the log of a run that
+  published nothing. What says a run published is its `created ...` line
+  naming the manifest object, together with the run's own conclusion. Where
+  both are there the recovery happened, and what a passed-over state folded
+  from days outside that run's window is not in the manifest; a second
+  dispatch changes none of that. Either way the log is reporting that the
+  newest states stopped being readable, which is the thing to go and find
+  the cause of.
+- If the log says every state it looked at was one it could not read, read
+  the fault it names against each. A state written in a shape from further
+  ahead means a publisher below that shape is deployed; land a `main` that
+  reads the shape it names and dispatch again. Where the log adds that the
+  states behind those are named for days before the first day the run reads,
+  widening `days` is what reaches them: dispatch with a window reaching a day
+  the listing above shows a readable state was created on. Either way leave
+  the append-only manifests and state objects intact — they and the raw
+  record history are the recovery sources — and do not reach for bootstrap or
+  for object deletion or renaming.
+- If a widened window reaches no readable state either, work back through
+  the listing, dispatching with a window that reaches the day each older
+  state was created on, until one is folded onto or the listing runs out. A
+  state written in a shape from further ahead is history out of reach rather
+  than history lost, and reads as soon as a publisher at that shape is
+  deployed, so a store holding one is never a cold start. A store whose
+  every state is a body that arrived and is not an aggregate holds no
+  history any publisher can reach, and that alone is the condition under
+  which this is a cold start: dispatch once with bootstrap on, and then
+  require the three acceptance checks above.
+- If listing a state, or reading one, fails outright, that is neither absence
+  nor an unreadable state: the run learned nothing about the object, and
+  refuses on that rather than taking the one behind it. Dispatch again once
+  the store serves the read.
 
 To run it by hand against the store without creating anything:
 
@@ -1013,6 +1125,108 @@ artifacts, so it takes minutes; nothing waits on it.
 To see what it would say about a run, set `MAIN_REPORT_RUN_ID` to that
 run and pass `--dry-run`, which posts nothing.
 
+## Units that run whole
+
+An invocation unit is usually one test file. A lane that wants part of
+one registers the rest of the file's tests as ignored.
+
+Some units hold more than one test and cannot be split. These are a
+workspace member whose test task takes no file list, a member's browser
+half, the reload suite's directory, and a section of the FUSE
+integration script. A lane that asks for one test of such a unit runs
+every test in it.
+
+Each suite lists these units in `whole`, and a lane writes no skip list
+for one. Most units in `whole` hold a single identity, such as a gate, a
+type-check group, a binary build, one pattern's check, or one vintage
+fixture's replay. Only the four kinds above hold several. A unit's shape
+does not tell you which kind it is, because two of the four kinds are
+paths.
+
+The packer places each such unit as one choice. `plan()` in
+`tasks/test-selection/plan.ts` merges the unit's tests into one choice
+before it packs. That choice costs what all the tests cost together, and
+it is held back when any of them is. The plan it writes lists the tests
+again in place of the merged choice. The merge exists only inside
+`plan()`. The manifest, the records, and the plan all name tests, so
+anything that matches a record against the manifest or a plan finds the
+test by its own name.
+
+A change to such a member's source makes its unit mandatory only
+through the coverage gate. A member with a measured set is reached by
+changes under its own tree. At present those members are
+`packages/connectors/agents/debug-view` and `packages/dashboard`. The
+others have no measured set, because
+[the coverage gate excludes them](#the-coverage-gate). No diff names a
+directory, so those units reach a lane only on the score of their tests.
+At present those are `packages/identity`, `packages/patterns`, and the
+three browser halves.
+
+A workspace member stops running whole when the task holding its tests
+becomes one the topology can point at files. That task is its
+`deno-test`, or its `test` if it defines no `deno-test`. The topology can
+point a single `deno test` at files, and also a dependency list that
+resolves to one, or the shard wrapper around one. It cannot point a task
+that joins commands with a shell operator such as `&&`, a task that
+names its own import map, or a test runner of the package's own.
+
+The shard wrapper, `tasks/run-sharded-test-files.ts`, is also how a
+member whose files need different flags stays splittable. Its `--serial`
+option names files that cannot run beside another test file in one
+process, and those run in a `deno test` without `--parallel`, one file
+at a time. Its `--all-access` option names files that need every
+permission, and those run under `--allow-all`. The wrapper runs each
+group as a `deno test` of its own and merges their JUnit reports into
+the one path it was handed. A lane groups the files it selects the same
+way, with a report for each group. The topology refuses a `--serial` or
+`--all-access` pattern that names no test file, and so does the wrapper,
+which also refuses such an `--ignore`. `packages/cli` is the member that
+uses both options.
+
+## A case that fails only when its siblings do not run
+
+A lane runs part of a file: the cases it holds run, and the registration
+preload registers the rest as ignored. So a case that passes in a
+full-file run and fails when a lane selects it on its own is reading
+state that another case in the same file establishes — a process-wide
+initialization, a global something else installs, a cache another case
+fills. The selection that dropped the other case dropped the setup with
+it.
+
+`CF_TEST_SKIP_LIST` reproduces such a selection locally.
+[The record guide](test-records.md#the-environment-surface) describes the
+variable; the file it names is keyed by repository-relative test file and
+holds the names this invocation is not to run. A name is a case's whole
+`describe` chain, joined with ` > `, which is the name the report carries.
+A file whose hooks sit outside every `describe` has a root suite the bdd
+runner invents, named `global`, and every name in that file opens with
+it. A name that matches nothing is skipped over in silence, so a case
+that goes on running is as likely to be a misspelled name as an
+independent case:
+
+```json
+{
+  "packages/donut/test/glaze.test.ts": [
+    "glazing a donut > takes the sugar ratio from the flavor"
+  ]
+}
+```
+
+`packages/test-support/src/records/preload.ts` is what reads the list, so
+the invocation adds it to whatever preloads and variables the package's
+own test task already passes, and runs from that package's directory.
+Deno resolves `--preload` as a path rather than through the import map,
+so it is absolute:
+
+```bash
+CF_TEST_SKIP_LIST=/tmp/skips.json deno test --no-check --allow-all \
+  --preload="$(git rev-parse --show-toplevel)/packages/test-support/src/records/preload.ts" \
+  test/glaze.test.ts
+```
+
+Running each case of a file alone, with every other case in it skipped,
+is what settles whether the file holds more of them.
+
 ## Telling the machinery about a new test
 
 Nothing, in the ordinary case. A test added to an existing suite is
@@ -1030,6 +1244,16 @@ of the identity being the reported name:
   `tasks/test-identity-aliases/`. Most renames cost nothing, because
   most tests have never caught anything; a rename of a test that has is
   worth the line.
+
+Until a run records it, a new test file is charged what
+[`standIn`](../../tasks/test-selection/census.ts) works out from the
+measured units of the suite around it: the larger of their mean and their
+ninetieth percentile. That is deliberately above what most units of a
+suite cost, since a lane packed under what its work takes is one killed at
+its bound, where one packed over it finishes early. A change adding many
+files at once therefore reads as filling a lane well before it does, and
+the lane summary says how many seconds of its projection stand on units
+nothing has measured.
 
 A new test *surface* — a new job, script, or harness — needs wiring, which
 [the record guide](test-records.md#covering-a-new-test-surface) covers.

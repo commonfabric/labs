@@ -40,6 +40,20 @@ const text = wishResult.result.content;
 return { [UI]: <div>{wishResult.result}</div> };
 ```
 
+### Results wait for loading documents
+
+Wish waits for the backing documents of its discovery collections and
+mentionable candidates before selecting a result. This loading behavior applies
+to every hashtag Wish. Pending document loads leave any existing state untouched;
+a cold Wish with no existing state publishes none until loading settles. UI
+loading affordances must not depend on an empty `candidates` array. A confirmed
+empty collection produces a no-match error; a failed document load produces a
+load error.
+
+This document readiness check is internal to the runtime. It does not expose
+an existence-query API to patterns or replace schema validation of loaded
+values.
+
 ### Single match auto-confirms
 
 When exactly one piece matches, `result` is set immediately with no picker
@@ -53,9 +67,10 @@ user browses candidates and clicks "Confirm Selection". Until confirmed,
 
 > **Exception — well-known profile targets.** `wish({ query: "#profile" })` does
 > _not_ follow the "result reflects the highlighted candidate" rule. Its
-> `.result` is **always the single current profile** (default → MRU → first) in
-> every mode; the picker there is only a switching affordance, and selecting a
-> profile changes `.result` by reordering candidates (MRU/default writes), not by
+> `.result` is **the single current profile** (default → MRU → first) in every
+> mode once profile data is loaded and a profile exists. The picker there is
+> only a switching affordance. Selecting a profile changes `.result` by
+> reordering candidates (MRU/default writes), not by
 > a confirm gesture. See [Well-Known Profile Targets](#well-known-profile-targets)
 > (CT-1829). Generalizing this "single-best by default; picker opt-in" shape to
 > all wishes is a future step.
@@ -141,12 +156,26 @@ wish({ query: "#profileBio" }) // default profile's bio (free-text description)
 wish({ query: "#profileSpace" }) // default profile's space cell
 ```
 
-`wish({ query: "#profile" }).result` is **always the single current profile** —
+Once profile data is loaded and at least one profile exists,
+`wish({ query: "#profile" }).result` is **the single current profile** —
 the best of the ordered candidates (default → MRU → first) — in **every** mode
-(interactive, headless, and the blessed read). It is never `undefined` while a
-profile exists, and it never depends on the picker sidecar pattern running, so
+(interactive, headless, and the blessed read). It does not depend on the picker
+sidecar pattern running, so
 consumers can gate on `.result` without stranding in the multi-profile case
 (CT-1829). The `candidates` array holds all ordered profiles.
+
+Profile resolution waits for the Home root, default pattern, roster, and
+referenced profile documents to load before publishing a new result or opening
+profile creation.
+While those reads are pending, the existing wish state is retained; a new wish
+can remain unset. Confirmation re-runs the wish even when a document is absent
+and no data arrives. A confirmed empty roster opens profile creation. An entry
+confirmed absent is skipped when another valid profile remains. A failed load,
+or absent entries leaving no valid profile, produces an error surface instead.
+Failed confirmations do not schedule another load on their own. Every re-run
+checks the current document before consulting a cached failure, so document
+arrival allows the same Wish instance to recover. A fresh Wish instance or a
+replica reset can request another load.
 
 The picker is the **switching affordance**, not the source of `.result`:
 selection is _state_, not a channel. When the picker's "Use" writes `mru` or
@@ -256,8 +285,8 @@ This ensures the wish is established once. Conditional logic belongs in how you
 
 These query strings resolve to well-known cells without a search. The
 `#`-prefixed targets resolve against the current space by default, except
-`#favorites`, `#journal`, `#learned`, `#learnedSummary`, and the `#profile*`
-targets, which require a signed-in user and resolve from that user's home space.
+`#favorites`, `#journal`, `#learned`, `#learnedSummary`, `#agent_queue`, and the
+`#profile*` targets, which require a signed-in user and resolve from that user's home space.
 The `scope` parameter can redirect or fan the others out across other spaces.
 
 | Target              | Description                                             |
@@ -277,6 +306,7 @@ The `scope` parameter can redirect or fan the others out across other spaces.
 | `#journal`          | User's journal (home space)                             |
 | `#learned`          | User's learned data (home space)                        |
 | `#learnedSummary`   | Free-form learned summary string (home space)           |
+| `#agent_queue`      | User's agent queue: their agent runs and runner (home space) |
 | `#profile`          | Profile default pattern object                          |
 | `#profileName`      | User's profile display name                             |
 | `#profileAvatar`    | User's profile avatar                                   |

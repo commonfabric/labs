@@ -1,11 +1,13 @@
 import { hashStringOf } from "@commonfabric/data-model";
 import { getLogger } from "@commonfabric/utils/logger";
+import { normalizeCellScope } from "../scope.ts";
 import type { CfcConfClause } from "./clause.ts";
 import { encodePointer } from "../../../memory/v2/path.ts";
 import type {
   AttemptedWrite,
   CfcAddress,
   CfcDereferenceTrace,
+  CfcExternalContentObservation,
   CfcLabelMetadataObservation,
   CfcMetadata,
   ConsultedGrant,
@@ -196,6 +198,17 @@ const compareLabelMetadataObservation = (
   return leftHash < rightHash ? -1 : leftHash > rightHash ? 1 : 0;
 };
 
+const compareExternalContentObservation = (
+  left: CfcExternalContentObservation,
+  right: CfcExternalContentObservation,
+): number => {
+  const bySource = compareCanonicalAddress(left.source, right.source);
+  if (bySource !== 0) return bySource;
+  const leftHash = hashStringOf(left);
+  const rightHash = hashStringOf(right);
+  return leftHash < rightHash ? -1 : leftHash > rightHash ? 1 : 0;
+};
+
 const compareWritePolicyInput = (
   left: WritePolicyInput,
   right: WritePolicyInput,
@@ -209,6 +222,15 @@ const compareWritePolicyInput = (
   // canonical hash to give a total order on otherwise-distinct records.
   let primary = 0;
   switch (left.kind) {
+    case "preserved-output":
+    case "owner-adoption":
+    case "initialization": {
+      primary = compareCanonicalAddress(
+        left.target,
+        (right as typeof left).target,
+      );
+      break;
+    }
     case "schema":
     case "structural-provenance":
     case "trusted-event":
@@ -273,6 +295,19 @@ export const canonicalizeWritePolicyInput = (
   input: WritePolicyInput,
 ): WritePolicyInput => {
   switch (input.kind) {
+    case "preserved-output":
+    case "owner-adoption":
+    case "initialization":
+      // Runtime evidence addresses are already value-relative. A literal leading
+      // `value` is a field name, not the storage envelope segment.
+      return {
+        ...input,
+        target: {
+          ...input.target,
+          scope: normalizeCellScope(input.target.scope),
+          path: Object.freeze([...input.target.path]),
+        },
+      };
     case "schema":
       return { ...input, target: canonicalizeAttemptedWrite(input.target) };
     case "structural-provenance":
@@ -537,6 +572,17 @@ export const canonicalizePreparedDigestInput = (
     ? {
       labelMetadataObservations: [...input.labelMetadataObservations].sort(
         compareLabelMetadataObservation,
+      ),
+    }
+    : {}),
+  // External-content observations are an order-insensitive set of opaque
+  // runtime receipts. Empty collapses to absent so adding support for the
+  // channel does not change digests of transactions that observed none.
+  ...(input.externalContentObservations !== undefined &&
+      input.externalContentObservations.length > 0
+    ? {
+      externalContentObservations: [...input.externalContentObservations].sort(
+        compareExternalContentObservation,
       ),
     }
     : {}),

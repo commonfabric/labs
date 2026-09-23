@@ -20,7 +20,68 @@ This block is LIVE: the change that moves a stage updates it here.
 | S3 — the shell opens `/<space>/top/42` | on main (#6896) |
 | S4 — `#42` in text | on main (#6887) |
 | S6 — graft onto Topics | items 1, 2, 3, 5 on main (#6937), with what items 2 and 3 show hidden on Topics since 2026-09-17 (below); item 4 rehearsed twice and held, awaiting a demand for named Topics rather than a technical answer |
+| S6b — a Topic stores its own number | built; awaiting review and merge |
 | S5 — deferred, not scheduled | — |
+
+### Built 2026-09-17: a Topic stores its own number
+
+A topic takes the number its board calls it by as an ordinary input and
+reports that. It reads no board table to learn it, and the `boardNames` input
+is gone from `topic.tsx` altogether, so no topic reaches a sibling topic on
+account of its own number. Dropping a declared input that deployed topics have
+a link bound at is accepted rather than refused — the candidate declares no
+path there, so the link is neither proved against anything nor written, and it
+stays in the raw argument document unreachable through the new projection. That
+is measured in `packages/cli/test/piece-link-input-visibility.test.ts`, beside
+the case that bounds it: a candidate may not stop PUBLISHING a path, and a
+topic never published this one.
+
+`addTopic` and the browser composer allocate over the board's namespace and
+pass the number into the topic in the transaction that creates it, the way the
+exemplar's `addItem` does. A topic nobody has
+numbered stores nothing, reports nothing, and renders without failing.
+
+The step's report is degraded while Topics hides its numbers, and Mike ruled on
+2026-09-19 to ship on that footing rather than publish a second property to
+work around it. A topic's published `shortName` is the only signal the board's
+step can read, and `SHOW_TOPIC_NUMBERS` gates it, so `named` comes back empty
+and `pending` holds every topic on every run. Repeating the step is safe but
+not idle — a topic that already stores the number writes nothing further, one
+whose number never landed stores it now, and the asking is itself a write
+either way — and what it loses is the ability to report that it is finished.
+`assigned`, the namespace's own half, still settles exactly.
+Turning the switch on restores the report by itself. The component behavior
+that forced the gate onto the publication is
+[#7771](https://github.com/commontoolsinc/labs/issues/7771): `cf-code-editor`
+takes a mention's short name off the destination piece where the list it was
+handed is the raw member list, which the spec reserves for a universe row.
+Criteria 3 and 4 of this stage were re-baselined the same day to say so.
+
+The board's `backfillNames` is now the whole of the operator procedure for the
+topics filed before the namespace. It numbers every topic the namespace does
+not hold and asks every topic reporting no number to store the one the
+namespace holds for it, by sending that number to the topic's own
+`recordName` — the one thing a member must provide for `recordNames` in
+`naming.ts` to reach it, and the verb an operator can also call directly. A
+board cannot confirm that asking inside the transaction that makes it, so the
+step returns `assigned`, `named` and `pending`. Once numbers are shown again, a
+run leaving a non-empty `pending` is completed by running it again; while they
+are hidden `pending` holds every topic on every run and `assigned` is the half
+that settles, as the paragraph above says. The per-topic `cf piece link` of
+`namesTable` that decision 13 accepted is no longer part of any Topics
+procedure; the operator procedure as it now stands, including what it has not
+been rehearsed for, is
+[`namespace-backfill.md`](../../skills/topics/references/namespace-backfill.md).
+
+Two things it leaves as they were, and one it leaves behind. The namespace is
+still what a number is allocated over, and `namesTable` is still the reverse
+lookup a caller uses to find the board's number for a topic by identity,
+including one that stores none. The exemplar's `item.tsx` declares no
+`recordName`, so its board goes on calling `backfillNames` and a member a
+backfill numbers there still stores nothing. And `ownName` in `naming.ts` now
+has no pattern reading it: it is the lift a member would use to read its name
+out of a board table, and no member does — the exemplar stores its name, and
+Topics now does too.
 
 ### What remains, and none of it is built
 
@@ -43,19 +104,20 @@ over — `createNamed` reads its keys — and the derived `namesTable` is still 
 `nameOf` reads to find the board's name for a member by identity, including a
 member whose own `shortName` is absent.
 
-A member filed before this change, or one a backfill names, stores no name and
-shows none. Writing a name onto such a member is not built, because a board
-writes a member's result and never its argument, so no verb of the board can
-reach that input once the member exists.
+An exemplar member filed before this change, or one a backfill names, stores
+no name and shows none. Writing a name onto such a member is not built there,
+because a board writes a member's result and never its argument, so no verb of
+the board can reach that input once the member exists. What closes it is a
+verb on the member, which Topics has and the exemplar does not.
 
-`packages/patterns/topics` is unchanged. A topic still takes `boardNames` and
-reads its name through `ownName` over that table, so none of this is yet true of
-Topics.
+For Topics this is built, and what it took is the dated entry above.
 
 Items 1 and 2, and decisions 13 and 14, are not yet reconciled with this
 decision. Read as an elaboration of it they would give the wrong input contract
 for decision 14 and #7439. Reconciling them is its own stage, and is not done
-here.
+here. The 2026-09-17 entry above settles the `boardNames` third of it for
+Topics and nothing more: `mentionable` and `boardCrossrefs` are untouched, and
+the exemplar's member still takes the tables it always took.
 
 [The lenient-naming experiment record](../history/plans/collection-naming-lenient-naming-experiment-2026-09-14.md)
 holds the evidence behind the decision: a member reading its name through the
@@ -65,8 +127,9 @@ namespace.
 **Decided 2026-09-17: Topics shows no numbers until every topic has one.** Mike
 ruled it, and ruled the mechanism too. The deployed board numbers each topic it
 creates, while a topic filed before the namespace has no number until the
-production backfill and bind (item 3 below) reach it, so only some topics showed
-a number, and that confused the people reading the board.
+production backfill (item 3 below) reaches it and that topic stores what the
+step asked it to, so only some topics showed a number, and that confused the
+people reading the board.
 
 `SHOW_TOPIC_NUMBERS` in `packages/patterns/topics/topic.tsx` is off, and a topic
 then publishes no `shortName`. Withholding the publication rather than each
@@ -84,8 +147,10 @@ Addressing is untouched: the board allocates a number on every create, records
 it in `names`, lists it beside its topic in `namesTable`, `addTopic` returns the
 name it allocated, and `top/<n>` resolves. What the hiding costs is the two
 reads that go through a topic — its own `shortName` and its `index` row — so the
-namespace is where a number is read while numbers are hidden, and item 3's bind
-check reads the topic's stored `boardNames` argument instead. The exemplar in
+namespace is where a number is read while numbers are hidden. Item 3's check is
+the topic's own stored number, read from its durable `shortName` input, which
+the switch does not gate; the `boardNames` argument that check once read is gone
+with the input. The exemplar in
 `packages/patterns/collection-naming/` shows its numbers in the header, on the
 cards, and in the editor, and its tests are unchanged.
 
@@ -101,7 +166,8 @@ is shown.
    with the same byte total, as the item wired with one link per table, from 2
    members to 40. **Unbuilt.** Until it lands, every collection adopting the
    namespace pays one `cf piece link` per existing member, per board-to-member
-   input.
+   input. A Topic has two such inputs rather than three: it stores its own
+   number, so no names table is wired onto it.
 
 2. **A table handed to every member delivers every member's document whole**
    (#7439). Measured on Topics: a member's declared demand over `boardCrossrefs`
@@ -112,7 +178,8 @@ is shown.
    and comments in `naming.ts` and `topic.tsx` say otherwise. The fix is a
    row-shape change: the `comparable` marker was measured to leave the document
    and byte counts unchanged. It touches the same inputs decision 14 touches,
-   so the two belong in one pass.
+   so the two belong in one pass. `boardNames` is no longer among them on a
+   Topic; `boardCrossrefs` and `mentionable` are.
 
 3. **S6 item 4 — the production backfill.** Held for want of a demand rather
    than a technical answer. Its sequence, and the contract breaks it still
@@ -433,15 +500,18 @@ Mike's call, after S4.
    strings off each one.
 4. The production backfill is rehearsed on a clone per
    `../development/space-clone-rehearsal.md`; the deployed vintage includes
-   #6827 before the backfill runs. One decision items 1-3 could not make for it
-   stands: a topic filed before the namespace reads its name only once
-   `namesTable` is link-bound onto it, and nothing in a pattern can reach a
-   member's argument to do that. The rehearsal of 2026-09-05 measured that step
-   end to end and is recorded at
-   `../history/plans/collection-naming-s6-backfill-rehearsal-2026-09-05.md`:
-   `backfillNames` writes the name into the board's map, the topic goes on
-   reading none, and one `cf piece link` per topic closes it. The operator
-   procedure is `skills/topics/references/namespace-backfill.md`.
+   #6827 before the backfill runs. The decision items 1-3 could not make for it
+   is made by the 2026-09-17 entry above: a topic stores its own number, and
+   `backfillNames` asks each topic filed before the namespace to store the one
+   the namespace holds for it, so no per-topic `cf piece link` remains in the
+   sequence. Both rehearsals ran the link-bind shape — the first of 2026-09-05,
+   recorded at
+   `../history/plans/collection-naming-s6-backfill-rehearsal-2026-09-05.md`, and
+   its rerun below — so what they measured of the numbering step itself no
+   longer describes it; what they measured of the two source legs does, and
+   those legs are unchanged. The
+   operator procedure is `skills/topics/references/namespace-backfill.md`, which
+   states which of its steps have a clone run behind them.
 
    **Held 2026-09-06, and not for a technical reason.** The step is rehearsed
    twice; the second run, after the positional-link fix, is recorded at
@@ -467,13 +537,20 @@ Mike's call, after S4.
    2. Deploy the board leg, which is refused over topics filed before the
       namespace and needs `--dangerously-allow-incompatible-schema` until a
       general mechanism for adding a property to existing data exists.
-   3. Update each topic to a pattern whose input schema selects `boardNames`.
-      Backfill, then bind `namesTable` onto each topic `addTopic` did not wire.
-      The topic's `boardNames` default materializes `[]`, so this bind needs no
-      `--allow-non-existing` flag. The flag only overrides missing endpoint
-      values or pieces; it cannot override a topic's input schema (#6965).
-      Run it from a host: laptop runs died 4-6 minutes in during the
-      2026-08-28 migration.
+   3. Update each topic to a pattern that declares the `shortName` input and
+      the `recordName` verb, then run `backfillNames` until its `assigned` list
+      comes back empty. `assigned` rather than `pending`, and the difference
+      matters while numbers are hidden: the step reads a topic's published
+      `shortName` to tell a stored number from none, `SHOW_TOPIC_NUMBERS` gates
+      exactly that, so `pending` holds every topic on every run and waiting for
+      it to empty would wait forever. An empty `assigned` says the namespace
+      holds every listed topic; what each topic stores is read from its own
+      durable input, `cf cell get --cell "$TOPIC" shortName --input`. The
+      operator procedure has the whole of it. Every topic takes the source
+      update BEFORE the step runs: a send to a path holding no stream is an
+      ordinary write, so the step's event lands as data in an un-updated
+      topic's result. Run the source updates from a host: laptop runs died 4-6
+      minutes in during the 2026-08-28 migration.
    4. Verify by reading both the board's index and the member addresses. In
       the rerun the fixed board's index agreed with its members at all three
       reads; the two reads that disagreed were on the instrument board

@@ -51,14 +51,28 @@
 //                  (`hasTable`, the scope_key shim). A schema-migration concern.
 // └────────────────────────────────────────────────────────────────────────────┘
 
+import type { JSONSchema } from "@commonfabric/api";
+import {
+  classifySchemaMetaValue,
+  SCHEMA_DOCUMENT_REF_PREFIX,
+} from "@commonfabric/data-model-schema/schema-refs";
+import {
+  definitionNamed,
+  type ExternalReferenceResolver,
+  externalReferenceResolverOver,
+} from "@commonfabric/runner/cfc/schema-primitives";
+import {
+  declaredHandleKind,
+  followExternalReferences,
+} from "@commonfabric/runner/stream-declaration";
 import { isObjectNotArray } from "@commonfabric/utils/types";
 import { utf8Compare } from "@commonfabric/utils/utf8";
 
 import type { SpaceDb } from "./db.ts";
 import {
+  decodedLinkOf,
   linksWithPaths,
   type LinkWalkBounds,
-  parseSigilLink,
   summarize,
 } from "./decode.ts";
 import {
@@ -78,7 +92,7 @@ import type {
 export type EntityKind =
   | "piece" // a running pattern instance (result cell + lineage meta)
   | "module" // pattern source/compiled module (value carries code + identity)
-  | "stream" // write-only event channel (value.$stream === true)
+  | "stream" // write-only event channel, declared by its owner's manifest
   | "schema" // a JSONSchema stored as a cell value
   | "owned-cell" // a cell owned by a piece (carries a `result` back-link)
   | "free-cell" // a standalone cell, owned by no piece
@@ -174,7 +188,7 @@ export interface EntityModel {
 
 /** The target id of a SigilLink value, if it is one. */
 function linkId(v: unknown): string | undefined {
-  return parseSigilLink(v)?.id ?? undefined;
+  return decodedLinkOf(v)?.id ?? undefined;
 }
 
 /** Owned child cell ids from a piece's `internal` manifest. */
@@ -213,8 +227,170 @@ function isSchemaValue(v: unknown): boolean {
   return !("$UI" in v) && !("$NAME" in v);
 }
 
+/**
+ * The stored sentinel a stream document held before its owner's manifest
+ * declared it. Documents written since carry no value; this reads the ones
+ * written before.
+ */
 function isStreamValue(v: unknown): boolean {
   return isObjectNotArray(v) && v.$stream === true;
+}
+
+/**
+ * Reads one document out of the space by id, for a classification that has to
+ * read past the document in hand: the owner a `result` back-link names, whose
+ * manifest declares a stream, and the schema document a `cid:` reference
+ * names.
+ */
+export type DocumentReader = (id: string) => EntityDocument | undefined;
+
+/**
+ * A reader over `space` at `branch`, reading an ordinary document at `scope`
+ * and a content-addressed one at space scope, which is the only scope those
+ * live at whatever scope the caller describes. It reads at `atSeq` where one
+ * is given, so that what a historical read reads past resolves against the
+ * same snapshot.
+ */
+export function spaceDocumentReader(
+  space: SpaceDb,
+  opts: { branch?: string; scope?: string; atSeq?: number } = {},
+): DocumentReader {
+  const branch = opts.branch ?? "";
+  const scope = opts.scope ?? "space";
+  return (id) => {
+    const outcome = reconstructOutcome(space, {
+      id,
+      branch,
+      scope: id.startsWith(SCHEMA_DOCUMENT_REF_PREFIX) ? "space" : scope,
+      ...(opts.atSeq === undefined ? {} : { atSeq: opts.atSeq }),
+    });
+    return outcome.status === "present" ? outcome.document : undefined;
+  };
+}
+
+/**
+ * A schema read out of a `schema` member — a document's meta, or a link's —
+ * together with the document its local references resolve against: the
+ * schema itself where it was held inline, and the schema document's value
+ * where it was reached by reference.
+ */
+export interface ResolvedSchema {
+  schema: unknown;
+
+  /** The document whose `$defs` a local `$ref` in `schema` names. */
+  root: unknown;
+
+  /** Whether the schema was held inline or read out of a schema document. */
+  via: "own" | "document";
+
+  /** The `cid:` reference followed, for `via: "document"`. */
+  ref?: string;
+}
+
+/**
+ * The schema a `schema` member holds, in either of the two forms the grammar
+ * admits: the schema itself, or a single-member `{ "$ref": "cid:…" }`, the
+ * `#/$defs/<name>` fragment form included, read through `readDocument`.
+ * `undefined` for an absent member, for a reference no reader was given for
+ * or that the space cannot supply, and for a member outside the grammar,
+ * which declares nothing rather than whatever a lenient read of it would
+ * find.
+ */
+export function resolveSchemaMember(
+  member: unknown,
+  readDocument?: DocumentReader,
+): ResolvedSchema | undefined {
+  const form = classifySchemaMetaValue(member);
+  if (form.kind === "inline") {
+    return { schema: form.schema, root: form.schema, via: "own" };
+  }
+  if (form.kind !== "reference") return undefined;
+  const root = readDocument?.(`${SCHEMA_DOCUMENT_REF_PREFIX}${form.taggedHash}`)
+    ?.value;
+  if (root === undefined) return undefined;
+  const schema = form.defName === undefined
+    ? root
+    : definitionNamed(root as JSONSchema, form.defName);
+  return schema === undefined
+    ? undefined
+    : { schema, root, via: "document", ref: form.ref };
+}
+
+/** Like {@link resolveSchemaMember}, over the `schema` meta of `doc`. */
+export function storedSchemaOf(
+  doc: EntityDocument,
+  readDocument?: DocumentReader,
+): ResolvedSchema | undefined {
+  return resolveSchemaMember(doc.schema, readDocument);
+}
+
+/**
+ * How the declaration reading follows an external reference here: into the
+ * schema document the space holds, through `readDocument`, read the way the
+ * runtime reads one. A reference the space cannot supply resolves to nothing,
+ * and the position declares nothing.
+ */
+function externalReferenceResolver(
+  readDocument?: DocumentReader,
+): ExternalReferenceResolver {
+  return externalReferenceResolverOver((taggedHash) =>
+    readDocument?.(`${SCHEMA_DOCUMENT_REF_PREFIX}${taggedHash}`)?.value as
+      | JSONSchema
+      | undefined
+  );
+}
+
+/** Where a stream's declaration was read, and the schema found there. */
+export interface StreamDeclaration extends ResolvedSchema {
+  /** The owner whose manifest declares the stream: the back-link's target. */
+  owner: string;
+}
+
+/**
+ * The declaration under which the owner of the document `id` names it a
+ * stream, or `undefined` when no owner does.
+ *
+ * A stream's document holds only the `result` back-link its setup writes, so
+ * the document alone says nothing about it. The declaration is on the owner,
+ * in the manifest link its result document keeps for each derived internal
+ * cell, and this follows the back-link to read it there: the entry whose link
+ * names the document at its root, with a schema declaring a stream. A
+ * document naming no owner, one whose owner the space does not hold, and one
+ * its owner's manifest does not carry are declared by no one.
+ */
+export function streamDeclarationOf(
+  id: string,
+  doc: EntityDocument,
+  readDocument?: DocumentReader,
+): StreamDeclaration | undefined {
+  const owner = linkId(doc.result);
+  if (owner === undefined) return undefined;
+  const manifest = readDocument?.(owner)?.internal;
+  if (!Array.isArray(manifest)) return undefined;
+  const resolveExternal = externalReferenceResolver(readDocument);
+  for (const entry of manifest) {
+    if (!isObjectNotArray(entry)) continue;
+    const link = decodedLinkOf(entry.link);
+    if (link === null || link.id !== id || (link.path?.length ?? 0) > 0) {
+      continue;
+    }
+    const schema = link.schema as JSONSchema | undefined;
+    if (declaredHandleKind(schema, { resolveExternal }) !== "stream") continue;
+    // The declaration held, so the chain of references it was read through
+    // resolves; what is shown is the schema at its end, and the source names
+    // the last document followed into.
+    const reached = followExternalReferences(schema, { resolveExternal });
+    if (reached === undefined) return undefined;
+    const ref = reached.followed.at(-1);
+    return {
+      schema: reached.schema,
+      root: reached.root,
+      via: ref === undefined ? "own" : "document",
+      ...(ref === undefined ? {} : { ref }),
+      owner,
+    };
+  }
+  return undefined;
 }
 
 /** A piece result value: carries render/name markers. */
@@ -270,11 +446,26 @@ export interface Classification {
 
 /**
  * Classify a reconstructed entity document by its top-level path-set and value
- * shape. Pure: resolves lineage to link-target ids but does not follow them or
+ * shape. Resolves lineage to link-target ids but does not follow them or
  * resolve `patternIdentity` to a module (that needs the space-wide module index;
- * see {@link modelEntity}).
+ * see {@link modelEntity}). What it reads besides `doc`, through
+ * `readDocument`, is what tells a stream from an owned cell: the owner its
+ * `result` back-link names, whose `internal` manifest declares the stream, and
+ * the schema document a manifest link's `cid:` reference names. A stream's
+ * document holds no value, so its owner is what says it is one, and a
+ * classification given no `id` to match a manifest entry by finds no stream
+ * that way.
  */
-export function classifyDocument(doc: EntityDocument): Classification {
+export function classifyDocument(
+  doc: EntityDocument,
+  opts: {
+    /** The document's own id, which a manifest entry naming it is matched by. */
+    id?: string;
+
+    /** Reads past `doc`: its owner, and a schema document a reference names. */
+    readDocument?: DocumentReader;
+  } = {},
+): Classification {
   const paths = Object.keys(doc).sort();
   const value = doc.value;
   const owned = "result" in doc;
@@ -352,7 +543,11 @@ export function classifyDocument(doc: EntityDocument): Classification {
       lineage,
     };
   }
-  if (isStreamValue(value)) {
+  if (
+    isStreamValue(value) ||
+    (opts.id !== undefined &&
+      streamDeclarationOf(opts.id, doc, opts.readDocument) !== undefined)
+  ) {
     return {
       kind: "stream",
       regime: "n/a",
@@ -463,15 +658,28 @@ export function modelEntity(
     id: address.id,
     scope: address.scope ?? "space",
     moduleIndex,
+    readDocument: spaceDocumentReader(space, {
+      branch: address.branch,
+      scope: address.scope,
+      atSeq: address.atSeq,
+    }),
   });
 }
 
 /** Build an EntityModel from an already-reconstructed document. */
 export function modelFromDocument(
   doc: EntityDocument,
-  ctx: { id: string; scope?: string; moduleIndex?: Map<string, ModuleEntry> },
+  ctx: {
+    id: string;
+    scope?: string;
+    moduleIndex?: Map<string, ModuleEntry>;
+    readDocument?: DocumentReader;
+  },
 ): EntityModel {
-  const c = classifyDocument(doc);
+  const c = classifyDocument(doc, {
+    id: ctx.id,
+    readDocument: ctx.readDocument,
+  });
   if (c.lineage.pattern && ctx.moduleIndex) {
     c.lineage.pattern.moduleId = ctx.moduleIndex.get(c.lineage.pattern.identity)
       ?.id;
@@ -650,19 +858,18 @@ export function visibleEntityRows(
   // a farther link is hidden by the nearer branch that claimed it.
   const gone = new Set<string>();
   if (!opts.includeDeleted) {
-    const tombstoned = space.db.prepare(
-      `SELECT r.id FROM revision r
+    const tombstoned = `SELECT r.id FROM revision r
        WHERE r.branch = ? AND r.scope_key = ? AND r.op = 'delete' AND r.seq <= ?
          AND NOT EXISTS (
            SELECT 1 FROM revision h
            WHERE h.branch = r.branch AND h.id = r.id
              AND h.scope_key = r.scope_key AND h.seq <= ?
              AND (h.seq > r.seq OR (h.seq = r.seq AND h.op_index > r.op_index))
-         )`,
-    );
+         )`;
     for (const link of branchReadChain(space, branch)) {
       for (
-        const r of tombstoned.all<{ id: string }>(
+        const r of space.all<{ id: string }>(
+          tombstoned,
           link.branch,
           scope,
           link.atSeq,
@@ -685,6 +892,40 @@ export function visibleEntityRows(
 }
 
 /**
+ * Every scope's entity rows in ONE pass, keyed by scope — for each scope,
+ * exactly what `visibleEntityRows(space, { branch, scope, includeDeleted: true })`
+ * returns, in the same order.
+ *
+ * The per-scope query filters on `scope_key` with no `id`, and the revision
+ * index leads with `id`, so SQLite cannot seek to a scope: it walks every
+ * revision on the branch and keeps the few that match. Asked once per scope,
+ * that is a whole-branch scan per scope, and a real store holds thousands of
+ * scopes — the Estuary Topics store has 13,571, most of them a handful of
+ * entities apiece, so enumerating it took hours. Asking once, unfiltered, walks
+ * the branch a single time and sorts the rows into their scopes as it goes.
+ *
+ * Tombstones stay, which is the records view `listEntityModels` reads: a
+ * `deleted` row models as `deleted` rather than disappearing.
+ */
+export function visibleEntityRowsByScope(
+  space: SpaceDb,
+  opts: { branch?: string } = {},
+): Map<string, EntityScanRow[]> {
+  const byScope = new Map<string, EntityScanRow[]>();
+  for (const r of visibleRevisionRows(space, { branch: opts.branch ?? "" })) {
+    let rows = byScope.get(r.scope);
+    if (rows === undefined) byScope.set(r.scope, rows = []);
+    rows.push({ id: r.id, revisions: r.revisions, link: r.link });
+  }
+  // The same comparator `visibleEntityRows` applies, so a scope's share of this
+  // pass is interchangeable with that function's answer for the scope.
+  for (const rows of byScope.values()) {
+    rows.sort((a, b) => b.revisions - a.revisions || utf8Compare(a.id, b.id));
+  }
+  return byScope;
+}
+
+/**
  * How many entities a read on this branch and scope can see — the size of
  * `visibleEntityRows`, and by construction the same set a scan walks.
  */
@@ -700,9 +941,13 @@ export function countEntities(
  * by WHY it carries none, so a tombstone answers `deleted` and only a genuinely
  * unreadable one answers `unknown`.
  */
-function kindOf(outcome: ReconstructOutcome): EntityKind {
+function kindOf(
+  id: string,
+  outcome: ReconstructOutcome,
+  readDocument: DocumentReader,
+): EntityKind {
   return outcome.status === "present"
-    ? classifyDocument(outcome.document).kind
+    ? classifyDocument(outcome.document, { id, readDocument }).kind
     : absentEntity(outcome.status).kind;
 }
 
@@ -761,6 +1006,19 @@ export function listEntityModels(
     scope?: string;
     limit?: number;
     kind?: EntityKind;
+
+    /**
+     * This scope's rows, already fetched, in place of
+     * `visibleEntityRows(space, { branch, scope, includeDeleted: true })`. The
+     * listing covers exactly these rows, and `extent.total` counts them, so a
+     * caller that passes a subset gets a listing of that subset. A caller
+     * enumerating EVERY scope passes each scope's share of one
+     * {@link visibleEntityRowsByScope} pass rather than letting each call
+     * fetch its own: the per-scope query cannot seek on `scope_key` (the index
+     * leads with `id`), so it walks the branch's whole revision set, and one of
+     * those per scope is the cost of the listing rather than a part of it.
+     */
+    rows?: readonly EntityScanRow[];
   } = {},
 ): EntityListing {
   const branch = opts.branch ?? "";
@@ -771,7 +1029,7 @@ export function listEntityModels(
   // A listing describes the space's RECORDS, so it keeps tombstones (they model
   // as `deleted`, which is why `--kind deleted` can ask for them) — and that
   // keeps `extent.total` counting exactly the set this pass returns.
-  const rows = visibleEntityRows(space, {
+  const rows = opts.rows ?? visibleEntityRows(space, {
     branch,
     scope,
     includeDeleted: true,
@@ -799,6 +1057,7 @@ export function listEntityModels(
     reconstructOutcome(space, { id, branch, scope });
   const documentOf = (o: ReconstructOutcome): EntityDocument | undefined =>
     o.status === "present" ? o.document : undefined;
+  const readDocument = spaceDocumentReader(space, { branch, scope });
   // An entity that is HERE and cannot be read. A tombstone is not one: it says
   // what happened to it.
   const isUnreadable = (o: ReconstructOutcome): boolean =>
@@ -828,7 +1087,7 @@ export function listEntityModels(
     const outcome = read(r.id);
     const doc = documentOf(outcome);
     indexModule(r.id, doc);
-    if (kind !== undefined && kindOf(outcome) !== kind) {
+    if (kind !== undefined && kindOf(r.id, outcome, readDocument) !== kind) {
       if (concealable && isUnreadable(outcome)) unreadable++;
       continue;
     }
@@ -903,6 +1162,7 @@ export function listEntityModels(
       id: r.id,
       scope,
       moduleIndex,
+      readDocument,
     });
     m.revisions = r.revisions;
     m.links = linksWithPaths(outcome.document.value, LISTING_LINK_WALK)
@@ -992,7 +1252,8 @@ export function describePiece(
     return { error: `entity ${absentEntity(outcome.status).label}` };
   }
   const doc = outcome.document;
-  const c = classifyDocument(doc);
+  const readDocument = spaceDocumentReader(space, { branch, scope });
+  const c = classifyDocument(doc, { id, readDocument });
   if (c.kind !== "piece") return { error: `not a piece (kind=${c.kind})` };
 
   const value = doc.value;
@@ -1048,18 +1309,23 @@ export function describePiece(
         return { id: cid, kind, label, summary: label };
       }
       const cdoc = child.document;
-      const cc = classifyDocument(cdoc);
+      const cc = classifyDocument(cdoc, { id: cid, readDocument });
       return {
         id: cid,
         kind: cc.kind,
         label: cc.label,
-        summary: cc.valueShape === "absent"
+        summary: cc.kind === "stream"
+          ? cc.label
+          : cc.valueShape === "absent"
           ? "(no value)"
           : summarize(cdoc.value),
       };
     },
   );
 
+  // The keys of the schema itself, read out of the schema document where the
+  // meta only references one.
+  const schema = storedSchemaOf(doc, readDocument)?.schema;
   return {
     id,
     regime: c.regime,
@@ -1067,7 +1333,7 @@ export function describePiece(
     pattern,
     input,
     resultKeys: isObjectNotArray(value) ? Object.keys(value) : [],
-    schemaKeys: isObjectNotArray(doc.schema) ? Object.keys(doc.schema) : [],
+    schemaKeys: isObjectNotArray(schema) ? Object.keys(schema) : [],
     ownedCells,
   };
 }

@@ -15,11 +15,8 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { FabricPrimitive } from "@/interface.ts";
-import {
-  BaseFabricPrimitive,
-  VALUE_TAG,
-} from "@/fabric-bases/BaseFabricPrimitive.ts";
+import { FabricPrimitive } from "@";
+import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
 
 /**
  * Minimal `BaseFabricPrimitive` subclass for exercising the static guard in

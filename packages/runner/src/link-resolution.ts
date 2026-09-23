@@ -6,7 +6,7 @@ import {
 } from "./schema-ifc.ts";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { isObjectOrArray } from "@commonfabric/utils/types";
-import { toCompactDebugString } from "@commonfabric/data-model";
+import { debugStr } from "@commonfabric/data-model";
 import {
   linkPayloadAtProbe,
   linkProbeSubPath,
@@ -25,7 +25,10 @@ import type {
   IExtendedStorageTransaction,
   INotFoundError,
 } from "./storage/interface.ts";
-import { linkResolutionProbe } from "./storage/reactivity-log.ts";
+import {
+  dereferenceResolutionProbe,
+  linkResolutionProbe,
+} from "./storage/reactivity-log.ts";
 import { ContextualFlowControl } from "./cfc.ts";
 import type { Runtime } from "./runtime.ts";
 import type { CfcAddress, CfcDereferenceTrace } from "./cfc/types.ts";
@@ -54,10 +57,17 @@ export type ResolvedFullLink = NormalizedFullLink & {
  * `$defs`. Such a schema selects every value, so it says nothing the
  * schema a resolution is already carrying does not, and a hop onto a link
  * bearing one keeps carrying rather than adopting it. `false` is not one
- * of these — it selects nothing, which is information.
+ * of these — it selects nothing, which is information. Nor is a schema
+ * that declares a stream: it selects every value too, but the document behind
+ * a stream holds nothing, so the declaration is the only thing that says what
+ * the position is, and a carried schema that lacks it cannot say so. Any
+ * other `asCell` entry keeps carrying: its document holds a value, which the
+ * carried schema is there to read.
  */
 const schemaConstrainsNothing = (schema: JSONSchema | undefined): boolean =>
-  schema === undefined || ContextualFlowControl.isTrueSchema(schema);
+  schema === undefined ||
+  (ContextualFlowControl.isTrueSchema(schema) &&
+    !ContextualFlowControl.declaresStream(schema));
 
 export const MAX_PATH_RESOLUTION_LENGTH = 100;
 
@@ -582,7 +592,7 @@ export function resolveLinkTracingDereferences(
         ...link,
         path: [...position, ...linkProbeSubPath()],
       }),
-      { meta: linkResolutionProbe },
+      { meta: dereferenceResolutionProbe },
     );
     let record: ProbeRecord;
     if (probe.ok) {
@@ -666,10 +676,10 @@ export function resolveLinkTracingDereferences(
     if (seen.has(key)) {
       logger.error(
         "link-res-error",
-        `Link cycle detected ${key} [${toCompactDebugString([...seen])}]`,
+        debugStr`Link cycle detected ${key}: $quote,long${[...seen]}`,
       );
       throw new Error(
-        `Link cycle detected at ${key} [${toCompactDebugString([...seen])}]`,
+        debugStr`Link cycle detected at ${key}: $quote,long${[...seen]}`,
       );
     }
     seen.add(key);
@@ -844,8 +854,15 @@ export function resolveLinkTracingDereferences(
         // so the shift reduces to target-path length minus our own.
         nextHop.link.path.length - link.path.length,
       );
+      // A stored schema that is only a stream's declaration adds nothing to
+      // a carried schema that already declares the stream, and that one can
+      // also type the event, so it keeps carrying.
+      const carriedDeclaresStoredStream = declaration !== undefined &&
+        ContextualFlowControl.isTrueSchema(declaration) &&
+        ContextualFlowControl.declaresStream(link.schema);
       if (
-        schemaConstrainsNothing(declaration) && link.schema !== undefined
+        link.schema !== undefined &&
+        (schemaConstrainsNothing(declaration) || carriedDeclaresStoredStream)
       ) {
         // `default` still inherits from the last declaration even when the
         // stored schema is otherwise unconstrained — a top-level `default`

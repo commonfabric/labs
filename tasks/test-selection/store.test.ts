@@ -9,6 +9,7 @@ import {
   newestAtOrBefore,
   newestFirstAtOrBefore,
   selectionPrefix,
+  stateDayOf,
   stateObjectName,
   statePrefix,
 } from "./store.ts";
@@ -105,15 +106,32 @@ describe("store", () => {
     });
 
     it("leads a state object's name with its day", () => {
-      expect(stateObjectName("2026-08-20", "01K3", NO_ENV)).toBe(
-        `${AREA}/state/2026-08-20-01K3.json.gz`,
-      );
+      const name = stateObjectName("2026-08-20", "01K3", NO_ENV);
+      expect(name).toBe(`${AREA}/state/2026-08-20-01K3.json.gz`);
+      expect(stateDayOf(name)).toBe("2026-08-20");
     });
 
     it("reads no generation time out of a name that is not one", () => {
       expect(generatedAtOf(`${AREA}/state/x.json.gz`))
         .toBeUndefined();
       expect(generatedAtOf("something-else")).toBeUndefined();
+    });
+
+    it("reads no day out of a name that is not a state object's", () => {
+      // The publisher walks the state listing by the day each name
+      // carries, so anything else under the prefix has to drop out of
+      // that walk rather than sort into it. A listing has no folders in
+      // it, so a name carrying one is an object among the states rather
+      // than one of them.
+      expect(stateDayOf(`${AREA}/state/x.json.gz`)).toBeUndefined();
+      expect(stateDayOf(`${AREA}/state/held/2026-08-20-01K3.json.gz`))
+        .toBeUndefined();
+      expect(stateDayOf(`${AREA}/state/2026-08-20-.json.gz`)).toBeUndefined();
+      expect(
+        stateDayOf(
+          manifestObjectName("2026-08-20T04:00:00.000Z", "01K3", NO_ENV),
+        ),
+      ).toBeUndefined();
     });
   });
 
@@ -231,6 +249,8 @@ describe("store", () => {
       });
       expect(found.manifest).toBeUndefined();
       expect(found.absent).toContain("no manifest");
+      // The store answered, and it answers every lane the same way.
+      expect(found.unreachable).toBeUndefined();
     });
 
     it("takes the newest manifest written in a shape it reads", async () => {
@@ -263,6 +283,7 @@ describe("store", () => {
       });
       expect(found.manifest).toBeUndefined();
       expect(found.absent).toContain("newer shape");
+      expect(found.unreachable).toBeUndefined();
     });
 
     it("stops at a corrupt manifest rather than taking the one before it", async () => {
@@ -290,6 +311,7 @@ describe("store", () => {
       });
       expect(found.manifest).toBeUndefined();
       expect(found.absent).toContain("not a manifest this reader understands");
+      expect(found.unreachable).toBeUndefined();
     });
 
     it("ignores a manifest created after the moment it is asked about", async () => {
@@ -316,10 +338,11 @@ describe("store", () => {
         ["gives an unparseable creation time", "the other day"],
       ] as const
     ) {
-      it(`treats a listing that ${what} as absent`, async () => {
+      it(`marks a listing that ${what} as unreachable`, async () => {
         // Any of these would order the resolution by a key that means
-        // nothing, so the listing fails and the lane goes on without a
-        // manifest rather than obeying one it picked by accident.
+        // nothing, so the listing fails rather than the lane obeying a
+        // manifest it picked by accident. A listing that did not answer
+        // the question asked is a store that could not be asked.
         const found = await fetchManifest({
           at,
           env: NO_ENV,
@@ -330,13 +353,16 @@ describe("store", () => {
         });
         expect(found.manifest).toBeUndefined();
         expect(found.absent).toContain("no usable creation time");
+        expect(found.unreachable).toBe(true);
       });
     }
 
     it("reports an object the listing named and the store would not give", async () => {
       // A manifest deleted between the listing and the read looks like
       // this. Every way a fetch can go wrong ends as no manifest with a
-      // sentence saying so, rather than as an exception out of a lane.
+      // sentence saying so, rather than as an exception, and is marked as
+      // a store that could not be asked, which one lane can meet and the
+      // next need not.
       const found = await fetchManifest({
         at,
         env: NO_ENV,
@@ -346,6 +372,7 @@ describe("store", () => {
       });
       expect(found.manifest).toBeUndefined();
       expect(found.absent).toContain("HTTP 404");
+      expect(found.unreachable).toBe(true);
     });
 
     it("reports a read of one object that threw", async () => {
@@ -356,9 +383,10 @@ describe("store", () => {
       });
       expect(found.manifest).toBeUndefined();
       expect(found.absent).toContain("connection lost");
+      expect(found.unreachable).toBe(true);
     });
 
-    it("treats an unreachable store as absent", async () => {
+    it("marks a store whose listing threw as unreachable", async () => {
       const found = await fetchManifest({
         at,
         env: NO_ENV,
@@ -366,6 +394,7 @@ describe("store", () => {
       });
       expect(found.manifest).toBeUndefined();
       expect(found.absent).toContain("no network");
+      expect(found.unreachable).toBe(true);
     });
   });
 });

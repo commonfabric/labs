@@ -3,14 +3,14 @@
 # and read back what it drew.
 #
 # Shuttle's unit suite drives every module with nothing behind it — no server,
-# no piece, and no terminal. `packages/cli/test/shuttle-terminal.test.ts` says
-# so of itself: "A handler that the runtime never runs, and a `setRaw` that the
-# driver never honours, would both pass here." What no case there can see is
+# no piece, and no terminal. `packages/cli/test/shuttle-terminal.serial.test.ts`
+# says so of itself: "A handler that the runtime never runs, and a `setRaw` that
+# the driver never honours, would both pass here." What no case there can see is
 # the composition: whether a `cd` that a stub accepted lands on a cell the
-# fabric holds, whether the reference a listing printed is the one the next
-# line takes, and whether what a read serves is what storage holds. Each of
-# those is a property of the seams together and of no module, so this is where
-# they are asserted.
+# fabric holds, whether the reference a listing printed is the one the next line
+# takes, and whether what a read serves is what storage holds. Each of those is
+# a property of the seams together and of no module, so this is where they are
+# asserted.
 #
 # The terminal is a real one. `cf sh` refuses to start unless both standard
 # streams are terminals, because it reads keys in raw mode and draws lines back
@@ -213,8 +213,8 @@ cat >"$EDITOR_SCRIPT" <<'EDITS'
 # does not assert the shell came back to its own screen: which screen a byte
 # landed on is not something a transcript of the bytes can say, and a shell
 # that drew its frame over the transcript would write exactly these records.
-# That assertion is `shuttle-terminal.test.ts`'s, where the escape sequences
-# are what is read.
+# That assertion is `shuttle-terminal.serial.test.ts`'s, where the escape
+# sequences are what is read.
 printf '\033[?1049h'
 trap 'printf "\033[?1049l"' EXIT
 case "$(cat "$1")" in
@@ -316,7 +316,13 @@ watch settings/note
 @frame q
 watches
 unwatch %1
+xpwd
+xcd ../elsewhere
+xpwd
 LINES
+# Read before the session so the claim step 32 makes about the seed is a
+# claim about this directory and not about whatever the shell reported.
+STARTED_IN=$(pwd)
 EDITOR="$EDITOR_SCRIPT" python3 "$DRIVER" "$SCRIPT" "$TRANSCRIPT" -- \
   $CF sh $ARGS >/dev/null
 DRIVE_STATUS=$?
@@ -360,6 +366,8 @@ WHERE=$(said 1 "where")
 contains "api       $API_URL" "$WHERE" "where names the host it connected to"
 contains "space     $SPACE" "$WHERE" "where names the space it connected to"
 contains "identity  $CF_IDENTITY" "$WHERE" "where names the identity it opened"
+contains "external  file://" "$WHERE" \
+  "where names the external working location beside the fabric place"
 
 step "6. ls at the root lists the facets, and cd takes one of them"
 check "%1 slugs
@@ -382,10 +390,12 @@ check "shuttle /slugs/ @space> " "$(prompt 5 "cd nosuchslug")" \
 step "9. A slug the index does record lands on the piece it names"
 check "shuttle first @space> " "$(prompt 6 "cd first")" \
   "the prompt carries the name the index confirmed"
+# The two handlers list as callables off the schema their stored links carry;
+# nothing is stored at either position.
 check "%1 \$NAME
 %2 \$UI
-%3 addItem
-%4 clearItems
+%3 addItem <callable>
+%4 clearItems <callable>
 %5 items
 %6 label
 %7 settings
@@ -914,6 +924,28 @@ check "%1 first/settings/note @space" "$(said 76 "watches")" \
   "the view closing left the watch armed, as it does when nothing was typed at it"
 check "Disarmed the watch on \`first/settings/note @space\`." \
   "$(said 77 "unwatch %1")" "unwatch disarms the watch the view was opened onto"
+
+step "32. The external working location starts at the process's own directory, and xcd moves it"
+# The half no unit test reaches: the location is seeded from `Deno.cwd()` at
+# startup, so what proves the seeding is a shell started from a real directory
+# rather than one handed a location by a case.
+#
+# The expected address is built from the directory this harness was standing
+# in, not matched against a shape. A shape would pass for any `file:` seed at
+# all — a fixed path, or the home directory — which is every way the seeding
+# could regress while still writing something that looks right.
+EXPECT_SEED=$(python3 -c \
+  'import pathlib, sys; print(pathlib.Path(sys.argv[1]).as_uri() + "/")' \
+  "$STARTED_IN")
+check "$EXPECT_SEED" "$(said 78 "xpwd")" \
+  "xpwd writes the directory the shell was started from, whole"
+EXPECT_MOVED=$(python3 -c \
+  'import pathlib, sys; print((pathlib.Path(sys.argv[1]).parent / "elsewhere").as_uri() + "/")' \
+  "$STARTED_IN")
+check "$EXPECT_MOVED" "$(said 79 "xcd ../elsewhere")" \
+  "xcd writes where it landed, the walk taken against that directory"
+check "$EXPECT_MOVED" "$(said 80 "xpwd")" \
+  "xpwd afterwards writes what the move wrote, the two being one spelling"
 
 # What step 11 does not reach: a piece that changes under a shell already
 # standing on it. Step 11 reads storage before the session and the shell's own

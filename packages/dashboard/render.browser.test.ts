@@ -35,13 +35,13 @@ function assertStandardTileLayout(
 ): void {
   const width = pixel(root.getBoundingClientRect().width);
   const tiles = new Map(
-    [...root.querySelectorAll<HTMLElement>("[data-tile-id]")].map((tile) => [
-      tile.dataset.tileId!,
+    [...root.querySelectorAll<HTMLElement>("[data-tile-label]")].map((tile) => [
+      tile.dataset.tileLabel!,
       tile,
     ]),
   );
   assertEquals(tiles.size, standard.length);
-  const benchmark = tiles.get("benchmark");
+  const benchmark = tiles.get("all benchmarks");
   assertExists(benchmark);
   const benchmarkHeadline = benchmark.querySelector<HTMLElement>(".big");
   const benchmarkSub = benchmark.querySelector<HTMLElement>(
@@ -67,15 +67,15 @@ function assertStandardTileLayout(
     benchmarkDuration.getBoundingClientRect().left - benchmarkRect.left,
   );
 
-  for (const { id, subSelector, view } of standard) {
-    const tile = tiles.get(id);
+  for (const { label, subSelector, view } of standard) {
+    const tile = tiles.get(label);
     assertExists(tile);
     if (view.href) {
-      assert(tile instanceof HTMLAnchorElement, `${id} must render as a link`);
+      assert(tile instanceof HTMLAnchorElement, `${label} must render as a link`);
       assertEquals(
         getComputedStyle(tile).display,
         "block",
-        `${id} linked tile must retain block layout`,
+        `${label} linked tile must retain block layout`,
       );
     }
     const tileRect = tile.getBoundingClientRect();
@@ -85,41 +85,41 @@ function assertStandardTileLayout(
       assertEquals(
         headline.title,
         view.valueLabel,
-        `${id} truncated headline must expose its full text at ${width}px`,
+        `${label} truncated headline must expose its full text at ${width}px`,
       );
     }
     const header = tile.querySelector<HTMLElement>(".lbl");
     assertExists(header);
     assert(
       header.scrollWidth <= header.clientWidth,
-      `${id} header overflows at ${width}px`,
+      `${label} header overflows at ${width}px`,
     );
     const facet = header.querySelector<HTMLElement>(".hfacet");
     if (facet) {
       assertEquals(
         facet.title,
         facet.textContent,
-        `${id} truncated header facet must expose its full text at ${width}px`,
+        `${label} truncated header facet must expose its full text at ${width}px`,
       );
     }
     assertEquals(
       pixel(headline.getBoundingClientRect().top - tileRect.top),
       headlineTop,
-      `${id} headline must share the benchmark offset at ${width}px`,
+      `${label} headline must share the benchmark offset at ${width}px`,
     );
     const sub = tile.querySelector<HTMLElement>(subSelector ?? ".sub");
     if (view.sub !== undefined || subSelector !== undefined) {
-      assertExists(sub, `${id} must render its subheading at ${width}px`);
+      assertExists(sub, `${label} must render its subheading at ${width}px`);
       assertEquals(
         pixel(sub.getBoundingClientRect().top - tileRect.top),
         subTop,
-        `${id} subheading must share the benchmark offset at ${width}px`,
+        `${label} subheading must share the benchmark offset at ${width}px`,
       );
       if (sub.matches(".sub")) {
         assertEquals(
           sub.title,
           sub.textContent?.trim(),
-          `${id} truncated subheading must expose its full text at ${width}px`,
+          `${label} truncated subheading must expose its full text at ${width}px`,
         );
       }
     }
@@ -127,19 +127,19 @@ function assertStandardTileLayout(
       ".chart > span:last-child",
     );
     if (view.duration !== undefined) {
-      assertExists(duration, `${id} must render its duration at ${width}px`);
+      assertExists(duration, `${label} must render its duration at ${width}px`);
       assertEquals(
         pixel(duration.getBoundingClientRect().top - tileRect.top),
         durationTop,
-        `${id} duration must share the benchmark offset at ${width}px`,
+        `${label} duration must share the benchmark offset at ${width}px`,
       );
       assertEquals(
         pixel(duration.getBoundingClientRect().left - tileRect.left),
         durationLeft,
-        `${id} duration must share the benchmark left offset at ${width}px`,
+        `${label} duration must share the benchmark left offset at ${width}px`,
       );
     }
-    if (id === "ci-trust" || id === "loom-ci-trust") {
+    if (label === "labs ci trust" || label === "loom ci trust") {
       const grid = tile.querySelector<HTMLElement>(".cells.labeled");
       const firstCell = grid?.querySelector<HTMLElement>(".cell");
       const lastCell = grid?.querySelector<HTMLElement>(".cell:last-child");
@@ -156,16 +156,16 @@ function assertStandardTileLayout(
       assertPixelAligned(
         firstCellRect.width,
         firstCellRect.height,
-        `${id} commit cells must be square at ${width}px`,
+        `${label} commit cells must be square at ${width}px`,
       );
       assertPixelAligned(
         lastCellRect.bottom,
         gridRect.bottom,
-        `${id} commit grid must align to its bottom edge at ${width}px`,
+        `${label} commit grid must align to its bottom edge at ${width}px`,
       );
       assert(
         firstCellRect.top >= trustSub.getBoundingClientRect().bottom,
-        `${id} commit grid must not overlap its subheading at ${width}px: ${
+        `${label} commit grid must not overlap its subheading at ${width}px: ${
           pixel(firstCellRect.top)
         }px vs ${pixel(trustSub.getBoundingClientRect().bottom)}px`,
       );
@@ -174,12 +174,12 @@ function assertStandardTileLayout(
       assertPixelAligned(
         rightInset,
         leftInset,
-        `${id} commit grid must have equal side insets at ${width}px`,
+        `${label} commit grid must have equal side insets at ${width}px`,
       );
       assertPixelAligned(
         tileRect.bottom - gridRect.bottom,
         leftInset,
-        `${id} commit grid bottom inset must match its sides at ${width}px`,
+        `${label} commit grid bottom inset must match its sides at ${width}px`,
       );
       assert(
         durationRect.left >= gridRect.left &&
@@ -187,12 +187,12 @@ function assertStandardTileLayout(
           durationRect.right > gridRect.left &&
           durationRect.top < gridRect.bottom &&
           durationRect.bottom > gridRect.top,
-        `${id} duration must overlap the grid's bottom-left corner at ${width}px`,
+        `${label} duration must overlap the grid's bottom-left corner at ${width}px`,
       );
       assertNotEquals(
         getComputedStyle(duration).textShadow,
         "none",
-        `${id} duration must carry a readable grid outline at ${width}px`,
+        `${label} duration must carry a readable grid outline at ${width}px`,
       );
       const cells = [...grid.querySelectorAll<HTMLElement>(".cell")];
       assertEquals(cells.length, 160);
@@ -201,27 +201,27 @@ function assertStandardTileLayout(
       assertPixelAligned(
         firstCellRect.left,
         gridRect.left,
-        `${id} first cell must reach the grid's left edge at ${width}px`,
+        `${label} first cell must reach the grid's left edge at ${width}px`,
       );
       assert(
         Math.abs(fortiethRect.right - gridRect.right) < 0.5,
-        `${id} fortieth cell must reach the grid's right edge at ${width}px: ${
+        `${label} fortieth cell must reach the grid's right edge at ${width}px: ${
           pixel(fortiethRect.right)
         }px vs ${pixel(gridRect.right)}px`,
       );
       assertPixelAligned(
         fortiethRect.top,
         firstCellRect.top,
-        `${id} first row must contain 40 cells at ${width}px`,
+        `${label} first row must contain 40 cells at ${width}px`,
       );
       assert(
         fortyFirstRect.top > firstCellRect.top,
-        `${id} forty-first cell must start the second row at ${width}px`,
+        `${label} forty-first cell must start the second row at ${width}px`,
       );
     }
     assert(
       pixel(tileRect.height) <= pixel(benchmarkRect.height),
-      `${id} is ${pixel(tileRect.height)}px tall at ${width}px; benchmarks is ${
+      `${label} is ${pixel(tileRect.height)}px tall at ${width}px; benchmarks is ${
         pixel(benchmarkRect.height)
       }px`,
     );
@@ -230,7 +230,7 @@ function assertStandardTileLayout(
 
 Deno.test("every standard tile shares text baselines and fits under benchmarks", async () => {
   const standard = TILE_LAYOUT_FIXTURES.filter(({ wide }) => !wide);
-  const tiles = standard.map(({ id, view }) => renderTile(view, id)).join("");
+  const tiles = standard.map(({ label, view }) => renderTile(label, view)).join("");
   const fixture = document.createElement("div");
   fixture.innerHTML = `<style>
     .layout-dashboard{width:1100px;--surface:#111;font-family:-apple-system,"Segoe UI",Roboto,sans-serif}
@@ -271,8 +271,7 @@ Deno.test("a linked bottom-chart tile keeps its flex layout", async () => {
     ${BOTTOM_CHART_RULES}
     ${tileContentRules(SPARKLINE_HEIGHT)}
   </style>${
-    renderTile({
-      label: "linked history",
+    renderTile("linked history", {
       status: "good",
       value: "42",
       sub: "representative linked tile",

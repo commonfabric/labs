@@ -225,14 +225,104 @@ describe("Group E readings off the clean path", () => {
     expect(said).toContain("an authenticated subject");
   });
 
-  it("reads delegations from the run state alone when the report is gone, and claims no divergence", () => {
+  it("AUD-23 refuses a claimed inheritance when the child's runtime ceiling widens", () => {
+    const fam = structuredClone(family);
+    if (
+      fam.root.runState.status !== "present" ||
+      fam.children[0].runState.status !== "present"
+    ) {
+      throw new Error("fixture has no run states");
+    }
+    const parent = fam.root.runState.value;
+    const child = fam.children[0].runState.value;
+    for (const delegation of parent.subagentRuns ?? []) {
+      delegation.manifest.confidentialityCeiling = {
+        source: "parent",
+        mode: "bounded",
+      };
+    }
+    parent.fabricSessionCfc = {
+      enforcementMode: "enforce-strict",
+      enforcementModeSource: "configured",
+      flowLabels: "persist",
+      flowLabelsSource: "configured",
+      readMaxConfidentiality: ["did:key:owner"],
+    };
+    child.fabricSessionCfc = {
+      ...parent.fabricSessionCfc,
+      readMaxConfidentiality: undefined,
+    };
+    expect(checkById("AUD-23").inspect(fam.root, fam).verdict).toBe("warn");
+  });
+
+  for (const malformed of [false, true]) {
+    it(`AUD-23 ${malformed ? "refuses malformed" : "verifies matching"} bounded runtime ceilings`, () => {
+      const fam = withoutArtifact("runReport");
+      if (fam.root.runState.status !== "present") {
+        throw new Error("fixture has no parent run state");
+      }
+      const parent = fam.root.runState.value;
+      parent.fabricSessionCfc = {
+        enforcementMode: "enforce-strict",
+        enforcementModeSource: "configured",
+        flowLabels: "persist",
+        flowLabelsSource: "configured",
+        readMaxConfidentiality: ["did:key:owner"],
+      };
+      for (const delegation of parent.subagentRuns ?? []) {
+        delegation.manifest.confidentialityCeiling = {
+          source: "parent",
+          mode: "bounded",
+        };
+      }
+      for (const child of fam.children) {
+        if (child.runState.status !== "present") {
+          throw new Error("fixture has no child run state");
+        }
+        child.runState.value.fabricSessionCfc = {
+          ...parent.fabricSessionCfc,
+          readMaxConfidentiality: malformed
+            ? [""]
+            : [...parent.fabricSessionCfc.readMaxConfidentiality!],
+        };
+      }
+      expect(checkById("AUD-23").inspect(fam.root, fam).verdict).toBe(
+        malformed ? "warn" : "pass",
+      );
+    });
+  }
+
+  it("AUD-23 refuses an invalid mode on an inherited owner view", () => {
+    const fam = withoutArtifact("runReport");
+    if (
+      fam.root.runState.status !== "present" ||
+      fam.children[0].runState.status !== "present"
+    ) {
+      throw new Error("fixture has no run states");
+    }
+    const posture = {
+      enforcementMode: "enforce-strict",
+      enforcementModeSource: "configured",
+      flowLabels: "persist",
+      flowLabelsSource: "configured",
+      readOnExceed: "invalid",
+    } as unknown as NonNullable<
+      typeof fam.root.runState.value.fabricSessionCfc
+    >;
+    fam.root.runState.value.fabricSessionCfc = posture;
+    fam.children[0].runState.value.fabricSessionCfc = structuredClone(posture);
+
+    expect(checkById("AUD-23").inspect(fam.root, fam).verdict).toBe("warn");
+  });
+
+  it("passes delegations from the run state alone when the report is gone", () => {
     // Divergence is a comparison, so an artifact that is absent is not an
     // artifact that disagrees. The check still has the run state's
     // delegations and still reports on their ceilings; what it must not do is
     // read a missing second opinion as a conflicting one.
     const fam = withoutArtifact("runReport");
     const result = checkById("AUD-23").inspect(fam.root, fam);
-    expect(result.verdict).toBe("warn");
+    expect(result.verdict).toBe("pass");
     expect(JSON.stringify(result.evidence)).not.toContain("has lost a child");
   });
 

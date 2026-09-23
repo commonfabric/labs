@@ -175,7 +175,8 @@ export class SchedulerGates {
     context?: DebouncedComputationContext,
   ): void {
     if (
-      !context || !this.#shouldDebouncePullComputation(node.action, context)
+      node.gate.retryOwed || !context ||
+      !this.#shouldDebouncePullComputation(node.action, context)
     ) {
       return;
     }
@@ -255,9 +256,10 @@ export class SchedulerGates {
       readonly logDebounce: (message: string) => void;
     },
   ): void {
-    const debounceMs = this.#gate(action)?.debounceMs;
+    const currentGate = this.#gate(action);
+    const debounceMs = currentGate?.debounceMs;
 
-    if (!debounceMs || debounceMs <= 0) {
+    if (currentGate?.retryOwed || !debounceMs || debounceMs <= 0) {
       context.pending.add(action);
       context.queueExecution();
       return;
@@ -406,12 +408,13 @@ export class SchedulerGates {
    * readiness are cleared and the wake recomputed, so the retry is eligible
    * in the pass queued for it. The convergence backoff (§7.7) stays — it
    * bounds a non-settling graph, and a retry inside one waits its turn like
-   * every other run. The debounce and throttle POLICIES stay too: the next
-   * genuine invalidation arms them as before.
+   * every other run. Further invalidations preserve this release until the
+   * owed run starts. The policies apply again to invalidations after that.
    */
   releaseForRetry(action: Action): void {
     const gate = this.#gate(action);
     if (!gate) return;
+    gate.retryOwed = true;
     if (
       gate.debounceReadyAt === undefined && gate.throttleReadyAt === undefined
     ) {
@@ -472,7 +475,7 @@ export class SchedulerGates {
   #armThrottleFromStats(action: Action): void {
     const gate = this.#gate(action);
     const throttleMs = gate?.throttleMs;
-    if (!gate || !throttleMs || throttleMs <= 0) {
+    if (!gate || gate.retryOwed || !throttleMs || throttleMs <= 0) {
       if (gate) delete gate.throttleReadyAt;
       return;
     }

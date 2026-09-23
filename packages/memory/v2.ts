@@ -15,6 +15,7 @@ import {
 } from "@commonfabric/data-model/codecs";
 import { internPathSelector } from "@commonfabric/data-model-schema";
 import { isPlainObject, unsafeObjectKeyIn } from "@commonfabric/utils/types";
+import type { SessionReadCeiling } from "./v2/read-ceiling.ts";
 
 export const MEMORY_PROTOCOL = "memory" as const;
 export const DEFAULT_BRANCH = "" as const;
@@ -1048,7 +1049,16 @@ export type CommitPrecondition =
     valueHash: string | null;
   };
 
+/** A generic root reserved atomically with a fresh space's ACL. */
+export type GenesisRoot = {
+  source: string;
+  sourceRoots?: string[];
+  cause: string;
+  argument?: Record<string, FabricValue>;
+};
+
 export type ClientCommit = {
+  genesisRoot?: GenesisRoot;
   localSeq: number;
   reads: {
     confirmed: ConfirmedRead[];
@@ -1084,6 +1094,7 @@ export type SessionOpenResult = {
 };
 
 export type MemoryProtocolFlags = {
+  genesisRoot?: boolean;
   modernCellRep: boolean;
 
   /**
@@ -1178,12 +1189,23 @@ export type MemoryProtocolFlags = {
 
   /** Server-selected view delivery with independent execution demand. */
   viewScopedReplicationV1?: boolean;
+
+  /**
+   * Server capability: a `session.open` descriptor's `readCeiling` is
+   * recorded on the session and served runs as that session read under it.
+   * Build-inherent, so a server of this version always advertises it. A
+   * client carrying a ceiling REQUIRES it: an older server would accept the
+   * descriptor and serve every query unbounded, so absent parses to false
+   * and the client refuses to open the session.
+   */
+  sessionReadCeiling?: boolean;
 };
 
 /**
  * Wire-format flags object.
  */
 export type WireMemoryProtocolFlags = {
+  genesisRoot?: boolean;
   modernCellRep?: boolean;
 
   /** Expression result identity contract required for session admission. */
@@ -1203,6 +1225,7 @@ export type WireMemoryProtocolFlags = {
   entityIdLookup?: boolean;
   sessionHoldings?: boolean;
   viewScopedReplicationV1?: boolean;
+  sessionReadCeiling?: boolean;
 };
 
 export type HelloMessage = {
@@ -1229,9 +1252,26 @@ export type SessionOpenAuthMetadata = {
 };
 
 export type SessionDescriptor = {
+  /** Assert the immutable custom-root reservation when mounting or resuming. */
+  genesisRoot?: GenesisRoot;
   sessionId?: SessionId;
   seenSeq?: number;
   sessionToken?: SessionToken;
+
+  /**
+   * The read ceiling every `db.query` served for this session reads under
+   * (`docs/specs/sqlite-builtin/06-cfc.md`, "Runtime read ceiling";
+   * server-side execution `protocol.md` §1). A client runtime under server
+   * execution executes no query of its own — the space server's runtime
+   * serves them — so the ceiling it is configured with travels here, once,
+   * with the session, and the serving runtime stamps it onto every run it
+   * serves AS this session. Signed into the session.open invocation with the
+   * rest of this descriptor. Fresh per open, never inherited by a resume: a
+   * client that resumes re-declares it. Admitted only by a server
+   * advertising `sessionReadCeiling`; a client with one refuses a server
+   * without it rather than opening a session whose reads nothing bounds.
+   */
+  readonly readCeiling?: SessionReadCeiling;
 
   /**
    * The session-level delegated READ binding (OW31, READ side RULED
@@ -1913,6 +1953,15 @@ let ownWriteEchoEnabled = true;
 export {
   SERVER_EXECUTION_DEFAULT_ENABLED,
 } from "./v2/server-execution-default.ts";
+export {
+  parseSessionReadCeiling,
+  type ReadCeilingClause,
+  type ReadCeilingLabels,
+  type ReadCeilingOnExceed,
+  readCeilingShapeError,
+  SESSION_READ_CEILING_LABELS,
+  type SessionReadCeiling,
+} from "./v2/read-ceiling.ts";
 
 // The ambient flag's inputs, resolved by getServerExecutionConfig():
 // - the live ENABLER count (below), which forces the flag on — every
@@ -2067,6 +2116,7 @@ export function resetOwnWriteEchoConfig(): void {
 }
 
 export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
+  genesisRoot: true,
   modernCellRep: getModernCellRepConfig(),
   stableExpressionResultIds: true,
   commitPreconditions: getCommitPreconditionsConfig(),
@@ -2096,6 +2146,9 @@ export const getMemoryProtocolFlags = (): MemoryProtocolFlags => ({
   // as the delivery diff base wherever they are sent.
   sessionHoldings: true,
   viewScopedReplicationV1: getServerExecutionConfig(),
+  // Build-inherent: this build's server records a session's declared read
+  // ceiling and its serving runtime stamps it onto the runs it serves.
+  sessionReadCeiling: true,
   syncSchemaTableV2: getSyncSchemaTableConfig(),
 });
 
@@ -2119,6 +2172,10 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const genesisRoot = value.genesisRoot;
+  if (genesisRoot !== undefined && typeof genesisRoot !== "boolean") {
+    return null;
+  }
   const stableExpressionResultIds = value.stableExpressionResultIds;
   if (
     stableExpressionResultIds !== undefined &&
@@ -2238,6 +2295,14 @@ export const parseMemoryProtocolFlags = (
     return null;
   }
 
+  const sessionReadCeiling = value.sessionReadCeiling;
+  if (
+    sessionReadCeiling !== undefined &&
+    typeof sessionReadCeiling !== "boolean"
+  ) {
+    return null;
+  }
+
   const sessionHoldings = value.sessionHoldings;
   if (
     sessionHoldings !== undefined &&
@@ -2248,6 +2313,7 @@ export const parseMemoryProtocolFlags = (
 
   return {
     modernCellRep: modernCellRep === true,
+    genesisRoot: value.genesisRoot === true,
     stableExpressionResultIds: stableExpressionResultIds === true,
     commitPreconditions: commitPreconditions === true,
     applyOp: applyOp === true,
@@ -2275,6 +2341,9 @@ export const parseMemoryProtocolFlags = (
     // provider-bearing one terminates at restore (see the flag's doc).
     sessionHoldings: sessionHoldings === true,
     viewScopedReplicationV1: viewScopedReplicationV1 === true,
+    // Absent (an older server) parses to false: a client carrying a read
+    // ceiling refuses such a server rather than reading unbounded.
+    sessionReadCeiling: sessionReadCeiling === true,
   };
 };
 
@@ -2284,6 +2353,7 @@ export const parseMemoryProtocolFlags = (
 export const wireMemoryProtocolFlags = (
   flags: MemoryProtocolFlags,
 ): WireMemoryProtocolFlags => ({
+  genesisRoot: flags.genesisRoot,
   modernCellRep: flags.modernCellRep,
   stableExpressionResultIds: flags.stableExpressionResultIds,
   commitPreconditions: flags.commitPreconditions,
@@ -2302,6 +2372,7 @@ export const wireMemoryProtocolFlags = (
   entityIdLookup: flags.entityIdLookup,
   sessionHoldings: flags.sessionHoldings,
   viewScopedReplicationV1: flags.viewScopedReplicationV1,
+  sessionReadCeiling: flags.sessionReadCeiling,
 });
 
 /**
@@ -2375,7 +2446,7 @@ export const isEntityDocument = (
  * absent document is `null`, which the root check below refuses on its own.
  */
 export const decodeStoredDocumentPayload = (
-  decode: (source: string) => unknown,
+  decode: (source: string) => FabricValue,
   data: string | null,
 ): EntityDocument => {
   const parsed = data === null ? null : decode(data);
@@ -2399,7 +2470,7 @@ export const decodeStoredDocumentPayload = (
  * no-op would leave the document reading current.
  */
 export const decodeStoredPatchListPayload = (
-  decode: (source: string) => unknown,
+  decode: (source: string) => FabricValue,
   data: string | null,
 ): PatchOp[] => {
   if (data === null) {

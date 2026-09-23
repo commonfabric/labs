@@ -4,7 +4,7 @@ import type {
   NonterminalCodec,
   TerminalCodec,
 } from "@/codec-interface/interface.ts";
-import { toCompactDebugString, toShortQuotedDebugString } from "@/value-debug";
+import { debugStr, toCompactDebugString } from "@/value-debug";
 import { isCodecTypeTag } from "./isCodecTypeTag.ts";
 import { UnknownValue } from "./UnknownValue.ts";
 import type { FabricValue } from "@/interface.ts";
@@ -235,7 +235,7 @@ export abstract class BaseDecodeAct<Encoded, SerializedForm = Encoded>
       return this.reportMalformed(
         tag,
         this.decodeValue(rawState),
-        `tagged value has a malformed tag: ${toShortQuotedDebugString(tag)}`,
+        debugStr`tagged value has a malformed tag: $quote${tag}`,
       );
     }
 

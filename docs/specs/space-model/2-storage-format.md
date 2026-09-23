@@ -27,7 +27,6 @@ The `is` field contains the value, which may include:
 - Primitive data (strings, numbers, booleans, null)
 - Nested objects and arrays
 - References to other facts (via sigil links)
-- Special markers (e.g., `{ $stream: true }` for stream endpoints)
 
 ### Result Cell Metadata
 
@@ -62,18 +61,18 @@ Result-cell metadata enables:
 
 The system currently uses JSON for interchange and storage representation.
 
-### The Stream Marker
+### Streams
 
-Stream cells store a sentinel value rather than actual data:
+A stream cell stores no value. Its document carries a `result` back-link to the
+owning piece and nothing else. The links that reach it declare it, with
+`asCell: ["stream"]` as the outermost `asCell` entry of their schema, and the
+one the owning piece keeps in its `internal` manifest is how a reader holding
+only the document tells what it is. The document is what gives a stream its
+durable identity and marks the location as an event endpoint; events flow
+through it and are never stored.
 
-```json
-{ "$stream": true }
-```
-
-This marker:
-- Persists in storage (streams have durable identity)
-- Signals that the location is an event endpoint
-- Is never used as actual input data — events flow through but aren't stored
+Documents written before this held a `{ "$stream": true }` sentinel as their
+value. Readers still recognize it, and nothing writes it.
 
 ---
 
@@ -90,11 +89,12 @@ CBOR is under consideration for storage and transmission, offering:
 be computed over the abstract data structure, not the encoded bytes. This allows
 format migration without breaking identities.
 
-### Stream Marker Elimination
+### Stream and Value Cell Unification
 
-The `$stream` marker may be unnecessary if streams are unified with value cells
-via timestamp-inclusive schemas. See [Cells](./4-cells.md) for discussion of
-potential unification.
+With no stored marker, what still separates a stream from a value cell is the
+schema declaration and the send-versus-set behavior. Unifying the two via
+timestamp-inclusive schemas remains open. See [Cells](./4-cells.md) for
+discussion of potential unification.
 
 ## Open Questions
 

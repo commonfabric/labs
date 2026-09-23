@@ -39,6 +39,10 @@ export type {
  */
 const PATTERN_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
+/** Whether an id uses the spelling accepted by the pattern index. */
+export const isPatternRefId = (id: string): boolean =>
+  PATTERN_ID_PATTERN.test(id);
+
 /**
  * References one task may attach. Each costs an index read before the run's
  * first model turn, and the same bound `delegate_task` holds a selection to
@@ -54,7 +58,7 @@ export const MAX_HARNESS_PATTERN_REFS = 8;
  * @throws Error naming the value and the grammar it missed.
  */
 export const checkPatternRefSpec = (spec: HarnessPatternRefSpec): void => {
-  if (!PATTERN_ID_PATTERN.test(spec.patternId)) {
+  if (!isPatternRefId(spec.patternId)) {
     throw new Error(
       `patternRefs patternId must match ${PATTERN_ID_PATTERN}, got \`${spec.patternId}\``,
     );

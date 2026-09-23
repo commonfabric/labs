@@ -217,8 +217,8 @@ describe("materializer envelope collection", () => {
   });
 
   it("collects cell-branded tuple (prefixItems) slot positions", () => {
-    // CT-1895: the walker never descended prefixItems, so asCell/writeonly
-    // markers in tuple slots escaped write tracking.
+    // The walk descends `prefixItems`, so a `cell` brand in a tuple slot is
+    // collected as an envelope.
     const resultCell = runtime.getCell(space, "envelope-tuple-result");
     const targetCell = runtime.getCell<number>(space, "envelope-tuple-target");
     const argumentSchema = {

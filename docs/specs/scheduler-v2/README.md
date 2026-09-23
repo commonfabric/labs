@@ -1071,10 +1071,17 @@ stale basis, re-queued once the conflict's catch-up gate (§7.6) resolved — is
 not an input change and is queued past the debounce and throttle: the debounce
 is not re-armed and an armed readiness of either is released (the `retry`
 option of `MarkInvalidOptions`; the §7.7 backoff stays). The refused run left
-nothing durable and its wait was its delay. Held behind the debounce, such a
+nothing durable and its wait was its delay. The node keeps this release until
+the owed run starts: intervening input invalidations still record their causes
+but do not re-arm freshness gates. A retry requested during a run remains owed
+after that run completes. Starting the next run consumes the release, and
+unsubscribing retires it. Held behind the debounce, such a
 retry would count as a deferred re-run of an already-ran computation, which is
 not idle work and gets its expiry wake only from a live demander — a one-shot
-`pull()` has none once it resolves, so the retry would never run. An empty
+`pull()` has none once it resolves, so the retry would never run. A re-queue
+for a builtin that held its output pending document confirmation uses the same
+`retry` option on `invalidateAction` after confirmation completes, including
+confirmation of absence that writes no data. An empty
 reactive commit rejected for changed scheduling dependencies also releases
 debounce and throttle if that node or fan-out instance has no accepted result
 yet, or no live demander to wake it. A live node with an accepted result keeps

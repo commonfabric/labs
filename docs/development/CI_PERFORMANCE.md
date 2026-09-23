@@ -231,6 +231,46 @@ post-job save can reevaluate the output reference safely because its value was
 fixed before the job populated the workspace. The `deno-setup` composite action
 uses this shape for the shared Deno dependency cache.
 
+### The Pattern Compile Cache Key
+
+Four `actions/cache` steps in `.github/workflows/deno.yml` restore a pattern
+compile byte cache: one in the generated-pattern integration job, one in each of
+the two pattern integration arms, and one in the pattern unit coverage job.
+Their keys carry the compiler-input fingerprint. The runtime's version axis is
+`cf/esm-compile/` followed by that same fingerprint, so a compiled document is
+stored under `compileCache:cf/esm-compile/<fingerprint>/<identity>`. A cache
+entry CI names by the fingerprint therefore holds bytes the compiler now running
+emitted, and an entry from any other compiler is one those jobs never ask for.
+
+The fingerprint is not written into the workflow as a literal. Each of those
+jobs resolves it in a setup step, through the
+`./.github/actions/compile-cache-key` composite action,
+which runs `tasks/compile-cache-key.ts` and offers the value as its
+`fingerprint` output. The cache steps then reference that step's output. This is
+the shape the section above prescribes, and it buys two things here. The
+post-job save re-evaluates the key without walking the fingerprinted trees a
+second time. And the CI key and the runtime version become one value computed
+once, rather than two descriptions of one list of inputs that can drift apart.
+
+`COMPILE_FINGERPRINT_INPUTS` in
+`packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts` is the list
+being hashed, and it is the only place that list is written down. Changing what
+shapes the emitted bytes means editing it there; nothing in the workflow
+enumerates those inputs, so nothing in the workflow has to be changed to match.
+That module's own source is in the list, so changing how the fingerprint is
+computed moves it too. `classifyCacheKeyState()` in
+`tasks/compile-cache-state.ts` decides from a changed-file list whether a run's
+compile cache went cold, and that is what lets it see such a change.
+
+What the workflow is held to is where the value comes from. "every compile byte
+cache is keyed on the compiler fingerprint" in `tasks/ci-workflow.test.ts` reads
+every job that sets `CF_COMPILE_CACHE_FILE`, finds the cache entry covering that
+file, and fails when its key or a restore prefix does not carry the action's
+output, when the job never resolves it, or when it resolves it after the cache
+step — which would leave the key holding an empty segment and collapse entries
+from different compilers onto one another. The action fails the job outright if
+the script prints nothing, so an empty segment cannot reach a key.
+
 ## Step And Job Timeouts
 
 Every work step in `.github/workflows/deno.yml` carries its own
@@ -320,8 +360,8 @@ A package too heavy for any single shard can be split internally. The CLI,
 piece, and tasks packages run as multiple units via their package-specific
 shard variables (see
 `INTERNALLY_SHARDED_PACKAGES` in `tasks/workspace-tests.ts` and
-`packages/cli/test/run-tests.ts` or `tasks/run-sharded-test-files.ts`), so their
-slices spread across workspace shards. Slices of one package occupy distinct
+`tasks/run-sharded-test-files.ts`), so their slices spread across workspace
+shards. Slices of one package occupy distinct
 workspace shards whenever the matrix has enough shards. A package that
 dominates a shard can be given the same treatment. A slow package may also be
 running many independent test modules serially. Deno's `--parallel` mode can
@@ -329,11 +369,12 @@ reduce that package's wall time, but only after checking for tests that share
 process-wide state.
 
 The CLI's commit-message tests are split across numbered
-`view-commitmsg-*.test.ts` files. Some of these tests change process environment
-while installing Git shims, so every file in the family stays in the serial
-group. Their numbered filenames are consecutive in the sorted test inventory,
-so ordinary file assignment places one in each CLI slice. An unsharded local
-CLI test run executes every file.
+`view-commitmsg-*.serial.test.ts` files. Some of these tests change process
+environment while installing Git shims, so every file in the family is serial.
+The CLI has no measured file weights, so every file weighs the same, and files
+of equal weight are dealt out across the slices in name order. The numbered
+filenames are consecutive in that order, which places one in each CLI slice.
+An unsharded local CLI test run executes every file.
 
 ### Runner Test Sharding
 
@@ -357,26 +398,32 @@ it spawns shares nothing — `cf` in `packages/cli/test/utils.ts` takes the
 command's environment as an argument and gives it nothing else, so those tests
 stay in the parallel group.
 
-Known serial CLI tests:
+Among the serial CLI tests, and why each is serial:
 
-- `test/completion-output.test.ts`, `test/completion-providers.test.ts`,
-  `test/fuse.test.ts`, `test/inspect-remote.test.ts`,
-  `test/log-level.test.ts`, `test/main-command.test.ts`,
-  `test/test-runner-compile-byte-cache.test.ts`,
-  `test/test-runner-pattern-coverage.test.ts`, and `test/wish-command.test.ts`
-  set an
-  environment variable that the test process itself then reads, so another
-  file setting the same name would decide what they read.
-- Every `test/view-commitmsg-*.test.ts` file remains serial because some tests
-  in the family install Git shims by changing process environment.
-- `test/json-command.test.ts` and `test/runtime-creation.test.ts` replace
-  globals — the console methods and runtime prototype methods.
-- `test/view-mod-gate.test.ts` changes into a removed directory to test the
-  missing-current-directory fallback.
-- `test/view-pager-pty.test.ts` drives a real pseudo-terminal, spawning a full
-  CLI child per test. Keystrokes are gated on observed child output rather than
-  on timing, so contention slows it but does not flake it; it stays serial to
-  avoid stacking those children on top of the parallel groups.
+- `test/completion-output.serial.test.ts`,
+  `test/completion-providers.serial.test.ts`, `test/fuse.serial.test.ts`,
+  `test/inspect-remote.serial.test.ts`, `test/log-level.serial.test.ts`,
+  `test/main-command.serial.test.ts`,
+  `test/test-runner-compile-byte-cache.serial.test.ts`,
+  `test/test-runner-pattern-coverage.serial.test.ts`, and
+  `test/wish-command.serial.test.ts` set an environment variable that the test
+  process itself then reads, so another file setting the same name would
+  decide what they read.
+- Every `test/view-commitmsg-*.serial.test.ts` file is serial because some
+  tests in the family install Git shims by changing process environment.
+- `test/json-command.serial.test.ts` and
+  `test/runtime-creation.serial.test.ts` replace globals — the console methods
+  and runtime prototype methods.
+- `test/view-mod-gate.serial.test.ts` changes into a removed directory to test
+  the missing-current-directory fallback.
+- `test/view-pager-pty.serial.test.ts` drives a real pseudo-terminal, spawning
+  a full CLI child per test. Keystrokes are gated on observed child output
+  rather than on timing, so contention slows it but does not flake it; it is
+  serial to avoid stacking those children on top of the parallel files.
 
-The CLI package keeps those tests in a serial group and runs the rest of its
-test modules with `--parallel`.
+A serial CLI test file is named `*.serial.test.ts`. The package's `deno-test`
+task passes `tasks/run-sharded-test-files.ts` a `--serial` option naming that
+pattern, so the runner runs those files after the rest, in a `deno test`
+without `--parallel`, and runs the rest of the package's test modules with
+`--parallel`. A lane that selects some of the CLI's files splits them the same
+way.

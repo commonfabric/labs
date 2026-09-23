@@ -1,4 +1,13 @@
-import { action, assert, NAME, pattern, TESTS, Writable } from "commonfabric";
+import {
+  action,
+  assert,
+  NAME,
+  pattern,
+  TESTS,
+  UI,
+  Writable,
+} from "commonfabric";
+import { findNodeByProp, hasText } from "../test/vnode-helpers.ts";
 import Home from "./home.tsx";
 
 export default pattern(() => {
@@ -9,6 +18,34 @@ export default pattern(() => {
 
   const assert_initial_profile_missing = assert(() =>
     ((home.profiles as unknown[])?.length ?? 0) === 0
+  );
+
+  // The agent queue is held in a field of its own and starts empty, with no
+  // runner registered.
+  const assert_agent_queue_starts_empty = assert(() =>
+    home.agentQueue.entries.get().length === 0 &&
+    home.agentQueue.agentRunner === undefined
+  );
+  const assert_agent_runs_tab = assert(() =>
+    hasText(findNodeByProp(home[UI], "value", "agent-runs"), "Agent runs") &&
+    hasText(
+      findNodeByProp(home[UI], "id", "home-agent-runs"),
+      "No runner is registered.",
+    ) &&
+    hasText(findNodeByProp(home[UI], "value", "self"), "Self")
+  );
+  const action_register_runner = action(() => {
+    home.agentQueue.setAgentRunner.send({
+      runner: {
+        host: "https://local.example",
+        tools: [],
+        registrationId: "runner-1",
+        registeredAt: "2026-09-18T00:00:00.000Z",
+      },
+    });
+  });
+  const assert_runner_registered = assert(() =>
+    home.agentQueue.agentRunner?.host === "https://local.example"
   );
 
   // NOTE: untrusted-write protection (sending the exported `createProfile`
@@ -62,16 +99,29 @@ export default pattern(() => {
   const action_remove_space = action(() => {
     home.removeSpace.send({ name: "Space One" });
   });
+  const assert_empty_space_notice = assert(() =>
+    hasText(home[UI], "No spaces yet. Add one below.")
+  );
+  const assert_space_notice_hidden = assert(() =>
+    !hasText(home[UI], "No spaces yet. Add one below.")
+  );
 
   return {
     [TESTS]: [
       { assertion: assert_initial_profile_missing },
+      { assertion: assert_agent_queue_starts_empty },
+      { assertion: assert_agent_runs_tab },
+      { action: action_register_runner },
+      { assertion: assert_runner_registered },
       { action: action_add_favorite },
       { action: action_remove_favorite },
       { action: action_remove_favorite_again },
       { action: action_add_journal },
+      { assertion: assert_empty_space_notice },
       { action: action_add_space },
+      { assertion: assert_space_notice_hidden },
       { action: action_remove_space },
+      { assertion: assert_empty_space_notice },
       { assertion: assert_initial_profile_missing },
     ],
   };

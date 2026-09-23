@@ -1,0 +1,1 @@
+{"date":"2026-09-18","from":{"k":"unit","s":"runner","n":"compile-cache version axis > CI compile-cache key mirrors the fingerprint input set"},"to":{"k":"unit","s":"tasks","n":"every compile byte cache is keyed on the compiler fingerprint"}}

@@ -18,11 +18,8 @@ import type {
 import type { MustBeTrue, Same } from "@commonfabric/utils/types";
 import { isPlainObject } from "@commonfabric/utils/types";
 
-import {
-  BaseFabricPrimitive,
-  VALUE_TAG,
-} from "@/fabric-bases/BaseFabricPrimitive.ts";
-import { ProblematicValue } from "@/codec-common/ProblematicValue.ts";
+import { BaseFabricPrimitive, VALUE_TAG } from "@/fabric-bases";
+import { ProblematicValue } from "@/codec-common";
 import { BaseNonterminalCodec } from "@/codec-interface/BaseNonterminalCodec.ts";
 import { BaseTerminalCodec } from "@/codec-interface/BaseTerminalCodec.ts";
 import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
@@ -33,9 +30,9 @@ import {
   REALM_CODEC,
   type TerminalCodec,
 } from "@/codec-interface/interface.ts";
-import type { RealmCodecValue } from "@/codec-realm/interface.ts";
+import type { RealmCodecValue } from "@/codec-realm";
 import type { FabricValue } from "@/interface.ts";
-import { toShortQuotedDebugString } from "@/value-debug";
+import { debugStr } from "@/value-debug";
 import {
   FABRIC_PRIMITIVE_VALUE_TAGS,
   type FabricPrimitiveValueTag,
@@ -150,7 +147,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
       !Object.hasOwn(UNAVAILABLE_REASONS, reason)
     ) {
       throw new Error(
-        `Not an \`UnavailableReason\`: ${toShortQuotedDebugString(reason)}`,
+        debugStr`Not an \`UnavailableReason\`: $quote${reason}`,
       );
     }
 
@@ -162,14 +159,12 @@ export class FabricUnavailable extends BaseFabricPrimitive
         !Object.hasOwn(UNAVAILABLE_ERROR_KINDS, errorKind)
       ) {
         throw new Error(
-          `Reason \`error\` requires an \`UnavailableErrorKind\`, not ${
-            toShortQuotedDebugString(errorKind)
-          }.`,
+          debugStr`Reason \`error\` requires an \`UnavailableErrorKind\`, not $quote${errorKind}.`,
         );
       }
       if ((errorMessage !== null) && (typeof errorMessage !== "string")) {
         throw new Error(
-          `Not an \`errorMessage\`: ${toShortQuotedDebugString(errorMessage)}`,
+          debugStr`Not an \`errorMessage\`: $quote${errorMessage}`,
         );
       }
       // A message equal to the kind's default is stored as none.
@@ -179,9 +174,7 @@ export class FabricUnavailable extends BaseFabricPrimitive
           : errorMessage;
     } else if ((errorKind !== null) || (errorMessage !== null)) {
       throw new Error(
-        `Reason ${
-          toShortQuotedDebugString(reason)
-        } takes neither an \`errorKind\` nor an \`errorMessage\`.`,
+        debugStr`Reason $quote${reason} takes neither an \`errorKind\` nor an \`errorMessage\`.`,
       );
     }
 

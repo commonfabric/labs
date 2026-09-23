@@ -32,8 +32,8 @@ describe("entity-id-scheme-parsing", () => {
 
   describe("XSchedulerGraph", () => {
     describe("static members", () => {
-      describe("accessForTestingOnly", () => {
-        it("extractEntityId() keeps the scheme in the entity id", () => {
+      describe("#extractEntityId()", () => {
+        it("returns the entity id with its scheme", () => {
           const helpers = XSchedulerGraph.accessForTestingOnly;
 
           expect(

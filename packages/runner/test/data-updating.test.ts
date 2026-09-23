@@ -1004,11 +1004,10 @@ describe("data-updating", () => {
 
     const current = targetCell.key("result").getAsNormalizedFullLink();
 
-    // Write the data cell (which contains a redirect to sourceCell) to the target
-    // Before the fix: data URI was not inlined early enough, and the redirect
-    // would be written to destinationCell.value instead of target.result
-    // After the fix: data URI is inlined first, exposing the redirect, which is
-    // then properly written to target.result
+    // Write the data cell (which contains a redirect to sourceCell) to the
+    // target. The data URI is inlined ahead of the check for a redirect in the
+    // current value, so the redirect it holds is written to `target.result`,
+    // and the current value's redirect to `destinationCell` is not followed.
     const changes = normalizeAndDiff(
       runtime,
       tx,
@@ -1230,9 +1229,8 @@ describe("data-updating", () => {
       // The id source is consumed for an anchored element BEFORE the
       // recursion into its content, so an element containing its own
       // objects-in-arrays draws a lower seed than they do. This pins the
-      // sequence deliberately: the annotation scheme this replaced drew
-      // post-order (children first), and nothing else pins either order --
-      // a change here silently re-derives every nested anchored id.
+      // sequence deliberately: a change to it would silently re-derive every
+      // nested anchored id.
       const testCell = runtime.getCell<unknown>(
         space,
         "pre-order anchor ids",
@@ -1279,9 +1277,8 @@ describe("data-updating", () => {
 
     it("converges repeated references on one document", () => {
       // The same object in two array slots is one entity: both slots link to
-      // a single document and the id source is consumed once. (The
-      // annotation scheme stamped a fresh copy per occurrence and stored two
-      // documents; preserving the written graph's aliasing is deliberate.)
+      // a single document and the id source is consumed once. Preserving the
+      // written graph's aliasing is deliberate.
       const testCell = runtime.getCell<unknown>(
         space,
         "shared reference converges",
@@ -1724,8 +1721,7 @@ describe("data-updating", () => {
 
     it("draws no anchor id for an addUnique candidate rejected as duplicate", () => {
       // A candidate `addUnique` rejects never reaches the write, so it draws
-      // no id. (The annotation scheme anchored all candidates before
-      // filtering, so a rejected duplicate still consumed one.)
+      // no id.
       const frame = pushFrame({
         generatedIdCounter: 0,
         cause: "addUnique duplicate draws nothing",
@@ -2042,20 +2038,16 @@ describe("compactChangeSet", () => {
       expect(result[0].location.path).toEqual(["foo"]);
     });
 
-    it("should NOT subsume child when parent sets different key (BUG TEST)", () => {
+    it("does not subsume a child whose key the parent does not set", () => {
       // Parent writes {a: 1} to 'foo', child writes 99 to 'foo.b' (DIFFERENT key!)
       // Child write is NOT redundant - it sets a key not in parent!
-      //
-      // IMPORTANT: This test documents the EXPECTED behavior.
-      // If this fails, it reveals the bug in compactChangeSet.
       const changes: ChangeSet = [
         makeChange(["foo"], { a: 1 }),
         makeChange(["foo", "b"], 99),
       ];
       const result = compactChangeSet(changes);
 
-      // We EXPECT both changes to be kept because parent doesn't include 'b'
-      // If this assertion fails with length 1, the bug exists.
+      // Both changes are kept because parent doesn't include 'b'
       expect(result).toHaveLength(2);
       expect(result[0].location.path).toEqual(["foo"]);
       expect(result[1].location.path).toEqual(["foo", "b"]);
@@ -2157,7 +2149,7 @@ describe("compactChangeSet", () => {
       ];
       const result = compactChangeSet(changes);
 
-      // With the fix, only children whose paths exist in parent are subsumed
+      // Only children whose paths exist in parent are subsumed
       // Parent {x: 1} doesn't contain 'y' or 'z', so all 3 changes are kept
       expect(result).toHaveLength(3);
       expect(result[0].location.path).toEqual(["root"]);
@@ -2193,7 +2185,7 @@ describe("compactChangeSet", () => {
       // Parent writes array [1, 2], child writes to index "01"
       // "01" is not a valid array index (has leading zero), so the child
       // path does NOT exist in the parent and should NOT be subsumed.
-      // Fixed by isArrayIndexPropertyName() which correctly rejects "01".
+      // `isArrayIndexPropertyName()` decides, and it returns `false` for "01".
       const changes: ChangeSet = [
         makeChange(["items"], [1, 2]),
         makeChange(["items", "01"], 99),
@@ -2351,13 +2343,12 @@ describe("scope-isolation write guard", () => {
   // in docs/development/debugging/gotchas/scoped-cell-pitfalls.md): links do
   // not carry a principal, so a narrower-scoped link stored in a broader-scoped
   // slot resolves to a DIFFERENT instance for every reader — shared data
-  // written that way can never propagate (the B2 reader-blackout investigation,
-  // #4457). The guard WARNS loudly at the write site unless the slot's schema
-  // declares the scope (per-reader semantics opted into by the author). It is a
-  // warn, not a throw, because the runtime's own machinery legitimately writes
-  // scoped links into scope-silent slots today (.asScope() result links,
-  // navigateTo result cells, updateArgument setup wiring); see the enumeration
-  // on #4561 for the flip-to-throw checklist.
+  // written that way can never propagate. The guard WARNS loudly at the write
+  // site unless the slot's schema declares the scope (per-reader semantics
+  // opted into by the author). It is a warn, not a throw, because the runtime's
+  // own machinery legitimately writes scoped links into scope-silent slots
+  // today (.asScope() result links, navigateTo result cells, updateArgument
+  // setup wiring).
 
   let storageManager: ReturnType<typeof StorageManager.emulate>;
   let runtime: Runtime;
@@ -2477,7 +2468,7 @@ describe("scope-isolation write guard", () => {
     expect(warnCounts()).toBe(before + 1);
   });
 
-  it("does not warn when the slot's schema tolerates undefined (ubik2's criterion)", () => {
+  it("does not warn when the slot's schema tolerates `undefined`", () => {
     // A slot that matches undefined degrades harmlessly for readers whose
     // resolution comes up empty — per-reader links there are a legitimate
     // pattern, not the blackout footgun.
@@ -2554,7 +2545,7 @@ describe("scope-isolation write guard", () => {
     expect(warnCounts()).toBe(before + 1);
   });
 
-  it("does not warn for an optional slot, even when strictly typed (ubik2's criterion)", () => {
+  it("does not warn for an optional slot, even when strictly typed", () => {
     // The parent's `required` list is what makes a missing cell void the
     // read; an optional property is simply dropped and the object survives —
     // per-reader links there degrade harmlessly.
@@ -2586,9 +2577,8 @@ describe("scope-isolation write guard", () => {
   });
 
   it("resolves $defs/$ref slot schemas before judging tolerance (still warns on strict refs)", () => {
-    // CTS-emitted slot schemas routinely carry $defs + $ref (the original
-    // convergence-chat repro's stored link schema had exactly this shape);
-    // tolerance must be judged on the resolved schema, not the ref wrapper.
+    // CTS-emitted slot schemas routinely carry $defs + $ref; tolerance must be
+    // judged on the resolved schema, not the ref wrapper.
     const dest = runtime.getCell<{ profile?: unknown }>(
       space,
       "scope-guard-ref-dest",
@@ -2708,9 +2698,9 @@ describe("scope-isolation write guard", () => {
 });
 
 describe("schemaIfcOverlapsPath", () => {
-  // CT-1895: the overlap predicate deciding whether a schema-policy write input
-  // might cover a written path missed ifc labels in tuple slots, so
-  // schema-policy inputs for tuple positions were skipped (fail-open).
+  // The predicate decides whether a schema-policy write input might cover a
+  // written path. An `ifc` label in a tuple slot overlaps at the slot's
+  // concrete index.
 
   const tupleSchema = {
     type: "object",
@@ -2747,8 +2737,8 @@ describe("schemaIfcOverlapsPath", () => {
   });
 
   it("sees labels inside combinator branches (shared-walk descent)", () => {
-    // Gained by the forEachSubschema rework: ifc under an anyOf branch was
-    // previously invisible to the predicate (fail-open).
+    // Combinator branches descend at the same path, so an `ifc` label under an
+    // `anyOf` branch overlaps a write to the field.
     const branchSchema = {
       type: "object",
       properties: {

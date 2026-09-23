@@ -2669,7 +2669,7 @@ describe("piece pull materialization", () => {
     };
     const piece = await pieces.runPersistent(
       trustPattern(runtime, pattern),
-      { event: { $stream: true } },
+      {},
       undefined,
       { start: true },
     );
@@ -2723,7 +2723,7 @@ describe("piece pull materialization", () => {
       };
       const piece = await pieces.runPersistent(
         trustPattern(runtime, pattern),
-        { event: { $stream: true } },
+        {},
         undefined,
         { start: true },
       );
@@ -2776,7 +2776,7 @@ describe("piece pull materialization", () => {
     };
     const piece = await pieces.runPersistent(
       trustPattern(runtime, pattern),
-      { event: { $stream: true } },
+      {},
       undefined,
       { start: true },
     );
@@ -2827,7 +2827,7 @@ describe("piece pull materialization", () => {
     };
     const piece = await pieces.runPersistent(
       trustPattern(runtime, pattern),
-      { event: { $stream: true } },
+      {},
       undefined,
       { start: true },
     );
@@ -2889,7 +2889,7 @@ describe("piece pull materialization", () => {
         },
         nodes: [],
       }),
-      { event: { $stream: true } },
+      {},
       undefined,
       { start: true },
     );
@@ -2968,7 +2968,7 @@ describe("piece pull materialization", () => {
     };
     const piece = await pieces.runPersistent(
       trustPattern(runtime, pattern),
-      { slot: { $stream: true } },
+      {},
       undefined,
       { start: true },
     );
@@ -3623,7 +3623,7 @@ describe("piece pull materialization", () => {
         result: { event: { $alias: { cell: "argument", path: ["event"] } } },
         nodes: [],
       }),
-      { event: { $stream: true } },
+      {},
       undefined,
       { start: true },
     );
@@ -3648,7 +3648,7 @@ describe("piece pull materialization", () => {
         },
         nodes: [],
       }),
-      { event: { $stream: true } },
+      {},
       undefined,
       { start: true },
     );
@@ -3805,7 +3805,7 @@ describe("piece pull materialization", () => {
         },
         nodes: [],
       }),
-      { event: { $stream: true }, other: 1, spare: 2 },
+      { other: 1, spare: 2 },
       undefined,
       { start: true },
     );
@@ -3828,11 +3828,7 @@ describe("piece pull materialization", () => {
       expect(events).toEqual([7]);
       // The premise the skip rests on: sending stores nothing, so the producer
       // document the root pass would have judged is the one it already was.
-      expect(argument.getRawUntyped()).toEqual({
-        event: { $stream: true },
-        other: 1,
-        spare: "bad",
-      });
+      expect(argument.getRawUntyped()).toEqual({ other: 1, spare: "bad" });
 
       // Bypassing the root pass does not excuse a payload the producer's own
       // event contract refuses: nothing further reaches the stream.
@@ -3895,7 +3891,7 @@ describe("piece pull materialization", () => {
         result: {},
         nodes: [],
       }),
-      { event: { $stream: true } },
+      {},
       undefined,
       { start: true },
     );
@@ -4811,7 +4807,13 @@ describe("piece pull materialization", () => {
             Event: { type: "number", asCell: ["stream"] },
           },
         },
-        result: { events: { $stream: true } },
+        derivedInternalCells: [
+          {
+            partialCause: "events",
+            schema: { type: "number", asCell: ["stream"] },
+          },
+        ],
+        result: { events: { $alias: { partialCause: "events", path: [] } } },
         nodes: [],
       }),
       {},
@@ -6762,7 +6764,6 @@ describe("piece pull materialization", () => {
       { type: "number", asCell: ["stream"] },
     );
     await runtime.editWithRetry((tx) => {
-      stream.withTx(tx).setRawUntyped({ $stream: true });
       inputCell.withTx(tx).key("mode").setRawUntyped(
         stream.getAsLink({
           base: inputCell,

@@ -2051,8 +2051,9 @@ export class SpeculationOverlayDestination
           const state = view(doc.id, doc.scope);
           // A content-addressed doc the store holds witnesses at ANY
           // cover seq (#6304). Its stored envelope is immutable —
-          // admission refuses a `cid:` delete or patch outright, and a
-          // `cid:` set unless the WHOLE stored envelope, metadata
+          // admission refuses every operation but `set` against a `cid:`
+          // id outright, and a `cid:` set unless the WHOLE stored
+          // envelope, metadata
           // included, is value-equal (memory/v2 engine.ts's
           // content-addressed immutability pass; this witness rests on
           // that boundary, so a metadata-write carve-out for cid docs

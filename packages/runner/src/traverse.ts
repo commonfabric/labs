@@ -1,8 +1,4 @@
-import {
-  isFabricPrimitiveSchemaType,
-  type JSONSchemaObj,
-  type SchemaPathSelector,
-} from "@commonfabric/api";
+import type { JSONSchemaObj, SchemaPathSelector } from "@commonfabric/api";
 import {
   FabricInstance,
   FabricPrimitive,
@@ -15,6 +11,7 @@ import {
   toIndentedDebugString,
 } from "@commonfabric/data-model";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
+import { isFabricPrimitiveSchemaType } from "@commonfabric/data-model/fabric-primitives";
 import {
   DEFAULT_SELECTOR,
   hashSchema,
@@ -70,12 +67,15 @@ import type {
   SchemaScope,
 } from "./builder/types.ts";
 import { isOpaqueReference, opaqueReference } from "./back-to-cell.ts";
-import { ContextualFlowControl } from "./cfc.ts";
+import {
+  ContextualFlowControl,
+  resolveExternalRootRefForStructure,
+} from "./cfc.ts";
 import { cfcEnvelopeLabelDocumentHashes } from "./cfc/label-documents.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { dataUriFromValueWithResolvedLinks } from "./data-uri.ts";
 import { FABRIC_SPECIAL_OBJECT_BRAND } from "./fabric-special-object-brand.ts";
-import type { LastNode } from "./link-resolution.ts";
+import { type LastNode, readMaybeLink } from "./link-resolution.ts";
 import {
   type IMemorySpaceValueAddress,
   isSigilLink,
@@ -84,11 +84,12 @@ import {
 } from "./link-types.ts";
 import {
   addressKey,
+  declareStreamSchema,
   NormalizedFullLink,
   parseLink,
   schemaForSpaceCrossing,
 } from "./link-utils.ts";
-import { canFollowScopedLink } from "./scope.ts";
+import { canFollowScopedLink, isCellScope, scopeRank } from "./scope.ts";
 import { type CellLinkRefPayload, SigilLink, type URI } from "./sigil-types.ts";
 import {
   type Activity,
@@ -110,6 +111,7 @@ import {
 import {
   excludeReadFromConflict,
   ignoreReadForScheduling,
+  linkResolutionProbe,
 } from "./storage/reactivity-log.ts";
 import { resolve } from "./storage/transaction/attestation.ts";
 import {
@@ -707,10 +709,7 @@ function prepareAnyOfBranch(
   const types = resolved.type !== undefined
     ? (Array.isArray(resolved.type) ? resolved.type : [resolved.type])
     : undefined;
-  const required =
-    schemaTypeIncludesObject(resolved.type) && Array.isArray(resolved.required)
-      ? resolved.required as readonly string[]
-      : undefined;
+  const required = requiredValueProperties(resolved);
   return {
     optionIsFalse: false,
     merged,
@@ -719,6 +718,52 @@ function prepareAnyOfBranch(
     types,
     required,
   };
+}
+
+/**
+ * The `required` property names of `resolved` that a value has to carry:
+ * every required name except one whose property schema declares a stream.
+ * A stream position holds no value — its handle is minted from the schema
+ * alone — so its absence from a value says nothing about the value's shape.
+ * `undefined` when the schema admits no object or requires nothing.
+ *
+ * The same exemption applies inside a union's branches, so a required stream
+ * never tells two branches apart: branches that differ only by one all match,
+ * `anyOf` merges them and mints a handle for each branch's stream, and
+ * `oneOf` reports more than one match. Discriminating such branches by
+ * whether the data names the stream is a follow-up.
+ */
+function requiredValueProperties(
+  resolved: JSONSchemaObj,
+): readonly string[] | undefined {
+  if (
+    !schemaTypeIncludesObject(resolved.type) ||
+    !Array.isArray(resolved.required)
+  ) {
+    return undefined;
+  }
+  return (resolved.required as readonly string[]).filter((name) =>
+    !propertyDeclaresStream(resolved, name)
+  );
+}
+
+/**
+ * Whether the property `name` of `resolved` declares a stream, read the way
+ * the object traversal reads it when it mints an absent stream's handle: a
+ * property written as a `$ref` into the schema's own `$defs` declares what
+ * its definition declares. The two have to agree, or a branch requiring such
+ * a stream is rejected for lacking a key the traversal would have supplied.
+ */
+function propertyDeclaresStream(
+  resolved: JSONSchemaObj,
+  name: string,
+): boolean {
+  const property = isObjectNotArray(resolved.properties)
+    ? resolved.properties[name] as JSONSchema | undefined
+    : undefined;
+  // `resolved` is the document a `$ref` in the property resolves against.
+  return ContextualFlowControl.declaredHandleKind(property, resolved) ===
+    "stream";
 }
 
 /**
@@ -1329,6 +1374,8 @@ export type PointerCycleTracker = CompoundCycleTracker<
 >;
 
 export type TraversalContext = {
+  /** Probe terminal payload only while constructing a held cell reference. */
+  referenceOnly?: boolean;
   tracker: PointerCycleTracker;
   schemaTracker: MapSet<string, SchemaPathSelector>;
 
@@ -2592,7 +2639,15 @@ function followPointer(
   // for scheduling. We'll have to tag it later.
   // We use a nonRecursive read, since we may not need everything at the target.
   if (readStatsActive) recordLinkResolution(tx);
-  const { ok: valueEntry, error } = tx.read(target, READ_NON_RECURSIVE);
+  const { ok: valueEntry, error } = tx.read(
+    target,
+    context.referenceOnly
+      ? {
+        ...READ_NON_RECURSIVE,
+        meta: { ...READ_NON_RECURSIVE.meta, ...linkResolutionProbe },
+      }
+      : READ_NON_RECURSIVE,
+  );
 
   if (error !== undefined) {
     // If we had an unexpected error, or didn't find the doc at all, return.
@@ -3070,6 +3125,21 @@ export function combineSchema(
  * reader's (including a default-only reader's, which is otherwise a true
  * schema) stands.
  *
+ * A stream declaration crosses it as well, whole. A reader's shape describes
+ * the value it expects at the target, and a stream's document holds none, so
+ * a shape that does not itself declare the stream has nothing there to
+ * describe: read as it stands, it finds the position empty and drops it, and
+ * whatever requires it with it. The link's declaration is the only thing that
+ * says what the position is, so it governs, and the reader gets the stream.
+ *
+ * A reader that asks for a plain `cell` handle is the exception: it named the
+ * kind of endpoint it wants, a stream is not one, and the combination is
+ * `false`, a mismatch. It is not read as `asCell: ["stream", "cell"]`, which
+ * would mean a stream of cells and move the reader's wrapper into the event.
+ * A reader wanting that declares it. The reader's schema is judged in its
+ * structural form, so one spelled as a content-addressed reference gets the
+ * same verdict as one spelled inline.
+ *
  * A discarded link schema's `ifc` does NOT ride onto the result. Write
  * policy consumes declared schemas verbatim (`recordSchemaWritePolicyInput`),
  * so transplanting flow-control clauses between schemas corrupts the
@@ -3096,6 +3166,28 @@ export function combineSchemaForLink(
   }
   if (ContextualFlowControl.isFalseSchema(parentSchema)) {
     return parentSchema;
+  }
+  // A link that declares a stream governs a reader that does not: the target
+  // holds no value for the reader's shape to describe. Decided before the
+  // reader is sorted into true or shaped, and on its structural form, so a
+  // reader spelled as a content-addressed reference gets the same answer as
+  // one spelled inline. The declaration is handed on in structural form too,
+  // since what follows reads `asCell` off the schema it is given.
+  if (
+    ContextualFlowControl.declaresStream(linkSchema) &&
+    !ContextualFlowControl.declaresStream(parentSchema)
+  ) {
+    const reader = isObjectNotArray(parentSchema)
+      ? resolveExternalRootRefForStructure(parentSchema)
+      : parentSchema;
+    const readerKind = ContextualFlowControl.getAsCellKind(
+      ContextualFlowControl.getAsCellValues(reader).at(0),
+    );
+    // A plain readable cell was asked for, and a stream is not one.
+    if (readerKind === "cell") return false;
+    return isObjectNotArray(linkSchema)
+      ? resolveExternalRootRefForStructure(linkSchema)
+      : linkSchema;
   }
   // A value's `default` is inherited from the last crossed schema that
   // declares one: each hop's stored schema describes that hop's target, so
@@ -4820,10 +4912,29 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // let createdDataURI = false;
       // const maybeLink = parseLink(item, arrayLink);
       if (isSigilLink(item)) {
+        const elementLink = parseLink(item, curDoc.address);
+        // An unknown-valued handle carries only an address. A consumer
+        // reading through it needs the target.
+        if (
+          isUnknownCellSchema(curSelector.schema) &&
+          !isWriteRedirectLink(item) &&
+          elementLink !== undefined
+        ) {
+          this.tx.read(curDoc.address, READ_FOR_SCHEDULING);
+          const cellLink = getNextCellLink(
+            this.tx,
+            curDoc,
+            curSelector.schema!,
+          );
+          arrayObj[index] = this.objectCreator.createObject(
+            cellLink,
+            undefined,
+          );
+          return;
+        }
         // The element hop is a crossing whichever machinery dereferences
         // it — including the prepared fast path below, which bypasses
         // followPointer — so the seam runs here.
-        const elementLink = parseLink(item, curDoc.address);
         if (elementLink !== undefined) {
           markIfcBearingLinkCrossing(
             this.tx,
@@ -5132,15 +5243,40 @@ export class SchemaObjectTraverser<V extends FabricValue>
         if (Object.hasOwn(filteredObj, propKey)) {
           continue;
         }
-        const propSchema = getPropertyDefaultSchema(schema, propKey);
-        if (propSchema === undefined) continue;
-        if (rejectedOverMissingTarget.has(propKey)) {
-          this.context.substituteCoveredMissingTarget = true;
+        const subSchema = ContextualFlowControl.getSchemaAtPath(schema, [
+          propKey,
+        ]);
+        if (!isObjectOrArray(subSchema)) {
+          continue;
+        }
+        const propSchema = ContextualFlowControl.resolveSchemaRefs(subSchema);
+        if (!isObjectOrArray(propSchema)) {
+          continue;
         }
         const propAddress = {
           ...doc.address,
           path: appendToPath(doc.address.path, propKey),
         };
+        if (ContextualFlowControl.declaresStream(propSchema)) {
+          // A declared stream position is materialized whether or not the
+          // data names it: the handle is minted from the schema alone, the
+          // way an inline value at an asCell boundary is above, so a key the
+          // data lacks there is not a missing property. Nothing is traversed:
+          // the event schema describes what the stream accepts, not a value.
+          // The handle's link declares the stream at its root, where the
+          // creator reads it, however the property spelled the declaration.
+          filteredObj[propKey] = this.objectCreator.createObject(
+            getNormalizedLink(propAddress, declareStreamSchema(propSchema)),
+            undefined,
+          );
+          continue;
+        }
+        if (propSchema.default == undefined) {
+          continue;
+        }
+        if (rejectedOverMissingTarget.has(propKey)) {
+          this.context.substituteCoveredMissingTarget = true;
+        }
         if (SchemaObjectTraverser.hasAsCell(propSchema)) {
           const { ok: val, error } = this.traverseWithSchema({
             address: propAddress,
@@ -5211,15 +5347,20 @@ export class SchemaObjectTraverser<V extends FabricValue>
     const alreadyTracked = this.traverseCells &&
       this.isLinkedDocumentCovered(doc, selector);
 
-    // In the case of an opaque cell, we want to skip any deeper reads
-    // This means we don't follow any redirects
+    // Opaque handles preserve their link directly. An unknown-valued
+    // handle also preserves an ordinary link: transferring its address needs
+    // no target read authority. Write redirects still resolve the local slot.
     const asCellValues = ContextualFlowControl.getAsCellValues(schema);
-    if (ContextualFlowControl.getAsCellKind(asCellValues.at(0)) === "opaque") {
+    const pointerLink = parseLink(doc.value, doc.address);
+    if (
+      ContextualFlowControl.getAsCellKind(asCellValues.at(0)) === "opaque" ||
+      (isUnknownCellSchema(schema) && !isWriteRedirectLink(doc.value) &&
+        pointerLink !== undefined)
+    ) {
       const cellLink = getNextCellLink(this.tx, doc, schema);
       return { ok: this.objectCreator.createObject(cellLink, undefined) };
     }
 
-    const pointerLink = parseLink(doc.value, doc.address);
     if (
       this.traverseCells && alreadyTracked &&
       pointerLink?.id !== doc.address.id
@@ -5227,12 +5368,30 @@ export class SchemaObjectTraverser<V extends FabricValue>
       return { ok: null };
     }
 
-    const [redirDoc, redirSelector] = this.getDocAtPath(
+    this.getDocAtPathCalls++;
+    // Only the terminal target payload is a handle-construction probe.
+    // getAtPath checks every intermediate pointer before following its choice.
+    const [redirDoc, redirSelector] = getAtPath(
+      this.tx,
       doc,
       [],
+      !this.traverseCells && SchemaObjectTraverser.hasAsCell(schema)
+        ? { ...this.context, referenceOnly: true }
+        : this.context,
       selector,
       "writeRedirect",
     );
+    if (
+      isUnknownCellSchema(schema) && isSigilLink(redirDoc.value) &&
+      !isWriteRedirectLink(redirDoc.value)
+    ) {
+      const combinedSchema = combineOptionalSchema(
+        schema,
+        redirSelector?.schema,
+      )!;
+      const cellLink = getNextCellLink(this.tx, redirDoc, combinedSchema);
+      return { ok: this.objectCreator.createObject(cellLink, undefined) };
+    }
     if (redirDoc.value === undefined) {
       // This may be ok, but log it anyhow
       logger.info(
@@ -5481,11 +5640,9 @@ export function canBranchMatch(
   // Const/enum checks are omitted — property values may contain unresolved
   // links that would match after link resolution during traversal.
   if (isObjectOrArray(value)) {
-    if (
-      schemaTypeIncludesObject(resolved.type) &&
-      Array.isArray(resolved.required)
-    ) {
-      for (const req of resolved.required) {
+    const required = requiredValueProperties(resolved);
+    if (required !== undefined) {
+      for (const req of required) {
         // A `FabricSpecialObject`'s surface is class accessors, so its
         // membership test is prototype-chain `in`; the nominal brand key has no
         // runtime existence and is satisfied by construction (the `TODO`
@@ -5574,6 +5731,43 @@ export function getJsonType(value: unknown): JSONSchemaTypes | null {
     : getPlainJsonType(value);
 }
 
+/** Returns whether a schema requests a cell handle with no declared value shape. */
+export function isUnknownCellSchema(schema: JSONSchema | undefined): boolean {
+  if (!isObjectOrArray(schema)) return false;
+  const resolved = resolveSchemaRefsCanonical(schema);
+  return isObjectOrArray(resolved) &&
+    (resolved.type === "unknown" ||
+      (Array.isArray(resolved.type) && resolved.type.includes("unknown"))) &&
+    SchemaObjectTraverser.hasAsCell(resolved);
+}
+
+/**
+ * Drops a top-level `scope` from `schema` when it is narrower than
+ * `targetScope`.
+ *
+ * A `scope` on a slot's schema places that slot's own content: a plain value
+ * written there narrows into the scoped instance. A handle minted by
+ * following a reference out of the slot to a different cell addresses that
+ * cell, whose scope the reference already names. Keeping the slot's scope on
+ * the handle would narrow a write through it into an instance of the
+ * referenced cell that nobody else reads, and leave a redirect in the cell's
+ * shared instance. A reference within the same cell is the slot's own
+ * narrowing redirect, which the caller leaves alone.
+ */
+function withoutSlotValueScope(
+  schema: JSONSchema,
+  targetScope: CellScope,
+): JSONSchema {
+  if (
+    !isObjectNotArray(schema) || !isCellScope(schema.scope) ||
+    scopeRank(schema.scope) <= scopeRank(targetScope)
+  ) {
+    return schema;
+  }
+  const { scope: _slotScope, ...rest } = schema;
+  return internSchema(rest);
+}
+
 /**
  * Get the link for a cell reached by following one link if available.
  * If doc.value does not contain a link, the cell will point to doc.address.
@@ -5594,6 +5788,11 @@ function getNextCellLink(
   // that location, so we effectively follow one more link if available.
   const lastLink = parseLink(doc.value, doc.address);
   if (lastLink !== undefined) {
+    if (isUnknownCellSchema(schema)) {
+      // Observing a handle consumes the source pointer's own label even when
+      // its target value is unavailable or outside this reader's authority.
+      readMaybeLink(tx, getNormalizedLink(doc.address));
+    }
     if (readStatsActive) recordLinkResolution(tx);
     // This extra hop bypasses followPointer, so it carries the crossing
     // seam itself.
@@ -5606,7 +5805,14 @@ function getNextCellLink(
     // The link may not have the asCell flags, so pull that from itemSchema.
     // Reader precedence, like every other crossing: the handle must not
     // carry the link's wider schema past the reader's.
-    const combined = combineSchemaForLink(schema, lastLink.schema ?? true);
+    const readerSchema = lastLink.id === doc.address.id &&
+        lastLink.space === doc.address.space
+      ? schema
+      : withoutSlotValueScope(schema, lastLink.scope);
+    const combined = combineSchemaForLink(
+      readerSchema,
+      lastLink.schema ?? true,
+    );
     return {
       ...lastLink,
       schema: lastLink.space === doc.address.space

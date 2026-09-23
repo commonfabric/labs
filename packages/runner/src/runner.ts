@@ -1,5 +1,6 @@
 import {
   convertibleJsFromFabricValue,
+  debugStr,
   fabricFromConvertibleJsValue,
   FabricInstance,
   type FabricValue,
@@ -9,8 +10,6 @@ import {
   isKeyableObjectOrArray,
   isWalkableObjectOrArray,
   refuseFabricInstance,
-  toCompactDebugString,
-  toLongQuotedDebugString,
   valueEqual,
 } from "@commonfabric/data-model";
 import { BoundedKeyMap } from "@commonfabric/utils/cache";
@@ -49,7 +48,6 @@ import {
   type Frame,
   isModule,
   isPattern,
-  isStreamValue,
   type JSONSchema,
   JSONValue,
   type Module,
@@ -71,6 +69,7 @@ import {
   ContextualFlowControl,
   resolveExternalRootRefForStructure,
 } from "./cfc.ts";
+import { recordNewProtectedDefaults } from "./cfc/default-initialization.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { findAndInlineDataUriLinks } from "./data-uri.ts";
 import type { EntityKind } from "./entity-kind.ts";
@@ -147,6 +146,7 @@ import { entityKey } from "./scheduler/keys.ts";
 import { RetryImmediately } from "./scheduler/retry-immediately.ts";
 import { isSchemaMismatchError } from "./schema-view.ts";
 import { rendererVDOMSchema } from "./schemas.ts";
+import { combineOptionalSchema } from "./traverse.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
 import { TransactionWrapper } from "./storage/extended-storage-transaction.ts";
 import { getTransactionReadActivities } from "./storage/transaction-inspection.ts";
@@ -231,7 +231,10 @@ import { normalizeSandboxResult } from "./sandbox/result-normalization.ts";
 import { isCellScope, narrowestScope } from "./scope.ts";
 import { SigilLink } from "./sigil-types.ts";
 import { toURI } from "./uri-utils.ts";
-import { rawMetaWriteAuthorization } from "./meta-seam.ts";
+import {
+  asPatternIdentityRef,
+  rawMetaWriteAuthorization,
+} from "./meta-seam.ts";
 export {
   extractDefaultValues,
   mergeObjects,
@@ -290,6 +293,13 @@ type StartAttempt = {
   readonly lifecycleEpoch: number;
   readonly generationsByDoc: Map<string, number>;
   readonly preResolutionStopKeys: Set<string>;
+
+  /** Parent demand and synchronization context for a retained child. */
+  readonly options?: Pick<
+    RunnerRunOptions,
+    "parentPieceRootId" | "awaitSyncBeforeInitialRun"
+  >;
+
   // The result this attempt resolved to, which a link start only learns by
   // following the link.
   targetKey?: `${MemorySpace}/${ScopeKey}/${URI}`;
@@ -300,7 +310,7 @@ type StartAttempt = {
   // the caller emptied, with no stop and so no generation bump to witness
   // it. A caller that hands a registration to an ownership it holds must
   // hand off THIS one, never merely whatever `cancels` holds at claim
-  // time (the catch-up recovery's Cubic-P1 fix).
+  // time (the catch-up recovery does so).
   installedRegistration?: Cancel;
   // The attempt's outcome, which a concurrent start of the same doc joins
   // instead of running a second resolution pipeline. Assigned by start() once
@@ -459,8 +469,8 @@ const recordOutputSchemaPolicyInputs = (
     const bindingLink = parseLink(outputBinding, bindingBase);
     // Output-redirect resolution is result-plumbing machinery
     // (machineryRead, same family as sendValueToBinding's walk): its reads
-    // must not consume `*`-path membership templates (bot review on this
-    // PR — these resolve the SAME redirects immediately before the send).
+    // must not consume `*`-path membership templates (these resolve the
+    // SAME redirects immediately before the send).
     const link = tx.runWithAmbientReadMeta(
       machineryRead,
       () =>
@@ -685,19 +695,18 @@ const recordRawBuiltinResultSchemaPolicyInput = (
 };
 
 /**
- * The kind-free ids of a pattern's derived internal cells on `resultCell` —
- * the ids a manifest-blind binding conversion mints for a `partialCause`
- * alias (pattern-binding's descriptor-miss fallback), which is how the
- * identity bind (CT-1943) renders such an alias. Cause-only by contract:
- * the coordinates ARE the position-derived identity, and nothing may read
- * through them — where the descriptor carries a kind, the data lives at the
- * KINDED entity, so a read here asks about bytes that are never there and
- * ties the asking transaction to replication state.
- * {@link firstResolvedOutputRedirect} takes this set to return such links
- * parsed rather than resolved. The kind is omitted from the mint on
- * purpose: the hash preimage is kind-free, so one kindless mint per
- * descriptor names the id the fallback produces whatever the descriptor's
- * kind is.
+ * The kind-free ids of a pattern's derived internal cells on `resultCell` — the
+ * ids a manifest-blind binding conversion mints for a `partialCause` alias
+ * (pattern-binding's descriptor-miss fallback), which is how the identity bind
+ * renders such an alias. Cause-only by contract: the coordinates ARE the
+ * position-derived identity, and nothing may read through them — where the
+ * descriptor carries a kind, the data lives at the KINDED entity, so a read
+ * here asks about bytes that are never there and ties the asking transaction to
+ * replication state. {@link firstResolvedOutputRedirect} takes this set to
+ * return such links parsed rather than resolved. The kind is omitted from the
+ * mint on purpose: the hash preimage is kind-free, so one kindless mint per
+ * descriptor names the id the fallback produces whatever the descriptor's kind
+ * is.
  */
 function causeOnlySpotIds(
   resultCell: Cell<any>,
@@ -1461,9 +1470,8 @@ type SchedulerRehydrationSubscriptionOptions = {
   viewNodeId?: string;
   viewLocalOnly?: boolean;
   // The owning pattern instance for this reader, set unconditionally so the
-  // scheduler can group a pattern's shaped cell-flip wakes by instance
-  // (timing side-channel mitigation, plan B) and tell a pattern reader from
-  // internal machinery.
+  // scheduler can group a pattern's shaped cell-flip wakes by instance (timing
+  // side-channel mitigation) and tell a pattern reader from internal machinery.
   observationIdentity?: {
     pieceId: string;
     ownerSpace: MemorySpace;
@@ -1506,7 +1514,7 @@ type RunnerRunOptions = {
   // demand roots (`SchedulerObservationIdentity.demandRootIds`) become the
   // parent's chain plus this root, so the serving loop's per-(action ×
   // instance) run supply resolves a nested piece's demanded instances
-  // through the OUTER piece a client watches (server-execution v2 Phase 7).
+  // through the OUTER piece a client watches.
   parentPieceRootId?: string;
   // The source origin a piece brought into being by this run records with its
   // creation revision. A run that finds the piece already there leaves both
@@ -1524,8 +1532,8 @@ type RunnerRunOptions = {
 const relaxedHandlerSchemaCache = new WeakMap<object, JSONSchema>();
 
 /**
- * The dispatch-side closed-world gate (verb contract WS-C, C5 — design rule
- * 1: an undeclared field is a rejection, never ignored).
+ * The dispatch-side closed-world gate: under a closed event schema an
+ * undeclared field is a rejection, never ignored.
  *
  * Returns the rejection message when a PRESENT event payload cannot satisfy
  * an event schema that declares `additionalProperties: false` — read off the
@@ -1533,38 +1541,31 @@ const relaxedHandlerSchemaCache = new WeakMap<object, JSONSchema>();
  * `$ref` names (`generateHandlerSchema` hoists the event schema's `$defs`
  * onto the handler schema, so that schema is the root local refs resolve
  * against). Closure inside a combinator root (`allOf`/`anyOf`/`oneOf`) is
- * deliberately NOT detected — the same recorded boundary as the CLI gate's
- * absence rule (plan, D5 bullet: combinator roots are out of scope without a
- * test proving each case; conservative and documented beats clever and
- * silent). Generated event schemas never emit combinator roots, and the miss
- * direction is safe: an undetected closure keeps today's open-schema
- * delivery, never a false rejection. Everything else returns `undefined` and
- * keeps the measured delivery behavior (recorded on #5147):
+ * deliberately NOT detected. The miss direction is safe: an undetected
+ * closure gets open-schema delivery, never a false rejection. Everything
+ * else returns `undefined`:
  *
- * - An OPEN event schema stays exactly as measured: the schema read path
- *   delivers the declared fields and ignores the rest, and a payload that
- *   misses the schema reads back as an absent event. Closure is the schema's
- *   opt-in — generated event schemas do not carry it yet (the emission is
- *   blocked on a pattern-update-gate migration; see the plan's WS-C bullet).
- * - An ABSENT payload stays deliverable as `undefined` regardless of
- *   closure: absence is the CLI gate's question (D5), and the measured table
- *   holds — defaults never materialize for an absent event.
+ * - An OPEN event schema: the schema read path delivers the declared fields
+ *   and ignores the rest, and a payload that misses the schema reads back as
+ *   an absent event. Closure is the schema's opt-in.
+ * - An ABSENT payload is deliverable as `undefined` regardless of closure:
+ *   absence is the CLI gate's question, and defaults never materialize for
+ *   an absent event.
  *
  * Validation is the same composition the CLI's pre-dispatch gate applies
- * (`verbInputSchemaError`, packages/cli/lib/callable.ts) — which is why D6
- * moved the helpers beside the validator: `required` lists are relaxed for
- * defaulted properties first (the runtime fills a present object's missing
- * defaulted properties before checking `required`, so judging the unrelaxed
- * schema would refuse payloads the verb accepts), then `validateSchemaValue`
- * judges the payload. Cell links inside the payload are accepted opaquely: a
- * link's target cannot be read here, and its schema check belongs to the
- * handler's own reactive reads — the same deferral the pattern-argument
- * validator applies to unresolvable links. A link VALUE passes unjudged; an
- * undeclared KEY still rejects.
+ * (`verbInputSchemaError`, packages/cli/lib/callable.ts): `required` lists are
+ * relaxed for defaulted properties first (the runtime fills a present object's
+ * missing defaulted properties before checking `required`, so judging the
+ * unrelaxed schema would refuse payloads the verb accepts), then
+ * `validateSchemaValue` judges the payload. Cell links inside the payload are
+ * accepted opaquely: a link's target cannot be read here, and its schema check
+ * belongs to the handler's own reactive reads — the same deferral the
+ * pattern-argument validator applies to unresolvable links. A link VALUE passes
+ * unjudged; an undeclared KEY still rejects.
  *
  * On rejection the handler wrapper throws, which fails the handling exactly
- * the way a thrown handler error already fails — no new receipt shape, error
- * class, or wire format (WS-E owns codes later).
+ * the way a thrown handler error fails — with no receipt shape, error class,
+ * or wire format of its own.
  */
 function closedWorldEventRejection(
   argumentSchema: JSONSchema | undefined,
@@ -1683,6 +1684,15 @@ interface SetupStateReuse {
    * pattern, only the lack of evidence that it is not.
    */
   storedSetupMatches: boolean;
+
+  /**
+   * Leave the completion marker as it stands. The marker says an identity's
+   * argument was staged along with its internal cells and result projection,
+   * and a later setup that finds it matching re-stages and validates nothing.
+   * A caller that deliberately leaves the argument alone has not staged all of
+   * that, so it leaves the marker saying what it said.
+   */
+  leaveCompletionMarker?: boolean;
 }
 
 /**
@@ -2286,12 +2296,11 @@ export class Runner {
   }
 
   /**
-   * The SESSION-side pattern pointer for a keyless piece this runner set up,
-   * or undefined. The piece layer's read-through: a keyless piece carries no
-   * durable `patternIdentity` (the never-durable contract), so consumers
-   * that used to read the durable meta (`PiecesController.syncPattern`)
-   * consult this before concluding the piece has no pattern. Session-scoped
-   * by construction — a fresh runtime correctly finds nothing.
+   * The SESSION-side pattern pointer for a keyless piece this runner set up, or
+   * undefined. The piece layer's read-through: a keyless piece carries no
+   * durable `patternIdentity` (the never-durable contract), so consumers of the
+   * durable meta consult this before concluding the piece has no pattern.
+   * Session-scoped by construction — a fresh runtime correctly finds nothing.
    */
   sessionPatternPointerFor(
     resultCell: Cell<unknown>,
@@ -2479,18 +2488,15 @@ export class Runner {
         const space = notification.space;
         if ("changes" in notification) {
           for (const change of notification.changes) {
-            // The notification names the DOC (scope arrives by NAME,
-            // which cannot address a per-run scope instance on a
-            // serving runtime — r3739139481), so eviction drops the
-            // doc's WHOLE entry: every instance's memo clears, and the
-            // over-eviction is safe — re-preparing an unchanged
-            // pattern commits no differing bytes
-            // (writeJavaScriptActionResult's unchanged path is
-            // idempotent). This also keeps the stage-E healing: no
-            // scope segment in the key means no raw-vs-normalized
-            // mismatch can make eviction silently miss an entry. The
-            // eviction-on-notification CONTRACT is what the storage
-            // subscription exists for and is pinned by the "clears
+            // The notification names the DOC (scope arrives by NAME, which
+            // cannot address a per-run scope instance on a serving runtime), so
+            // eviction drops the doc's WHOLE entry: every instance's memo
+            // clears, and the over-eviction is safe — re-preparing an unchanged
+            // pattern commits no differing bytes (writeJavaScriptActionResult's
+            // unchanged path is idempotent). No scope segment in the key also
+            // means no raw-vs-normalized mismatch can make eviction silently
+            // miss an entry. The eviction-on-notification CONTRACT is what the
+            // storage subscription exists for and is pinned by the "clears
             // cached patterns when storage notifies of changes" test.
             this.#evictResultPatternMemos(`${space}/${change.address.id}`);
           }
@@ -2705,12 +2711,12 @@ export class Runner {
   /**
    * The pattern pointer for `pattern`: its real content-addressed entry ref
    * when it has one (a compiled pattern), else a stable session-synthetic
-   * `keyless:` ref minted for the hand-built pattern object. The keyless ref
-   * is INDEX-only — it resolves through `artifactFromIdentitySync` for any
+   * `keyless:` ref minted for the hand-built pattern object. The keyless ref is
+   * INDEX-only — it resolves through `artifactFromIdentitySync` for any
    * in-session holder of the ref, but it is never recorded durably
-   * (`#applySetupState` skips the stamp for it; L3(a), RULED 2026-08-27), so
-   * a keyless piece carries no pattern pointer and cannot be started by
-   * identity: its producer re-derives and re-runs it instead.
+   * (`#applySetupState` skips the stamp for it), so a keyless piece carries no
+   * pattern pointer and cannot be started by identity: its producer re-derives
+   * and re-runs it instead.
    */
   #entryRefForPattern(
     pattern: Pattern,
@@ -2756,7 +2762,7 @@ export class Runner {
     argumentCell.set(storable);
     // The policy recorder sees the RAW argument, as its sibling in
     // `#updateResultProjection` does. Handing it the flattened one would walk
-    // a serialized pattern graph it previously stopped at -- a function halts
+    // a serialized pattern graph the raw walk stops at -- a function halts
     // its descent, a record does not -- and record structural-provenance
     // claims from positions it has never seen.
     //
@@ -3217,6 +3223,7 @@ export class Runner {
         meta: ignoreReadForScheduling,
       }) as T | undefined;
 
+      const previousArgumentSchema = argumentLink.schema;
       const nextArgumentCell = previousArgumentCell.asSchema(
         pattern.argumentSchema,
       );
@@ -3236,7 +3243,7 @@ export class Runner {
         // Pattern change over an argument doc that reads nothing right now.
         // This is the normal client state whenever the argument links into a
         // piece that is down or a doc that has not synced — a nested piece's
-        // argument lives in its HOST's doc (CT-1917: BacklinksIndex's
+        // argument lives in its HOST's doc (for example, BacklinksIndex's
         // `pieceRegistry` argument under a host whose own pattern failed to
         // load). There is no supplied value to stage, and validating — or
         // writing defaults over — a doc we cannot read would either kill the
@@ -3249,6 +3256,17 @@ export class Runner {
           defaults as Partial<T>,
           pattern.argumentSchema,
         );
+
+        if (this.#runtime.patternManager.getArtifactEntryRef(pattern)) {
+          recordNewProtectedDefaults(
+            tx,
+            argumentLink,
+            previousArgumentSchema,
+            pattern.argumentSchema,
+            defaults,
+            nextArgument,
+          );
+        }
 
         // Stage the exact Fabric-layer representation before validating it.
         // The untyped materialization inside resolves ordinary sigil links
@@ -3287,19 +3305,16 @@ export class Runner {
     }
 
     // Record the content-addressed {identity, symbol} reference — the ONLY
-    // pattern pointer — when the pattern's entry identity is a REAL one
-    // (every space-compiled pattern post-E4). On reload this loads the
-    // pattern straight from the compiled cache by identity (or, on a version
-    // bump, recompiles from the source-doc closure). A KEYLESS hand-built
-    // pattern gets NO durable pointer: `#entryRefForPattern` mints a
-    // `keyless:<hash>` session pointer for it, but that identity is
-    // session-only by construction and must never land in durable state
-    // (pattern-manager's contract; L3(a), RULED 2026-08-27 — the serving
-    // runtime's stamp here was the durable keyless writer the 2026-08-27
-    // diagnosis rooted the r06/r09 poisoned-pointer collateral in). Readers
-    // of such a piece get the designed no-pattern-meta verdict; recovery is
-    // the producer's (re-run the producing lift), never a load. The ref
-    // carries the authoritative export symbol (recorded at compile/load
+    // pattern pointer — when the pattern's entry identity is a REAL one (as
+    // every space-compiled pattern's is). On reload this loads the pattern
+    // straight from the compiled cache by identity (or, on a version bump,
+    // recompiles from the source-doc closure). A KEYLESS hand-built pattern
+    // gets NO durable pointer: `#entryRefForPattern` mints a `keyless:<hash>`
+    // session pointer for it, but that identity is session-only by construction
+    // and must never land in durable state (pattern-manager's contract).
+    // Readers of such a piece get the designed no-pattern-meta verdict;
+    // recovery is the producer's (re-run the producing lift), never a load. The
+    // ref carries the authoritative export symbol (recorded at compile/load
     // time); we never recompute it from `pattern`'s program here, since a
     // source-free reloaded pattern only has a stub program (mainExport
     // "default"), which would clobber a non-"default" export name.
@@ -3346,10 +3361,12 @@ export class Runner {
     // internal cells, and result projection were staged by setup(). Pattern
     // loading continues to use patternIdentity.
     if (durableEntryRef) {
-      resultCell.withTx(tx).setMetaRaw("patternSetupIdentity", {
-        identity: durableEntryRef.identity,
-        symbol: durableEntryRef.symbol,
-      }, rawMetaWriteAuthorization);
+      if (!setupState.leaveCompletionMarker) {
+        resultCell.withTx(tx).setMetaRaw("patternSetupIdentity", {
+          identity: durableEntryRef.identity,
+          symbol: durableEntryRef.symbol,
+        }, rawMetaWriteAuthorization);
+      }
       // The durable stamps staged above supersede a keyless session pointer
       // — WHEN they commit. They are transaction state, so the pointer
       // removal rides the same commit: dropping it at staging would leave a
@@ -3374,14 +3391,13 @@ export class Runner {
         });
       }
     } else if (entryRef) {
-      // A piece previously stamped with a DIFFERENT durable pointer (a real
-      // identity from an earlier keyed setup, or a pre-guard legacy keyless
-      // orphan) must not keep it: setup just staged the KEYLESS pattern's
-      // state, and a standing stale pointer would make later starts —
-      // fresh sessions especially — select the OLD pattern over it. Clear
-      // both durable metas transactionally with this setup; the cleared
-      // state IS the keyless piece's designed durable verdict
-      // (no-pattern-meta), and clearing writes no keyless identity.
+      // A piece that carries a DIFFERENT durable pointer (a real identity from
+      // an earlier keyed setup, or a legacy keyless orphan) must not keep it:
+      // setup just staged the KEYLESS pattern's state, and a standing stale
+      // pointer would make later starts — fresh sessions especially — select
+      // the OLD pattern over it. Clear both durable metas transactionally with
+      // this setup; the cleared state IS the keyless piece's designed durable
+      // verdict (no-pattern-meta), and clearing writes no keyless identity.
       const staleRef = getPatternIdentityRef(resultCell.withTx(tx));
       if (staleRef !== undefined) {
         resultCell.withTx(tx).setMetaRaw(
@@ -3520,22 +3536,20 @@ export class Runner {
     const setupState: SetupStateReuse = {
       sameStoredSetup,
       // The zero-evidence exemption: a piece with NO pattern pointer (durable
-      // or session) and NO setup marker carries no evidence any update moved
-      // it — the KEYLESS piece's designed durable verdict (L3(a), RULED
-      // 2026-08-27: a keyless piece stamps nothing, so a FRESH session
-      // re-encountering one reads exactly this), and the pre-marker legacy
-      // root. The absent-marker exemption's own rationale applies in full:
-      // re-staging would validate — and rewrite defaults over — a stored
-      // argument no update touched (the cross-session `cf cell get` transform
-      // replay failed exactly there). A marker naming ANOTHER identity still
-      // restages, and any surviving pointer keeps the ordinary rule. An
-      // EVICTED session pointer is NOT zero evidence — this session had the
-      // evidence and lost it to capacity. The tombstone says WHICH pattern
-      // it lost: a different-identity re-setup takes the conservative
-      // restage the un-evicted state would have taken, while a
-      // same-identity re-setup keeps the exemption — the evidence agrees
-      // with the stored setup, and forcing a restage there would break the
-      // very replay the exemption ships for.
+      // or session) and NO setup marker carries no evidence any update moved it
+      // — the KEYLESS piece's designed durable verdict (a keyless piece stamps
+      // nothing, so a FRESH session re-encountering one reads exactly this),
+      // and the pre-marker legacy root. The absent-marker exemption's own
+      // rationale applies in full: re-staging would validate — and rewrite
+      // defaults over — a stored argument no update touched. A marker naming
+      // ANOTHER identity still restages, and any surviving pointer keeps the
+      // ordinary rule. An EVICTED session pointer is NOT zero evidence — this
+      // session had the evidence and lost it to capacity. The tombstone says
+      // WHICH pattern it lost: a different-identity re-setup takes the
+      // conservative restage the un-evicted state would have taken, while a
+      // same-identity re-setup keeps the exemption — the evidence agrees with
+      // the stored setup, and forcing a restage there would break the very
+      // replay the exemption ships for.
       restageStoredArgument: (!sameStoredSetup || marker === "other") &&
         !(previousIdentityRef === undefined && marker === "absent" &&
           !validationOptions.reapplyStoredSetup &&
@@ -3672,15 +3686,14 @@ export class Runner {
           this.#locallyPreparedResults.delete(key);
         }
       });
-      // ALREADY-RUNNING piece, full setup staged, KEYLESS pattern: the
-      // durable stamp used to carry this exact moment to the piece's meta
-      // watcher, whose swap replaced the running graph with the new version
+      // ALREADY-RUNNING piece, full setup staged, KEYLESS pattern: for a real
+      // pattern the durable stamp carries this exact moment to the piece's meta
+      // watcher, whose swap replaces the running graph with the new version
       // (bare setup(), run(), and the deferred-start arm all funnel through
       // here — the reuse paths returned earlier). A keyless identity never
-      // lands durably (L3(a), RULED 2026-08-27), so request the swap through
-      // the session channel once the setup commit lands — the watcher's own
-      // ordering, with the watcher's own guards deciding whether anything
-      // changed. Real patterns keep the durable-stamp path.
+      // lands durably, so request the swap through the session channel once the
+      // setup commit lands — the watcher's own ordering, with the watcher's own
+      // guards deciding whether anything changed.
       if (PatternManager.isKeylessPatternIdentity(entryRef.identity)) {
         const sessionSwap = this.#sessionPatternSwaps.get(key);
         if (sessionSwap !== undefined) {
@@ -3849,10 +3862,10 @@ export class Runner {
    * the root and heal only the nested pieces the controller never sees (a
    * profile mounted via a #wish, say). Profiles are plain `inSpace` pieces and
    * are never a space's `defaultPattern` (only the controller sets that), so
-   * they are correctly not excluded. Called only on the rare brick path, so the
-   * space-cell read costs nothing on a healthy start. A read failure returns
-   * false: better to attempt the idempotent, fail-closed repair than to leave a
-   * piece bricked because a lookup raced.
+   * they are correctly not excluded. Called only on the rare repair path, so
+   * the space-cell read costs nothing on a healthy start. A read failure
+   * returns false: better to attempt the idempotent, fail-closed repair than
+   * to leave a piece bricked because a lookup raced.
    */
   #isSpaceDefaultPattern(resultCell: Cell<unknown>): boolean {
     try {
@@ -3875,6 +3888,28 @@ export class Runner {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * Whether the internal-cell manifest stored on `resultCell` names every
+   * derived internal cell of `pattern`. `false` says no setup for this pattern
+   * ran over this document, which is what the cold-start repair in
+   * `#startCore()` turns on.
+   */
+  #storedManifestCovers(resultCell: Cell<unknown>, pattern: Pattern): boolean {
+    const descriptors = pattern.derivedInternalCells ?? [];
+    if (descriptors.length === 0) return true;
+    const stored = convertibleJsFromFabricValue(
+      resultCell.getMetaRaw("internal", { meta: ignoreReadForScheduling }),
+    );
+    if (!Array.isArray(stored)) return false;
+    const manifest = stored as InternalCellDescriptor[];
+    return descriptors.every((descriptor) =>
+      manifest.some((entry) =>
+        deepEqual(entry.partialCause, descriptor.partialCause) &&
+        entry.kind === descriptor.kind
+      )
+    );
   }
 
   /** Convert a module to pattern format */
@@ -4257,10 +4292,19 @@ export class Runner {
     // roll-forward's keyless arm: when `runningRef` is absent or keyless (the
     // never-durable session mint), the durable convergence target is the
     // value's module-addressed PRODUCER — the first real entry ref up its
-    // derivation chain (`resolveProducerEntryRef`; L3(a), RULED 2026-08-27).
+    // derivation chain (`resolveProducerEntryRef`).
     let runningPattern: Pattern | undefined;
     let cancelNodes: Cancel | undefined;
     let initialSchedulerRehydrationAvailable = true;
+    // The cold-start setup repair `instantiateInitialPattern` found owed for
+    // the pattern this start began with. It stages into the instantiation's
+    // own transaction, so the setup and the graph that reads it land or fail
+    // together, under the one retry and the wave settlement that transaction
+    // already has.
+    let setupRepair: {
+      pattern: Pattern;
+      stage: (tx: IExtendedStorageTransaction) => void;
+    } | undefined;
 
     // Helper to instantiate nodes for a pattern
     const instantiatePattern = (
@@ -4278,16 +4322,25 @@ export class Runner {
       const actualTx = useTx ?? this.#runtime.edit();
       enrollPieceOwnedStores(actualTx, resultCell, pattern);
       const shouldCommit = !useTx;
+      // A transaction that also carries the cold-start setup repair is named
+      // for it, so its seal and any refusal of it are attributed to the repair
+      // rather than to an ordinary instantiation.
+      const repair = shouldCommit && setupRepair?.pattern === pattern &&
+          !this.#storedManifestCovers(resultCell, pattern)
+        ? setupRepair
+        : undefined;
+      const startActionId = `${
+        repair ? "piece-start-repair" : "piece-instantiate"
+      }/${resultCell.sourceURI}`;
       if (shouldCommit) {
-        // Self-minted instantiation tx (the hot-swap watcher's
-        // swapToPattern arm reaches here tx-less): runtime-internal
-        // piece machinery with no scheduler run around it, so stamp the
-        // sanctioned bookkeeping kind (serving-loop.md §3d, RULED
-        // 2026-08-05) like the sibling setup write in swapToPattern
-        // below. A PROVIDED tx keeps its caller's stamp — never
-        // restamped here. No-op off the serving posture.
+        // Self-minted instantiation tx (the hot-swap watcher's swapToPattern
+        // arm reaches here tx-less): runtime-internal piece machinery with no
+        // scheduler run around it, so stamp the sanctioned bookkeeping kind
+        // (serving-loop.md §3d) like the sibling setup write in swapToPattern
+        // below. A PROVIDED tx keeps its caller's stamp — never restamped here.
+        // No-op off the serving posture.
         this.#runtime.stampServerRun(actualTx, {
-          actionId: `piece-instantiate/${resultCell.sourceURI}`,
+          actionId: startActionId,
           kind: "bookkeeping",
         });
         // The instantiation's writes are authored bookkeeping bound for
@@ -4297,6 +4350,18 @@ export class Runner {
         // retires the piece registration along with the event handlers
         // its graph installed.
         markDurableReadTx(actualTx);
+        if (repair !== undefined) {
+          // Staged ahead of the nodes, which read what it writes. Fail
+          // closed: a repair that cannot proceed aborts the transaction
+          // before anything is wired or committed, and the piece is left
+          // exactly as it was.
+          try {
+            repair.stage(actualTx);
+          } catch (repairError) {
+            actualTx.abort();
+            throw repairError;
+          }
+        }
       }
       // A boot snapshot belongs to exactly one pattern instantiation. A later
       // patternIdentity hot-swap must register fresh under the same durable
@@ -4412,13 +4477,11 @@ export class Runner {
         if (shouldCommit) {
           this.#runtime.prepareTxForCommit(actualTx);
           // Fire-and-forget by design (start() resolves before the
-          // commit settles), but NEVER swallowed (stage P2-F, the F1
-          // fold-in — RULED 2026-08-13): a refused or failed
+          // commit settles), but NEVER swallowed: a refused or failed
           // instantiation commit means the piece is running against
           // writes that never landed, so the failure surfaces loudly
           // and, on a serving runtime, counted.
-          const instantiateActionId =
-            `piece-instantiate/${resultCell.sourceURI}`;
+          const instantiateActionId = startActionId;
           const patternKeyAtInstantiation = currentPatternKey;
           const teardownRegistrationIfCurrent = () => {
             if (registrations.get(key) !== cancel) return;
@@ -4560,12 +4623,9 @@ export class Runner {
     // is inert by design (keyless patterns change only via a fresh run()).
     const setupPatternWatcher = () => {
       // A hot-swap targets a DIFFERENT program over this piece's existing doc:
-      // the incoming pattern's internal cells — handler { "$stream": true }
-      // markers included — and its argument-schema defaults have never been
-      // materialized here. A fresh start() does that in its setup phase;
-      // skipping it makes every handler node of the incoming pattern fail as
-      // "Handler used as lift" at instantiation (the 2026-07-22 estuary
-      // home-root swap failure). Run the same setup state first, and only
+      // the incoming pattern's internal cells and its argument-schema
+      // defaults have never been materialized here. A fresh start() does
+      // that in its setup phase, so run the same setup state first, and only
       // tear down the old nodes once it commits — a failed setup leaves the
       // running pattern in place instead of a dead piece.
       const swapToPattern = (
@@ -4589,16 +4649,14 @@ export class Runner {
           return;
         }
         const setupTx = this.#runtime.edit();
-        // Server-execution v2 stage F (serving-loop.md §3d): under an
-        // installed seal destination every commit path declares its run
-        // context; the swap's setup write is runtime-internal
-        // bookkeeping. A no-op everywhere else. The action identity is
-        // per PIECE (the swapped result cell's stable address), not per
-        // {identity, symbol}: two pieces swapping to one pattern must
-        // not share a basis action (their rows would overwrite each
-        // other under §3b's per-(action, instance) replacement), while
-        // consecutive swaps of ONE piece overwrite — bounded, exactly
-        // the S4-friendly shape.
+        // Under an installed seal destination (serving-loop.md §3d) every
+        // commit path declares its run context; the swap's setup write is
+        // runtime-internal bookkeeping. A no-op everywhere else. The action
+        // identity is per PIECE (the swapped result cell's stable address), not
+        // per {identity, symbol}: two pieces swapping to one pattern must not
+        // share a basis action (their rows would overwrite each other under
+        // §3b's per-(action, instance) replacement), while consecutive swaps of
+        // ONE piece overwrite, which keeps the rows bounded.
         const pieceLink = resultCell.getAsNormalizedFullLink();
         this.#runtime.stampServerRun(setupTx, {
           actionId: `pattern-swap/${pieceLink.space}/${
@@ -4613,9 +4671,8 @@ export class Runner {
           runningPattern = pattern;
         };
         if (!this.#runtime.sealDestinationInstalled) {
-          // The OFF arm (and ON-arm client speculation): today's
-          // behavior, byte for byte — setup commits to the store and the
-          // swap proceeds synchronously.
+          // The OFF arm (and ON-arm client speculation): setup commits to
+          // the store and the swap proceeds synchronously.
           try {
             this.#applySetupState(
               setupTx,
@@ -4647,10 +4704,10 @@ export class Runner {
         // lease-lost abort) AFTER commit() resolved — so the running
         // graph is replaced only once the setup is DURABLY accepted
         // (waveSettlementOf). On withdrawal the OLD graph stays: v2
-        // running against withdrawn setup is the "Handler used as lift"
-        // failure class, while old-graph-plus-new-pointer is a coherent
-        // not-yet-swapped state a later pointer write (or reactivation)
-        // repairs.
+        // running against withdrawn setup would read internal cells that
+        // setup never materialized, while old-graph-plus-new-pointer is a
+        // coherent not-yet-swapped state a later pointer write (or
+        // reactivation) repairs.
         void (async () => {
           try {
             this.#applySetupState(
@@ -4801,13 +4858,12 @@ export class Runner {
               if (
                 PatternManager.isKeylessPatternIdentity(newRef.identity)
               ) {
-                // A `keyless:` pointer READ from durable state is a
-                // pre-guard legacy orphan (the guard means nothing new
-                // mints one into a store): unloadable by construction for
-                // every session but its minter, and expected in aged
-                // spaces. Tolerated as the orphan it is — a debug record,
-                // not an error — and healed below when a producer identity
-                // is available to converge to.
+                // A `keyless:` pointer READ from durable state is a legacy
+                // orphan (nothing mints one into a store): unloadable by
+                // construction for every session but its minter, and expected
+                // in aged spaces. Tolerated as the orphan it is — a debug
+                // record, not an error — and healed below when a producer
+                // identity is available to converge to.
                 logger.debug("legacy-keyless-pattern-pointer", () => [
                   `durable patternIdentity carries a session-synthetic`,
                   `identity ${newRef.identity}#${newRef.symbol} (pre-guard`,
@@ -4819,31 +4875,29 @@ export class Runner {
                   `Failed to load pattern ${newRef.identity}#${newRef.symbol}`,
                 );
               }
-              // CT-1923: an undefined result is a DEFINITIVE verdict — the
-              // load synced and found the identity's docs absent or
-              // uncompilable — while a pattern is still running here. Left
-              // alone, the durable pointer keeps naming an identity no
-              // session can load: every boot re-logs this error and any
-              // start-by-identity of this piece is dead (the stranded
-              // blank-section state). Roll the pointer back to the RUNNING
-              // pattern's identity, durably, with a superseded-check so a
-              // legitimate concurrent repoint wins. Thrown load errors
-              // (which may be transient) never trigger this. One verdict is
-              // NOT definitive and must never trigger it: with CFC
-              // enforcement disabled, loadPatternByIdentity returns
+              // An undefined result is a DEFINITIVE verdict — the load synced
+              // and found the identity's docs absent or uncompilable — while a
+              // pattern is still running here. Left alone, the durable pointer
+              // keeps naming an identity no session can load: every boot
+              // re-logs this error and any start-by-identity of this piece is
+              // dead (the stranded blank-section state). Roll the pointer back
+              // to the RUNNING pattern's identity, durably, with a
+              // superseded-check so a legitimate concurrent repoint wins.
+              // Thrown load errors (which may be transient) never trigger this.
+              // One verdict is NOT definitive and must never trigger it: with
+              // CFC enforcement disabled, loadPatternByIdentity returns
               // undefined for anything outside the in-memory index (probe
               // unsupported, not artifact dead).
               //
-              // The ref written back must be durable-legal: a
-              // session-synthetic keyless ref never is (L3(a), RULED
-              // 2026-08-27 — a fresh runtime is guaranteed unable to load
-              // it). When the RUNNING ref is keyless or absent, converge to
-              // the running VALUE's module-addressed PRODUCER instead — the
-              // first real entry ref up its derivation chain (walking as
-              // many steps as recorded). A from-scratch runtime-built value
-              // has no such link; the piece then keeps running on its
-              // session value and the pointer is left alone (the tolerated
-              // orphan), because there is nothing durable-legal to write.
+              // The ref written back must be durable-legal: a session-synthetic
+              // keyless ref never is (a fresh runtime is guaranteed unable to
+              // load it). When the RUNNING ref is keyless or absent, converge
+              // to the running VALUE's module-addressed PRODUCER instead — the
+              // first real entry ref up its derivation chain (walking as many
+              // steps as recorded). A from-scratch runtime-built value has no
+              // such link; the piece then keeps running on its session value
+              // and the pointer is left alone (the tolerated orphan), because
+              // there is nothing durable-legal to write.
               const revertTarget = runningRef !== undefined &&
                   !PatternManager.isKeylessPatternIdentity(
                     runningRef.identity,
@@ -5002,136 +5056,115 @@ export class Runner {
     // WITHOUT a setup phase. A nested/embedded piece — a profile mounted via a
     // `#wish`, say — is instantiated by the runtime's start walk, and no
     // pattern watcher is armed yet to self-heal (setupPatternWatcher runs only
-    // AFTER a successful instantiate). If such a piece's stored doc predates its
-    // pattern's setup (a pre-manifest internal-cell layout, or a handler stream
-    // added after the doc was created), the `{ "$stream": true }` markers were
-    // never materialized and instantiation throws "Handler used as lift … marker
-    // was never written". A fresh run() would materialize them; this is the same
-    // repair the home ROOT got in startEnsuredDefaultPattern, reachable at last
-    // for the nested pieces that never pass through it.
+    // AFTER a successful instantiate). Such a piece's stored doc can have been
+    // set up by one version of its pattern and then pointed at another with no
+    // setup for it: the internal cells the new version's setup would have
+    // materialized — a handler's stream among them — have no manifest entry
+    // and no result projection reaching them, and nothing about the stored
+    // doc changes on its own. A fresh run() would materialize them; this is
+    // the same repair the home ROOT gets in startEnsuredDefaultPattern,
+    // reachable here for the nested pieces that never pass through it.
     //
-    // The repair moves no durable identity pointer; this setup replays the
-    // pattern the pointer already names. On exactly that
-    // failure, re-run the pinned pattern's OWN setup state (samePattern=true:
-    // materializes the missing internal cells but leaves the existing argument
-    // — the piece's data — untouched; no roll-forward, no user-data rewrite),
-    // then retry once. Fail-closed: a non-matching or failed repair rethrows the
-    // ORIGINAL error, so the caller's cleanup leaves the piece exactly as it was.
-    // Only the plain start path is repaired — a caller-supplied `useTx` is a
-    // setup/run transaction that is already materializing state and never hits
-    // this failure, so it is skipped rather than reasoned about.
+    // The trigger is that stored state and nothing else: a setup-completion
+    // marker that does not name this version, and a manifest missing one of
+    // this pattern's derived internal cells. A marker naming another version
+    // and no marker at all both qualify: a doc set up before the marker
+    // existed carries none, and drifts the same way. Only a marker naming
+    // this version says its setup ran. A keyless piece keeps that marker
+    // session-side (`#sessionPatternPointers`, the never-durable contract),
+    // so it reads as matching and is not repaired here; the precondition
+    // below re-reads a durable identity it never had. The repair moves no
+    // durable identity pointer; it replays the pattern the pointer already
+    // names
+    // (samePattern=true: materializes the missing internal cells but leaves
+    // the existing argument — the piece's data — untouched; no roll-forward,
+    // no user-data rewrite). It stages into the instantiation's own
+    // transaction (`setupRepair`), so the setup and the graph that reads it
+    // commit together, and a refused commit takes the instantiation's one
+    // retry, which stages the repair again. Fail-closed: a repair that cannot
+    // proceed throws and leaves the piece exactly as it was. Only the plain
+    // start path is repaired — a caller-supplied `useTx` is a setup/run
+    // transaction that is already materializing state, so it is skipped
+    // rather than reasoned about.
     const instantiateInitialPattern = (
       pattern: Pattern,
       ref: { identity: string; symbol: string } | undefined,
       useTx?: IExtendedStorageTransaction,
     ) => {
-      try {
-        instantiatePattern(pattern, useTx);
-      } catch (instantiateError) {
-        if (
-          useTx !== undefined ||
-          ref === undefined ||
-          !isMissingStreamMarkerFailure(instantiateError) ||
-          // The root/default pattern is the PieceController's to repair (it has
-          // the richer roll-forward + clear-error path); defer to it there.
-          this.#isSpaceDefaultPattern(resultCell)
-        ) {
-          throw instantiateError;
-        }
-        // Tear down the nodes the failed attempt partially wired.
-        cancelNodes?.();
-        // ONE repair transaction holds the precondition re-read, the setup
-        // state, the retry instantiate, AND prepare — staged together or not at
-        // all, so there is no window in which setup commits and the retry then
-        // races it. EVERY step sits inside the try: any failure (including the
-        // precondition read or prepare throwing) aborts the tx and rethrows the
-        // ORIGINAL instantiate error, so the piece is left exactly as it was.
-        const repairTx = this.#runtime.edit();
-        // Self-minted repair tx inside `#startCore()` — piece machinery with
-        // no scheduler run around it; bookkeeping per serving-loop.md
-        // §3d (reachable server-side via the demand loader's start).
-        this.#runtime.stampServerRun(repairTx, {
-          actionId: `piece-start-repair/${resultCell.sourceURI}`,
-          kind: "bookkeeping",
-        });
-        try {
-          // Precondition: the pinned identity must still equal the ref diagnosed
-          // above. A concurrent updater or boot may have moved it; re-running
-          // the stale pinned pattern's setup would roll that newer identity
-          // back. The read is through repairTx so it also participates in commit
-          // conflict detection (mirrors the controller repair's
-          // expectedPatternIdentity).
-          const currentRef = getPatternIdentityRef(resultCell.withTx(repairTx));
-          if (
-            currentRef === undefined ||
-            currentRef.identity !== ref.identity ||
-            currentRef.symbol !== ref.symbol
-          ) {
-            throw instantiateError;
-          }
-          this.#applySetupState(
-            repairTx,
-            pattern,
-            ref,
-            // No re-stage, even though this doc's setup state may well have
-            // been staged by an older version: the precondition just re-read
-            // the pinned identity, so this is the SAME pattern repairing its
-            // own internal cells, not an update. Re-pointing the argument here
-            // would rewrite user data on a narrow instantiation repair.
-            {
-              sameStoredSetup: true,
-              restageStoredArgument: false,
-              // Inert here — `#applySetupState` reads only the two fields
-              // above — but stated rather than defaulted, because this repair
-              // deliberately leaves the piece's ARGUMENT alone even though its
-              // precondition proves the pattern is the same one.
-              storedSetupMatches: false,
-            },
-            undefined,
+      if (
+        useTx === undefined &&
+        ref !== undefined &&
+        storedSetupMarker(
             resultCell,
-          );
-          // Instantiate into the SAME tx: it reads the just-staged setup writes,
-          // so the once-missing markers resolve and node wiring succeeds.
-          instantiatePattern(pattern, repairTx);
-          this.#runtime.prepareTxForCommit(repairTx);
-        } catch {
-          repairTx.abort();
-          throw instantiateError;
-        }
-        // Staging succeeded, so this is a SPECULATIVE start: the graph is wired
-        // locally and start() returns success. The commit is deliberately not
-        // awaited (consistent with every other start path), so its outcome can
-        // NOT be thrown back to a start() that has already resolved. Instead a
-        // committed-with-{error} result OR a rejected commit Promise tears the
-        // piece down so a later start() re-heals it rather than taking the
-        // "already started" fast path over a dead registration.
-        //
-        // Scope-safe teardown: unregister ONLY this start's own `cancel`. A
-        // stop+restart during the pending commit installs a NEWER cancel under
-        // the same key; deleting `this.#cancels[key]` unconditionally (as
-        // cleanup() does) would clobber that live registration and orphan its
-        // graph. Delete the key only while it still holds our cancel — the same
-        // guard createDeferredStartOwnership uses — and always drop/invoke ours.
-        const teardownAfterFailedCommit = () => {
-          if (registrations.get(key) === cancel) registrations.delete(key);
-          this.#allCancels.delete(cancel);
-          cancel();
+            ref,
+            this.#sessionPatternPointer(resultCell),
+          ) !== "matches" &&
+        !this.#storedManifestCovers(resultCell, pattern) &&
+        // The root/default pattern is the PieceController's to repair (it has
+        // the richer roll-forward + clear-error path); defer to it there.
+        !this.#isSpaceDefaultPattern(resultCell)
+      ) {
+        setupRepair = {
+          pattern,
+          stage: (repairTx) => {
+            // A retry re-stages what a refused commit rolled back; once a
+            // commit has landed the manifest covers the pattern and there is
+            // nothing left to stage.
+            if (
+              this.#storedManifestCovers(resultCell.withTx(repairTx), pattern)
+            ) {
+              return;
+            }
+            // Precondition: the pinned identity must still equal `ref`. A
+            // concurrent updater or boot may have moved it; re-running the
+            // stale pinned pattern's setup would roll that newer identity
+            // back. The read is through the instantiation's transaction, so
+            // it also participates in commit conflict detection (mirrors the
+            // controller repair's expectedPatternIdentity).
+            const currentRef = getPatternIdentityRef(
+              resultCell.withTx(repairTx),
+            );
+            if (
+              currentRef === undefined ||
+              currentRef.identity !== ref.identity ||
+              currentRef.symbol !== ref.symbol
+            ) {
+              throw new Error(
+                `Piece \`${resultCell.sourceURI}\` moved to another pattern ` +
+                  "while its setup was being repaired",
+              );
+            }
+            this.#applySetupState(
+              repairTx,
+              pattern,
+              ref,
+              // No re-stage, even though this doc's setup state was staged by
+              // another version: the precondition just re-read the pinned
+              // identity, so this is the SAME pattern repairing its own
+              // internal cells, not an update. Re-pointing the argument here
+              // would rewrite user data on a narrow instantiation repair.
+              {
+                sameStoredSetup: true,
+                restageStoredArgument: false,
+                // Inert here — `#applySetupState` reads only the two fields
+                // above — but stated rather than defaulted, because this
+                // repair deliberately leaves the piece's ARGUMENT alone even
+                // though its precondition proves the pattern is the same one.
+                storedSetupMatches: false,
+                // The argument was staged by another version and is not
+                // re-validated here, so the marker keeps saying so: the next
+                // setup for this identity still re-stages and validates it.
+                // The repair does not come back for that, because the
+                // manifest it writes now covers the pattern.
+                leaveCompletionMarker: true,
+              },
+              undefined,
+              resultCell,
+            );
+          },
         };
-        const repairActionId = `piece-start-repair/${resultCell.sourceURI}`;
-        repairTx.addCommitCallback((_committedTx, result) => {
-          if (result.error) {
-            // Surfaced BEFORE the teardown (stage P2-F, the F1
-            // fold-in): the pre-P2-F path tore the registration down
-            // silently — correct liveness, invisible failure.
-            this.#reportPieceStartCommitFailure(repairActionId, result.error);
-            teardownAfterFailedCommit();
-          }
-        });
-        repairTx.commit().catch((error) => {
-          this.#reportPieceStartCommitFailure(repairActionId, error);
-          teardownAfterFailedCommit();
-        });
       }
+      instantiatePattern(pattern, useTx);
     };
 
     const resultCellForRead = tx ? resultCell.withTx(tx) : resultCell;
@@ -5209,11 +5242,7 @@ export class Runner {
     // Sync path - instantiate immediately
     currentPatternKey = patternIdentityKey(initialRef);
     const initialPattern = this.#resolveToPattern(initialResolved);
-    instantiateInitialPattern(
-      initialPattern,
-      initialRef,
-      tx,
-    );
+    instantiateInitialPattern(initialPattern, initialRef, tx);
     runningRef = initialRef;
     runningPattern = initialPattern;
     if (!doNotUpdateOnPatternChange) {
@@ -5531,12 +5560,11 @@ export class Runner {
       !pattern &&
       PatternManager.isKeylessPatternIdentity(identityRef.identity)
     ) {
-      // A durable `keyless:` pointer is pre-guard legacy state (nothing
-      // mints one into a store any more — L3(a), RULED 2026-08-27), and
-      // session-only by construction: with the in-memory index missed there
-      // is no closure anywhere to load. Tolerate the orphan — record it and
-      // report the piece as not started, rather than failing the caller's
-      // whole start walk over state no session can ever serve.
+      // A durable `keyless:` pointer is legacy state (nothing mints one into a
+      // store), and session-only by construction: with the in-memory index
+      // missed there is no closure anywhere to load. Tolerate the orphan —
+      // record it and report the piece as not started, rather than failing the
+      // caller's whole start walk over state no session can ever serve.
       logger.debug("legacy-keyless-pattern-pointer", () => [
         `piece ${rootCell.getAsNormalizedFullLink().id} carries a`,
         `session-synthetic patternIdentity ${identityRef.identity}#` +
@@ -5585,8 +5613,8 @@ export class Runner {
     // We gate on the locally-assembled signals (`wasPreparedLocally` /
     // `wasStoppedLocally`) rather than the cell's `synced` flag: a fresh-runtime
     // resume reaches here past Step 3 with `getRaw()` populated, so it is not
-    // locally assembled iff neither flag is set. The `synced` flag is no longer
-    // reliably set for a storage-loaded cell, which would otherwise drop the
+    // locally assembled iff neither flag is set. The `synced` flag is not
+    // reliably set for a storage-loaded cell, so gating on it would drop the
     // resume path and re-run the piece from scratch (`wasSyncedAtEntry` kept for
     // diagnostics).
     void wasSyncedAtEntry;
@@ -5594,6 +5622,7 @@ export class Runner {
       if (!this.#isStartAttemptCurrent(attempt)) return Promise.resolve(false);
       try {
         attempt.installedRegistration = this.#startCore(rootCell, {
+          ...attempt.options,
           givenPattern: resolvedPattern,
         });
       } catch (err) {
@@ -5640,6 +5669,7 @@ export class Runner {
       const startCoreStart = performance.now();
       try {
         attempt.installedRegistration = this.#startCore(rootCell, {
+          ...attempt.options,
           givenPattern: resolvedPattern,
           schedulerRehydration: this.#schedulerRehydrationOptions(
             rootCell,
@@ -5649,6 +5679,7 @@ export class Runner {
             // (e.g. maps reconciling an empty array, then re-running once it
             // streams in).
             true,
+            attempt.options?.parentPieceRootId,
           ),
         });
       } finally {
@@ -5815,20 +5846,18 @@ export class Runner {
       if (ownership.isCancelled()) return;
 
       const startTx = this.#runtime.edit();
-      // Minted inside a commit callback — by definition outside any
-      // scheduler run; the deferred start's node wiring is piece
-      // machinery, stamped bookkeeping per serving-loop.md §3d. A
-      // flag-ON CLIENT's navigate-deferred start carries §3d's RULED
-      // speculative-consequence stamp (2026-08-13): it is a handler
-      // CONSEQUENCE (the receipt + result wrapper of a speculative
-      // echo), so it stamps event-handler-kind and the overlay
-      // diverts it — committing it authored would race the SERVING
-      // side's own deferred start for the create-only receipt, and a
-      // client win would suppress the served navigateTo (no intent
-      // would ever be computed). §3d's bookkeeping-only rule governs
-      // internal writes at the wave seal destination, which this
-      // client-side start tx never reaches. The serving side and the
-      // OFF arm keep bookkeeping.
+      // Minted inside a commit callback — by definition outside any scheduler
+      // run; the deferred start's node wiring is piece machinery, stamped
+      // bookkeeping per serving-loop.md §3d. A flag-ON CLIENT's
+      // navigate-deferred start carries §3d's speculative-consequence stamp: it
+      // is a handler CONSEQUENCE (the receipt + result wrapper of a speculative
+      // echo), so it stamps event-handler-kind and the overlay diverts it —
+      // committing it authored would race the SERVING side's own deferred start
+      // for the create-only receipt, and a client win would suppress the served
+      // navigateTo (no intent would ever be computed). §3d's bookkeeping-only
+      // rule governs internal writes at the wave seal destination, which this
+      // client-side start tx never reaches. The serving side and the OFF arm
+      // keep bookkeeping.
       this.#runtime.stampServerRun(startTx, {
         actionId: `piece-start/${resultLink.id}`,
         ...(speculativeConsequence !== undefined
@@ -5838,10 +5867,10 @@ export class Runner {
           }
           : { kind: "bookkeeping" as const }),
       });
-      // Phase 4 (builtins.md §4): a deferred start minted from an
-      // EVENT-HANDLER run carries that run's event context across to
-      // the start tx, so a navigateTo instantiated under it can address
-      // the firing session (navigate-context.ts's capture point 1).
+      // A deferred start minted from an EVENT-HANDLER run carries that run's
+      // event context across to the start tx, so a navigateTo instantiated
+      // under it can address the firing session (builtins.md §4;
+      // navigate-context.ts's capture point 1).
       const navigateContext = navigateEventContextFromRunInfo(
         waveRunContextOf(tx) ?? speculationRunContextOf(tx),
       );
@@ -6001,6 +6030,31 @@ export class Runner {
   }
 
   /**
+   * Whether the document `link` names is on this replica, probed through
+   * `readTx`. A document is here when it holds a value. A stream's document
+   * never holds one, so for a link that declares a stream the record is
+   * probed instead: setup writes the `result` back-link onto it. Any other
+   * document that has its metadata and no value — a computed cell nothing
+   * has computed yet — reads absent.
+   */
+  #documentPresent(
+    readTx: IExtendedStorageTransaction,
+    link: NormalizedFullLink,
+  ): boolean {
+    return readTx.readOrThrow(
+      {
+        space: link.space,
+        id: link.id,
+        path: ContextualFlowControl.declaresStream(link.schema)
+          ? []
+          : ["value"],
+        ...(link.scope !== undefined && { scope: link.scope }),
+      },
+      { meta: ignoreReadForScheduling },
+    ) !== undefined;
+  }
+
+  /**
    * Whether a swap of `resultCell` to `pattern` would read a document this
    * replica lacks: the argument document `argumentLink` names, which the
    * swap's setup reads whole, or an owned cell the stored manifest lists —
@@ -6016,15 +6070,7 @@ export class Runner {
   ): boolean {
     const readTx = this.#familyReadTx(resultCell.tx?.tx.scopeKeyIdentity);
     const present = (link: NormalizedFullLink): boolean =>
-      readTx.readOrThrow(
-        {
-          space: link.space,
-          id: link.id,
-          path: ["value"],
-          ...(link.scope !== undefined && { scope: link.scope }),
-        },
-        { meta: ignoreReadForScheduling },
-      ) !== undefined;
+      this.#documentPresent(readTx, link);
     if (!present(argumentLink)) return true;
     const cell = resultCell.withTx(readTx);
     const manifest = convertibleJsFromFabricValue(
@@ -6068,13 +6114,13 @@ export class Runner {
     // Presence probes on a read transaction of their own, so an absent
     // document enters neither the caller's dependencies nor its commit's
     // read set: the run that follows the name-sync reads these for real.
-    // The document itself is what is probed, not a value read through a
-    // schema, which answers an absent document with the schema's default.
-    // A cell nothing has written yet — a derived cell whose producer never
-    // ran — reads absent here too, and holds the run once; the probes stop
-    // at a budget (`NAMING_PROBE_BUDGET`), and a budget spent reads absent
-    // as well: a hold costs one name-sync, a wrong local verdict costs a
-    // conflicting commit.
+    // The document itself is what is probed (`#documentPresent`), not a
+    // value read through a schema, which returns the schema's default for an
+    // absent document. A cell nothing has written yet — a derived cell whose
+    // producer never ran — reads absent here too, and holds the run once; the
+    // probes stop at a budget (`NAMING_PROBE_BUDGET`), and a budget spent
+    // reads absent as well: a hold costs one name-sync, a wrong local verdict
+    // costs a conflicting commit.
     const readTx = this.#familyReadTx(identity);
     const cell = resultCell.withTx(readTx);
     let probes = this.#namingProbeBudget;
@@ -6085,15 +6131,7 @@ export class Runner {
         return false;
       }
       probes--;
-      return readTx.readOrThrow(
-        {
-          space: link.space,
-          id: link.id,
-          path: ["value"],
-          ...(link.scope !== undefined && { scope: link.scope }),
-        },
-        { meta: ignoreReadForScheduling },
-      ) !== undefined;
+      return this.#documentPresent(readTx, link);
     };
     // The hold, with what decided it: a document of `stage` read absent, or
     // the budget ran out on a probe of that stage — the case worth a log,
@@ -6366,11 +6404,9 @@ export class Runner {
 
   /**
    * The catch-up recovery a commit-gated start earns when its transaction
-   * is refused for a STALE CONFIRMED READ under server execution — the
-   * seat of the OW45 arm-B client-start fix (verification-coverage.md;
-   * RULED 2026-08-24). Returns whether a recovery was scheduled — `false`
-   * leaves the caller's terminal arm to run exactly as it does for every
-   * other refusal.
+   * is refused for a STALE CONFIRMED READ under server execution. Returns
+   * whether a recovery was scheduled — `false` leaves the caller's terminal
+   * arm to run exactly as it does for every other refusal.
    *
    * WHY a start earns one at all. Under the flag a piece is materialized
    * SERVER-side, and the client's navigate-deferred start reads that
@@ -6379,84 +6415,75 @@ export class Runner {
    * derived commits for the just-born piece are in flight exactly while
    * the client reads their targets as absent, so the client's basis is
    * stale whenever the interleaving is tight — the EXPECTED outcome of
-   * losing the race, not an exceptional one. Terminating there is what
-   * made the race fatal: `#startWithTx()` has already installed the
+   * losing the race, not an exceptional one. Terminating there would make
+   * the race fatal: `#startWithTx()` has already installed the
    * client-side piece inside the transaction when the refusal lands, the
    * error arm's cancel tears that install down, and nothing re-runs it —
-   * the piece has no client context for the rest of the session and every
-   * read that depends on it resolves to nothing, while the store holds
-   * every append (verification-coverage.md OW45 arm B, the run b04 catch).
+   * the piece would have no client context for the rest of the session and
+   * every read that depends on it would resolve to nothing, while the store
+   * holds every append.
    *
-   * WHAT the recovery does — and deliberately does not. The refusal is
-   * treated as "the server won the race": await the conflict's readiness
-   * (the session catch-up the wire attaches as `readyToRetry`, plus the
-   * named document's pull — `Runtime.awaitCommitRetryReadiness`), then
-   * START the piece from the served documents through the ordinary load
-   * walk (`#doStart`), the same walk a reload runs. The recovery arm
-   * COMMITS NOTHING: it does not re-mint and re-commit the refused
-   * materialization (#6208's retry — census-proved non-convergent,
-   * closed), and it mints no transaction of its own. The load walk's own
-   * instantiation transaction keeps its sanctioned `bookkeeping` stamp
-   * exactly as a reload's does (serving-loop.md §3d's piece-start site),
-   * and for a piece the server materialized it has nothing left to write.
-   * A document still in flight reads as PENDING and re-triggers on
-   * arrival (speculation.md §2's unresolved-input semantics) — the
-   * entirely reactive flow that catches up with the server.
+   * WHAT the recovery does — and deliberately does not. The refusal is treated
+   * as "the server won the race": await the conflict's readiness (the session
+   * catch-up the wire attaches as `readyToRetry`, plus the named document's
+   * pull — `Runtime.awaitCommitRetryReadiness`), then START the piece from the
+   * served documents through the ordinary load walk (`#doStart`), the same walk
+   * a reload runs. The recovery arm COMMITS NOTHING: it does not re-mint and
+   * re-commit the refused materialization, and it mints no transaction of its
+   * own. The load walk's own instantiation transaction keeps its sanctioned
+   * `bookkeeping` stamp exactly as a reload's does (serving-loop.md §3d's
+   * piece-start site), and for a piece the server materialized it has nothing
+   * left to write. A document still in flight reads as PENDING and re-triggers
+   * on arrival (speculation.md §2's unresolved-input semantics) — the entirely
+   * reactive flow that catches up with the server.
    *
-   * ON-ONLY, by the coordinator's conservative default: under OFF a stale
-   * confirmed read on a deferred start means another CLIENT raced, and
-   * the cross-tab mutex semantics own that story — the OFF arm keeps
-   * today's terminal behavior byte-for-byte.
+   * ON-ONLY: under OFF a stale confirmed read on a deferred start means another
+   * CLIENT raced, and the cross-tab mutex semantics own that story — the OFF
+   * arm stays terminal.
    *
    * WHAT stays terminal. Only the engine's stale-read family recovers —
    * `stale confirmed read` and its `stale pending read` sibling
-   * ({@link isStaleReadConflict}, head-anchored). Every other refusal
-   * keeps today's behavior exactly: a CFC or speculative-basis refusal,
-   * an authorization denial, a precondition failure, a row-label
-   * violation, a withdrawal that merely embeds a staleness phrase — none
-   * of them describe a basis the served documents repair.
+   * ({@link isStaleReadConflict}, head-anchored). Every other refusal stays
+   * terminal: a CFC or speculative-basis refusal, an authorization denial, a
+   * precondition failure, a row-label violation, a withdrawal that merely
+   * embeds a staleness phrase — none of them describe a basis the served
+   * documents repair.
    *
-   * CANCELLATION AUTHORITY (review F1 + Cubic P1 — both faces of one
-   * root). The recovery RIDES THE ORIGINAL ATTEMPT'S OWNERSHIP TOKEN —
-   * the one Cancel handle the parent holds (its cancel group and lineage
-   * piece-stop) — and recovers only an attempt whose install is STILL THE
-   * CURRENT REGISTRATION when the refusal lands. Concretely: (1) at
-   * entry, a stop or supersede that landed during the commit round trip
-   * (which removed the install, could cancel no pending token — the
-   * ownership unregistered at markInstalled — and bumps no epoch) makes
-   * the recovery DECLINE, so the stop wins exactly as it does on the
-   * terminal path; (2) the refused install is torn down with the same
-   * registry-guarded stop the token's own cancel performs, WITHOUT
-   * spending the token, and the token's now-stale install reference is
-   * CLEARED (delta review D1: the token's cancel is a one-shot `stopped`
-   * latch — fired against a stale install it would no-op AND burn the
-   * latch, leaving a later hand-off unable to stop the recovered run;
-   * with the install cleared, a cancel landing anywhere in the wait or
-   * walk window stays pending-shaped); (3) the token re-enters the
-   * pending index for the readiness wait, so a stop, a release, or
-   * `stopAll()` during that window tombstones the recovery through the
-   * same path that tombstones a pending first attempt; (4) the walk
-   * hands the claimed registration to the token INSIDE its claim
-   * mapping — the same synchronous block as the claim checks, no
-   * promise hop for a stop+restart to slip a foreign registration into
-   * (delta review D2) — and the hand-off is EXACT: only the
-   * registration this attempt's own `#startCore()` created, still current
-   * (Cubic P1 — a COMPETING start can install into the registry the
-   * recovery's entry emptied with no stop and so no generation bump,
-   * and the walk's already-started returns report it as success; an
-   * identity-blind hand-off would bind the parent's token to a run
-   * whose lifecycle the parent does not own, so the recovery instead
-   * yields exactly as on an owned key). A parent cancel from the
-   * hand-off on stops the recovered run, and one that landed during
-   * the wait or the walk is finished by that markInstalled against the
-   * real registration: the run is stopped in the same breath and the
-   * walk reports not-running.
-   * If another start took the key while the recovery waited, the
-   * recovery yields exactly as `#startWithTx()` yields on an owned key:
-   * the piece has a context under someone else's authority, and the
-   * token settles without touching it. The lifecycle epoch still covers
-   * the one window no token can: a teardown that ran before the
-   * refusal's continuation, whose sweep could not see this scheduling.
+   * CANCELLATION AUTHORITY. The recovery RIDES THE ORIGINAL ATTEMPT'S OWNERSHIP
+   * TOKEN — the one Cancel handle the parent holds (its cancel group and
+   * lineage piece-stop) — and recovers only an attempt whose install is STILL
+   * THE CURRENT REGISTRATION when the refusal lands. Concretely: (1) at entry,
+   * a stop or supersede that landed during the commit round trip (which removed
+   * the install, could cancel no pending token — the ownership unregistered at
+   * markInstalled — and bumps no epoch) makes the recovery DECLINE, so the stop
+   * wins exactly as it does on the terminal path; (2) the refused install is
+   * torn down with the same registry-guarded stop the token's own cancel
+   * performs, WITHOUT spending the token, and the token's now-stale install
+   * reference is CLEARED (the token's cancel is a one-shot `stopped` latch —
+   * fired against a stale install it would no-op AND burn the latch, leaving a
+   * later hand-off unable to stop the recovered run; with the install cleared,
+   * a cancel landing anywhere in the wait or walk window stays pending-shaped);
+   * (3) the token re-enters the pending index for the readiness wait, so a
+   * stop, a release, or `stopAll()` during that window tombstones the recovery
+   * through the same path that tombstones a pending first attempt; (4) the walk
+   * hands the claimed registration to the token INSIDE its claim mapping — the
+   * same synchronous block as the claim checks, no promise hop for a
+   * stop+restart to slip a foreign registration into — and the hand-off is
+   * EXACT: only the registration this attempt's own `#startCore()` created,
+   * still current (a COMPETING start can install into the registry the
+   * recovery's entry emptied with no stop and so no generation bump, and the
+   * walk's already-started returns report it as success; an identity-blind
+   * hand-off would bind the parent's token to a run whose lifecycle the parent
+   * does not own, so the recovery instead yields exactly as on an owned key). A
+   * parent cancel from the hand-off on stops the recovered run, and one that
+   * landed during the wait or the walk is finished by that markInstalled
+   * against the real registration: the run is stopped in the same breath and
+   * the walk reports not-running. If another start took the key while the
+   * recovery waited, the recovery yields exactly as `#startWithTx()` yields on
+   * an owned key: the piece has a context under someone else's authority, and
+   * the token settles without touching it. The lifecycle epoch still covers the
+   * one window no token can: a teardown that ran before the refusal's
+   * continuation, whose sweep could not see this scheduling.
    */
   #catchUpAndStartOnStaleRead<T>(
     error: { name?: string; message?: string },
@@ -6471,13 +6498,12 @@ export class Runner {
     if (scheduledLifecycleEpoch !== this.#lifecycleEpoch) return false;
     if (ownership.isCancelled()) return false;
     const key = this.#getDocKey(resultCell);
-    // The cancellation-authority gate: recover only an attempt whose
-    // install is still the current registration as the refusal lands. A
-    // stop or release during the commit round trip removed it; a
-    // replacement start superseded it. Either way the authority over this
-    // key has moved on, and the recovery must not override it — the
-    // caller's terminal arm runs as before (which no-op-cancels the spent
-    // registration exactly like today).
+    // The cancellation-authority gate: recover only an attempt whose install is
+    // still the current registration as the refusal lands. A stop or release
+    // during the commit round trip removed it; a replacement start superseded
+    // it. Either way the authority over this key has moved on, and the recovery
+    // must not override it — the caller's terminal arm runs (which
+    // no-op-cancels the spent registration).
     if (
       installedRegistration === undefined ||
       this.#cancels.get(key) !== installedRegistration
@@ -6495,13 +6521,12 @@ export class Runner {
     // token is the parent's one handle to this start, and it now carries
     // the recovery.
     this.stop(resultCell);
-    // Clear the token's now-STALE install (delta review D1). The token's
-    // cancel is a ONE-SHOT `stopped` latch: fired against the stale
-    // install it would be a registry-guarded no-op that BURNS the latch,
-    // and the hand-off's later markInstalled would return at the latch
-    // WITHOUT stopping the freshly recovered run — the F1 leak one
-    // window later. With the install cleared, a cancel landing anywhere
-    // in the wait or walk window stays pending-shaped (no latch burn),
+    // Clear the token's now-STALE install. The token's cancel is a ONE-SHOT
+    // `stopped` latch: fired against the stale install it would be a
+    // registry-guarded no-op that BURNS the latch, and the hand-off's later
+    // markInstalled would return at the latch WITHOUT stopping the freshly
+    // recovered run, leaking it. With the install cleared, a cancel landing
+    // anywhere in the wait or walk window stays pending-shaped (no latch burn),
     // and the hand-off's markInstalled finishes it against the real
     // registration.
     ownership.markInstalled(undefined);
@@ -6513,12 +6538,11 @@ export class Runner {
     this.#registerPendingDeferredStart(key, ownership);
     const recovery = this.#runtime.awaitCommitRetryReadiness(error)
       .then(async () => {
-        // Paired guards, each the other's backstop (the mutation pins kill
-        // them jointly): the token covers a stop or a stopAll that ran
-        // while the readiness gate was awaited (the token re-entered the
-        // pending index before the await, so the sweep sees it), and the
-        // epoch covers a teardown that ran before this recovery was even
-        // scheduled, when the sweep could not have seen it.
+        // Paired guards, each the other's backstop: the token covers a stop or
+        // a stopAll that ran while the readiness gate was awaited (the token
+        // re-entered the pending index before the await, so the sweep sees it),
+        // and the epoch covers a teardown that ran before this recovery was
+        // even scheduled, when the sweep could not have seen it.
         if (
           ownership.isCancelled() ||
           scheduledLifecycleEpoch !== this.#lifecycleEpoch
@@ -6535,16 +6559,14 @@ export class Runner {
           return;
         }
         try {
-          // The hand-off to the parent's token happens INSIDE the walk's
-          // claim mapping — the same synchronous block as the claim
-          // checks — so there is no promise-hop window between "the walk
-          // left the piece running" and "the token owns that
-          // registration" for a stop+restart to slip a foreign
-          // registration into (delta review D2, closed by construction).
-          // `started` is therefore already the hand-off's verdict: true
-          // means the token owns the recovered run un-cancelled; false
-          // with a cancelled token means a cancel landed in the wait or
-          // walk window and the run was stopped in the same breath.
+          // The hand-off to the parent's token happens INSIDE the walk's claim
+          // mapping — the same synchronous block as the claim checks — so there
+          // is no promise-hop window between "the walk left the piece running"
+          // and "the token owns that registration" for a stop+restart to slip a
+          // foreign registration into. `started` is therefore already the
+          // hand-off's verdict: true means the token owns the recovered run
+          // un-cancelled; false with a cancelled token means a cancel landed in
+          // the wait or walk window and the run was stopped in the same breath.
           const started = await this.#startFromServedState(
             resultCell,
             ownership,
@@ -6596,19 +6618,20 @@ export class Runner {
    * attempt would have registered.
    *
    * When an `ownership` token is supplied, the walk hands the claimed
-   * registration to it IN THE CLAIM MAPPING — the same synchronous block
-   * as the claim checks — so a cancel that landed during the walk stops
-   * the just-claimed run in the same breath (markInstalled finishes a
-   * pending cancellation), and no promise hop separates the claim from
-   * the hand-off (delta review D1/D2). The mapping then reports whether
-   * the token owns a RUNNING piece: a hand-off that resolved a pending
-   * cancellation reports false.
+   * registration to it IN THE CLAIM MAPPING — the same synchronous block as the
+   * claim checks — so a cancel that landed during the walk stops the
+   * just-claimed run in the same breath (markInstalled finishes a pending
+   * cancellation), and no promise hop separates the claim from the hand-off.
+   * The mapping then reports whether the token owns a RUNNING piece: a hand-off
+   * that resolved a pending cancellation reports false.
    */
   #startFromServedState<T>(
     resultCell: Cell<T>,
     ownership?: DeferredCancelOwnership,
+    options?: StartAttempt["options"],
   ): Promise<boolean> {
     const attempt: StartAttempt = {
+      options,
       lifecycleEpoch: this.#lifecycleEpoch,
       generationsByDoc: new Map(),
       preResolutionStopKeys: new Set(),
@@ -6630,17 +6653,15 @@ export class Runner {
               attempt.installedRegistration === undefined ||
               current !== attempt.installedRegistration
             ) {
-              // Not this walk's own registration (Cubic P1): a COMPETING
-              // start claimed the result while the walk was in flight —
-              // installing into the registry the recovery's entry
-              // emptied needs no stop, so no generation bump witnesses
-              // it, and doStart's already-started returns report it as
-              // success. The piece runs under the competitor's
-              // authority; binding it to the caller's token would let a
-              // parent cancel tear down a run whose lifecycle the
-              // parent does not own. Yield exactly as `#startWithTx()`
-              // yields on an owned key: settle the token without
-              // touching the registration.
+              // Not this walk's own registration: a COMPETING start claimed the
+              // result while the walk was in flight — installing into the
+              // registry the recovery's entry emptied needs no stop, so no
+              // generation bump witnesses it, and doStart's already-started
+              // returns report it as success. The piece runs under the
+              // competitor's authority; binding it to the caller's token would
+              // let a parent cancel tear down a run whose lifecycle the parent
+              // does not own. Yield exactly as `#startWithTx()` yields on an
+              // owned key: settle the token without touching the registration.
               ownership.cancel();
               return true;
             }
@@ -6691,11 +6712,11 @@ export class Runner {
 
       const startTx = this.#runtime.edit();
       // Minted inside a commit callback — outside any scheduler run;
-      // bookkeeping per serving-loop.md §3d, like the deferred start
-      // above (and with the same §3d-RULED speculative-consequence
-      // stamp, 2026-08-13: a flag-ON client's navigate-deferred start
-      // is a speculative handler CONSEQUENCE and diverts to the
-      // overlay instead of racing the serving side's receipt create).
+      // bookkeeping per serving-loop.md §3d, like the deferred start above (and
+      // with the same §3d speculative-consequence stamp: a flag-ON client's
+      // navigate-deferred start is a speculative handler CONSEQUENCE and
+      // diverts to the overlay instead of racing the serving side's receipt
+      // create).
       this.#runtime.stampServerRun(startTx, {
         actionId: `piece-start/${resultLink.id}`,
         ...(speculativeConsequence !== undefined
@@ -6705,9 +6726,9 @@ export class Runner {
           }
           : { kind: "bookkeeping" as const }),
       });
-      // Phase 4 (builtins.md §4): carry the instantiating event-handler
-      // run's event context to the start tx — capture point 1, as in
-      // startAfterSuccessfulCommit above.
+      // Carry the instantiating event-handler run's event context to the start
+      // tx (builtins.md §4) — capture point 1, as in startAfterSuccessfulCommit
+      // above.
       const navigateContext = navigateEventContextFromRunInfo(
         waveRunContextOf(tx) ?? speculationRunContextOf(tx),
       );
@@ -7426,26 +7447,12 @@ export class Runner {
     return `${space}/${resolveScopeKey(scope, identity)}/${id}`;
   }
 
-  // The scheduler observation identity (pieceId + owning space) for a piece's
-  // result cell. Pattern readers subscribe with this so the timing shapers can
-  // group and rate-cap a pattern's wakes; without it, cell-flip shaping (plan B)
-  // silently does not apply to the piece. It is derived purely from the result
-  // cell, so it is available even when scheduler state is not rehydrated.
-  // The pieceId bucket is per scope INSTANCE (key-vocabulary.md §5's
-  // stage-F serving-hazard list): name-keyed buckets collapse shaper
-  // groups and rate caps across principals — cross-principal budget
-  // consumption, and a timing channel correlating one principal's
-  // activity with another's wakes. Resolved against the runtime's own
-  // identity; partition-unchanged at cardinality 1 (key-vocabulary.md
-  // §2 — the resolver also normalizes the raw `undefined:` form the
-  // previous string interpolation produced for scope-less links, which
-  // merges with `space:`, the same instance by definition).
-
-  /** Stage P2-F (the F1 fold-in, RULED 2026-08-13): a piece-start
-   * setup/instantiation commit failure is fire-and-forget by design but
-   * NEVER silent — loud in every arm, and handed to the serving
-   * runtime's installed observer (the SpaceServer counts it into §7's
-   * structureLoadFailures). */
+  /**
+   * Reports a piece-start setup/instantiation commit failure. Such a commit
+   * is fire-and-forget by design but NEVER silent — loud in every arm, and
+   * handed to the serving runtime's installed observer (the SpaceServer
+   * counts it into serving-loop.md §7's structureLoadFailures).
+   */
   #reportPieceStartCommitFailure(
     actionId: string,
     error: unknown,
@@ -7525,15 +7532,13 @@ export class Runner {
   }
 
   /**
-   * The demand-root CHAIN of a piece root (server-execution v2 Phase 7):
-   * the roots of every ancestor piece that instantiated it, ending in
-   * itself. Recorded when a piece starts under a known parent
-   * (`RunnerRunOptions.parentPieceRootId`); a root started with no
-   * parent (a top-level piece, or a resume whose parent is unknown) keeps
-   * whatever chain an earlier parent-driven start recorded, else stands
-   * alone. Only ever grows per root — a nested piece re-started
-   * standalone (a client navigating to it) must not lose the outer
-   * demand it is also served under.
+   * The demand-root CHAIN of a piece root: the roots of every ancestor piece
+   * that instantiated it, ending in itself. Recorded when a piece starts under
+   * a known parent (`RunnerRunOptions.parentPieceRootId`); a root started with
+   * no parent (a top-level piece, or a resume whose parent is unknown) keeps
+   * whatever chain an earlier parent-driven start recorded, else stands alone.
+   * Only ever grows per root — a nested piece re-started standalone (a client
+   * navigating to it) must not lose the outer demand it is also served under.
    */
   #demandRootChains = new Map<string, readonly string[]>();
 
@@ -7553,6 +7558,20 @@ export class Runner {
     return chain;
   }
 
+  /**
+   * Returns the scheduler observation identity for a piece's result cell.
+   * Pattern readers subscribe with this so the timing shapers can group and
+   * rate-cap a pattern's wakes; without it, cell-flip shaping silently does not
+   * apply to the piece. Its `pieceId` and owner space are derived purely from
+   * the result cell, so they are available even when scheduler state is not
+   * rehydrated. The pieceId bucket is per scope INSTANCE (key-vocabulary.md
+   * §5's serving-identity sites): name-keyed buckets collapse shaper groups and
+   * rate caps across principals — cross-principal budget consumption, and a
+   * timing channel correlating one principal's activity with another's wakes.
+   * Resolved against the runtime's own identity; partition-unchanged at
+   * cardinality 1 (key-vocabulary.md §2 — the resolver also gives a scope-less
+   * link the `space` key, the same instance by definition).
+   */
   #schedulerObservationIdentity(
     resultCell: Cell<any>,
     parentPieceRootId?: string,
@@ -7564,12 +7583,12 @@ export class Runner {
         resolveScopeKey(scope, this.#runtime.scopeKeyIdentity)
       }:${id}`,
       ownerSpace: space,
-      // The RAW root doc id, un-prefixed, for the per-(action × instance)
-      // run supply (server-execution v2 stage P2-F): the scheduler
-      // resolves this piece's demanded instances through it.
+      // The RAW root doc id, un-prefixed, for the per-(action × instance) run
+      // supply: the scheduler resolves this piece's demanded instances through
+      // it.
       pieceRootId: id,
-      // Phase 7: plus the ancestor roots that instantiated it — a nested
-      // piece is demanded through the outer piece the client watches.
+      // Plus the ancestor roots that instantiated it — a nested piece is
+      // demanded through the outer piece the client watches.
       ...(demandRootIds.length > 1 ? { demandRootIds } : {}),
     };
   }
@@ -8133,10 +8152,11 @@ export class Runner {
             schemaWithoutEventSlot(plan.module.argumentSchema),
           ),
         ];
-        // A handler node's `$event` slot names its stream document, which
-        // instantiation reads the stream marker off after following the
-        // slot's whole redirect chain. Every hop is named whole: it is the
-        // event log, not a value the module schema describes.
+        // A handler node's `$event` slot names its stream's document through
+        // a redirect chain. Instantiation registers on the slot's link and
+        // reads nothing behind it; a send resolves every hop, so each is
+        // named here, and named whole: it is not a value the module schema
+        // describes.
         if (isObjectOrArray(plan.inputs) && "$event" in plan.inputs) {
           for (
             const streamLink of findAllWriteRedirectCells(
@@ -8282,8 +8302,8 @@ export class Runner {
    * A coordinator resumes its durable children from inside its own
    * scheduler run, synchronously: `run()` instantiates the child in the
    * coordinator's transaction, and instantiation reads the child's
-   * execution family — its argument document, its derived internal cells,
-   * a handler's `$event` stream marker among them. A child a subscription
+   * execution family — its argument document and its derived internal
+   * cells among them. A child a subscription
    * merely reached arrives without that family, so the family is named
    * here, where every other resume dependency is: naming a child's result
    * document delivers the family, and the coordinator's synchronous start
@@ -8580,6 +8600,19 @@ export class Runner {
     return this.#cancels.get(this.#getDocKey(resultCell))
       ?.graphIsInstalled() ===
       true;
+  }
+
+  /**
+   * Whether a graph is registered for `resultCell`'s document: the piece is
+   * running, and a start would return on its fast path without touching the
+   * stored doc. A subpath cell stands for its root document.
+   */
+  isRunning<T>(resultCell: Cell<T>): boolean {
+    const link = resultCell.getAsNormalizedFullLink();
+    const rootCell = link.path.length > 0
+      ? this.#runtime.getCellFromLink({ ...link, path: [] })
+      : resultCell;
+    return this.#cancels.has(this.#getDocKey(rootCell));
   }
 
   /**
@@ -8975,7 +9008,7 @@ export class Runner {
       // TODO(seefeld): Implement, a dynamic node
       return undefined;
     } else {
-      throw new Error(`Unknown module: ${toCompactDebugString(module)}`);
+      throw new Error(debugStr`Unknown module: $quote${module}`);
     }
   }
 
@@ -8994,13 +9027,19 @@ export class Runner {
       inputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
     const outputs = unwrapOneLevelAndBindToDoc(
       outputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
     return {
       inputs,
@@ -9254,15 +9293,14 @@ export class Runner {
         return;
       }
 
-      // Keyword descent via the shared walk (a keyword missed here means
-      // asCell markers escaping write tracking — the prefixItems gap,
-      // CT-1895). The value-position keywords align value and path — a
-      // named property or undeclared-key (`additionalProperties`) at its
-      // key, a tuple slot at its index, `items` elements past the slots at
-      // theirs — falling back to the conservative same-value/same-path
-      // visit when value and schema misalign. Combinator branches and
-      // `not` genuinely describe the same position: same value, same path.
-      // `not` is included deliberately: a nested `not` (not-of-not)
+      // Keyword descent via the shared walk (a keyword missed here means asCell
+      // markers escaping write tracking). The value-position keywords align
+      // value and path — a named property or undeclared-key
+      // (`additionalProperties`) at its key, a tuple slot at its index, `items`
+      // elements past the slots at theirs — falling back to the conservative
+      // same-value/same-path visit when value and schema misalign. Combinator
+      // branches and `not` genuinely describe the same position: same value,
+      // same path. `not` is included deliberately: a nested `not` (not-of-not)
       // re-selects values that DO match the inner subschema, so skipping it
       // could let an asCell marker escape tracking; over-collection is this
       // walker's safe direction (mirrors joinSchema's `not` union).
@@ -9349,11 +9387,13 @@ export class Runner {
         const link = parseLink(currentValue, resultCell);
         links.push({
           ...link,
-          schema: link.schema ??
-            (schema === undefined ? undefined : cfcSchemaWithInheritedDefs(
+          schema: combineOptionalSchema(
+            schema === undefined ? undefined : cfcSchemaWithInheritedDefs(
               schema as JSONSchema,
               rootDefinitions,
-            )),
+            ),
+            link.schema,
+          ),
         });
         return;
       }
@@ -9393,8 +9433,8 @@ export class Runner {
 
       if (Array.isArray(currentValue)) {
         // A tuple slot covers its exact index; `items` covers the indices
-        // past the slots (2020-12). prefixItems-only schemas previously
-        // skipped elements entirely.
+        // past the slots (2020-12). Under a `prefixItems`-only schema the
+        // slots are the only elements visited.
         const prefixItems = Array.isArray(schema.prefixItems)
           ? schema.prefixItems
           : undefined;
@@ -9448,8 +9488,7 @@ export class Runner {
     //    trust grant in another runtime of the same process proves nothing
     //    here). This is the in-memory instantiation path: a trusted module
     //    that never round-tripped through JSON has no `$implRef` property,
-    //    but its function IS the artifact (pre-E5 this resolved through the
-    //    legacy ref index — same function, different lookup);
+    //    but its function IS the artifact;
     // 3. the stringified-source fallback (SES-sandboxed, CFC-unverified) —
     //    test-built / never-verified modules. A forged fn carries neither
     //    provenance nor an entry ref, so it always lands here.
@@ -9559,48 +9598,46 @@ export class Runner {
   }
 
   /**
-   * If the final target of the link chain is a stream, return the first link
-   * as `streamLink`. When the inputs carry a `$event` key — i.e. the node was
-   * authored as a handler — but the chain does not end in a stream marker,
-   * return what it resolved to instead (`eventTarget`), so the caller can
-   * report why the node cannot be instantiated as a handler.
+   * The stream a handler node registers on, parsed from its `$event` input,
+   * or `undefined` for an action node. A node is a handler exactly when its
+   * module carries the handler wrapper, and its stream is whatever `$event`
+   * names: nothing is read at that target, which holds no value for a stream.
    *
-   * @param inputs
-   * @param base
-   * @param tx
-   * @returns
+   * A node that is one thing and shaped like the other is refused. A handler
+   * with no `$event` has nothing to register on. An action binding a `$event`
+   * is the shape a handler lowered where a lift belongs takes, and running it
+   * as an action would run a handler body as a computation.
    */
-  #resolveJavaScriptStreamLink(
+  #handlerStreamLink(
+    module: Module,
     inputs: FabricExecValue,
     base: NormalizedFullLink,
-    tx: IExtendedStorageTransaction,
-  ): {
-    streamLink?: NormalizedFullLink;
-    eventTarget?: { link?: NormalizedFullLink; value: FabricValue };
-  } {
-    if (!isObjectOrArray(inputs) || !("$event" in inputs)) return {};
-
-    // Sigil-only: `$event` is builder-generated and always unwraps to a sigil
-    // link; a residual `$alias` here could only be an embedded pattern's
-    // binding, which must not be followed at this level.
-    // Narrowing, not papering over: `$event` is a sigil link, which IS a
-    // `FabricValue`. Only the exec-typed container widens it here, and the
-    // sigil-only invariant above is what licenses the assertion.
-    let value = inputs.$event as FabricValue;
-    let lastLink: NormalizedFullLink | undefined;
-    while (isWriteRedirectLink(value)) {
-      lastLink = resolveLink(
-        this.#runtime,
-        tx,
-        parseLink(value, base),
-        "writeRedirect",
-      );
-      value = tx.readValueOrThrow(lastLink);
+    name: string | undefined,
+  ): NormalizedFullLink | undefined {
+    const event = isObjectOrArray(inputs) && "$event" in inputs
+      ? inputs.$event
+      : undefined;
+    const label = name ? `node \`${name}\`` : "node";
+    if (module.wrapper === "handler") {
+      if (event === undefined) {
+        throw new Error(`Handler ${label} has no \`$event\` input`);
+      }
+      // `$event` is builder-generated and always a sigil redirect link; a
+      // residual `$alias` here could only be an embedded pattern's binding,
+      // which must not be followed at this level.
+      if (!isWriteRedirectLink(event)) {
+        throw new Error(
+          debugStr`Handler ${label}'s \`$event\` input is not a link (got: $quote,long${event})`,
+        );
+      }
+      return parseLink(event, base);
     }
-
-    return isStreamValue(value)
-      ? { streamLink: parseLink(inputs.$event, base) }
-      : { eventTarget: { link: lastLink, value } };
+    if (event !== undefined) {
+      throw new Error(
+        `Lift ${label} binds a \`$event\` input, which only a handler takes`,
+      );
+    }
+    return undefined;
   }
 
   #createPatternFrame(
@@ -9742,35 +9779,34 @@ export class Runner {
     );
     const receiptsEnabled =
       this.#runtime.experimental.commitPreconditions === true &&
-      // Events-down (server-execution v2 Phase 3; runtime-mapping N26):
-      // receipt create-only exactly-once is SUBSUMED by the stream's
-      // `eventWatermark` (events.md §4), and the two mechanisms must not
-      // be active for the same event — client handler runs divert to the
-      // overlay anyway, and a serving run's create-only mark would ride
-      // the WAVE commit as a precondition the watermark already covers.
+      // Events-down (runtime-mapping.md, row N26): receipt create-only
+      // exactly-once is SUBSUMED by the stream's `eventWatermark`
+      // (events.md §4), and the two mechanisms must not be active for the same
+      // event — client handler runs divert to the overlay anyway, and a
+      // serving run's create-only mark would ride the WAVE commit as a
+      // precondition the watermark already covers.
       this.#runtime.experimental.serverExecution !== true;
-    // The serving-side receipt/result write (owner-ruled 2026-08-29;
-    // events.md §4 "Result carriage"): N26's subsumption retired the
-    // receipt's EXACTLY-ONCE role, not its RESULT-CARRIAGE role. Under
-    // the flag the SERVING side writes the handling's receipt — every
-    // served handler completion writes its result cell, even when the
-    // declared value is undefined — in the handler run's own transaction,
-    // so the write seals into the run's wave with the entry's
-    // `consequenced` mark (events.md §4 mark/effects atomicity) and
-    // enters the space through the same carriage every served
-    // event-handler write rides. Only a run whose body actually ran
-    // writes (a skipped served dispatch is withdrawn whole — see
-    // `dispatchedHandlerNotRun`); the client's write stays disabled
-    // (`receiptsEnabled` above), so the serving run is the ONE writer.
+    // The serving-side receipt/result write (events.md §4 "Result carriage"):
+    // the watermark subsumes the receipt's EXACTLY-ONCE role, not its
+    // RESULT-CARRIAGE role. Under the flag the SERVING side writes the
+    // handling's receipt — every served handler completion writes its result
+    // cell, even when the declared value is undefined — in the handler run's
+    // own transaction, so the write seals into the run's wave with the entry's
+    // `consequenced` mark (events.md §4 mark/effects atomicity) and enters the
+    // space through the same carriage every served event-handler write rides.
+    // Only a run whose body actually ran writes (a skipped served dispatch is
+    // withdrawn whole — see `dispatchedHandlerNotRun`); the client's write
+    // stays disabled (`receiptsEnabled` above), so the serving run is the ONE
+    // writer.
     const servedReceiptWrite =
       this.#runtime.experimental.serverExecution === true &&
       waveRunContextOf(tx)?.kind === "event-handler" &&
       tx.dispatchedHandlerNotRun === undefined;
     // Expose the handling's receipt address on the transaction, where the
-    // sender's commit callback can read it (verb contract WS-D). Stashed
-    // before the branches so BOTH outcomes carry it: a committed handling
-    // hands back its own receipt, and a create-only collision loser hands
-    // back the same address — which is the winner's original outcome.
+    // sender's commit callback can read it. Stashed before the branches so BOTH
+    // outcomes carry it: a committed handling hands back its own receipt, and a
+    // create-only collision loser hands back the same address — which is the
+    // winner's original outcome.
     //
     // Only while receipts are actually being written. With commitPreconditions
     // off nothing below creates or create-only marks this cell, so publishing
@@ -9778,15 +9814,15 @@ export class Runner {
     // invite a readback against an unwritten cell. Absent beats fabricated —
     // the same fail-closed stance cfc/grants.ts takes when its gate is off.
     //
-    // Under EXPERIMENTAL_SERVER_EXECUTION the receipt IS being written —
-    // by the SERVING side (the ruled write above). The address is
-    // cause-derived, so the client's diverted ECHO of the same event mints
-    // the same address the serving run writes; publishing it on the echo's
-    // transaction is what hands an unchanged caller (the CLI verb
-    // dispatch, WS-D) a readable handle on the served outcome. The
-    // durable-ack coupling (cell.ts) settles that caller's callback only
-    // after the handling CONSEQUENCED — the serving wave, receipt
-    // included, committed before the address is ever dereferenced.
+    // Under EXPERIMENTAL_SERVER_EXECUTION the receipt IS being written — by the
+    // SERVING side (see the write above). The address is
+    // cause-derived, so the client's diverted ECHO of the same event mints the
+    // same address the serving run writes; publishing it on the echo's
+    // transaction is what hands an unchanged caller (the CLI verb dispatch) a
+    // readable handle on the served outcome. The durable-ack coupling (cell.ts)
+    // settles that caller's callback only after the handling CONSEQUENCED — the
+    // serving wave, receipt included, committed before the address is ever
+    // dereferenced.
     if (
       receiptsEnabled || this.#runtime.experimental.serverExecution === true
     ) {
@@ -9827,26 +9863,24 @@ export class Runner {
         if (shape !== undefined) writeResultSchemaMeta(receipt, shape);
         tx.markCreateOnly?.(receiptCell.getAsNormalizedFullLink());
       } else if (servedReceiptWrite) {
-        // The ruled serving-side receipt write (owner, 2026-08-29): the
-        // value-less/plain shape is EXACTLY the client-era one — `{}` as
-        // the existence witness, the handler's plain return under
-        // `plainResultReceipts` — and the cell identity is the same
-        // cause-derived address, so the verb contract's readback
-        // (WS-C/D; `cf call`'s `.result`) needs no migration.
+        // The serving-side receipt write: the value-less/plain shape is EXACTLY
+        // the client-written one — `{}` as the existence witness, the handler's
+        // plain return under `plainResultReceipts` — and the cell identity is
+        // the same cause-derived address, so the verb contract's readback
+        // (`cf call`'s `.result`) reads a serving-written receipt the same
+        // way it reads a client-written one.
         //
-        // Write-once is CAS, not a wire precondition: no markCreateOnly
-        // (N26 — a create-only mark must not ride a wave commit whose
-        // event the watermark already covers), and a receipt that
-        // ALREADY holds a value is a LOUD NO-OP. A lost CAS means a
-        // writer already landed this handling's receipt — a re-served
-        // replay converging on the same cause-derived id, or a
-        // pre-created cell — and first-writer-wins is the OFF arm's
-        // receipt-collision semantics: never a second write, never an
-        // error that fails the wave (the entry's consequenced mark and
-        // the handler's other consequences still commit; the read below
-        // rides the wave's basis for this doc, so a genuinely
-        // concurrent landing rebases the run and the re-run takes this
-        // same no-op arm).
+        // Write-once is CAS, not a wire precondition: no markCreateOnly (a
+        // create-only mark must not ride a wave commit whose event the
+        // watermark already covers), and a receipt that ALREADY holds a value
+        // is a LOUD NO-OP. A lost CAS means a writer already landed this
+        // handling's receipt — a re-served replay converging on the same
+        // cause-derived id, or a pre-created cell — and first-writer-wins is
+        // the OFF arm's receipt-collision semantics: never a second write,
+        // never an error that fails the wave (the entry's consequenced mark and
+        // the handler's other consequences still commit; the read below rides
+        // the wave's basis for this doc, so a genuinely concurrent landing
+        // rebases the run and the re-run takes this same no-op arm).
         const existing = receiptCell.getRaw({ meta: ignoreReadForScheduling });
         if (existing !== undefined) {
           this.#servedReceiptCasLosses += 1;
@@ -9914,12 +9948,12 @@ export class Runner {
     const deferForNavigate = this.#handlerResultPatternHasNavigateTo(
       resultPattern,
     );
-    // Phase 4 (protocol.md §5): on a flag-ON CLIENT, a navigate-bearing
-    // result's deferred start is a SPECULATIVE handler consequence — it
-    // must divert to the overlay with its event's id, never commit the
-    // receipt authored (the serving side owns the durable create; see
-    // startAfterSuccessfulCommit's stamp comment). Wave-stamped
-    // (serving) and unstamped (OFF-arm) handler runs pass nothing.
+    // On a flag-ON CLIENT (protocol.md §5), a navigate-bearing result's
+    // deferred start is a SPECULATIVE handler consequence — it must divert to
+    // the overlay with its event's id, never commit the receipt authored (the
+    // serving side owns the durable create; see startAfterSuccessfulCommit's
+    // stamp comment). Wave-stamped (serving) and unstamped (OFF-arm) handler
+    // runs pass nothing.
     const speculativeConsequence = deferForNavigate &&
         waveRunContextOf(tx) === undefined
       ? (() => {
@@ -9973,8 +10007,8 @@ export class Runner {
           undefined,
           receiptCell,
           {
-            // Phase 7: a result-as-pattern child's demand roots include
-            // the producing piece's chain (see RunnerRunOptions).
+            // A result-as-pattern child's demand roots include the producing
+            // piece's chain (see RunnerRunOptions).
             parentPieceRootId: patternResultCell.getAsNormalizedFullLink()
               .id,
           },
@@ -9985,13 +10019,12 @@ export class Runner {
       })();
 
     if (!deferForNavigate && receiptsEnabled) {
-      // Gated like every other receipt write above (round-2 thread
-      // T27): under serverExecution the receipt create-only mechanism
-      // is subsumed by the stream's eventWatermark and MUST NOT ride a
-      // serving run's wave commit — an ungated mark here left the
-      // create-only precondition active alongside the watermark, so a
-      // duplicate derived run aborted on receipt-exists instead of
-      // coalescing to the watermark.
+      // Gated like every other receipt write above: under serverExecution the
+      // receipt create-only mechanism is subsumed by the stream's
+      // eventWatermark and MUST NOT ride a serving run's wave commit — an
+      // ungated mark here would leave the create-only precondition active
+      // alongside the watermark, so a duplicate derived run would abort on
+      // receipt-exists instead of coalescing to the watermark.
       tx.markCreateOnly?.(receiptCell.getAsNormalizedFullLink());
     }
 
@@ -10053,22 +10086,21 @@ export class Runner {
    * the pattern builder's resolveInSpaceTargetSpace), so the child results are
    * routed into the correct spaces from the start — no link rewriting required.
    *
-   * OW31 (RULED 2026-08-18): on a SERVING runtime the fresh space's genesis
-   * ACL must name the run's ACTING user as OWNER, so the acting principal is
-   * read from the run transaction's wave run context and threaded to
+   * On a SERVING runtime the fresh space's genesis ACL must name the run's
+   * ACTING user as OWNER, so the acting principal is read from the run
+   * transaction's wave run context and threaded to
    * {@link Runtime.resolveSpaceName} as the genesis owner. Read WITHOUT
-   * `homeSpacePrincipalFor`'s read-scope-ratchet side effect (scope report
-   * F8): resolving a provisioning target is not a scoped READ of the run.
-   * The ACTING user is the ONLY source (review F1 on #6156): the genesis
-   * owner must be the same principal the provisioning crossing's grant
-   * probe and carriage carry, or replay's acl arm would probe a stranger —
-   * a demand-supplied `scopeKeyIdentity` is resolution scaffolding whose
-   * acting settles (possibly to NONE) at the seal, so a context carrying
-   * only it REFUSES here exactly like a bare one: its crossing would be
-   * refused carriage-less anyway, and registering the scaffolding
-   * principal would mint an orphaned genesis under an owner the wave
-   * never grants. On a client (`!servingPosture`) no owner is supplied
-   * and the genesis names the active user — byte-identical to before.
+   * `homeSpacePrincipalFor`'s read-scope-ratchet side effect: resolving a
+   * provisioning target is not a scoped READ of the run. The ACTING user is the
+   * ONLY source: the genesis owner must be the same principal the provisioning
+   * crossing's grant probe and carriage carry, or replay's acl arm would probe
+   * a stranger — a demand-supplied `scopeKeyIdentity` is resolution scaffolding
+   * whose acting settles (possibly to NONE) at the seal, so a context carrying
+   * only it REFUSES here exactly like a bare one: its crossing would be refused
+   * carriage-less anyway, and registering the scaffolding principal would mint
+   * an orphaned genesis under an owner the wave never grants. On a client
+   * (`!servingPosture`) no owner is supplied and the genesis names the active
+   * user.
    */
   async #resolvePendingSpaceNamesAndRetry(
     frame: Frame,
@@ -10201,11 +10233,10 @@ export class Runner {
       schemaCellScope(resultPattern.resultSchema),
       narrowestReadScope,
     ]);
-    // See if the resultCell was already in this effective output INSTANCE
-    // (the discovered scope name resolved against the run's acting
-    // identity — the runtime's own session in the OFF arm; a served
-    // run's DEMAND-SUPPLIED identity when the wave run context carries
-    // one — M1's per-run threading, server-execution v2 Phase 2).
+    // See if the resultCell was already in this effective output INSTANCE (the
+    // discovered scope name resolved against the run's acting identity — the
+    // runtime's own session in the OFF arm; a served run's DEMAND-SUPPLIED
+    // identity when the wave run context carries one).
     const effectiveOutputScopeKey = resolveScopeKey(
       effectiveOutputScope,
       waveRunContextOf(tx)?.scopeKeyIdentity ?? this.#runtime.scopeKeyIdentity,
@@ -10255,11 +10286,11 @@ export class Runner {
     const resultPatternKey = hashStringOf(
       flattenBuilderArtifacts(resultPattern),
     );
-    // Keyed doc-then-INSTANCE, the instance being the SAME per-run
-    // resolved key that selected the byScope cell above (r3739139481):
-    // a doc-level or service-identity-resolved key made the second
-    // demanded instance's run read the first's memo as "unchanged" and
-    // skip its child materialization.
+    // Keyed doc-then-INSTANCE, the instance being the SAME per-run resolved key
+    // that selected the byScope cell above: a doc-level or
+    // service-identity-resolved key would make the second demanded instance's
+    // run read the first's memo as "unchanged" and skip its child
+    // materialization.
     const resultDocLink = resultCell.getAsNormalizedFullLink();
     const cacheDocKey =
       `${resultDocLink.space}/${resultDocLink.id}` as `${MemorySpace}/${URI}`;
@@ -10358,12 +10389,11 @@ export class Runner {
         : handlerResultCell;
       if (event?.preventDefault) event.preventDefault();
 
-      // The dispatch-side closed-world gate (verb contract WS-C, C5). A
-      // present payload that cannot satisfy a closed event schema fails the
-      // handling exactly the way a thrown handler error already fails: the
-      // body never runs, the transaction aborts (no receipt is created, the
-      // event id is not spent), scheduler onError fires, and the commit
-      // callback settles with the errored transaction.
+      // The dispatch-side closed-world gate. A present payload that cannot
+      // satisfy a closed event schema fails the handling exactly the way a
+      // thrown handler error fails: the body never runs, the transaction aborts
+      // (no receipt is created, the event id is not spent), scheduler onError
+      // fires, and the commit callback settles with the errored transaction.
       const closedWorldRejection = closedWorldEventRejection(
         module.argumentSchema,
         event,
@@ -10570,8 +10600,8 @@ export class Runner {
             await inputsCell.sync();
           } else {
             // A served event's presync loads the ACTOR's instances of the
-            // handler's scoped inputs (stage A — the runner's
-            // explicit-instance read; see EventHandler.presyncInputs).
+            // handler's scoped inputs (the runner's explicit-instance read; see
+            // EventHandler.presyncInputs).
             await this.#runtime.storageManager.syncCell(inputsCell, {
               scopeKeyIdentity: identity,
             });
@@ -10602,13 +10632,12 @@ export class Runner {
       pattern,
       schedulerObservationIdentity: {
         // Per scope INSTANCE, matching schedulerObservationIdentity above
-        // (key-vocabulary.md §5's stage-F list).
+        // (key-vocabulary.md §5's serving-identity sites).
         pieceId: `${
           resolveScopeKey(instanceLink.scope, this.#runtime.scopeKeyIdentity)
         }:${instanceLink.id}`,
         ownerSpace: instanceLink.space,
-        // Raw root id for the per-(action × instance) run supply
-        // (stage P2-F).
+        // Raw root id for the per-(action × instance) run supply.
         pieceRootId: instanceLink.id,
       },
       ...(presyncInputs !== undefined && { presyncInputs }),
@@ -10676,12 +10705,6 @@ export class Runner {
       schedulerRehydration,
     }: JavaScriptNodeContext,
   ): void {
-    if (isObjectOrArray(inputs) && "$event" in inputs) {
-      throw new Error(
-        "Handler used as lift, because $stream: true was overwritten",
-      );
-    }
-
     const previousResultCellRef: JavaScriptActionResultCells = {
       byScope: new Map(),
     };
@@ -11084,22 +11107,15 @@ export class Runner {
       inputsCell: plan.inputsCell,
     };
 
-    const { streamLink, eventTarget } = this.#resolveJavaScriptStreamLink(
+    const streamLink = this.#handlerStreamLink(
+      module,
       inputs,
       resultCell.getAsNormalizedFullLink(),
-      tx,
+      name,
     );
     if (streamLink) {
       this.#instantiateJavaScriptHandlerNode({ ...context, streamLink });
       return;
-    }
-    if (eventTarget) {
-      // The node was authored as a handler ($event input), but its stream
-      // marker did not resolve. Report what actually happened instead of
-      // misclassifying the node as a lift.
-      throw new Error(
-        describeHandlerStreamFailure(name, eventTarget, resultCell),
-      );
     }
 
     this.#instantiateJavaScriptActionNode(context);
@@ -11176,31 +11192,31 @@ export class Runner {
       return fn(argument);
     };
 
-    // Builder artifacts cannot be minted inside a running action (identity
-    // E5): they would have no content-addressed identity, no provenance, and
-    // — closure-bearing — no serializable body, so nothing could ever
-    // rehydrate them. The transformer hoists every authored builder call to
-    // module scope; the window makes a mint that slipped through fail loudly
-    // at creation time (see builder/action-context.ts) instead of producing
-    // an unrehydratable value. The window rides AsyncLocalStorage, so an
-    // async action's continuations stay covered past its awaits.
+    // Builder artifacts cannot be minted inside a running action: they would
+    // have no content-addressed identity, no provenance, and — closure-bearing
+    // — no serializable body, so nothing could ever rehydrate them. The
+    // transformer hoists every authored builder call to module scope; the
+    // window makes a mint that slipped through fail loudly at creation time
+    // (see builder/action-context.ts) instead of producing an unrehydratable
+    // value. The window rides AsyncLocalStorage, so an async action's
+    // continuations stay covered past its awaits.
     return runInActionExecution(invoke);
   }
 
   /**
-   * CT-1623: for the list builtins (`map`/`filter`/`flatMap`), annotate the `op`
-   * input with its content-addressed `{ identity, symbol }` entry ref (when
-   * known) so the builtin can resolve the live canonical pattern by identity
-   * instead of deserializing the embedded graph. Mutates `inputBindings` in
-   * place: `op` becomes `{ $patternRef }`.
+   * For the list builtins (`map`/`filter`/`flatMap`), annotates the `op` input
+   * with its content-addressed `{ identity, symbol }` entry ref (when known) so
+   * the builtin can resolve the live canonical pattern by identity instead of
+   * deserializing the embedded graph. Mutates `inputBindings` in place: `op`
+   * becomes `{ $patternRef }`.
    *
    * Only the `op` key is rewritten — it is the sole pattern-valued input the
    * builtins rehydrate (`resolveOpPattern`). Rewriting other inputs (e.g. a
    * pattern captured in `params`) would leave an unresolved `$patternRef` object
    * that nothing reads back.
    *
-   * The sentinel carries NO embedded fallback graph (identity E4): the artifact
-   * index is session-lifetime, and the op's module evaluated in this session by
+   * The sentinel carries NO embedded fallback graph: the artifact index is
+   * session-lifetime, and the op's module evaluated in this session by
    * construction (the sentinel is stamped from its live artifact right here),
    * so the builtin's sync resolution cannot miss short of a bug — and a bug
    * should be loud, not silently served a stale graph.
@@ -11218,32 +11234,27 @@ export class Runner {
    * `getArtifactEntryRef` finds the ref (assigned post-eval by
    * `registerEvaluatedModules`) in both cases.
    *
-   * An op with NO known ref but a LIVE trusted original is a KEYLESS pattern
-   * — hand-built through the in-process builder DSL, or evaluated through the
+   * An op with NO known ref but a LIVE trusted original is a KEYLESS pattern —
+   * hand-built through the in-process builder DSL, or evaluated through the
    * bare non-registering `Engine.compileAndEvaluateModules` — whose serialized
    * copy carries a derivation link to its pristine in-memory pattern. It is
    * minted its content-hash session identity right here (the same pointer
-   * `#entryRefForPattern` mints for a keyless ROOT pattern) — but that
-   * identity is session-synthetic and must never land in the durable inputs
-   * doc (L3(a), RULED 2026-08-27; the sentinel here was one of the durable
-   * keyless writers the 2026-08-27 diagnosis named). So the op is LEFT IN
-   * PLACE — the boundary walk inside `getImmutableCell` serializes its full
-   * graph, readable by any session — and the minted ref is returned for the
-   * caller to register as a SESSION-side resolution hint keyed by the inputs
-   * doc (`registerKeylessOpResolution`): the builtin then resolves the
-   * pristine artifact in-session, so the embedded round-trip's defer
-   * corruption (CT-1812 — the CT-1811 corruption, reachable ref-lessly)
-   * still never engages for the instantiating session. The trust gate stays
-   * intact: minting BRANDS, so only a value whose original is already a
-   * trusted builder pattern is minted.
+   * `#entryRefForPattern` mints for a keyless ROOT pattern) — but that identity
+   * is session-synthetic and must never land in the durable inputs doc. So the
+   * op is LEFT IN PLACE — the boundary walk inside `getImmutableCell`
+   * serializes its full graph, readable by any session — and the minted ref is
+   * returned for the caller to register as a SESSION-side resolution hint keyed
+   * by the inputs doc (`registerKeylessOpResolution`): the builtin then
+   * resolves the pristine artifact in-session, so the embedded round-trip's
+   * defer corruption never engages for the instantiating session. The trust
+   * gate stays intact: minting BRANDS, so only a value whose original is
+   * already a trusted builder pattern is minted.
    *
-   * An op with no ref AND no live original — a plain deserialized graph,
-   * i.e. a STORED no-entry-ref pattern value (the live keyless writer path
-   * pinned by stored-pattern-rehydration.test.ts) — is left embedded with no
-   * hint: there is no pristine artifact in existence to point at, and
-   * re-rooting the graph bind-free is exactly the defer surgery CT-1812
-   * records as the residual there. Such an op takes the builtin's legacy
-   * graph path.
+   * An op with no ref AND no live original — a plain deserialized graph, i.e. a
+   * STORED no-entry-ref pattern value (the live keyless writer path pinned by
+   * stored-pattern-rehydration.test.ts) — is left embedded with no hint: there
+   * is no pristine artifact in existence to point at. Such an op takes the
+   * builtin's legacy graph path.
    */
   #substituteOpPatternRefs(
     moduleRefName: string | undefined,
@@ -11301,25 +11312,32 @@ export class Runner {
       inputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
     const mappedOutputBindings = unwrapOneLevelAndBindToDoc(
       outputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
 
-    // CT-1623: for the list builtins, replace a pattern-valued input (the `op`)
-    // with a compact `{ $patternRef }` sentinel when its content-addressed entry
-    // ref is known. This is the post-eval moment where the in-memory op object
+    // For the list builtins, replace a pattern-valued input (the `op`) with a
+    // compact `{ $patternRef }` sentinel when its content-addressed entry ref
+    // is known. This is the post-eval moment where the in-memory op object
     // (linked to its original via `noteDerivedCopy`, preserved through binding)
-    // carries its `{ identity, symbol }`; the sentinel then survives the immutable-cell
-    // JSON round-trip, so the builtin resolves the live canonical pattern by
-    // identity instead of deserializing the embedded graph. A KEYLESS op is
-    // never substituted (its session identity must not land durably); the
-    // returned mint is registered below, once the inputs doc's address is
-    // known, as this session's resolution hint for the builtin.
+    // carries its `{ identity, symbol }`; the sentinel then survives the
+    // immutable-cell JSON round-trip, so the builtin resolves the live
+    // canonical pattern by identity instead of deserializing the embedded
+    // graph. A KEYLESS op is never substituted (its session identity must not
+    // land durably); the returned mint is registered below, once the inputs
+    // doc's address is known, as this session's resolution hint for the
+    // builtin.
     const keylessOpRef = this.#substituteOpPatternRefs(
       moduleRefName,
       mappedInputBindings,
@@ -11350,19 +11368,19 @@ export class Runner {
       // The keyless op's in-session resolution hint (see
       // `#substituteOpPatternRefs`): the builtin reads the embedded graph from
       // this immutable doc and resolves the pristine minted artifact through
-      // this registration instead (CT-1812 stays sealed in-session, with
-      // nothing keyless durable).
+      // this registration instead (the embedded round-trip's defer corruption
+      // never engages in-session, and nothing keyless is durable).
       this.#runtime.patternManager.registerKeylessOpResolution(
         opInputsDocKey(inputsCell),
         keylessOpRef,
       );
     }
 
-    // CT-1623: the output spot this node writes through is reserved for this
-    // node, so its fully-resolved coordinates are a stable, position-derived,
+    // The output spot this node writes through is reserved for this node, so
+    // its fully-resolved coordinates are a stable, position-derived,
     // program-independent identity. Builtins that mint a result container
-    // (map/flatmap/filter) key it on this instead of the serialized op /
-    // inputs cell (both of which drag in the session-varying `program`).
+    // (map/flatmap/filter) key it on this instead of the serialized op / inputs
+    // cell (both of which drag in the session-varying `program`).
     const resolvedOutputSpot = firstResolvedOutputRedirect(
       this.#runtime,
       tx,
@@ -11516,7 +11534,7 @@ export class Runner {
     const builtinAction = isRawBuiltinResult(builtinResult)
       ? builtinResult.action
       : builtinResult;
-    // Phase 4 (builtins.md §4; navigate-context.ts's capture point 2):
+    // Capture point 2 of navigate-context.ts (builtins.md §4):
     // tag the builtin's action with the event context its instantiation
     // was a consequence of — the deferred start's carried context, or
     // the instantiating handler tx's own stamp when the result pattern
@@ -11711,8 +11729,8 @@ export class Runner {
     // on a cold-cache resume. Binding needs the link only when an alias
     // actually names the argument document, and throws otherwise.
     // Substituting a different document instead would derive the wrong
-    // `resultFor` identity and pre-sync the wrong owned-cell subtree
-    // (CT-1897); a stand-in a caller supplies deliberately is what the
+    // `resultFor` identity and pre-sync the wrong owned-cell subtree;
+    // a stand-in a caller supplies deliberately is what the
     // fresh run's pre-sync binds against.
     const argumentCellLink = argumentLink ??
       getMetaLink(resultCell, "argument");
@@ -11762,7 +11780,10 @@ export class Runner {
       outputBindings,
       argumentCellLink,
       resultCell,
-      { derivedInternalCells: pattern.derivedInternalCells },
+      {
+        derivedInternalCells: pattern.derivedInternalCells,
+        argumentCapSchema: pattern.argumentSchema,
+      },
     );
     const io = {
       child,
@@ -11784,7 +11805,7 @@ export class Runner {
         sendToBindings: false,
       };
     }
-    // CT-1623: identify the result cell by the (fully resolved) output spot
+    // Identify the result cell by the (fully resolved) output spot
     // reserved for this node — a stable, position-derived, program-independent
     // identity — rather than hashing the pattern object (which drags in the
     // session-varying `program` and forces `materializeRuntimeProgram`). We
@@ -11802,7 +11823,7 @@ export class Runner {
     // instantiate, so skip that work; we only need the pseudo-cell aliases
     // resolved to their concrete links.
     //
-    // IDENTITY BIND (kind: always `of:`). CT-1943: this omits
+    // IDENTITY BIND (kind: always `of:`). This omits
     // `derivedInternalCells` where the value bind above passes it, and the
     // manifest descriptor is what carries the entity kind. Same cause, same
     // hash preimage — but no descriptor means no kind, so this mint always
@@ -11896,7 +11917,16 @@ export class Runner {
     ]);
 
     const initialize = (instanceTx: IExtendedStorageTransaction) => {
-      if (childResultCell.space !== parentResultCell.space) {
+      const storedChild = childResultCell.withTx(instanceTx);
+      const crossSpace = childResultCell.space !== parentResultCell.space;
+      // An independently managed child owns its code and inputs, including
+      // after an owner detaches it. History keeps that fact after the origin
+      // is cleared; ordinary untracked nested children still bind inputs.
+      const resumeExisting = crossSpace &&
+        getPatternIdentityRef(storedChild) !== undefined &&
+        (getPatternSource(storedChild) !== undefined ||
+          getPieceSourceRevisions(storedChild).length > 0);
+      if (crossSpace && !resumeExisting) {
         // Cross-space child pattern: run it inline in a multi-space transaction
         // (child space committed first) rather than re-instantiating it in a
         // deferred second transaction, which would lose its verified-function
@@ -11906,16 +11936,16 @@ export class Runner {
           childResultCell.space,
           parentResultCell.space,
         );
-        // CT-1687: a fresh runtime navigating to the child piece loads its
+        // A fresh runtime navigating to the child piece loads its
         // pattern artifacts from `resultCell.space` (the child's own space),
         // where neither the meta nor the compiled closure exist yet. Replicate
         // them there (fire-and-forget) so the child is independently loadable.
         // On a SERVING runtime the replication's writebacks into the child's
         // space are FOREIGN to the home wave, so they ride the instantiating
-        // run's §2b delegated carriage (OW31 seat S-A) — the served mirror of
+        // run's delegated carriage (protocol.md §2b) — the served mirror of
         // the client committing the program under the user's own session;
         // without it the wave's accept gate refuses the crossing and the
-        // child space's program never materializes (the render-stall class).
+        // child space's program never materializes.
         const runContext = waveRunContextOf(instanceTx);
         this.#runtime.patternManager.replicatePatternToSpace(
           patternImpl,
@@ -11935,22 +11965,49 @@ export class Runner {
       // parent's program on each release of the parent, so an origin of its
       // own would be followed twice; a cross-space child outlives the
       // program that made it and is what a release has to reach.
-      const sourceOrigin = childResultCell.space === parentResultCell.space
-        ? undefined
-        : this.#childSystemOrigin(instanceTx, parentResultCell, patternImpl);
-      const childRun = this.#runWithStartOwnership(
-        instanceTx,
-        patternImpl,
-        inputs,
-        childResultCell.withTx(instanceTx),
-        {
-          awaitSyncBeforeInitialRun: defersInitialRunUntilSynced(
-            schedulerRehydration,
-          ),
-          parentPieceRootId: parentResultCell.getAsNormalizedFullLink().id,
-          ...(sourceOrigin === undefined ? {} : { sourceOrigin }),
-        },
-      );
+      const sourceOrigin = crossSpace && !resumeExisting
+        ? this.#childSystemOrigin(instanceTx, parentResultCell, patternImpl)
+        : undefined;
+      const options = {
+        awaitSyncBeforeInitialRun: defersInitialRunUntilSynced(
+          schedulerRehydration,
+        ),
+        parentPieceRootId: parentResultCell.getAsNormalizedFullLink().id,
+      };
+      const childRun: RunResult<unknown> = resumeExisting
+        ? this.#usesScopedPrograms(childResultCell)
+          ? {
+            resultCell: childResultCell,
+            installedCancel: this.#startWithTx(
+              instanceTx,
+              storedChild,
+              undefined,
+              options,
+            ),
+          }
+          : this.#resumeChildAfterCommit(instanceTx, childResultCell, options)
+        : this.#runWithStartOwnership(
+          instanceTx,
+          patternImpl,
+          inputs,
+          storedChild,
+          {
+            ...options,
+            ...(sourceOrigin === undefined ? {} : { sourceOrigin }),
+          },
+        );
+      if (childRun.cancelDeferredStart !== undefined) {
+        // Each actor initializer may own a separate pending start. Register
+        // its exact token so parent teardown cannot stop a replacement run.
+        const cancel = childRun.cancelDeferredStart;
+        addCancel(() => {
+          if (
+            !this.#independentlyStartedResults.has(
+              this.#getDocKey(childResultCell),
+            )
+          ) cancel();
+        });
+      }
 
       if (sendToBindings) {
         sendValueToBinding(
@@ -11977,8 +12034,45 @@ export class Runner {
     addCancel(
       this.#usesScopedPrograms(childResultCell)
         ? this.retainChild(childResultCell)
-        : () => this.releaseChild(childResultCell, childRun.installedCancel),
+        : () => {
+          if (childRun.cancelDeferredStart === undefined) {
+            this.releaseChild(childResultCell, childRun.installedCancel);
+          }
+        },
     );
+  }
+
+  /** Resumes a child from its retained source after its parent's commit. */
+  #resumeChildAfterCommit<T>(
+    tx: IExtendedStorageTransaction,
+    resultCell: Cell<T>,
+    options: StartAttempt["options"],
+  ): RunResult<T> {
+    const ownership = this.#createDeferredStartOwnership(resultCell);
+    tx.addCommitCallback((_committedTx, result) => {
+      if (result.error) {
+        ownership.cancel();
+        return;
+      }
+      if (ownership.isCancelled()) return;
+      const work = this.#startFromServedState(
+        resultCell.withTx(),
+        ownership,
+        options,
+      )
+        .then((started) => {
+          if (!started) ownership.cancel();
+        }).catch((error) => {
+          ownership.cancel();
+          this.#reportPieceStartCommitFailure(
+            `piece-start/${resultCell.sourceURI}`,
+            error,
+          );
+          throw error;
+        });
+      this.#runtime.scheduler.trackBackgroundTask(work);
+    });
+    return { resultCell, cancelDeferredStart: ownership.cancel };
   }
 }
 
@@ -11986,76 +12080,6 @@ function getTxDebugActionId(
   tx?: IExtendedStorageTransaction,
 ): string | undefined {
   return tx ? (tx.tx as { debugActionId?: string }).debugActionId : undefined;
-}
-
-/**
- * Explain why a node authored as a handler ($event input) could not be
- * instantiated as one. The historical error here ("$stream: true was
- * overwritten") was misleading: the by-far most common cause is that the
- * marker read returned undefined because nothing was ever written at the
- * derived location — e.g. piece state persisted before the internal-cell
- * manifest format (#3911) keeps its markers elsewhere — not that anything
- * overwrote it.
- */
-function describeHandlerStreamFailure(
-  name: string | undefined,
-  eventTarget: { link?: NormalizedFullLink; value: FabricValue },
-  resultCell: Cell<any>,
-): string {
-  const prefix = `Handler used as lift: ${
-    name ? `node "${name}"` : "node"
-  }'s $event input`;
-
-  if (eventTarget.link === undefined) {
-    return `${prefix} is not a stream reference (got: ${
-      toLongQuotedDebugString(eventTarget.value)
-    })`;
-  }
-
-  const where = `${eventTarget.link.id}${
-    eventTarget.link.path.length > 0
-      ? ` at path [${eventTarget.link.path.join(", ")}]`
-      : ""
-  }`;
-
-  if (eventTarget.value === undefined) {
-    let hint = "";
-    try {
-      const internalMeta = resultCell.getMetaRaw("internal", {
-        meta: ignoreReadForScheduling,
-      });
-      if (internalMeta !== undefined && !Array.isArray(internalMeta)) {
-        hint = " This piece's internal metadata is a single-cell link " +
-          "(pre-manifest format), so its persisted state predates the " +
-          "current runtime's internal-cell layout; recreate the piece to " +
-          "repair it.";
-      }
-    } catch {
-      // Diagnostic only — never mask the primary error.
-    }
-    return `${prefix} resolves to ${where}, which reads undefined — the ` +
-      `{ "$stream": true } marker was never written there.${hint}`;
-  }
-
-  return `${prefix} resolves to ${where}, whose value is not a stream ` +
-    `marker — { "$stream": true } was overwritten (found: ${
-      toLongQuotedDebugString(eventTarget.value)
-    })`;
-}
-
-/**
- * True only for the "marker was never written" variant of the handler-stream
- * failure above: a piece instantiated over a stored doc whose setup never
- * materialized the handler's `{ "$stream": true }` marker (a pre-manifest
- * internal-cell layout, or a handler stream added after the doc was created).
- * That is the case a fresh setup pass repairs. The sibling variants — "is not a
- * stream reference" and "was overwritten" — are NOT setup-missing and must not
- * match, so this keys on the distinctive `never written` phrasing rather than
- * the shared `Handler used as lift` prefix.
- */
-export function isMissingStreamMarkerFailure(error: unknown): boolean {
-  return error instanceof Error &&
-    error.message.includes("marker was never written");
 }
 
 /**
@@ -12268,8 +12292,8 @@ function isPieceReconciliationReason(
 
 /**
  * The source state guarded by a lifecycle transition. `sessionPattern` is a
- * KEYLESS piece's session-side pointer (the never-durable contract; L3(a),
- * RULED 2026-08-27 — the durable meta legitimately holds nothing for one):
+ * KEYLESS piece's session-side pointer (the never-durable contract: the
+ * durable meta legitimately holds nothing for one):
  * callers that resolved it through the runner pass it so a builder-run
  * piece still has a source state to transition FROM.
  */
@@ -12397,20 +12421,17 @@ export const PIECE_SOURCE_MOVED =
   "piece source changed while the source transition was being prepared";
 
 /**
- * The session-side pattern the prepare/apply moved-guards below check a
- * KEYLESS piece's source state against. A keyless expected pattern is
- * session-side by construction — the durable pointer legitimately holds
- * nothing (L3(a), RULED 2026-08-27) and a concurrent keyless re-setup moves
- * neither durable meta nor source revisions — so the only supersession
- * signal such a piece has is the runner's LIVE session pointer, and the
- * guards must read exactly that. (An earlier revision substituted the
- * transition's own expected pattern here, which compared expected against
- * itself and let a prepared transition apply over a NEWER keyless setup —
- * the abort the durable stamp used to provide.) The durable read still wins
+ * The session-side pattern the prepare/apply moved-guards below check a KEYLESS
+ * piece's source state against. A keyless expected pattern is session-side by
+ * construction — the durable pointer legitimately holds nothing and a
+ * concurrent keyless re-setup moves neither durable meta nor source revisions —
+ * so the only supersession signal such a piece has is the runner's LIVE session
+ * pointer, and the guards must read exactly that: it is what differs from the
+ * expected pattern once a NEWER keyless setup has landed. The durable read wins
  * when present, so a REAL pointer appearing over a keyless piece reads as
- * moved; an EVICTED session pointer reads as moved too — a spurious loud
- * abort, failing safe. A real expected pattern gets no fallback: a cleared
- * or changed durable pointer must read as moved.
+ * moved; an EVICTED session pointer reads as moved too — a spurious loud abort,
+ * failing safe. A real expected pattern gets no fallback: a cleared or changed
+ * durable pointer must read as moved.
  */
 function keylessTransitionSessionPattern(
   runtime: Runtime,
@@ -12527,7 +12548,7 @@ export function applyPieceSourceTransition(
   }
   if (
     transition.baseline.kind === "unavailable" &&
-    // A keyless displaced identity must never land durably (L3(a)): the
+    // A keyless displaced identity must never land durably: the
     // displaced executable was a session-built value no session can reload,
     // and the history's absent baseline is the honest record of that.
     !PatternManager.isKeylessPatternIdentity(current.pattern.identity)
@@ -12627,19 +12648,6 @@ export function setPatternRepository(
     repository,
     rawMetaWriteAuthorization,
   );
-}
-
-/** Narrow a raw meta value to a `{ identity, symbol }` pattern ref, or undefined. */
-export function asPatternIdentityRef(
-  raw: unknown,
-): { identity: string; symbol: string } | undefined {
-  if (
-    isObjectOrArray(raw) && typeof raw.identity === "string" &&
-    typeof raw.symbol === "string"
-  ) {
-    return { identity: raw.identity, symbol: raw.symbol };
-  }
-  return undefined;
 }
 
 /**

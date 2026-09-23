@@ -21,19 +21,26 @@ import { expect } from "@std/expect";
 import { createHasher } from "@commonfabric/content-hash";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 
-import { hashOf, hashStringOf, taggedHashStringOf } from "@/value-hash.ts";
-import { FabricHash } from "@/fabric-primitives/FabricHash.ts";
-import { FabricKeyPair } from "@/fabric-primitives/FabricKeyPair.ts";
-import { FabricValue } from "@/interface.ts";
-import { FabricEpochDay } from "@/fabric-primitives/FabricEpochDay.ts";
-import { FabricEpochNsec } from "@/fabric-primitives/FabricEpochNsec.ts";
-import { FabricError } from "@/fabric-instances/FabricError.ts";
-import { FabricRegExp } from "@/fabric-primitives/FabricRegExp.ts";
 import {
+  deepFreeze,
+  FabricValue,
+  hashOf,
+  hashStringOf,
+  taggedHashStringOf,
+} from "@";
+import { UnknownValue } from "@/codec-common";
+import { FabricError } from "@/fabric-instances";
+import {
+  FabricBytes,
+  FabricEpochDay,
+  FabricEpochNsec,
+  FabricHash,
+  FabricKeyPair,
+  FabricRegExp,
   FabricUnavailable,
   UNAVAILABLE_PENDING,
-} from "@/fabric-primitives/FabricUnavailable.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
+} from "@/fabric-primitives";
+import { float64BytesOfForTestingOnly } from "@/for-testing-only.ts";
 import * as nodeCrypto from "@node/crypto";
 
 /**
@@ -54,12 +61,19 @@ function hex(hash: Uint8Array): string {
   return Array.from(hash).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
+/** Returns the raw hash bytes from `hashOf()`, for comparison. */
+function hashBytesOf(value: FabricValue): Uint8Array {
+  return hashOf(value).bytes;
+}
+
 /**
- * Returns the raw hash bytes from `hashOf()`, for comparison. Takes `unknown`,
- * as `hashOf()` itself does: the JS-instance cases below hash a JS
- * `Date` / `RegExp` / `Uint8Array`, none of which is a `FabricValue`.
+ * Like `hashBytesOf()`, except for a JS `Date`, `RegExp` or `Uint8Array`,
+ * none of which is a `FabricValue`. `hashOf()` converts each to its fabric
+ * counterpart on the way in, which is what the "JS instances" cases pin.
  */
-function hashBytesOf(value: unknown): Uint8Array {
+function hashBytesOfJsInstance(value: Date | RegExp | Uint8Array): Uint8Array {
+  // @ts-expect-error: `hashOf()` is typed for `FabricValue`s, and converts
+  // these on the way in.
   return hashOf(value).bytes;
 }
 
@@ -153,17 +167,6 @@ describe("value-hash", () => {
           0x00,
         ]);
         expect(hashBytesOf(NaN)).toEqual(expected);
-      });
-
-      it("hashes non-canonical `NaN` bit patterns to the canonical `NaN`", () => {
-        // Construct a NaN with a non-zero payload (still a valid quiet NaN) and
-        // confirm it canonicalizes. The hashed bytes must match those of the
-        // literal `NaN`.
-        const view = new DataView(new ArrayBuffer(8));
-        view.setBigUint64(0, 0x7ff8000000000001n, false);
-        const nonCanonicalNaN = view.getFloat64(0, false);
-        expect(Number.isNaN(nonCanonicalNaN)).toBe(true);
-        expect(hex(hashBytesOf(nonCanonicalNaN))).toBe(hex(hashBytesOf(NaN)));
       });
 
       it("produces `TAG_NUMBER` + IEEE 754 `+Infinity` bit pattern for `Infinity`", () => {
@@ -819,6 +822,143 @@ describe("value-hash", () => {
         );
       });
     });
+    describe("Cycles", () => {
+      /** The direct-form bytes of a short ASCII string. */
+      function stringBytes(value: string): number[] {
+        return [0x24, value.length, ...new TextEncoder().encode(value)];
+      }
+
+      it("encodes an object that holds itself as `TAG_CYCLE` + distance 1", () => {
+        const self: Record<string, FabricValue> = {};
+        self.self = self;
+
+        expect(hashBytesOf(self)).toEqual(
+          sha256([0x11, ...stringBytes("self"), 0x02, 0x01, 0x00]),
+        );
+      });
+
+      it("encodes an array that holds itself as `TAG_CYCLE` + distance 1", () => {
+        const self: FabricValue[] = [];
+        self.push(self);
+
+        expect(hashBytesOf(self)).toEqual(sha256([0x10, 0x02, 0x01, 0x00]));
+      });
+
+      it("encodes the distance up the path to the container the cycle returns to", () => {
+        const a: Record<string, FabricValue> = {};
+        const b: Record<string, FabricValue> = { a };
+        a.b = b;
+
+        expect(hashBytesOf(a)).toEqual(
+          sha256([
+            0x11,
+            ...stringBytes("b"),
+            0x11,
+            ...stringBytes("a"),
+            0x02,
+            0x02,
+            0x00,
+            0x00,
+          ]),
+        );
+      });
+
+      it("encodes a cycle through a `FabricInstance`, counting the instance and its state", () => {
+        const state: Record<string, FabricValue> = {};
+        const instance = new UnknownValue("Node@1", state);
+        state.self = instance;
+
+        expect(hashBytesOf(instance)).toEqual(
+          sha256([
+            0x12,
+            ...stringBytes("Node@1"),
+            0x11,
+            ...stringBytes("self"),
+            0x02,
+            0x02,
+            0x00,
+          ]),
+        );
+      });
+
+      it("encodes a cyclic value the same way wherever it sits", () => {
+        const self: Record<string, FabricValue> = {};
+        self.self = self;
+
+        expect(hashBytesOf([self])).toEqual(
+          sha256([
+            0x10,
+            0x11,
+            ...stringBytes("self"),
+            0x02,
+            0x01,
+            0x00,
+            0x00,
+          ]),
+        );
+      });
+
+      it("encodes a distance past the height at which the path is indexed", () => {
+        // 100 nested objects, the innermost holding the outermost.
+        const root: Record<string, FabricValue> = {};
+        let inner = root;
+        for (let i = 1; i < 100; i++) {
+          const next: Record<string, FabricValue> = {};
+          inner.n = next;
+          inner = next;
+        }
+        inner.root = root;
+
+        const nest = Array.from(
+          { length: 99 },
+          () => [0x11, ...stringBytes("n")],
+        ).flat();
+        expect(hashBytesOf(root)).toEqual(
+          sha256([
+            ...nest,
+            0x11,
+            ...stringBytes("root"),
+            0x02,
+            100, // LEB128(100) = [0x64]
+            0x00,
+            ...new Array(99).fill(0x00),
+          ]),
+        );
+      });
+
+      it("expands a shared container that is not on the path, as it does in an acyclic value", () => {
+        const shared = { v: 1 };
+
+        expect(hashBytesOf({ a: shared, b: shared })).toEqual(
+          hashBytesOf({ a: { v: 1 }, b: { v: 1 } }),
+        );
+        expect(hashBytesOf([shared, [shared]])).toEqual(
+          hashBytesOf([{ v: 1 }, [{ v: 1 }]]),
+        );
+      });
+
+      it("hashes differently where a cycle closes at a different container", () => {
+        const one: Record<string, FabricValue> = {};
+        one.x = one;
+        const two: Record<string, FabricValue> = {};
+        two.x = { x: two };
+
+        expect(hex(hashBytesOf(one))).not.toBe(hex(hashBytesOf(two)));
+        expect(hex(hashBytesOf({ x: one }))).not.toBe(hex(hashBytesOf(one)));
+      });
+
+      it("caches the hash of a deep-frozen cyclic value", () => {
+        const self: Record<string, FabricValue> = {};
+        self.self = self;
+        const expected = hashOf(self);
+        deepFreeze(self);
+
+        const first = hashOf(self);
+        expect(first.bytes).toEqual(expected.bytes);
+        expect(hashOf(self)).toBe(first);
+      });
+    });
+
     describe("Consistency and distinctness", () => {
       it("produces the same hash for the same value every time", () => {
         expect(hashBytesOf(42)).toEqual(hashBytesOf(42));
@@ -1253,14 +1393,14 @@ describe("value-hash", () => {
     describe("Date", () => {
       it("hashes a JS `Date` without throwing", () => {
         const date = new Date("2024-01-01T00:00:00Z");
-        const hash = hashBytesOf(date);
+        const hash = hashBytesOfJsInstance(date);
         expect(hash.length).toBe(32);
       });
 
       it("produces the same hash for a JS `Date` as for an equivalent `FabricEpochNsec`", () => {
         const date = new Date("2024-01-01T00:00:00Z");
         const nsec = BigInt(date.getTime()) * 1_000_000n;
-        const dateHash = hex(hashBytesOf(date));
+        const dateHash = hex(hashBytesOfJsInstance(date));
         const epochHash = hex(hashBytesOf(new FabricEpochNsec(nsec)));
         expect(dateHash).toBe(epochHash);
       });
@@ -1268,19 +1408,21 @@ describe("value-hash", () => {
       it("produces different hashes for different Dates", () => {
         const d1 = new Date("2024-01-01T00:00:00Z");
         const d2 = new Date("2025-06-15T12:00:00Z");
-        expect(hex(hashBytesOf(d1))).not.toBe(hex(hashBytesOf(d2)));
+        expect(hex(hashBytesOfJsInstance(d1))).not.toBe(
+          hex(hashBytesOfJsInstance(d2)),
+        );
       });
     });
     describe("RegExp", () => {
       it("hashes a JS `RegExp` without throwing", () => {
         const re = /hello/gi;
-        const hash = hashBytesOf(re);
+        const hash = hashBytesOfJsInstance(re);
         expect(hash.length).toBe(32);
       });
 
       it("produces the same hash for a JS `RegExp` as for an equivalent `FabricRegExp`", () => {
         const re = /hello/gi;
-        const nativeHash = hex(hashBytesOf(re));
+        const nativeHash = hex(hashBytesOfJsInstance(re));
         const fabricHash = hex(hashBytesOf(new FabricRegExp(re)));
         expect(nativeHash).toBe(fabricHash);
       });
@@ -1288,19 +1430,21 @@ describe("value-hash", () => {
       it("produces different hashes for different RegExps", () => {
         const r1 = /foo/;
         const r2 = /bar/;
-        expect(hex(hashBytesOf(r1))).not.toBe(hex(hashBytesOf(r2)));
+        expect(hex(hashBytesOfJsInstance(r1))).not.toBe(
+          hex(hashBytesOfJsInstance(r2)),
+        );
       });
     });
     describe("Uint8Array", () => {
       it("hashes a JS `Uint8Array` without throwing", () => {
         const buf = new Uint8Array([1, 2, 3]);
-        const hash = hashBytesOf(buf);
+        const hash = hashBytesOfJsInstance(buf);
         expect(hash.length).toBe(32);
       });
 
       it("produces the same hash for a JS `Uint8Array` as for a `FabricBytes` with the same bytes", () => {
         const bytes = new Uint8Array([10, 20, 30]);
-        const nativeHash = hex(hashBytesOf(bytes));
+        const nativeHash = hex(hashBytesOfJsInstance(bytes));
         const fabricHash = hex(hashBytesOf(new FabricBytes(bytes)));
         expect(nativeHash).toBe(fabricHash);
       });
@@ -1308,23 +1452,28 @@ describe("value-hash", () => {
       it("produces different hashes for different Uint8Arrays", () => {
         const b1 = new Uint8Array([1, 2, 3]);
         const b2 = new Uint8Array([4, 5, 6]);
-        expect(hex(hashBytesOf(b1))).not.toBe(hex(hashBytesOf(b2)));
+        expect(hex(hashBytesOfJsInstance(b1))).not.toBe(
+          hex(hashBytesOfJsInstance(b2)),
+        );
       });
     });
     describe("Deferred types (not yet handled — these document known gaps)", () => {
       it("throws for `Map` (deferred — needs recursive translation)", () => {
+        // @ts-expect-error: a `Map` is not a `FabricValue`.
         expect(() => hashOf(new Map([["a", 1]]))).toThrow(
           "unsupported object type",
         );
       });
 
       it("throws for `Set` (deferred — needs recursive translation)", () => {
+        // @ts-expect-error: a `Set` is not a `FabricValue`.
         expect(() => hashOf(new Set([1, 2, 3]))).toThrow(
           "unsupported object type",
         );
       });
 
       it("throws for `Error` (deferred — needs recursive translation)", () => {
+        // @ts-expect-error: an `Error` is not a `FabricValue`.
         expect(() => hashOf(new Error("test"))).toThrow(
           "unsupported object type",
         );
@@ -1334,6 +1483,7 @@ describe("value-hash", () => {
         // `toJSON` gets no special reading here either: it is a function-valued
         // member, and functions have no hash.
         const obj = { toJSON: () => "hello" };
+        // @ts-expect-error: a function-valued member is not a `FabricValue`.
         expect(() => hashOf(obj)).toThrow("unsupported type `function`");
       });
     });
@@ -1535,6 +1685,52 @@ describe("value-hash", () => {
       expect(() => hashOf(value)).toThrow(
         "Cannot hash unique (uninterned) symbol",
       );
+    });
+  });
+
+  describe("float64BytesOf()", () => {
+    // The function returns one buffer for every number other than `NaN`, and
+    // writes into it on each call. So a case reads a result, as hex, before it
+    // makes another call.
+
+    it("returns the big-endian IEEE 754 bytes of a number", () => {
+      expect(hex(float64BytesOfForTestingOnly(1))).toBe("3ff0000000000000");
+      expect(hex(float64BytesOfForTestingOnly(-2.5))).toBe("c004000000000000");
+    });
+
+    it("returns different bytes for `-0` and `+0`", () => {
+      expect(hex(float64BytesOfForTestingOnly(-0))).toBe("8000000000000000");
+      expect(hex(float64BytesOfForTestingOnly(0))).toBe("0000000000000000");
+    });
+
+    it("returns the canonical quiet-`NaN` bytes for `NaN`", () => {
+      expect(hex(float64BytesOfForTestingOnly(NaN))).toBe("7ff8000000000000");
+    });
+
+    it("returns an array for `NaN` which is not the one it returns for other numbers", () => {
+      // This is the case that shows a `NaN`'s bytes are not read from the
+      // value. The engine decides which bits a `NaN` has by the time it gets
+      // here, so a case about the bytes of some particular `NaN` passes or
+      // fails by engine. Which array comes back does not vary that way.
+
+      const forNumber = float64BytesOfForTestingOnly(1);
+      const forNaN = float64BytesOfForTestingOnly(NaN);
+
+      expect(forNaN).not.toBe(forNumber);
+      expect(float64BytesOfForTestingOnly(2)).toBe(forNumber);
+    });
+
+    it("returns the canonical quiet-`NaN` bytes for a `NaN` that has a payload", () => {
+      // Where the engine canonicalizes the `NaN` before the call, this case
+      // repeats the one for a plain `NaN`. Where the payload reaches the
+      // function, this case fails if the function reads the bytes from the
+      // value.
+
+      const view = new DataView(new ArrayBuffer(8));
+      view.setBigUint64(0, 0x7ff8000000000001n, false);
+
+      expect(hex(float64BytesOfForTestingOnly(view.getFloat64(0, false))))
+        .toBe("7ff8000000000000");
     });
   });
 });

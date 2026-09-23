@@ -6,6 +6,9 @@
  */
 
 import type { JSONSchema } from "@commonfabric/api";
+import type { FabricValue } from "@commonfabric/data-model";
+
+import type { IFCLabel } from "@commonfabric/runner/cfc";
 
 import type { HarnessSkillAcquisition } from "./skill.ts";
 
@@ -13,9 +16,9 @@ import type { HarnessSkillAcquisition } from "./skill.ts";
 export const HARNESS_HANDLE_TABLE_TYPE = "cf-harness.handle-table";
 
 /**
- * Referent category of a handle. Only cell addresses are representable; the
- * token grammar reserves a distinct `cfh:v:` prefix so a value kind can be
- * added without re-reading existing tokens.
+ * Referent category of an address-table entry. Non-cell document referents
+ * live in {@link HarnessHandleTable.referents} under the distinct `cfh:v:`
+ * token prefix rather than widening this address-only entry shape.
  */
 export type HarnessHandleKind = "address";
 
@@ -53,6 +56,86 @@ export const HANDLE_TOKEN_PATTERN = new RegExp(
   `cfh:a:[${HANDLE_TOKEN_ALPHABET}]{${MIN_HANDLE_TOKEN_SUFFIX_LENGTH},}`,
   "g",
 );
+
+/** Prefix of every referent-handle token (`cfh:v:<suffix>`). */
+export const REFERENT_HANDLE_TOKEN_PREFIX = "cfh:v:";
+
+/** Matches referent-handle tokens in free text, as the address pattern does. */
+export const REFERENT_TOKEN_PATTERN = new RegExp(
+  `cfh:v:[${HANDLE_TOKEN_ALPHABET}]{${MIN_HANDLE_TOKEN_SUFFIX_LENGTH},}`,
+  "g",
+);
+
+/** Matches a token of either kind in free text. */
+export const ANY_HANDLE_TOKEN_PATTERN = new RegExp(
+  `cfh:[av]:[${HANDLE_TOKEN_ALPHABET}]{${MIN_HANDLE_TOKEN_SUFFIX_LENGTH},}`,
+  "g",
+);
+
+/**
+ * A referent a run holds that is not a cell: content a tool observed — a Loom
+ * row — or the findings a research call admitted, with the label it was
+ * admitted under. The token stands for it in model-visible text. A result
+ * that names a document referent's token gets a document minted from this
+ * record and a link to it; a research referent is a projection of the run's
+ * own work, and no document is minted from it.
+ *
+ * A document's content reaches a model-visible surface nowhere through this
+ * entry: the model saw it when the tool returned it, and `describe_handle`
+ * reports the label's atom types alone. A research referent is the one whose
+ * content `describe_handle` does return, under this same label, which is how
+ * a run — or a child handed the token — reads what research found instead of
+ * researching again. The two kinds are told apart by `kind`, and each has
+ * the label sources that can apply to it and no other.
+ */
+export type HarnessHandleReferent =
+  | (HarnessHandleReferentBase & {
+    /** Content a tool observed. */
+    kind: "document";
+
+    /**
+     * Where the label came from: the row's own `ifc`, or the label of the
+     * query, assigned because the row carried none.
+     */
+    labelSource: "row" | "query";
+  })
+  | (HarnessHandleReferentBase & {
+    /** An admitted research kit. */
+    kind: "research";
+
+    /** The label research derived for its kit. */
+    labelSource: "research";
+  });
+
+/** What every referent carries whatever its kind. */
+interface HarnessHandleReferentBase {
+  /** The full token, prefix included (`cfh:v:<suffix>`). */
+  token: string;
+
+  /** The tool that observed the referent. */
+  source: string;
+
+  /** The content as the model saw it, JSON. */
+  value: FabricValue;
+
+  /** The label the content was admitted under. */
+  label: IFCLabel;
+}
+
+/**
+ * A referent as handed to minting: everything but the token, per kind. Spelled
+ * distributively so a draft is a document draft or a research draft, and a
+ * label source of the wrong kind is refused where the draft is written.
+ */
+export type HarnessHandleReferentDraft = HarnessHandleReferent extends infer R
+  ? R extends HarnessHandleReferent ? Omit<R, "token"> : never
+  : never;
+
+/** A document referent as a tool hands it to the run: content and label. */
+export type HarnessDocumentReferentDraft = Omit<
+  Extract<HarnessHandleReferent, { kind: "document" }>,
+  "token" | "kind"
+>;
 
 /**
  * One handle: a token and the address it stands for.
@@ -125,11 +208,18 @@ export interface HarnessHandleEntry {
  * creation, so token derivation is deterministic within a run and disjoint
  * across runs. The version stays `1` across the optional
  * {@link HarnessHandleEntry.schema}: an entry without one is well-formed, so
- * a table persisted before schemas were captured loads unchanged.
+ * a table persisted before schemas were captured loads unchanged. The same
+ * holds for {@link HarnessHandleTable.referents}.
  */
 export interface HarnessHandleTable {
   type: typeof HARNESS_HANDLE_TABLE_TYPE;
   version: 1;
   salt: string;
   entries: HarnessHandleEntry[];
+
+  /**
+   * The non-cell referents the run holds. Optional for the reason `schema`
+   * is: a table persisted without any is well-formed.
+   */
+  referents?: HarnessHandleReferent[];
 }

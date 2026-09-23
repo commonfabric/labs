@@ -34,7 +34,9 @@ import {
   externalResolutionMissCount,
   onSchemaRegistryClear,
 } from "./schema-registry.ts";
+import type { ResolvedExternalReference } from "./cfc/schema-primitives.ts";
 import { isSchemaScope, narrowerScopeCap } from "./scope.ts";
+import { declaredHandleKind as declaredHandleKindOf } from "./stream-declaration.ts";
 export {
   CFC_ATOM_TYPE,
   CFC_CONCEPT_KIND,
@@ -831,6 +833,32 @@ export class ContextualFlowControl {
     return typeof entry === "string" ? entry : entry?.kind;
   }
 
+  /**
+   * Whether `schema` declares a stream position: the handle kind it declares
+   * ({@link declaredHandleKind}) is `stream`. Such a position holds no value,
+   * and its handle is minted from the schema alone.
+   */
+  static declaresStream(schema: JSONSchema | undefined): boolean {
+    return ContextualFlowControl.declaredHandleKind(schema) === "stream";
+  }
+
+  /**
+   * The kind of handle `schema` declares at its root: the reading in
+   * `stream-declaration.ts`, with an external reference resolved through the
+   * schema registry. `root` is the document local `$ref`s resolve against,
+   * and defaults to `schema`, which a link's schema is self-contained enough
+   * for (`schemaAtPath` keeps the reachable `$defs` closure on it).
+   */
+  static declaredHandleKind(
+    schema: JSONSchema | undefined,
+    root: JSONSchema | undefined = schema,
+  ): CellKind | undefined {
+    return declaredHandleKindOf(schema, {
+      root,
+      resolveExternal: resolveExternalReferenceThroughRegistry,
+    });
+  }
+
   static getAsCellScope(
     entry: AsCellEntry | undefined,
   ): SchemaScope | undefined {
@@ -900,6 +928,20 @@ export class ContextualFlowControl {
     }
     return cap;
   }
+}
+
+/**
+ * Helper for {@link ContextualFlowControl.declaredHandleKind}, which follows
+ * an external reference through the schema registry
+ * ({@link resolveExternalRootRefForStructure}). The resolved document is what
+ * the local references inside it name definitions of, so it is the root as
+ * well. A reference the registry cannot resolve declares nothing.
+ */
+function resolveExternalReferenceThroughRegistry(
+  schema: JSONSchemaObj,
+): ResolvedExternalReference | undefined {
+  const resolved = resolveExternalRootRefForStructure(schema);
+  return resolved === schema ? undefined : { schema: resolved, root: resolved };
 }
 
 /**

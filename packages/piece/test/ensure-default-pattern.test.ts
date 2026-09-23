@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import {
   getPatternRepository,
   getPatternSource,
+  isStream,
   NAME,
   Runtime,
 } from "@commonfabric/runner";
@@ -107,11 +108,12 @@ describe("PiecesController.ensureDefaultPattern", () => {
     ).toBe("MockDefaultPattern");
   });
 
-  it("finds the defaultPattern when the schema view projects an empty object", async () => {
+  it("finds the defaultPattern when the schema view projects none of its data", async () => {
     // The stored link's schema requires a field the pattern doc lacks. The
     // space cell's own shaped reader takes precedence over that link schema,
-    // and projects an empty object — nothing the reader names is present. The
-    // controller's found-decision must not trust such a view: it reads raw.
+    // and projects none of the doc's data — nothing the reader names is
+    // present. The controller's found-decision must not trust such a view: it
+    // reads raw.
     const schema = {
       type: "object",
       properties: {
@@ -137,12 +139,15 @@ describe("PiecesController.ensureDefaultPattern", () => {
     // controller builds its space cell with no explicit schema): its
     // `defaultPattern` property is a shaped asCell fetch-shape naming only
     // `spaces`/`defaultAppUrl`/`suggestionHistory`/`recordSuggestion`,
-    // with no `additionalProperties`. That shape wins the crossing, the
+    // with no `additionalProperties`. That shape wins the crossing, and the
     // pattern doc carries none of those properties ([NAME] is not among
-    // them), so the projection is `{}`.
+    // them). `recordSuggestion` is a declared stream, whose handle is minted
+    // from the schema alone, so it is the one key the projection holds.
     const linked = controller.getSpaceCellContents().key("defaultPattern")
       .get();
-    expect(linked?.get()).toEqual({});
+    const projected = linked?.get() as Record<string, unknown> | undefined;
+    expect(Object.keys(projected ?? {})).toEqual(["recordSuggestion"]);
+    expect(isStream(projected?.recordSuggestion)).toBe(true);
 
     const defaultPattern = await controller.getDefaultPattern(false);
     expect(defaultPattern).toBeDefined();

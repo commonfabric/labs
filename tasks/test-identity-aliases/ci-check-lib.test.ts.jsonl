@@ -1,0 +1,1 @@
+{"date":"2026-09-19","from":{"k":"unit","s":"tasks","n":"GitHub REST errors survive response cancellation failures"},"to":{"k":"unit","s":"tasks","n":"GitHub REST errors do not wait for response cancellation"}}

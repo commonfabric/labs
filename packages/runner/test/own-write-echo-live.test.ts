@@ -1,3 +1,17 @@
+/**
+ * Own-write echo, end to end over a LIVE in-process server: a session's own
+ * accepted patch-produced heads ride its covering frame as full post-apply
+ * documents. The risk this suite pins is DOUBLE-APPLY — the echoed base swap
+ * must not compose with a still-standing pending overlay — and the
+ * notification contract: an echo fully shadowed by the write it confirms must
+ * not re-notify the writer.
+ *
+ * Fan-out is gated manually and flushed explicitly, so which commits share a
+ * fan-out batch — and therefore whether the dirty-origin survives as this
+ * session's own — is deterministic, immune to any clock advancing a held
+ * timer.
+ */
+
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
@@ -6,18 +20,6 @@ import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
-
-// Own-write echo (CT-1965), end to end over a LIVE in-process server: a
-// session's own accepted patch-produced heads ride its covering frame as full
-// post-apply documents. The risk this suite pins is DOUBLE-APPLY — the echoed
-// base swap must not compose with a still-standing pending overlay — and the
-// notification contract: an echo fully shadowed by the write it confirms must
-// not re-notify the writer.
-//
-// Fan-out is gated manually and flushed explicitly, so which commits share a
-// fan-out batch — and therefore whether the dirty-origin survives as this
-// session's own — is deterministic, immune to any clock advancing a held
-// timer.
 
 const signer = await Identity.fromPassphrase("own-write-echo-live");
 const space = signer.did();

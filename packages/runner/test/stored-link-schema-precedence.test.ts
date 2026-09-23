@@ -158,6 +158,47 @@ describe("stored-link-schema-precedence", () => {
 
       expect(resolveLink(runtime, tx, readerLink).schema).toEqual(rowSchema);
     });
+
+    it("resolves through a stored schema that is only a `cell` stamp to the reader's schema", () => {
+      const holder = holderOverLinkCarrying({ asCell: ["cell"] });
+      const readerLink = {
+        ...holder.getAsNormalizedFullLink(),
+        path: ["rows", "0"],
+        schema: rowSchema as JSONSchema,
+      };
+
+      expect(resolveLink(runtime, tx, readerLink).schema).toEqual(rowSchema);
+    });
+  });
+
+  describe("a stored schema that only declares a stream", () => {
+    const streamStamp = { asCell: ["stream"] } as const satisfies JSONSchema;
+
+    it("governs in place of a reader's schema that does not declare the stream", () => {
+      const holder = holderOverLinkCarrying(streamStamp);
+      const readerLink = {
+        ...holder.getAsNormalizedFullLink(),
+        path: ["rows", "0"],
+        schema: rowSchema as JSONSchema,
+      };
+
+      expect(resolveLink(runtime, tx, readerLink).schema).toEqual(streamStamp);
+    });
+
+    it("keeps a reader's schema that declares the stream and types its event", () => {
+      const holder = holderOverLinkCarrying(streamStamp);
+      const typedStream = {
+        ...rowSchema,
+        asCell: ["stream"],
+      } as const satisfies JSONSchema;
+      const readerLink = {
+        ...holder.getAsNormalizedFullLink(),
+        path: ["rows", "0"],
+        schema: typedStream as JSONSchema,
+      };
+
+      expect(resolveLink(runtime, tx, readerLink).schema).toEqual(typedStream);
+    });
   });
 
   describe("a stored schema that constrains", () => {

@@ -87,6 +87,8 @@ export const RESEARCH_RESULT_SCHEMA = {
     },
     inputs: RESEARCH_INPUTS_SCHEMA,
     selectedPatternIds: {
+      description:
+        "Inspected patterns selected as reusable building blocks for this goal. The author must import each selection or give a one-line reason for omitting it. Do not select a pattern only as a specification to rewrite; explain a capability mismatch in the findings instead.",
       type: "array",
       maxItems: 8,
       items: { type: "string", maxLength: 200 },

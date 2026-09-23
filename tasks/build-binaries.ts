@@ -3,6 +3,7 @@ import { exists } from "@std/fs";
 import * as path from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
 import {
+  COMPILE_FINGERPRINT_INPUTS,
   computeCompilerVersion,
   renderVersionModule,
 } from "../packages/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
@@ -17,6 +18,26 @@ export interface BuildConfigInitializer {
 
 export const BINARY_NAMES = ["toolshed", "bg-piece-service", "cf"] as const;
 export type BinaryName = (typeof BINARY_NAMES)[number];
+
+/**
+ * Everything a built binary is made from, as repository-relative files and
+ * directories (a directory ends in `/`): the Deno release `mise.toml` pins,
+ * which `deno compile` embeds in every binary; this script; the workspace
+ * manifest and lockfile; the port table the servers import; and the trees
+ * that the entry points' module graphs and every `--include` reach. A CI lane
+ * keys the binaries it caches on the tracked contents of these, so a change
+ * to any of them builds the binaries afresh and a change to anything else
+ * reuses what was built. `BuildConfig.sourcePaths()` lies within them.
+ */
+export const BINARY_SOURCES = [
+  "mise.toml",
+  "tasks/build-binaries.ts",
+  "deno.jsonc",
+  "deno.lock",
+  "ports.json",
+  "packages/",
+  "docs/common/",
+] as const;
 
 export function requestedBinaries(args: readonly string[]): BinaryName[] {
   if (args.length === 0) return [...BINARY_NAMES];
@@ -180,6 +201,36 @@ export class BuildConfig {
 
   fusePackagePath() {
     return this.#path("packages", "fuse");
+  }
+
+  /**
+   * Every path the build reads, as opposed to writes: those its path methods
+   * name, and the compiler inputs whose fingerprint `prepareWorkspace()`
+   * writes into the binaries. A binary cached under `BINARY_SOURCES` is only
+   * as fresh as this list is complete, so each path method of this class is
+   * either named here or recorded as an output in `build-binaries.test.ts`.
+   */
+  sourcePaths(): string[] {
+    return [
+      this.workspaceManifestPath(),
+      this.workspaceLockPath(),
+      this.compileCacheVersionPath(),
+      this.shellProjectPath(),
+      this.toolshedProjectPath(),
+      this.toolshedEntryPath(),
+      this.bgPieceServiceEntryPath(),
+      this.bgPieceServiceWorkerPath(),
+      this.staticAssetsPath(),
+      ...this.patternPaths(),
+      this.staticTypesPath(),
+      this.docsCommonPath(),
+      this.cliEntryPath(),
+      this.cliMultiUserTestWorkerPath(),
+      this.fusePackagePath(),
+      ...COMPILE_FINGERPRINT_INPUTS.map((input) =>
+        this.#path(...input.split("/"))
+      ),
+    ];
   }
 
   distDir() {

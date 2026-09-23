@@ -31,6 +31,8 @@ export {
   shallowMutableClone,
 } from "./value-clone.ts";
 
+// Not `@/value-debug`, which names late-bound forwarders: the package should
+// export the renderers themselves, and naming them here is what loads them.
 export {
   debugStr,
   toCompactDebugString,
@@ -39,7 +41,7 @@ export {
   toLongQuotedDebugString,
   toShortQuotedDebugString,
   toStructuredDebugValue,
-} from "@/value-debug";
+} from "@/value-debug/index.ts";
 
 export {
   getFrozenObjectHashCacheHits,

@@ -40,7 +40,7 @@ export async function resolveProgram(
       }
       const newSource = await graph.resolveSource(identifier);
       if (!newSource) {
-        isUnresolvedModuleOk(identifier, unresolvedModules);
+        isUnresolvedModuleOk(identifier, current, unresolvedModules);
         if (resolveUnresolvedModuleTypes) {
           const typeDefIdentifier = `${identifier}.d.ts`;
           if (!sources.has(typeDefIdentifier)) {
@@ -64,10 +64,19 @@ export async function resolveProgram(
   };
 }
 
+/**
+ * Helper for `resolveProgram()`, which accepts a module no source was found
+ * for when `config` allows it to go unresolved.
+ *
+ * @throws If `config` does not allow it. The message names `importer`, the
+ *   first module found importing `identifier`, since an identifier alone does
+ *   not say which file to go and fix.
+ */
 function isUnresolvedModuleOk(
   identifier: string,
+  importer: Source,
   config: UnresolvedModuleHandling,
-) {
+): void {
   switch (config.type) {
     case "allow-all":
       return;
@@ -80,7 +89,7 @@ function isUnresolvedModuleOk(
     case "deny":
     default:
       throw new Error(
-        `Could not resolve "${identifier}".`,
+        `Could not resolve "${identifier}", imported by "${importer.name}".`,
       );
   }
 }

@@ -17,9 +17,11 @@
 import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
-import { SymbolCodec } from "@/codec-common/SymbolCodec.ts";
-import { CODEC_TYPE_TAGS } from "@/codec-interface/codec-type-tags.ts";
-import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
+import {
+  CODEC_TYPE_TAGS,
+  NULL_LIVE_ENVIRONMENT,
+  SymbolCodec,
+} from "@/codec-common";
 import type { JsonCodecValue } from "@/codec-json/interface.ts";
 
 // An `Encoded` that cannot hold a registry key cannot be constructed at, since

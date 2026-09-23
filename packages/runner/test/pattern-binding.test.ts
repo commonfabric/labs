@@ -601,11 +601,64 @@ describe("pattern-binding", () => {
       expect({ ...parsed, schema: resolvedSchema(parsed.schema) }).toEqual({
         ...argumentCell.getAsNormalizedFullLink(),
         path: ["profile"],
-        scope: "user",
+        // The link keeps the argument cell's scope; the declared scope stays
+        // in the schema, realized when the link is read or written.
         schema: profileSchema,
         overwrite: "redirect",
         // parseLink of a sigil stamps the read-side data-derived mark (OW51).
         viaLinkHop: true,
+      });
+    });
+
+    it("carries a handle cap an argument path passes through onto a nested binding", () => {
+      const binding = {
+        name: { $alias: { cell: "argument", path: ["profile", "name"] } },
+      };
+      const resultCell = runtime.getCell(
+        space,
+        "nested handle cap result cell",
+        undefined,
+        tx,
+      );
+      // A link schema drops cell wrappers, so the argument link does not show
+      // the handle's cap; the authored argument schema does.
+      const argumentCell = runtime.getCell(
+        space,
+        "nested handle cap argument cell",
+        {
+          type: "object",
+          properties: {
+            profile: {
+              type: "object",
+              properties: { name: { type: "string" } },
+            },
+          },
+        },
+        tx,
+      );
+      const result = unwrapOneLevelAndBindToDoc(
+        binding,
+        argumentCell.getAsNormalizedFullLink(),
+        resultCell,
+        {
+          argumentCapSchema: {
+            type: "object",
+            properties: {
+              profile: {
+                type: "object",
+                properties: { name: { type: "string" } },
+                asCell: [{ kind: "cell", scope: "user" }],
+              },
+            },
+          },
+        },
+      ) as { name: unknown };
+
+      const parsed = parseLink(result.name, resultCell)!;
+      expect(parsed.scope).toBe("space");
+      expect(resolvedSchema(parsed.schema)).toEqual({
+        type: "string",
+        scope: "user",
       });
     });
 

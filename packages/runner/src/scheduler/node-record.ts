@@ -11,6 +11,10 @@ export interface SchedulerGateState {
   throttleMs?: number;
   debounceReadyAt?: number;
   throttleReadyAt?: number;
+
+  /** Keeps freshness gates released until the owed run starts. */
+  retryOwed?: true;
+
   backoffUntil?: number;
   backoffStreak: number;
 
@@ -166,6 +170,7 @@ export class NodeRegistry {
     if (!record) return undefined;
     record.registrationToken = {};
     delete record.hasCommittedResult;
+    delete record.gate.retryOwed;
     delete record.pendingWaveRun;
     record.adoptedViewIdentity = undefined;
     record.cancelLocalReadWake?.();

@@ -1,0 +1,792 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "ClockOverride": {
+        "properties": {
+          "at": {
+            "description": "The instant the poll reads as now, in milliseconds since the epoch.",
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "ClockValue": {
+        "$ref": "#/$defs/ClockOverride",
+        "default": {}
+      },
+      "HistoryEntry": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "loggedBy": {
+            "$ref": "#/$defs/LunchProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "Live identity link to whoever logged it. Optional only for entries\nstored by the name-keyed predecessor, which recorded no identity link."
+          },
+          "loggedByName": {
+            "default": "",
+            "description": "Display name at log time — cosmetic. Defaulted so entries stored by the\nname-keyed predecessor (which had no such field) read back as `\"\"`.",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "votes": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/VoteSnapshot"
+            },
+            "type": "array"
+          },
+          "wentAt": {
+            "default": 0,
+            "description": "Both defaulted so entries stored by the SQL-era predecessor (separate\ntables, text timestamps) read back — a zero `wentAt` sorts a legacy row\nlast rather than refusing the update, and its snapshot list reads empty.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "loggedByName",
+          "wentAt",
+          "votes"
+        ],
+        "type": "object"
+      },
+      "HostValue": {
+        "$ref": "#/$defs/PollHost",
+        "default": {}
+      },
+      "LunchProfile": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Option": {
+        "properties": {
+          "addedByName": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "imageUrl": {
+            "description": "Persisted generated-art data URL (`\"\"` until the host's client generates\nand syncs it). Every viewer renders this stored value; generation only\nruns on the host's client for options where it is still empty.",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "addedByName"
+        ],
+        "type": "object"
+      },
+      "PollHost": {
+        "properties": {
+          "profile": {
+            "$ref": "#/$defs/LunchProfile",
+            "asCell": [
+              "cell"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "User": {
+        "properties": {
+          "avatar": {
+            "description": "Avatar URL or glyph, snapshotted from the joiner's shared profile.",
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          },
+          "name": {
+            "description": "Display name at join time — cosmetic, may duplicate another participant.",
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/LunchProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "Identity. Compare with `equals()`. Optional ONLY for rows stored by the\nname-keyed predecessor of this pattern: every row THIS pattern writes\ncarries it (the join gate refuses an identity that does not read as\npresent). A row without one is a display ghost — it matches no viewer,\nso its person can re-join with a profile and appear as themselves."
+          }
+        },
+        "required": [
+          "name",
+          "color"
+        ],
+        "type": "object"
+      },
+      "ViewerOverride": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "description": "Stands in for `#profileName` / `#profileAvatar`, which also need a wish.",
+            "tags": [
+              "profilename",
+              "profileavatar"
+            ],
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/LunchProfile",
+            "asCell": [
+              "cell"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "ViewerOverrideValue": {
+        "$ref": "#/$defs/ViewerOverride",
+        "default": {}
+      },
+      "Vote": {
+        "properties": {
+          "castAt": {
+            "description": "When the vote was cast (ms epoch), stamped by `castVote`. Optional for\nvotes stored before this field existed — those count as not-today, so the\ncurrent-day filter hides them.",
+            "type": "number"
+          },
+          "optionId": {
+            "type": "string"
+          },
+          "voteType": {
+            "$ref": "#/$defs/VoteColor"
+          },
+          "voter": {
+            "$ref": "#/$defs/LunchProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "Whose vote this is. Identity — found with `equals()`, never by name.\nOptional ONLY for votes stored by the name-keyed predecessor; every vote\nTHIS pattern casts carries it. A legacy vote tallies anonymously and,\nmatching no voter, can never be toggled or recast by anyone."
+          }
+        },
+        "required": [
+          "optionId",
+          "voteType"
+        ],
+        "type": "object"
+      },
+      "VoteColor": {
+        "enum": [
+          "green",
+          "yellow",
+          "red"
+        ]
+      },
+      "VoteSnapshot": {
+        "properties": {
+          "color": {
+            "$ref": "#/$defs/VoteColor"
+          },
+          "optionTitle": {
+            "type": "string"
+          },
+          "voter": {
+            "description": "Display name at snapshot time — cosmetic; the profile below is identity.",
+            "type": "string"
+          },
+          "voterProfile": {
+            "$ref": "#/$defs/LunchProfile",
+            "asCell": [
+              "cell"
+            ],
+            "description": "Live identity link, so a badge stays right even after a rename. Optional\nonly for snapshots stored by the name-keyed predecessor."
+          }
+        },
+        "required": [
+          "voter",
+          "optionTitle",
+          "color"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "clock": {
+        "$ref": "#/$defs/ClockValue",
+        "description": "Allocation site for the clock override. Leave this absent outside a test:\nan instant written here replaces the `#now/300` wish everywhere the poll\nreads the clock, which fixes the day the poll shows and the day every\nlater vote and visit is stamped with, for every viewer of that poll, until\nit is cleared. A runner-owned timer writes that wish on aligned five-minute\nboundaries, which a pattern body cannot make happen, so a test that needs\nthe poll at a chosen instant, or at two instants one tick apart, writes\nthem here. Per space rather than per user, because the day a poll runs on\nis one day for everyone looking at it. Production leaves it absent and the\nwish rules.",
+        "scope": "space",
+        "tags": [
+          "now"
+        ]
+      },
+      "host": {
+        "$ref": "#/$defs/HostValue",
+        "description": "Which participant hosts the poll — the first to join, transferable.",
+        "scope": "space"
+      },
+      "options": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Option"
+        },
+        "scope": "space",
+        "type": "array"
+      },
+      "question": {
+        "default": "Where should we eat?",
+        "scope": "space",
+        "type": "string"
+      },
+      "users": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/User"
+        },
+        "scope": "space",
+        "type": "array"
+      },
+      "viewer": {
+        "$ref": "#/$defs/ViewerOverrideValue",
+        "description": "Allocation site for the viewer-identity override slot — per-user, so ONE\nshared piece holds a separate override per viewer (a multi-user test\nclaims two identities on the same poll). ALWAYS leave this absent: tests\nclaim identity by sending `overrideViewer`, whose handler runs in the\nsending session's runtime and so writes the sender's own slot; a value\npassed here would materialize under whichever user instantiates the\npiece. Production sends nothing, so the wish path rules there.",
+        "scope": "user"
+      },
+      "visits": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/HistoryEntry"
+        },
+        "scope": "space",
+        "type": "array"
+      },
+      "votes": {
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/Vote"
+        },
+        "scope": "space",
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "lunch-poll/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AddOptionEvent": {
+        "properties": {
+          "title": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "CastVoteEvent": {
+        "properties": {
+          "optionId": {
+            "type": "string"
+          },
+          "voteType": {
+            "$ref": "#/$defs/VoteColor"
+          }
+        },
+        "required": [
+          "optionId",
+          "voteType"
+        ],
+        "type": "object"
+      },
+      "ClaimHostEvent": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "ClearHistoryEvent": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "ClearVoteEvent": {
+        "properties": {
+          "optionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "optionId"
+        ],
+        "type": "object"
+      },
+      "HistoryEntry": {
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "loggedBy": {
+            "$ref": "#/$defs/LunchProfile",
+            "description": "Live identity link to whoever logged it. Optional only for entries\nstored by the name-keyed predecessor, which recorded no identity link."
+          },
+          "loggedByName": {
+            "default": "",
+            "description": "Display name at log time — cosmetic. Defaulted so entries stored by the\nname-keyed predecessor (which had no such field) read back as `\"\"`.",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "votes": {
+            "default": [],
+            "items": {
+              "$ref": "#/$defs/VoteSnapshot"
+            },
+            "type": "array"
+          },
+          "wentAt": {
+            "default": 0,
+            "description": "Both defaulted so entries stored by the SQL-era predecessor (separate\ntables, text timestamps) read back — a zero `wentAt` sorts a legacy row\nlast rather than refusing the update, and its snapshot list reads empty.",
+            "type": "number"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "loggedByName",
+          "wentAt",
+          "votes"
+        ],
+        "type": "object"
+      },
+      "JoinEvent": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "LogVisitEvent": {
+        "properties": {
+          "optionId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "wentAt": {
+            "type": "number"
+          }
+        },
+        "type": "object"
+      },
+      "LunchProfile": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "Option": {
+        "properties": {
+          "addedByName": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "imageUrl": {
+            "description": "Persisted generated-art data URL (`\"\"` until the host's client generates\nand syncs it). Every viewer renders this stored value; generation only\nruns on the host's client for options where it is still empty.",
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "addedByName"
+        ],
+        "type": "object"
+      },
+      "PlaceStat": {
+        "properties": {
+          "greens": {
+            "default": 0,
+            "type": "number"
+          },
+          "reds": {
+            "default": 0,
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          },
+          "visits": {
+            "default": 0,
+            "description": "Counts are defaulted so rows stored by the SQL-era predecessor (whose\nderived stat rows carried different fields) read back as zeros instead\nof refusing the update.",
+            "type": "number"
+          },
+          "yellows": {
+            "default": 0,
+            "type": "number"
+          }
+        },
+        "required": [
+          "title",
+          "visits",
+          "greens",
+          "yellows",
+          "reds"
+        ],
+        "type": "object"
+      },
+      "RemoveHistoryEntryEvent": {
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "type": "object"
+      },
+      "RemoveOptionEvent": {
+        "properties": {
+          "optionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "optionId"
+        ],
+        "type": "object"
+      },
+      "ResetVotesEvent": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "SetOptionImageEvent": {
+        "properties": {
+          "imageUrl": {
+            "type": "string"
+          },
+          "optionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "optionId",
+          "imageUrl"
+        ],
+        "type": "object"
+      },
+      "User": {
+        "properties": {
+          "avatar": {
+            "description": "Avatar URL or glyph, snapshotted from the joiner's shared profile.",
+            "type": "string"
+          },
+          "color": {
+            "type": "string"
+          },
+          "name": {
+            "description": "Display name at join time — cosmetic, may duplicate another participant.",
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/LunchProfile",
+            "description": "Identity. Compare with `equals()`. Optional ONLY for rows stored by the\nname-keyed predecessor of this pattern: every row THIS pattern writes\ncarries it (the join gate refuses an identity that does not read as\npresent). A row without one is a display ghost — it matches no viewer,\nso its person can re-join with a profile and appear as themselves."
+          }
+        },
+        "required": [
+          "name",
+          "color"
+        ],
+        "type": "object"
+      },
+      "ViewerOverride": {
+        "properties": {
+          "avatar": {
+            "type": "string"
+          },
+          "name": {
+            "description": "Stands in for `#profileName` / `#profileAvatar`, which also need a wish.",
+            "tags": [
+              "profilename",
+              "profileavatar"
+            ],
+            "type": "string"
+          },
+          "profile": {
+            "$ref": "#/$defs/LunchProfile"
+          }
+        },
+        "type": "object"
+      },
+      "Vote": {
+        "properties": {
+          "castAt": {
+            "description": "When the vote was cast (ms epoch), stamped by `castVote`. Optional for\nvotes stored before this field existed — those count as not-today, so the\ncurrent-day filter hides them.",
+            "type": "number"
+          },
+          "optionId": {
+            "type": "string"
+          },
+          "voteType": {
+            "$ref": "#/$defs/VoteColor"
+          },
+          "voter": {
+            "$ref": "#/$defs/LunchProfile",
+            "description": "Whose vote this is. Identity — found with `equals()`, never by name.\nOptional ONLY for votes stored by the name-keyed predecessor; every vote\nTHIS pattern casts carries it. A legacy vote tallies anonymously and,\nmatching no voter, can never be toggled or recast by anyone."
+          }
+        },
+        "required": [
+          "optionId",
+          "voteType"
+        ],
+        "type": "object"
+      },
+      "VoteColor": {
+        "enum": [
+          "green",
+          "yellow",
+          "red"
+        ]
+      },
+      "VoteSnapshot": {
+        "properties": {
+          "color": {
+            "$ref": "#/$defs/VoteColor"
+          },
+          "optionTitle": {
+            "type": "string"
+          },
+          "voter": {
+            "description": "Display name at snapshot time — cosmetic; the profile below is identity.",
+            "type": "string"
+          },
+          "voterProfile": {
+            "$ref": "#/$defs/LunchProfile",
+            "description": "Live identity link, so a badge stays right even after a rename. Optional\nonly for snapshots stored by the name-keyed predecessor."
+          }
+        },
+        "required": [
+          "voter",
+          "optionTitle",
+          "color"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addOption": {
+        "$ref": "#/$defs/AddOptionEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "castVote": {
+        "$ref": "#/$defs/CastVoteEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "claimHost": {
+        "$ref": "#/$defs/ClaimHostEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "clearHistory": {
+        "$ref": "#/$defs/ClearHistoryEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "clearMyVote": {
+        "$ref": "#/$defs/ClearVoteEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "historyCount": {
+        "type": "number"
+      },
+      "hostName": {
+        "description": "The host's display name, resolved from the roster (\"\" when unhosted).",
+        "type": "string"
+      },
+      "isAdmin": {
+        "type": "boolean"
+      },
+      "isJoined": {
+        "type": "boolean"
+      },
+      "joinAs": {
+        "$ref": "#/$defs/JoinEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "joinMessage": {
+        "description": "Why this viewer's last join attempt was rejected, or \"\" — the join\ngate's loud counterpart. The deploy doc's CLI smoke test reads this.",
+        "type": "string"
+      },
+      "logVisit": {
+        "$ref": "#/$defs/LogVisitEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "mostRecentTitle": {
+        "type": "string"
+      },
+      "myName": {
+        "description": "This viewer's display name from their profile (\"\" before it resolves).",
+        "type": "string"
+      },
+      "optionCount": {
+        "type": "number"
+      },
+      "options": {
+        "items": {
+          "$ref": "#/$defs/Option"
+        },
+        "type": "array"
+      },
+      "overrideViewer": {
+        "$ref": "#/$defs/ViewerOverride",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Test seam: claim this viewer's identity (see the handler's doc)."
+      },
+      "placeStats": {
+        "items": {
+          "$ref": "#/$defs/PlaceStat"
+        },
+        "type": "array"
+      },
+      "question": {
+        "type": "string"
+      },
+      "recentVisits": {
+        "items": {
+          "$ref": "#/$defs/HistoryEntry"
+        },
+        "type": "array"
+      },
+      "removeHistoryEntry": {
+        "$ref": "#/$defs/RemoveHistoryEntryEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "removeOption": {
+        "$ref": "#/$defs/RemoveOptionEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "resetVotes": {
+        "$ref": "#/$defs/ResetVotesEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "setOptionImage": {
+        "$ref": "#/$defs/SetOptionImageEvent",
+        "asCell": [
+          "stream"
+        ]
+      },
+      "todayDate": {
+        "type": "string"
+      },
+      "todayVoteCount": {
+        "type": "number"
+      },
+      "todaysVotes": {
+        "items": {
+          "$ref": "#/$defs/Vote"
+        },
+        "type": "array"
+      },
+      "userCount": {
+        "type": "number"
+      },
+      "users": {
+        "items": {
+          "$ref": "#/$defs/User"
+        },
+        "type": "array"
+      },
+      "voteCount": {
+        "type": "number"
+      },
+      "voteHistoryCount": {
+        "type": "number"
+      },
+      "votes": {
+        "items": {
+          "$ref": "#/$defs/Vote"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "question",
+      "options",
+      "votes",
+      "users",
+      "hostName",
+      "myName",
+      "userCount",
+      "optionCount",
+      "voteCount",
+      "todayDate",
+      "todaysVotes",
+      "todayVoteCount",
+      "historyCount",
+      "recentVisits",
+      "mostRecentTitle",
+      "voteHistoryCount",
+      "placeStats",
+      "isJoined",
+      "isAdmin",
+      "joinMessage",
+      "joinAs",
+      "claimHost",
+      "overrideViewer",
+      "addOption",
+      "removeOption",
+      "castVote",
+      "clearMyVote",
+      "resetVotes",
+      "setOptionImage",
+      "logVisit",
+      "removeHistoryEntry",
+      "clearHistory",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

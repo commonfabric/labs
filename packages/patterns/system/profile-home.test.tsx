@@ -1,8 +1,85 @@
-import { action, assert, pattern, TESTS } from "commonfabric";
-import ProfileHome from "./profile-home.tsx";
+import {
+  action,
+  assert,
+  equals,
+  NAME,
+  pattern,
+  TESTS,
+  Writable,
+} from "commonfabric";
+import ProfileHome, {
+  identityProfileUrl,
+  isFreshIdentity,
+  isShownIdentity,
+  VerifiedIdentitiesSection,
+  VerifiedIdentityRow,
+} from "./profile-home.tsx";
 
 export default pattern(() => {
   const profile = ProfileHome({ initialName: "Ada Lovelace" });
+
+  // Verified identities reach the profile only as Loom-labeled cells, which a
+  // pattern test cannot mint, so the display rules are checked on the helpers
+  // and the row directly. The rendered list is covered by
+  // packages/html/test/profile-home-verified-identities.test.ts.
+  const nowMs = Date.parse("2026-07-17T20:00:00.000Z");
+  const freshLogin = {
+    type: "github.login",
+    value: "ada lovelace",
+    verifiedAt: "2026-07-16T20:00:00.000Z",
+  };
+  const assert_fresh_login_is_shown = assert(() =>
+    isShownIdentity(freshLogin, nowMs) === true
+  );
+  const assert_stale_login_is_hidden = assert(() =>
+    isShownIdentity(
+      { ...freshLogin, verifiedAt: "2026-07-14T20:00:00.000Z" },
+      nowMs,
+    ) === false
+  );
+  const assert_node_id_is_hidden = assert(() =>
+    isShownIdentity({ ...freshLogin, type: "github.node_id" }, nowMs) === false
+  );
+  const assert_undated_identity_is_hidden = assert(() =>
+    isShownIdentity({ ...freshLogin, verifiedAt: undefined }, nowMs) ===
+      false
+  );
+  const assert_unreadable_date_or_clock_hides_identity = assert(() =>
+    isFreshIdentity(freshLogin.verifiedAt, undefined) === false &&
+    isFreshIdentity("not a timestamp", nowMs) === false
+  );
+  const assert_profile_url_encodes_the_login = assert(() =>
+    identityProfileUrl("github.login", "ada lovelace") ===
+      "https://github.com/ada%20lovelace" &&
+    identityProfileUrl("github.node_id", "MDQ6VXNlcjE=") === ""
+  );
+  const freshRow = VerifiedIdentityRow({ assertion: freshLogin, nowMs });
+  const staleLogin = Writable.of({
+    ...freshLogin,
+    verifiedAt: "2026-07-14T20:00:00.000Z",
+  });
+  const nodeId = Writable.of({
+    ...freshLogin,
+    type: "github.node_id",
+    value: "MDQ6VXNlcjE=",
+  });
+  const sectionWithFreshLogin = VerifiedIdentitiesSection({
+    identities: [nodeId, Writable.of(freshLogin), staleLogin],
+    nowMs,
+  });
+  const sectionWithoutShownIdentity = VerifiedIdentitiesSection({
+    identities: [nodeId, staleLogin],
+    nowMs,
+  });
+  const assert_section_shown_for_a_fresh_login = assert(() =>
+    sectionWithFreshLogin.shown === true
+  );
+  const assert_section_hidden_without_a_shown_identity = assert(() =>
+    sectionWithoutShownIdentity.shown === false
+  );
+  const assert_row_links_the_profile = assert(() =>
+    freshRow.profileUrl === "https://github.com/ada%20lovelace"
+  );
 
   // CT-1748: the rendered profile view. Single context, so the owner-protected
   // name/avatar/elements resolve cleanly (no cross-stamp moduleIdentity
@@ -16,55 +93,55 @@ export default pattern(() => {
   const action_set_avatar = action(() => {
     profile.setAvatar.send({ avatar: "AL" });
   });
-  // The share inbox pointer (2026-09-15): both parts shaped or nothing.
-  const INBOX_SPACE = "did:key:z6MkinboxAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+  // The share inbox link. Loom sends it serialized, as the `link@1` sigil
+  // naming the inbox piece and its space; here the link is a live cell, the
+  // catalog card added below, because a link into a space the harness does
+  // not hold resolves to nothing and the action never runs.
   const action_set_inbox = action(() => {
-    profile.setInbox.send({
-      space: INBOX_SPACE,
-      host: "https://estuary.example.ts.net/",
+    const first = profile.elements[0];
+    if (first) profile.setInbox.send({ inbox: first.cell });
+  });
+  const action_add_second_card = action(() => {
+    profile.addElement.send({
+      catalogId: "profile-card",
+      title: "Second card",
+      tag: "#second",
+      userTags: ["person"],
     });
   });
-  const action_set_inbox_half = action(() => {
-    profile.setInbox.send({
-      space: INBOX_SPACE,
-      host: "estuary.example.ts.net",
-    });
-  });
-  const action_set_inbox_with_credentials = action(() => {
-    profile.setInbox.send({
-      space: INBOX_SPACE,
-      host: "https://alice:secret@estuary.example.ts.net",
-    });
-  });
-  const action_set_inbox_with_a_path_and_query = action(() => {
-    profile.setInbox.send({
-      space: INBOX_SPACE,
-      host: "https://estuary.example.ts.net/api?x=1",
-    });
-  });
-  const action_set_inbox_with_a_loose_did = action(() => {
-    profile.setInbox.send({
-      space: "did:key:not-base58-0OIl",
-      host: "https://estuary.example.ts.net",
-    });
+  const action_set_inbox_to_second = action(() => {
+    const second = profile.elements[1];
+    if (second) profile.setInbox.send({ inbox: second.cell });
   });
   const action_clear_inbox = action(() => {
     profile.setInbox.send({});
   });
-  const assert_inbox_empty_at_birth = assert(() =>
-    profile.inbox?.space === "" && profile.inbox?.host === ""
+  const assert_inbox_absent_at_birth = assert(() =>
+    profile.inbox?.piece === undefined
   );
-  const assert_inbox_set_with_the_host_trimmed = assert(() =>
-    profile.inbox?.space === INBOX_SPACE &&
-    profile.inbox?.host === "https://estuary.example.ts.net"
+  const assert_inbox_links_the_first_card = assert(() =>
+    profile.inbox?.piece !== undefined &&
+    equals(profile.inbox?.piece, profile.elements[0]?.cell)
   );
-  const assert_inbox_kept_over_a_half_pointer = assert(() =>
-    profile.inbox?.space === INBOX_SPACE &&
-    profile.inbox?.host === "https://estuary.example.ts.net"
+  const assert_inbox_links_the_second_card = assert(() =>
+    profile.inbox?.piece !== undefined &&
+    equals(profile.inbox?.piece, profile.elements[1]?.cell)
   );
-  const assert_inbox_cleared = assert(() =>
-    profile.inbox?.space === "" && profile.inbox?.host === ""
+  // Both cards keep their content through every pointer write: the pointer
+  // is re-bound and cleared in place, never written through into a card.
+  // Each card's name is read back through its cell, so a write that reached
+  // a card's document — or re-bound a card's slot to the other card — reads
+  // as the wrong name, not as an object of some kind.
+  const assert_both_cards_intact = assert(() =>
+    profile.elements.length === 2 &&
+    profile.elements[0]?.cell?.[NAME] === "Profile card" &&
+    profile.elements[1]?.cell?.[NAME] === "Second card"
   );
+  const assert_inbox_cleared = assert(() => profile.inbox?.piece === undefined);
+  const action_remove_second_card = action(() => {
+    const second = profile.elements[1];
+    if (second) profile.removeElement.send({ cell: second.cell });
+  });
 
   // CT-1828: same empty-after-trim guard applies to setAvatar.
   const action_clear_avatar = action(() => {
@@ -193,19 +270,16 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
-      { assertion: assert_inbox_empty_at_birth },
-      { action: action_set_inbox },
-      { assertion: assert_inbox_set_with_the_host_trimmed },
-      { action: action_set_inbox_half },
-      { assertion: assert_inbox_kept_over_a_half_pointer },
-      { action: action_set_inbox_with_credentials },
-      { assertion: assert_inbox_kept_over_a_half_pointer },
-      { action: action_set_inbox_with_a_path_and_query },
-      { assertion: assert_inbox_kept_over_a_half_pointer },
-      { action: action_set_inbox_with_a_loose_did },
-      { assertion: assert_inbox_kept_over_a_half_pointer },
-      { action: action_clear_inbox },
-      { assertion: assert_inbox_cleared },
+      { assertion: assert_fresh_login_is_shown },
+      { assertion: assert_stale_login_is_hidden },
+      { assertion: assert_node_id_is_hidden },
+      { assertion: assert_undated_identity_is_hidden },
+      { assertion: assert_unreadable_date_or_clock_hides_identity },
+      { assertion: assert_profile_url_encodes_the_login },
+      { assertion: assert_row_links_the_profile },
+      { assertion: assert_section_shown_for_a_fresh_login },
+      { assertion: assert_section_hidden_without_a_shown_identity },
+      { assertion: assert_inbox_absent_at_birth },
       { assertion: assert_initial_state },
       // CT-1748: a freshly-visited profile starts in the read-only
       // presentation, not the edit form.
@@ -238,6 +312,20 @@ export default pattern(() => {
       // writer behind every mutation surface (CT-1698).
       { action: action_add_catalog_element },
       { assertion: assert_added_element },
+      // The share inbox link points at a piece; a send without one clears it.
+      { action: action_set_inbox },
+      { assertion: assert_inbox_links_the_first_card },
+      { action: action_add_second_card },
+      { action: action_set_inbox_to_second },
+      { assertion: assert_inbox_links_the_second_card },
+      { assertion: assert_both_cards_intact },
+      { action: action_clear_inbox },
+      { assertion: assert_inbox_cleared },
+      { assertion: assert_both_cards_intact },
+      { action: action_remove_second_card },
+      { assertion: assert_added_element },
+      { action: action_remove_catalog_element },
+      { assertion: assert_removed_element },
       // CT-1748: the view/edit toggle flips presentation ⇄ edit form.
       { action: action_toggle_editing },
       { assertion: assert_editing },

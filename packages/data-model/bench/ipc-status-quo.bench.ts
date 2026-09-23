@@ -35,9 +35,9 @@
 
 import { BenchWorker } from "@commonfabric/test-support/bench-worker";
 
+import type { FabricValue } from "@";
 import { realmFromFabricValue } from "@/codecs.ts";
-import { FabricBytes } from "@/fabric-primitives/FabricBytes.ts";
-import type { FabricValue } from "@/interface.ts";
+import { FabricBytes } from "@/fabric-primitives";
 import {
   makeJsonPassThroughOmnibus,
   makeObject,

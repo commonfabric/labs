@@ -28,15 +28,6 @@ export type {
 export const CFC_STRUCTURAL_PROVENANCE_SETUP_PROJECTION =
   "runtime.setup.result-projection";
 
-// Recorded ONLY by the runtime's cell-serialization path (data-updating.ts
-// BRANCH_CELL) when it materializes a runtime-constructed cell's initial
-// value into the brand-new doc the cell points at. The prepare gate accepts a
-// protected write only when this marker covers the target AND the write
-// creates the doc — arbitrary `cell.set` calls record no marker and stay
-// fully enforced.
-export const CFC_STRUCTURAL_PROVENANCE_SEED_MATERIALIZATION =
-  "runtime.setup.seed-materialization";
-
 // A store the runtime owns: a document it materializes to hold a piece's
 // machinery rather than data an author named. Four kinds carry it — a piece's
 // argument, result and internal documents, minted by the runner from the
@@ -571,6 +562,26 @@ export type ModuleDelegationSnapshotEntry = {
 // surface narrower.
 export type WritePolicyInput =
   | {
+    /** Private runtime evidence; preparation must also prove unchanged protection. */
+    readonly kind: "preserved-output";
+    readonly target: CfcAddress;
+    readonly value: FabricValue;
+  }
+  | {
+    /** An explicit host-authorized acceptance of existing unlabeled bytes. */
+    readonly kind: "owner-adoption";
+    readonly target: CfcAddress;
+    readonly value: FabricValue;
+    readonly owner: string;
+  }
+  | {
+    /** Authority is carried by the runtime's private mark, never this record alone. */
+    readonly kind: "initialization";
+    readonly target: CfcAddress;
+    readonly value: FabricValue;
+    readonly mode: "seed" | "default" | "projection";
+  }
+  | {
     readonly kind: "schema";
     readonly target: CfcAddress;
     readonly schemaHash?: string;
@@ -689,6 +700,33 @@ export type PreparedDigestInput = {
   // discipline as writePolicyInputs. Absent when none were recorded, so
   // pre-Stage-2 digests are unchanged; canonicalized address-sorted.
   readonly labelMetadataObservations?: readonly CfcLabelMetadataObservation[];
+
+  /**
+   * Host-observed content admitted through opaque runtime receipts. Absent
+   * when empty so a transaction with no such observation keeps the established
+   * prepared-digest spelling.
+   */
+  readonly externalContentObservations?:
+    readonly CfcExternalContentObservation[];
+};
+
+/**
+ * A content observation made outside durable Fabric storage and admitted by
+ * the runtime through a prepared, aborted write transaction. Both labels are
+ * canonical runtime products: `flow` carries the effective content label whose
+ * hereditary integrity the final flow fold meets, while `consumed` carries the
+ * egress guard pool.
+ */
+export type CfcExternalContentObservation = {
+  readonly source: CfcAddress;
+  readonly flow: IFCLabel;
+  readonly consumed: IFCLabel;
+  readonly labeledSpaces: readonly MemorySpace[];
+  readonly sources: readonly {
+    readonly atom: CfcConfClause;
+    readonly read: CfcAddress;
+    readonly labelPath: readonly string[];
+  }[];
 };
 
 /** A synchronous release refusal before the effect starts any work. */
@@ -984,6 +1022,10 @@ export type CfcTxState = {
   // PreparedDigestInput. Only labeled observations are recorded (empty =
   // public = nothing to derive, gate, or bind).
   labelMetadataObservations: CfcLabelMetadataObservation[];
+  // Host-only observations admitted through an opaque runtime receipt. These
+  // are CONTENT inputs: they participate in flow derivation, read-side gates,
+  // egress, and the prepared digest exactly like durable content reads.
+  externalContentObservations: CfcExternalContentObservation[];
   // Structured descriptions of the refusals this transaction's gates
   // recorded (`cfc/refusal-detail.ts`): which boundary refused, which atoms
   // it refused, and which reads carried them. Recorded in every enforcement

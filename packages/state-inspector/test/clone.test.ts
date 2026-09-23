@@ -433,6 +433,95 @@ Deno.test("reset refuses while a server still holds the working copy", async () 
   });
 });
 
+Deno.test("reset removes the databases an attempt created beside the working copy", async () => {
+  // A link into another space makes the server create a store for that space
+  // on demand, beside the working copy, and the pass writes into it; the server
+  // keeps cell-derived databases there too. `verify` reads only the cloned
+  // space, so a reset that left these behind would report the clone pristine
+  // while pass two started from pass one's state in them.
+  await withDirs(async ({ source, clone }) => {
+    await createClone({ source, space: SPACE, targetDir: clone, now: NOW });
+    const engineDir = Path.dirname(clonePaths(clone, SPACE).workingPath);
+    /** A database as the engine leaves one: WAL mode, companions beside it. */
+    const openedDatabase = async (name: string): Promise<void> => {
+      const db = new Database(`${engineDir}/${name}`);
+      db.exec("PRAGMA journal_mode = WAL");
+      db.exec("CREATE TABLE t (x)");
+      db.close();
+      await Deno.writeTextFile(`${engineDir}/${name}-wal`, "");
+      await Deno.writeTextFile(`${engineDir}/${name}-shm`, "");
+    };
+    // `did:` itself is a DID by `isDID`, so a server resolves a store for it.
+    const others = ["did:", "did:key:z6MkOtherSpace"];
+    for (const other of others) await openedDatabase(`${other}.sqlite`);
+    // Not a space, so reported apart from the stores.
+    const cellDb = "cell-deadbeef-cafe.sqlite";
+    await openedDatabase(cellDb);
+    // Neither name the server gives a database, so not the reset's to remove.
+    await Deno.writeTextFile(`${engineDir}/operator-notes.txt`, "keep me");
+    await Deno.writeTextFile(`${engineDir}/scratch.sqlite`, "keep me too");
+
+    const result = await resetClone(clone);
+
+    assertEquals(result.removedStores, others);
+    assertEquals(result.removedCellDatabases, [cellDb]);
+    for (const name of [...others.map((d) => `${d}.sqlite`), cellDb]) {
+      for (const suffix of ["", "-wal", "-shm"]) {
+        await assertRejects(
+          () => Deno.stat(`${engineDir}/${name}${suffix}`),
+          Deno.errors.NotFound,
+          undefined,
+          `${name}${suffix} must not survive a reset`,
+        );
+      }
+    }
+    assertEquals(
+      await Deno.readTextFile(`${engineDir}/scratch.sqlite`),
+      "keep me too",
+    );
+    assertEquals(
+      await Deno.readTextFile(`${engineDir}/operator-notes.txt`),
+      "keep me",
+    );
+    assert((await verifyClone(clone)).ok, "and the clone is back to baseline");
+  });
+});
+
+Deno.test("reset refuses while a server still holds another space's store", async () => {
+  // The same stale-inode hazard as the working copy: removing a store a server
+  // still has open would not reach the server. And nothing is removed before
+  // every store has been probed, so the refusal leaves the clone as it was.
+  await withDirs(async ({ source, clone }) => {
+    await createClone({ source, space: SPACE, targetDir: clone, now: NOW });
+    const paths = clonePaths(clone, SPACE);
+    const otherPath = `${
+      Path.dirname(paths.workingPath)
+    }/did:key:z6MkOther.sqlite`;
+    mutate(paths.workingPath, [["of:input", { value: { title: "ATTEMPT" } }]]);
+
+    const server = new Database(otherPath);
+    server.exec("PRAGMA journal_mode = WAL");
+    server.exec("CREATE TABLE t (x)");
+    try {
+      await assertRejects(
+        () => resetClone(clone),
+        Error,
+        "still has it open",
+      );
+      assert(
+        !(await verifyClone(clone)).ok,
+        "the working copy was not restored by the refused reset",
+      );
+    } finally {
+      server.close();
+    }
+
+    const result = await resetClone(clone);
+    assertEquals(result.removedStores, ["did:key:z6MkOther"]);
+    assert((await verifyClone(clone)).ok, "reset works once the server stops");
+  });
+});
+
 Deno.test("reset restores a working copy that was deleted outright", async () => {
   // Nothing to hold open, and nothing to unlink. The probe must not treat an
   // absent file as a reason to fail — and must not create one just to ask.
@@ -441,6 +530,22 @@ Deno.test("reset restores a working copy that was deleted outright", async () =>
     await Deno.remove(clonePaths(clone, SPACE).workingPath);
 
     await resetClone(clone);
+    assert((await verifyClone(clone)).ok, "restored from pristine");
+  });
+});
+
+Deno.test("reset recreates an engine directory that was deleted outright", async () => {
+  // The same remedy as a deleted working copy, one level up: nothing is beside
+  // the working copy to clear, and the restore puts the directory back.
+  await withDirs(async ({ source, clone }) => {
+    await createClone({ source, space: SPACE, targetDir: clone, now: NOW });
+    const engineDir = Path.dirname(clonePaths(clone, SPACE).workingPath);
+    await Deno.remove(engineDir, { recursive: true });
+
+    const result = await resetClone(clone);
+
+    assertEquals(result.removedStores, []);
+    assertEquals(result.removedCellDatabases, []);
     assert((await verifyClone(clone)).ok, "restored from pristine");
   });
 });
@@ -690,8 +795,8 @@ Deno.test("a corrupt baseline sidecar fails loudly rather than recomputing", asy
 });
 
 Deno.test("an IO error while clearing the working set is surfaced", async () => {
-  // reset probes for `-wal`/`-shm` companions; only "absent" is an ordinary
-  // answer. A component that is not a directory yields NotADirectory, which
+  // reset probes the working copy and its `-wal`/`-shm` companions; only
+  // "absent" is an ordinary answer. A component that is not a directory yields NotADirectory, which
   // must propagate rather than be read as "nothing there" — treating it as
   // absent would skip a file it failed to delete and call the clone pristine.
   await withDirs(async ({ source, clone }) => {

@@ -24,6 +24,10 @@ import ingest from "@/routes/ingest/ingest.index.ts";
 import ingestChannels from "@/routes/ingest-channels/ingest-channels.index.ts";
 import patternLifecycle from "@/routes/pattern-lifecycle/pattern-lifecycle.index.ts";
 
+import spaceInvites from "@/routes/space-invites/space-invites.index.ts";
+
+import inbox from "./routes/inbox/inbox.index.ts";
+
 const app = createApp();
 
 configureOpenAPI(app);
@@ -50,6 +54,8 @@ const routes = [
   webhooks,
   ingest,
   ingestChannels,
+  spaceInvites,
+  inbox,
   patternLifecycle,
 ];
 

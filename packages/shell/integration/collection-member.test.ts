@@ -35,19 +35,18 @@ const BOARD_SOURCE = join(
   "collection-naming",
   "board.tsx",
 );
-const ITEM_SOURCE = join(
-  REPO_ROOT,
-  "packages",
-  "patterns",
-  "collection-naming",
-  "item.tsx",
-);
 const decoder = new TextDecoder();
 
-/** Run one `cf` command against the space these tests share. */
+/**
+ * Run one `cf` command against the space these tests share. The identity and
+ * server flags land between `args` and `tail`, because a callable name opens
+ * the section its own arguments sit in: `cf piece call` reads everything past
+ * the name as the handler's input.
+ */
 async function cf(
   identityPath: string,
   args: string[],
+  tail: string[] = [],
 ): Promise<string> {
   // Through the temporary lock, because a nested Deno resolves dependencies
   // of its own and would refresh the repository's `deno.lock` as a side
@@ -67,13 +66,15 @@ async function cf(
       API_URL,
       "--space",
       SPACE_NAME,
+      ...tail,
     ],
     env: { CF_LOG_LEVEL: "error" },
   });
   const stdout = decoder.decode(result.stdout);
   if (!result.success) {
+    const written = [...args, ...tail].join(" ");
     throw new Error(
-      `cf ${args.join(" ")} failed with ${result.code}\nstdout:\n${stdout}` +
+      `cf ${written} failed with ${result.code}\nstdout:\n${stdout}` +
         `\nstderr:\n${decoder.decode(result.stderr)}`,
     );
   }
@@ -109,29 +110,29 @@ async function fileBoardWithMembers(
     throw new Error("A collection fixture needs at least one member.");
   }
   const boardId = await filePiece(identityPath, BOARD_SOURCE);
-  const writer = await PiecesController.initialize({
-    apiUrl: new URL(API_URL),
-    identity,
-    space: SPACE_NAME,
-  });
-  try {
-    // Routing needs a fixed namespace whose targets are real pieces. Each
-    // member holds the same explicit name that the board maps to its link.
-    const entries = [];
-    for (const [index, title] of titles.entries()) {
-      const itemId = await filePiece(identityPath, ITEM_SOURCE);
-      const item = await writer.get(itemId, true);
-      const name = String(index + 1);
-      await item.setInput({ title, shortName: name });
-      entries.push([name, await item.result.getCell()] as const);
-    }
-    const board = await writer.get(boardId, true);
-    await board.setInput({
-      items: entries.map(([, item]) => item),
-      names: Object.fromEntries(entries),
-    });
-  } finally {
-    await writer.dispose();
+  // Through the board's own verb, which is the only way a client files a
+  // member: `addItem` allocates the next name, creates the member holding
+  // it, and appends the member, all in the write its own run mints. Seeding
+  // the namespace from here instead writes that name from the test's client,
+  // over a board shape no client produces.
+  for (const [index, title] of titles.entries()) {
+    // Projected to the allocated name alone: the unprojected result carries
+    // the created member's whole rendered view. The name is read here rather
+    // than assumed, so a namespace that stops being dense from 1 fails at the
+    // call that allocated it and says what it allocated.
+    const called = await cf(
+      identityPath,
+      ["piece", "call", "--cell", `/of:${boardId}`, "--quiet"],
+      [
+        "addItem",
+        JSON.stringify({ title, agentName: "shell integration" }),
+        "--",
+        "--schema",
+        JSON.stringify({ properties: { name: { type: "string" } } }),
+      ],
+    );
+    const { result } = JSON.parse(called) as { result: { name: string } };
+    expect(result.name).toBe(String(index + 1));
   }
 
   // Prove that fresh readers see each exact member before publishing the

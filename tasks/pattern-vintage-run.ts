@@ -28,8 +28,10 @@ import {
   relativeToRepo,
   removeVintages,
   type ReplayFailure,
+  replayFilterTakes,
   stampFor,
   vintageFileName,
+  vintageRecordName,
   type VintageRef,
 } from "./pattern-vintage-lib.ts";
 import {
@@ -52,6 +54,7 @@ import { vintageCompanionDir } from "../packages/piece/test/vintage-layout.ts";
 import {
   acceptedDropKey,
   acceptedDropsFor,
+  type AcceptedStateDrop,
   withoutAcceptedDrops,
 } from "./pattern-vintage-accepted-drops.ts";
 import { derivedCorrectionsFor } from "./pattern-vintage-derived-corrections.ts";
@@ -68,6 +71,17 @@ export interface GateRoots {
 
   /** Signer every capture and replay runs as. */
   signer: Identity;
+}
+
+/** What a replay reads beyond the tree it is pointed at. */
+export interface ReplayOptions {
+  /**
+   * Removals the state comparison forgives, defaulting to the repository's
+   * own `ACCEPTED_STATE_DROPS`. A test supplies its own list so that a case
+   * about the accounting is written against a pattern it wrote, rather than
+   * against whichever entries the repository's list holds today.
+   */
+  acceptedDrops?: readonly AcceptedStateDrop[];
 }
 
 async function withRuntime<T>(
@@ -327,6 +341,7 @@ export interface ReplayReport {
 export async function replayVintage(
   roots: GateRoots,
   vintage: VintageRef,
+  options: ReplayOptions = {},
 ): Promise<ReplayReport> {
   const where = {
     testKey: vintage.testKey,
@@ -841,7 +856,11 @@ export async function replayVintage(
         // schema `before` came from: an asymmetric strip would measure the
         // stripping. `applied` is counted from the vintage's side only, since
         // that is where "the vintage held it" is a fact.
-        const drops = acceptedDropsFor(entry.main ?? "", vintage.stamp);
+        const drops = acceptedDropsFor(
+          entry.main ?? "",
+          vintage.stamp,
+          options.acceptedDrops,
+        );
         const paths = drops?.paths ?? new Set<string>();
         const keptBefore = withoutAcceptedDrops(before, paths, isReduction);
         const keptAfter = withoutAcceptedDrops(after, paths, isReduction);
@@ -926,7 +945,7 @@ export async function replayVintage(
 }
 
 /** How `replayAll` reports what it walked. */
-export interface ReplayAllOptions {
+export interface ReplayAllOptions extends ReplayOptions {
   /**
    * Spool one gate record per fixture replayed.
    *
@@ -936,6 +955,17 @@ export interface ReplayAllOptions {
    * own, and a fixture is data rather than a test of this repository.
    */
   recordResults?: boolean;
+
+  /**
+   * The fixtures to replay, as terms matched against each fixture's
+   * repository-relative path. When absent or empty, every fixture replays.
+   *
+   * Each fixture's replay restores its own store, drives its own roots, and
+   * compares against its own manifest, so its result is the same whether or not
+   * other fixtures replay. A caller that filters the fixtures cannot make the
+   * checks that need every fixture replayed.
+   */
+  only?: readonly string[];
 }
 
 /**
@@ -1008,7 +1038,10 @@ export async function replayAll(
     failures: ReplayFailure[];
   }
 > {
-  const vintages = await collectVintages(roots.vintagesRoot);
+  const vintages = (await collectVintages(roots.vintagesRoot))
+    .filter((vintage) =>
+      replayFilterTakes(vintage.path, roots.repoRoot, options.only ?? [])
+    );
   const perVintage: VintageOutcome[] = [];
   const covered = new Set<string>();
   const coveredBy = new Map<string, VintageAttribution>();
@@ -1031,14 +1064,13 @@ export async function replayAll(
     : undefined;
   for (const vintage of vintages) {
     const replayStarted = performance.now();
-    const report = await replayVintage(roots, vintage);
+    const report = await replayVintage(roots, vintage, options);
     recordsFragment?.append({
       line: "record",
       test: {
         k: "gate",
         s: "repo",
-        n: `pattern-vintage ${vintage.testKey} ${vintage.tier} ` +
-          vintage.stamp,
+        n: vintageRecordName(vintage),
       },
       outcome: report.failures.length > 0 ? "fail" : "pass",
       durationMs: Math.round(performance.now() - replayStarted),

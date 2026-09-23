@@ -2,7 +2,7 @@ import { isObjectOrArray } from "@commonfabric/utils/types";
 import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 import type { FabricValue } from "@/interface.ts";
-import { BaseEncodeAct } from "@/codec-common/BaseEncodeAct.ts";
+import { BaseEncodeAct } from "@/codec-common";
 import { CODEC_META_TAGS } from "@/codec-interface/codec-meta-tags.ts";
 import { ENCODING_PREFIX_TAG, type JsonCodecValue } from "./interface.ts";
 import { isEncodedInstance } from "./wire-text.ts";
