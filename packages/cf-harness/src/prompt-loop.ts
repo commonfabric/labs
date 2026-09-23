@@ -1283,10 +1283,11 @@ export const scrubHandleSkillTextDeep = (
  * run that delegated once and succeeded is never gated.
  *
  * `running` counts as not completed, which costs nothing while a run is
- * healthy — tool calls are dispatched one at a time, so a delegation's
- * terminal ref always supersedes its running ref before the next delegation is
- * judged — and is the whole answer after a crash, where the running ref is the
- * only trace the lost delegation left.
+ * healthy — a delegation is judged against the runs recorded before its turn
+ * began, so a sibling started in the same turn is not yet there and a
+ * delegation from an earlier turn has its terminal ref by then — and is the
+ * whole answer after a crash, where the running ref is the only trace the
+ * lost delegation left.
  *
  * A delegation that declared `withoutSkillHandle` discharges everything
  * outstanding when it is reached. The refusal exists to make the parent answer
@@ -2954,6 +2955,25 @@ export class CfHarnessPromptLoop {
    */
   readonly #persistedRunPatternSources = new Set<string>();
 
+  /**
+   * The highest child run sequence this loop has handed out. Two delegations
+   * started in one turn both read the run state before either is recorded
+   * there, so the state alone would number them the same; the sequence is
+   * the greater of what the state implies and the next one after this. A
+   * child is numbered when its delegation is admitted, so two admitted from
+   * one turn are numbered in that order rather than the order the model wrote
+   * them; the run's subagent refs pair each child with its parent tool call.
+   */
+  #lastReservedSubagentSequence = 0;
+
+  /**
+   * The parent's subagent runs as they stood when the current turn's tool
+   * calls were dispatched, and `undefined` outside a turn. Skill custody is
+   * judged against this rather than the live state, so a delegation is not
+   * refused on account of a sibling the same turn started a moment earlier.
+   */
+  #subagentRunsAtTurnStart?: readonly HarnessSubagentRunRef[];
+
   constructor(options: CreateHarnessPromptLoopOptions = {}) {
     this.engine = options.engine ?? new CfHarnessEngine(options);
     if (this.engine.config.modelProvider === "openai-compatible-gateway") {
@@ -3945,20 +3965,43 @@ export class CfHarnessPromptLoop {
         const followupMessages: HarnessTranscriptMessage[] = [];
         const pendingCfcModelContextObservations:
           HarnessCfcModelContextObservationInput[] = [];
-        for (const toolCall of toolCalls) {
-          options.signal?.throwIfAborted();
-          const invokedToolCall = await this.#invokeToolCall(
-            toolCall,
-            model,
-            promptSlotBinding,
-            options.signal,
-            toolActivity.length + 1,
-            (activity) => toolActivity.push(activity),
-            recordModelUsage,
-            options.onTranscriptEvent,
-            undefined,
-            toolCalls.length,
-          );
+        options.signal?.throwIfAborted();
+        // The calls of one turn run together, and everything that orders them
+        // is fixed before any of them starts: the activity sequence each call
+        // records under, the run state a delegation's skill custody is judged
+        // against, and the position its result takes in the transcript. So
+        // the record reads the same whichever call finished first, and two
+        // delegations the model wrote side by side are judged as it wrote
+        // them, against the custody that stood when it did.
+        const firstToolActivitySequence = toolActivity.length + 1;
+        const turnActivities: HarnessToolActivity[][] = toolCalls.map(
+          () => [],
+        );
+        this.#subagentRunsAtTurnStart =
+          this.engine.getRunState().subagentRuns ?? [];
+        const settledToolCalls = await Promise.allSettled(
+          toolCalls.map((toolCall, index) =>
+            this.#invokeToolCall(
+              toolCall,
+              model,
+              promptSlotBinding,
+              options.signal,
+              firstToolActivitySequence + index,
+              (activity) => turnActivities[index].push(activity),
+              recordModelUsage,
+              options.onTranscriptEvent,
+              undefined,
+              toolCalls.length,
+            )
+          ),
+        );
+        this.#subagentRunsAtTurnStart = undefined;
+        toolActivity.push(...turnActivities.flat());
+        const invokedToolCalls = settledToolCalls.map((settled) => {
+          if (settled.status === "rejected") throw settled.reason;
+          return settled.value;
+        });
+        for (const invokedToolCall of invokedToolCalls) {
           const toolMessage = invokedToolCall.toolMessage;
           const outcome = invokedToolCall.taskOutcome;
           if (outcome !== undefined && outcome.outcome !== "completed") {
@@ -4753,7 +4796,8 @@ export class CfHarnessPromptLoop {
         // decision going unmade — a delegation that neither carries the
         // outstanding handle nor says it is running without one.
         const outstanding = outstandingSkillCustody(
-          this.engine.getRunState().subagentRuns ?? [],
+          this.#subagentRunsAtTurnStart ??
+            this.engine.getRunState().subagentRuns ?? [],
         );
         if (outstanding.length > 0) {
           return await this.#rejectInvalidToolCall({
@@ -5523,7 +5567,11 @@ export class CfHarnessPromptLoop {
     const parentRunState = this.engine.getRunState();
     const modelProvider = parentRunState.modelProvider ??
       this.engine.config.modelProvider;
-    const subagentSequence = nextSubagentSequence(parentRunState);
+    const subagentSequence = Math.max(
+      nextSubagentSequence(parentRunState),
+      this.#lastReservedSubagentSequence + 1,
+    );
+    this.#lastReservedSubagentSequence = subagentSequence;
     const childRunId = `${parentRunState.runId}.subagent.${subagentSequence}`;
     const childLineage = {
       role: "subagent" as const,

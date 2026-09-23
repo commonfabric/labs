@@ -288,7 +288,8 @@ What is not done yet:
 - first-class browser operation policy on top of the provisional browser
   subagent profile
 - dynamic/model-driven Agent Skills activation
-- parallel child orchestration
+- parallel child orchestration beyond one model turn: the children a turn starts
+  run together, and nothing schedules, budgets, or cancels across turns
 - app UI event provenance
 - streaming model responses
 - richer mid-turn resumability

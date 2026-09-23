@@ -608,7 +608,8 @@ mode.
   preflight for workflows that require them.
 - Package-default sandbox networking is a provisional bridge-oriented posture,
   not the final destination policy model. Product adapters may narrow it.
-- Delegation is serial: only one child runs at a time.
+- The children one model turn starts run together; across turns nothing
+  schedules, budgets, or cancels them, and a child cannot delegate.
 - The retained-pattern preflight returns before Fabric access or compilation
   when it refuses a `run_pattern` request, so it persists nothing. A created
   piece persists in the configured space and joins its registered piece list

@@ -3193,6 +3193,153 @@ Deno.test("CfHarnessPromptLoop preserves custom abort reasons for local gateway 
   assert(caught === reason, "custom abort reason must be rethrown unchanged");
 });
 
+Deno.test("CfHarnessPromptLoop runs the tool calls of one model turn together and joins their results in call order", async () => {
+  // Each child's first model request is held until the other child's has
+  // arrived, so the parent turn can only finish if both children are in
+  // flight at once. The hold yields event-loop turns rather than time, and
+  // gives up after a fixed number of them: a loop that ran the calls one
+  // after the other would otherwise hold the first child forever, since the
+  // second cannot start until the first returns, and the test would hang
+  // instead of failing. The child serving the second call is made to answer
+  // first, so the transcript order below is the order the model wrote the
+  // calls, not the order the children finished.
+  const childRequests: string[] = [];
+  const bothChildRequestsSeen = async (): Promise<void> => {
+    for (let turn = 0; turn < 1_000; turn++) {
+      if (childRequests.length === 2) return;
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+    throw new Error(
+      "the second child never sent a model request while the first was held",
+    );
+  };
+  const childAnswers = new Map<string, PromiseWithResolvers<void>>();
+  let parentTurns = 0;
+  const modelClient: HarnessModelClient = {
+    providerId: "test-provider",
+    async complete(request) {
+      const childRunId = request.runId;
+      if (childRunId === "run-two-children") {
+        parentTurns += 1;
+        if (parentTurns === 1) {
+          return {
+            assistant: {
+              role: "assistant",
+              content: "",
+              toolCalls: ["call-first", "call-second"].map((id) => ({
+                id,
+                type: "function" as const,
+                function: {
+                  name: "delegate_task",
+                  arguments: JSON.stringify({
+                    goal: `Inspect for ${id}.`,
+                    context: "Return only findings.",
+                  }),
+                },
+              })),
+            },
+          };
+        }
+        return { assistant: { role: "assistant", content: "Both returned." } };
+      }
+      const servesCall =
+        request.transcript.some((message) =>
+            message.role === "user" && message.content.includes("call-second")
+          )
+          ? "call-second"
+          : "call-first";
+      childRequests.push(childRunId);
+      await bothChildRequestsSeen();
+      const answer = Promise.withResolvers<void>();
+      childAnswers.set(servesCall, answer);
+      if (childAnswers.size === 2) {
+        childAnswers.get("call-second")?.resolve();
+      }
+      await answer.promise;
+      childAnswers.get("call-first")?.resolve();
+      return {
+        assistant: { role: "assistant", content: `${childRunId} done.` },
+      };
+    },
+  };
+  const loop = new CfHarnessPromptLoop({
+    modelClient,
+    allowedToolIds: ["delegate_task"],
+    allowedSubagentProfiles: ["default"],
+    engine: new CfHarnessEngine({
+      sandboxRuntime: new FakeSandboxRuntime(),
+      runId: "run-two-children",
+      model: "test-model",
+    }),
+  });
+
+  const result = await loop.runPrompt({
+    prompt: "Delegate two inspections.",
+    promptSlotBinding: directPromptSlotBinding,
+  });
+
+  assertEquals(result.finalAssistantText, "Both returned.");
+  assertEquals(childRequests.toSorted(), [
+    "run-two-children.subagent.1",
+    "run-two-children.subagent.2",
+  ]);
+  const toolMessages = result.transcript.filter((message) =>
+    message.role === "tool"
+  );
+  assertEquals(
+    toolMessages.map((message) => message.toolCallId),
+    ["call-first", "call-second"],
+  );
+  // A child is numbered when its delegation is admitted, which for two
+  // started together is not necessarily the order the model wrote them; what
+  // the record fixes is which child answered which call.
+  const childSummaries = toolMessages.map((message) =>
+    (JSON.parse(message.content) as {
+      subagent: { childRunId: string; status: string; summary: string };
+    }).subagent
+  );
+  assertEquals(
+    childSummaries.map((subagent) => subagent.childRunId).toSorted(),
+    ["run-two-children.subagent.1", "run-two-children.subagent.2"],
+  );
+  assertEquals(
+    childSummaries.map((subagent) => [subagent.status, subagent.summary]),
+    childSummaries.map((subagent) => [
+      "completed",
+      `${subagent.childRunId} done.`,
+    ]),
+  );
+  const pairs = (entries: readonly (readonly string[])[]) =>
+    entries.map((entry) => entry.join(" -> ")).toSorted();
+  assertEquals(
+    pairs(
+      (result.runState.subagentRuns ?? []).map((run) => [
+        run.parentToolCallId,
+        run.childRunId,
+      ]),
+    ),
+    pairs(
+      toolMessages.map((message, index) => [
+        message.toolCallId,
+        childSummaries[index].childRunId,
+      ]),
+    ),
+  );
+  // Decisions are logged as they are made, so their order is the order the
+  // calls finished; the activity sequence is what ties each to its call.
+  assertEquals(
+    (result.runState.policyDecisions ?? [])
+      .map((decision) =>
+        [
+          decision.toolCallId,
+          decision.toolActivitySequence,
+        ] as const
+      )
+      .toSorted((a, b) => a[1] - b[1]),
+    [["call-first", 1], ["call-second", 2]],
+  );
+});
+
 Deno.test("CfHarnessPromptLoop forwards abort signals to delegate_task child loops", async () => {
   const controller = new AbortController();
   const seenSignals: Array<RequestInit["signal"]> = [];
