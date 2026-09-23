@@ -3937,10 +3937,14 @@ export function llmDialog(
 
     // An empty `pinnedCells` belongs to every resolved instance; an
     // initialized symbolic handle does not establish another actor's stored
-    // state.
+    // state. Stored pins are written back as stored: a pin a handler wrote may
+    // sit in a document of its own, and the raw write keeps the link to it.
+    const stored = result.withTx(tx).getRaw() as
+      | Record<string, FabricValue>
+      | undefined;
     result.withTx(tx).setRawUntyped({
-      ...result.withTx(tx).getRaw(),
-      pinnedCells: result.withTx(tx).key("pinnedCells").get() ?? [],
+      ...stored,
+      pinnedCells: stored?.pinnedCells ?? [],
     } as FabricValue);
     // The dialog's handlers are fields of this document, and a stream holds
     // nothing, so the document keeps its result schema the way a piece's
