@@ -52,11 +52,12 @@ import { valueEqual } from "./valueEqual.ts";
  * `valueEqual()`. `FabricMap` and `FabricSet` carry stub codecs, and a stub
  * naming itself is the answer that names the work.
  *
- * Where both this and `valueEqual()` return, they return the same answer but
- * for two kinds of value. A null-prototype object holding the same contents as
- * a plain record: `valueEqual()` calls the two equal, a record being a record
- * in the value model, and this walk separates them on their constructors. And
- * an array with non-index properties, which `valueEqual()` ignores, as content
+ * Where both this and `valueEqual()` return, they return the same result
+ * except in two cases, where this walk keeps a distinction that `valueEqual()`
+ * does not. A null-prototype object holding the same contents as a plain
+ * record: `valueEqual()` calls the two equal, a record being a record in the
+ * value model, and this walk separates them on their constructors. And an
+ * array with non-index properties, which `valueEqual()` ignores, as content
  * hashing does, and this walk compares.
  *
  * This is the compare-side half of admitting special objects; the walk-side

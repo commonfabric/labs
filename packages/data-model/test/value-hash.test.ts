@@ -306,21 +306,23 @@ describe("value-hash", () => {
       });
 
       it("sorts object keys by the byte order of their WTF-8 encodings", () => {
-        // `"\ud800x"` encodes as `ED A0 80 78` and the pair `"\ud800\udc00"`
-        // as `F0 90 80 80`, so the lone surrogate's key comes first even though
-        // the two share their first code unit.
-        const value = { "\ud800\udc00": 1, "\ud800x": 2 };
+        // The pair `"\ud800\udc00"` encodes as `F0 90 80 80`, and
+        // `"\ud800\ue000"` (a lone high surrogate, then U+E000) as
+        // `ED A0 80 EE 80 80`, so the second key comes first.
+        const value = { "\ud800\udc00": 1, "\ud800\ue000": 2 };
         const one = [0x23, 0x3f, 0xf0, 0, 0, 0, 0, 0, 0];
         const two = [0x23, 0x40, 0, 0, 0, 0, 0, 0, 0];
         expect(hashBytesOf(value)).toEqual(
           sha256([
             0x11,
             0x24,
-            0x04,
+            0x06,
             0xed,
             0xa0,
             0x80,
-            0x78,
+            0xee,
+            0x80,
+            0x80,
             ...two,
             0x24,
             0x04,
