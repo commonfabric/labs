@@ -394,8 +394,16 @@ export const assignSlugTool: HarnessToolDefinition<
     // one is free or already names this piece. A name someone else holds is
     // never repointed; it is passed over, and the receipt says which name the
     // piece got. The counter starts at 2 so that a first collision reads as
-    // "the second one of these".
-    for (let counter = 1;; counter += 1) {
+    // "the second one of these". The counter advances only where a name is
+    // found held by something else; a write refused underneath reads the
+    // same name again, because what refused it may have been this piece.
+    //
+    // Whether the registry join has committed decides what a refusal below
+    // reports: a name passed over before it leaves nothing behind, one
+    // passed over after it leaves a listed piece.
+    let counter = 1;
+    let listed = false;
+    for (;;) {
       const slug = counter === 1 ? requested : `${requested}-${counter}`;
       if (counter > 1) {
         try {
@@ -410,11 +418,18 @@ export const assignSlugTool: HarnessToolDefinition<
       const availability = await slugAvailability(pieces, slug);
       if (availability.state === "unknown") {
         return errorOutput(
-          `assign_slug could not establish whether slug "${slug}" is available: ${availability.reason}. Nothing was assigned. Try the same call again.`,
+          `assign_slug could not establish whether slug "${slug}" is available: ${availability.reason}. ` +
+            (listed
+              ? "The slug was not assigned and the piece is listed in this space. "
+              : "Nothing was assigned. ") +
+            "Try the same call again.",
         );
       }
       if (availability.state === "taken") {
-        if (availability.pieceId !== targetId) continue;
+        if (availability.pieceId !== targetId) {
+          counter += 1;
+          continue;
+        }
         // The name already points where the caller is pointing it, so the
         // request is already true, and saying so beats passing it over. The
         // contract's other half still has to hold: a slug can point at a
@@ -432,7 +447,10 @@ export const assignSlugTool: HarnessToolDefinition<
         }
         return successOutput(slug);
       }
-      if (availability.state === "in-use") continue;
+      if (availability.state === "in-use") {
+        counter += 1;
+        continue;
+      }
       // The registry join goes first, so a failure between the two leaves a
       // listed-but-unnamed piece — visible and reachable by its handle —
       // rather than an orphan name pointing outside the list. Membership is
@@ -450,14 +468,16 @@ export const assignSlugTool: HarnessToolDefinition<
           `assign_slug failed while listing the piece: ${errorMessage(error)}`,
         );
       }
+      listed = true;
       try {
         await assignSlug(pieces, cell, slug, {
           takeFrom: availability.binding,
         });
       } catch (error) {
         // The name was bound between this call's reading of it and its
-        // write, so it gets the answer a name found taken gets: the next
-        // counter, never a repointing of an address someone holds.
+        // write. Whoever bound it, the next read of the same name says: this
+        // piece, and the request is already true; another, and the counter
+        // advances there. Never a repointing of an address someone holds.
         if (error instanceof SlugAssignedError) continue;
         // The name moved the other way and now points nowhere, so nobody is
         // holding it and the answer is the one an unestablished availability

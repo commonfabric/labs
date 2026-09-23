@@ -2009,15 +2009,16 @@ refused with a structured error.
 
 The slug is validated, then checked for availability, before anything is
 written, so an unusable slug is a structured error that changes nothing. A slug
-already naming another piece is never repointed and never refused: the tool
-appends a counter — `-2`, `-3`, and so on — to the requested word until it
-reaches a free name, or one already naming this piece, and the receipt's `slug`
-and `url` carry the name assigned, which is where the model reads the address it
-got. The availability question fails closed: a slug is free only on the outcomes
-that say nothing is there — no document, a malformed one, one that is not a
-piece, one carrying no piece id. A slug that resolves into a piece rather than
-to one names a collection, and is passed over the way a taken name is: it is an
-address a person opens. Any other failure refuses the call saying the
+already naming another piece is never repointed: the tool appends a counter —
+`-2`, `-3`, and so on — to the requested word until it reaches a free name, or
+one already naming this piece, and the receipt's `slug` and `url` carry the name
+assigned, which is where the model reads the address it got. A requested word so
+long that no counter fits under the slug length limit is the one collision that
+is refused. The availability question fails closed: a slug is free only on the
+outcomes that say nothing is there — no document, a malformed one, one that is
+not a piece, one carrying no piece id. A slug that resolves into a piece rather
+than to one names a collection, and is passed over the way a taken name is: it
+is an address a person opens. Any other failure refuses the call saying the
 availability could not be established, because reporting a storage error as a
 free name would write over whatever is there. That check is what stops a caller
 from taking over a name a person already opens, and it is the narrower of the

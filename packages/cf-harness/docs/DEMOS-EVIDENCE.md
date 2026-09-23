@@ -405,10 +405,6 @@ is informative rather than merely a caveat: a short task stayed short under load
 while a long one stayed long alone, so **duration here is a property of the task
 rather than of the machine.** Expect these numbers to hold on a quiet console.
 
-**Likely failure:** the slug it first tries is taken; it picks another and
-carries on. A second `assign_slug` in the timeline is the retry working, not a
-fault.
-
 **Proof status: PROVEN — 4/4 on `e5b9f57c6c`, 2/2 on `a77e958513`, timing under
 load.** A further run naming the pattern by id finished end to end in **16
 seconds** on `a77e958513`, with the opening pass absent. The four runs of the
@@ -690,11 +686,12 @@ the only entry here whose done condition has been exercised end to end. One run
 delivered `monthly-bills-mail-bank` in 427 s, 61 s of it the opening pass,
 importing both indexed readers into an authored wrapper. Its first submission
 failed on a `cf-alert` prop and the repaired version ran; its first naming
-attempt collided and the second succeeded, which is the slug sentence working.
-The run's own final text says its counts and matches were not independently
-verified, because policy withheld the results from the model — so this
-establishes a named piece and indexed composition, not that the bills it lists
-are the right ones. Whether the pairings are right is the subject of
+attempt collided and the second succeeded, which was the slug sentence working
+on a build that refused a collision. The run's own final text says its counts
+and matches were not independently verified, because policy withheld the results
+from the model — so this establishes a named piece and indexed composition, not
+that the bills it lists are the right ones. Whether the pairings are right is
+the subject of
 [§5](#5-bills-from-gmail-and-plaid-composing-two-library-patterns-by-id), which
 runs the same job with the readers named and records what varies between runs.
 

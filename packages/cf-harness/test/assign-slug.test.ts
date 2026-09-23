@@ -1025,6 +1025,39 @@ describe("assign-slug", () => {
       expect(output.message).toContain("space root unavailable");
     });
 
+    it("answers ok on the bare word when the race it lost was to a call naming this same piece", async () => {
+      // Two calls for one piece under one word, one landing between the
+      // other's read and write. The loser's write is refused underneath, and
+      // what refused it is its own piece, so advancing to a counter would
+      // give the piece a second name it never asked for. The refused name is
+      // read again instead, and the read says the request is already true.
+      // The registry join sits between the read and the write, which is
+      // where the winning call is staged.
+      await linkDefaultPattern();
+      const engine = createEngine();
+      const created = await createPiece(engine);
+      const cell = pieces.runtime.getCellFromLink(
+        parseLLMFriendlyLink(created.resultRef, pieces.getSpace()),
+      );
+      await cell.sync();
+      const originalAdd = pieces.add.bind(pieces);
+      pieces.add = async (cells) => {
+        await originalAdd(cells);
+        await setSlugLink(pieces, "doubling-report", cell);
+      };
+      const result = await engine.invokeBuiltinTool("assign_slug", {
+        token: created.resultRef,
+        slug: "doubling-report",
+      });
+      pieces.add = originalAdd;
+
+      const output = result.output as AssignSlugToolSuccessOutput;
+      expect(output.status).toBe("ok");
+      expect(output.slug).toBe("doubling-report");
+      await expect(resolvePieceAddress(pieces, "doubling-report-2")).rejects
+        .toThrow();
+    });
+
     it("reports a name released between the availability read and the write as one to retry", async () => {
       // The tool judges a name free, and the name comes to point nowhere
       // before the write lands. That is not the same outcome as a name
