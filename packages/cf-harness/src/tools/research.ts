@@ -181,13 +181,14 @@ export const researchToolDescriptor: HarnessToolDescriptor = {
 /** What a research handle holds for `summary`: its kit, records and label. */
 const researchHandleValue = (
   summary: HarnessResearchRunSummary,
+  cfc: HarnessResearchCfcProjection,
 ): HarnessResearchHandleValue => ({
   type: HARNESS_RESEARCH_HANDLE_TYPE,
   researchRunId: summary.researchRunId,
   kit: structuredClone(summary.kit),
   confirmedPatterns: structuredClone([...summary.confirmedPatterns]),
   describedHandles: structuredClone([...summary.describedHandles]),
-  cfc: structuredClone(summary.cfc!),
+  cfc: structuredClone(cfc),
 });
 
 /** Stable model-facing explanation for an internal research failure. */
@@ -329,7 +330,10 @@ export const researchTool: HarnessToolDefinition<
           kind: "research",
           source: "research",
           labelSource: "research",
-          value: researchHandleValue(summary) as unknown as FabricValue,
+          value: researchHandleValue(
+            summary,
+            reply.record.cfc,
+          ) as unknown as FabricValue,
           label: structuredClone(reply.record.cfc.outputLabel),
         });
       return {

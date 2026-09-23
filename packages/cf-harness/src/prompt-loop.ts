@@ -1127,22 +1127,22 @@ export const seedSubagentHandleTable = (
       ...text.matchAll(new RegExp(REFERENT_TOKEN_PATTERN)),
     ].map((match) => match[0])
   );
-  const seedEntry = (token: string): void => {
+  const seed = (token: string): HarnessHandleReferent | undefined => {
     const entry = resolveHandleToken(parentTable, token);
     if (entry !== undefined && entry.capability === undefined) {
       seeded.set(entry.token, entry);
     }
+    const referent = resolveReferentToken(parentTable, token);
+    if (referent !== undefined) seededReferents.set(referent.token, referent);
+    return referent;
   };
   for (const token of namedTokens) {
-    seedEntry(token);
-    const referent = resolveReferentToken(parentTable, token);
-    if (referent === undefined) continue;
-    seededReferents.set(referent.token, referent);
+    const referent = seed(token);
     if (
-      referent.kind === "research" &&
+      referent?.kind === "research" &&
       isHarnessResearchHandleValue(referent.value)
     ) {
-      for (const input of referent.value.kit.inputs) seedEntry(input.token);
+      for (const input of referent.value.kit.inputs) seed(input.token);
     }
   }
   if (seeded.size === 0 && seededReferents.size === 0) {
