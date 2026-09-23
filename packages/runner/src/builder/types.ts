@@ -480,6 +480,7 @@ type IntentionallyUnrequired =
   | "CFC_CONCEPT_KIND"
   | "CFC_FUSE_ATOM_CLASS"
   | "CFC_RUNTIME_SUBJECT"
+  | "CFC_SYSTEM_STRING_ATOMS"
   | "THIS_POLICY"
   | "cfcAtom"
   | "cfcPattern"

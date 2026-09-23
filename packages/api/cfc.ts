@@ -139,6 +139,28 @@ export const CFC_COMPILED_BY_ATOM_PREFIX = "cf-compiled-by:" as const;
  */
 export const CFC_COMPILED_BY_ATOM = "cf-compiled-by:cf-compiler" as const;
 
+/**
+ * System integrity atoms: string-shaped atoms that name a fact only a trusted
+ * system writer may assert. Like the compiler attestation above, prepare's
+ * `gateRuntimeMintedIntegrity` strips them from any write not authored by a
+ * trusted builtin, so a pattern-authored or unattributed write schema that
+ * names one persists without it, and a `requiredIntegrity` floor naming it
+ * refuses the value.
+ *
+ * Host code can attribute its transaction to a builtin, so this restricts
+ * minting to trusted code rather than to one verifier; binding the atom to a
+ * verifier key is the hardening that follows once host writes stop being
+ * trusted by default.
+ */
+export const CFC_SYSTEM_STRING_ATOMS: readonly string[] = [
+  // An external account identifier Loom observed after its connector
+  // authenticated as the profile owner. Loom's verifier writes these
+  // assertions into the owner's home space, and People merges on them, so a
+  // self-asserted one would merge two people on the asserter's word. Stored
+  // assertions carry this exact literal, so it keeps its spelling.
+  "loom-verified-external-identity",
+];
+
 export const CFC_CONCEPT_KIND = {
   PromptInfluence: "https://commonfabric.org/cfc/concepts/prompt-influence",
   // The §10.1 screening-gradient risk tiers. A tier upgrade ADDS the

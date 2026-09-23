@@ -136,6 +136,11 @@ export type ExternalIdentityAssertion = {
   verifiedAt: string;
 };
 
+/**
+ * A system integrity atom (`CFC_SYSTEM_STRING_ATOMS`): the runtime keeps it
+ * only on a write authored by a trusted builtin, which is how Loom's verifier
+ * writes its assertions, so a profile cannot collect a self-asserted identity.
+ */
 export const LOOM_VERIFIED_EXTERNAL_IDENTITY_INTEGRITY =
   "loom-verified-external-identity" as const;
 
