@@ -105,7 +105,7 @@ export function cachedPrimitiveHash(
 }
 
 /**
- * Counts `hashOf` and `hashStringOf` calls served by the frozen-object cache.
+ * Counts the hashes served by the frozen-object cache.
  *
  * @internal Not in the `value-hash` barrel; `for-testing-only.ts` offers it to
  * tests.

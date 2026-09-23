@@ -17,8 +17,8 @@ import {
 import { ValueHasher } from "./ValueHasher.ts";
 
 /**
- * Common helper for the two exported hash functions, which _might_ return a
- * plain `string` when passed `stringOkay = true`.
+ * Common helper for the exported hash functions, which _might_ return a plain
+ * `string` when passed `stringOkay = true`.
  */
 function hashOfInternal(value: unknown, stringOkay: false): FabricHash;
 function hashOfInternal(

@@ -239,8 +239,7 @@ export const float64BytesOfForTestingOnly: (value: number) => Uint8Array =
 
 /**
  * `getFrozenObjectHashCacheHits()` from `value-hash/caching.ts`, which counts
- * the `hashOf()` and `hashStringOf()` calls served by the deep-frozen-object
- * cache.
+ * the hashes served by the deep-frozen-object cache.
  *
  * It is here because nothing on the package's public surface can tell a hash
  * the cache served from one computed afresh: the two are equal. A test or a
