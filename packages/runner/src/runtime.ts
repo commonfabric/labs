@@ -1556,8 +1556,17 @@ export class Runtime {
       );
       const existing = snapshotQueryResult(cell.get());
       if (existing === undefined) {
+        // No create-only mark. The document is content-addressed, so every
+        // participant of a shared space installs the same bytes under the same
+        // id, and a replica that has not loaded it yet reads it as absent. A
+        // create-only mark turns that stale absence into a permanent
+        // `receipt-exists` rejection, which drops the whole transaction — an
+        // event handler's first labeled write included. The absence read above
+        // is a confirmed read of this document, so a document another writer
+        // created since this replica's basis is a retryable stale-read
+        // conflict instead. The retry reads the document, and the branch below
+        // either accepts it as the same artifact or refuses a different one.
         cell.set(artifact);
-        tx.markCreateOnly?.(cell.getAsNormalizedFullLink());
       } else {
         let verified: PolicyArtifactManifestV1;
         try {
