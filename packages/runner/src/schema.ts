@@ -85,8 +85,10 @@ import {
   combineSchema,
   combineSchemaForLink,
   createDefaultTraversalContext,
+  getJsonType,
   IObjectCreator,
   mergeAnyOfMatches,
+  schemaAcceptsType,
   SchemaObjectTraverser,
 } from "./traverse.ts";
 
@@ -449,6 +451,46 @@ const selectMatchingCompoundBranch = (
   });
 
   return matches.length === 1 ? matches[0] : undefined;
+};
+
+/**
+ * The one branch of an `anyOf` or `oneOf` that the value's type alone selects,
+ * with the keywords beside the union merged under it the way traversal merges
+ * them — shallowly, the branch's own winning — or `undefined` where the type
+ * settles nothing: no branch accepts the value's type, more than one does, a
+ * branch declares no `type` and so accepts every value, or the schema is an
+ * `allOf`, which is not a choice. A branch selected this way is one nothing
+ * below the value can undo in favor of another — every other branch has
+ * already refused the value's type — so what remains below is only whether
+ * the branch itself holds, and a view decides that where the reader touches
+ * it.
+ */
+const narrowUnionByValueType = (
+  schema: JSONSchemaObj,
+  value: unknown,
+): JSONSchema | undefined => {
+  const kind = Array.isArray(schema.anyOf)
+    ? "anyOf"
+    : Array.isArray(schema.oneOf)
+    ? "oneOf"
+    : undefined;
+  if (kind === undefined || schema.allOf !== undefined) return undefined;
+  const valueType = getJsonType(value);
+  if (valueType === null) return undefined;
+  const { [kind]: branches, ...rest } = schema;
+  let selected: JSONSchema | undefined;
+  for (const branch of branches as readonly JSONSchema[]) {
+    const withDefs = cfcSchemaWithInheritedDefs(branch, schema.$defs);
+    const resolved = resolveSchema(withDefs) ?? withDefs;
+    if (resolved === false) continue;
+    if (!isObjectOrArray(resolved) || resolved.type === undefined) {
+      return undefined;
+    }
+    if (!schemaAcceptsType(resolved, valueType)) continue;
+    if (selected !== undefined) return undefined;
+    selected = schemaWithProperties(rest as JSONSchemaObj, resolved);
+  }
+  return selected;
 };
 
 export function resolveSchemaForValue(
@@ -1338,10 +1380,31 @@ export function validateAndTransform(
     // property or a nullable array item is decided by what the view can see
     // at the container, never by evaluating a present subtree whole, since
     // registering every read below it is the cost a view exists to avoid.
-    const compound = isObjectOrArray(selector.schema) &&
-      (selector.schema.anyOf !== undefined ||
-        selector.schema.oneOf !== undefined ||
-        selector.schema.allOf !== undefined);
+    //
+    // The union is the reader's, so it is classified off `viewSchema` and
+    // not off the selector alone: a link that carries a schema of its own
+    // puts that schema on the selector, and the union the reader asked for
+    // survives only in `viewSchema`. The traverser is handed the same
+    // schema, for the same reason.
+    const hasCombinator = (schema: JSONSchema | undefined): boolean =>
+      isObjectOrArray(schema) &&
+      (schema.anyOf !== undefined || schema.oneOf !== undefined ||
+        schema.allOf !== undefined);
+    let compound = hasCombinator(viewSchema) || hasCombinator(selector.schema);
+    let lazySchema = viewSchema;
+    // Where the value's type alone tells the branches apart — an array under
+    // `Row[] | null` — exactly one branch can match, and nothing below the
+    // value decides which. The view is built over that branch and stays lazy;
+    // evaluating the union whole would materialize every row to answer
+    // `rows.length`. A union the type does not settle still goes to the
+    // traverser.
+    if (compound && value !== undefined && isObjectOrArray(viewSchema)) {
+      const narrowed = narrowUnionByValueType(viewSchema, value);
+      if (narrowed !== undefined && !hasCombinator(narrowed)) {
+        lazySchema = narrowed;
+        compound = false;
+      }
+    }
     if (
       !compound ||
       (value === undefined && defaultForAbsentValue(viewSchema) !== undefined)
@@ -1349,13 +1412,14 @@ export function validateAndTransform(
       return materializeSchemaView(
         runtime,
         tx,
-        { ...resolvedValueLink, schema: viewSchema },
+        { ...resolvedValueLink, schema: lazySchema },
         value,
         cfcLabelView,
         options?.synced ?? false,
         options?.mismatchThrows !== true,
       );
     }
+    selector.schema = viewSchema;
   }
 
   // TODO(@ubik2): these constructor parameters are complex enough that we should

@@ -385,9 +385,12 @@ describe("materialization-parity", () => {
     }
   });
 
-  it("refuses an unavailable link inside a combinator item even when a null branch matches", async () => {
-    // A combinator is the one shape a view evaluates whole, so the dead-end
-    // is met inside the traverser rather than where a reader touches it.
+  it("refuses an unavailable link inside a union item where the reader touches it, not at the item", async () => {
+    // The item is an object, so its type alone selects the object branch — the
+    // `null` branch cannot match it — and the view is built over that branch
+    // rather than evaluating the union whole. The dead-end below it is then
+    // met where the reader touches it, as under any view; the item itself
+    // reads as a view, never as the `null` substitute.
     const write = runtime.edit();
     const missing = runtime.getCell(space, "missing-child", undefined, write);
     runtime.getCell(space, "missing-in-item", undefined, write).setRaw([
@@ -415,7 +418,11 @@ describe("materialization-parity", () => {
         },
         tx,
       ).get();
-      expect(() => value[0]).toThrow(UnresolvedInputError);
+      // Compared as a boolean: handing the view to `expect` would coerce it
+      // into the failure message, and a view refuses that coercion.
+      const item = value[0];
+      expect(item === null).toBe(false);
+      expect(() => (item as { n: number }).n).toThrow(UnresolvedInputError);
       expect(tx.takeSchemaRefusal()).toBeInstanceOf(UnresolvedInputError);
     } finally {
       await tx.commit();
@@ -601,5 +608,256 @@ describe("materialization-parity", () => {
       }
     }
     expect(links[1]).toEqual(links[0]);
+  });
+  describe("a union the reader declares over a link that carries its own schema", () => {
+    // The link's schema lands on the selector; the reader's union survives
+    // only in the schema the view is given. Each row asserts the lazy read
+    // agrees with the eager one whether or not the link carries a schema.
+
+    const target = {
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        driver: { type: "string" },
+        n: { type: "number" },
+      },
+    } as JSONSchema;
+    const record = (
+      properties: Record<string, JSONSchema>,
+      required?: readonly string[],
+      rest?: Record<string, unknown>,
+    ): JSONSchema =>
+      ({
+        type: "object",
+        properties,
+        ...(required === undefined ? {} : { required }),
+        ...(rest ?? {}),
+      }) as JSONSchema;
+    const rows: Array<[string, JSONSchema]> = [
+      [
+        "an `anyOf` of a closed record and `null`",
+        {
+          anyOf: [
+            record({ id: { type: "string" } }, undefined, {
+              additionalProperties: false,
+            }),
+            { type: "null" },
+          ],
+        },
+      ],
+      [
+        "an `anyOf` whose branches each match only part of the value",
+        {
+          anyOf: [
+            record({ id: { type: "string" }, n: { type: "string" } }, [
+              "id",
+              "n",
+            ]),
+            record({ driver: { type: "string" }, id: { type: "number" } }, [
+              "driver",
+              "id",
+            ]),
+          ],
+        },
+      ],
+      [
+        "an overlapping `oneOf`",
+        {
+          oneOf: [
+            record({ id: { type: "string" } }, ["id"]),
+            record({ driver: { type: "string" } }, ["driver"]),
+          ],
+        },
+      ],
+      [
+        "a closed record beside an `allOf` naming a key",
+        {
+          type: "object",
+          additionalProperties: false,
+          allOf: [record({ id: { type: "string" } })],
+        },
+      ],
+      [
+        "an `allOf` with a part whose required child is invalid",
+        {
+          allOf: [
+            record({ id: { type: "string" } }),
+            record({ n: { type: "string" } }, ["n"]),
+          ],
+        },
+      ],
+    ];
+
+    const keysOrValue = (value: unknown): unknown =>
+      value !== null && typeof value === "object"
+        ? Object.keys(value as object)
+        : value;
+
+    for (const [index, [shape, union]] of rows.entries()) {
+      for (const carries of [false, true]) {
+        it(`agrees with an eager read under ${shape}, the link ${carries ? "carrying" : "without"} a schema`, async () => {
+          const write = runtime.edit();
+          const linked = runtime.getCell<Record<string, unknown>>(
+            space,
+            `union-target-${index}-${carries}`,
+            target,
+            write,
+          );
+          linked.set({ id: "a", driver: "x", n: 1 });
+          runtime.getCell<Record<string, unknown>>(
+            space,
+            `union-holder-${index}-${carries}`,
+            undefined,
+            write,
+          ).setRaw({
+            p: carries
+              ? linked.getAsLink({ includeSchema: true })
+              : linked.getAsLink(),
+          });
+          await write.commit();
+          const reader = {
+            type: "object",
+            properties: { p: union },
+          } as JSONSchema;
+          const read = (lazy: boolean) => {
+            const tx = runtime.edit();
+            if (lazy) tx.markLazyMaterialize(true);
+            const value = runtime.getCell<{ p?: unknown }>(
+              space,
+              `union-holder-${index}-${carries}`,
+              reader,
+              tx,
+            ).get();
+            return { tx, p: keysOrValue(value?.p) };
+          };
+          const eager = read(false);
+          const lazy = read(true);
+          try {
+            expect(lazy.p).toEqual(eager.p);
+          } finally {
+            await eager.tx.commit();
+            await lazy.tx.commit();
+          }
+        });
+      }
+    }
+  });
+
+  describe("a union the value's type settles, with keywords beside it", () => {
+    it("keeps the selected branch's shape under a `description` and a `default` beside the union", async () => {
+      // The keywords beside the union ride under the selected branch the way
+      // traversal merges them, shallowly. A `description` there is not an
+      // internal keyword, so a strict intersection would take the outer side
+      // for a shaped reader and drop the branch — and the view would then
+      // select none of the branch's properties.
+      const write = runtime.edit();
+      runtime.getCell<Record<string, unknown>>(
+        space,
+        "described-union",
+        undefined,
+        write,
+      ).set({ p: { kind: "agent", name: "Sol" } });
+      await write.commit();
+      const reader = {
+        type: "object",
+        properties: {
+          p: {
+            anyOf: [{ $ref: "#/$defs/Author" }, { type: "undefined" }],
+            description: "Who filed it.",
+            default: { kind: "person", name: "" },
+          },
+        },
+        $defs: {
+          Author: {
+            type: "object",
+            properties: { kind: { type: "string" }, name: { type: "string" } },
+            required: ["kind", "name"],
+          },
+        },
+      } as JSONSchema;
+      const read = (lazy: boolean) => {
+        const tx = runtime.edit();
+        if (lazy) tx.markLazyMaterialize(true);
+        const value = runtime.getCell<{ p?: { kind?: string; name?: string } }>(
+          space,
+          "described-union",
+          reader,
+          tx,
+        ).get();
+        return { tx, kind: value.p?.kind, name: value.p?.name };
+      };
+      const eager = read(false);
+      const lazy = read(true);
+      try {
+        expect(eager.kind).toBe("agent");
+        expect(lazy.kind).toBe("agent");
+        expect(lazy.name).toBe(eager.name);
+      } finally {
+        await eager.tx.commit();
+        await lazy.tx.commit();
+      }
+    });
+  });
+
+  describe("a union around a list", () => {
+    // `Row[] | null` over an array: the type alone selects the array branch,
+    // so the view stays lazy and `rows.length` reads the container and nothing
+    // below it — the same reads as `Row[]`.
+
+    const row = {
+      type: "object",
+      properties: { id: { type: "string" }, n: { type: "number" } },
+    } as JSONSchema;
+    const rowCount = 300;
+
+    const readsOf = async (rows: JSONSchema): Promise<string[]> => {
+      const tx = runtime.edit();
+      tx.markLazyMaterialize(true);
+      try {
+        const value = runtime.getCell<{ rows: { id: string }[] }>(
+          space,
+          "list-holder",
+          { type: "object", properties: { rows } } as JSONSchema,
+          tx,
+        ).get();
+        expect(value.rows.length).toBe(rowCount);
+        return [...(getTransactionReadActivities(tx) ?? [])].map((activity) =>
+          `${activity.id}/${activity.path.join("/")}`
+        );
+      } finally {
+        await tx.commit();
+      }
+    };
+
+    it("reads `rows.length` under `Row[] | null` with the reads of `Row[]`", async () => {
+      const write = runtime.edit();
+      const links: FabricValue[] = [];
+      for (let i = 0; i < rowCount; i++) {
+        const cell = runtime.getCell<Record<string, unknown>>(
+          space,
+          `list-row-${i}`,
+          row,
+          write,
+        );
+        cell.set({ id: `r${i}`, n: i });
+        links.push(cell.getAsLink({ includeSchema: true }));
+      }
+      runtime.getCell<Record<string, unknown>>(
+        space,
+        "list-holder",
+        undefined,
+        write,
+      ).setRaw({ rows: links });
+      await write.commit();
+
+      const plain = await readsOf({ type: "array", items: row } as JSONSchema);
+      const nullable = await readsOf(
+        {
+          anyOf: [{ type: "array", items: row }, { type: "null" }],
+        } as JSONSchema,
+      );
+      expect(nullable).toEqual(plain);
+      expect(plain.length).toBeLessThan(rowCount);
+    });
   });
 });

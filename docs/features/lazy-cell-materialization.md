@@ -52,13 +52,22 @@ author can observe, and [the divergences](#where-a-view-deliberately-diverges)
 below spell out what follows from it.
 
 One shape is evaluated whole at the position where it is accessed, through the
-same traverser an eager read uses: a combinator. `anyOf`, `oneOf`, and `allOf`
-must validate entire branches before selecting and merging successful results.
-A shallow prefilter cannot decide whether a branch matches, and combining
-candidate property schemas loses relationships between the properties of a
-branch. Accessing a combinator therefore registers reads throughout its
-selected subtree; an untouched sibling remains deferred, and cell handles
-retain their ordinary traversal boundaries.
+same traverser an eager read uses: a combinator the value's type does not
+settle. `anyOf`, `oneOf`, and `allOf` must validate entire branches before
+selecting and merging successful results. A shallow prefilter cannot decide
+whether a branch matches, and combining candidate property schemas loses
+relationships between the properties of a branch. Accessing such a combinator
+therefore registers reads throughout its selected subtree; an untouched sibling
+remains deferred, and cell handles retain their ordinary traversal boundaries.
+
+Where the value's type alone selects one branch of an `anyOf` or `oneOf` —
+an array under `Row[] | null`, an object under `Row | null` — every other
+branch has already refused the value, and nothing below it can change which
+branch applies. The view is built over that branch, with the keywords beside
+the union carried onto it, and stays lazy: `rows.length` under `Row[] | null`
+reads what it reads under `Row[]`. A union the type does not settle — a branch
+declaring no `type`, two branches accepting the value's type, none doing so,
+or an `allOf`, which is not a choice — is evaluated whole as above.
 
 A combinator evaluated whole can dead-end at a linked document the replica
 cannot serve. Nothing in it is then known to be invalid, so the read refuses as
@@ -141,7 +150,12 @@ wrong. These rules hold that agreement:
   keywords, `$defs`, handle selection, and merging of successful results are
   decided by the traverser. `oneOf` requires exactly one match; `allOf` requires
   every branch to match. A failed branch cannot contribute properties to an
-  `anyOf` result.
+  `anyOf` result. The union classified this way, and the schema the traverser
+  is handed, are the reader's: a link that carries a schema of its own puts
+  that schema on the selector, and the union the reader asked for is what the
+  view was given. A union the value's type settles is not evaluated whole; the
+  view is built over the one branch that can match, which is the branch the
+  eager read would have selected.
 - **A handle branch the value selects is minted as a handle.** An optional
   handle — `Cell<T> | undefined` — generates as a union whose one branch
   declares `asCell`, and the entry point's dispatch sees the marker only at the
@@ -161,6 +175,9 @@ wrong. These rules hold that agreement:
   still raises the lazy read's `UnresolvedInputError`, whether it is the item
   itself or a link inside a combinator item evaluated whole: its value is not
   known to be invalid, so an array substitute does not satisfy that refusal.
+  Under a union the item's type settles, the item is a view over the selected
+  branch, and the dead-end below it refuses where the reader touches it, as
+  under any view; the item never reads as the substitute.
 - **An inline array element is identified by its value.** `toCell` on such an
   element, including a nested array, must not name the array's index; written
   elsewhere that link would follow whatever lands at the index next. Eager
