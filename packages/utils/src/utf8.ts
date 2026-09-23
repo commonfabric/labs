@@ -42,6 +42,14 @@ function hasSurrogateCharCode(value: string) {
  * order. A lone surrogate sorts as the code point of the same value, which
  * makes this the byte order of the strings' WTF-8 encodings (see
  * `encodeWtf8()`).
+ *
+ * The order is by code point even where two strings share a high surrogate
+ * that only one of them pairs. For example, `"𐀀"` is the single
+ * character U+10000, encoded as `F0 90 80 80`, and `"\ud800"` is a lone
+ * high surrogate followed by U+E000, encoded as `ED A0 80 EE 80 80`. The
+ * second sorts first, because its first code point (`0xD800`) is less than
+ * the first's (`0x10000`), even though at the first differing code unit the
+ * first string's `0xDC00` is less than the second's `0xE000`.
  */
 export function utf8Compare(a: string, b: string): number {
   // Credit where due: Though this started out as an independent implementation
