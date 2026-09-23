@@ -461,10 +461,11 @@ prompts each returned a named piece composing CheckList and AmountLedger by
 
 So the page is half-live: the part's own checkbox writes back and its removal
 control does not. **The newer published parts fix this** — see
-[§2a](#2a-a-checklist-and-a-running-total-composed-by-id), where removal is
-demonstrated working across four checks. This entry's failures predate them, and
-its runs were judged before the viewport hazard described there was known, so
-they should be re-checked with visible targets before being relied on.
+[§2a](#2a-a-checklist-and-a-running-total-composed-from-named-parts), where
+removal is demonstrated working across four checks. This entry's failures
+predate them, and its runs were judged before the viewport hazard described
+there was known, so they should be re-checked with visible targets before being
+relied on.
 
 The runtime cause behind the original defect is CT-2407: `Cell.remove` never
 matched a row of a constructor-seeded inline array, because reads of such an
@@ -1228,16 +1229,20 @@ Each demo was then run a second time **with every hint stripped** — no slug
 sentence, no pattern ids, no unit sentence, and with "sortable" restored where a
 person would say it. The question was which hints cover a real gap.
 
-**Three hints cover nothing, because the harness already does the work.**
+**Two hints cover nothing, because the harness already does the work.**
 
 | Hint                                         | What happens without it                                                                                      |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | the slug-retry sentence                      | a taken slug is retried unprompted — observed three times, including two collisions recovered inside one run |
 | "use a pattern from the library if one fits" | the same indexed pattern is found anyway                                                                     |
-| leaving "sortable" out                       | asking for a sortable table reaches a published sortable part that the hinted wording never looks for        |
 
 The slug sentence is the clearest: `assign_slug`'s own error says _"Choose
 another"_, and the run does.
+
+**The word "sortable" runs the other way: its absence costs a capability.** A
+prompt that asks for a sortable table reaches a published sortable part, and one
+that avoids the word never looks for it. That is a word to keep, not a hint to
+delete.
 
 **One hint is load-bearing, and it is not the one in the dinner demo.** Told to
 compose this month's bills from mail and bank with no ids, a run finds both
