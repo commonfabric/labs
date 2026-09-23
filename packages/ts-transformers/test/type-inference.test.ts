@@ -437,6 +437,7 @@ Deno.test("type inference helpers detect collections and array element types", (
         checker,
         factory: ts.factory,
         sourceFile,
+        state: undefined,
       }).type,
       checker,
     ),
@@ -448,6 +449,7 @@ Deno.test("type inference helpers detect collections and array element types", (
         checker,
         factory: ts.factory,
         sourceFile,
+        state: undefined,
       }).type,
       checker,
     ),
@@ -459,6 +461,7 @@ Deno.test("type inference helpers detect collections and array element types", (
         checker,
         factory: ts.factory,
         sourceFile,
+        state: undefined,
       }).type,
       checker,
     ),
@@ -469,6 +472,7 @@ Deno.test("type inference helpers detect collections and array element types", (
       checker,
       factory: ts.factory,
       sourceFile,
+      state: undefined,
     }).typeNode.kind,
     ts.SyntaxKind.UnknownKeyword,
   );
@@ -500,7 +504,7 @@ Deno.test("type inference helpers convert and unwrap types conservatively", () =
   assertEquals(unwrapCellLikeType(undefined, checker), undefined);
   assertEquals(unwrapCellLikeType(boxType, checker), boxType);
 
-  const asTypeNode = typeToTypeNode(boxType, checker, sourceFile);
+  const asTypeNode = typeToTypeNode(boxType, checker, sourceFile, undefined);
   assert(asTypeNode);
   // The converted node refers back to the named alias rather than inlining the
   // object shape.
@@ -511,6 +515,7 @@ Deno.test("type inference helpers convert and unwrap types conservatively", () =
     checker.getTypeAtLocation(value),
     checker,
     sourceFile,
+    undefined,
   );
   assert(schemaTypeNode);
 });

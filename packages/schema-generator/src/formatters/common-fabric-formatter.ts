@@ -676,8 +676,9 @@ export class CommonFabricFormatter implements TypeFormatter {
 
     // Keep schema-hint propagation behavior aligned with type-based wrapper formatting.
     let childContext = context;
-    if (context.schemaHints && context.typeNode) {
-      const hint = context.schemaHints.get(context.typeNode);
+    const hintsNode = context.typeNode ?? context.hintsNode;
+    if (context.schemaHints && hintsNode) {
+      const hint = context.schemaHints.get(hintsNode);
       if (hint?.items === false) {
         const itemsOverride = this.#createArrayItemsOverride(
           innerType,
@@ -925,8 +926,9 @@ export class CommonFabricFormatter implements TypeFormatter {
     // This allows identity-only/property-only array access patterns to avoid
     // materializing full item schemas while preserving the wrapper on the array.
     let childContext = context;
-    if (context.schemaHints && context.typeNode) {
-      const hint = context.schemaHints.get(context.typeNode);
+    const hintsNode = context.typeNode ?? context.hintsNode;
+    if (context.schemaHints && hintsNode) {
+      const hint = context.schemaHints.get(hintsNode);
       if (hint?.items === false) {
         // Pass the inner node even when it isn't used to build the inner schema
         // (shouldPassTypeNode=false): the override only reads the element's

@@ -894,6 +894,26 @@ function declaresTypeParameters(symbol: ts.Symbol): boolean {
 }
 
 /**
+ * Returns the type to read in place of `typeNode` when that node was printed
+ * from a type, or `undefined` when it was not. A printed node is never read as
+ * a node. The type read is the caller's own `type` when it carries something,
+ * and the type the node was printed from when the caller's is `any`, `unknown`,
+ * or an unbound type parameter.
+ */
+function typeReadForPrintedNode(
+  type: ts.Type,
+  typeNode: ts.TypeNode | undefined,
+  printedFrom: ((node: ts.TypeNode) => ts.Type | undefined) | undefined,
+): ts.Type | undefined {
+  const printed = typeNode && printedFrom?.(typeNode);
+  if (!printed) return undefined;
+  const carriesNothing = (type.flags &
+    (ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.TypeParameter)) !==
+    0;
+  return carriesNothing ? printed : type;
+}
+
+/**
  * Main schema generator that uses a chain of formatters
  */
 export class SchemaGenerator {
@@ -977,7 +997,26 @@ export class SchemaGenerator {
     options?: SchemaGenerationOptions,
     schemaHints?: SchemaHints,
     sourceFile?: ts.SourceFile,
+    hintsNode?: ts.TypeNode,
   ): MutableJSONSchema {
+    const readInPlace = typeReadForPrintedNode(
+      type,
+      typeNode,
+      options?.printedFrom,
+    );
+    if (readInPlace) {
+      return this.#generateSchemaInternal(
+        readInPlace,
+        checker,
+        undefined,
+        typeRegistry,
+        options,
+        schemaHints,
+        sourceFile,
+        typeNode,
+      );
+    }
+
     // Create unified context with all state
     const cycles = this.#getCycles(type, checker);
 
@@ -1003,6 +1042,7 @@ export class SchemaGenerator {
 
       // Optional context
       ...(typeNode && { typeNode }),
+      ...(hintsNode && { hintsNode }),
       ...(typeNode?.getSourceFile()?.fileName && {
         sourceFileName: typeNode.getSourceFile().fileName,
       }),
@@ -1019,6 +1059,7 @@ export class SchemaGenerator {
       ...(options?.isDefaultLibrarySourceFile && {
         isDefaultLibrarySourceFile: options.isDefaultLibrarySourceFile,
       }),
+      ...(options?.printedFrom && { printedFrom: options.printedFrom }),
       ...(schemaHints && { schemaHints }),
     };
 
@@ -1088,22 +1129,36 @@ export class SchemaGenerator {
    * definition/$ref behavior (including cycles) and ensures non-root usages can
    * return $ref where appropriate.
    *
-   * AUTO-DETECTS whether to use type-based or node-based analysis.
+   * AUTO-DETECTS whether to use type-based or node-based analysis. A node the
+   * caller printed from a type is never analyzed; the type at that position is
+   * read instead (`typeReadForPrintedNode()`).
    */
   public formatChildType(
     type: ts.Type,
     context: GenerationContext,
     typeNode?: ts.TypeNode,
   ): MutableJSONSchema {
+    const readInPlace = typeReadForPrintedNode(
+      type,
+      typeNode,
+      context.printedFrom,
+    );
+
     // IMPORTANT: Always create a new context, replacing typeNode (even if undefined).
     // If we pass the parent context as-is when typeNode is undefined, the child will
     // inherit the parent's typeNode which leads to mismatched type/node pairs.
-    const { typeNode: _, ...baseContext } = context;
-    const childContext = typeNode ? { ...context, typeNode } : baseContext;
+    // A printed node is not read as a node, and the hints attached to it apply.
+    const { typeNode: _, hintsNode: __, ...baseContext } = context;
+    const childContext: GenerationContext = readInPlace && typeNode
+      ? { ...baseContext, hintsNode: typeNode }
+      : typeNode
+      ? { ...baseContext, typeNode }
+      : baseContext;
+    const readType = readInPlace ?? type;
 
     // Auto-detect: Should we use node-based or type-based analysis?
-    const useNodeBased = this.#shouldUseNodeBasedAnalysis(
-      type,
+    const useNodeBased = !readInPlace && this.#shouldUseNodeBasedAnalysis(
+      readType,
       typeNode,
       context.typeChecker,
     );
@@ -1121,7 +1176,7 @@ export class SchemaGenerator {
 
     // Use type-based analysis (normal path)
     return this.#applyNodeSchemaHints(
-      this.#formatType(type, childContext, false),
+      this.#formatType(readType, childContext, false),
       childContext,
     );
   }
@@ -1554,6 +1609,9 @@ export class SchemaGenerator {
     checker: ts.TypeChecker,
     context: GenerationContext,
   ): MutableJSONSchema {
+    const printed = context.printedFrom?.(typeNode);
+    if (printed) return this.formatChildType(printed, context, typeNode);
+
     const typeRegistry = context.typeRegistry;
 
     // Handle TypeLiteral nodes (object types)
