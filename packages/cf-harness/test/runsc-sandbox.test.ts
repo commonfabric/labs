@@ -11,6 +11,7 @@ import {
   assertRunscCfcPolicyForMode,
   assertRunscSessionAllowedForMode,
   defaultDarwinRootfs,
+  realPathOfNearestExisting,
   resolveRunscSandboxConfig,
   RunscSandboxRuntime,
 } from "../src/sandbox/runsc.ts";
@@ -578,7 +579,6 @@ Deno.test("RunscSandboxRuntime needs a runner that can spawn for sessions, and r
     Error,
     "sandbox runtime is closed",
   );
-  // A fresh per-call container still runs after close: nothing to keep alive.
   const runner = new FakeRunscRunner();
   const open = new RunscSandboxRuntime(
     config({ cfcPolicyPath: undefined }),
@@ -742,4 +742,63 @@ Deno.test("a closed runtime refuses fresh calls as well as sessions", async () =
     Error,
     "sandbox runtime is closed",
   );
+});
+
+Deno.test("sibling subagent runs never share a scratch directory", () => {
+  // `<uuid>.subagent.1` and `<uuid>.subagent.2` agree on their first 40
+  // characters, which is all the sanitizer keeps.
+  const parent = "0f9b1c2d-3e4f-4a5b-8c6d-7e8f9a0b1c2d";
+  const one = resolveRunscSandboxConfig({
+    workspaceHostPath: "/tmp/workspace",
+    rootfs: "/images/kitchensink",
+    runId: `${parent}.subagent.1`,
+    platform: "linux",
+  });
+  const two = resolveRunscSandboxConfig({
+    workspaceHostPath: "/tmp/workspace",
+    rootfs: "/images/kitchensink",
+    runId: `${parent}.subagent.2`,
+    platform: "linux",
+  });
+  assert(one.scratchDir !== two.scratchDir, one.scratchDir);
+});
+
+Deno.test("the scratch containment check sees through symlinks", async () => {
+  const base = await Deno.makeTempDir();
+  try {
+    await Deno.mkdir(join(base, "workspace"));
+    await Deno.symlink(join(base, "workspace"), join(base, "alias"));
+    // Spelled outside the workspace, really inside it.
+    assertThrows(
+      () =>
+        resolveRunscSandboxConfig({
+          workspaceHostPath: join(base, "workspace"),
+          rootfs: "/images/kitchensink",
+          runId: "run-link",
+          platform: "linux",
+          scratchDir: join(base, "alias", "scratch"),
+        }),
+      Error,
+      "inside",
+    );
+    // And the reverse: the mount spelled through the alias.
+    assertThrows(
+      () =>
+        resolveRunscSandboxConfig({
+          workspaceHostPath: join(base, "alias"),
+          rootfs: "/images/kitchensink",
+          runId: "run-link",
+          platform: "linux",
+          scratchDir: join(base, "workspace", "scratch"),
+        }),
+      Error,
+      "inside",
+    );
+    assertEquals(
+      realPathOfNearestExisting(join(base, "alias", "not", "yet")),
+      join(await Deno.realPath(join(base, "workspace")), "not", "yet"),
+    );
+  } finally {
+    await Deno.remove(base, { recursive: true });
+  }
 });

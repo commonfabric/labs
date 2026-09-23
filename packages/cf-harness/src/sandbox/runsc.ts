@@ -240,22 +240,34 @@ export const resolveRunscSandboxConfig = (
   // harness reads it and forge a public taint over its own output (review,
   // verified live). The default is the user's temp dir; an explicit scratch
   // is refused when it lies inside a mount.
+  // The directory name carries a readable slice of the run id and a nonce:
+  // the sanitizer truncates, and sibling subagent ids (`<uuid>.subagent.N`)
+  // agree on their first 40 characters.
   const scratchDir = requireAbsoluteHostPath(
     "scratch directory",
     options.scratchDir ?? joinHostPath(
       (Deno.env.get("TMPDIR") ?? "/tmp").replace(/\/+$/, "") || "/",
       "cf-harness-runsc",
-      sanitizeIdPart(runId),
+      `${sanitizeIdPart(runId).slice(0, 24)}-${
+        crypto.randomUUID().slice(0, 8)
+      }`,
     ),
   );
+  // Compared by real path, not spelling: a symlink under a mount that points
+  // at scratch (or the reverse) would put the files inside the sandbox's
+  // reach while the strings say otherwise. Existing ancestors resolve; the
+  // part that does not exist yet is put back unchanged.
+  const realScratch = realPathOfNearestExisting(scratchDir);
   for (
     const root of [
       workspaceHostPath,
       ...additionalMounts.map((m) => m.hostPath),
     ]
   ) {
-    const normalized = root.replace(/\/+$/, "");
-    if (scratchDir === normalized || scratchDir.startsWith(normalized + "/")) {
+    const normalized = realPathOfNearestExisting(root).replace(/\/+$/, "");
+    if (
+      realScratch === normalized || realScratch.startsWith(normalized + "/")
+    ) {
       throw new Error(
         `sandbox scratch directory ${scratchDir} lies inside the mount ${root}: the CFC result and context files there would be writable from the sandbox`,
       );
@@ -349,6 +361,39 @@ const waitUpTo = (promise: Promise<unknown>, ms: number): Promise<void> => {
   return Promise.race([promise.then(() => undefined), timeout]).finally(() => {
     if (timer !== undefined) clearTimeout(timer);
   });
+};
+
+/**
+ * The real path of `path`, resolving as many leading components as exist
+ * and appending the rest verbatim, so a path that is yet to be created is
+ * still compared through the symlinks above it.
+ */
+export const realPathOfNearestExisting = (path: string): string => {
+  let existing = path;
+  const rest: string[] = [];
+  for (;;) {
+    try {
+      const real = Deno.realPathSync(existing);
+      return rest.length === 0 ? real : joinHostPath(real, ...rest.reverse());
+    } catch {
+      const parent = dirnameHost(existing);
+      if (parent === existing) return path;
+      rest.push(basenameHost(existing));
+      existing = parent;
+    }
+  }
+};
+
+const dirnameHost = (p: string): string => {
+  const trimmed = p.replace(/\/+$/, "");
+  const i = trimmed.lastIndexOf("/");
+  if (i <= 0) return "/";
+  return trimmed.slice(0, i);
+};
+
+const basenameHost = (p: string): string => {
+  const trimmed = p.replace(/\/+$/, "");
+  return trimmed.slice(trimmed.lastIndexOf("/") + 1);
 };
 
 const sanitizeIdPart = (value: string): string =>
