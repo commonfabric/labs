@@ -646,13 +646,32 @@ export class ContextualFlowControl {
           defs = cursor.$defs;
         }
       }
+      // A false schema spelled as an object — `{ not: true }`, which is how a
+      // reference to a `false` definition resolves — admits nothing, and
+      // holds no children under either reading below.
+      if (ContextualFlowControl.isFalseSchema(cursor)) return false;
+      // A cursor declaring no `type` admits every type, and which of its
+      // keywords apply is settled only by a value — `properties` and
+      // `additionalProperties` by an object, `prefixItems` and `items` by an
+      // array. Narrowing without one can say only what both readings admit,
+      // so such a cursor is read as the union of its object and array
+      // readings. A caller holding the value settles the type first.
+      const typeless = isObjectOrArray(cursor) && cursor.type === undefined &&
+        !("anyOf" in cursor) && !("oneOf" in cursor) &&
+        !ContextualFlowControl.isTrueSchema(cursor);
       if (
         isObjectOrArray(cursor) &&
-        (Array.isArray(cursor.type) || "anyOf" in cursor || "oneOf" in cursor)
+        (Array.isArray(cursor.type) || "anyOf" in cursor || "oneOf" in cursor ||
+          typeless)
       ) {
         const armSchemas: JSONSchema[] = [];
         const cursorObject = cursor;
-        const options = Array.isArray(cursorObject.type)
+        const options = typeless
+          ? [{ ...cursorObject, type: "object" as const }, {
+            ...cursorObject,
+            type: "array" as const,
+          }]
+          : Array.isArray(cursorObject.type)
           ? cursorObject.type.map((type) => ({ ...cursorObject, type }))
           : (cursorObject.anyOf && cursorObject.oneOf)
           ? [...cursorObject.anyOf, ...cursorObject.oneOf]
@@ -758,14 +777,12 @@ export class ContextualFlowControl {
         } else {
           return false;
         }
-      } else if (
-        cursor.type === "unknown" ||
-        Array.isArray(cursor.type) && cursor.type.includes("unknown")
-      ) {
+      } else if (cursor.type === "unknown") {
         // we can descend into unknown, but we just get more unknown
         cursor = { type: "unknown", ...(cursor.ifc && { ifc: cursor.ifc }) };
       } else {
-        // we can only descend into objects and arrays or unknown
+        // A declared type other than object, array or unknown holds no
+        // children.
         return false;
       }
     }

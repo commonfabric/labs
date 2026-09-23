@@ -516,6 +516,22 @@ function plainArrayItems(schema: JSONSchemaObj): JSONSchema | undefined {
     : undefined;
 }
 
+/**
+ * `schema` with its `type` settled to the container a traversal holds, where
+ * it declares none. Narrowing without a value reads a type-less schema as the
+ * union of its object and array readings (`schemaAtPath`); a traversal that
+ * has the value in hand narrows through the reading the value selects. A
+ * declared type stands, whatever the value.
+ */
+function settledForContainer(
+  schema: JSONSchemaObj,
+  container: "object" | "array",
+): JSONSchemaObj {
+  return schema.type === undefined
+    ? internSchema({ ...schema, type: container }) as JSONSchemaObj
+    : schema;
+}
+
 function plainObjectProperties(
   schema: JSONSchemaObj,
 ): Record<string, JSONSchema> | undefined {
@@ -4869,7 +4885,10 @@ export class SchemaObjectTraverser<V extends FabricValue>
     let valid = true;
     docArray.forEach((item, index) => {
       const itemSchema = directItems ??
-        schemaAtPathCanonical(schema, [index.toString()]);
+        schemaAtPathCanonical(
+          settledForContainer(schema, "array"),
+          [index.toString()],
+        );
       const batchIndex = preparedPlainLinkIndex++;
       const preparedSourceAddress = preparedPlainLinks
         ?.sourceAddresses[batchIndex];
@@ -5168,7 +5187,11 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // We'll use marker schemas to detect some places where we want special
       // schema behavior
       const propSchema = directProperties?.[propKey] ??
-        schemaAtPathCanonical(schema, [propKey], true);
+        schemaAtPathCanonical(
+          settledForContainer(schema, "object"),
+          [propKey],
+          true,
+        );
       // Normally, if additionalProperties is not specified, it would
       // default to true. However, if we provided the `properties` field, we
       // treat this specially, and don't invalidate the object, but also don't

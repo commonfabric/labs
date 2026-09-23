@@ -88,6 +88,46 @@ describe("ContextualFlowControl.schemaAtPath", () => {
     expect(nested).toEqual({ type: "string" });
   });
 
+  it("narrows a schema that omits `type` to what its object and array readings both admit, and a declared non-container type to `false`", () => {
+    // A schema declaring no `type` admits every type, and without a value
+    // nothing says whether its `properties` or its `items` apply, so the
+    // narrowing is the union of the two readings: a named property beside an
+    // element schema gives both at an index, a key only one reading names
+    // gives that reading's answer, and a key the object reading leaves open
+    // admits anything. A declared type other than object, array or unknown
+    // holds no children.
+    const typeless: JSONSchema = {
+      properties: { title: { type: "string" }, "0": { type: "boolean" } },
+      items: { type: "number" },
+    };
+    expect(ContextualFlowControl.schemaAtPath(typeless, ["title"])).toEqual({
+      type: "string",
+    });
+    expect(ContextualFlowControl.schemaAtPath(typeless, ["0"])).toEqual({
+      anyOf: [{ type: "boolean" }, { type: "number" }],
+    });
+    expect(ContextualFlowControl.schemaAtPath(typeless, ["extra"])).toBe(
+      true,
+    );
+    expect(
+      ContextualFlowControl.schemaAtPath({ items: { type: "number" } }, ["1"]),
+    ).toBe(true);
+    expect(
+      ContextualFlowControl.schemaAtPath(
+        { additionalProperties: { type: "boolean" } },
+        ["extra"],
+      ),
+    ).toEqual({ type: "boolean" });
+    expect(
+      ContextualFlowControl.schemaAtPath({ type: "string" }, ["extra"]),
+    ).toBe(false);
+    // A false schema spelled as an object holds no children under either
+    // reading.
+    expect(ContextualFlowControl.schemaAtPath({ not: true }, ["extra"])).toBe(
+      false,
+    );
+  });
+
   it("does not treat inherited property names as declared properties", () => {
     const schema: JSONSchema = {
       type: "object",

@@ -533,6 +533,78 @@ describe("materialization-parity", () => {
     });
   });
 
+  describe("a schema that omits `type`", () => {
+    // Such a schema admits every type, and which of its keywords apply is
+    // settled by the value: a read holding an object narrows a key through
+    // the object reading, one holding an array narrows an element through
+    // `items`. Both modes settle it the same way.
+
+    it("reads a key of an object it names nothing about as an additional property in both modes", async () => {
+      const write = runtime.edit();
+      runtime.getCell(space, "typeless-open", undefined, write).setRaw({
+        extra: "kept",
+      });
+      await write.commit();
+      const schema: JSONSchema = {
+        items: { type: "object", properties: { title: { type: "string" } } },
+      };
+      for (const lazy of [false, true]) {
+        const tx = runtime.edit();
+        if (lazy) tx.markLazyMaterialize(true);
+        try {
+          const value = runtime.getCell<{ extra?: string }>(
+            space,
+            "typeless-open",
+            schema,
+            tx,
+          ).get();
+          expect(value.extra).toBe("kept");
+          expect(tx.takeSchemaRefusal()).toBeUndefined();
+        } finally {
+          await tx.commit();
+        }
+      }
+    });
+
+    it("narrows an element of an array through `items` in both modes", async () => {
+      const write = runtime.edit();
+      runtime.getCell(space, "typeless-list", undefined, write).setRaw({
+        list: [{ n: 1 }],
+      });
+      await write.commit();
+      const schema: JSONSchema = {
+        type: "object",
+        properties: {
+          list: {
+            items: {
+              type: "object",
+              properties: { n: { type: "number" } },
+              asCell: ["cell"],
+            },
+          },
+        },
+      };
+      for (const lazy of [false, true]) {
+        const tx = runtime.edit();
+        if (lazy) tx.markLazyMaterialize(true);
+        try {
+          const value = runtime.getCell<{ list: unknown[] }>(
+            space,
+            "typeless-list",
+            schema,
+            tx,
+          ).get();
+          const element = value.list[0];
+          expect(isCell(element)).toBe(true);
+          expect((element as Cell<{ n: number }>).get().n).toBe(1);
+          expect(tx.takeSchemaRefusal()).toBeUndefined();
+        } finally {
+          await tx.commit();
+        }
+      }
+    });
+  });
+
   describe("a union evaluated whole that admits an unserved hop as `undefined`", () => {
     it("reads `undefined` with no refusal, and the document's read registered", async () => {
       // Two object branches: the union is evaluated whole, and the link below

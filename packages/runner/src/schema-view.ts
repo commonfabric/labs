@@ -73,6 +73,7 @@ import {
   opaqueLeafMissesRequired,
   schemaAcceptsType,
 } from "./traverse.ts";
+import { internSchema } from "@commonfabric/data-model-schema";
 
 const logger = getLogger("schema-view", { enabled: false, level: "warn" });
 
@@ -189,13 +190,23 @@ const requiredKeys = (schema: JSONSchema | undefined): readonly string[] =>
     ? schema.required as string[]
     : [];
 
+/**
+ * The schema of `key` under `schema`, narrowed for the `container` the view
+ * holds. A schema that declares no `type` is settled to that container first:
+ * narrowing without a value reads it as the union of its object and array
+ * readings, and a view has the value in hand. A declared type stands.
+ */
 const childSchema = (
   schema: JSONSchema | undefined,
   key: string,
+  container: "object" | "array",
 ): JSONSchema => {
   if (schema === undefined) return true;
+  const settled = isObjectOrArray(schema) && schema.type === undefined
+    ? internSchema({ ...schema, type: container })
+    : schema;
   const narrowed = ContextualFlowControl.schemaAtPath(
-    schema,
+    settled,
     [key],
     undefined,
     EXCLUDED_EMPTY,
@@ -204,38 +215,34 @@ const childSchema = (
   if (narrowed !== false || !isObjectOrArray(schema)) {
     return narrowed;
   }
-  // `schemaAtPath` decides which children exist from the schema's `type`, so a
-  // schema that declares `properties` or `items` and omits `type` narrows to
-  // `false` — no child selected. An eager read reaches those children, and the
-  // subschema is right there, so read it directly rather than refuse. Losing it
-  // costs more than a refusal: the child's `asCell` marker goes with it, and
-  // the reader gets a plain view where the pattern declared a `Cell`.
-  if (
-    isObjectOrArray(schema.properties) && Object.hasOwn(schema.properties, key)
-  ) {
-    const declared = (schema.properties as Record<string, JSONSchema>)[key];
-    // Except where the subschema is `false`, which turns the child down rather
-    // than describing one to read through.
-    return declared === false ? EXCLUDED_REJECTED : declared;
-  }
-  if (isArrayIndexPropertyName(key) && schema.items !== undefined) {
-    return schema.items as JSONSchema;
-  }
-  // A schema that refuses the properties it does not name has turned this key
-  // down, whether it names some or none. Without `additionalProperties`, one
-  // that names some reaches `schemaAtPath` as a missing property rather than as
-  // `false`, and an eager read drops the property either way.
+  // `schemaAtPath` narrows to `false` where the schema turns the child down —
+  // a property declared `false`, or a key left unnamed by a schema that
+  // refuses the properties it does not name — and where the schema's declared
+  // type holds no children at all. The first two are deliberate absences,
+  // settled off the schema: the child is absent to a reader, and the link
+  // under it is never followed. Without `additionalProperties`, a schema that
+  // names some properties reaches `schemaAtPath` as a missing property rather
+  // than as `false`, and an eager read drops the property either way.
   //
-  // One that names none and carries `allOf` parts has not: an eager read merges
-  // the keywords beside an `allOf` into each part before it looks at a key, so
-  // a part can name this one, and it is left to the read below. An `allOf`
-  // holding no parts names nothing, and an eager read passes over it.
+  // A schema that names no properties and carries `allOf` parts has turned
+  // nothing down: an eager read merges the keywords beside an `allOf` into
+  // each part before it looks at a key, so a part can name this one. An
+  // `allOf` holding no parts names nothing, and an eager read passes over it.
+  if (
+    isObjectOrArray(schema.properties) &&
+    Object.hasOwn(schema.properties, key) &&
+    (schema.properties as Record<string, JSONSchema>)[key] === false
+  ) {
+    return EXCLUDED_REJECTED;
+  }
   if (
     schema.additionalProperties === false &&
     (isObjectOrArray(schema.properties) || !schema.allOf?.length)
   ) {
     return EXCLUDED_REJECTED;
   }
+  // What remains is a type that holds no children, and an eager read selects
+  // nothing there either: the child reads as absent.
   return false;
 };
 
@@ -389,7 +396,7 @@ export function materializeSchemaView(
   }
 
   for (const key of requiredKeys(schema)) {
-    const narrowed = childSchema(schema, key);
+    const narrowed = childSchema(schema, key, "object");
     if (!Object.hasOwn(value, key)) {
       // A declared default stands in for an absent required key, exactly as it
       // does for an eager read, and so does a declared stream: its handle is
@@ -433,14 +440,16 @@ const visibleKeys = (
   value: Record<string, FabricValue>,
 ): string[] => {
   const keys = Object.keys(value).filter((key) =>
-    !isExcluded(childSchema(schema, key))
+    !isExcluded(childSchema(schema, key, "object"))
   );
   if (isObjectOrArray(schema) && isObjectOrArray(schema.properties)) {
     for (const key of Object.keys(schema.properties)) {
       if (Object.hasOwn(value, key)) continue;
       if (
         getPropertyDefaultSchema(schema, key) === undefined &&
-        !ContextualFlowControl.declaresStream(childSchema(schema, key))
+        !ContextualFlowControl.declaresStream(
+          childSchema(schema, key, "object"),
+        )
       ) continue;
       keys.push(key);
     }
@@ -527,7 +536,7 @@ function createObjectView(
   const schema = link.schema;
   const required = new Set(requiredKeys(schema));
   const resolveChild = (key: string): unknown => {
-    const narrowed = childSchema(schema, key);
+    const narrowed = childSchema(schema, key, "object");
     if (isExcluded(narrowed)) {
       // The data carries this key and the schema does not select it, so the
       // reader gets the `undefined` an absent key gives, and nothing at the
@@ -702,7 +711,7 @@ function createArrayView(
   const resolveElement = (index: number): unknown => {
     const key = String(index);
     const item = value[index];
-    const itemSchema = childSchema(schema, key);
+    const itemSchema = childSchema(schema, key, "array");
     const slotLink: NormalizedFullLink = {
       ...link,
       path: [...link.path, key],
@@ -759,7 +768,7 @@ function createArrayView(
       // fails deeper inside an element view is decided where it is touched.
       if (isUnresolvedInputError(error)) throw error;
       const fallbackType = arrayItemFallbackType(
-        childSchema(schema, String(index)),
+        childSchema(schema, String(index), "array"),
       );
       if (fallbackType === undefined) throw error;
       tx.clearSchemaRefusal(error);
