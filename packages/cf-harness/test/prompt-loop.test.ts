@@ -3595,10 +3595,10 @@ Deno.test("CfHarnessPromptLoop holds the calls after a browser delegation until 
   assertEquals(shellCommands().some((c) => c.includes("printf after")), true);
 });
 
-Deno.test("CfHarnessPromptLoop starts no further call of a turn once the owner aborts", async () => {
-  // The first shell call aborts the owner as it runs. The second call of the
-  // turn must not start: it records no policy decision and reaches no
-  // sandbox.
+Deno.test("CfHarnessPromptLoop starts no further call of a turn once a running call is aborted by the owner", async () => {
+  // The first shell call aborts the owner as it runs, so that call rejects
+  // and ends the turn. The second call of the turn must not start: it
+  // records no policy decision and reaches no sandbox.
   const controller = new AbortController();
   const sandbox = new FakeSandboxRuntime([
     { stdout: "first", stderr: "", exitCode: 0 },
