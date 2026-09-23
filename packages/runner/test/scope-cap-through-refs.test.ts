@@ -235,6 +235,47 @@ describe("scope-cap-through-refs", () => {
       expect(ContextualFlowControl.getSchemaScopeCap(node)).toBeUndefined();
     });
 
+    it("returns the entry scope of a recursive handle branch in either form", () => {
+      // A branch naming a definition that is already being expanded still
+      // declares its own cap; only the expansion stops there.
+
+      const schema: JSONSchemaObj = {
+        $ref: "#/$defs/Recursive",
+        $defs: {
+          Recursive: {
+            anyOf: [
+              { type: "null" },
+              {
+                $ref: "#/$defs/Recursive",
+                asCell: [{ kind: "cell", scope: "user" }],
+              },
+            ],
+          },
+        },
+      };
+
+      expect(ContextualFlowControl.getAsCellFollowScopeCap(schema))
+        .toBe("user");
+      expect(ContextualFlowControl.getAsCellFollowScopeCap(storedForm(schema)))
+        .toBe("user");
+    });
+
+    it("returns the entry scope of a branch repeating its compound's reference in either form", () => {
+      const schema: JSONSchemaObj = {
+        $ref: "#/$defs/R",
+        anyOf: [
+          { $ref: "#/$defs/R", asCell: [{ kind: "cell", scope: "user" }] },
+          { type: "null" },
+        ],
+        $defs: { R: { type: "string" } },
+      };
+
+      expect(ContextualFlowControl.getAsCellFollowScopeCap(schema))
+        .toBe("user");
+      expect(ContextualFlowControl.getAsCellFollowScopeCap(storedForm(schema)))
+        .toBe("user");
+    });
+
     it("returns the owning document's definition for a branch that carries a `$defs` of its own", () => {
       // A `$defs` below the root is inert: `#/$defs/Handle` names the root's
       // definition wherever the reference sits.

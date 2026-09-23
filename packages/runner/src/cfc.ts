@@ -976,10 +976,11 @@ const resolveRootRefForScope = (
  * sits in the document its compound was read from, which changes only where a
  * reference resolved into another one.
  *
- * `following` holds, per document, the references followed on the way down, as
- * the resolver guards a single chain: a reference already being followed
- * declares nothing further, so a definition that reaches itself through a
- * branch ends there rather than recursing without end.
+ * `following` holds, per document, the references whose compounds are being
+ * expanded on the way down, as the resolver guards a single chain. A position's
+ * own declaration is read whatever it names, and a reference already being
+ * expanded is not expanded again, so a definition that reaches itself through
+ * a branch ends there rather than recursing without end.
  */
 const asCellFollowScopeCap = (
   schema: JSONSchema | undefined,
@@ -987,6 +988,11 @@ const asCellFollowScopeCap = (
   following?: Map<JSONSchema, Set<string>>,
 ): SchemaScope | undefined => {
   if (!isObjectOrArray(schema)) return undefined;
+  const declaring = resolveRootRefForScope(schema, root);
+  const entryScope = ContextualFlowControl.getAsCellScope(
+    ContextualFlowControl.getAsCellValues(declaring.schema).at(0),
+  );
+  if (isSchemaScope(entryScope)) return entryScope;
   const ref = typeof schema.$ref === "string" ? schema.$ref : undefined;
   let followed: Set<string> | undefined;
   if (ref !== undefined) {
@@ -1002,11 +1008,6 @@ const asCellFollowScopeCap = (
     followed.add(ref);
   }
   try {
-    const declaring = resolveRootRefForScope(schema, root);
-    const entryScope = ContextualFlowControl.getAsCellScope(
-      ContextualFlowControl.getAsCellValues(declaring.schema).at(0),
-    );
-    if (isSchemaScope(entryScope)) return entryScope;
     let cap: SchemaScope | undefined;
     for (const branches of [declaring.schema.anyOf, declaring.schema.oneOf]) {
       if (!Array.isArray(branches)) continue;
