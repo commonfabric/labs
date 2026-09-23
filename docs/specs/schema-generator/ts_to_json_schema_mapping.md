@@ -873,6 +873,13 @@ Mechanics:
   own declaration as ordinary metadata.
   An authored wrapper around a library alias is also read from its declaration,
   preserving any binding fixed inside the wrapper.
+- A canonical alias reached by its own name reads its payload, like its
+  labels, from the reference's own argument nodes. A payload that is itself a
+  CFC alias therefore lowers as it would if written on its own: a generic alias
+  keeps its argument (`Integrity<Sec<string>, I>` is a string), a nested
+  `WriteAuthorizedBy` keeps its `typeof` binding, and a nested label keeps its
+  `AnyOf` clauses. A named type in the payload stays a `$ref` to its
+  definition.
 - User alias chains are followed with type-parameter node substitution until a
   canonical name is reached (`resolveCfcAliasFromDeclaration` /
   `substituteTypeNode`). Substitution starts at the authored reference's

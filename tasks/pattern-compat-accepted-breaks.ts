@@ -773,4 +773,28 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "#7976 reverted: the result returns to the contract recorded before it",
     record: "docs/history/printed-type-node-revert-break.md",
   },
+  {
+    // The everyone-is-admin flag's `true` branch gains the `writeAuthorizedBy`
+    // claim its type declares, which a canonical alias formatting its payload
+    // without a node had dropped. The proof descends to the flag here.
+    pattern: "cfc-group-chat-demo/main.tsx",
+    baselines: ["20260922T020444Z-IRoEgfpuUdf-xwvE"],
+    paths: [
+      "argument.adminRegistry.everyoneIsAdmin",
+      "result.adminRegistry.everyoneIsAdmin",
+    ],
+    reason:
+      "the everyone-is-admin flag's `true` branch carries the write claim its type declares",
+    record: "docs/history/everyone-admin-write-claim-restored-break.md",
+  },
+  {
+    // The same break; against this older contract the proof blames the whole
+    // registry rather than descending to the flag.
+    pattern: "cfc-group-chat-demo/main.tsx",
+    baselines: ["20260918T041802Z-YAJU948xc_bQwY0H"],
+    paths: ["argument.adminRegistry", "result.adminRegistry"],
+    reason:
+      "the everyone-is-admin flag's `true` branch carries the write claim its type declares",
+    record: "docs/history/everyone-admin-write-claim-restored-break.md",
+  },
 ];

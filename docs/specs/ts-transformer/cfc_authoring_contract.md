@@ -119,10 +119,13 @@ gone.
   the base schema's atoms first and each atom once. Any other key both declare
   must be declared alike, or lowering fails.
 - Where the base schema is a `$ref` to a definition carrying `ifc`, the `ifc`
-  written beside the `$ref` also carries the definition's labels, combined by
-  the same rule, because resolving the reference replaces the definition's
-  `ifc` with it. The mapping spec's §11
-  (`docs/specs/schema-generator/ts_to_json_schema_mapping.md`) has the details.
+  written beside the `$ref` also carries the labels of every definition its
+  reference chain reaches, because resolving the reference replaces the
+  definition's `ifc` with it. They combine by the same rule with the
+  definitions as the inner declarations: the farthest definition's
+  `confidentiality` atoms first and the reference's own last. The mapping
+  spec's §11 (`docs/specs/schema-generator/ts_to_json_schema_mapping.md`) has
+  the details.
 
 ### Simple Wrapper Aliases
 
