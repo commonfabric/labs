@@ -1253,15 +1253,38 @@ anything a binary is built from does. `tasks/binary-cache-key.ts` computes
 it as a digest of the git object id of every tracked file under
 `BINARY_SOURCES` in `tasks/build-binaries.ts`. The tests in
 `tasks/build-binaries.test.ts` hold the list to every path the build reads
-and to every local module the binaries' import graphs reach. A change to the shell's service worker, to
-the Deno release that `mise.toml` pins, or to a JSON file an import reaches
-therefore moves the key like a change to any other source. Everything a
-lane wants to keep between runs sits under that one directory — the built
-binaries, and the pattern compile byte cache — because one step covering
-one directory is what keeps the workflow independent of what the lane turns
-out to need. That step is in the workflow rather than in the runner because
-the cache service is only reachable through the action, and it is written
-once and never touched again.
+and to every local module the binaries' import graphs reach. A change to the
+shell's service worker, to the Deno release that `mise.toml` pins, or to a
+JSON file an import reaches therefore moves the key like a change to any
+other source. Those graphs start from each entry point and from each module
+in a path the compile embeds with `--include`, because `deno compile`
+follows the imports of both. The toolshed binary leaves out the patterns'
+integration tests, so the test harness modules only those tests import are
+not embedded either.
+
+A binary is also made from the environment it is built in, because the
+shell bundle bakes environment variables in as compile-time defines. So a
+capability that builds a binary it caches runs the build with a cleared
+environment. It passes through only `BUILD_HOST_VARIABLES` in
+`tasks/build-binaries.ts`, the variables the build needs from the machine,
+such as `PATH` and `DENO_DIR`. A test fails if the shell's configuration
+reads one of them, so none reaches a binary. The build is given only the
+other variables that `cachedBinaries()` in `tasks/ci-capabilities.ts` names
+for that binary, and every other variable it reads is unset. The key covers
+that table as well as the sources, so a change to what a cached binary's
+build is given moves the key even where no source changes, as when
+`tasks/server-execution-ci.ts` changes which define the opposite arm is
+given. A variable set in the lane's own environment cannot reach a cached
+binary. Nothing sets `COMMIT_SHA` in a cached build, because a binary built
+at one commit serves every later commit with the same sources.
+
+Everything a lane wants to keep between runs sits under that one
+directory — the built binaries, and the pattern compile byte cache —
+because one step covering one directory is what keeps the workflow
+independent of what the lane turns out to need. That step is in the
+workflow rather than in the runner because the cache service is only
+reachable through the action, and it is written once and never touched
+again.
 
 That split is the argument for having capabilities at all. Three ways of
 providing "a Toolshed server" coexist, suites say which one they need, and
@@ -1276,13 +1299,19 @@ The lane job's steps are fixed and do not vary with what the lane runs:
 3. Verify the lock file and install dependencies.
 4. Restore the binary cache.
 5. Run `deno run -A tasks/ci-lane.ts --lane N --of 5`.
-6. Ship test records.
+6. Upload what a failing lane left behind.
+7. Ship test records.
 
 Everything conditional happens inside step 5. That is what makes the
 workflow independent of the topology. The one cost is that a capability
 which genuinely needs a GitHub Action — and today only the binary cache
 does — has to be represented by a fixed step that runs unconditionally and
 cheaply.
+
+Step 6 uploads what a lane leaves behind for somebody to read. A lane that
+failed keeps its own working directory, where a server's log is, and that
+directory sits under the job's temporary directory so the upload can reach
+it; a lane that passed removes it.
 
 ## What the store gives us and what it is missing
 
@@ -2802,6 +2831,13 @@ pr-tests:
         deno run -A tasks/ci-lane.ts
         --lane ${{ matrix.lane }} --of 5
         --base origin/${{ github.base_ref }}
+    - name: 📋 Upload what a failing lane left behind
+      if: ${{ failure() }}
+      uses: actions/upload-artifact@v7
+      with:
+        name: lane-failure-${{ matrix.lane }}-a${{ github.run_attempt }}
+        path: ${{ runner.temp }}/ci-lane-*
+        if-no-files-found: ignore
     - name: 📤 Ship test records
       if: always()
       uses: ./.github/actions/test-records-ship
@@ -3098,8 +3134,8 @@ something or into skipping something.
 
 Two rules keep the joined result honest. A coverage failure says in the
 summary that it is a coverage failure, so it is never mistaken for a test
-failure. And when any lane failed, every set a lane reported is reported
-rather than gated, because coverage measured through a failing run says
+failure. And when any lane failed, every set a lane's report measured is
+reported rather than gated, because coverage measured through a failing run says
 nothing about whether the change was tested. Every such set rather than
 the sets the failure was in: `Status` is already failing for the lane, so
 a second failure over a measurement taken through it buys nothing, and
@@ -3291,12 +3327,12 @@ list is what it is today:
 | `packages/identity` | Every one of its tests runs in a browser through `deno-web-test`. It has no Deno-only half to measure. |
 | `packages/deno-web-test` | Its tests drive the browser harness end to end. |
 | `packages/toolshed` | Its tests want the service's own environment and its initialized database. |
+| `packages/integration` | The coverage metric counts none of its lines, since it leaves out every path with an `integration` directory in it, so a set over it would measure nothing. |
 
-That leaves 35 measured sets in the tree today, `packages/memory` among
-them, out of the 45 members `deno.jsonc` lists under `packages/`: the
+That leaves 34 measured sets in the tree today, `packages/memory` among
+them, out of the 44 members `deno.jsonc` lists under `packages/`: the
 nine on the list, and one member with no Deno-only tests to measure.
-`packages/agents-host` and `packages/piece` are two of the 35: both are
-hand-sharded today, and being hand-sharded stops meaning anything once
+`packages/piece` is one of the 34: it is hand-sharded today, and being hand-sharded stops meaning anything once
 the packer does the sharding and `Status` joins what the lanes measured.
 
 One entry is there for size. Because `Status` joins the lanes' coverage, a
@@ -3508,11 +3544,14 @@ And when the manifest holds no run the branch contains, the comparison
 would be against a tree the branch does not have, so a rise measured
 against it is not the branch's rise.
 
-A third is not about the baseline at all: a set whose joined reports name
-no line of its member measured nothing, rather than covering nothing.
-Charging it every tracked line would fail a change for a measurement that
-never happened, and a set's tests always load some of their own member's
-source, so an empty report is the conversion having produced nothing.
+A forced set whose joined reports name no line of its member fails. A
+set's tests always load some of their own member's source, so an empty
+report measured nothing, rather than covering nothing. Charging it every
+tracked line would score a measurement that never happened, and passing
+it would pass a rise that nothing measured. That is the failure of a
+forced set no lane reported, and the gate treats the two alike. An
+unforced set whose reports name nothing is reported, as an unforced set
+no run measured is.
 
 The publisher fills those numbers from the `perf-metrics` artifact of each
 run on `main` it has not read yet, and carries forward what the previous
@@ -3692,7 +3731,7 @@ dashboard is where it gets answered.
 over each measured set.** Nothing will fail because a change lowered the
 repository's whole coverage number. What replaces that is a weekly trend
 somebody has to choose to look at, plus a comment naming the source
-groups where the debt rose. Over the 35 [measured
+groups where the debt rose. Over the 34 [measured
 sets](#the-measured-set) the ratchet still fails a pull request, because
 there both sides measure the same complete thing. The reduction in
 enforcement is real and confined to what could no longer be measured per
@@ -3729,9 +3768,9 @@ is pinned to the commit's date. And if none of that settles it,
 | A measured set has no baseline, or none from an ancestor of the merge base | `Status` reports the comparison and does not fail. The next full `main` run supplies one. |
 | A measured member gains a test needing a browser or a server | It goes in the member's `browser-test` half, which no measured set holds, so the Deno-only half keeps its gate. A member with no such half yet names one. |
 | A measured set grows expensive | Reported in the publisher's summary and by `deno task test-selection coverage`. Nothing is excluded automatically; somebody splits the member's tests or adds a line to the exclusion list. |
-| A test in a measured set fails | Every set a lane reported is reported rather than gated. Coverage measured through a failing run says nothing about whether the change was tested, and the failure is the thing to fix. |
+| A test in a measured set fails | Every set a lane's report measured is reported rather than gated. Coverage measured through a failing run says nothing about whether the change was tested, and the failure is the thing to fix. |
 | A change reaches more than two measured sets | The gate does not run at all, and `Status` says so. The full run on `main` still measures every set, and a rise it finds is reported back to the pull request. |
-| No lane's report for a forced set reaches the gate: a lane dies before uploading, or an upload or the download carries nothing | That set fails the gate, whether or not any lane failed, because the change was made to measure those sets and a rise in them cannot be ruled out. A set the cap left unforced is reported rather than failed. |
+| No lane's report measuring a forced set reaches the gate: a lane dies before uploading, an upload or the download carries nothing, or a lane writes an empty report | That set fails the gate, whether or not any lane failed, because the change was made to measure those sets and a rise in them cannot be ruled out. A set the cap left unforced is reported rather than failed. |
 | Two measured sets over one member disagree | Nothing joins them. Each carries its own baseline and its own verdict, and an `ACCEPT_COVERAGE_DEBT` marker naming the member accepts a rise in either. |
 | A lane exceeds five minutes repeatedly | The correction factors rise on the next publisher run and less is packed. If it persists, the publisher's summary shows the miss and somebody looks. |
 | Two attempts of one run straddle a UTC midnight | The later attempt's relay writes the earlier attempt's records a second time, under the later day, and the publisher folds both. Not observed in the store so far; see [What the store is missing](#what-the-store-is-missing). |
@@ -3888,10 +3927,11 @@ test-selection`. Its modes are also how the system is tested by hand.
 - `explain <identity>` prints one test's score, the catches behind it
   with their dates and sources, its flake rate, and which item it maps to.
   A suite-level measurement instead says that it is not selectable. For an
-  item identity, the output says whether the current manifest selects it,
-  how many runs it gives it, and whether it withholds it from pull
-  requests. The argument accepts the canonical three- or
-  four-part identity key, and the output always names a present variant.
+  item identity, the output says whether the manifest the checked-out
+  commit resolves selects it, how many runs it gives it, and whether it
+  withholds it from pull requests. The argument accepts the canonical
+  three- or four-part identity key, and the output always names a present
+  variant.
   This is what somebody uses to answer "why did my test not run?", which
   is the question this system will be asked most often and the one it
   would otherwise answer badly.
@@ -3901,15 +3941,18 @@ test-selection`. Its modes are also how the system is tested by hand.
   measured one whether the figure shown is still the checked-in seed or
   one the publisher has since written back.
 - `coverage` prints every measured set, the suite and the member it pairs,
-  the task the set measures, and the baseline the newest manifest holds
-  for it, and beside them every workspace member that carries no set and
-  the reason it does not. This is what somebody uses to answer "why is my
+  the task the set measures, and the baseline the checked-out commit's
+  manifest holds for it, and beside them every workspace member that
+  carries no set and the reason it does not. This is what somebody uses to answer "why is my
   package not gated?" and "what am I being compared against?".
 
 `tasks/ci-lane.ts` keeps a `--dry-run` of its own, because that is how
 continuous integration asks the same question from inside a job.
 `plan --dry-run` is that code path with a person's output rather than a
-job summary, so the two cannot disagree about what would run.
+job summary, so the two cannot disagree about what would run. Every mode
+that reads a manifest resolves it the way a lane does, at the moment the
+checked-out commit was made, so each reads the manifest the lanes testing
+that commit read, or the one current at the moment `--at` names.
 
 ## Every dial in one place
 
@@ -4329,10 +4372,10 @@ exercised on the branch on its own.
       request's description. It works out which sets the gate covers by
       running the same function the lanes run, cap included, rather than
       trusting a lane's report. A coverage failure names itself as one, a
-      run with a failing test reports rather than gates every set a lane
-      reported, a forced set no lane reported fails, and a change over
-      the cap forces no set, with a line saying so, and still scores any
-      set some run measured anyway.
+      run with a failing test reports rather than gates every set a
+      lane's report measured, a forced set no lane's report measured
+      fails, and a change over the cap forces no set, with a line saying
+      so, and still scores any set some run measured anyway.
 - [ ] The gate's workflow half, which only the lanes can carry. Each
       `pr-tests` lane uploads what is under its coverage directory as an
       artifact, `Status` downloads all five into one directory, and

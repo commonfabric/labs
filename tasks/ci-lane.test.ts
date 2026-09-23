@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
 import { exists } from "@std/fs";
-import { describe, it } from "@std/testing/bdd";
+import { afterEach, describe, it } from "@std/testing/bdd";
 import { fromFileUrl } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { shuffleNotice } from "@commonfabric/test-support/shuffle";
@@ -75,6 +75,7 @@ import {
   LANE_BUDGET_SECONDS,
   UNMEASURED_COST_SECONDS,
 } from "./test-selection/policy.ts";
+import { repositoryCommittedAt } from "./test-selection/testing.ts";
 
 /**
  * The repository, found from this file rather than from the process's
@@ -124,6 +125,35 @@ function manifestOf(entries: readonly Partial<ManifestEntry>[]): Manifest {
     known: { count: 0, digest: "" },
     coverageBaselines: [],
   };
+}
+
+/**
+ * Sets the named variables, or unsets those given as `undefined`, and
+ * returns a function that puts all of them back.
+ */
+function setEnv(env: Record<string, string | undefined>): () => void {
+  const set = (values: Record<string, string | undefined>) => {
+    for (const [name, value] of Object.entries(values)) {
+      if (value === undefined) Deno.env.delete(name);
+      else Deno.env.set(name, value);
+    }
+  };
+  const previous = Object.fromEntries(
+    Object.keys(env).map((name) => [name, Deno.env.get(name)]),
+  );
+  set(env);
+  return () => set(previous);
+}
+
+/**
+ * Makes a lane run by a test behave as it does outside a
+ * continuous-integration job, and returns a function that undoes that.
+ * Inside a job, a lane that fails keeps its work directory under the
+ * job's temporary directory, which here is that of the job running the
+ * tests.
+ */
+function outsideJob(): () => void {
+  return setEnv({ RUNNER_TEMP: undefined });
 }
 
 describe("reading the lane's command line", () => {
@@ -186,30 +216,18 @@ describe("reading the lane's command line", () => {
 
 describe("the moment a lane resolves its manifest at", () => {
   const lane = { lane: 1, of: 5, full: false, dryRun: false, laneCount: false };
+  const roots: string[] = [];
+
+  afterEach(async () => {
+    for (const root of roots.splice(0)) {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
 
   /** A repository whose one commit was made at a moment a case chose. */
   async function repository(committed: string): Promise<string> {
-    const root = await Deno.makeTempDir({ prefix: "ci-lane-commit-" });
-    const git = (...args: string[]) =>
-      new Deno.Command("git", {
-        args,
-        cwd: root,
-        env: {
-          ...Deno.env.toObject(),
-          GIT_AUTHOR_DATE: committed,
-          GIT_COMMITTER_DATE: committed,
-          GIT_AUTHOR_NAME: "A",
-          GIT_AUTHOR_EMAIL: "a@example.com",
-          GIT_COMMITTER_NAME: "A",
-          GIT_COMMITTER_EMAIL: "a@example.com",
-        },
-        stdout: "null",
-        stderr: "null",
-      }).output();
-    await git("init", "-q");
-    await Deno.writeTextFile(`${root}/a.txt`, "a");
-    await git("add", "a.txt");
-    await git("commit", "-q", "-m", "one");
+    const root = await repositoryCommittedAt(committed);
+    roots.push(root);
     return root;
   }
 
@@ -245,6 +263,7 @@ describe("the moment a lane resolves its manifest at", () => {
 
   it("falls back to the newest manifest outside a repository, and says so", async () => {
     const root = await Deno.makeTempDir({ prefix: "ci-lane-nogit-" });
+    roots.push(root);
     const moment = manifestMoment({ ...lane, root });
     expect(moment.note).toContain("cannot read the commit's date");
     expect(Number.isNaN(new Date(moment.at).getTime())).toBe(false);
@@ -1917,8 +1936,7 @@ describe("the lane's own housekeeping", () => {
     // somebody for a report that was never complete.
     const root = await Deno.makeTempDir({ prefix: "lane-convert-" });
     const temp = await Deno.makeTempDir({ prefix: "lane-tmp-" });
-    const previous = Deno.env.get("TMPDIR");
-    Deno.env.set("TMPDIR", temp);
+    const restore = setEnv({ TMPDIR: temp, RUNNER_TEMP: undefined });
     const dir =
       `${root}/coverage/${COVERAGE_PROFILE_DIR}/workspace-unit/packages__bakery`;
     await Deno.mkdir(dir, { recursive: true });
@@ -1951,8 +1969,7 @@ describe("the lane's own housekeeping", () => {
       });
     } finally {
       console.log = log;
-      if (previous === undefined) Deno.env.delete("TMPDIR");
-      else Deno.env.set("TMPDIR", previous);
+      restore();
     }
     expect(ok).toBe(false);
     await Deno.remove(temp, { recursive: true });
@@ -1964,8 +1981,7 @@ describe("the lane's own housekeeping", () => {
     // capability that refuses is not a reason to leave one behind.
     const root = await Deno.makeTempDir({ prefix: "lane-caps-" });
     const temp = await Deno.makeTempDir({ prefix: "lane-tmp-" });
-    const previous = Deno.env.get("TMPDIR");
-    Deno.env.set("TMPDIR", temp);
+    const restore = setEnv({ TMPDIR: temp, RUNNER_TEMP: undefined });
     const wanting: Suite = {
       id: "wanting",
       recordSurfaces: [{ kind: "unit", scope: "wanting" }],
@@ -1993,8 +2009,7 @@ describe("the lane's own housekeeping", () => {
       })).rejects.toThrow();
     } finally {
       console.log = log;
-      if (previous === undefined) Deno.env.delete("TMPDIR");
-      else Deno.env.set("TMPDIR", previous);
+      restore();
     }
     expect([...Deno.readDirSync(temp)]).toEqual([]);
     await Deno.remove(temp, { recursive: true });
@@ -2013,13 +2028,14 @@ describe("the lane's own housekeeping", () => {
     // does not end up inside the directory this then checks and clears.
     const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
     const temp = await Deno.makeTempDir({ prefix: "lane-tmp-" });
-    const previous = Deno.env.get("TMPDIR");
-    Deno.env.set("TMPDIR", temp);
     // The spool is what makes the lane reach the point where it would
     // record what its setup cost. It opened nothing, so there is
     // nothing to record.
-    const previousSpool = Deno.env.get("CF_TEST_RECORDS_DIR");
-    Deno.env.set("CF_TEST_RECORDS_DIR", spool);
+    const restore = setEnv({
+      TMPDIR: temp,
+      RUNNER_TEMP: undefined,
+      CF_TEST_RECORDS_DIR: spool,
+    });
     const log = console.log;
     console.log = () => {};
     let ok: boolean;
@@ -2049,10 +2065,7 @@ describe("the lane's own housekeeping", () => {
       });
     } finally {
       console.log = log;
-      if (previous === undefined) Deno.env.delete("TMPDIR");
-      else Deno.env.set("TMPDIR", previous);
-      if (previousSpool === undefined) Deno.env.delete("CF_TEST_RECORDS_DIR");
-      else Deno.env.set("CF_TEST_RECORDS_DIR", previousSpool);
+      restore();
     }
     expect(ok).toBe(true);
     // Named rather than counted: the private root keeps other test
@@ -2074,8 +2087,18 @@ describe("the lane's own housekeeping", () => {
     await Deno.remove(spool, { recursive: true });
   });
 
-  /** Runs the only lane of a full run over `suites` in `root`, quietly. */
-  async function onlyLane(root: string, suites: Suite[]): Promise<boolean> {
+  /**
+   * Runs the only lane of a full run over `suites` in `root`, quietly,
+   * and says whether it passed. It runs as it would outside a job unless
+   * `env` sets `RUNNER_TEMP`, with the other variables `env` names set
+   * around it (or unset, for `undefined`).
+   */
+  async function onlyLane(
+    root: string,
+    suites: Suite[],
+    env: Record<string, string | undefined> = {},
+  ): Promise<boolean> {
+    const restore = setEnv({ RUNNER_TEMP: undefined, ...env });
     const log = console.log;
     console.log = () => {};
     try {
@@ -2090,6 +2113,7 @@ describe("the lane's own housekeeping", () => {
       );
     } finally {
       console.log = log;
+      restore();
     }
   }
 
@@ -2126,6 +2150,72 @@ describe("the lane's own housekeeping", () => {
       expect(await exists(`${root}/coverage/lcov/${COMPILE_CACHE_STATE_FILE}`))
         .toBe(false);
     } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("keeps a failed lane's work directory only where a job will upload it", async () => {
+    // Outside a job nothing collects it, and the end of each capability's
+    // log has been printed by then; inside one, a workflow step can
+    // upload what is under the job's temporary directory.
+
+    const root = await Deno.makeTempDir({ prefix: "lane-kept-" });
+    const temp = await Deno.makeTempDir({ prefix: "lane-tmp-" });
+    const failing = [suite({
+      id: "workspace-unit",
+      units: ["packages/bakery/glaze.test.ts"],
+      command: (_units, context) =>
+        Promise.resolve([{
+          command: [Deno.execPath(), "eval", "Deno.exit(1)"],
+          cwd: context.root,
+        }]),
+    })];
+    const refusing = [suite({
+      id: "workspace-unit",
+      needs: ["nothing-opens-this" as CapabilityId],
+      units: ["packages/bakery/glaze.test.ts"],
+    })];
+    const throwing = [suite({
+      id: "workspace-unit",
+      units: ["packages/bakery/glaze.test.ts"],
+      command: () =>
+        Promise.reject(new Error("the command could not be built")),
+    })];
+    const lanes = async () =>
+      (await Array.fromAsync(Deno.readDir(temp)))
+        .map((entry) => entry.name)
+        .filter((name) => name.startsWith("ci-lane-"));
+    try {
+      expect(await onlyLane(root, [], { RUNNER_TEMP: temp })).toBe(true);
+      expect(await lanes()).toEqual([]);
+      expect(
+        await onlyLane(root, failing, { TMPDIR: temp }),
+      ).toBe(false);
+      expect(await lanes()).toEqual([]);
+      // An empty value is no directory at all. Taken as one, it would put
+      // the directory under the current one, so that is `temp` here too.
+      const cwd = Deno.cwd();
+      Deno.chdir(temp);
+      try {
+        expect(
+          await onlyLane(root, failing, { TMPDIR: temp, RUNNER_TEMP: "" }),
+        ).toBe(false);
+      } finally {
+        Deno.chdir(cwd);
+      }
+      expect(await lanes()).toEqual([]);
+      expect(await onlyLane(root, failing, { RUNNER_TEMP: temp })).toBe(false);
+      expect(await lanes()).toHaveLength(1);
+      // A lane that ended by throwing failed as well, whether a capability
+      // would not open or a batch could not be run.
+      await expect(onlyLane(root, refusing, { RUNNER_TEMP: temp })).rejects
+        .toThrow();
+      expect(await lanes()).toHaveLength(2);
+      await expect(onlyLane(root, throwing, { RUNNER_TEMP: temp })).rejects
+        .toThrow("the command could not be built");
+      expect(await lanes()).toHaveLength(3);
+    } finally {
+      await Deno.remove(temp, { recursive: true });
       await Deno.remove(root, { recursive: true });
     }
   });
@@ -2844,6 +2934,7 @@ describe("what a lane does with the batches it was given", () => {
     over: { full?: boolean; manifest?: Manifest } = {},
   ): Promise<{ ok: boolean; measured: TestRecord[] }> {
     const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
+    const restore = outsideJob();
     const log = console.log;
     console.log = () => {};
     try {
@@ -2875,6 +2966,7 @@ describe("what a lane does with the batches it was given", () => {
       return { ok, measured };
     } finally {
       console.log = log;
+      restore();
       await Deno.remove(spool, { recursive: true });
     }
   }
@@ -2921,6 +3013,7 @@ describe("what a lane does with the batches it was given", () => {
             cwd: context.root,
           }]),
       });
+    const restore = outsideJob();
     const log = console.log;
     console.log = () => {};
     try {
@@ -2966,6 +3059,7 @@ describe("what a lane does with the batches it was given", () => {
       expect(await Deno.readTextFile(`${dir}/did-not`)).toBe("");
     } finally {
       console.log = log;
+      restore();
       await Deno.remove(dir, { recursive: true }).catch(() => {});
     }
   });
@@ -2976,6 +3070,7 @@ describe("what a lane does with the batches it was given", () => {
     // wrote: the teardown reads their logs out of the work directory
     // before removing it, and a lane still holding `ok` true would have
     // removed them unread.
+    const restore = outsideJob();
     const log = console.log;
     console.log = () => {};
     let thrown: unknown;
@@ -3009,6 +3104,7 @@ describe("what a lane does with the batches it was given", () => {
       thrown = error;
     } finally {
       console.log = log;
+      restore();
     }
     expect(thrown).toBeInstanceOf(Error);
     expect((thrown as Error).message).toContain(
@@ -3583,9 +3679,11 @@ describe("what a lane hands the children it spawns", () => {
     // to the ambient environment, since a token a developer exported is
     // exactly what this reads.
     const names = ["GITHUB_TOKEN", "GH_TOKEN"] as const;
-    const before = new Map(names.map((name) => [name, Deno.env.get(name)]));
-    Deno.env.delete("GITHUB_TOKEN");
-    Deno.env.set("GH_TOKEN", "a-token");
+    const restore = setEnv({
+      GITHUB_TOKEN: undefined,
+      GH_TOKEN: "a-token",
+      RUNNER_TEMP: undefined,
+    });
     const log = console.log;
     console.log = () => {};
     let heldAfter: (string | undefined)[] = [];
@@ -3623,10 +3721,7 @@ describe("what a lane hands the children it spawns", () => {
       };
     } finally {
       console.log = log;
-      for (const [name, value] of before) {
-        if (value === undefined) Deno.env.delete(name);
-        else Deno.env.set(name, value);
-      }
+      restore();
       await Deno.remove(at, { recursive: true });
       await Deno.remove(spool, { recursive: true });
     }

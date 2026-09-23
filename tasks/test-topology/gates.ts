@@ -14,7 +14,10 @@
 
 import { collectPathsByScope, scopeOfPath } from "../typecheck.ts";
 import * as path from "@std/path";
+import { ACCEPTED_CONTRACT_BREAKS } from "../pattern-compat-accepted-breaks.ts";
 import {
+  BASELINES_DIR,
+  collectCompatibilityPaths,
   collectPatternFiles,
   normalizePatternPath,
   PATTERN_TREES,
@@ -622,17 +625,20 @@ async function cfcheckSuite(root: string): Promise<Suite> {
 }
 
 /**
- * The pattern update compatibility gate, one unit per pattern. Its task
- * takes `--only` to restrict which patterns it reads, so a lane runs the
- * ones it was given, and a run given every pattern passes no `--only` at
- * all — the whole-tree questions this gate also answers, whether a
- * retired pattern still has a baseline and whether an accepted break has
- * gone orphaned, are only asked of an unfiltered run.
+ * The pattern update compatibility gate, one unit per pattern. A pattern
+ * whose file is gone stays a unit while it has baselines or an accepted
+ * break names it, and the lane given it reports it as retired or orphaned.
+ * Its task takes `--only` to restrict which patterns it reads, so a lane
+ * runs the ones it was given, and a run given every pattern passes no
+ * `--only` at all.
  */
 async function patternCompatSuite(root: string): Promise<Suite> {
-  const byKey = new Map(
-    (await patternFiles(root)).map((file) => [patternKey(file), file]),
+  const paths = await collectCompatibilityPaths(
+    await patternFiles(root),
+    path.join(root, BASELINES_DIR),
+    ACCEPTED_CONTRACT_BREAKS.map((accepted) => accepted.pattern),
   );
+  const byKey = new Map(paths.map((item) => [patternKey(item), item]));
   const units = [...byKey.keys()].sort();
   const recordSurfaces = [{ kind: "gate", scope: "repo" }];
   const name = "pattern-compat";

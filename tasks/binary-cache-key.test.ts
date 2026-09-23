@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 
 import { binaryCacheKey } from "./binary-cache-key.ts";
+import { cachedBinaries } from "./ci-capabilities.ts";
 
 /** Runs git in `root`, failing the test on anything but success. */
 async function git(root: string, ...args: string[]): Promise<void> {
@@ -69,6 +70,17 @@ describe("binary-cache-key", () => {
       expect(withWorker).not.toBe(before);
       await stage(root, "mise.toml", '[tools]\ndeno = "2.0.0"\n');
       expect(await binaryCacheKey(root)).not.toBe(withWorker);
+    });
+  });
+
+  it("returns a different digest when a cached binary's build variables change", async () => {
+    // The two tables differ only in the define each Toolshed build bakes, and
+    // no file under the sources changes between the two keys.
+    await inTempDir(async (root) => {
+      await initRepository(root);
+      const on = await binaryCacheKey(root, cachedBinaries(true));
+      expect(await binaryCacheKey(root, cachedBinaries(true))).toBe(on);
+      expect(await binaryCacheKey(root, cachedBinaries(false))).not.toBe(on);
     });
   });
 

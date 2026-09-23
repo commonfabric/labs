@@ -91,7 +91,11 @@ the background piece service all go through that one mapping, so their wirings
 cannot drift; the shell reads the same variables from its build-time defines
 through the same canonical parser, for the flags it defines;
 `packages/shell/felt.config.ts` and `packages/shell/src/lib/env.ts` are the
-authority on which those are. `EXPERIMENTAL_ENV_VARS` itself is the authority on
+authority on which those are. A CI lane builds the binaries it caches with
+every define's variable unset unless `cachedBinaries()` in
+[`tasks/ci-capabilities.ts`](../../tasks/ci-capabilities.ts) sets it, so a lane
+that needs a flag in its baked shell names it there.
+`EXPERIMENTAL_ENV_VARS` itself is the authority on
 which flags are env-reachable — a flag that deliberately is not,
 `commitPreconditions` today, is mapped to `null` there, which records the
 decision rather than leaving an omission. The mapping accepts exactly `"true"`

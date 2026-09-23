@@ -8,6 +8,7 @@
 
 import { expect } from "@std/expect";
 
+import { CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { type JSONSchema, Runtime, UI } from "@commonfabric/runner";
 import { cfcLabelViewForCell } from "@commonfabric/runner/cfc";
@@ -17,7 +18,7 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { VDomOp } from "../src/vdom-ops.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
 
-const INTEGRITY = "loom-verified-external-identity";
+const INTEGRITY = CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM;
 const signer = await Identity.fromPassphrase(
   "profile-home verified identity render",
 );
@@ -68,7 +69,13 @@ Deno.test("profile-home shows a human-facing verified identity with a badge boun
     expect((await tx.commit()).error).toBeUndefined();
 
     const freshVerifiedAt = new Date().toISOString();
+    // Loom's verifier writes the assertions as a builtin, the only author the
+    // runtime lets mint the verified-identity atom.
     const assertionTx = runtime.edit();
+    assertionTx.setCfcImplementationIdentity({
+      kind: "builtin",
+      builtinId: "loom-verified-identity-publisher",
+    });
     const login = runtime.getCell(
       space,
       "loom github login",

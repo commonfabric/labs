@@ -15,9 +15,11 @@ import {
   SKIP_LIST_VARIABLE,
 } from "@commonfabric/test-support/records";
 import { CAPABILITIES } from "./ci-capabilities.ts";
+import { collectMeasuredSetDebt } from "./coverage-metrics.ts";
 import { DENO_TEST_FILE } from "./test-topology/deno-task.ts";
 import { MEASURED_BATCH_SUFFIX } from "./lane-measurement.ts";
 import { serverExecutionCiLane } from "./server-execution-ci.ts";
+import { readWorkspaceMembers } from "./workspace-tests.ts";
 
 const root = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
 const suites = await loadTopology(root);
@@ -313,6 +315,25 @@ describe("reading the topology as a whole", () => {
     for (const suite of suites) {
       expect([suite.id, suite.id.endsWith(MEASURED_BATCH_SUFFIX)])
         .toEqual([suite.id, false]);
+    }
+  });
+
+  it("gives every measured set a member with lines a report can name", async () => {
+    // The coverage gate fails a forced set whose reports name no line of
+    // its member, which is sound only where the member has a line a
+    // report could name. An empty report charges every such line, so a
+    // member it charges nothing has none.
+    const members = await readWorkspaceMembers(path.join(root, "deno.jsonc"));
+    for (const suite of suites) {
+      for (const set of suite.measured ?? []) {
+        const { uncoveredLines } = await collectMeasuredSetDebt({
+          rootDir: root,
+          lcov: "",
+          member: set.member,
+          members,
+        });
+        expect([set.member, uncoveredLines > 0]).toEqual([set.member, true]);
+      }
     }
   });
 

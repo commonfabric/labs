@@ -27,7 +27,10 @@ import {
   extractLiteralValueOfSymbol,
   resolveAliasedSymbol,
 } from "../typescript/literal-value.ts";
-import { readAuthoredTypeNode } from "../typescript/type-node.ts";
+import {
+  readAuthoredTypeNode,
+  unwrapTypeParentheses,
+} from "../typescript/type-node.ts";
 import { resolveWriterBinding } from "../typescript/writer-binding.ts";
 import {
   type CellWrapperKind,
@@ -1447,7 +1450,10 @@ export class CommonFabricFormatter implements TypeFormatter {
       };
     }
 
-    const aliased = aliasDeclaration.type;
+    // Parentheses around the body denote the same type; a body read raw
+    // would not be seen as the policy it holds, and the field would lose its
+    // policy and its type together.
+    const aliased = unwrapTypeParentheses(aliasDeclaration.type);
     if (
       !ts.isTypeReferenceNode(aliased) || !ts.isIdentifier(aliased.typeName)
     ) {
