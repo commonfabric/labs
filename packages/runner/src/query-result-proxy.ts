@@ -522,7 +522,13 @@ function createViewProxy<T>(
   // built over, and `currentValue()` below refuses once the document holds
   // another. The cache key carries the kind, so a document that changes kind
   // is served a fresh view on its next read.
-  const proxyTarget = Object.isFrozen(value)
+  //
+  // An instance takes the stub whether or not it is frozen. Its view reports
+  // no own keys (the `ownKeys` trap below), and a target carrying the
+  // instance's own non-configurable freeze shield would make that report
+  // break the invariant that a proxy list every non-configurable key of its
+  // target. Storage freezes what it holds, so this does not rest on it.
+  const proxyTarget = Object.isFrozen(value) || value instanceof FabricInstance
     ? (Array.isArray(value) ? new Array(value.length) : {})
     : value;
   const boundKind = viewKindOf(value)!;
