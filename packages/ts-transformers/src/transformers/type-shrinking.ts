@@ -9,8 +9,10 @@ import { getPropertyNameText } from "@commonfabric/schema-generator/property-nam
 import {
   getScopeBrand,
   SCOPE_WRAPPER_FOR_SCOPE,
+  scopeForWrapperName,
 } from "@commonfabric/schema-generator/scope-brand";
 import {
+  entityNameRight,
   readAuthoredTypeNode,
   unwrapTypeParentheses,
 } from "@commonfabric/schema-generator/type-node";
@@ -2734,15 +2736,13 @@ function moveNullishIntoScopeWrapper(
 ): ts.TypeNode | undefined {
   const written = unwrapTypeParentheses(value);
   const name = ts.isTypeReferenceNode(written)
-    ? ts.isIdentifier(written.typeName)
-      ? written.typeName
-      : written.typeName.right
+    ? entityNameRight(written.typeName)
     : undefined;
 
-  const spelledScope = name && scopeForWrapperName(name.text);
-  if (spelledScope) {
+  const namedScope = name && scopeForWrapperName(name.text);
+  if (namedScope) {
     const payload = (written as ts.TypeReferenceNode).typeArguments?.[0];
-    return payload && wrapInScope([payload], spelledScope, nullish, factory);
+    return payload && wrapInScope([payload], namedScope, nullish, factory);
   }
 
   const valueType = cellValueType ??
@@ -2768,13 +2768,6 @@ function moveNullishIntoScopeWrapper(
     );
   }
   return wrapInScope(alternatives, brand.scope, nullish, factory);
-}
-
-/** The scope the wrapper spelled `name` declares, if `name` spells one. */
-function scopeForWrapperName(name: string): SchemaScope | undefined {
-  return (Object.keys(SCOPE_WRAPPER_FOR_SCOPE) as SchemaScope[]).find(
-    (scope) => SCOPE_WRAPPER_FOR_SCOPE[scope] === name,
-  );
 }
 
 /** `__cfHelpers.PerUser<A | B | ...nullish>` for the scope `user`. */

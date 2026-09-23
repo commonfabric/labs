@@ -179,10 +179,11 @@ describe("captured cell value fields", () => {
           : [];
       },
     );
-    expect(cells).toEqual([expect.objectContaining({
+    expect(cells).toEqual([{
+      anyOf: [{ $ref: "#/$defs/Data" }, { type: "undefined" }],
       scope: "user",
       asCell: ["readonly"],
-    })]);
+    }]);
   });
 
   for (

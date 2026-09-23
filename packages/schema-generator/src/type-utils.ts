@@ -93,32 +93,6 @@ function wrapperKindForName(name: string): NodeWrapperKind | undefined {
 export { getPropertyNameText };
 
 /**
- * Safely get text from a Node, handling synthetic nodes (pos=-1) that lack
- * real source positions. Falls back to ts.createPrinter() to avoid triggering
- * TypeScript's assertHasRealPosition debug assertion.
- */
-export function safeGetNodeText(node: ts.Node): string {
-  try {
-    const sourceFile = node.getSourceFile?.();
-    if (sourceFile && node.pos >= 0 && node.end >= 0) {
-      return node.getText(sourceFile);
-    }
-  } catch {
-    // fall through to printer
-  }
-  try {
-    const printer = ts.createPrinter();
-    return printer.printNode(
-      ts.EmitHint.Unspecified,
-      node,
-      ts.createSourceFile("", "", ts.ScriptTarget.Latest),
-    );
-  } catch {
-    return "";
-  }
-}
-
-/**
  * Safe wrapper for TypeScript checker APIs that may throw in reduced environments
  */
 export function safeGetTypeFromTypeNode(

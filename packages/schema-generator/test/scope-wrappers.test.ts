@@ -175,8 +175,8 @@ interface SchemaRoot {
       ),
     ).toBe(true);
   });
-  describe("a scope wrapper reached through a local alias", () => {
-    // The checker reports the local alias, not the wrapper, as the type's
+  describe("a scope wrapper reached through an alias", () => {
+    // The checker reports the outermost alias, not the wrapper, as the type's
     // alias symbol, so the scope is found by following the alias.
 
     async function propertySchemas(
@@ -363,6 +363,31 @@ interface SchemaRoot { head: Node; }
       });
     });
 
+    it("keeps the scope in the cell entry of each reference to a recursive cell alias", async () => {
+      // A scope around a cell caps the handle, so it belongs in the `asCell`
+      // entry of every reference and nowhere in the definition.
+
+      const schemas = await propertySchemas(`
+type Node = PerUser<Cell<{ label: string; next?: Node }>>;
+interface SchemaRoot { head: Node; }
+`);
+
+      const defs = schemas.$defs as Record<string, unknown>;
+      const [name] = Object.keys(defs);
+      const handle = {
+        $ref: `#/$defs/${name}`,
+        asCell: [{ kind: "cell", scope: "user" }],
+      };
+      expect(schemas.head).toEqual(handle);
+      expect(defs).toEqual({
+        [name!]: {
+          type: "object",
+          properties: { label: { type: "string" }, next: handle },
+          required: ["label"],
+        },
+      });
+    });
+
     it("throws for an alias of a scope wrapper that is a union member", async () => {
       const { type, checker, typeNode } = await getTypeFromCode(
         `
@@ -474,6 +499,53 @@ interface SchemaRoot { draft: Draft | undefined; }
       expect(printed).toEqual(
         new SchemaGenerator().generateSchema(type, checker, typeNode),
       );
+    });
+
+    it("reads a union member printed under a name the module does not import from its registered type", async () => {
+      // The transformer prints a type by the name its declaring module gives
+      // it and registers the type, which is then all that says what it is.
+      const { checker, sourceFile } = await createTestProgram(
+        `${PRELUDE} interface X { authored: Stored; }`,
+      );
+      const symbol = checker.getSymbolsInScope(
+        sourceFile,
+        ts.SymbolFlags.Interface,
+      ).find((candidate) => candidate.name === "X");
+      if (!symbol) throw new Error("Interface X not found");
+      const authored = checker.getDeclaredTypeOfSymbol(symbol)
+        .getProperty("authored");
+      if (!authored) throw new Error("Property X.authored not found");
+      const printed = named("Elsewhere");
+      const typeRegistry = new WeakMap<ts.Node, ts.Type>([
+        [printed, checker.getTypeOfSymbolAtLocation(authored, sourceFile)],
+      ]);
+
+      const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        ts.factory.createTypeReferenceNode(
+          ts.factory.createQualifiedName(
+            ts.factory.createIdentifier("__cfHelpers"),
+            ts.factory.createIdentifier("PerUser"),
+          ),
+          [
+            ts.factory.createUnionTypeNode([
+              printed,
+              ts.factory.createKeywordTypeNode(ts.SyntaxKind.UndefinedKeyword),
+            ]),
+          ],
+        ),
+        checker,
+        typeRegistry,
+        undefined,
+        sourceFile,
+      );
+
+      expect(schema).toEqual({
+        anyOf: [{ $ref: "#/$defs/Stored" }, { type: "undefined" }],
+        scope: "user",
+        $defs: {
+          Stored: { type: "object", properties: { name: { type: "string" } } },
+        },
+      });
     });
 
     it("emits the resolved payload and its default when only the computed brand cannot be read", async () => {

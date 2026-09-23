@@ -98,7 +98,10 @@ form as the type path), intersections (reduced as the checker reduces the
 types, then merged as `IntersectionFormatter` merges them; the rules are
 below), unions (`true` member short-circuits, `false` members filtered,
 singletons unwrapped), literal nodes, `TypeReference` nodes (wrapper
-detection first; then the default library's generic aliases — `Readonly`,
+detection first; then, for a node the transformer registered a type for, that
+type, since a name printed from a type is the one its declaring module gives
+it and the emitting module need not import it; then the default library's
+generic aliases — `Readonly`,
 `Partial`, `Required`, `Pick`, `Omit`, `NonNullable`, `Array`,
 `ReadonlyArray`, `Record` — applied structurally to their arguments when the
 name binds through the node or, for an unbindable synthetic reference,
@@ -328,10 +331,14 @@ Apart from `getNamedTypeKey`, the generator gives no name to a type whose
 alias is, or leads through a chain of aliases to, a scope wrapper
 (`scopeOfAliasChain`, §10): `type Rec = PerUser<Inner>` formats inline, as
 `PerUser<Inner>` does, so the scope stays at the top level of the slot's own
-schema. A recursive one still needs a definition; it is written under the
-cycle's synthetic name without its scope, and every reference to it carries
-the scope beside the `$ref` (`{ $ref: "#/$defs/AnonymousType_1", scope:
-"user" }`).
+schema. A recursive one around a value still needs a definition; it is
+written under the cycle's synthetic name without its scope, and every
+reference to it carries the scope beside the `$ref` (`{ $ref:
+"#/$defs/AnonymousType_1", scope: "user" }`). One around a cell is a wrapper,
+and a wrapper is never a cycle's entry: the cycle is found at the cell's
+value, as for `Cell<T>`, and each reference is the capped handle inline
+(`{ $ref: "#/$defs/AnonymousType_1", asCell: [{ kind: "cell", scope: "user"
+}] }`, as `PerUser<Cell<T>>` written in place emits).
 
 Everything else — interfaces, classes, named aliases, and TS enum declarations
 — hoists under its bare symbol name. Enum members stay inline. There is no
@@ -792,7 +799,9 @@ node name or aliasSymbol name, and otherwise by following the aliasSymbol's
 declaration down a chain of aliases, each the whole body of the one before, to
 a scope wrapper (`scopeOfAliasChain`). The checker reports the outermost alias
 as a type's aliasSymbol, so `type Rec = PerUser<Inner>` reads as `Rec`, and
-only the chain finds the wrapper. The payload of a wrapper found that way is
+only the chain finds the wrapper. The chain ends at a wrapper's name, so
+`Scoped<T, S>`, the type the four are declared with, is not read as one
+written directly. The payload of a wrapper found that way is
 the wrapper's first argument, with the arguments of each generic alias along
 the chain substituted for its parameters, the same walk that lowers a CFC alias
 reached through aliases (§11): `type Rec<T> = PerUser<{ value: T }>` read as
@@ -830,8 +839,9 @@ carries the default — and a wrapper whose argument the printer left out
 because it equals the parameter's default (`SqliteDb` for
 `SqliteDb<SqliteDatabase>`), which names no payload. A printed wrapper with no
 argument takes it from the resolved wrapper type where the caller has one, and
-is otherwise left unread; an authored one still throws. Both cost whatever narrowing the node carried: the schema
-is then that of the whole declared value. Tested: scope-wrappers.test.ts, and
+is otherwise left unread; an authored one still throws. Both cases cost
+whatever narrowing the node carried: the schema is then that of the whole
+declared value. Tested: scope-wrappers.test.ts, and
 end-to-end in ts-transformers `aliased-binding-declared-type.test.ts` and
 `scoped-interface-schema.test.ts` (local, exported, and imported interfaces).
 

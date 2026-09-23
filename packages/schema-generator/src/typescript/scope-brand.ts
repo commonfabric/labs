@@ -4,6 +4,11 @@
  * `packages/api/index.ts`), so a resolved type carries its scope in that
  * member however the wrapper was reached: written in place, or through any
  * chain of aliases, whose outermost alias is all the checker reports.
+ *
+ * The transformer reads a wrapper this way where it holds only a resolved type.
+ * Schema generation recognizes a wrapper by name instead
+ * (`ts_to_json_schema_mapping.md` §10), so `Scoped<T, S>` written directly is
+ * read as a scope wrapper by neither.
  */
 
 import type { SchemaScope } from "@commonfabric/api";
@@ -19,9 +24,23 @@ export const SCOPE_WRAPPER_FOR_SCOPE: Readonly<Record<SchemaScope, string>> = {
   any: "PerAny",
 };
 
+/**
+ * The scope the wrapper named `name` declares, or `undefined` for a name that
+ * is not a scope wrapper's.
+ */
+export function scopeForWrapperName(
+  name: string | undefined,
+): SchemaScope | undefined {
+  return (Object.keys(SCOPE_WRAPPER_FOR_SCOPE) as SchemaScope[]).find(
+    (scope) => SCOPE_WRAPPER_FOR_SCOPE[scope] === name,
+  );
+}
+
 /** A resolved scope wrapper: its scope, and the types it wraps. */
 export interface ScopeBrand {
+  /** The scope the brand declares. */
   readonly scope: SchemaScope;
+
   /**
    * The payload's alternatives, one per member of a union the brand was
    * distributed over, and one for any other payload. Each lists the members

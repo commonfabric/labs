@@ -28,6 +28,7 @@ import {
   resolveAliasedSymbol,
 } from "../typescript/literal-value.ts";
 import {
+  entityNameRight,
   readAuthoredTypeNode,
   unwrapTypeParentheses,
 } from "../typescript/type-node.ts";
@@ -40,27 +41,25 @@ import {
   wrapperKindToBrand,
 } from "../typescript/cell-brand.ts";
 import { isDefaultAliasSymbol } from "../typescript/property-optionality.ts";
-import { SCOPE_WRAPPER_FOR_SCOPE } from "../typescript/scope-brand.ts";
+import {
+  SCOPE_WRAPPER_FOR_SCOPE,
+  scopeForWrapperName,
+} from "../typescript/scope-brand.ts";
 import { dedupeByValueEqual } from "../value-equality.ts";
 import { scopeInsideUnionError } from "../scope-placement.ts";
 
 type WrapperKind = CellWrapperKind;
 const CFC_ALIAS_NAMES: ReadonlySet<string> = new Set(CFC_CANONICAL_ALIAS_NAMES);
-const SCOPE_WRAPPER_SCOPES: Readonly<Record<string, SchemaScope>> = Object
-  .fromEntries(
-    Object.entries(SCOPE_WRAPPER_FOR_SCOPE).map(([scope, name]) => [
-      name,
-      scope as SchemaScope,
-    ]),
-  );
 const SCOPE_WRAPPER_NAMES: ReadonlySet<string> = new Set(
-  Object.keys(SCOPE_WRAPPER_SCOPES),
+  Object.values(SCOPE_WRAPPER_FOR_SCOPE),
 );
+
 /** The aliases this formatter lowers when a chain of aliases reaches one. */
 const CHAIN_LOWERED_ALIAS_NAMES: ReadonlySet<string> = new Set([
   ...CFC_ALIAS_NAMES,
   ...SCOPE_WRAPPER_NAMES,
 ]);
+
 /**
  * The alias at the end of a chain of aliases, each the whole body of the one
  * before, with the arguments it is instantiated with there.
@@ -80,15 +79,6 @@ type ResolvedScopeWrapper = {
   readonly scope: SchemaScope;
   readonly node: ts.TypeReferenceNode;
 };
-
-/** The last identifier of `name`: `PerUser` for both `PerUser` and `cf.PerUser`. */
-const entityNameRight = (name: ts.EntityName): ts.Identifier =>
-  ts.isIdentifier(name) ? name : name.right;
-
-const scopeForWrapperName = (
-  name: string | undefined,
-): SchemaScope | undefined =>
-  name === undefined ? undefined : SCOPE_WRAPPER_SCOPES[name];
 
 // The capability subset of `CellWrapperKind`: brands that all wrap the SAME
 // structural inner `T` and differ only in read/write capability. The transformer
@@ -502,7 +492,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     if (resolvedScopeAlias) {
       return this.#applyScopeWrapperSemantics(
         this.#formatResolvedAliasPayload(resolvedScopeAlias, context),
-        SCOPE_WRAPPER_SCOPES[resolvedScopeAlias.aliasName]!,
+        scopeForWrapperName(resolvedScopeAlias.aliasName)!,
       );
     }
 

@@ -24,6 +24,8 @@ import {
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import { UnionFormatter } from "./formatters/union-formatter.ts";
 import { IntersectionFormatter } from "./formatters/intersection-formatter.ts";
+import { getCellWrapperInfo } from "./typescript/cell-brand.ts";
+import { getScopeBrand } from "./typescript/scope-brand.ts";
 import { isDefaultLibrarySourceFile } from "./typescript/default-library.ts";
 import { unwrapTypeParentheses } from "./typescript/type-node.ts";
 import {
@@ -31,7 +33,6 @@ import {
   getNamedTypeKey,
   getPropertyNameText,
   safeGetIndexTypeOfType,
-  safeGetNodeText,
   safeGetTypeOfSymbolAtLocation,
 } from "./type-utils.ts";
 import { attachDocTags, extractDocFromType } from "./doc-utils.ts";
@@ -1125,41 +1126,6 @@ export class SchemaGenerator {
     );
   }
 
-  /**
-   * Create a stack key that distinguishes erased wrapper types from their
-   * inner types
-   */
-  #createStackKey(
-    type: ts.Type,
-    typeNode?: ts.TypeNode,
-    checker?: ts.TypeChecker,
-  ): string | ts.Type {
-    const reference = typeNode && unwrapTypeParentheses(typeNode);
-    if (reference && checker && ts.isTypeReferenceNode(reference)) {
-      // A wrapper reference — `Default` or a cell-like wrapper (Cell,
-      // Writable, Stream, OpaqueCell), written in place, in parentheses, or
-      // reached through an alias — shares its ts.Type identity with the same
-      // instantiation at other positions. When a recursive type like TodoItem
-      // contains `Writable<TodoItem[]>`, TypeScript reuses the same
-      // Cell<TodoItem[]> type object, causing the cycle to be detected in
-      // wrapper context where it can't be properly stored. Give each wrapper
-      // occurrence a unique stack key, from its type arguments and its source
-      // location, so the cycle is instead detected at the inner type level
-      // where it can be handled.
-      const wrapperKind = detectWrapperViaNode(reference, checker);
-      if (wrapperKind) {
-        const argTexts = reference.typeArguments
-          ? reference.typeArguments.map((arg) => safeGetNodeText(arg))
-            .join(",")
-          : "";
-        const locationHash = reference.getSourceFile?.()?.fileName || "";
-        const position = reference.pos || 0;
-        return `${wrapperKind}_${type.flags}_${argTexts}_${locationHash}_${position}`;
-      }
-    }
-    return type;
-  }
-
   #ensureSyntheticName(
     type: ts.Type,
   ): string {
@@ -1227,6 +1193,16 @@ export class SchemaGenerator {
     // carries the scope instead.
     const aliasScope = scopeOfAliasChain(type, context.typeChecker);
     const isScopeWrapperAlias = aliasScope !== undefined;
+    // One around a cell caps the handle and is itself a wrapper: it is not a
+    // cycle's entry, so a cycle through it is found at the cell's value and
+    // written there, as for `Cell<T>`, with the capped handle inline at each
+    // reference.
+    const scopesHandle = isScopeWrapperAlias &&
+      (getScopeBrand(type, context.typeChecker)?.payload.some((members) =>
+        members.some((member) =>
+          getCellWrapperInfo(member, context.typeChecker) !== undefined
+        )
+      ) ?? false);
 
     let namedKey = isScopeWrapperAlias
       ? undefined
@@ -1251,13 +1227,15 @@ export class SchemaGenerator {
       context.inProgressNames.add(namedKey);
     }
 
-    // Cycle detection: if we see the same type again by identity, emit a $ref
-    const stackKey = this.#createStackKey(
-      type,
-      context.typeNode,
-      context.typeChecker,
-    );
-    if (context.definitionStack.has(stackKey)) {
+    // Cycle detection: if we see the same type again by identity, emit a $ref.
+    // A wrapper is not a cycle's entry. TypeScript reuses one type object for
+    // every occurrence of an instantiation, so a recursive type holding
+    // `Writable<TodoItem[]>` meets the same `Cell<TodoItem[]>` again, and in
+    // wrapper context the cycle's definition could not be stored. The cycle is
+    // found at the wrapper's value instead, where it can be.
+    const stackKey = type;
+    const tracksCycle = !scopesHandle && !isWrapperContext;
+    if (tracksCycle && context.definitionStack.has(stackKey)) {
       if (namedKey) {
         context.emittedRefs.add(namedKey);
         return { "$ref": `#/$defs/${namedKey}` };
@@ -1271,9 +1249,7 @@ export class SchemaGenerator {
     }
 
     // Push current type onto the stack
-    context.definitionStack.add(
-      this.#createStackKey(type, context.typeNode, context.typeChecker),
-    );
+    if (tracksCycle) context.definitionStack.add(stackKey);
 
     // Try to find a formatter that supports this type
     for (const formatter of this.#formatters) {
@@ -1301,9 +1277,7 @@ export class SchemaGenerator {
             context.definitions[keyForDef] = payload as MutableJSONSchema;
           }
           context.inProgressNames.delete(keyForDef);
-          context.definitionStack.delete(
-            this.#createStackKey(type, context.typeNode, context.typeChecker),
-          );
+          context.definitionStack.delete(stackKey);
           if (!isRootType) {
             context.emittedRefs.add(keyForDef);
             return scopeOnReference === undefined
@@ -1313,18 +1287,14 @@ export class SchemaGenerator {
           // For root, keep inline; buildFinalSchema may promote if we choose
         }
         // Pop after formatting
-        context.definitionStack.delete(
-          this.#createStackKey(type, context.typeNode, context.typeChecker),
-        );
+        context.definitionStack.delete(stackKey);
         return result;
       }
     }
 
     // If no formatter supports this type, this is an error - we should have
     // complete coverage
-    context.definitionStack.delete(
-      this.#createStackKey(type, context.typeNode, context.typeChecker),
-    );
+    context.definitionStack.delete(stackKey);
 
     const typeName = context.typeChecker.typeToString(type);
     const typeFlags = type.flags;
@@ -1803,6 +1773,14 @@ export class SchemaGenerator {
           context,
           typeNode,
         );
+      }
+
+      // A name printed from a type is the one its declaring module gives it,
+      // which the emitting module need not import; the type the printer
+      // registered for the node is what it stands for.
+      const registered = typeRegistry?.get(typeNode);
+      if (registered && (registered.flags & ts.TypeFlags.Any) === 0) {
+        return this.formatChildType(registered, context, typeNode);
       }
 
       const applied = this.#analyzeLibraryAliasReference(
