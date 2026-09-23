@@ -287,15 +287,15 @@ Mac (`claude://code/new`, the link the app's own Finder action uses) in the
 start's directory with the prompt ready to send; the app mints the session's id
 when the person sends, so the id the command named never exists, the receipt's
 `result.surface` says `desktop`, and no session refresh follows the command. The
-host runs no provider operation for it and does not report cancellation
-readiness. A cancellation admitted while the app link is opening waits for the
-start to finish and cannot interrupt the opener. On its next listing the Claude
-driver pairs the session the app made (that directory, made after the start,
-opening with the start's text) and publishes its index row with `startedAs`, the
-id the command named, and the start's title unless the person has titled it
-since, so the workbench that sent the start confirms it. The driver pairs them
-in its memory, and once the row is published with `startedAs` later publications
-keep it; a host restarted before the person sends no longer pairs them, and the
+host runs no prompt in its process and does not report cancellation readiness. A
+cancellation admitted while the app link is opening waits for the start to
+finish and cannot interrupt the opener. On its next listing the Claude driver
+pairs the session the app made (that directory, made after the start, opening
+with the start's text) and publishes its index row with `startedAs`, the id the
+command named, and the start's title unless the person has titled it since, so
+the workbench that sent the start confirms it. The driver pairs them in its
+memory, and once the row is published with `startedAs` later publications keep
+it; a host restarted before the person sends no longer pairs them, and the
 session then shows as one started by hand. Before opening the app, the driver
 reads a fresh, complete inventory and records the launch time. A candidate
 session must be absent from that inventory and carry a creation timestamp at or

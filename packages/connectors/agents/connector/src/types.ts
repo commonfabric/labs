@@ -127,8 +127,8 @@ export interface CommandExecutionOptions {
 
   /**
    * Callback reporting when `cancel()` can address a prompt or headless
-   * start. A desktop start never reports readiness because it runs no
-   * provider operation in the connector.
+   * start. A desktop start never reports readiness: it reads provider
+   * inventory but starts no prompt or turn in the connector.
    */
   onCancellationReady?: () => void;
 
@@ -168,11 +168,11 @@ export interface AgentDriver {
    * Starts a new session whose provider identity is `nativeSessionId`, chosen
    * by the caller. A headless start (the default surface) runs `input.text`
    * as the session's first prompt here. A start on the `desktop` surface
-   * opens the Claude Code desktop app with `input.text` ready to send and
-   * runs nothing: the session exists once the person sends it, under an id
-   * the app mints, and the driver pairs it with this start afterwards
-   * (`SessionSummary.startedAs`), answering with `affectedSession: null`
-   * without reporting cancellation readiness.
+   * reads provider inventory and opens the Claude Code desktop app with
+   * `input.text` ready to send, but starts no prompt or turn here: the session
+   * exists once the person sends it, under an id the app mints, and the driver
+   * pairs it with this start afterwards (`SessionSummary.startedAs`), answering
+   * with `affectedSession: null` without reporting cancellation readiness.
    */
   startSession(
     nativeSessionId: string,

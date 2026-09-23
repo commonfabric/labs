@@ -104,8 +104,8 @@ separate prompt milestones to the command worker. A driver calls
 prompt. Claude reaches this point before session metadata lookup because its
 pending-prompt record accepts cancellation. ACP and Codex reach it after their
 provider prompt or turn has started. A Claude desktop start is the exception: it
-starts no provider operation in the connector and never calls
-`onCancellationReady` or `onSessionActive`.
+reads provider inventory but starts no provider prompt or turn in the connector,
+and never calls `onCancellationReady` or `onSessionActive`.
 
 A driver calls and awaits the asynchronous `onSessionActive` callback only after
 the provider operation has started. This callback refreshes every command target
@@ -414,8 +414,8 @@ start unsupported.
 
 A desktop start instead snapshots the complete SDK inventory, records its
 creation-time boundary, and opens `claude://code/new` with the directory and
-prompt. It runs no provider operation in the connector, calls neither command
-milestone callback, and returns `affectedSession: null` once the opener
+prompt. It starts no provider prompt or turn in the connector, calls neither
+command milestone callback, and returns `affectedSession: null` once the opener
 succeeds. The person sends the prompt in the app, which mints a different
 session ID. A later inventory pairs that session with the start only when it was
 absent from the snapshot, has a finite creation time at or after the boundary,
