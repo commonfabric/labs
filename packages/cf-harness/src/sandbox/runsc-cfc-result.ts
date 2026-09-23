@@ -106,14 +106,34 @@ const runscTaintLabel = (taint: RunscCfcLabelSidecar): IFCLabel => {
   };
 };
 
+/** How runsc's `cfc.Label.String` spells the empty label. */
+const RUNSC_EMPTY_LABEL_STRING = "{conf: ⊤, integ: ∅}";
+
 const isPublicRunscTaint = (taint: RunscCfcLabelSidecar): boolean => {
   if (isObjectNotArray(taint.xattrJSON)) {
     return !Object.values(taint.xattrJSON).some(hasNonEmptyXattrValue);
   }
-  const stringValue = typeof taint.string === "string"
-    ? taint.string.trim()
-    : "";
-  return stringValue.length === 0 || stringValue === "{}";
+  // With no xattr form only runsc's own spelling of the empty label is
+  // public. An empty or unfamiliar string is not evidence of anything and
+  // withholds the output.
+  return typeof taint.string === "string" &&
+    taint.string.trim() === RUNSC_EMPTY_LABEL_STRING;
+};
+
+/**
+ * Whether the taint carries a representation this parser can read at all:
+ * runsc always writes `string`, and `xattrJSON`, when present, is an object.
+ * Anything else is a sidecar this code does not understand, and an
+ * unreadable taint is denied rather than read as "nothing to withhold".
+ */
+const isWellFormedRunscTaint = (taint: RunscCfcLabelSidecar): boolean => {
+  if (taint.string !== undefined && typeof taint.string !== "string") {
+    return false;
+  }
+  if (taint.xattrJSON !== undefined && !isObjectNotArray(taint.xattrJSON)) {
+    return false;
+  }
+  return taint.string !== undefined || taint.xattrJSON !== undefined;
 };
 
 export const cfcResultFromRunscSidecar = (
@@ -149,6 +169,13 @@ export const cfcResultFromRunscSidecar = (
   }
 
   const cfcTaint = parsed.cfcTaint;
+  if (!isWellFormedRunscTaint(cfcTaint)) {
+    return deniedCfcResult(
+      "runsc_cfc_sidecar_malformed_taint",
+      "runsc CFC result sidecar carried a final taint this harness cannot read",
+      { containerId: expectedContainerID },
+    );
+  }
   const label = runscTaintLabel(cfcTaint);
   const details: Record<string, CfcSandboxJsonValue> = {
     containerId: expectedContainerID,

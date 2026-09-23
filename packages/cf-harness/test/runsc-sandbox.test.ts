@@ -8,11 +8,13 @@ import {
 import { join } from "@std/path";
 
 import {
+  assertRunscCfcPolicyForMode,
   assertRunscSessionAllowedForMode,
   defaultDarwinRootfs,
   resolveRunscSandboxConfig,
   RunscSandboxRuntime,
 } from "../src/sandbox/runsc.ts";
+import { SandboxSessionUnavailableError } from "../src/sandbox/types.ts";
 import { createHarnessCfcInvocationContext } from "../src/contracts/cfc-invocation-context.ts";
 import { createToolOutputId } from "../src/contracts/tool-result.ts";
 import type {
@@ -581,4 +583,61 @@ Deno.test("RunscSandboxRuntime needs a runner that can spawn for sessions, and r
   await open.close();
   const r = await open.run({ argv: ["/bin/true"] });
   assertEquals(r.exitCode, 0);
+});
+
+class ThrowingRunscRunner extends FakeRunscRunner {
+  override run(request: ProcessRunRequest): Promise<ProcessRunResult> {
+    const sub = request.command === "/bin/sh" ? request.args[5 + 1] : undefined;
+    if (request.command === "/bin/sh") {
+      this.requests.push(request);
+      return Promise.reject(new Error(`runsc ${sub ?? "run"} exploded`));
+    }
+    return super.run(request);
+  }
+}
+
+Deno.test("RunscSandboxRuntime removes the bundle when the run itself throws", async () => {
+  const cfg = config();
+  const runtime = new RunscSandboxRuntime(cfg, new ThrowingRunscRunner());
+  await assertRejects(
+    async () =>
+      await runtime.run({
+        argv: ["true"],
+        cfcInvocationContext: await context(),
+      }),
+    Error,
+    "exploded",
+  );
+  const bundles = join(cfg.scratchDir, "bundles");
+  const left: string[] = [];
+  try {
+    for await (const entry of Deno.readDir(bundles)) left.push(entry.name);
+  } catch {
+    // no bundles directory at all is the cleanest outcome
+  }
+  assertEquals(left, []);
+});
+
+Deno.test("a session refused in an enforcing mode is the recoverable session error", () => {
+  assertThrows(
+    () => assertRunscSessionAllowedForMode("enforce-explicit", "s1"),
+    SandboxSessionUnavailableError,
+  );
+  assertRunscSessionAllowedForMode("observe", "s1");
+  assertRunscSessionAllowedForMode("enforce-explicit", undefined);
+});
+
+Deno.test("an enforcing mode requires the runsc runtime to run with a CFC policy", () => {
+  assertThrows(
+    () =>
+      assertRunscCfcPolicyForMode("enforce-explicit", {
+        cfcPolicyPath: undefined,
+      }),
+    Error,
+    "requires the runsc sandbox to run with a CFC policy",
+  );
+  assertRunscCfcPolicyForMode("observe", { cfcPolicyPath: undefined });
+  assertRunscCfcPolicyForMode("enforce-explicit", {
+    cfcPolicyPath: "/policy.json",
+  });
 });

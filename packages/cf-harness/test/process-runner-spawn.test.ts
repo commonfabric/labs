@@ -4,7 +4,9 @@ import { DenoProcessRunner } from "../src/sandbox/process-runner.ts";
 
 Deno.test("DenoProcessRunner.spawn hands back a live child that kill() ends", async () => {
   const runner = new DenoProcessRunner();
-  const handle = runner.spawn({ command: "/bin/sh", args: ["-c", "sleep 30"] });
+  // The sleeper itself, not a shell around it: the signal must land on the
+  // process under test, and a shell would leave the sleep behind.
+  const handle = runner.spawn({ command: "/bin/sleep", args: ["30"] });
   assert(handle.pid > 0);
   handle.kill("SIGTERM");
   const { exitCode } = await handle.exited;

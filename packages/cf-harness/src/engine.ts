@@ -206,8 +206,10 @@ import {
   resolveDockerRunscSandboxConfig,
 } from "./sandbox/docker-runsc.ts";
 import {
+  assertRunscCfcPolicyForMode,
   resolveRunscSandboxConfig,
   type RunscNetworkMode,
+  type RunscSandboxConfig,
   RunscSandboxRuntime,
 } from "./sandbox/runsc.ts";
 import {
@@ -668,6 +670,8 @@ export class CfHarnessEngine {
   readonly #spaceDbPath?: string;
   readonly #hostMounts: readonly HostSandboxMount[];
   readonly #ownedRunscConfig?: DockerRunscSandboxConfig;
+  /** The runsc configuration this engine built, when it built one. */
+  readonly #ownedNativeConfig?: RunscSandboxConfig;
   #sandboxClosed = false;
   readonly #resumedRun: boolean;
   #runModelBound: boolean;
@@ -890,7 +894,13 @@ export class CfHarnessEngine {
     this.#spaceDbPath = options.spaceDbPath;
     const useRunsc = options.sandboxRuntime === undefined &&
       options.sandboxRuntimeKind === "runsc";
-    const sandboxConfig = options.sandboxRuntime === undefined && !useRunsc
+    // Under the runsc runtime no docker configuration describes this run,
+    // whatever `config.sandbox` holds: the mounts below come from the runsc
+    // configuration, so host-backed tools resolve against the sandbox that
+    // actually executes.
+    const sandboxConfig = useRunsc
+      ? undefined
+      : options.sandboxRuntime === undefined
       ? resolveSandboxConfig(this.config, {
         workspaceHostPath: options.workspaceHostPath,
         sandboxImage: options.sandboxImage,
@@ -930,6 +940,7 @@ export class CfHarnessEngine {
         homeDir: Deno.env.get("HOME"),
       })
       : undefined;
+    this.#ownedNativeConfig = runscConfig;
     this.sandbox = options.sandboxRuntime ??
       (runscConfig !== undefined
         ? new RunscSandboxRuntime(runscConfig, options.processRunner)
@@ -941,15 +952,16 @@ export class CfHarnessEngine {
       sandboxConfig?.workspaceMountPath ??
         this.sandbox.defaultWorkingDirectory(),
     );
-    this.#hostMounts = sandboxConfig !== undefined
+    const mountSource = sandboxConfig ?? runscConfig;
+    this.#hostMounts = mountSource !== undefined
       ? [
         {
           kind: "workspace",
-          hostPath: sandboxConfig.workspaceHostPath,
-          sandboxPath: sandboxConfig.workspaceMountPath,
+          hostPath: mountSource.workspaceHostPath,
+          sandboxPath: mountSource.workspaceMountPath,
           readOnly: false,
         },
-        ...sandboxConfig.additionalMounts.map((mount) => ({
+        ...mountSource.additionalMounts.map((mount) => ({
           kind: mount.kind,
           ...(mount.kind === "host-bind" ? { name: mount.name } : {}),
           hostPath: mount.hostPath,
@@ -1222,6 +1234,16 @@ export class CfHarnessEngine {
    */
   get ownedSandboxConfig(): DockerRunscSandboxConfig | undefined {
     return this.#ownedRunscConfig;
+  }
+
+  /**
+   * The runsc counterpart of {@link ownedSandboxConfig}: the configuration
+   * the engine built its direct runsc runtime from, or `undefined` when the
+   * runtime is docker or was handed in. A child that needs a mount its parent
+   * lacks builds its own runtime from this.
+   */
+  get ownedRunscSandboxConfig(): RunscSandboxConfig | undefined {
+    return this.#ownedNativeConfig;
   }
 
   /**
@@ -2265,13 +2287,24 @@ export class CfHarnessEngine {
    * wiring. Idempotent so the cost is paid once per run.
    */
   #assertCfcTransportReady(): void {
-    if (this.#cfcTransportChecked || this.#ownedRunscConfig === undefined) {
+    if (this.#cfcTransportChecked) {
       return;
     }
-    assertDockerRunscCfcTransportForMode(
-      this.#runState.cfcEnforcementMode,
-      this.#ownedRunscConfig,
-    );
+    if (this.#ownedRunscConfig !== undefined) {
+      assertDockerRunscCfcTransportForMode(
+        this.#runState.cfcEnforcementMode,
+        this.#ownedRunscConfig,
+      );
+    } else if (this.#ownedNativeConfig !== undefined) {
+      // The same floor for the direct runtime: no policy means no `--cfc`,
+      // so an enforcing run would execute unmediated and deny afterwards.
+      assertRunscCfcPolicyForMode(
+        this.#runState.cfcEnforcementMode,
+        this.#ownedNativeConfig,
+      );
+    } else {
+      return;
+    }
     this.#cfcTransportChecked = true;
   }
 

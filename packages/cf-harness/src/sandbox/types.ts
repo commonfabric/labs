@@ -186,6 +186,19 @@ export interface SandboxCommandResult {
   cfcResult?: CfcSandboxResult;
 }
 
+/**
+ * A tool call named a sandbox session the runtime cannot honour right now:
+ * the runtime has no sessions, or the run's enforcement mode forbids them.
+ * Recoverable: the bash tool turns it into a result the model can act on
+ * (drop the session), rather than a run-fatal error.
+ */
+export class SandboxSessionUnavailableError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "SandboxSessionUnavailableError";
+  }
+}
+
 export interface SandboxRuntimeDescription {
   kind: "docker-runsc-cfc" | "runsc-cfc";
   defaultWorkingDirectory: string;

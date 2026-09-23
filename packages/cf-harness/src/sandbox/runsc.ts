@@ -38,6 +38,7 @@ import {
   type SandboxRuntime,
   type SandboxRuntimeDescription,
   type SandboxRuntimeMountDescription,
+  SandboxSessionUnavailableError,
   type SandboxShellRequest,
 } from "./types.ts";
 
@@ -269,8 +270,26 @@ export const assertRunscSessionAllowedForMode = (
 ): void => {
   if (session === undefined) return;
   if (cfcEnforcementStrictness(mode) < CFC_ENFORCING_STRICTNESS) return;
-  throw new Error(
+  throw new SandboxSessionUnavailableError(
     `sandbox session "${session}" cannot run in CFC mode ${mode}: runsc exec carries no per-call CFC transport yet; omit the session or run in observe mode`,
+  );
+};
+
+/**
+ * The enforcing floor for this runtime, the counterpart of the docker
+ * runtime's sidecar-transport check: without a policy runsc runs with no
+ * `--cfc` at all, so every result would arrive unmediated and an enforcing
+ * mode would deny each one after the command had already run. Refuse the
+ * run before anything executes instead.
+ */
+export const assertRunscCfcPolicyForMode = (
+  mode: CfcEnforcementMode,
+  config: Pick<RunscSandboxConfig, "cfcPolicyPath">,
+): void => {
+  if (cfcEnforcementStrictness(mode) < CFC_ENFORCING_STRICTNESS) return;
+  if (config.cfcPolicyPath !== undefined) return;
+  throw new Error(
+    `cfc enforcement mode '${mode}' requires the runsc sandbox to run with a CFC policy (set --sandbox-cfc-policy or CF_HARNESS_RUNSC_CFC_POLICY); refusing to start a run that would silently degrade enforcement`,
   );
 };
 
@@ -547,48 +566,54 @@ export class RunscSandboxRuntime implements SandboxRuntime {
       this.config.runscBinary,
       ...runscArgs,
     ];
-    let result: ProcessRunResult;
+    // The bundle (and the context and result files in it) goes whatever
+    // happens below: a run that throws — a timeout, a runsc that will not
+    // start — must not leave one behind per call, since the bash tool turns
+    // timeouts into recoverable results and the model may repeat them.
     try {
-      result = await this.#runner.run({
-        command: "/bin/sh",
-        args: shellArgs,
-        stdinText: request.stdinText,
-        timeoutMs: request.timeoutMs,
-      });
+      let result: ProcessRunResult;
+      try {
+        result = await this.#runner.run({
+          command: "/bin/sh",
+          args: shellArgs,
+          stdinText: request.stdinText,
+          timeoutMs: request.timeoutMs,
+        });
+      } finally {
+        // A timed-out or killed run leaves the container registered; make
+        // sure the sandbox is gone before the bundle it was started from.
+        await this.#runner.run({
+          command: this.config.runscBinary,
+          args: [...this.#globalArgs(), "delete", "--force", callId],
+        }).catch(() => undefined);
+      }
+      const commandResult: SandboxCommandResult = {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+      };
+      if (!withResult) {
+        return commandResult;
+      }
+      let cfcResult: CfcSandboxResult;
+      try {
+        const text = await Deno.readTextFile(resultPath);
+        const parsed = JSON.parse(text) as RunscCfcResultSidecar;
+        cfcResult = cfcResultFromRunscSidecar(parsed, callId, commandResult);
+      } catch (error) {
+        cfcResult = deniedCfcResult(
+          "runsc_cfc_result_fd_unreadable",
+          "runsc did not deliver a CFC result on the result descriptor",
+          {
+            containerId: callId,
+            error: error instanceof Error ? error.message : String(error),
+          },
+        );
+      }
+      return { ...commandResult, cfcResult };
     } finally {
-      // A timed-out or killed run leaves the container registered; make sure
-      // the sandbox is gone before the bundle it was started from.
-      await this.#runner.run({
-        command: this.config.runscBinary,
-        args: [...this.#globalArgs(), "delete", "--force", callId],
-      }).catch(() => undefined);
-    }
-    const commandResult: SandboxCommandResult = {
-      stdout: result.stdout,
-      stderr: result.stderr,
-      exitCode: result.exitCode,
-    };
-    if (!withResult) {
       await Deno.remove(bundleDir, { recursive: true }).catch(() => undefined);
-      return commandResult;
     }
-    let cfcResult: CfcSandboxResult;
-    try {
-      const text = await Deno.readTextFile(resultPath);
-      const parsed = JSON.parse(text) as RunscCfcResultSidecar;
-      cfcResult = cfcResultFromRunscSidecar(parsed, callId, commandResult);
-    } catch (error) {
-      cfcResult = deniedCfcResult(
-        "runsc_cfc_result_fd_unreadable",
-        "runsc did not deliver a CFC result on the result descriptor",
-        {
-          containerId: callId,
-          error: error instanceof Error ? error.message : String(error),
-        },
-      );
-    }
-    await Deno.remove(bundleDir, { recursive: true }).catch(() => undefined);
-    return { ...commandResult, cfcResult };
   }
 
   #sessionContainerId(session: string): string {

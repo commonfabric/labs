@@ -12,6 +12,7 @@ import {
   extractFinalWorkingDirectory,
 } from "./shell-cwd.ts";
 import { ProcessTimeoutError } from "../sandbox/process-runner.ts";
+import { SandboxSessionUnavailableError } from "../sandbox/types.ts";
 import { SandboxPathEscapeError } from "../sandbox/errors.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 
@@ -34,6 +35,12 @@ export const BASH_CWD_OUTSIDE_SANDBOX_EXIT_CODE = 1;
 // 124 is the conventional shell exit code for a timed-out command (GNU coreutils
 // `timeout`), which agents already recognize.
 export const BASH_TIMEOUT_EXIT_CODE = 124;
+/**
+ * The command did not run: it named a sandbox session the runtime cannot
+ * honour (no sessions, or an enforcing mode). Recoverable — the model reruns
+ * without the session.
+ */
+export const BASH_SESSION_UNAVAILABLE_EXIT_CODE = 125;
 
 export interface BashToolInput {
   command: string;
@@ -84,7 +91,7 @@ export const bashToolDescriptor: HarnessToolDescriptor = {
         type: "string",
         pattern: "^[A-Za-z0-9][A-Za-z0-9_.-]{0,31}$",
         description:
-          "Name a sandbox session to keep state between commands (files outside the mounts, background processes). Omit for a fresh sandbox per command.",
+          "Name a sandbox session to keep state between commands (files outside the mounts, background processes). Only some sandbox runtimes offer sessions, and none do under an enforcing CFC mode: where one is unavailable the call does not run and returns a recoverable error saying so, and you rerun it without a session. Omit for a fresh sandbox per command.",
       },
     },
     required: ["command"],
@@ -171,6 +178,22 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
         ? [["command"], ["cwd"]]
         : [["command"]],
     });
+    if (
+      input.session !== undefined &&
+      context.sandbox.describe().sessions !== true
+    ) {
+      // Said rather than silently dropped: a runtime without sessions would
+      // run the command in a fresh sandbox and the model would go on relying
+      // on state that is not there.
+      return {
+        outputId,
+        stdout: "",
+        stderr:
+          "this sandbox runtime has no sessions; rerun the command without `session`",
+        exitCode: BASH_SESSION_UNAVAILABLE_EXIT_CODE,
+        cwd: commandCwd,
+      };
+    }
     let result: Awaited<ReturnType<typeof context.sandbox.runShell>>;
     try {
       result = await context.sandbox.runShell({
@@ -191,6 +214,17 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
           stdout: "",
           stderr: `command timed out after ${error.timeoutMs}ms`,
           exitCode: BASH_TIMEOUT_EXIT_CODE,
+          cwd: commandCwd,
+        };
+      }
+      if (error instanceof SandboxSessionUnavailableError) {
+        // The runtime has sessions but not for this run (an enforcing mode):
+        // the model can act on that by dropping the session.
+        return {
+          outputId,
+          stdout: "",
+          stderr: `${error.message}; rerun the command without \`session\``,
+          exitCode: BASH_SESSION_UNAVAILABLE_EXIT_CODE,
           cwd: commandCwd,
         };
       }

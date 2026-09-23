@@ -381,6 +381,8 @@ export interface RunCfHarnessCliDependencies {
 
   io?: CfHarnessCliIO;
   readTextFile?: (path: string) => Promise<string>;
+  /** Whether a regular file exists at `path`; `Deno.stat` when absent. */
+  pathExists?: (path: string) => Promise<boolean>;
   writeTextFile?: (path: string, text: string) => Promise<void>;
   readRunArtifacts?: typeof readHarnessRunArtifacts;
   createPromptLoop?: (
@@ -1302,7 +1304,7 @@ export const parseCfHarnessCliArgs = async (
   argv: readonly string[],
   deps: Pick<
     RunCfHarnessCliDependencies,
-    "cwd" | "env" | "readTextFile" | "providerSettingsStore"
+    "cwd" | "env" | "readTextFile" | "pathExists" | "providerSettingsStore"
   > = {},
 ): Promise<CfHarnessCliConfig | { help: true }> => {
   const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
@@ -1744,11 +1746,37 @@ export const parseCfHarnessCliArgs = async (
   const rawSandboxCfcPolicy = typeof args["sandbox-cfc-policy"] === "string"
     ? args["sandbox-cfc-policy"].trim()
     : nonEmptyEnvValue(env.CF_HARNESS_RUNSC_CFC_POLICY);
-  const sandboxCfcPolicy = rawSandboxCfcPolicy === ""
+  const explicitSandboxCfcPolicy = rawSandboxCfcPolicy === ""
     ? undefined
     : rawSandboxCfcPolicy;
+  // The default the usage text promises: the policy the docker path's
+  // installer puts under HOME, so both runtimes label the same files the same
+  // way. Looked up only for the runsc runtime, only when nothing named one,
+  // and only taken when it is there.
+  const defaultRunscCfcPolicy = nonEmptyEnvValue(env.HOME) !== undefined
+    ? join(env.HOME!, ".local", "share", "runsc-cfc", "cfc-policy.json")
+    : undefined;
+  const pathExists = deps.pathExists ??
+    ((path: string) =>
+      Deno.stat(path).then((info) => info.isFile).catch(() => false));
+  const sandboxCfcPolicy = explicitSandboxCfcPolicy ??
+    (sandboxRuntimeKind === "runsc" && defaultRunscCfcPolicy !== undefined &&
+        await pathExists(defaultRunscCfcPolicy)
+      ? defaultRunscCfcPolicy
+      : undefined);
   const sandboxRunscBinary = nonEmptyEnvValue(env.CF_HARNESS_RUNSC_BINARY);
   const rawRunscNetwork = nonEmptyEnvValue(env.CF_HARNESS_DOCKER_NETWORK_MODE);
+  if (
+    sandboxRuntimeKind === "runsc" && rawRunscNetwork !== undefined &&
+    rawRunscNetwork !== "none" && rawRunscNetwork !== "bridge" &&
+    rawRunscNetwork !== "host"
+  ) {
+    // The docker path refuses this value when it builds its sandbox; the
+    // runsc path must not read it as "no network" instead.
+    throw new Error(
+      "CF_HARNESS_DOCKER_NETWORK_MODE must be one of none, bridge, or host",
+    );
+  }
   // The docker network vocabulary maps onto runsc's: none stays none, bridge
   // is runsc's own netstack, host is the host's stack.
   const sandboxRunscNetworkMode = rawRunscNetwork === "none"

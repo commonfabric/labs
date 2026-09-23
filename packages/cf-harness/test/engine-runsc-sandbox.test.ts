@@ -1,4 +1,4 @@
-import { assertEquals, assertThrows } from "@std/assert";
+import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 
 import { CfHarnessEngine } from "../src/engine.ts";
 import type {
@@ -106,4 +106,44 @@ Deno.test("CfHarnessEngine still ends the run when the sandbox refuses to close"
   const state = await engine.completeRun("assistant_completed");
   assertEquals(state.status, "completed");
   assertEquals(runtime.closes, 1);
+});
+
+Deno.test("CfHarnessEngine refuses enforcing work on the runsc sandbox without a CFC policy", async () => {
+  const engine = new CfHarnessEngine({
+    runId: "run-1",
+    workspaceHostPath: "/host/project",
+    sandboxRuntimeKind: "runsc",
+    sandboxRootfs: "/images/kitchensink",
+    cfcEnforcementMode: "enforce-explicit",
+    processRunner: new RecordingRunner(),
+  });
+  await assertRejects(
+    () => engine.invokeBuiltinTool("bash", { command: "echo hi" }),
+    Error,
+    "requires the runsc sandbox to run with a CFC policy",
+  );
+});
+
+Deno.test("CfHarnessEngine owns the runsc configuration a child can build on", () => {
+  const engine = new CfHarnessEngine({
+    runId: "run-1",
+    workspaceHostPath: "/host/project",
+    sandboxRuntimeKind: "runsc",
+    sandboxRootfs: "/images/kitchensink",
+    sandboxCfcPolicy: "/policy.json",
+    additionalMounts: [{
+      kind: "host-bind",
+      name: "cabinet",
+      hostPath: "/host/cabinet",
+      sandboxPath: "/file-cabinet",
+      readOnly: true,
+    }],
+    processRunner: new RecordingRunner(),
+  });
+  assertEquals(engine.ownedSandboxConfig, undefined);
+  assertEquals(engine.ownedRunscSandboxConfig?.rootfs, "/images/kitchensink");
+  assertEquals(
+    engine.ownedRunscSandboxConfig?.additionalMounts.map((m) => m.sandboxPath),
+    ["/file-cabinet"],
+  );
 });

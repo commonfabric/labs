@@ -10,10 +10,12 @@
  */
 
 import type {
+  DockerRunscAdditionalMountConfig,
   DockerRunscSandboxConfig,
   SandboxRuntime,
   SandboxRuntimeMountDescription,
 } from "../sandbox/types.ts";
+import type { RunscNetworkMode, RunscSandboxConfig } from "../sandbox/runsc.ts";
 import type {
   HarnessAcquiredSkill,
   HarnessAllowedSkillScript,
@@ -95,13 +97,49 @@ export const childSandboxOptions = (
   parent: {
     sandbox: SandboxRuntime;
     ownedSandboxConfig?: DockerRunscSandboxConfig;
+    /** The parent's direct-runsc configuration, when that is what it runs. */
+    ownedRunscSandboxConfig?: RunscSandboxConfig;
     configuredSandbox?: DockerRunscSandboxConfig;
   },
   acquired: HarnessAcquiredSkill | undefined,
 ): {
   sandboxRuntime?: SandboxRuntime;
   sandbox?: DockerRunscSandboxConfig;
+  sandboxRuntimeKind?: "runsc";
+  sandboxRootfs?: string;
+  sandboxCfcPolicy?: string;
+  sandboxRunscBinary?: string;
+  sandboxRunscNetworkMode?: RunscNetworkMode;
+  additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
 } => {
+  if (acquired !== undefined && parent.ownedRunscSandboxConfig !== undefined) {
+    // The direct runtime: the child names the same runsc configuration in the
+    // engine's own option vocabulary, plus the one mount, and the engine
+    // builds it a runtime of its own with its own run id.
+    const runsc = parent.ownedRunscSandboxConfig;
+    return {
+      sandboxRuntimeKind: "runsc",
+      sandboxRootfs: runsc.rootfs,
+      ...(runsc.cfcPolicyPath !== undefined
+        ? { sandboxCfcPolicy: runsc.cfcPolicyPath }
+        : {}),
+      sandboxRunscBinary: runsc.runscBinary,
+      sandboxRunscNetworkMode: runsc.networkMode,
+      additionalMounts:
+        acquiredSkillMountBacks(runsc.additionalMounts, acquired)
+          ? runsc.additionalMounts
+          : [
+            ...runsc.additionalMounts,
+            {
+              kind: "host-bind",
+              name: ACQUIRED_SKILL_MOUNT_NAME,
+              hostPath: acquired.hostRoot,
+              sandboxPath: acquired.sandboxRoot,
+              readOnly: true,
+            },
+          ],
+    };
+  }
   if (acquired === undefined || parent.ownedSandboxConfig === undefined) {
     return {
       sandboxRuntime: parent.sandbox,
@@ -200,7 +238,9 @@ export const acquiredSkillScriptSurface = (
  * neither receives no tool.
  */
 export const acquiredSkillScriptBacking = (
-  ownedSandboxConfig: DockerRunscSandboxConfig | undefined,
+  ownedSandboxConfig:
+    | Pick<DockerRunscSandboxConfig, "additionalMounts">
+    | undefined,
   acquiredSkills: readonly HarnessAcquiredSkill[] | undefined,
 ): boolean =>
   (acquiredSkills ?? []).some((skill) =>

@@ -128,13 +128,24 @@ Deno.test("cfcResultFromRunscSidecar reads nested and string-only taints", () =>
   assertEquals(integ.stdout.policy, "opaque");
   assertEquals(integ.stdout.label, { integrity: [{ subject: "did:key:bob" }] });
 
-  // With no xattr form, the string form decides: empty means public.
+  // With no xattr form, the string form decides: only runsc's own spelling of
+  // the empty label is public; anything else is withheld.
   const stringPublic = cfcResultFromRunscSidecar(
-    { version: 1, containerId: "c1", cfcTaint: { string: "{}" } },
+    {
+      version: 1,
+      containerId: "c1",
+      cfcTaint: { string: "{conf: ⊤, integ: ∅}" },
+    },
     "c1",
     command,
   );
   assertEquals(stringPublic.stdout.policy, "observed");
+  const stringUnknown = cfcResultFromRunscSidecar(
+    { version: 1, containerId: "c1", cfcTaint: { string: "{}" } },
+    "c1",
+    command,
+  );
+  assertEquals(stringUnknown.stdout.policy, "opaque");
   const stringTainted = cfcResultFromRunscSidecar(
     {
       version: 1,
@@ -145,4 +156,25 @@ Deno.test("cfcResultFromRunscSidecar reads nested and string-only taints", () =>
     command,
   );
   assertEquals(stringTainted.stdout.policy, "opaque");
+});
+
+Deno.test("cfcResultFromRunscSidecar denies a malformed taint rather than reading it as public", () => {
+  for (
+    const cfcTaint of [
+      {},
+      { string: 7 },
+      { xattrJSON: "not-an-object" },
+      { string: "{conf: ⊤, integ: ∅}", xattrJSON: ["x"] },
+    ]
+  ) {
+    const r = cfcResultFromRunscSidecar(
+      { version: 1, containerId: "c1", cfcTaint } as Parameters<
+        typeof cfcResultFromRunscSidecar
+      >[0],
+      "c1",
+      command,
+    );
+    assertEquals(r.stdout.policy, "denied", JSON.stringify(cfcTaint));
+    assertEquals(r.diagnostics?.[0]?.code, "runsc_cfc_sidecar_malformed_taint");
+  }
 });
