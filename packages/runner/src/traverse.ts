@@ -4867,12 +4867,13 @@ export class SchemaObjectTraverser<V extends FabricValue>
     // keeps the selector walk covering (and thus delivering + watching) the
     // remaining element docs. `forEach` skips sparse holes like `every` did.
     let valid = true;
+    const settledSchema = ContextualFlowControl.settledForContainer(
+      schema,
+      "array",
+    );
     docArray.forEach((item, index) => {
       const itemSchema = directItems ??
-        schemaAtPathCanonical(
-          ContextualFlowControl.settledForContainer(schema, "array"),
-          [index.toString()],
-        );
+        schemaAtPathCanonical(settledSchema, [index.toString()]);
       const batchIndex = preparedPlainLinkIndex++;
       const preparedSourceAddress = preparedPlainLinks
         ?.sourceAddresses[batchIndex];
@@ -5167,15 +5168,15 @@ export class SchemaObjectTraverser<V extends FabricValue>
     // replica lacks: a default filled in below would stand in for the unknown.
     const rejectedOverMissingTarget = new Set<string>();
     const directProperties = plainObjectProperties(schema);
+    const settledSchema = ContextualFlowControl.settledForContainer(
+      schema,
+      "object",
+    );
     for (const [propKey, propValue] of Object.entries(doc.value!)) {
       // We'll use marker schemas to detect some places where we want special
       // schema behavior
       const propSchema = directProperties?.[propKey] ??
-        schemaAtPathCanonical(
-          ContextualFlowControl.settledForContainer(schema, "object"),
-          [propKey],
-          true,
-        );
+        schemaAtPathCanonical(settledSchema, [propKey], true);
       // Normally, if additionalProperties is not specified, it would
       // default to true. However, if we provided the `properties` field, we
       // treat this specially, and don't invalidate the object, but also don't

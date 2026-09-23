@@ -210,11 +210,12 @@ wrong. These rules hold that agreement:
   Requiring such a property instead voids the object, since nothing reaches the
   filtered result at that key. Schema narrowing also returns `false` where the
   schema's declared type holds no children at all, and there nothing was turned
-  down. A schema that declares no `type` admits every type, and narrowing
-  without the value in hand can say only what its object and array readings
-  both admit; a read that holds the value settles the type first, so an
-  object's key narrows through the properties and an array's element through
-  the items, on both paths.
+  down. Omitting `type` alone restricts no type — an `enum`, a `const` or a
+  combinator beside it still does — and narrowing without the value in hand
+  can say only what such a schema's object and array readings both admit; a
+  read that holds the value settles the type first, so an object's key narrows
+  through the properties and an array's element through the items, on both
+  paths.
 - **A read-only array method visits every element, even past one that does not
   match.** An eager read walks the whole array before it calls the array
   invalid, so each element is a dependency of the reader either way. Stopping at

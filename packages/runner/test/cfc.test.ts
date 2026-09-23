@@ -112,6 +112,14 @@ describe("ContextualFlowControl.schemaAtPath", () => {
     expect(
       ContextualFlowControl.schemaAtPath({ items: { type: "number" } }, ["1"]),
     ).toBe(true);
+    // A conjunction is not narrowed here: a type-less `allOf` holds no
+    // children rather than admitting one a part constrains as anything.
+    expect(
+      ContextualFlowControl.schemaAtPath(
+        { allOf: [{ properties: { a: { type: "number" } } }] },
+        ["a"],
+      ),
+    ).toBe(false);
     expect(
       ContextualFlowControl.schemaAtPath(
         { additionalProperties: { type: "boolean" } },

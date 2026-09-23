@@ -155,10 +155,10 @@ const EXCLUDED_MISSING: JSONSchema = Object.freeze({
  * document behind it, and reading first would resolve the link and fetch the
  * document the `false` was there to avoid.
  *
- * This is its own marker because `schemaAtPath` also returns `false` for a
- * shape it cannot read a child out of — an `allOf`, or an object schema that
- * omits `type` — where the schema has turned nothing down and the subschema is
- * still reachable below.
+ * This is its own marker because `schemaAtPath` also returns `false` where
+ * the schema has turned nothing down: for a declared type that holds no
+ * children, and for an `allOf`, which it does not read a child out of while
+ * the subschema is still reachable below.
  */
 const EXCLUDED_REJECTED: JSONSchema = Object.freeze({
   $comment: "rejectedProperty",

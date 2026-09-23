@@ -697,10 +697,13 @@ export class ContextualFlowControl {
       // `additionalProperties` by an object, `prefixItems` and `items` by an
       // array. Narrowing without one can say only what both readings admit,
       // so such a cursor is read as the union of its object and array
-      // readings. A caller holding the value settles the type first.
+      // readings. A caller holding the value settles the type first. A
+      // conjunction is left out: this narrowing does not read a child out of
+      // `allOf` parts, and a reading that ignored them would admit a property
+      // a part constrains as anything, its schema and labels dropped.
       const typeless = isObjectOrArray(cursor) && cursor.type === undefined &&
         !("anyOf" in cursor) && !("oneOf" in cursor) &&
-        !ContextualFlowControl.isTrueSchema(cursor);
+        !("allOf" in cursor) && !ContextualFlowControl.isTrueSchema(cursor);
       if (
         isObjectOrArray(cursor) &&
         (Array.isArray(cursor.type) || "anyOf" in cursor || "oneOf" in cursor ||
