@@ -8,5 +8,4 @@
  * reached from its own file.
  */
 
-export { getFrozenObjectHashCacheHits } from "./caching.ts";
 export * from "./impl.ts";

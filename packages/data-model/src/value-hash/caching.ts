@@ -40,6 +40,11 @@ const primitiveHashCache = new LRUCache<
  */
 const frozenObjectHashCache = new WeakMap<object, FabricHash>();
 
+/**
+ * How many hashes `frozenObjectHashCache` has served, counted from when this
+ * module loaded. Only a test or a benchmark reads it, through
+ * `getFrozenObjectHashCacheHits()`.
+ */
 let frozenObjectHashCacheHits = 0;
 
 /** Pre-computed hash of `null`. */
@@ -99,7 +104,12 @@ export function cachedPrimitiveHash(
   return result;
 }
 
-/** Counts `hashOf` and `hashStringOf` calls served by the frozen-object cache. */
+/**
+ * Counts `hashOf` and `hashStringOf` calls served by the frozen-object cache.
+ *
+ * @internal Not in the `value-hash` barrel; `for-testing-only.ts` offers it to
+ * tests.
+ */
 export function getFrozenObjectHashCacheHits(): number {
   return frozenObjectHashCacheHits;
 }
