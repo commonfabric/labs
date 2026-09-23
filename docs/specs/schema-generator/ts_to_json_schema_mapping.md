@@ -865,7 +865,12 @@ Mechanics:
   declaration, including a function-local generic alias whose resolved type
   reports an inner alias: the outer reference's arguments belong to the outer
   declaration's parameters. Fixed writer bindings and default value arguments
-  are read from that declaration. Unresolvable expansions fall back to
+  are read from that declaration. References qualified through a namespace
+  import are followed by resolving their full type name, including within a
+  nested policy payload. Qualified metadata aliases such as
+  `cf.CurrentPrincipal` resolve through the same import. Type arguments are
+  converted to checker types only when the chain reaches a canonical policy
+  alias. Unresolvable expansions fall back to
   ordinary generation (tested). A subtree holding a substituted parameter is
   built afresh, with no original node, so the payload is read from the node
   and its arguments, never back through the checker as the declaration's

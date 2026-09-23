@@ -2195,7 +2195,10 @@ parentheses and plain aliases (`readAuthoredTypeNode`), so a pattern-local
 syntax written in place names. Pattern-local generic policy aliases also retain
 their writer bindings: each reference's arguments and defaults are substituted
 from its authored declaration, even when TypeScript reports the resolved type
-under an inner alias's name. The binding itself stays a direct `typeof`
+under an inner alias's name. A generic alias may name its policy through a
+namespace import (`cf.WriteAuthorizedBy<T, typeof setName>`) at module scope or
+inside the pattern, including through alias chains and nested policy wrappers.
+The binding itself stays a direct `typeof`
 (§6.8): `type Binding = typeof setName` is refused, on a constructor's type
 arguments as on a declared field. `protected-cell-policy.test.ts` pins the
 generated schemas and the refusals.

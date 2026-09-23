@@ -1369,9 +1369,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     ) {
       return this.#formatCfcAliasTypeNode(typeNode.type, context);
     }
-    if (
-      !ts.isTypeReferenceNode(typeNode) || !ts.isIdentifier(typeNode.typeName)
-    ) {
+    if (!ts.isTypeReferenceNode(typeNode)) {
       return undefined;
     }
 
@@ -1386,12 +1384,9 @@ export class CommonFabricFormatter implements TypeFormatter {
     const aliasArgNodes = typeNode.typeArguments
       ? [...typeNode.typeArguments]
       : undefined;
-    const aliasArgs = (aliasArgNodes ?? []).map((argNode) =>
-      this.#resolveTypeNodeToType(argNode, context, new Map())
-    );
     const resolved = this.#resolveCfcAliasFromDeclaration(
       aliasDeclaration,
-      aliasArgs,
+      undefined,
       aliasArgNodes,
       { ...context, typeNode },
       new Set([aliasDeclaration.name.text]),
@@ -1420,9 +1415,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         const nodes = reference.typeArguments ?? [];
         const resolved = this.#resolveCfcAliasFromDeclaration(
           declaration,
-          nodes.map((node) =>
-            this.#resolveTypeNodeToType(node, context, new Map())
-          ),
+          undefined,
           nodes,
           context,
           new Set([declaration.name.text]),
@@ -1460,7 +1453,7 @@ export class CommonFabricFormatter implements TypeFormatter {
 
   #resolveCfcAliasFromDeclaration(
     aliasDeclaration: ts.TypeAliasDeclaration,
-    aliasArgs: readonly ts.Type[],
+    aliasArgs: readonly ts.Type[] | undefined,
     aliasArgNodes: readonly ts.TypeNode[] | undefined,
     context: GenerationContext,
     visited: Set<string>,
@@ -1470,7 +1463,12 @@ export class CommonFabricFormatter implements TypeFormatter {
     if (CFC_ALIAS_NAMES.has(aliasName)) {
       return {
         aliasName,
-        aliasArgs,
+        // Alias chains substitute syntax until they reach a policy. Only its
+        // arguments need checker types; unrelated aliases require no conversion.
+        aliasArgs: aliasArgs ??
+          (aliasArgNodes ?? []).map((node) =>
+            this.#resolveTypeNodeToType(node, context, new Map())
+          ),
         ...(aliasArgNodes ? { aliasArgNodes } : {}),
         ...(substituted.length > 0 ? { substituted } : {}),
       };
@@ -1480,13 +1478,13 @@ export class CommonFabricFormatter implements TypeFormatter {
     // would not be seen as the policy it holds, and the field would lose its
     // policy and its type together.
     const aliased = unwrapTypeParentheses(aliasDeclaration.type);
-    if (
-      !ts.isTypeReferenceNode(aliased) || !ts.isIdentifier(aliased.typeName)
-    ) {
+    if (!ts.isTypeReferenceNode(aliased)) {
       return undefined;
     }
 
-    const targetName = aliased.typeName.text;
+    const targetName = ts.isIdentifier(aliased.typeName)
+      ? aliased.typeName.text
+      : aliased.typeName.right.text;
     if (visited.has(targetName)) {
       return undefined;
     }
@@ -1499,16 +1497,11 @@ export class CommonFabricFormatter implements TypeFormatter {
       return undefined;
     }
 
-    const paramMap = new Map<string, ts.Type>();
     const paramNodeMap = new Map<string, ts.TypeNode>();
     const substitutedHere: ts.TypeParameterDeclaration[] = [];
     for (let i = 0; i < (aliasDeclaration.typeParameters?.length ?? 0); i++) {
       const parameter = aliasDeclaration.typeParameters?.[i];
       const paramName = parameter?.name.text;
-      const actualArg = aliasArgs[i];
-      if (paramName && actualArg) {
-        paramMap.set(paramName, actualArg);
-      }
       // An argument the reference leaves out is its parameter's default read
       // with the arguments before it, as the checker instantiates one. With no
       // argument nodes at all there is nothing to read that default with.
@@ -1522,20 +1515,16 @@ export class CommonFabricFormatter implements TypeFormatter {
       }
     }
 
-    const resolvedArgs: ts.Type[] = [];
     const resolvedArgNodes: ts.TypeNode[] = [];
     for (const argNode of aliased.typeArguments ?? []) {
       const resolvedArgNode = substituteTypeNode(argNode, paramNodeMap);
-      resolvedArgs.push(
-        this.#resolveTypeNodeToType(resolvedArgNode, context, new Map()),
-      );
       resolvedArgNodes.push(resolvedArgNode);
     }
 
     visited.add(aliasName);
     return this.#resolveCfcAliasFromDeclaration(
       targetDeclaration,
-      resolvedArgs,
+      undefined,
       resolvedArgNodes,
       context,
       visited,
@@ -1923,9 +1912,7 @@ export class CommonFabricFormatter implements TypeFormatter {
           this.#extractLiteralLikeValue(undefined, element, context)
         );
       }
-      if (
-        ts.isTypeReferenceNode(typeNode) && ts.isIdentifier(typeNode.typeName)
-      ) {
+      if (ts.isTypeReferenceNode(typeNode)) {
         const referencedName = this.#resolveTypeReferenceName(
           typeNode.typeName,
           context,
@@ -2081,14 +2068,15 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   #resolveTypeReferenceName(
-    typeName: ts.Identifier,
+    typeName: ts.EntityName,
     context: GenerationContext,
   ): string {
     const symbol = context.typeChecker.getSymbolAtLocation(typeName);
     const resolved = symbol && (symbol.flags & ts.SymbolFlags.Alias)
       ? context.typeChecker.getAliasedSymbol(symbol)
       : symbol;
-    return resolved?.name ?? typeName.text;
+    return resolved?.name ??
+      (ts.isIdentifier(typeName) ? typeName.text : typeName.right.text);
   }
 
   #extractDefaultValueFromNode(

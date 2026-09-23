@@ -166,6 +166,65 @@ export default pattern<{ initialName: string }>(({ initialName }) => {
     });
   }
 
+  for (
+    const [spelling, aliases, local, expectedPolicy] of [
+      [
+        "a module-level generic alias",
+        "type ProtectedName<T> = cf.WriteAuthorizedBy<T, typeof setName>;",
+        "",
+        { writeAuthorizedBy: policy.writeAuthorizedBy },
+      ],
+      [
+        "a pattern-local generic alias",
+        "",
+        "type ProtectedName<T> = cf.WriteAuthorizedBy<T, typeof setName>;",
+        { writeAuthorizedBy: policy.writeAuthorizedBy },
+      ],
+      [
+        "a generic alias chain",
+        "type Inner<T, Writer> = cf.WriteAuthorizedBy<T, Writer>;",
+        "type ProtectedName<T> = Inner<T, typeof setName>;",
+        { writeAuthorizedBy: policy.writeAuthorizedBy },
+      ],
+      [
+        "nested policy aliases",
+        "",
+        "type ProtectedName<T> = cf.Cfc<cf.WriteAuthorizedBy<T, typeof setName>, { ownerPrincipal: cf.CurrentPrincipal }>;",
+        policy,
+      ],
+    ] as const
+  ) {
+    it(`keeps a namespace-qualified writer policy through ${spelling}`, async () => {
+      const diagnostics: TransformationDiagnostic[] = [];
+      const root = parseModule(
+        await transformSource(
+          `${prelude}import * as cf from "commonfabric";
+${aliases}
+export default pattern<{ initialName: string }>(({ initialName }) => {
+  ${local}
+  const name = new Writable<ProtectedName<string>>(initialName ?? "").for("name");
+  return { name, setName: setName({ name }) };
+});`,
+          {
+            types: COMMONFABRIC_TYPES,
+            typeCheck: true,
+            pipelineDiagnostics: diagnostics,
+          },
+        ),
+      );
+      expect(diagnostics.filter(isError)).toEqual([]);
+      const expected = {
+        type: "string",
+        ifc: expectedPolicy,
+      };
+      expect(resolved(callSchemas(root, "lift")[1])).toMatchObject(expected);
+      const output = patternSchemas(root).output;
+      // deno-lint-ignore no-explicit-any
+      expect(resolved((output as any).properties.name, output))
+        .toMatchObject(expected);
+    });
+  }
+
   // `type Binding = typeof setName` is not a direct `typeof`. The generator
   // reads no writer from it, so the transform must refuse it wherever a policy
   // can be written. A constructor's type arguments once went unvalidated, and
