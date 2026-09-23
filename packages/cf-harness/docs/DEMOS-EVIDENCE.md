@@ -1257,6 +1257,38 @@ successor across owners.
 So a prompt that names those two ids is not stylistic. Until one of those lands,
 it is the only thing standing between a reader and the defect.
 
+## The hints the prompts no longer carry
+
+Three hints were removed from the run page and one word restored, each on
+evidence from running the prompts without them. `NAIVE.md` and `BASELINE.md` in
+the demo-owner thread's storage hold the runs.
+
+**The slug sentence is gone from all four prompts.** A run picks another name by
+itself when the one it tries is taken — observed on every prompt that lost the
+sentence, including one run that recovered two collisions in a row. The tool's
+own error says "Choose another", and the run does.
+
+**The library hint is gone from demos 1 and 3.** Without it, the pomodoro demo
+still composes the indexed timer, and the bank demo still composes the published
+reader. Naming the library did not change which part a run reached.
+
+**Demo 3 asks for a _sortable_ table again, and sorting works.** The published
+sortable part is only reached by a prompt that asks for sorting; a wording that
+avoids the word never looks for it. Avoiding it did not route around a gap — it
+hid a capability.
+
+**The ids stay** in demos 2 and 4 until the index question is settled. Without
+them a run composes the superseded generation of `check-list` and
+`amount-ledger`, which is the defect described above.
+
+### A defect the restored wording exposes
+
+Sorting a column replaces that header's caret with a policy placeholder, so it
+reads "DateContent hidden by policy" (CT-2418). The sort is correct and the rows
+are right; the caret is a `computed` over sort state written by a handler that
+had read labelled rows, so the label reaches the header. The run page says what
+a runner will see.
+
 ## Where the evidence is
 
 Run artifacts sit under the console's own artifact root. The proof runs behind
