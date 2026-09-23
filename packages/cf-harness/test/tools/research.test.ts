@@ -66,6 +66,58 @@ describe("research", () => {
       expect(request?.handleTokens).toEqual([attached.token, registry.token]);
     });
 
+    it("names the granted tokens in the inventory it hands to research", async () => {
+      const registry = await mintAddressHandle(
+        createHarnessHandleTable("granted"),
+        `/of:fid1:${"B".repeat(43)}/pieceRegistry`,
+      );
+      const mail = await mintAddressHandle(
+        registry.table,
+        `/of:fid1:${"C".repeat(43)}`,
+      );
+      const other = await mintAddressHandle(
+        mail.table,
+        `/of:fid1:${"D".repeat(43)}`,
+      );
+      let request: HarnessResearchRequest | undefined;
+      const context: Partial<HarnessToolContext> = {
+        nextOutputId: () => createToolOutputId("granted", "research", 1),
+        handleTable: other.table,
+        wellKnownGrants: [
+          {
+            name: "piece-registry",
+            token: registry.token,
+            ref: `/of:fid1:${"B".repeat(43)}/pieceRegistry`,
+          },
+          {
+            name: "email",
+            token: mail.token,
+            ref: `/of:fid1:${"C".repeat(43)}`,
+            source: {
+              connection: "gmail-work",
+              piece: "cf-gmail-messages--gmail-work",
+            },
+          },
+        ],
+        runResearch: (value) => {
+          request = value;
+          return Promise.reject(new Error("stop after capturing the request"));
+        },
+      };
+      await researchTool.invoke(context as HarnessToolContext, {
+        task: "Summarize this week's mail",
+      });
+      expect(request?.handleTokens).toEqual([
+        registry.token,
+        mail.token,
+        other.token,
+      ]);
+      expect(request?.handleNames).toEqual({
+        [registry.token]: "piece-registry",
+        [mail.token]: "gmail-work (email)",
+      });
+    });
+
     it("refuses an unknown follow-up before invoking research and retains task influence", async () => {
       let invoked = false;
       const context: Partial<HarnessToolContext> = {
