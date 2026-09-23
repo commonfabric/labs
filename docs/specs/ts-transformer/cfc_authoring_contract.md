@@ -182,6 +182,8 @@ Normative behavior:
    - a variable initialized from `handler(...)`
    - a variable initialized from `module(...)`
    - a variable initialized from `requireEventIntegrity(...)`
+   - any of the three called through a namespace import of a Common Fabric
+     module (`cf.handler(...)`); a member of any other object is not a builder
    - a function declaration
 4. The transformer must report `cfc-write-authorized-by` if any of the above
    conditions fail.

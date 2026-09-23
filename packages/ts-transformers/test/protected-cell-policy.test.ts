@@ -662,4 +662,44 @@ export default pattern<{ name: string }, { name: Guarded<string, Binding> }>(({ 
       });
     }
   }
+
+  // An alias chain may pass through two different aliases of one name; the
+  // second is part of the chain, not a cycle, and the policy it holds
+  // reaches the schema.
+  it("follows a policy alias chain through two aliases of the same name", async () => {
+    const diagnostics: TransformationDiagnostic[] = [];
+    const files = await transformFiles(
+      {
+        "/main.tsx": `import { pattern, Writable } from "commonfabric";
+import { type Wrapped, setName } from "./shared.ts";
+type Owned<T> = Wrapped<T>;
+export default pattern<{ initialName: string }>(({ initialName }) => {
+  const name = new Writable<Owned<string>>(initialName ?? "").for("name");
+  return { name, setName: setName({ name }) };
+});`,
+        "/shared.ts":
+          `import { Cfc, CurrentPrincipal, handler, RepresentsCurrentUser, Writable, WriteAuthorizedBy } from "commonfabric";
+type Owned<T, Binding> = RepresentsCurrentUser<Cfc<WriteAuthorizedBy<T, Binding>, { ownerPrincipal: CurrentPrincipal }>>;
+export const setName = handler<{ name: string }, { name: Writable<string> }>((event, { name }) => { name.set(event.name); });
+export type Wrapped<T> = Owned<T, typeof setName>;`,
+      },
+      {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        pipelineDiagnostics: diagnostics,
+      },
+    );
+    expect(diagnostics.filter(isError)).toEqual([]);
+    const expected = {
+      type: "string",
+      ifc: {
+        ownerPrincipal: { __ctCurrentPrincipal: true },
+        writeAuthorizedBy: {
+          __ctWriterIdentityOf: { file: "/shared.ts", path: ["setName"] },
+        },
+      },
+    };
+    const root = parseModule(files["/main.tsx"]);
+    expect(resolved(callSchemas(root, "lift")[1])).toMatchObject(expected);
+  });
 });
