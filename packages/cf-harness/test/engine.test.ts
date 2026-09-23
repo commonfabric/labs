@@ -129,6 +129,57 @@ class FakeProcessRunner implements ProcessRunner {
   }
 }
 
+Deno.test("CfHarnessEngine numbers CFC invocation contexts prepared at once apart", async () => {
+  const sandbox = new FakeSandboxRuntime([
+    { stdout: "", stderr: "", exitCode: 0 },
+    { stdout: "", stderr: "", exitCode: 0 },
+  ]);
+  const engine = new CfHarnessEngine({
+    sandboxRuntime: sandbox,
+    runId: "run-contexts-at-once",
+  });
+
+  await Promise.all([
+    engine.invokeBuiltinTool("bash", { command: "printf one" }),
+    engine.invokeBuiltinTool("bash", { command: "printf two" }),
+  ]);
+
+  assertEquals(
+    engine.getRunState().cfcInvocationContexts?.map((context) =>
+      context.sequence
+    ).toSorted(),
+    [1, 2],
+  );
+});
+
+Deno.test("CfHarnessEngine keeps the handles of two mints recorded at once", async () => {
+  const engine = new CfHarnessEngine({
+    sandboxRuntime: new FakeSandboxRuntime(),
+    runId: "run-mints-at-once",
+  });
+
+  const tokens = await Promise.all([
+    engine.mintReferentHandle({
+      source: "loom:rows",
+      value: "first row",
+      label: { confidentiality: ["https://cfc.test/atom/facet/work"] },
+      labelSource: "row",
+    }),
+    engine.mintReferentHandle({
+      source: "loom:rows",
+      value: "second row",
+      label: { confidentiality: ["https://cfc.test/atom/facet/work"] },
+      labelSource: "row",
+    }),
+  ]);
+
+  assertEquals(
+    engine.handleTable?.referents?.map((referent) => referent.token)
+      .toSorted(),
+    tokens.toSorted(),
+  );
+});
+
 Deno.test("CfHarnessEngine builds a default docker-runsc sandbox when given a workspace path", () => {
   const engine = new CfHarnessEngine({
     workspaceHostPath: "/host/project",

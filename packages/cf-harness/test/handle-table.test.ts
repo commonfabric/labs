@@ -13,6 +13,7 @@ import {
   assertValidHarnessHandleTable,
   createHarnessHandleTable,
   type HandleTokenHasher,
+  mergeHarnessHandleTables,
   mintAddressHandle,
   resolveHandleRef,
   resolveHandleToken,
@@ -62,6 +63,42 @@ describe("handle-table", () => {
         salt: "run-1",
         entries: [],
       });
+    });
+  });
+
+  describe("mergeHarnessHandleTables()", () => {
+    it("keeps the additions of two tables minted from one base", async () => {
+      const base = createHarnessHandleTable("run-1");
+      const first = await mintAddressHandle(base, `of:fid1:${HASH_A}`);
+      const second = await mintAddressHandle(base, `of:fid1:${HASH_B}`);
+
+      const merged = mergeHarnessHandleTables(first.table, second.table);
+
+      expect(merged.entries.map((entry) => entry.token).toSorted()).toEqual(
+        [first.token, second.token].toSorted(),
+      );
+    });
+
+    it("lets the incoming table's version of a shared entry stand", async () => {
+      const base = createHarnessHandleTable("run-1");
+      const plain = await mintAddressHandle(base, `of:fid1:${HASH_A}`);
+      const withSchema = await mintAddressHandle(base, `of:fid1:${HASH_A}`, {
+        schema: { type: "number" },
+      });
+
+      const merged = mergeHarnessHandleTables(plain.table, withSchema.table);
+
+      expect(merged.entries).toHaveLength(1);
+      expect(merged.entries[0].schema).toEqual({ type: "number" });
+    });
+
+    it("refuses tables salted by different runs", () => {
+      expect(() =>
+        mergeHarnessHandleTables(
+          createHarnessHandleTable("run-1"),
+          createHarnessHandleTable("run-2"),
+        )
+      ).toThrow("different runs");
     });
   });
 

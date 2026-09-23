@@ -141,6 +141,7 @@ import {
 import {
   assertValidHarnessHandleTable,
   createHarnessHandleTable,
+  mergeHarnessHandleTables,
   mintAddressHandle,
   mintReferentHandle,
 } from "./handle-table.ts";
@@ -637,6 +638,14 @@ export class CfHarnessEngine {
 
   #runState: HarnessRunState;
   #outputSequence: number;
+
+  /**
+   * The highest CFC invocation-context sequence handed out. Read beside the
+   * recorded contexts when the next is numbered, so two contexts prepared at
+   * once are numbered apart even though neither is recorded yet.
+   */
+  #lastCfcInvocationSequence = 0;
+
   readonly #now: () => string;
   readonly #fabricSessionFactory?: HarnessFabricSessionFactory;
   readonly #openProbeRuntime?: HarnessToolContext["openProbeRuntime"];
@@ -1588,15 +1597,23 @@ export class CfHarnessEngine {
   }
 
   /**
-   * Records `table` as the run's handle table and persists the run state.
+   * Records the entries and referents of `table` into the run's handle table
+   * and persists the run state. A caller mints on the table it read and
+   * records what it got back, and two callers whose calls overlap both read
+   * the table before either recorded; folding each result in, rather than
+   * replacing the table with it, keeps both their additions.
    *
    * @throws Error when `table` is not a well-formed version-1 handle table.
    */
   async recordHandleTable(table: HarnessHandleTable): Promise<void> {
     assertValidHarnessHandleTable(table);
+    const current = this.handleTable;
+    const merged = current === undefined
+      ? table
+      : mergeHarnessHandleTables(current, table);
     this.#runState = patchHarnessRunState(
       this.#runState,
-      { handleTable: structuredClone(table) },
+      { handleTable: structuredClone(merged) },
       this.#now(),
     );
     await this.persistRunState();
@@ -2639,8 +2656,16 @@ export class CfHarnessEngine {
       readonly HarnessCfcInvocationInputLabelPath[];
   }): Promise<HarnessCfcInvocationContext> {
     const now = this.#now();
+    // Taken before the await: two invocations prepared at once would
+    // otherwise both count the contexts recorded so far and share a number,
+    // and the audit keys contexts by sequence.
+    const sequence = Math.max(
+      (this.#runState.cfcInvocationContexts ?? []).length + 1,
+      this.#lastCfcInvocationSequence + 1,
+    );
+    this.#lastCfcInvocationSequence = sequence;
     const invocation = await createHarnessCfcInvocationContext({
-      sequence: (this.#runState.cfcInvocationContexts ?? []).length + 1,
+      sequence,
       runId: this.#runState.runId,
       createdAt: now,
       toolId: options.toolId,

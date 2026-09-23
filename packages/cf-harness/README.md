@@ -203,7 +203,7 @@ What works today:
   opt-in ChatGPT/Codex subscription transports
 - interactive chat NDJSON stdio transport with opt-in SQLite session, turn, and
   event persistence
-- single-child subagent delegation with fresh child prompt context, explicit
+- subagent delegation with fresh child prompt context, explicit
   default/browser/web_fetch/web_search/pattern-author child profiles, retained
   child run references, and a sanitized summary/state return channel, plus a
   bounded private research loop that is not a delegable profile
@@ -288,8 +288,9 @@ What is not done yet:
 - first-class browser operation policy on top of the provisional browser
   subagent profile
 - dynamic/model-driven Agent Skills activation
-- parallel child orchestration beyond one model turn: the children a turn starts
-  run together, and nothing schedules, budgets, or cancels across turns
+- parallel child orchestration beyond one model turn: a turn's delegations run
+  together while its other calls run in order, and nothing schedules, budgets,
+  or cancels across turns
 - app UI event provenance
 - streaming model responses
 - richer mid-turn resumability

@@ -382,6 +382,25 @@ type ParsedToolArguments =
   | { input: Record<string, unknown> }
   | { invalid: CreateHarnessInvalidToolCallOptions };
 
+/**
+ * Whether the loop may start the calls after `toolCall` while it runs. True
+ * of a delegation, whose child works in an engine of its own, except one on
+ * the `browser` profile: two browser children share one persistent profile
+ * and so one page, and would drive it at once. A call whose arguments do not
+ * decode is held like any other, since the complaint it gets is written
+ * before it would have started anything.
+ */
+const delegationHoldsNothingAfterIt = (toolCall: HarnessToolCall): boolean => {
+  if (
+    getBuiltinTool(toolCall.function.name)?.descriptor.toolId !==
+      "delegate_task"
+  ) {
+    return false;
+  }
+  const parsed = parseToolArguments(toolCall);
+  return "input" in parsed && parsed.input.profile !== "browser";
+};
+
 const parseToolArguments = (
   toolCall: HarnessToolCall,
 ): ParsedToolArguments => {
@@ -2971,6 +2990,8 @@ export class CfHarnessPromptLoop {
    * calls were dispatched, and `undefined` outside a turn. Skill custody is
    * judged against this rather than the live state, so a delegation is not
    * refused on account of a sibling the same turn started a moment earlier.
+   * The siblings of one turn are unordered for custody: each is recorded
+   * when it is admitted, and a later turn reads them in that order.
    */
   #subagentRunsAtTurnStart?: readonly HarnessSubagentRunRef[];
 
@@ -3966,37 +3987,55 @@ export class CfHarnessPromptLoop {
         const pendingCfcModelContextObservations:
           HarnessCfcModelContextObservationInput[] = [];
         options.signal?.throwIfAborted();
-        // The calls of one turn run together, and everything that orders them
-        // is fixed before any of them starts: the activity sequence each call
-        // records under, the run state a delegation's skill custody is judged
-        // against, and the position its result takes in the transcript. So
-        // the record reads the same whichever call finished first, and two
-        // delegations the model wrote side by side are judged as it wrote
-        // them, against the custody that stood when it did.
+        // The calls run in the order the model wrote them, and a delegation
+        // does not hold the calls after it. A child runs in its own engine
+        // and shares nothing of this run's session state but the sandbox,
+        // so two children a turn starts can run together, while every other
+        // call runs in turn against the working directory and browser page
+        // the session holds once. Everything that orders the record is fixed
+        // before any call starts: the activity sequence each records under,
+        // the run state a delegation's skill custody is judged against, and
+        // the position its result takes in the transcript, which is the
+        // order written whichever finished first. One call's failure ends the
+        // turn: whatever is still running is aborted, and that failure is
+        // the one the run ends on.
         const firstToolActivitySequence = toolActivity.length + 1;
         const turnActivities: HarnessToolActivity[][] = toolCalls.map(
           () => [],
         );
         this.#subagentRunsAtTurnStart =
           this.engine.getRunState().subagentRuns ?? [];
-        const settledToolCalls = await Promise.allSettled(
-          toolCalls.map((toolCall, index) =>
-            this.#invokeToolCall(
-              toolCall,
-              model,
-              promptSlotBinding,
-              options.signal,
-              firstToolActivitySequence + index,
-              (activity) => turnActivities[index].push(activity),
-              recordModelUsage,
-              options.onTranscriptEvent,
-              undefined,
-              toolCalls.length,
-            )
-          ),
-        );
+        const turn = new AbortController();
+        const abortTurn = () => turn.abort(options.signal?.reason);
+        options.signal?.addEventListener("abort", abortTurn, { once: true });
+        let turnFailure: { error: unknown } | undefined;
+        const invocations: Promise<InvokedToolCallMessages>[] = [];
+        for (const [index, toolCall] of toolCalls.entries()) {
+          const invocation = this.#invokeToolCall(
+            toolCall,
+            model,
+            promptSlotBinding,
+            turn.signal,
+            firstToolActivitySequence + index,
+            (activity) => turnActivities[index].push(activity),
+            recordModelUsage,
+            options.onTranscriptEvent,
+            undefined,
+            toolCalls.length,
+          );
+          invocations.push(invocation);
+          const settled = invocation.then(() => {}, (error) => {
+            turnFailure ??= { error };
+            turn.abort(error);
+          });
+          if (!delegationHoldsNothingAfterIt(toolCall)) await settled;
+          if (turnFailure !== undefined) break;
+        }
+        const settledToolCalls = await Promise.allSettled(invocations);
+        options.signal?.removeEventListener("abort", abortTurn);
         this.#subagentRunsAtTurnStart = undefined;
         toolActivity.push(...turnActivities.flat());
+        if (turnFailure !== undefined) throw turnFailure.error;
         const invokedToolCalls = settledToolCalls.map((settled) => {
           if (settled.status === "rejected") throw settled.reason;
           return settled.value;

@@ -352,6 +352,47 @@ export const mintReferentHandle = async (
   };
 };
 
+/**
+ * Folds the entries and referents of `incoming` into `current`, answering a
+ * table that holds everything either held. Both were minted from one run's
+ * table, so an entry present in both names the same address under the same
+ * token; where the two differ, `incoming` stands, since a mint only ever adds
+ * to an entry it found. Two writers that each extended the table they read
+ * therefore both keep their additions, whichever recorded second.
+ *
+ * @throws Error when the tables carry different salts, since their tokens
+ * were then derived from different runs and cannot share a table.
+ */
+export const mergeHarnessHandleTables = (
+  current: HarnessHandleTable,
+  incoming: HarnessHandleTable,
+): HarnessHandleTable => {
+  if (current.salt !== incoming.salt) {
+    throw new Error(
+      `handle tables of different runs cannot merge: ${current.salt} and ${incoming.salt}`,
+    );
+  }
+  const entries = [...current.entries];
+  for (const entry of incoming.entries) {
+    const index = entries.findIndex((held) =>
+      held.addressKey === entry.addressKey
+    );
+    if (index === -1) entries.push(entry);
+    else entries[index] = entry;
+  }
+  const referents = [...(current.referents ?? [])];
+  for (const referent of incoming.referents ?? []) {
+    if (!referents.some((held) => held.token === referent.token)) {
+      referents.push(referent);
+    }
+  }
+  return {
+    ...current,
+    entries,
+    ...(referents.length > 0 ? { referents } : {}),
+  };
+};
+
 /** Returns the referent holding `token`, or `undefined` when none does. */
 export const resolveReferentToken = (
   table: HarnessHandleTable,

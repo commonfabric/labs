@@ -78,9 +78,10 @@ The current package provides:
 - workspace, Fabric, and explicit host mounts with path containment;
 - sandboxed shell, file, image, web-fetch, skills, edit/write, and delegation
   tools;
-- one child at a time through `default`, `browser`, `web_fetch`, `web_search`,
-  and `pattern-author` profiles, beside a bounded private `research` loop that
-  no delegation may name;
+- children through `default`, `browser`, `web_fetch`, `web_search`, and
+  `pattern-author` profiles, of which the ones a turn starts together run
+  together, beside a bounded private `research` loop that no delegation may
+  name;
 - Common Fabric implementation research over the operator-provisioned docs and
   skills corpus, published pattern metadata and complete multi-file source,
   dependencies, and safe handle shapes. Fresh CLI root tasks and interactive
@@ -608,8 +609,12 @@ mode.
   preflight for workflows that require them.
 - Package-default sandbox networking is a provisional bridge-oriented posture,
   not the final destination policy model. Product adapters may narrow it.
-- The children one model turn starts run together; across turns nothing
-  schedules, budgets, or cancels them, and a child cannot delegate.
+- A turn's tool calls run in the order written, and a delegation does not hold
+  the calls after it, so the children one turn starts run together while its
+  other calls run in turn against the session's one working directory; a
+  `browser` delegation holds the calls after it, since browser children share
+  one page. Across turns nothing schedules, budgets, or cancels children, and a
+  child cannot delegate.
 - The retained-pattern preflight returns before Fabric access or compilation
   when it refuses a `run_pattern` request, so it persists nothing. A created
   piece persists in the configured space and joins its registered piece list
