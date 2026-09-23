@@ -151,7 +151,7 @@ describe("profile-home verified external identities", () => {
     }
   });
 
-  it("refuses an assertion that a writer other than the verifier labelled", async () => {
+  it("refuses an assertion that a writer other than the verifier labeled", async () => {
     // The self-assertion case: any writer in the principal's home space can
     // name the verified-identity atom in its write schema. Only a write the
     // runtime attributes to a builtin may mint it, so this label is dropped
