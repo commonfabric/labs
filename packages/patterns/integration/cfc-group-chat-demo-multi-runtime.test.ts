@@ -4,14 +4,14 @@
  * Each test opens the same piece in several runtimes (Alice, Bob — distinct
  * identities — plus a second session for Alice) backed by one shared
  * in-memory storage server. This exercises what neither the single-runtime
- * pattern test nor the single-page browser test can: PerUser/PerSession
- * isolation between concurrently-active users, and live propagation of
- * PerSpace state between them.
+ * pattern test nor the single-page browser test can: PerUser isolation
+ * between concurrently-active users, and live propagation of PerSpace state
+ * between them.
  *
  * No toolshed or browser required.
  */
 
-import { assert, assertEquals } from "@std/assert";
+import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
@@ -64,23 +64,13 @@ let alice: MultiRuntimeSession;
 let bob: MultiRuntimeSession;
 let aliceTab2: MultiRuntimeSession;
 
-// Each helper below chains TWO events: a draft write, then a trusted
-// action whose served handler reads that draft — and silently no-ops
-// when it reads it empty (`prepareTrustedMessageSend` and friends
-// return null on a blank draft). Events on DIFFERENT streams have no
-// cross-stream serve-order guarantee (events.md §2: per stream,
-// commit-seq order; across streams, no claim), so under ON a loaded
-// serving loop can serve the trusted action against a pre-draft view —
-// the action terminalizes cleanly as a no-op, and a downstream arrival
-// wait then times out on a write that never happened (the 2026-08-22
-// ON-lane flake: runs 32543810077 and 32547606642, quiescence clean,
-// zero errors, next step healthy). The real UI forbids that
-// interleaving — the trusted control stays disabled until the SERVED
-// draft state round-trips (the browser test waits `waitForDisabled`,
-// OW47 S-G) — so these helpers gate the same way: fire the trusted
-// action only after the draft event's terminal consequence has arrived
-// back at this session (`awaitEventConsequences`), which puts the
-// draft's commit in the space's history before the action is served.
+// A `cf-submit-input` delivers its field's text on the trusted click, from its
+// button or from Enter in the field; each helper below sends that one event.
+const submitted = (text: string) => ({
+  type: "click",
+  target: { value: text },
+});
+
 /**
  * Saves `name` as this session's profile, and waits until the session reads
  * it back.
@@ -98,9 +88,7 @@ async function saveProfile(
   session: MultiRuntimeSession,
   name: string,
 ): Promise<void> {
-  await session.send("setProfileDraft", name);
-  await session.awaitEventConsequences();
-  await session.send("saveProfile", {}, {
+  await session.send("saveProfile", submitted(name), {
     surface: PROFILE_SURFACE,
     action: SAVE_PROFILE_ACTION,
   });
@@ -143,9 +131,7 @@ async function sendMessage(
   session: MultiRuntimeSession,
   body: string,
 ): Promise<void> {
-  await session.send("setMessageDraft", body);
-  await session.awaitEventConsequences();
-  await session.send("sendTrustedMessage", {}, {
+  await session.send("sendTrustedMessage", submitted(body), {
     surface: SEND_SURFACE,
     action: SEND_ACTION,
   });
@@ -155,9 +141,7 @@ async function addRoom(
   session: MultiRuntimeSession,
   name: string,
 ): Promise<void> {
-  await session.send("setRoomDraft", name);
-  await session.awaitEventConsequences();
-  await session.send("addTrustedRoom", {}, {
+  await session.send("addTrustedRoom", submitted(name), {
     surface: ROOM_SURFACE,
     action: ADD_ROOM_ACTION,
   });
@@ -191,54 +175,6 @@ describe("cfc group chat demo across runtimes", () => {
       "bob receives alice's message",
       async () =>
         (await messages(bob)).some((m) => m?.body === "Hello from Alice"),
-    );
-  });
-
-  it("does not leak the profile name draft to another user", async () => {
-    await alice.send("setProfileDraft", "Alice is typing");
-    await harness.settle();
-
-    // PerUser state SHOULD follow the same user into another session. This
-    // also controls the assertion below: a draft that never left alice's
-    // session reads at bob exactly as one that stayed put does.
-    await harness.waitFor(
-      "alice's second session sees her own draft",
-      async () =>
-        (await aliceTab2.read(["profileDraft"])) === "Alice is typing",
-    );
-
-    const bobDraft = await bob.read(["profileDraft"]);
-    assert(
-      bobDraft !== "Alice is typing",
-      `PerUser profileDraft leaked across users: ` +
-        debugStr`bob sees $quote,long${bobDraft}`,
-    );
-  });
-
-  it("keeps PerSession drafts isolated between sessions of one user", async () => {
-    await alice.send("setHostMessageDraft", "tab-local host draft");
-
-    // The control for the two assertions below: nothing else here reads the
-    // draft where it is supposed to be, so a write that never happened would
-    // otherwise satisfy both of them.
-    await harness.waitFor(
-      "alice's own session holds the host draft",
-      async () =>
-        (await alice.read(["hostMessageDraft"])) === "tab-local host draft",
-    );
-    await harness.settle();
-
-    const tab2Draft = await aliceTab2.read(["hostMessageDraft"]);
-    assert(
-      tab2Draft !== "tab-local host draft",
-      `PerSession hostMessageDraft leaked across sessions: ` +
-        debugStr`tab2 sees $quote,long${tab2Draft}`,
-    );
-    const bobDraft = await bob.read(["hostMessageDraft"]);
-    assert(
-      bobDraft !== "tab-local host draft",
-      `PerSession hostMessageDraft leaked across users: ` +
-        debugStr`bob sees $quote,long${bobDraft}`,
     );
   });
 

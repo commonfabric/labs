@@ -32,7 +32,7 @@ import {
 const PROGRAM_PATH = join(
   import.meta.dirname!,
   "fixtures",
-  "cellset-lww",
+  "drafted-chat",
   "main.tsx",
 );
 const ROOT_PATH = join(import.meta.dirname!, "..");

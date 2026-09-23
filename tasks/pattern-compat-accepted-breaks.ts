@@ -179,9 +179,23 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "result.myProfile",
       "argument.rooms",
       "result.rooms",
+      "result.profileDraft",
+      "result.messageDraft",
+      "result.hostMessageDraft",
+      "result.roomDraft",
+      "result.setProfileDraft",
+      "result.setMessageDraft",
+      "result.setHostMessageDraft",
+      "result.setRoomDraft",
+      "result.saveProfile",
+      "result.sendTrustedMessage",
+      "result.addTrustedRoom",
+      "result.hostLookalikeSend",
     ],
     reason:
-      "the declared `Default<{}>` of the admin registry, the profile, and the room list is honored where the recorded contracts carry no default",
+      "the declared `Default<{}>` of the admin registry, the profile, and the room list is honored where the recorded contracts carry no default" +
+      "; and the drafts removed, with the trusted streams taking the text a " +
+      "`cf-submit-input` click carries (docs/history/cfc-chat-demo-submit-input-break.md)",
     record: "docs/history/admin-registry-default-honored-break.md",
   },
   {
@@ -782,9 +796,23 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     paths: [
       "argument.adminRegistry.everyoneIsAdmin",
       "result.adminRegistry.everyoneIsAdmin",
+      "result.profileDraft",
+      "result.messageDraft",
+      "result.hostMessageDraft",
+      "result.roomDraft",
+      "result.setProfileDraft",
+      "result.setMessageDraft",
+      "result.setHostMessageDraft",
+      "result.setRoomDraft",
+      "result.saveProfile",
+      "result.sendTrustedMessage",
+      "result.addTrustedRoom",
+      "result.hostLookalikeSend",
     ],
     reason:
-      "the everyone-is-admin flag's `true` branch carries the write claim its type declares",
+      "the everyone-is-admin flag's `true` branch carries the write claim its type declares" +
+      "; and the drafts removed, with the trusted streams taking the text a " +
+      "`cf-submit-input` click carries (docs/history/cfc-chat-demo-submit-input-break.md)",
     record: "docs/history/everyone-admin-write-claim-restored-break.md",
   },
   {
@@ -792,9 +820,52 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // registry rather than descending to the flag.
     pattern: "cfc-group-chat-demo/main.tsx",
     baselines: ["20260918T041802Z-YAJU948xc_bQwY0H"],
-    paths: ["argument.adminRegistry", "result.adminRegistry"],
+    paths: [
+      "argument.adminRegistry",
+      "result.adminRegistry",
+      "result.profileDraft",
+      "result.messageDraft",
+      "result.hostMessageDraft",
+      "result.roomDraft",
+      "result.setProfileDraft",
+      "result.setMessageDraft",
+      "result.setHostMessageDraft",
+      "result.setRoomDraft",
+      "result.saveProfile",
+      "result.sendTrustedMessage",
+      "result.addTrustedRoom",
+      "result.hostLookalikeSend",
+    ],
     reason:
-      "the everyone-is-admin flag's `true` branch carries the write claim its type declares",
+      "the everyone-is-admin flag's `true` branch carries the write claim its type declares" +
+      "; and the drafts removed, with the trusted streams taking the text a " +
+      "`cf-submit-input` click carries (docs/history/cfc-chat-demo-submit-input-break.md)",
     record: "docs/history/everyone-admin-write-claim-restored-break.md",
+  },
+  {
+    // The CFC group chat demo's fields become `cf-submit-input`s, so Enter
+    // gives the trusted gesture its writes require. The drafts and their
+    // setter streams are removed, and the trusted streams take the submitted
+    // text as their event. The older baselines carry this break in the
+    // entries above that already name them.
+    pattern: "cfc-group-chat-demo/main.tsx",
+    baselines: ["20260923T205929Z-mHuHgI9LlBLCu53t"],
+    paths: [
+      "result.profileDraft",
+      "result.messageDraft",
+      "result.hostMessageDraft",
+      "result.roomDraft",
+      "result.setProfileDraft",
+      "result.setMessageDraft",
+      "result.setHostMessageDraft",
+      "result.setRoomDraft",
+      "result.saveProfile",
+      "result.sendTrustedMessage",
+      "result.addTrustedRoom",
+      "result.hostLookalikeSend",
+    ],
+    reason:
+      "the drafts removed, with the trusted streams taking the text a `cf-submit-input` click carries",
+    record: "docs/history/cfc-chat-demo-submit-input-break.md",
   },
 ];
