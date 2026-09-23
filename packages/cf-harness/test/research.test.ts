@@ -376,6 +376,10 @@ describe("research", () => {
             id: "empty-prefixed-pattern-id",
             name: "inspect_pattern",
             input: { patternId: "cf:pattern:" },
+          }, {
+            id: "empty-prefixed-source-id",
+            name: "open_pattern_file",
+            input: { patternId: "cf:pattern:", path: "/main.tsx" },
           }]),
         () => finalResult(),
       ]);
@@ -388,6 +392,7 @@ describe("research", () => {
       expect(outputs).toEqual([
         { error: "pattern search requires text, tags, or both" },
         { results: [] },
+        { error: "patternId is required" },
         { error: "patternId is required" },
         { error: "patternId is required" },
       ]);
@@ -945,7 +950,7 @@ describe("research", () => {
           assistant("", [{
             id: "main",
             name: "open_pattern_file",
-            input: { patternId, path: "/main.tsx" },
+            input: { patternId: `cf:pattern:${patternId}`, path: "/main.tsx" },
           }, {
             id: "title",
             name: "open_pattern_file",

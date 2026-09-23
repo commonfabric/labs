@@ -1535,8 +1535,8 @@ The tool is available to the parent and `pattern-author` whenever the run can
 supply a documentation corpus or pattern index. The gateway transport uses
 `gemini-3.5-flash`; the owner-authenticated Codex transport uses `gpt-5.6-luna`.
 Research is a private tool loop, not web search or a delegable child profile.
-Its `inspect_pattern` tool accepts a bare pattern id or `cf:pattern:<id>`; index
-lookups and retained evidence use the bare id.
+Its `inspect_pattern` and `open_pattern_file` tools accept a bare pattern id or
+`cf:pattern:<id>`; index lookups and retained evidence use the bare id.
 
 Fresh CLI tasks and interactive sessions without retained research request an
 opening `orient` pass for open-ended tasks. A task already selecting an

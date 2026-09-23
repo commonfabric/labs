@@ -1063,7 +1063,11 @@ const invokeResearchTool = async (
       );
     }
     case "open_pattern_file": {
-      const patternId = stringValue(input.patternId, 500);
+      const patternId = stringValue(input.patternId, 500).replace(
+        /^cf:pattern:/,
+        "",
+      );
+      if (patternId.length === 0) throw new Error("patternId is required");
       const path = stringValue(input.path, 2_000);
       const program = state.programs.get(patternId);
       if (program === undefined) {
