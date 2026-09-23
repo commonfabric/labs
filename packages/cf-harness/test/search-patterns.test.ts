@@ -170,8 +170,9 @@ describe("search-patterns", () => {
           items: { $ref: "#/$defs/LedgerTransaction" },
         },
         pending: { type: "boolean" },
+        currency: { $ref: "#/$defs/Currency" },
       },
-      required: ["month", "rows", "pending"],
+      required: ["month", "rows", "pending", "currency"],
       $defs: {
         LedgerTransaction: {
           type: "object",
@@ -197,9 +198,14 @@ describe("search-patterns", () => {
           },
           required: ["primary", "detailed", "confidence_level"],
         },
+        Currency: { type: "string" },
         Unreferenced: {
           type: "object",
           properties: { never: { type: "string" } },
+        },
+        month: {
+          type: "object",
+          properties: { never_used_under_this_name: { type: "string" } },
         },
       },
     };
@@ -216,6 +222,11 @@ describe("search-patterns", () => {
       );
       expect(rendered).toContain("confidence_level: string");
       expect(rendered).not.toContain("Unreferenced");
+      // A property named like a definition is not a reference to it.
+      expect(rendered).not.toContain("type month =");
+      // A definition small enough to inline is inlined, not written out.
+      expect(rendered).toContain("currency: string");
+      expect(rendered).not.toContain("type Currency =");
     });
 
     it("adds nothing to a type that names no definition", () => {

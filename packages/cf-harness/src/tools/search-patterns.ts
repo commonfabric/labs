@@ -214,19 +214,27 @@ export const patternIndexDeclaredType = (
   }
   try {
     const defs = declaredDefinitions(schema);
-    const lines = [schemaToTypeString(schema, { defs })];
+    const rendered = [{ schema, text: schemaToTypeString(schema, { defs }) }];
     const written = new Set<string>();
-    for (let index = 0; index < lines.length; index++) {
-      for (const name of Object.keys(defs)) {
-        if (!written.has(name) && namesType(lines[index], name)) {
-          written.add(name);
-          lines.push(
-            `type ${name} = ${schemaToTypeString(defs[name], { defs })}`,
-          );
+    for (let index = 0; index < rendered.length; index++) {
+      const { schema: from, text } = rendered[index];
+      // Only a `$ref` the schema actually holds can name a definition, and
+      // only a name the text prints was left uninlined by the formatter.
+      for (const name of referencedDefinitions(from)) {
+        if (
+          written.has(name) || !Object.hasOwn(defs, name) ||
+          !namesType(text, name)
+        ) {
+          continue;
         }
+        written.add(name);
+        rendered.push({
+          schema: defs[name],
+          text: `type ${name} = ${schemaToTypeString(defs[name], { defs })}`,
+        });
       }
     }
-    return lines.join("\n");
+    return rendered.map((entry) => entry.text).join("\n");
   } catch {
     return undefined;
   }
@@ -242,6 +250,17 @@ const declaredDefinitions = (
   return typeof defs === "object" && defs !== null && !Array.isArray(defs)
     ? defs as Record<string, JSONSchema>
     : {};
+};
+
+/** The definition names `schema`'s own `$ref`s point at, its `$defs` aside. */
+const referencedDefinitions = (schema: JSONSchema): string[] => {
+  const { $defs: _defs, ...body } = typeof schema === "object" &&
+      schema !== null
+    ? schema as Record<string, unknown>
+    : {};
+  return [
+    ...JSON.stringify(body).matchAll(/"\$ref":"#\/\$defs\/([^"]+)"/g),
+  ].map((match) => match[1]);
 };
 
 /** Whether `rendered` uses `name` as a whole identifier. */
