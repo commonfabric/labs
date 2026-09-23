@@ -91,7 +91,10 @@ node-based analyzer, a printed node gives way to the caller's own type at that
 position when that type carries something, and to the type the node was
 printed from when the caller's is `any`, `unknown`, or an unbound type
 parameter. The schema hints attached to the node still apply, through the
-context's `hintsNode`.
+context's `hintsNode`. A printed member of a type literal the caller built reads
+as the property would in the object type the literal stands for: a callable is
+left out, unless calling it makes a stream, a cell, or a database, which reads
+as that wrapper's `asCell`.
 
 **The node-based analyzer** (`analyzeTypeNodeStructure`,
 `src/schema-generator.ts`) handles: `TypeLiteral` nodes (properties
@@ -876,12 +879,17 @@ Mechanics:
   subtree with the parameter unbound; a subtree holding none keeps its
   declaration node. An argument a reference leaves out is its parameter's
   default, read with the arguments before it, as the checker instantiates one.
-  A payload that still refers to a parameter that substitution had an argument
-  for but did not reach, through a kind it does not open (`T["name"]`), is a
-  guess: the payload reads as accepting anything, and the labels are lowered
-  as usual. A chain entered with no argument nodes, as from a type whose print
-  expands the alias, has nothing to substitute, and its payload is read from
-  the declaration.
+  A chain entered with no argument nodes, as from a type read without its
+  node, has no node to put in place of a parameter. Its innermost payload is
+  read from the type the chain instantiates instead, which is the payload with
+  every CFC alias's metadata carrier (`{ readonly __ct_cfc__?: Meta }`) added
+  as one more member of an intersection. A parameter inside a label literal
+  (`{ subject: Author }`) reads as its argument's type. A `WriteAuthorizedBy`
+  binding is read only from a `typeof` node, so such a chain carries none.
+  Where the chain was entered with argument nodes, a payload that still refers
+  to a parameter substitution had an argument for but did not reach, through a
+  kind it does not open (`T["name"]`), is a guess: the payload reads as
+  accepting anything, and the labels are lowered as usual.
 - Metadata values come from type-level literals: literal nodes, tuples, type
   literals, `typeof` value reads, alias-parameter substitution, and
   tuple/object **types** via the checker when nodes are gone

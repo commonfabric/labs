@@ -3071,9 +3071,10 @@ type CalculatorRequest = {
           });
         });
 
-        it("reads a nongeneric alias whose payload substitution does not reach as its labels alone", async () => {
-          // `Contact` itself is read; the lowering leaves the payload, which
-          // still names `T`, as a guess.
+        it("reads the payload of a nongeneric alias whose payload substitution does not reach from the type it instantiates", async () => {
+          // `Contact` itself is read, with no argument nodes. Its payload
+          // still names `T` where substitution does not reach, but the type
+          // `Contact` instantiates holds it with `T` in.
           const schema = await generate(
             {
               "/main.ts": CFC +
@@ -3086,7 +3087,14 @@ type CalculatorRequest = {
 
           expect(schema).toEqual({
             $ref: "#/$defs/Contact",
-            $defs: { Contact: { ifc: { confidentiality: ["owner"] } } },
+            $defs: {
+              Contact: {
+                type: "object",
+                properties: { name: { type: "string", enum: ["Ada"] } },
+                required: ["name"],
+                ifc: { confidentiality: ["owner"] },
+              },
+            },
           });
         });
 
@@ -3221,7 +3229,9 @@ type CalculatorRequest = {
       const { checker, sourceFile } = await createTestProgram(
         "interface Entry { host: string }\n" +
           'type Mode = "a" | "b";\n' +
-          "export type Keep = [Entry, Mode];",
+          "type Callable = (tags: string[]) => boolean;\n" +
+          "type MakesStream = () => Stream<number>;\n" +
+          "export type Keep = [Entry, Mode, Callable, MakesStream];",
       );
       const declared = (name: string) =>
         checker.getDeclaredTypeOfSymbol(
@@ -3233,6 +3243,8 @@ type CalculatorRequest = {
         sourceFile,
         entry: declared("Entry"),
         mode: declared("Mode"),
+        callable: declared("Callable"),
+        makesStream: declared("MakesStream"),
       };
     }
 
@@ -3280,6 +3292,61 @@ type CalculatorRequest = {
       });
     });
 
+    it("leaves a printed callable out of a type literal the caller built", async () => {
+      // The object type the literal stands for leaves the callable out, and
+      // so does the literal.
+      const { checker, sourceFile, callable } = await types();
+      const node = unresolvable();
+      const literal = ts.factory.createTypeLiteralNode([
+        ts.factory.createPropertySignature(undefined, "call", undefined, node),
+        ts.factory.createPropertySignature(
+          undefined,
+          "tags",
+          undefined,
+          ts.factory.createArrayTypeNode(
+            ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword),
+          ),
+        ),
+      ]);
+
+      const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        literal,
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+        printedFrom(new Map([[node, callable]])),
+      );
+
+      expect(schema).toEqual({
+        type: "object",
+        properties: { tags: { type: "array", items: { type: "string" } } },
+        required: ["tags"],
+      });
+    });
+
+    it("reads a printed callable that makes a stream as a stream", async () => {
+      const { checker, sourceFile, makesStream } = await types();
+      const node = unresolvable();
+      const literal = ts.factory.createTypeLiteralNode([
+        ts.factory.createPropertySignature(undefined, "next", undefined, node),
+      ]);
+
+      const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
+        literal,
+        checker,
+        undefined,
+        undefined,
+        sourceFile,
+        printedFrom(new Map([[node, makesStream]])),
+      );
+
+      expect(schema).toEqual({
+        type: "object",
+        properties: { next: { asCell: ["stream"] } },
+        required: ["next"],
+      });
+    });
     it("reads a printed node that is a member of a union", async () => {
       const { checker, sourceFile, entry } = await types();
       const node = unresolvable();

@@ -45,7 +45,7 @@ const logger = getLogger("schema-generator.object", {
  *
  * Returns the schema definition for the wrapper if detected, undefined otherwise.
  */
-function getWrapperSchemaFromCallable(
+export function getWrapperSchemaFromCallable(
   type: ts.Type,
   checker: ts.TypeChecker,
 ): MutableJSONSchemaObj | undefined {

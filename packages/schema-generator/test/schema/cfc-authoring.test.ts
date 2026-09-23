@@ -649,4 +649,69 @@ describe("Schema: CFC authoring aliases", () => {
       integrity: ["inner"],
     });
   });
+
+  describe("an alias chain entered without argument nodes", () => {
+    // A type with no node, as a print that expands the alias leaves it, gives
+    // the lowering no argument node to put in place of a parameter the chain
+    // reaches; the parameter is read as the argument's type instead.
+
+    async function schemaOfHolderValue(declarations: string) {
+      const { checker, sourceFile } = await createTestProgram(declarations);
+      const holder = checker.getSymbolsInScope(
+        sourceFile,
+        ts.SymbolFlags.Interface,
+      ).find((candidate) => candidate.name === "Holder")!;
+      const value = checker.getDeclaredTypeOfSymbol(holder).getProperty(
+        "value",
+      )!;
+      return asObjectSchema(
+        new SchemaGenerator().generateSchema(
+          checker.getTypeOfSymbolAtLocation(value, sourceFile),
+          checker,
+        ),
+      );
+    }
+
+    it("reads a payload that is a parameter as that parameter's argument", async () => {
+      const schema = await schemaOfHolderValue(`
+        type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+        type CurrentPrincipal = { readonly __ctCurrentPrincipal: true };
+        type Owned<T> = Cfc<T, { ownerPrincipal: CurrentPrincipal }>;
+        interface Entry { host: string }
+        interface Holder { value: Owned<Entry> }
+      `);
+
+      expect(schema).toEqual({
+        $ref: "#/$defs/Entry",
+        ifc: { ownerPrincipal: { __ctCurrentPrincipal: true } },
+        $defs: {
+          Entry: {
+            type: "object",
+            properties: { host: { type: "string" } },
+            required: ["host"],
+          },
+        },
+      });
+    });
+
+    it("reads a parameter inside a label as that parameter's argument", async () => {
+      const schema = await schemaOfHolderValue(`
+        type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+        type AuthoredBy<Author extends string> = {
+          readonly kind: "authored-by";
+          readonly subject: Author;
+        };
+        type Authored<Author extends string, T> = Cfc<
+          T,
+          { integrity: readonly [AuthoredBy<Author>] }
+        >;
+        interface Holder { value: Authored<"alice", string> }
+      `);
+
+      expect(schema).toEqual({
+        type: "string",
+        ifc: { integrity: [{ kind: "authored-by", subject: "alice" }] },
+      });
+    });
+  });
 });

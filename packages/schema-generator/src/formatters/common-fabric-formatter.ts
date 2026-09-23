@@ -60,6 +60,18 @@ type ResolvedCfcAlias = {
    * substituted for.
    */
   readonly substituted?: readonly ts.TypeParameterDeclaration[];
+  /**
+   * The types of the type parameters `aliasArgNodes` refer to, by name, where
+   * those nodes are the body of an alias read by its type, which has no
+   * argument nodes to put in their place.
+   */
+  readonly paramTypes?: ReadonlyMap<string, ts.Type>;
+  /**
+   * The type an alias chain entered without argument nodes instantiates.
+   * Every CFC alias adds its metadata to its payload as one more member of an
+   * intersection, so what the type holds besides those is the payload.
+   */
+  readonly instantiated?: ts.Type;
 };
 
 type ResolvedScopeWrapper = {
@@ -125,6 +137,23 @@ const applyScopeToAsCellEntry = (
     return { ...entry, scope };
   }
   return entry;
+};
+
+/**
+ * The innermost payload of `type`, a CFC alias chain's instantiation: its one
+ * member that is not a metadata carrier one of the chain's aliases adds, or
+ * `undefined` when it holds no carrier, or more than one other member.
+ */
+const cfcPayloadOf = (type: ts.Type): ts.Type | undefined => {
+  if (!type.isIntersection()) return undefined;
+  const carries = (member: ts.Type) => {
+    const properties = member.getProperties();
+    return properties.length === 1 && properties[0]!.name === "__ct_cfc__";
+  };
+  const rest = type.types.filter((member) => !carries(member));
+  return rest.length === 1 && rest.length < type.types.length
+    ? rest[0]
+    : undefined;
 };
 
 /**
@@ -1341,19 +1370,38 @@ export class CommonFabricFormatter implements TypeFormatter {
         context.typeChecker,
         resolved.substituted,
       );
-    if (unsubstituted) context.uninterpretedTypeNodes?.push(baseTypeNode);
-    const baseSchema = unsubstituted
-      ? true
-      : baseTypeNode
-      ? this.#formatCfcAliasTypeNode(baseTypeNode, context) ??
-        this.#schemaGenerator.formatChildType(baseType, context, baseTypeNode)
-      : this.#schemaGenerator.formatChildType(baseType, context, undefined);
+    // The body of an alias read by its type still refers to its parameters,
+    // but the type it instantiates holds the innermost payload with its
+    // arguments in, which is no guess.
+    const payload = resolved.instantiated &&
+      cfcPayloadOf(resolved.instantiated);
+    const nested = baseTypeNode &&
+      this.#formatCfcAliasTypeNode(
+        baseTypeNode,
+        context,
+        resolved.paramTypes,
+        resolved.instantiated,
+      );
+    if (!nested && !payload && unsubstituted) {
+      context.uninterpretedTypeNodes?.push(baseTypeNode);
+    }
+    const baseSchema = nested ??
+      (payload
+        ? this.#schemaGenerator.formatChildType(payload, context, undefined)
+        : unsubstituted
+        ? true
+        : this.#schemaGenerator.formatChildType(
+          baseType,
+          context,
+          baseTypeNode,
+        ));
 
     const ifc = this.#buildIfcMetadataForAlias(
       resolved.aliasName,
       resolved.aliasArgs,
       context,
       resolved.aliasArgNodes,
+      resolved.paramTypes,
     );
     if (ifc === undefined) {
       return baseSchema;
@@ -1365,11 +1413,18 @@ export class CommonFabricFormatter implements TypeFormatter {
   #formatCfcAliasTypeNode(
     typeNode: ts.TypeNode,
     context: GenerationContext,
+    paramTypes: ReadonlyMap<string, ts.Type> = new Map(),
+    instantiated?: ts.Type,
   ): MutableJSONSchema | undefined {
     if (
       ts.isParenthesizedTypeNode(typeNode) || ts.isTypeOperatorNode(typeNode)
     ) {
-      return this.#formatCfcAliasTypeNode(typeNode.type, context);
+      return this.#formatCfcAliasTypeNode(
+        typeNode.type,
+        context,
+        paramTypes,
+        instantiated,
+      );
     }
     if (
       !ts.isTypeReferenceNode(typeNode) || !ts.isIdentifier(typeNode.typeName)
@@ -1389,7 +1444,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       ? [...typeNode.typeArguments]
       : undefined;
     const aliasArgs = (aliasArgNodes ?? []).map((argNode) =>
-      this.#resolveTypeNodeToType(argNode, context, new Map())
+      this.#resolveTypeNodeToType(argNode, context, paramTypes)
     );
     const resolved = this.#resolveCfcAliasFromDeclaration(
       aliasDeclaration,
@@ -1397,9 +1452,14 @@ export class CommonFabricFormatter implements TypeFormatter {
       aliasArgNodes,
       { ...context, typeNode },
       new Set([aliasDeclaration.name.text]),
+      [],
+      paramTypes,
     );
     return resolved
-      ? this.#formatResolvedCfcAlias(resolved, context)
+      ? this.#formatResolvedCfcAlias(
+        instantiated ? { ...resolved, instantiated } : resolved,
+        context,
+      )
       : undefined;
   }
 
@@ -1425,13 +1485,17 @@ export class CommonFabricFormatter implements TypeFormatter {
       return undefined;
     }
 
-    return this.#resolveCfcAliasFromDeclaration(
+    const aliasArgNodes = this.#getAliasTypeArgumentNodes(context);
+    const resolved = this.#resolveCfcAliasFromDeclaration(
       aliasDeclaration,
       aliasArgs,
-      this.#getAliasTypeArgumentNodes(context),
+      aliasArgNodes,
       context,
       new Set([aliasName]),
     );
+    return resolved && !aliasArgNodes
+      ? { ...resolved, instantiated: typeWithAlias }
+      : resolved;
   }
 
   #resolveCfcAliasFromDeclaration(
@@ -1441,6 +1505,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     context: GenerationContext,
     visited: Set<string>,
     substituted: readonly ts.TypeParameterDeclaration[] = [],
+    paramTypes: ReadonlyMap<string, ts.Type> = new Map(),
   ): ResolvedCfcAlias | undefined {
     const aliasName = aliasDeclaration.name.text;
     if (CFC_ALIAS_NAMES.has(aliasName)) {
@@ -1449,6 +1514,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         aliasArgs,
         ...(aliasArgNodes ? { aliasArgNodes } : {}),
         ...(substituted.length > 0 ? { substituted } : {}),
+        ...(paramTypes.size > 0 ? { paramTypes } : {}),
       };
     }
 
@@ -1498,12 +1564,17 @@ export class CommonFabricFormatter implements TypeFormatter {
       }
     }
 
+    // An alias read by its type has no argument nodes to substitute, so its
+    // body's nodes still refer to its parameters, which its arguments' types
+    // stand for. Otherwise the substituted nodes refer to what `aliasArgNodes`
+    // did.
+    const bodyParamTypes = aliasArgNodes ? paramTypes : paramMap;
     const resolvedArgs: ts.Type[] = [];
     const resolvedArgNodes: ts.TypeNode[] = [];
     for (const argNode of aliased.typeArguments ?? []) {
       const resolvedArgNode = substituteTypeNode(argNode, paramNodeMap);
       resolvedArgs.push(
-        this.#resolveTypeNodeToType(resolvedArgNode, context, new Map()),
+        this.#resolveTypeNodeToType(resolvedArgNode, context, bodyParamTypes),
       );
       resolvedArgNodes.push(resolvedArgNode);
     }
@@ -1516,6 +1587,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       context,
       visited,
       [...substituted, ...substitutedHere],
+      bodyParamTypes,
     );
   }
 
@@ -1562,6 +1634,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     aliasArgs: readonly ts.Type[],
     context: GenerationContext,
     aliasArgNodes?: readonly ts.TypeNode[],
+    paramTypes?: ReadonlyMap<string, ts.Type>,
   ): Record<string, unknown> | undefined {
     const readValue = (index: number): unknown => {
       return this.#extractLiteralLikeValue(
@@ -1569,6 +1642,7 @@ export class CommonFabricFormatter implements TypeFormatter {
         aliasArgNodes?.[index] ??
           this.#getAliasTypeArgumentNode(context, index),
         context,
+        paramTypes,
       );
     };
 
@@ -1871,6 +1945,7 @@ export class CommonFabricFormatter implements TypeFormatter {
     type: ts.Type | undefined,
     typeNode: ts.TypeNode | undefined,
     context: GenerationContext,
+    paramTypes: ReadonlyMap<string, ts.Type> = new Map(),
   ): unknown {
     if (!typeNode && !type) {
       return undefined;
@@ -1878,10 +1953,20 @@ export class CommonFabricFormatter implements TypeFormatter {
 
     if (typeNode) {
       if (ts.isParenthesizedTypeNode(typeNode)) {
-        return this.#extractLiteralLikeValue(type, typeNode.type, context);
+        return this.#extractLiteralLikeValue(
+          type,
+          typeNode.type,
+          context,
+          paramTypes,
+        );
       }
       if (ts.isTypeOperatorNode(typeNode)) {
-        return this.#extractLiteralLikeValue(type, typeNode.type, context);
+        return this.#extractLiteralLikeValue(
+          type,
+          typeNode.type,
+          context,
+          paramTypes,
+        );
       }
       if (ts.isTypeQueryNode(typeNode)) {
         return this.#extractValueFromTypeQuery(typeNode, context);
@@ -1896,12 +1981,27 @@ export class CommonFabricFormatter implements TypeFormatter {
       }
       if (ts.isTupleTypeNode(typeNode)) {
         return typeNode.elements.map((element) =>
-          this.#extractLiteralLikeValue(undefined, element, context)
+          this.#extractLiteralLikeValue(
+            undefined,
+            element,
+            context,
+            paramTypes,
+          )
         );
       }
       if (
         ts.isTypeReferenceNode(typeNode) && ts.isIdentifier(typeNode.typeName)
       ) {
+        // A parameter of an alias read by its type is its argument's type.
+        const parameterType = !typeNode.typeArguments &&
+          paramTypes.get(typeNode.typeName.text);
+        if (parameterType) {
+          return this.#extractLiteralLikeValue(
+            parameterType,
+            undefined,
+            context,
+          );
+        }
         const referencedName = this.#resolveTypeReferenceName(
           typeNode.typeName,
           context,
@@ -1912,6 +2012,7 @@ export class CommonFabricFormatter implements TypeFormatter {
             undefined,
             alternativesNode,
             context,
+            paramTypes,
           );
           return Array.isArray(alternatives)
             ? { anyOf: alternatives }
@@ -1957,6 +2058,7 @@ export class CommonFabricFormatter implements TypeFormatter {
             undefined,
             substituteTypeNode(aliasDeclaration.type, paramMap),
             context,
+            paramTypes,
           );
         }
       }
@@ -1970,6 +2072,7 @@ export class CommonFabricFormatter implements TypeFormatter {
               undefined,
               member.type,
               context,
+              paramTypes,
             );
           }
         }
