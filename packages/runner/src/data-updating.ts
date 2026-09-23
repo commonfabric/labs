@@ -12,6 +12,7 @@ import {
   fabricFromConvertibleJsValue,
   type FabricPlainObject,
   type FabricValue,
+  isDeepFrozen,
   isFabricSpecialObject,
   isKeyableObjectNotArray,
   shallowFabricFromConvertibleJsObjectElseUndefined,
@@ -223,29 +224,52 @@ export const schemaIfcOverlapsPath = (
   return visit(schema, basePath);
 };
 
-// Exported for unit testing. Not part of the public surface. Whether a
-// `writeAuthorizedBy` claim in `schema` (rooted at `basePath`) covers
-// `targetPath` for every value that can land there. The declarations are the
-// ones `cfcSchemaEntries` finds, references resolved, less those inside an
-// `anyOf` or `oneOf` branch: such a claim holds for some values and not
-// others, and the written value is not known here.
+// The unconditional write-authorization paths of each schema, keyed by schema
+// object. Only deep-frozen schemas are cached, since a mutable one could be
+// edited after its paths were taken.
+const writeAuthorizationPathsCache = new WeakMap<
+  object,
+  readonly (readonly string[])[]
+>();
+
+/**
+ * Reports whether a `writeAuthorizedBy` claim in `schema`, rooted at
+ * `basePath`, covers `targetPath` for every value that can land there. The
+ * claims are those {@link cfcSchemaEntries} finds, references resolved. A claim
+ * inside an `anyOf` or `oneOf` branch is not counted, because it holds only
+ * for the values that branch matches; a location protected only by such a
+ * claim is therefore reported as uncovered. Exported for unit testing; not
+ * part of the public surface.
+ */
 export const writeAuthorizationCoversPath = (
   schema: JSONSchema | undefined,
   basePath: readonly string[],
   targetPath: readonly string[],
-): boolean =>
-  schema !== undefined &&
-  cfcSchemaEntries(schema, [...basePath]).some((entry) =>
-    entry.conditional !== true &&
-    isObjectOrArray(entry.schema) && isObjectOrArray(entry.schema.ifc) &&
-    entry.schema.ifc.writeAuthorizedBy !== undefined &&
-    pathPrefixMatches(entry.path, targetPath)
+): boolean => {
+  if (!isObjectOrArray(schema)) return false;
+  let paths = writeAuthorizationPathsCache.get(schema);
+  if (paths === undefined) {
+    paths = cfcSchemaEntries(schema)
+      .filter((entry) =>
+        entry.conditional !== true &&
+        isObjectOrArray(entry.schema) && isObjectOrArray(entry.schema.ifc) &&
+        entry.schema.ifc.writeAuthorizedBy !== undefined
+      )
+      .map((entry) => entry.path);
+    if (isDeepFrozen(schema)) writeAuthorizationPathsCache.set(schema, paths);
+  }
+  return paths.some((path) =>
+    pathPrefixMatches([...basePath, ...path], targetPath)
   );
+};
 
-// Whether a write-authorization claim arriving with this transaction covers the
-// target. A stored claim is found by `storedCfcMetadataAppliesToPath`; this
-// finds one that no commit has stored yet, as on the write that creates a
-// protected list.
+/**
+ * Helper for {@link recordLinkWritePolicyInput}, which reports whether a
+ * write authorization arriving with this transaction covers `target`. A claim
+ * a commit has already stored is found by `storedCfcMetadataAppliesToPath`;
+ * this finds one that is not stored yet, as on the write that creates a
+ * protected list.
+ */
 const hasPendingWriteAuthorization = (
   tx: IExtendedStorageTransaction,
   target: NormalizedFullLink,
