@@ -100,10 +100,10 @@ describe("CFC label representation transform (inv-12 Stage 1)", () => {
       // two records have one digest. Each equals the other's commitment, and
       // so each must equal the other.
       const lone = { subject: "\uD800" };
-      const replaced = { subject: "�" };
+      const replaced = { subject: "\uFFFD" };
       expect(hashStringOf(lone)).toBe(hashStringOf(replaced));
       expect(
-        commitmentAwareEquals(lone, { subject: commitCfcFieldValue("�") }),
+        commitmentAwareEquals(lone, { subject: commitCfcFieldValue("\uFFFD") }),
       ).toBe(true);
       expect(commitmentAwareEquals(lone, replaced)).toBe(true);
     });
