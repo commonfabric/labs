@@ -73,7 +73,6 @@ import {
   opaqueLeafMissesRequired,
   schemaAcceptsType,
 } from "./traverse.ts";
-import { internSchema } from "@commonfabric/data-model-schema";
 
 const logger = getLogger("schema-view", { enabled: false, level: "warn" });
 
@@ -192,9 +191,10 @@ const requiredKeys = (schema: JSONSchema | undefined): readonly string[] =>
 
 /**
  * The schema of `key` under `schema`, narrowed for the `container` the view
- * holds. A schema that declares no `type` is settled to that container first:
- * narrowing without a value reads it as the union of its object and array
- * readings, and a view has the value in hand. A declared type stands.
+ * holds. A schema that declares no `type` is settled to that container first
+ * (`ContextualFlowControl.settledForContainer`): narrowing without a value
+ * reads it as the union of the readings it offers, and a view has the value
+ * in hand.
  */
 const childSchema = (
   schema: JSONSchema | undefined,
@@ -202,11 +202,8 @@ const childSchema = (
   container: "object" | "array",
 ): JSONSchema => {
   if (schema === undefined) return true;
-  const settled = isObjectOrArray(schema) && schema.type === undefined
-    ? internSchema({ ...schema, type: container })
-    : schema;
   const narrowed = ContextualFlowControl.schemaAtPath(
-    settled,
+    ContextualFlowControl.settledForContainer(schema, container),
     [key],
     undefined,
     EXCLUDED_EMPTY,

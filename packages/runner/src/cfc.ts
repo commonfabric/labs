@@ -284,6 +284,37 @@ const schemaAtPathKey = (
 // their arguments, and what caching there is lives in module-level maps keyed
 // by schema identity.
 // The spec's confidentiality model is based on structured atoms.
+/**
+ * The values an `enum` or `const` schema admits at `part`: what each member
+ * holds there, for the members that hold anything — an object member at a
+ * key it names, an array member at an index it has. A schema naming its
+ * values outright narrows to exactly those, and to `false` where no member
+ * has the part at all. `undefined` where the schema names no values.
+ */
+function enumeratedValuesAt(
+  schema: JSONSchemaObj,
+  part: string,
+): readonly unknown[] | undefined {
+  const members = Array.isArray(schema.enum)
+    ? schema.enum
+    : "const" in schema
+    ? [schema.const]
+    : undefined;
+  if (members === undefined) return undefined;
+  const values: unknown[] = [];
+  for (const member of members) {
+    if (isObjectNotArray(member)) {
+      if (Object.hasOwn(member, part)) {
+        values.push((member as Record<string, unknown>)[part]);
+      }
+    } else if (Array.isArray(member) && isArrayIndexPropertyName(part)) {
+      const index = Number(part);
+      if (index < member.length) values.push(member[index]);
+    }
+  }
+  return values;
+}
+
 export class ContextualFlowControl {
   static uniqueAtoms(atoms: Iterable<unknown>): IFCAtom[] {
     return uniqueCfcAtoms(atoms);
@@ -650,6 +681,17 @@ export class ContextualFlowControl {
       // reference to a `false` definition resolves — admits nothing, and
       // holds no children under either reading below.
       if (ContextualFlowControl.isFalseSchema(cursor)) return false;
+      // An `enum` or `const` names the admitted values outright, so the child
+      // at `part` is what the members hold there, and nothing where none of
+      // them holds anything.
+      const enumerated = isObjectOrArray(cursor)
+        ? enumeratedValuesAt(cursor, part)
+        : undefined;
+      if (enumerated !== undefined) {
+        if (enumerated.length === 0) return false;
+        cursor = internSchema({ enum: enumerated as JSONValue[] });
+        continue;
+      }
       // A cursor declaring no `type` admits every type, and which of its
       // keywords apply is settled only by a value — `properties` and
       // `additionalProperties` by an object, `prefixItems` and `items` by an
@@ -810,6 +852,29 @@ export class ContextualFlowControl {
     delete result.$defs;
     if (selectedDefs !== undefined) result.$defs = selectedDefs;
     return result as JSONSchema;
+  }
+
+  /**
+   * `schema` with its `type` settled to `container`, for a reader holding a
+   * value of that shape. Narrowing without a value reads a schema declaring
+   * no `type` as the union of the readings it offers (`schemaAtPath`); a
+   * reader with the value in hand narrows through the one the value selects.
+   * The schema stands where it declares a type, refers elsewhere for one, is
+   * true — the wildcard every child narrows to, markers and all — or names
+   * its values outright with `enum` or `const`, which narrowing projects.
+   */
+  static settledForContainer(
+    schema: JSONSchema,
+    container: "object" | "array",
+  ): JSONSchema {
+    if (
+      !isObjectOrArray(schema) || schema.type !== undefined ||
+      schema.$ref !== undefined || ContextualFlowControl.isTrueSchema(schema) ||
+      Array.isArray(schema.enum) || "const" in schema
+    ) {
+      return schema;
+    }
+    return internSchema({ ...schema, type: container });
   }
 
   /**

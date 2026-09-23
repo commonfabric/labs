@@ -126,6 +126,48 @@ describe("ContextualFlowControl.schemaAtPath", () => {
     expect(ContextualFlowControl.schemaAtPath({ not: true }, ["extra"])).toBe(
       false,
     );
+    // An `enum` names the admitted values outright, so a child is what the
+    // members hold there: nothing under scalars, nothing at a key no member
+    // has, and the members' own values at one they do.
+    expect(
+      ContextualFlowControl.schemaAtPath({ enum: ["a", "b"] }, ["extra"]),
+    ).toBe(false);
+    expect(
+      ContextualFlowControl.schemaAtPath({ enum: [{ a: 1 }, "b"] }, ["extra"]),
+    ).toBe(false);
+    expect(
+      ContextualFlowControl.schemaAtPath({ enum: [{ a: 1 }, { a: 2 }, "b"] }, [
+        "a",
+      ]),
+    ).toEqual({ enum: [1, 2] });
+    expect(
+      ContextualFlowControl.schemaAtPath({ const: { a: [1, 2] } }, ["a", "1"]),
+    ).toEqual({ enum: [2] });
+  });
+
+  it("settles a schema that omits `type` to the container a reader holds, and leaves the rest standing", () => {
+    // A reader that holds an object narrows through the object reading, so a
+    // type-less schema offering one takes `type: "object"`. A declared type,
+    // a reference, a true schema and an `enum` of scalars stand as they are.
+    const settle = ContextualFlowControl.settledForContainer;
+    expect(settle({ items: { type: "number" } }, "object")).toEqual({
+      items: { type: "number" },
+      type: "object",
+    });
+    expect(settle({ items: { type: "number" } }, "array")).toEqual({
+      items: { type: "number" },
+      type: "array",
+    });
+    for (
+      const standing of [
+        { type: "string" },
+        { $ref: "#/$defs/X", $defs: { X: { type: "object" } } },
+        { asCell: ["cell"] },
+        { enum: ["a", "b"] },
+      ] as JSONSchema[]
+    ) {
+      expect(settle(standing, "object")).toBe(standing);
+    }
   });
 
   it("does not treat inherited property names as declared properties", () => {

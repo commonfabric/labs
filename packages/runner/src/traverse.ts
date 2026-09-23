@@ -516,22 +516,6 @@ function plainArrayItems(schema: JSONSchemaObj): JSONSchema | undefined {
     : undefined;
 }
 
-/**
- * `schema` with its `type` settled to the container a traversal holds, where
- * it declares none. Narrowing without a value reads a type-less schema as the
- * union of its object and array readings (`schemaAtPath`); a traversal that
- * has the value in hand narrows through the reading the value selects. A
- * declared type stands, whatever the value.
- */
-function settledForContainer(
-  schema: JSONSchemaObj,
-  container: "object" | "array",
-): JSONSchemaObj {
-  return schema.type === undefined
-    ? internSchema({ ...schema, type: container }) as JSONSchemaObj
-    : schema;
-}
-
 function plainObjectProperties(
   schema: JSONSchemaObj,
 ): Record<string, JSONSchema> | undefined {
@@ -4886,7 +4870,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
     docArray.forEach((item, index) => {
       const itemSchema = directItems ??
         schemaAtPathCanonical(
-          settledForContainer(schema, "array"),
+          ContextualFlowControl.settledForContainer(schema, "array"),
           [index.toString()],
         );
       const batchIndex = preparedPlainLinkIndex++;
@@ -5188,7 +5172,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // schema behavior
       const propSchema = directProperties?.[propKey] ??
         schemaAtPathCanonical(
-          settledForContainer(schema, "object"),
+          ContextualFlowControl.settledForContainer(schema, "object"),
           [propKey],
           true,
         );
