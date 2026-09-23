@@ -501,9 +501,9 @@ interface SchemaRoot { draft: Draft | undefined; }
       );
     });
 
-    it("reads a union member printed under a name the module does not import from its registered type", async () => {
+    it("reads a union member printed under a name the module does not import as the type it was printed from", async () => {
       // The transformer prints a type by the name its declaring module gives
-      // it and registers the type, which is then all that says what it is.
+      // it and records the type, which is then all that says what it is.
       const { checker, sourceFile } = await createTestProgram(
         `${PRELUDE} interface X { authored: Stored; }`,
       );
@@ -516,9 +516,10 @@ interface SchemaRoot { draft: Draft | undefined; }
         .getProperty("authored");
       if (!authored) throw new Error("Property X.authored not found");
       const printed = named("Elsewhere");
-      const typeRegistry = new WeakMap<ts.Node, ts.Type>([
-        [printed, checker.getTypeOfSymbolAtLocation(authored, sourceFile)],
-      ]);
+      const printedType = checker.getTypeOfSymbolAtLocation(
+        authored,
+        sourceFile,
+      );
 
       const schema = new SchemaGenerator().generateSchemaFromSyntheticTypeNode(
         ts.factory.createTypeReferenceNode(
@@ -534,9 +535,12 @@ interface SchemaRoot { draft: Draft | undefined; }
           ],
         ),
         checker,
-        typeRegistry,
+        undefined,
         undefined,
         sourceFile,
+        {
+          printedFrom: (node) => node === printed ? printedType : undefined,
+        },
       );
 
       expect(schema).toEqual({

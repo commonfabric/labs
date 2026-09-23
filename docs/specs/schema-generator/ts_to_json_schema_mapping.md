@@ -79,11 +79,19 @@ no child node is supplied to avoid mismatched type/node pairs.
 The consumer adds a second trigger of its own: `SchemaGeneratorTransformer`
 routes to `generateSchemaFromSyntheticTypeNode` when (a) the type arg is
 synthetic (`pos === -1 && end === -1`) and resolved to `any`, or (b) the
-real-position type arg *contains* an `any`/`unknown` keyword anywhere
+type arg, synthetic or not, *contains* an `any`/`unknown` keyword anywhere
 (`containsAnyOrUnknownTypeNode`), "so the checker does not recover a wider
-semantic type"
-(`ts-transformers/src/transformers/schema-generator.ts`). Both
+semantic type" (`ts-transformers/src/transformers/schema-generator.ts`). Both
 triggers are documented in the ts-transformers behavior spec §12.
+
+**Printed nodes.** A caller passes `printedFrom` in `SchemaGenerationOptions`:
+for a node it printed from a type, that type. The generator never reads such a
+node as a node. At the root, in `formatChildType`, and on entry to the
+node-based analyzer, a printed node gives way to the caller's own type at that
+position when that type carries something, and to the type the node was
+printed from when the caller's is `any`, `unknown`, or an unbound type
+parameter. The schema hints attached to the node still apply, through the
+context's `hintsNode`.
 
 **The node-based analyzer** (`analyzeTypeNodeStructure`,
 `src/schema-generator.ts`) handles: `TypeLiteral` nodes (properties
@@ -98,10 +106,7 @@ form as the type path), intersections (reduced as the checker reduces the
 types, then merged as `IntersectionFormatter` merges them; the rules are
 below), unions (`true` member short-circuits, `false` members filtered,
 singletons unwrapped), literal nodes, `TypeReference` nodes (wrapper
-detection first; then, for a node the transformer registered a type other
-than `any` for, that type, since a name printed from a type is the one its declaring module gives
-it and the emitting module need not import it; then the default library's
-generic aliases — `Readonly`,
+detection first; then the default library's generic aliases — `Readonly`,
 `Partial`, `Required`, `Pick`, `Omit`, `NonNullable`, `Array`,
 `ReadonlyArray`, `Record` — applied structurally to their arguments when the
 name binds through the node or, for an unbindable synthetic reference,
@@ -114,20 +119,21 @@ wrapper, whose scope `CommonFabricFormatter` reads from the reference's name;
 then the general path, which resolves the name the same way — bound through
 the node, else lexically from the module's scope, an import followed to what
 it imports — and formats the declared type, so a name the module declares,
-exported or not, or imports is read. A generic declared outside the default
-library is left unread: its declared type leaves the parameters unbound, and no
-reading of an unbound parameter stands in for the argument a reference supplies
-— the constraint drops the members an argument adds, the default is free to
-contradict one, and an operator over the parameter (`keyof T`, `T["name"]`) has
-no schema at all. The exceptions are the references `CommonFabricFormatter`
-lowers from their own arguments: a scope wrapper, whose payload it reads from
-the reference's argument without resolving the wrapper's name (the
-transformer prints a wrapper it builds as `__cfHelpers.PerUser<…>`, a name no
-scope declares), and an alias that is not itself a CFC alias or a scope
-wrapper and whose whole body references one, directly or through further such
-aliases, named with an argument for every parameter that has no default, which
-it substitutes down the chain (a chain reaching a scope wrapper must hand it
-an argument) — plus a `Date`-by-name special case), keyword types, and a final
+exported or not, or imports is read. On the general path, a generic
+declared outside the default library is left unread: its declared type leaves
+the parameters unbound, and no reading of an unbound parameter stands in for
+the argument a reference supplies — the constraint drops the members an
+argument adds, the default is free to contradict one, and an operator over the
+parameter (`keyof T`, `T["name"]`) has no schema at all. The exceptions are the
+references `CommonFabricFormatter` lowers from their own arguments: a scope
+wrapper, whose payload it reads from the reference's argument without
+resolving the wrapper's name (the transformer prints a wrapper it builds as
+`__cfHelpers.PerUser<…>`, a name no scope declares), and an alias that is not
+itself a CFC alias or a scope wrapper and whose whole body references one,
+directly or through further such aliases, named with an argument for every
+parameter that has no default, which it substitutes down the chain (a chain
+reaching a scope wrapper must hand it an argument) — plus a `Date`-by-name
+special case), keyword types, and a final
 resolve-else-`true` fallback.
 
 A `true` from that fallback is a guess rather than a reading, and is recorded
