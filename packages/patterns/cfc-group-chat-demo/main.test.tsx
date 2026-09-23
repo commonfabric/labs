@@ -64,6 +64,13 @@ const adminGesture = {
 
 type GroupChatDemoInputArg = Parameters<typeof GroupChatDemo>[0];
 
+// A `cf-submit-input` delivers its field's text on the trusted click, from its
+// button or from Enter in the field.
+const submitted = (text: string) => ({
+  type: "click",
+  target: { value: text },
+});
+
 export default pattern(() => {
   const myProfile = Writable.of<MyProfileCellValue>(
     {} as Default<EmptyMyProfileValue>,
@@ -80,67 +87,24 @@ export default pattern(() => {
   const adminRegistry = Writable.of<ChatAdminRegistryValue>(
     {} as ChatAdminRegistryValue,
   );
-  const profileDraft = Writable.of("");
-  const messageDraft = Writable.of("");
-  const hostMessageDraft = Writable.of("");
-  const roomDraft = Writable.of("");
   const chat = GroupChatDemo({
     myProfile,
     profiles,
     messages,
     rooms,
     adminRegistry,
-    profileDraft,
-    messageDraft,
-    hostMessageDraft,
-    roomDraft,
   } as GroupChatDemoInputArg);
   const bobProfile = Writable.of<MyProfileCellValue>(
     {} as Default<EmptyMyProfileValue>,
   );
-  const bobProfileDraft = Writable.of("");
-  const bobMessageDraft = Writable.of("");
-  const bobHostMessageDraft = Writable.of("");
-  const bobRoomDraft = Writable.of("");
   const bobChat = GroupChatDemo({
     myProfile: bobProfile,
     profiles,
     messages,
     rooms,
     adminRegistry,
-    profileDraft: bobProfileDraft,
-    messageDraft: bobMessageDraft,
-    hostMessageDraft: bobHostMessageDraft,
-    roomDraft: bobRoomDraft,
   } as GroupChatDemoInputArg);
 
-  const action_set_profile_alice = action(() => {
-    chat.setProfileDraft.send("Alice");
-  });
-  const action_set_profile_bob = action(() => {
-    bobChat.setProfileDraft.send("Bob");
-  });
-  const action_set_room_ops = action(() => {
-    chat.setRoomDraft.send("Ops");
-  });
-  const action_set_room_bob = action(() => {
-    bobChat.setRoomDraft.send("Bob room");
-  });
-  const action_set_room_ops_again = action(() => {
-    chat.setRoomDraft.send("Ops 2");
-  });
-  const action_set_room_bob_again = action(() => {
-    bobChat.setRoomDraft.send("Bob room 2");
-  });
-  const action_set_message_alice = action(() => {
-    chat.setMessageDraft.send("Hello from Alice");
-  });
-  const action_set_profile_rename = action(() => {
-    chat.setProfileDraft.send("Alice Renamed");
-  });
-  const action_set_message_after_rename = action(() => {
-    chat.setMessageDraft.send("After rename");
-  });
   // Imported rows are appended via push: rewriting the whole list with
   // `messages.set([...])` re-writes the existing TRUSTED rows, which only the
   // reviewed send binding may author under CFC enforcement.
@@ -222,8 +186,7 @@ export default pattern(() => {
   const assert_bootstrap_admin_can_add_room = assert(() => {
     const roomList = roomsValue(rooms);
     return roomList.length === 1 &&
-      roomList[0]?.name === "Ops" &&
-      roomDraft.get() === "";
+      roomList[0]?.name === "Ops";
   });
   const assert_everyone_disabled_seeds_alice = assert(() =>
     chat.currentUserIsAdmin === true &&
@@ -270,14 +233,12 @@ export default pattern(() => {
   const assert_bob_can_add_room = assert(() => {
     const roomList = roomsValue(rooms);
     return roomList.length === 2 &&
-      roomList[1]?.name === "Bob room" &&
-      bobRoomDraft.get() === "";
+      roomList[1]?.name === "Bob room";
   });
   const assert_alice_can_still_add_room = assert(() => {
     const roomList = roomsValue(rooms);
     return roomList.length === 3 &&
-      roomList[2]?.name === "Ops 2" &&
-      roomDraft.get() === "";
+      roomList[2]?.name === "Ops 2";
   });
   // The second write to the floored `admins` path: the revoke reads back the
   // explicit list the grant wrote and stores a shorter one. A floor over two
@@ -299,12 +260,11 @@ export default pattern(() => {
     roomsValue(rooms).length === 3 &&
     roomsValue(rooms)[2]?.name === "Ops 2"
   );
-  const assert_message_sent_and_draft_cleared = assert(() =>
+  const assert_message_sent = assert(() =>
     messages.get().length === 1 &&
     messages.get()[0]?.origin === "sent" &&
     messages.get()[0]?.authorName === "Alice" &&
-    messages.get()[0]?.body === "Hello from Alice" &&
-    messageDraft.get() === ""
+    messages.get()[0]?.body === "Hello from Alice"
   );
   const assert_profile_renamed = assert(() =>
     chat.currentProfileName === "Alice Renamed"
@@ -361,16 +321,25 @@ export default pattern(() => {
     [TESTS]: [
       { assertion: assert_initially_empty },
       { assertion: assert_admin_view_waits_for_profile },
-      { action: action_set_profile_alice },
-      { action: chat.saveProfile, trustedUi: profileGesture },
+      {
+        action: chat.saveProfile,
+        event: submitted("Alice"),
+        trustedUi: profileGesture,
+      },
       { assertion: assert_profile_created },
       { assertion: assert_profile_bootstraps_admin },
-      { action: action_set_profile_bob },
-      { action: bobChat.saveProfile, trustedUi: profileGesture },
+      {
+        action: bobChat.saveProfile,
+        event: submitted("Bob"),
+        trustedUi: profileGesture,
+      },
       { assertion: assert_alice_sees_bob_without_bob_message },
       { assertion: assert_admin_view_everyone_enabled },
-      { action: action_set_room_ops },
-      { action: chat.addTrustedRoom, trustedUi: roomGesture },
+      {
+        action: chat.addTrustedRoom,
+        event: submitted("Ops"),
+        trustedUi: roomGesture,
+      },
       { assertion: assert_bootstrap_admin_can_add_room },
       {
         action: chat.toggleEveryoneAdmin,
@@ -388,8 +357,11 @@ export default pattern(() => {
         trustedUi: adminGesture,
       },
       { assertion: assert_last_admin_removal_blocked },
-      { action: action_set_room_bob },
-      { action: bobChat.addTrustedRoom, trustedUi: roomGesture },
+      {
+        action: bobChat.addTrustedRoom,
+        event: submitted("Bob room"),
+        trustedUi: roomGesture,
+      },
       { assertion: assert_bob_cannot_add_room_after_lockdown },
       // The roster and the room list are both floored on `group-chat-admin`,
       // and both mint it at the path their floor sits on. The steps from here
@@ -403,10 +375,17 @@ export default pattern(() => {
         trustedUi: adminGesture,
       },
       { assertion: assert_bob_admin_enabled },
-      { action: bobChat.addTrustedRoom, trustedUi: roomGesture },
+      {
+        action: bobChat.addTrustedRoom,
+        event: submitted("Bob room"),
+        trustedUi: roomGesture,
+      },
       { assertion: assert_bob_can_add_room },
-      { action: action_set_room_ops_again },
-      { action: chat.addTrustedRoom, trustedUi: roomGesture },
+      {
+        action: chat.addTrustedRoom,
+        event: submitted("Ops 2"),
+        trustedUi: roomGesture,
+      },
       { assertion: assert_alice_can_still_add_room },
       {
         action: chat.toggleParticipantAdmin,
@@ -414,18 +393,30 @@ export default pattern(() => {
         trustedUi: adminGesture,
       },
       { assertion: assert_bob_admin_revoked },
-      { action: action_set_room_bob_again },
-      { action: bobChat.addTrustedRoom, trustedUi: roomGesture },
+      {
+        action: bobChat.addTrustedRoom,
+        event: submitted("Bob room 2"),
+        trustedUi: roomGesture,
+      },
       { assertion: assert_bob_cannot_add_room_after_revoke },
-      { action: action_set_message_alice },
-      { action: chat.sendTrustedMessage, trustedUi: sendGesture },
-      { assertion: assert_message_sent_and_draft_cleared },
-      { action: action_set_profile_rename },
-      { action: chat.saveProfile, trustedUi: profileGesture },
+      {
+        action: chat.sendTrustedMessage,
+        event: submitted("Hello from Alice"),
+        trustedUi: sendGesture,
+      },
+      { assertion: assert_message_sent },
+      {
+        action: chat.saveProfile,
+        event: submitted("Alice Renamed"),
+        trustedUi: profileGesture,
+      },
       { assertion: assert_profile_renamed },
       { assertion: assert_message_snapshot_stable },
-      { action: action_set_message_after_rename },
-      { action: chat.sendTrustedMessage, trustedUi: sendGesture },
+      {
+        action: chat.sendTrustedMessage,
+        event: submitted("After rename"),
+        trustedUi: sendGesture,
+      },
       { assertion: assert_second_message_uses_current_name },
       { action: action_add_deterministic_imported },
       { assertion: assert_imported_messages_injected },
