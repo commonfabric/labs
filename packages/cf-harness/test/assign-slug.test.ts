@@ -1191,7 +1191,7 @@ describe("assign-slug", () => {
 
       // The slug document's own cell, so only its sync fails and every other
       // cell the call reaches behaves normally.
-      const slugEntity = JSON.stringify(
+      const slugEntity = String(
         entityIdFrom(slugIdForSpace(pieces.getSpace(), "doubling-report")),
       );
       const originalGetCell = runtime.getCellFromEntityId.bind(runtime);
@@ -1200,7 +1200,7 @@ describe("assign-slug", () => {
         ...args: Parameters<Runtime["getCellFromEntityId"]>
       ) => {
         const cell = originalGetCell(...args);
-        if (JSON.stringify(args[1]) !== slugEntity) {
+        if (String(args[1]) !== slugEntity) {
           return cell;
         }
         (cell as unknown as { sync: () => Promise<unknown> }).sync = () => {
@@ -1225,6 +1225,91 @@ describe("assign-slug", () => {
       expect(output.message).toContain("doubling-report");
       expect(output.message).not.toContain("already names another piece");
       expect(await pieces.getRegisteredPieces()).toEqual([]);
+    });
+
+    it("says the piece is listed when a name passed over after the join leaves the next one unanswerable", async () => {
+      // The registry join has committed, the bare word is then found held
+      // by another piece at the write, and the counter's first candidate
+      // cannot be read at all. The refusal reports what the call left: a
+      // listed piece with no name, not "nothing was assigned" — a caller
+      // told the latter would never look for the piece it listed.
+      await linkDefaultPattern();
+      const engine = createEngine();
+      const created = await createPiece(engine, 21);
+      const other = await createPiece(engine, 22);
+      const otherCell = pieces.runtime.getCellFromLink(
+        parseLLMFriendlyLink(other.resultRef, pieces.getSpace()),
+      );
+      await otherCell.sync();
+
+      // Only the counter's slug document fails to sync; the bare word and
+      // everything else the call reaches behave normally.
+      const counterEntity = String(
+        entityIdFrom(slugIdForSpace(pieces.getSpace(), "doubling-report-2")),
+      );
+      const originalGetCell = runtime.getCellFromEntityId.bind(runtime);
+      runtime.getCellFromEntityId = ((
+        ...args: Parameters<Runtime["getCellFromEntityId"]>
+      ) => {
+        const cell = originalGetCell(...args);
+        if (String(args[1]) !== counterEntity) {
+          return cell;
+        }
+        (cell as unknown as { sync: () => Promise<unknown> }).sync = () =>
+          Promise.reject(new Error("storage unavailable"));
+        return cell;
+      }) as Runtime["getCellFromEntityId"];
+      const originalAdd = pieces.add.bind(pieces);
+      pieces.add = async (cells) => {
+        await originalAdd(cells);
+        // The join has landed; the bare word now belongs to another piece.
+        await setSlugLink(pieces, "doubling-report", otherCell);
+      };
+      const result = await engine.invokeBuiltinTool("assign_slug", {
+        token: created.resultRef,
+        slug: "doubling-report",
+      });
+      pieces.add = originalAdd;
+      runtime.getCellFromEntityId = originalGetCell;
+
+      const output = result.output as AssignSlugToolErrorOutput;
+      expect(output.status).toBe("error");
+      expect(output.message).toContain("could not establish");
+      expect(output.message).toContain("doubling-report-2");
+      expect(output.message).toContain("the piece is listed");
+      expect(output.message).not.toContain("Nothing was assigned");
+      expect(await resolvePieceAddress(pieces, "doubling-report")).toBe(
+        other.pieceId,
+      );
+      const registered = await pieces.getRegisteredPieces();
+      expect(registered.map((piece) => piece.id)).toEqual([created.pieceId]);
+    });
+
+    it("refuses a taken word too long for any counter to fit, naming nothing", async () => {
+      // The one collision that is refused: the requested word already sits
+      // at the slug length limit, so no counter can be appended and the tool
+      // has no free name to derive. Saying so beats inventing a shorter one.
+      await linkDefaultPattern();
+      const engine = createEngine();
+      const first = await createPiece(engine, 21);
+      const second = await createPiece(engine, 22);
+      const longest = "a".repeat(80);
+      const held = await engine.invokeBuiltinTool("assign_slug", {
+        token: first.resultRef,
+        slug: longest,
+      });
+      expect((held.output as AssignSlugToolSuccessOutput).slug).toBe(longest);
+
+      const result = await engine.invokeBuiltinTool("assign_slug", {
+        token: second.resultRef,
+        slug: longest,
+      });
+      const output = result.output as AssignSlugToolErrorOutput;
+      expect(output.status).toBe("error");
+      expect(output.message).toContain("no free slug can be derived");
+      expect(await resolvePieceAddress(pieces, longest)).toBe(first.pieceId);
+      const registered = await pieces.getRegisteredPieces();
+      expect(registered.map((piece) => piece.id)).toEqual([first.pieceId]);
     });
 
     it("returns the slug without a URL when the session's space is configured by DID", async () => {
