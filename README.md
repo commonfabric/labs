@@ -319,7 +319,7 @@ focused on topics that are non-controversial and related (even if indirectly) to
 Common Fabric and the ecosystem we're trying to catalyze. If someone is
 uncomfortable with a topic you brought up, back off, even if you don't
 understand why someone might be uncomfortable. If someone brings up a topic
-you're uncomfortable with, please contact <conduct@common.tools>.
+you're uncomfortable with, please contact <conduct@commonfabric.com>.
 
 _See also our
 [code of conduct](https://github.com/commonfabric/labs?tab=coc-ov-file)._

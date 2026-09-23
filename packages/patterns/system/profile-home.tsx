@@ -136,6 +136,13 @@ export type ExternalIdentityAssertion = {
   verifiedAt: string;
 };
 
+/**
+ * A system integrity atom (`CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM`, spelled
+ * out because the schema lowering reads only a local literal): the runtime
+ * keeps it only on a write authored by a trusted builtin, so the writer of an
+ * assertion must attribute its transaction to one, and a profile cannot
+ * collect a self-asserted identity.
+ */
 export const LOOM_VERIFIED_EXTERNAL_IDENTITY_INTEGRITY =
   "loom-verified-external-identity" as const;
 

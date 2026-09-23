@@ -1,4 +1,4 @@
-#!/usr/bin/env -S deno run --allow-read --allow-env --allow-net
+#!/usr/bin/env -S deno run --allow-read --allow-env --allow-net --allow-run=git
 
 /**
  * Everything a person types about test selection goes through here, and
@@ -13,6 +13,12 @@
  * `explain` is the one this will be asked most often, because "why did my
  * test not run?" is the question a selected run provokes and the one it
  * would otherwise answer badly.
+ *
+ * Every mode that reads a manifest reads the one the lanes testing this
+ * checkout's commit read, or the one current at the moment `--at` names.
+ * `plan` and `explain` pack the tree through the lanes' own code, for a
+ * change that touches nothing, so what they say a lane would do is what
+ * such a lane does.
  */
 
 import { join } from "@std/path";
@@ -31,19 +37,21 @@ import {
 } from "./test-selection/policy.ts";
 import { fetchManifest } from "./test-selection/store.ts";
 import {
-  capabilitiesBySuite,
-  loadTopology,
-  wholeUnits,
-} from "./test-topology.ts";
+  type LaneDeps,
+  type LaneOptions,
+  type LanePlan,
+  lanePlan,
+  resolveManifest,
+} from "./ci-lane.ts";
+import { loadTopology } from "./test-topology.ts";
 import { type Suite, unavailableUnits } from "./test-topology/suite.ts";
-import { census } from "./test-selection/census.ts";
 import {
   measuredSetName,
   type MeasuredSetRef,
   measuredSets,
 } from "./test-selection/coverage.ts";
 import type { Manifest } from "./test-selection/manifest.ts";
-import { crowdingLine, plan, unholdableSuites } from "./test-selection/plan.ts";
+import { crowdingLine, unholdableSuites } from "./test-selection/plan.ts";
 import { readWorkspaceMembers } from "./workspace-tests.ts";
 
 const USAGE = `usage: test-selection <mode>
@@ -53,6 +61,10 @@ const USAGE = `usage: test-selection <mode>
   explain <identity>          one test's score, and whether it is selected
   plan --dry-run [--lane N]   what would run, and what it would cost
   plan --verify               what the topology and the store disagree about
+
+Every mode that reads a manifest reads the one the lanes testing the
+checked-out commit read. --at <moment>, in ISO 8601, reads the one that
+was current at that moment instead.
 
 An identity is its canonical key, either three parts or four when the
 test ran in a non-default configuration:
@@ -73,6 +85,20 @@ export function laneArgument(
   const lane = Number(args[at + 1]);
   if (!Number.isInteger(lane) || lane < 1 || lane > LANES) return "invalid";
   return lane;
+}
+
+/**
+ * The moment an `--at` argument names, in the UTC form the store compares
+ * against: nothing when the flag is absent, and "invalid" for a flag with
+ * no moment after it that a `Date` can read.
+ */
+export function momentArgument(
+  args: readonly string[],
+): string | undefined | "invalid" {
+  const at = args.indexOf("--at");
+  if (at < 0) return undefined;
+  const moment = new Date(args[at + 1] ?? "");
+  return Number.isNaN(moment.getTime()) ? "invalid" : moment.toISOString();
 }
 
 /**
@@ -285,10 +311,10 @@ export function explainLines(
   // about the entry; whether a lane reaches it is a fact about the
   // packing, and only the packing knows it.
   if (verdict.selected) {
-    lines.push("  the current manifest selects it");
+    lines.push("  this commit's manifest selects it");
   } else if (!verdict.unschedulable && held === undefined) {
     lines.push(
-      "  the current manifest does not reach it: the budget runs out " +
+      "  this commit's manifest does not reach it: the budget runs out " +
         "first, on tests worth more per second",
     );
   }
@@ -303,52 +329,28 @@ function laneLine(
     `${lane.projectedSeconds.toFixed(1)}s of ${LANE_BUDGET_SECONDS}s`;
 }
 
-/**
- * The packing, over a manifest and no diff, as a lane would compute it.
- *
- * It reads the tree against the manifest first, exactly as a lane does.
- * Without that this would answer for a corpus a lane never sees: the
- * units the manifest still names and the tree has dropped would be in
- * the answer, and the units the tree has gained would not. The
- * capabilities a suite opens are most of what a lane's budget goes on,
- * which is the other reason the topology is what makes this the answer a
- * lane would give.
- */
-function planFor(manifest: Manifest, suites: readonly Suite[]) {
-  const seen = census(suites, manifest, new Set());
-  return {
-    seen: seen.manifest,
-    result: plan({
-      manifest: seen.manifest,
-      mandatory: seen.mandatory,
-      capabilities: capabilitiesBySuite(suites),
-      wholeUnits: wholeUnits(suites),
-    }),
-  };
-}
-
 /** What `plan --dry-run` prints, as lines. */
 export function planLines(
-  manifest: Manifest,
-  suites: readonly Suite[],
+  planned: LanePlan,
   laneNumber: number | undefined,
 ): string[] {
   const lines: string[] = [];
-  const { seen, result } = planFor(manifest, suites);
+  const { laid } = planned;
+  const corpus = planned.seen.manifest;
   const lanes = laneNumber === undefined
-    ? result.lanes
-    : result.lanes.filter((lane) => lane.lane === laneNumber);
+    ? laid.lanes
+    : laid.lanes.filter((lane) => lane.lane === laneNumber);
   lines.push(
-    `manifest of ${manifest.generatedAt}, from ${manifest.runs} runs at ` +
-      `${manifest.commit}`,
+    `manifest of ${corpus.generatedAt}, from ${corpus.runs} runs at ` +
+      `${corpus.commit}`,
   );
   // The corpus the lanes below were packed from, which is what this tree
   // holds rather than what the manifest was published over. Counting the
   // manifest's own entries here would head a plan with a total the plan
   // does not add up to.
   lines.push(
-    `${seen.entries.length} identities in this tree, ` +
-      `${seen.withheld.length} withheld`,
+    `${corpus.entries.length} identities in this tree, ` +
+      `${corpus.withheld.length} withheld`,
   );
   for (const lane of lanes) {
     lines.push(laneLine(lane));
@@ -366,19 +368,19 @@ export function planLines(
       lines.push(`    ${count} by ${reason}`);
     }
   }
-  if (result.overBudgetSeconds > 0) {
+  if (laid.overBudgetSeconds > 0) {
     lines.push(
       `the mandatory set alone puts a lane ` +
-        `${result.overBudgetSeconds.toFixed(1)}s past its budget`,
+        `${laid.overBudgetSeconds.toFixed(1)}s past its budget`,
     );
   }
   // A suite whose fixed charge alone is past a lane comes first, and its
   // identities are not listed under it. Every one of them is past the
   // bound by that charge and by nothing about itself, so a list of them
   // is one line per test saying what one line per suite already said.
-  const unholdable = unholdableSuites(result.crowding);
-  for (const suite of result.crowding) lines.push(crowdingLine(suite));
-  for (const entry of result.unschedulable) {
+  const unholdable = unholdableSuites(laid.crowding);
+  for (const suite of laid.crowding) lines.push(crowdingLine(suite));
+  for (const entry of laid.unschedulable) {
     if (unholdable.has(entry.suite)) continue;
     lines.push(
       `unschedulable: ${testIdentityKey(entry.test)} costs ` +
@@ -390,18 +392,18 @@ export function planLines(
 }
 
 /**
- * What the lanes would do with one test. Runs the same packing a lane
- * runs, so the answer is the one the lanes would give rather than a guess
- * from the manifest entry alone.
+ * What the lanes would do with one test. Reads the lanes' own plan, so
+ * the answer is the one the lanes would give rather than a guess from the
+ * manifest entry alone.
  */
 export function verdictFor(
-  manifest: Manifest,
-  suites: readonly Suite[],
+  planned: LanePlan,
   test: TestIdentity,
 ): PlanVerdict & { corpus: Manifest } {
-  const { seen, result } = planFor(manifest, suites);
+  const { laid } = planned;
+  const corpus = planned.seen.manifest;
   const key = testIdentityKey(test);
-  const taken = result.lanes.flatMap((lane) => lane.selections).find((
+  const taken = laid.lanes.flatMap((lane) => lane.selections).find((
     selection,
   ) => testIdentityKey(selection.entry.test) === key);
   // The corpus travels with the verdict so that whatever explains this
@@ -411,10 +413,10 @@ export function verdictFor(
   // beside it says a lane runs the stand-in for it.
   const verdict: PlanVerdict & { corpus: Manifest } = {
     selected: taken !== undefined,
-    corpus: seen,
+    corpus,
   };
   if (taken !== undefined) verdict.repeats = taken.repeats;
-  const refused = result.unschedulable.find((entry) =>
+  const refused = laid.unschedulable.find((entry) =>
     testIdentityKey(entry.test) === key
   );
   if (refused !== undefined) {
@@ -433,7 +435,7 @@ export interface Verification {
 }
 
 /**
- * Whether the newest manifest accounts for the tree in front of it.
+ * Whether a manifest accounts for the tree in front of it.
  *
  * Two directions, and they are not the same claim. A unit the topology
  * enumerates that the manifest holds nothing for is one every lane
@@ -491,20 +493,10 @@ export function verifyLines(
   return { lines, fails: missing.length > 0 };
 }
 
-/** The manifest the newest publisher run wrote, or nothing with a reason. */
-async function newestManifest(): Promise<Manifest | undefined> {
-  const found = await fetchManifest({ at: new Date().toISOString() });
-  if (found.manifest === undefined) {
-    console.error(`no manifest: ${found.absent}`);
-    return undefined;
-  }
-  return found.manifest;
-}
-
 /** What the dispatch reads that is not in its arguments. */
 export interface Sources {
-  /** The newest published manifest, or nothing when there is none. */
-  manifest(): Promise<Manifest | undefined>;
+  /** Where manifests come from, read at a moment, as a lane reads them. */
+  manifest: LaneDeps["manifest"];
 
   /** The workspace members the coverage gate has an opinion about. */
   members(): Promise<string[]>;
@@ -518,31 +510,96 @@ export interface Sources {
     resolve(test: TestIdentity, day: string): TestIdentity;
   }>;
 
-  /** The suites, read from the working tree. */
-  topology(): Promise<readonly Suite[]>;
+  /** The suites, read from the working tree at `root`. */
+  topology(root: string): Promise<readonly Suite[]>;
 }
 
 const LIVE: Sources = {
-  manifest: newestManifest,
+  manifest: fetchManifest,
   members: gatedMembers,
   aliases: loadAliasResolver,
   topology: loadTopology,
 };
 
+/** Says, on the error stream, how the manifest's moment was chosen. */
+function note(line: string): void {
+  console.error(`test-selection: ${line}`);
+}
+
 /**
- * Runs one command line and returns the code to stop with. Every line it
- * means a person to read goes to the console; every reason to stop is a
- * `Stop`, so nothing here ends the process.
+ * The manifest `root`'s commit resolves, or the one current `at` where a
+ * moment is named. Returns `undefined`, having said why, where there is
+ * none.
+ */
+async function commitManifest(
+  root: string,
+  at: string | undefined,
+  sources: Sources,
+): Promise<Manifest | undefined> {
+  const found = await resolveManifest(
+    at === undefined ? { root } : { root, at },
+    sources,
+    note,
+  );
+  if (found.manifest === undefined) {
+    console.error(`no manifest: ${found.absent}`);
+  }
+  return found.manifest;
+}
+
+/**
+ * The plan every lane testing `root`'s commit computes for a change that
+ * touches nothing, over the manifest current `at` where a moment is
+ * named. Returns `undefined`, having said why, where there is no manifest
+ * to compute it from.
+ */
+async function commitPlan(
+  root: string,
+  at: string | undefined,
+  sources: Sources,
+): Promise<LanePlan | undefined> {
+  const options: LaneOptions = {
+    lane: 1,
+    of: LANES,
+    full: false,
+    dryRun: true,
+    laneCount: false,
+    root,
+    ...(at === undefined ? {} : { at }),
+  };
+  const planned = await lanePlan(
+    options,
+    await sources.topology(root),
+    sources,
+    note,
+  );
+  if (planned.fetched.absent !== undefined) {
+    console.error(`no manifest: ${planned.fetched.absent}`);
+    return undefined;
+  }
+  return planned;
+}
+
+/**
+ * Runs one command line against the checkout at `root` and returns the
+ * code to stop with. Every line it means a person to read goes to the
+ * console; every reason to stop is a `Stop`, so nothing here ends the
+ * process.
  */
 export async function dispatch(
   args: readonly string[],
   sources: Sources = LIVE,
+  root: string = repositoryRoot() ?? Deno.cwd(),
 ): Promise<number> {
   const mode = args[0];
   if (mode === undefined || mode === "--help" || mode === "-h") {
     console.log(USAGE);
     return 0;
   }
+  // A moment this cannot read is a mistake to report rather than a reason
+  // to read the commit's manifest in its place.
+  const at = momentArgument(args);
+  if (at === "invalid") fail(`--at takes a moment in ISO 8601\n\n${USAGE}`);
   switch (mode) {
     case "dials":
       for (const line of dialLines()) console.log(line);
@@ -551,8 +608,8 @@ export async function dispatch(
       // The one mode that reads a manifest and carries on without one:
       // which sets exist is a fact about the tree, and only the baseline
       // each is measured against comes from a manifest.
-      const manifest = await sources.manifest();
-      const sets = measuredSets(await sources.topology());
+      const manifest = await commitManifest(root, at, sources);
+      const sets = measuredSets(await sources.topology(root));
       for (
         const line of coverageLines(manifest, sets, await sources.members())
       ) {
@@ -567,17 +624,16 @@ export async function dispatch(
       if (test === undefined) {
         fail(`not an identity key: ${argument}\n\n${USAGE}`);
       }
-      const manifest = await sources.manifest();
-      if (manifest === undefined) return 1;
+      const planned = await commitPlan(root, at, sources);
+      if (planned === undefined) return 1;
       // Resolving through the alias file is what joins the two halves of
       // a renamed test's history under today's name.
       const resolver = await sources.aliases();
       const resolved = resolver.resolve(
         test,
-        manifest.generatedAt.slice(0, 10),
+        planned.seen.manifest.generatedAt.slice(0, 10),
       );
-      const suites = await sources.topology();
-      const verdict = verdictFor(manifest, suites, resolved);
+      const verdict = verdictFor(planned, resolved);
       for (const line of explainLines(verdict.corpus, resolved, verdict)) {
         console.log(line);
       }
@@ -592,17 +648,19 @@ export async function dispatch(
       if (laneNumber === "invalid") {
         fail(`--lane takes a whole number from 1 to ${LANES}`);
       }
-      const manifest = await sources.manifest();
-      if (manifest === undefined) return 1;
-      const suites = await sources.topology();
       if (args.includes("--verify")) {
-        const verification = verifyLines(manifest, suites);
+        const manifest = await commitManifest(root, at, sources);
+        if (manifest === undefined) return 1;
+        const verification = verifyLines(
+          manifest,
+          await sources.topology(root),
+        );
         for (const line of verification.lines) console.log(line);
         return verification.fails ? 1 : 0;
       }
-      for (const line of planLines(manifest, suites, laneNumber)) {
-        console.log(line);
-      }
+      const planned = await commitPlan(root, at, sources);
+      if (planned === undefined) return 1;
+      for (const line of planLines(planned, laneNumber)) console.log(line);
       return 0;
     }
     default:

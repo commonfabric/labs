@@ -29,6 +29,7 @@ import {
 } from "@commonfabric/data-model/codecs";
 import { assertPatternSchemasBackwardCompatible } from "../packages/piece/src/schema-compatibility.ts";
 import { readOnlyArguments } from "./only-arguments.ts";
+import { matchesPatternFilter } from "./pattern-files.ts";
 
 /**
  * The two schemas that constitute a pattern's update contract. Nothing else
@@ -101,16 +102,19 @@ export function parseArgs(argv: readonly string[]): CliOptions {
   return { update, only };
 }
 
+/** One of `count` processes a run is divided into; `index` is 0-based. */
+export interface Shard {
+  index: number;
+  count: number;
+}
+
 /**
  * The share of the patterns `PATTERN_COMPAT_SHARD` names, as `"i/n"` counting
  * from one, or all of them where it names nothing. Compiling a pattern is
  * single-threaded CPU work, so dividing the patterns between processes is
  * what puts more cores to use.
  */
-export function parseShard(raw: string | undefined): {
-  index: number;
-  count: number;
-} {
+export function parseShard(raw: string | undefined): Shard {
   if (!raw) return { index: 0, count: 1 };
   const match = raw.match(/^(\d+)\/(\d+)$/);
   if (!match) throw new Error(`Invalid shard "${raw}"; expected "i/n".`);
@@ -303,60 +307,21 @@ export async function readBaselines(
 }
 
 /**
- * Every pattern key that has a baseline directory, including retired ones.
- *
- * A pattern's own directory is named for its file (`home.tsx`), so a name
- * ending in `.ts`/`.tsx` terminates the walk and anything else is an
- * intermediate path segment (`system/`). That is the only thing distinguishing
- * the two — baselines live at `<dir>/<pattern path>/<file>.json`, and a pattern
- * path is exactly the route suffix the updater keys on.
+ * The items one run of the gate judges: those `--only` selects, divided among
+ * the shards by position. Each item goes to exactly one of the shards, and
+ * every shard is given its items by that one rule.
  */
-export async function collectBaselineKeys(
-  baselinesDir: string,
-): Promise<string[]> {
-  const keys: string[] = [];
-  async function walk(current: string, prefix: string) {
-    let entries: Deno.DirEntry[];
-    try {
-      entries = [...Deno.readDirSync(current)];
-    } catch (error) {
-      if (error instanceof Deno.errors.NotFound) return;
-      throw error;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory) continue;
-      const key = prefix ? `${prefix}/${entry.name}` : entry.name;
-      if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
-        keys.push(key);
-      } else {
-        await walk(`${current}/${entry.name}`, key);
-      }
-    }
-  }
-  await walk(baselinesDir, "");
-  return keys.sort();
-}
-
-/**
- * Baselines whose pattern file is gone. Deleting a served pattern pins every
- * piece tracking it forever — the updater's `?identity` probe just fails and it
- * "does nothing" — so this is worth surfacing even though it needs no compiler.
- *
- * Filesystem-only by design: it must see the whole tree, so it cannot ride
- * along with the sharded, filterable compile pass.
- */
-export async function findRetired(
-  baselinesDir: string,
-  currentPatterns: ReadonlySet<string>,
-): Promise<Finding[]> {
-  const findings: Finding[] = [];
-  for (const key of await collectBaselineKeys(baselinesDir)) {
-    if (currentPatterns.has(key)) continue;
-    findings.push(
-      ...checkPattern(key, undefined, await readBaselines(baselinesDir, key)),
+export function selectItems(
+  items: readonly string[],
+  only: readonly string[],
+  shard: Shard,
+): string[] {
+  const selected = only.length === 0
+    ? items
+    : items.filter((item) =>
+      only.some((match) => matchesPatternFilter(item, match))
     );
-  }
-  return findings;
+  return selected.filter((_item, i) => i % shard.count === shard.index);
 }
 
 /** Record a contract as a new baseline. Returns the filename written. */

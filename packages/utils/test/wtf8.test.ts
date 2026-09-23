@@ -59,7 +59,7 @@ describe("encodeWtf8()", () => {
     });
 
     it("encodes the characters around a lone surrogate as UTF-8", () => {
-      expect(encodeWtf8("a\ud800é😀")).toEqual(
+      expect(encodeWtf8("a\ud800\u00e9😀")).toEqual(
         Uint8Array.of(
           0x61,
           0xed,
@@ -97,6 +97,11 @@ describe("encodeWtf8()", () => {
       const bytes = encodeWtf8("a\ud800");
       expect(bytes.length).toBe(4);
       expect(bytes.buffer.byteLength).toBe(4);
+
+      // Every code unit takes three bytes, which fills the working buffer.
+      const full = encodeWtf8("\udc00\ud800");
+      expect(full.length).toBe(6);
+      expect(full.buffer.byteLength).toBe(6);
     });
 
     it("returns bytes that differ from those of the replacement character", () => {
@@ -109,7 +114,7 @@ describe("encodeWtf8()", () => {
     const strings = [
       "",
       "a",
-      "퟿",
+      "\ud7ff",
       "\ud800",
       "\ud800a",
       "\ud800\ud801",
@@ -119,9 +124,9 @@ describe("encodeWtf8()", () => {
       "\udbff",
       "\udc00",
       "\udfff",
-      "",
+      "\ue000",
       "\ufffd",
-      "￿",
+      "\uffff",
       "😀",
       "\u{10000}",
       "\u{10ffff}",
