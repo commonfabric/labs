@@ -746,6 +746,138 @@ describe("run-pattern", () => {
   }
 
   describe("runPatternTool", () => {
+    describe("captured query status", () => {
+      for (
+        const { name, capture, pending, hasError } of [
+          {
+            name: "a pending read",
+            capture: { pending: true, error: "" },
+            pending: true,
+            hasError: false,
+          },
+          {
+            name: "a settled read",
+            capture: { pending: false, error: "", hasError: true },
+            pending: false,
+            hasError: false,
+          },
+          {
+            name: "an error branch",
+            capture: {
+              pending: false,
+              error: "private diagnostic",
+              hasError: false,
+            },
+            pending: false,
+            hasError: true,
+          },
+          {
+            name: "an errorMessage branch",
+            capture: { errorMessage: "private diagnostic" },
+            pending: false,
+            hasError: true,
+          },
+          {
+            name: "a result without status fields",
+            capture: {},
+            pending: false,
+            hasError: false,
+          },
+        ]
+      ) {
+        it(`returns host-computed booleans for ${name} without a resultSchema`, async () => {
+          const result = await createEngine().invokeBuiltinTool("run_pattern", {
+            sourceText: [
+              "import { pattern } from 'commonfabric';",
+              "interface Output { count: number; pending?: boolean; error?: string; errorMessage?: string; hasError?: boolean; }",
+              `export default pattern<Record<string, never>, Output>(() => (${
+                JSON.stringify({ count: 0, ...capture })
+              }));`,
+            ].join("\n"),
+          });
+          const output = result.output as RunPatternToolSuccessOutput;
+          expect(output.status).toBe("ok");
+          expect(output.pending).toBe(pending);
+          expect(output.hasError).toBe(hasError);
+          expect(output.value).toBeUndefined();
+          expect(output).not.toHaveProperty("error");
+          expect(output).not.toHaveProperty("errorMessage");
+          expect(output.releaseDecision?.reasonCode).toBe(
+            "cfc_release_allowed",
+          );
+        });
+      }
+
+      for (const mode of ["enforce-strict", "observe"] as const) {
+        it(`fits data-dependent status before returning it in ${mode}`, async () => {
+          const { runtime, pieces, space, dispose } = await createFabric(mode);
+          try {
+            const source = await seedLabelledSecret(
+              runtime,
+              space,
+              "query-status",
+            );
+            const engine = createStrictEngine(pieces);
+            for (const requestValue of [false, true]) {
+              const result = await engine.invokeBuiltinTool("run_pattern", {
+                sourceText: [
+                  "import { computed, pattern } from 'commonfabric';",
+                  "interface Input { source: { secret: string }; }",
+                  "interface Output { pending: boolean; error: string; }",
+                  "export default pattern<Input, Output>(({ source }) => ({",
+                  "  pending: computed(() => source.secret.length > 0),",
+                  "  error: computed(() => source.secret),",
+                  "}));",
+                ].join("\n"),
+                inputs: { source },
+                ...(requestValue
+                  ? {
+                    resultSchema: {
+                      type: "object",
+                      properties: {
+                        pending: { type: "boolean" },
+                        error: { type: "string" },
+                      },
+                      required: ["pending"],
+                    },
+                  }
+                  : {}),
+              });
+              const output = result.output as RunPatternToolSuccessOutput;
+              expect(output.status).toBe("ok");
+              expect(output.resultRef).toMatch(/^\/of:/);
+              expect(output.rawValue).toMatchObject({
+                pending: true,
+                error: "s3cr3t",
+              });
+              expect(output.pending).toBe(
+                mode === "observe" ? true : undefined,
+              );
+              expect(output.hasError).toBe(
+                mode === "observe" ? true : undefined,
+              );
+              expect(output.releaseDecision?.reasonCode).toBe(
+                mode === "observe"
+                  ? "cfc_release_observed"
+                  : "cfc_release_withheld",
+              );
+              if (requestValue && mode === "enforce-strict") {
+                expect(output.policyRefusal?.gates).toEqual(["sink-ceiling"]);
+                expect(output.outputConcerns?.map(({ concern }) => concern))
+                  .toEqual(["error-branch"]);
+              } else {
+                expect(output.policyRefusal).toBeUndefined();
+                expect(output.valueError).toBeUndefined();
+              }
+              expect(output).not.toHaveProperty("error");
+            }
+          } finally {
+            await dispose();
+          }
+        });
+      }
+    });
+
     it("runs inline `sourceText` and returns a `resultRef` with the sanitized `value`", async () => {
       const engine = createEngine();
       const result = await engine.invokeBuiltinTool("run_pattern", {
@@ -1741,9 +1873,8 @@ describe("run-pattern", () => {
       }
     });
 
-    it("returns the result reference without consulting the ceiling when no `resultSchema` asks for values", async () => {
-      // A reference reaches the piece without releasing its values. Without
-      // a result schema, pending still asks the caller to reread.
+    it("silently omits refused status when no `resultSchema` asks for values", async () => {
+      // The host's status fit leaves the existing reference and concerns intact.
       const { runtime, pieces, space, dispose } = await createStrictFabric();
       try {
         const accountRef = await seedLabelledAccount(
@@ -1765,7 +1896,9 @@ describe("run-pattern", () => {
         expect(output.valueError).toBeUndefined();
         expect(output.policyRefusal).toBeUndefined();
         expect(output.releaseObservation).toBeUndefined();
-        expect(output.releaseDecision).toBeUndefined();
+        expect(output.releaseDecision?.reasonCode).toBe("cfc_release_withheld");
+        expect(output.pending).toBeUndefined();
+        expect(output.hasError).toBeUndefined();
         expect(output.outputConcerns?.map(({ concern }) => concern)).toEqual([
           "error-branch",
           "pending",
@@ -2111,7 +2244,7 @@ describe("run-pattern", () => {
       // back as the values, but no document at rest holds a copy at all: a
       // reader reaching the text does so through the source's own label map.
       // The call asks for no values, so what leaves the fabric for the model
-      // is the reference alone, and nothing is measured or withheld.
+      // is the reference alone; the host's status fit withholds its booleans.
       const { runtime, pieces, space, dispose } = await createStrictFabric();
       try {
         const expenseIds: string[] = [];
@@ -2224,6 +2357,8 @@ describe("run-pattern", () => {
       });
       const output = result.output as RunPatternToolErrorOutput;
       expect(output.status).toBe("compile-error");
+      expect(output).not.toHaveProperty("pending");
+      expect(output).not.toHaveProperty("hasError");
       expect(output.message.length).toBeGreaterThan(0);
       expect(result.runState.status).not.toBe("failed");
     });
@@ -2380,6 +2515,8 @@ describe("run-pattern", () => {
       expect(output.status).toBe("error");
       expect(output.message).toContain('input "n"');
       expect(output.message).toContain("argument schema");
+      expect(output).not.toHaveProperty("pending");
+      expect(output).not.toHaveProperty("hasError");
       expect(spy.calls).toBe(0);
     });
 
@@ -2685,6 +2822,8 @@ describe("run-pattern", () => {
       }, { signal: controller.signal });
       const output = result.output as RunPatternToolErrorOutput;
       expect(output.status).toBe("cancelled");
+      expect(output).not.toHaveProperty("pending");
+      expect(output).not.toHaveProperty("hasError");
     });
 
     it("serializes a plain value and answers undefined for one JSON cannot carry", () => {

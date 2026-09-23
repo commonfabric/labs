@@ -2123,12 +2123,12 @@ emptiness concern. Its captured zeros and empty lists are not data. The root's
 exact returned snapshot is checked even when the runtime has no instantiation
 recorder or the read settles before the composed-output scan. A failure is
 reported alongside pending either way. Pass the held result reference as an
-`inputs` entry to a minimal unnamed reader pattern through `run_pattern`, with a
-`resultSchema` covering pending, error, and counts, before describing counts or
-naming the page; a replacement page is not needed to receive the outstanding
-reply. A settled, error-free empty filtered result should be checked against the
-same source without the uncertain predicate, and both counts and the filter
-presented. All value reads use the ordinary release boundary.
+`inputs` entry to a minimal unnamed reader pattern through `run_pattern` before
+describing counts or naming the page; a replacement page is not needed to
+receive the outstanding reply. A settled, error-free empty filtered result
+should be checked against the same source without the uncertain predicate, and
+both counts and the filter presented. All value reads use the ordinary release
+boundary.
 
 The failure's own TEXT does not travel in the result. A concern names what the
 model already holds: it wrote the composition, and a composed instance's outputs
@@ -2155,27 +2155,32 @@ carrying it, and an agent holding one can wire it into a later run, hand it to a
 child, or publish it under a slug without ever reading it — the
 [CFC integration profile](../../docs/specs/agent-harness/02-cfc-integration.md)
 states this as AH-CFC-18. So a run that asks for no `resultSchema` gets
-`resultRef` whatever labels its result carries, and the ceiling is consulted
-only when a `resultSchema` asks for values. The measurement reads the result
-through a transaction — the result document and every computed cell it links to
-— and fits that transaction's consumed join to the ceiling. Under an enforcing
-mode a clause outside it withholds `value`, and the answer is still
-`{ status: "ok", resultRef }`: `valueError` states the refusal as an
-instruction, and `policyRefusal` carries it as data — the gates and sinks that
-refused, the offending atoms (a structured atom is counted rather than named,
-since it can carry the principal that introduced it), the keys of this call's
-own `inputs` whose values carried those atoms in, and whether dropping those
-keys is the whole remedy (`complete`), narrows the flow (`partial`), or reaches
-none of it (`none`). An input is attributed by the label-map entry the refused
-read consumed, so a link addressing a labeled field of a document is named for
-that entry whether the read landed on the field or on the document root. The
-refusal's reason names labels and documents, so it stays in the artifact's
-`rawCauseMessage` and out of the model-facing text. At `disabled` and `observe`
-nothing withholds: the values go out, and the same measurement is recorded on
-the artifact as `releaseObservation`, so an operator staging the ladder can size
-what raising it would withhold. The measurement applies no exchange-rule
-rewriting, so a clause a policy evaluation would have discharged is withheld
-here.
+`resultRef` whatever labels its result carries. Every captured success also fits
+host-computed `pending` and `hasError` booleans against the same ceiling, using
+the declared top-level pending and failure observations in that capture. No
+status fields yields two false flags; these are snapshot observations, not proof
+that every nested dependency is healthy. A refused host-only status fit silently
+omits both flags; a release `policyRefusal` is reserved for a model-supplied
+`resultSchema`. Compile, error, and cancellation outputs keep their own status.
+The measurement reads the result through a transaction — the result document and
+every computed cell it links to — and fits that transaction's consumed join to
+the ceiling. Under an enforcing mode a clause outside it withholds `value`, and
+the answer is still `{ status: "ok", resultRef }`: `valueError` states the
+refusal as an instruction, and `policyRefusal` carries it as data — the gates
+and sinks that refused, the offending atoms (a structured atom is counted rather
+than named, since it can carry the principal that introduced it), the keys of
+this call's own `inputs` whose values carried those atoms in, and whether
+dropping those keys is the whole remedy (`complete`), narrows the flow
+(`partial`), or reaches none of it (`none`). An input is attributed by the
+label-map entry the refused read consumed, so a link addressing a labeled field
+of a document is named for that entry whether the read landed on the field or on
+the document root. The refusal's reason names labels and documents, so it stays
+in the artifact's `rawCauseMessage` and out of the model-facing text. At
+`disabled` and `observe` nothing withholds: the values go out, and the same
+measurement is recorded on the artifact as `releaseObservation`, so an operator
+staging the ladder can size what raising it would withhold. The measurement
+applies no exchange-rule rewriting, so a clause a policy evaluation would have
+discharged is withheld here.
 
 Whichever way it went, the measurement is also a decision in the run's
 `policy-trace.json`, in the same record every tool-policy decision is written
@@ -2192,10 +2197,10 @@ ceiling the flow was fitted against, and the refusal with its attribution —
 beside the reference to the tool output it decided about. It is appended AFTER
 the allow-side decision for the same call, because that decision answers whether
 the call may run and is recorded before it does; a boundary that refuses inside
-the call cannot appear there at all. A call that asks for no values makes no
-release decision, since nothing was measured. Nothing of this reaches the model:
-the refusal already reaches it as `valueError` and `policyRefusal`, and the
-trace is where an operator reads it.
+the call cannot appear there at all. Host-initiated status fits also record a
+release decision. Nothing of this reaches the model: requested-value refusals
+reach it as `valueError` and `policyRefusal`; a host-only status refusal stays
+in the trace.
 
 A result that settles to nothing names its cause when one was observed: when the
 settled result fails the declared `resultSchema` or holds no fields of its own
