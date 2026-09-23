@@ -859,7 +859,11 @@ export const resolveConsoleConfig = async (
     }, {
       name: "reasoning effort",
       value: reasoningEffort ?? "provider default",
-      source: source("reasoning-effort", "CF_HARNESS_REASONING_EFFORT"),
+      // An unnamed effort is the provider's choice rather than a console
+      // default, so its source says so.
+      source: reasoningEffort === undefined
+        ? "provider default"
+        : source("reasoning-effort", "CF_HARNESS_REASONING_EFFORT"),
     }],
   };
 };

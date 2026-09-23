@@ -954,8 +954,36 @@ describe("console/server", () => {
       expect(
         consoleHealthRows(configured).find((row) =>
           row.id === "config.reasoning-effort"
-        )?.value,
-      ).toBe("provider default");
+        ),
+      ).toMatchObject({
+        value: "provider default",
+        detail: "provider default",
+      });
+    });
+
+    it("takes the reasoning effort the flag names over the environment's", async () => {
+      const configured = await resolveConsoleConfig(
+        [
+          "--fabric-identity",
+          "key.pkcs8",
+          "--fabric-space",
+          "console-test",
+          "--session-db",
+          "none",
+          "--reasoning-effort",
+          "high",
+        ],
+        { CF_HARNESS_REASONING_EFFORT: "low" },
+        "/console",
+      );
+      expect(harnessSessionEngineOptions(configured).reasoningEffort).toBe(
+        "high",
+      );
+      expect(
+        consoleHealthRows(configured).find((row) =>
+          row.id === "config.reasoning-effort"
+        ),
+      ).toMatchObject({ value: "high", detail: "--reasoning-effort" });
     });
 
     it("keeps missing inventory, automatic store discovery and unobserved credentials unknown", async () => {
