@@ -1103,6 +1103,52 @@ artifacts, so it takes minutes; nothing waits on it.
 To see what it would say about a run, set `MAIN_REPORT_RUN_ID` to that
 run and pass `--dry-run`, which posts nothing.
 
+## When a lane runs more than it chose
+
+An invocation unit is usually one test file, and a lane that wants part
+of one registers the rest as ignored. Some units hold more than one test
+and offer nothing finer to point at: a workspace member whose test task
+takes no file list, a member's browser half, the reload suite's
+directory, a section of the FUSE integration script. A lane asked for
+one test of such a unit runs every test in it.
+
+Those units are named in the topology, in each suite's `whole`, and no
+skip list is written for one. Most of what `whole` names holds a single
+identity and is in it only because there is nothing inside to leave out
+— a gate, a type-check group, a binary build, one pattern's check, one
+vintage fixture's replay. The four kinds above are the ones holding
+several, and there is no rule to read them off a unit's shape: two of
+the four are paths, and most of the units that are not paths are not
+among them.
+
+So the packer places such a unit as the one choice it is. `plan()` in
+`tasks/test-selection/plan.ts` folds the unit's tests into one choice
+before it packs, charged what all of them cost together and held back
+whenever any of them is, and writes the plan with the tests back in
+place of it. The fold happens there and nowhere else: the manifest, the
+records and the plan all name the tests, so whatever matches a record
+against the manifest or a plan finds the test it is looking for.
+
+Whether a change to such a member's source makes its unit mandatory is a
+separate question, and the coverage gate is what answers it. A member
+with a measured set is reached by its own tree, so a change under it
+forces the unit — `packages/connectors/agents/debug-view` and
+`packages/dashboard` today.
+The rest have no set, because
+[the coverage gate excludes them](#the-coverage-gate), and a unit named
+for a directory is a unit no diff ever names, so it reaches a lane on
+what its tests are worth like any other unit the diff passes over. That
+is `packages/cli`, `packages/identity`, `packages/patterns`, and the
+three browser halves.
+
+What takes a workspace member out of that group is the task holding its
+tests — its `deno-test`, or its `test` where it defines no `deno-test` —
+becoming one the topology can point at files: a single `deno test`, a
+dependency list resolving to one, or the shard wrapper around one. A task
+that joins commands with a shell operator such as `&&`, that names its
+own import map, or that runs a test runner of the package's own is not
+one of those, and the member is one unit.
+
 ## A case that fails only when its siblings do not run
 
 A lane runs part of a file: the cases it holds run, and the registration

@@ -549,11 +549,15 @@ and replaces its paths with the chosen ones.
 
 Most of the forty-seven members are readable that way, and nearly every
 unit the topology holds is one test file. The rest are one unit each and
-run whole. A member whose task is written as a dependency list resolves
-through it to the `deno test` underneath, and the one command
-substitution the workspace writes — naming the running Deno in an
-`--allow-run` list — is resolved rather than treated as a shell
-metacharacter, so neither shape costs a member its granularity.
+run whole. Three shapes that would otherwise cost a member its
+granularity do not: a task written as a dependency list resolves through
+it to the `deno test` underneath; the one command substitution the
+workspace writes, naming the running Deno in an `--allow-run` list, is
+resolved rather than treated as a shell metacharacter; and a task that
+runs the shard wrapper `tasks/run-sharded-test-files.ts` is read as the
+`deno test` that wrapper ends in, taking the directory it walks as the
+paths to enumerate and the flags after its `--` as the flags the tests
+run under.
 
 Two things a member's own `deno test` would apply are applied during
 enumeration instead: the task's `--ignore` globs and the member's
@@ -716,37 +720,51 @@ mechanism is a skip list rather than a selection list.
 
 ### Every invocation unit, and the identities inside it
 
-There are nine kinds of invocation unit across the topology, and two of
-them hold more than one identity. One of the two holds almost everything:
-the workspace and runner unit shards alone carry 15,997 of the reference
-build's 17,999 executions.
+Most invocation units hold one identity. The kinds that hold more are
+what the skip list is for, and one of those kinds holds almost
+everything: the workspace and runner unit shards alone carry 15,997 of
+the reference build's 17,999 executions.
+
+Which units a lane may be handed a subset of is written down in the
+topology rather than here. A suite names in `whole` every unit whose
+runner runs each identity in it whatever it is asked, and
+`tasks/test-topology.test.ts` holds every other unit to being a test file
+the tree holds, which is the key the registration preload reads a skip
+list under. A unit that said neither would be handed a list matching
+nothing: its lane would run every test in it while the packer charged for
+the one it chose.
 
 | Invocation unit | Suites | Identities inside it | Reaching one of them |
 | --- | --- | --- | --- |
-| A `deno test` file | `workspace-unit`, `runner-unit`, `pattern-integration` and its ON arm, `package-integration` and its ON arm, `generated-patterns`, `cli-deno`, `pattern-reload` | Every bare `Deno.test` in the file, and every `it`, named as its describe chain joined with `" > "`. The container testcase Deno also reports is dropped at ingestion, so a `describe` is not an identity | The skip list, through the preload for a bare `Deno.test` and through the remapped `describe`/`it` for the rest. This is the row the whole section is about. |
+| A `deno test` file | `workspace-unit`, `runner-unit`, `pattern-integration` and its ON arm, `package-integration` and its ON arm, `generated-patterns`, `cli-deno` | Every bare `Deno.test` in the file, and every `it`, named as its describe chain joined with `" > "`. The container testcase Deno also reports is dropped at ingestion, so a `describe` is not an identity | The skip list, through the preload for a bare `Deno.test` and through the remapped `describe`/`it` for the rest. This is the row the whole section is about. |
+| A workspace member whose test task takes no file list | `workspace-unit` | Every test of the member's Deno-only half | Nothing to reach. The skip list is keyed by the file a test was registered in, and this unit is the member's own directory, so the member runs whole. |
+| A member's browser half | `workspace-unit` | Every test the browser harness runs for that member | Nothing to reach. The harness runs the files its own task names, and the unit is the half rather than a file. |
 | A pattern file run by `cf test` | `pattern-unit` | One. The runner writes one record per pattern file | Nothing to reach: the file is the identity. |
 | A pattern file checked by the compatibility gate | `pattern-compat` | One, named `pattern-compat <key>`, which the task appends itself as each file's verdict is known | Nothing to reach. The task already takes `--only` to restrict which files it reads. |
 | A pattern file type-checked by `cfcheck` | `cfcheck` | One, named `cfcheck <path>`, carrying what the batch spent on that pattern's own files | Nothing to reach. The task takes `--only` the same way, and the unit is the path the diff names. |
 | A single-step arm of `integration.sh` | `cli-core` | One, named for its step | Nothing to reach. The script's own whole-invocation record is suite-level and belongs to no invocation unit at all. |
 | One gate command | `repo-gates`, `repo-history-gates` | One, named for the gate that ran | Nothing to reach. |
+| One binary build | `binaries`, `binaries-opposite` | One, named `build-binary <name>` | Nothing to reach. |
 | One `deno check` invocation | `typecheck` | One, named for the path group it checked, which the task records itself | Nothing to reach. |
-| A whole task carrying one record | `pattern-vintage` | One, for everything the task did | Nothing to reach, and nothing finer exists: the suite is its own identity. |
+| The reload suite's directory | `pattern-reload` | Every test under it | Nothing to reach. The task hard-codes the directory it runs and brings the local development stack up around it, so a lane asks for the suite or does not. |
+| One committed vintage fixture | `pattern-vintage` | One, named for the fixture's test key, tier and capture stamp | Nothing to reach. The task takes `--only` to restrict which fixtures it replays, and the unit is the fixture's own path. The replay's own end-to-end record is suite-level and belongs to no unit. |
 | A section of `fuse-exec.sh` | `cli-fuse` | The phases that section alone selects. The phases more than one section runs record against the suite instead, since they name no single section | Nothing to reach below the section. A mount comes up for the section, not for the phase, so its phases run or are skipped together. |
 
-Seven of the nine rows are one identity per invocation, which is why this
+Most of the rows are one identity per invocation, which is why this
 change is smaller than removing a concept sounds. The topology does not
 gain a mechanism for them; they simply stop being described as items
-holding one identity each and start being described as identities. The
-eighth, `cli-fuse`, holds the phases of whichever section ran, and there
-is nothing finer for the topology to reach, since a mount comes up for the
-section rather than for the phase.
+holding one identity each and start being described as identities.
 
-`pattern-reload` is in the first row and not in a row of its own, which is
-worth saying because the plan used to treat it as a special case. It runs
-`deno test` over a directory that happens to hold one file holding one
-`it`, and holding one of something is a fact about today's contents rather
-than a property of the invocation unit. A second `it` would make it an
-ordinary member of that row with nothing to change.
+Four rows hold more than one identity and offer nothing finer to reach: a
+member that runs whole, a member's browser half, the reload directory,
+and a `fuse-exec.sh` section. Those are the part of `whole` that costs
+something, and the last column above says why each of them is there.
+
+A member arrives in that group by its test task, so it leaves by the same
+route: a task the topology can point at files is read a file at a time.
+Three members reach that through the shard wrapper rather than through a
+plain `deno test`, and those three carried 4,930 of the 4,991 identities
+that sat in members running whole.
 
 ### What it reaches, and what it does not
 
@@ -814,31 +832,39 @@ registered as ignored.
 The `Suite` interface declared `granularity`, `"item"` or `"whole"`, so a
 runner that could not be handed a subset could say so and the packer could
 charge it for everything whenever anything in it was picked. Both halves
-of that stop being needed.
+move one level down, to `Suite.whole`.
 
-Nothing is left to declare. Every invocation unit in the topology either
-holds one identity, in which case skipping it is declining to invoke it
-and no runner has to support anything, or it is a `deno test` file, in
-which case the skip list reaches inside it. There is no third case, so an
-enum with two values is describing a distinction the topology no longer
-contains.
+What is left to charge is charged for the unit.
+[`unitOverhead`](#what-it-costs-to-run-one-test) charges a lane for
+opening a unit and then for each identity it chose, which is right for a
+unit that can skip the rest and short for one that cannot: a lane taking
+one test of a whole unit runs all of them. So `plan()` folds each unit
+`whole` names into one choice before it packs, costing what every
+identity in it costs together and held back whenever any of them is, and
+writes the plan with the identities back in its place. The fold lives in
+the packer alone. The manifest and the records keep naming identities,
+so every reader that matches a record to an entry, or to a plan, still
+finds it by its own name.
 
-Nothing is left to charge, either. `whole` was a coarse way of saying that
-running one thing costs you its neighbours, and
-[`unitOverhead`](#what-it-costs-to-run-one-test) says that better: an
-invocation with an empty skip list costs its overhead plus every identity
-in it, which is exactly what `whole` meant, and it falls out of the cost
-model rather than being a case in the packer.
+What is left to declare moves with it. Whether
+the identities inside an invocation unit can be skipped is a property of
+that unit rather than of the suite around it. `cli-fuse` is the
+illustration: its phases record separately, and a section holding four of
+them cannot skip one of the four, while a `deno test` file with four
+tests can. Those two suites would have carried the same declaration under
+the old field and behaved differently, which is the sign the field was in
+the wrong place.
 
-What the enum was reaching for does survive, one level down. Whether the
-identities inside an invocation unit can be skipped is a property of that
-unit rather than of the suite around it, and the [table
-above](#every-invocation-unit-and-the-identities-inside-it) is where it is
-written down. `cli-fuse` is the illustration: its phases record
-separately, and a section holding four of them cannot skip one of the
-four, while a `deno test` file with four tests can. Those two suites
-would have carried the same declaration under the old field and behaved
-differently, which is the sign the field was in the wrong place.
+A unit that runs whole has to say so rather than be told from its shape.
+The skip list the preload reads is keyed by the repository-relative file
+a test was registered in, so a unit that is not such a file is one no
+list can name, and a suite that neither declared its unit nor gave it a
+file would be handed a list matching nothing. Nothing about that is
+visible in a run: every test of the unit passes, the lane reports a pass,
+and the packer, charging only the identities it chose, packed the lane
+short by what the rest of the unit took. So the declaration is checked
+rather than trusted — every unit outside
+`whole` is held to being a test file the tree holds.
 
 ### What replaces the item
 
@@ -1096,6 +1122,11 @@ what a `beforeAll` that throws should do to the rest of its group.
       unlisted new test runs, a renamed test runs, a listed test is
       reported as skipped rather than missing, and two files holding the
       same test name skip independently.
+- [x] Every unit a lane may be handed a subset of is a test file the
+      preload can key a skip list on, and a unit whose runner runs it
+      entire says so in `Suite.whole` and is handed no list at all. A
+      unit that said neither would take a list matching nothing and run
+      every test in it while the packer charged the lane for one.
 
 ### The drift guard
 

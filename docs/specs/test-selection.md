@@ -483,6 +483,15 @@ the suite, and the identities of a suite in the second case are left out
 of the report that names identities, since the suite's line says what
 every one of them would.
 
+**A unit that runs whole is one choice.** Where the topology says a
+unit's runner runs every identity in it whatever it is asked, the packer
+places the unit rather than its identities: it costs what they cost
+together, it is held back whenever any of them is, and a test in it that
+must run makes all of it run. A plan still names the identities, each
+under the reason that put it there, so the fold is invisible outside the
+packer and every reader that matches a record to the manifest or to a
+plan finds it under its own name.
+
 Neither reading changes what the packer does. What they change is what a
 plan can be asked. A plan that reported only the identities says nothing
 at all in the first case, and in the second says the same thing once per

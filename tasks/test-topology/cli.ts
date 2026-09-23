@@ -142,6 +142,11 @@ function sectionSuite(options: SectionSuiteOptions): Suite {
     needs: options.needs,
     units,
     unavailable: [],
+    // A unit here is an arm of a script, and the script takes a section
+    // rather than a step. An arm running one step is its own identity;
+    // an arm running several brings one environment up for all of them
+    // and runs them together.
+    whole: units,
     sources: [...options.sources].sort(),
     locate(record): Location | undefined {
       if (!claimsIdentity({ recordSurfaces: SURFACE }, record.test)) {

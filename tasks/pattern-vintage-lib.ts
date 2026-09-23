@@ -549,7 +549,42 @@ export function describeCaptureOutcome(
 }
 
 /** Every flag this task understands. Anything else is a mistake, not a hint. */
-export const KNOWN_FLAGS = ["--update", "--capture-changed", "--pin"] as const;
+export const KNOWN_FLAGS = [
+  "--update",
+  "--capture-changed",
+  "--pin",
+  "--only",
+] as const;
+
+/** The flag that restricts a replay, in the form that carries its value. */
+const ONLY_PREFIX = "--only=";
+
+/** Whether a fixture path is one a filter asked for. */
+export function replayFilterTakes(
+  path: string,
+  only: readonly string[],
+): boolean {
+  return only.length === 0 || only.some((value) => path.includes(value));
+}
+
+/** What the task prints when a filter matched no fixture in the tree. */
+export function reportNothingMatched(only: readonly string[]): string {
+  return [
+    `Replayed 0 vintages — no fixture's path holds ${
+      only.map((value) => `\`${value}\``).join(" or ")
+    }.`,
+    "A filter that matches nothing proves nothing, so it is a failure.",
+  ].join("\n");
+}
+
+/** What the task prints when a filter is paired with a capture command. */
+export function reportOnlyWithCapture(): string {
+  return [
+    "`--only` restricts a replay and every command that captures or pins " +
+    "reads the whole tree, so the two cannot be given together.",
+    "Run the capture on its own, then replay what you want.",
+  ].join("\n");
+}
 
 /**
  * Flags the task does not recognize.
@@ -579,7 +614,8 @@ export function unknownFlags(args: readonly string[]): string[] {
   // `deno task` forwards it verbatim, so rejecting it refused the ordinary
   // `deno task pattern-vintage -- --update <key>` invocation.
   return args.filter((arg) =>
-    arg.startsWith("-") && arg !== "--" && !known.has(arg)
+    arg.startsWith("-") && arg !== "--" && !known.has(arg) &&
+    !arg.startsWith(ONLY_PREFIX)
   );
 }
 

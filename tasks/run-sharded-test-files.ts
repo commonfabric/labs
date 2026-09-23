@@ -1,7 +1,7 @@
 #!/usr/bin/env -S deno run --allow-env --allow-read --allow-run
 
-import * as path from "@std/path";
 import { parseShard, type Shard } from "./shard-utils.ts";
+import { memberTestFiles } from "./test-topology/deno-task.ts";
 import {
   AGENTS_HOST_TEST_WEIGHTS,
   PIECE_TEST_WEIGHTS,
@@ -17,26 +17,26 @@ const PROFILES = {
 
 type ProfileName = keyof typeof PROFILES;
 
-/** Returns whether a file follows Deno's test-module naming convention. */
-export function isTestFile(name: string): boolean {
-  return /(?:^|[._-])test\.[cm]?[jt]sx?$/.test(name);
-}
-
-/** Lists test modules below `root` using stable slash-separated paths. */
-export async function collectTestFiles(root: string): Promise<string[]> {
-  const files: string[] = [];
-  async function visit(dir: string): Promise<void> {
-    for await (const entry of Deno.readDir(dir)) {
-      const entryPath = path.join(dir, entry.name);
-      if (entry.isDirectory) {
-        await visit(entryPath);
-      } else if (entry.isFile && isTestFile(entry.name)) {
-        files.push(entryPath.replaceAll("\\", "/").replace(/^\.\//, ""));
-      }
-    }
-  }
-  await visit(root);
-  return files.sort();
+/**
+ * Lists the test modules below `root` in the member at `memberDir`, as
+ * stable slash-separated paths relative to the member.
+ *
+ * The enumeration is the topology's own, the member's `exclude` lists
+ * included, so that the files this runner hands to `deno test` and the
+ * units the topology offers lanes for the same member are one set. A rule
+ * of its own here would run tests no lane could be asked for, and would
+ * do it silently.
+ */
+export async function collectTestFiles(
+  memberDir: string,
+  root = ".",
+): Promise<string[]> {
+  return (await memberTestFiles(memberDir, {
+    env: {},
+    flags: [],
+    paths: [root],
+    ignores: [],
+  })).map((file) => file.replaceAll("\\", "/"));
 }
 
 /** Selects the files assigned to one weighted shard. */
@@ -74,7 +74,7 @@ async function main(): Promise<void> {
   const shardRaw = Deno.env.get(envName);
   const shard = shardRaw ? parseShard(shardRaw) : undefined;
   const files = selectShardedTestFiles(
-    await collectTestFiles(root),
+    await collectTestFiles(Deno.cwd(), root),
     shard,
     profile.weights,
     profile.defaultWeight,

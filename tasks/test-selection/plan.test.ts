@@ -21,6 +21,7 @@ import {
 } from "./policy.ts";
 
 const NO_CAPABILITIES = new Map<string, readonly string[]>();
+const NO_WHOLE_UNITS: ReadonlySet<string> = new Set();
 
 /** `count` identities of one suite, each in its own invocation unit. */
 function entries(
@@ -45,6 +46,7 @@ function run(
     manifest,
     mandatory: new Map(),
     capabilities: NO_CAPABILITIES,
+    wholeUnits: NO_WHOLE_UNITS,
     ...overrides,
   });
 }
@@ -961,6 +963,163 @@ describe("plan", () => {
   });
 });
 
+describe("a unit its runner runs whole", () => {
+  // A lane picking any test in such a unit runs every test in it, so the
+  // packer places the unit as one choice and the plan names the tests.
+
+  const HALF = "packages/ui#browser-test";
+  const WHOLE = new Set([`workspace-unit\t${HALF}`]);
+
+  /** Three tests of the browser half, and five ordinary ones beside it. */
+  function corpus(fields: (i: number) => Partial<ManifestEntry> = () => ({})) {
+    return sampleManifest({
+      entries: [
+        ...[0, 1, 2].map((i) =>
+          sampleEntry({ k: "browser", s: "ui", n: `half ${i}` }, {
+            unit: HALF,
+            cost: 2,
+            ...fields(i),
+          })
+        ),
+        ...entries(5),
+      ],
+    });
+  }
+
+  function lanesHolding(result: ReturnType<typeof plan>, name: string) {
+    return result.lanes.filter((lane) =>
+      lane.selections.some((s) => s.entry.test.n === name)
+    );
+  }
+
+  it("places every test of the unit in one lane, charged for all of them", () => {
+    const result = run(corpus(), {
+      wholeUnits: WHOLE,
+      mandatory: new Map([
+        [testIdentityKey({ k: "browser", s: "ui", n: "half 1" }), "changed"],
+      ]),
+    });
+    const holding = lanesHolding(result, "half 0");
+    expect(holding.length).toBe(1);
+    const names = holding[0]!.selections.map((s) => s.entry.test.n);
+    expect(names).toEqual(
+      expect.arrayContaining(["half 0", "half 1", "half 2"]),
+    );
+    // Six seconds of tests, not the two a test on its own would be.
+    expect(holding[0]!.projectedSeconds).toBeGreaterThanOrEqual(6);
+  });
+
+  it("reports each test under its own reason, and the rest under the unit's", () => {
+    const result = run(corpus(), {
+      wholeUnits: WHOLE,
+      mandatory: new Map([
+        [testIdentityKey({ k: "browser", s: "ui", n: "half 1" }), "changed"],
+      ]),
+    });
+    const reasons = new Map(
+      selected(result).map((s) => [s.entry.test.n, s.reason]),
+    );
+    expect(reasons.get("half 1")).toBe("changed");
+    expect(reasons.get("half 0")).toBe("changed");
+  });
+
+  it("names only the tests in the plan, never the unit", () => {
+    const result = run(corpus(), { wholeUnits: WHOLE, policy: "everything" });
+    const names = selected(result).map((s) => s.entry.test.n);
+    expect(names.filter((name) => name.startsWith("half")).sort()).toEqual([
+      "half 0",
+      "half 1",
+      "half 2",
+    ]);
+    expect(names.some((name) => name.startsWith("whole "))).toBe(false);
+  });
+
+  it("holds the unit back with a test in it the manifest withholds", () => {
+    const manifest = corpus();
+    manifest.withheld = [{
+      test: { k: "browser", s: "ui", n: "half 2" },
+      suite: "workspace-unit",
+      reason: "flaky",
+    }];
+    const result = run(manifest, { wholeUnits: WHOLE });
+    expect(lanesHolding(result, "half 0")).toEqual([]);
+    expect(lanesHolding(result, "half 2")).toEqual([]);
+  });
+
+  it("excuses a flaky test in the unit on a full run under its own name", () => {
+    // What a failing record is matched against is the name the record
+    // carries, which is the test's; excusing the unit instead would fail
+    // the default branch for a flake it already knows about.
+    const manifest = corpus((i) => (i === 2 ? { flakeRate: 0.5 } : {}));
+    manifest.withheld = [{
+      test: { k: "browser", s: "ui", n: "half 2" },
+      suite: "workspace-unit",
+      reason: "flaky",
+    }];
+    const result = run(manifest, { wholeUnits: WHOLE, policy: "everything" });
+    expect(result.nonGating.map((held) => held.test.n)).toEqual(["half 2"]);
+  });
+
+  it("reports every test of the unit as a full run's on a full run", () => {
+    const result = run(corpus(), {
+      wholeUnits: WHOLE,
+      policy: "everything",
+      mandatory: new Map([
+        [testIdentityKey({ k: "browser", s: "ui", n: "half 1" }), "changed"],
+      ]),
+    });
+    const reasons = selected(result)
+      .filter((s) => s.entry.test.n.startsWith("half"))
+      .map((s) => s.reason);
+    expect(reasons).toEqual(["full", "full", "full"]);
+  });
+
+  it("runs a test the manifest carries twice once", () => {
+    const manifest = corpus();
+    manifest.entries.push({ ...manifest.entries[0]! });
+    const result = run(manifest, { wholeUnits: WHOLE, policy: "everything" });
+    expect(
+      selected(result).filter((s) => s.entry.test.n === "half 0").length,
+    ).toBe(1);
+  });
+
+  it("keeps two suites' units of one name apart", () => {
+    // Both are whole, and their tests share a kind and a scope, so a
+    // choice named for the unit alone would give the two one name and
+    // one of them would run nowhere.
+    const other = [0, 1].map((i) =>
+      sampleEntry({ k: "browser", s: "ui", n: `other ${i}` }, {
+        suite: "pattern-integration",
+        unit: HALF,
+      })
+    );
+    const manifest = corpus();
+    manifest.entries.push(...other);
+    const result = run(manifest, {
+      wholeUnits: new Set([...WHOLE, `pattern-integration\t${HALF}`]),
+      policy: "everything",
+    });
+    const names = selected(result).map((s) => s.entry.test.n);
+    expect(names).toEqual(
+      expect.arrayContaining(["half 0", "half 2", "other 0", "other 1"]),
+    );
+  });
+
+  it("leaves a unit holding one test as that test", () => {
+    const only = sampleEntry({ k: "browser", s: "ui", n: "alone" }, {
+      unit: HALF,
+      cost: 2,
+      score: 0.25,
+    });
+    const result = run(sampleManifest({ entries: [only, ...entries(5)] }), {
+      wholeUnits: WHOLE,
+      policy: "everything",
+    });
+    expect(selected(result).find((s) => s.entry.test.n === "alone")!.entry)
+      .toBe(only);
+  });
+});
+
 describe("an identity a manifest carries twice", () => {
   it("runs it once, rather than placing it in two lanes", () => {
     // A duplicated entry is one identity however many rows describe it,
@@ -1149,7 +1308,12 @@ describe("how many lanes the full run needs", () => {
   const capabilities = NO_CAPABILITIES;
 
   function count(manifest: Manifest, overrides: Partial<PlanInput> = {}) {
-    return fullLaneCount({ manifest, capabilities, ...overrides });
+    return fullLaneCount({
+      manifest,
+      capabilities,
+      wholeUnits: NO_WHOLE_UNITS,
+      ...overrides,
+    });
   }
 
   it("takes one lane for work that fits in one", () => {
@@ -1169,6 +1333,7 @@ describe("how many lanes the full run needs", () => {
       manifest,
       mandatory: new Map(),
       capabilities,
+      wholeUnits: NO_WHOLE_UNITS,
       policy: "everything",
       lanes,
     });
@@ -1216,6 +1381,7 @@ describe("how many lanes the full run needs", () => {
         manifest,
         mandatory: new Map(),
         capabilities,
+        wholeUnits: NO_WHOLE_UNITS,
         policy: "everything",
         budgetSeconds: 100,
         lanes: count,
@@ -1248,6 +1414,7 @@ describe("how many lanes the full run needs", () => {
       manifest,
       mandatory: new Map(),
       capabilities,
+      wholeUnits: NO_WHOLE_UNITS,
       policy: "everything",
       lanes,
     });
@@ -1277,6 +1444,7 @@ describe("how many lanes the full run needs", () => {
         manifest,
         mandatory: new Map(),
         capabilities,
+        wholeUnits: NO_WHOLE_UNITS,
         policy: "everything",
         lanes: n,
       });
@@ -1312,6 +1480,7 @@ describe("how many lanes the full run needs", () => {
       manifest,
       mandatory: new Map(),
       capabilities,
+      wholeUnits: NO_WHOLE_UNITS,
       policy: "everything",
       lanes,
     });

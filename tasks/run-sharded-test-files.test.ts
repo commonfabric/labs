@@ -4,23 +4,17 @@ import { describe, it } from "@std/testing/bdd";
 
 import {
   collectTestFiles,
-  isTestFile,
   selectShardedTestFiles,
 } from "./run-sharded-test-files.ts";
 import { AGENTS_HOST_TEST_WEIGHTS } from "./test-timing-weights.ts";
+import {
+  memberTestFiles,
+  type ParsedTestTask,
+} from "./test-topology/deno-task.ts";
 
 const AGENTS_HOST_SHARDS = 5;
 
 describe("run-sharded-test-files", () => {
-  it("recognizes Deno test module names", () => {
-    expect([
-      "test.ts",
-      "donut.test.ts",
-      "donut_test.tsx",
-    ].every(isTestFile)).toBe(true);
-    expect(isTestFile("test-helper.ts")).toBe(false);
-  });
-
   it("collects test modules recursively in stable order", async () => {
     const dir = await Deno.makeTempDir({ prefix: "sharded-tests-" });
     try {
@@ -30,14 +24,44 @@ describe("run-sharded-test-files", () => {
       await Deno.writeTextFile(`${dir}/nested/helper.ts`, "");
 
       expect(await collectTestFiles(dir)).toEqual([
-        `${dir}/nested/a_test.ts`,
-        `${dir}/z.test.ts`,
+        "nested/a_test.ts",
+        "z.test.ts",
       ]);
     } finally {
       await Deno.remove(dir, { recursive: true });
     }
   });
 
+  it("leaves out what the member excludes, as the topology does", async () => {
+    // What this runner hands `deno test` is what a lane is offered as
+    // units. A file one of them takes and the other passes over is a
+    // test that runs in the full run and can never be asked for.
+    const dir = await Deno.makeTempDir({ prefix: "sharded-rule-" });
+    try {
+      await Deno.writeTextFile(
+        `${dir}/deno.json`,
+        JSON.stringify({ test: { exclude: ["fixtures/"] } }),
+      );
+      await Deno.mkdir(`${dir}/fixtures`);
+      await Deno.mkdir(`${dir}/node_modules`);
+      await Deno.writeTextFile(`${dir}/taken.test.ts`, "");
+      await Deno.writeTextFile(`${dir}/fixtures/sample.test.ts`, "");
+      await Deno.writeTextFile(`${dir}/passed-test.ts`, "");
+      await Deno.writeTextFile(`${dir}/node_modules/vendored.test.ts`, "");
+
+      const parsed: ParsedTestTask = {
+        env: {},
+        flags: [],
+        paths: ["."],
+        ignores: [],
+      };
+      expect(await collectTestFiles(dir)).toEqual(["taken.test.ts"]);
+      expect(await collectTestFiles(dir))
+        .toEqual(await memberTestFiles(dir, parsed));
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
   it("runs every file locally when no shard is selected", () => {
     expect(selectShardedTestFiles(
       ["b.test.ts", "a.test.ts"],
@@ -61,9 +85,7 @@ describe("run-sharded-test-files", () => {
     const root = path.fromFileUrl(
       new URL("../packages/connectors/agents/host", import.meta.url),
     );
-    const files = (await collectTestFiles(root)).map((file) =>
-      path.relative(root, file).replaceAll("\\", "/")
-    );
+    const files = await collectTestFiles(root);
     const expensiveFiles = Object.entries(AGENTS_HOST_TEST_WEIGHTS)
       .toSorted(([, left], [, right]) => right - left)
       .slice(0, AGENTS_HOST_SHARDS)

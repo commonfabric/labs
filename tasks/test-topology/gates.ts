@@ -422,6 +422,9 @@ function gateSuite(
     needs,
     units: gates.map((gate) => gate.name),
     unavailable: [],
+    // A gate is one identity, so running one is the whole of what a lane
+    // does with it and there is nothing inside it to leave out.
+    whole: gates.map((gate) => gate.name),
     // A gate's unit is the name of a gate rather than a path, so what a
     // change reaches is what each gate declares it reads. A gate that
     // declares nothing reads the whole tree, and reaches a lane on what
@@ -482,6 +485,8 @@ async function typecheckSuite(root: string): Promise<Suite> {
     needs: ["deno"],
     units: scopes,
     unavailable: [],
+    // One `deno check` over a group records one identity.
+    whole: scopes,
     // A group's unit is the scope it checks rather than a path, so the
     // diff is mapped onto scopes the same way the check itself groups
     // the paths it walks.
@@ -573,6 +578,10 @@ async function cfcheckSuite(root: string): Promise<Suite> {
     needs: ["deno"],
     units,
     unavailable: [],
+    // A unit here is a pattern file, and checking one records one
+    // identity. The task's `--only` is what a lane restricts it with,
+    // and it restricts it no finer than a pattern.
+    whole: units,
     locate(record): Location | undefined {
       if (!claimsIdentity({ recordSurfaces }, record.test)) return undefined;
       if (record.test.n === name) return { level: "suite" };
@@ -626,6 +635,9 @@ async function patternCompatSuite(root: string): Promise<Suite> {
     needs: ["deno"],
     units,
     unavailable: [],
+    // One pattern's verdict is one identity, and `--only` restricts the
+    // task no finer than a pattern.
+    whole: units,
     locate(record): Location | undefined {
       if (!claimsIdentity({ recordSurfaces }, record.test)) return undefined;
       if (record.test.n === name) return { level: "suite" };
@@ -663,39 +675,57 @@ async function patternCompatSuite(root: string): Promise<Suite> {
 }
 
 /**
- * The vintage replay, which runs every committed fixture under today's
- * source. It records one identity per vintage and takes no way of
- * running part of itself, so the suite is one unit.
+ * The vintage replay, one unit per committed fixture. Each fixture
+ * restores its own store, drives its own roots and compares against its
+ * own manifest, so replaying one says the same thing whether or not the
+ * others ran, and `--only` is what restricts a run to the ones a lane
+ * chose. A run given every fixture passes no filter at all, which is
+ * what the whole-tree questions this gate also answers need: whether
+ * every required pattern is covered, and whether the exemption registry
+ * still forgives anything.
  *
- * The names it claims are read from the fixture tree, so an identity is
- * claimed while the tree holds the fixture it names. A claimed identity
- * is one a published manifest carries and the publisher scores on every
- * run, and `departed` in `tasks/test-selection/build.ts` drops an
- * identity from the aggregate only while no suite claims it.
+ * A unit is the fixture's own repository-relative path, so the diff
+ * adding a fixture is what makes replaying it mandatory, and nothing
+ * here maps a change onto anything. The record the wrapper writes for
+ * the invocation is the suite's rather than a unit's: it measures the
+ * whole replay, and adding its time to the time of the fixtures inside
+ * it would count that work twice.
  */
 async function patternVintageSuite(root: string): Promise<Suite> {
-  const unit = VINTAGE_GATE;
-  const known = new Set(
+  // Repository-relative, because a unit is a path anyone else can
+  // resolve and the diff naming it is what makes replaying it mandatory.
+  // `collectVintages` names each fixture under the root it was given, and
+  // the root here is absolute so the task behaves the same from any
+  // directory.
+  const byRecord = new Map(
     (await collectVintages(path.join(root, VINTAGES_DIR)))
-      .map((vintage) => vintageRecordName(vintage)),
+      .map((
+        vintage,
+      ) => [vintageRecordName(vintage), path.relative(root, vintage.path)]),
   );
+  const units = [...byRecord.values()].sort();
+  const known = new Set(units);
   const recordSurfaces = [{ kind: "gate", scope: "repo" }];
   return {
-    id: unit,
+    id: VINTAGE_GATE,
     recordSurfaces,
     needs: ["deno", "git-history"],
-    units: [unit],
+    units,
     unavailable: [],
+    // One fixture's replay is one identity, so asking for less than a
+    // unit is asking not to replay it.
+    whole: units,
     locate(record): Location | undefined {
       if (!claimsIdentity({ recordSurfaces }, record.test)) return undefined;
-      // The wrapper's own record carries the suite's bare name and what
-      // the whole replay took.
-      return record.test.n === unit || known.has(record.test.n)
-        ? { level: "unit", unit }
-        : undefined;
+      if (record.test.n === VINTAGE_GATE) return { level: "suite" };
+      const unit = byRecord.get(record.test.n);
+      return unit === undefined ? undefined : { level: "unit", unit };
     },
     command(requests, context): Promise<Invocation[]> {
-      if (requests.length === 0) return Promise.resolve([]);
+      const chosen = requests
+        .map((request) => request.unit)
+        .filter((unit) => known.has(unit));
+      if (chosen.length === 0) return Promise.resolve([]);
       return Promise.resolve([{
         command: [
           Deno.execPath(),
@@ -703,11 +733,12 @@ async function patternVintageSuite(root: string): Promise<Suite> {
           "run-recorded",
           "gate",
           "repo",
-          unit,
+          VINTAGE_GATE,
           "--",
           Deno.execPath(),
           "task",
-          unit,
+          VINTAGE_GATE,
+          ...onlyArguments(chosen, chosen.length === units.length),
         ],
         cwd: context.root,
       }]);

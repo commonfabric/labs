@@ -30,7 +30,11 @@ import {
   LANES,
 } from "./test-selection/policy.ts";
 import { fetchManifest } from "./test-selection/store.ts";
-import { capabilitiesBySuite, loadTopology } from "./test-topology.ts";
+import {
+  capabilitiesBySuite,
+  loadTopology,
+  wholeUnits,
+} from "./test-topology.ts";
 import { type Suite, unavailableUnits } from "./test-topology/suite.ts";
 import { census } from "./test-selection/census.ts";
 import {
@@ -318,6 +322,7 @@ function planFor(manifest: Manifest, suites: readonly Suite[]) {
       manifest: seen.manifest,
       mandatory: seen.mandatory,
       capabilities: capabilitiesBySuite(suites),
+      wholeUnits: wholeUnits(suites),
     }),
   };
 }

@@ -122,7 +122,7 @@ async function patternIntegrationSuites(
         env,
         junit,
         files: defaultLane.enabled
-          ? files.filter((file) => !on.whole.has(file))
+          ? files.filter((file) => !on.excluded.has(file))
           : files,
         unavailable: defaultLane.enabled ? on.unavailable : [],
       }],
@@ -146,7 +146,7 @@ async function patternIntegrationSuites(
         },
         junit,
         files: oppositeLane.enabled
-          ? files.filter((file) => !on.whole.has(file))
+          ? files.filter((file) => !on.excluded.has(file))
           : files,
         unavailable: oppositeLane.enabled ? on.unavailable : [],
       }],
@@ -193,6 +193,10 @@ function patternReloadSuite(): Suite {
     needs: ["deno", "local-dev-servers", "browser"],
     units: [unit],
     unavailable: [],
+    // The task hard-codes the directory it runs and brings the local
+    // development stack up around it, so a lane asks for the suite or
+    // does not.
+    whole: [unit],
     locate(record): Location | undefined {
       if (record.test.v !== undefined) return undefined;
       if (record.test.k !== "integration" || record.test.s !== "patterns") {
@@ -241,6 +245,9 @@ async function patternUnitSuite(root: string): Promise<Suite> {
     needs: ["deno", "cf", "compile-cache"],
     units,
     unavailable: [],
+    // The file is the identity, so running one unit runs the one thing
+    // in it.
+    whole: units,
     locate(record): Location | undefined {
       if (record.test.v !== undefined) return undefined;
       if (record.test.k !== "pattern" || record.test.s !== "patterns") {

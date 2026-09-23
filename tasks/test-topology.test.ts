@@ -10,7 +10,12 @@ import {
   suiteById,
   topologyUnits,
 } from "./test-topology.ts";
+import {
+  parseSkipList,
+  SKIP_LIST_VARIABLE,
+} from "@commonfabric/test-support/records";
 import { CAPABILITIES } from "./ci-capabilities.ts";
+import { DENO_TEST_FILE } from "./test-topology/deno-task.ts";
 import { MEASURED_BATCH_SUFFIX } from "./lane-measurement.ts";
 import { serverExecutionCiLane } from "./server-execution-ci.ts";
 
@@ -111,6 +116,80 @@ describe("the test topology", () => {
     for (const suite of suites) {
       expect([suite.id, suite.units.length > 0]).toEqual([suite.id, true]);
     }
+  });
+
+  it("gives every unit a lane may subset a file the skip list keys on", async () => {
+    // A lane running part of a unit registers the rest as ignored, and
+    // the registration preload looks each name up under the
+    // repository-relative file it was registered in. So a unit that is
+    // not such a file cannot be handed a subset at all, and says so in
+    // `whole`. One that says neither would be handed a skip list
+    // matching nothing: the lane would run every test in that unit while
+    // the packer charged it for the one it chose.
+
+    const wrong: string[] = [];
+    for (const suite of suites) {
+      const whole = new Set(suite.whole);
+      for (const unit of suite.units) {
+        if (whole.has(unit)) continue;
+        if (!DENO_TEST_FILE.test(unit)) {
+          wrong.push(`${suite.id}: ${unit} is not a test file`);
+          continue;
+        }
+        const holds = await Deno.stat(path.join(root, unit))
+          .then((entry) => entry.isFile)
+          .catch(() => false);
+        if (!holds) wrong.push(`${suite.id}: ${unit} is not in the tree`);
+      }
+    }
+    expect(wrong).toEqual([]);
+  });
+
+  it("names only its own units as the ones that run whole", () => {
+    const stray: string[] = [];
+    for (const suite of suites) {
+      const units = new Set(suite.units);
+      for (const unit of suite.whole) {
+        if (!units.has(unit)) stray.push(`${suite.id}: ${unit}`);
+      }
+    }
+    expect(stray).toEqual([]);
+  });
+
+  it("writes no skip list for a unit it declares whole", async () => {
+    // The check above runs one way: it catches a unit that can hold
+    // several identities and says nothing about running whole. This is
+    // the other way. A suite that declares a unit whole and then writes
+    // a skip list naming it has a runner that can be handed a subset
+    // after all, and the declaration is costing that unit its
+    // granularity with every gate green.
+
+    const outputDir = await Deno.makeTempDir({ prefix: "topology-whole-" });
+    const spoolDir = `${outputDir}/spool`;
+    const written: string[] = [];
+    for (const suite of suites) {
+      if (suite.whole.length === 0) continue;
+      const requests = suite.whole.map((unit) => ({
+        unit,
+        skip: ["a name no unit holds"],
+      }));
+      for (
+        const invocation of await suite.command(requests, {
+          root,
+          outputDir,
+          spoolDir,
+        })
+      ) {
+        const named = invocation.env?.[SKIP_LIST_VARIABLE];
+        if (named === undefined) continue;
+        const list = parseSkipList(await Deno.readTextFile(named)) ?? {};
+        for (const unit of Object.keys(list)) {
+          written.push(`${suite.id}: ${unit}`);
+        }
+      }
+    }
+    await Deno.remove(outputDir, { recursive: true });
+    expect(written).toEqual([]);
   });
 
   it("lets a default suite and a variant suite hold one source file", () => {

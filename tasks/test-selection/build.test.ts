@@ -1222,6 +1222,7 @@ describe("build", () => {
         needs: ["deno"],
         units,
         unavailable,
+        whole: [],
         locate: () => undefined,
         command: () => Promise.resolve([]),
       };
@@ -1358,6 +1359,7 @@ describe("build", () => {
         needs: ["deno"],
         units: [],
         unavailable: [],
+        whole: [],
         locate,
         command: () => Promise.resolve([]),
       };

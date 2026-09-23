@@ -35,14 +35,17 @@ import {
   promoteVintage,
   relativeToRepo,
   removeVintages,
+  replayFilterTakes,
   reportCaptureRefusedOnRed,
   reportCapturesSuperseded,
   reportDropsApplied,
   reportEveryGenerationCurrent,
   reportFailures,
+  reportNothingMatched,
   reportNothingReplayed,
   reportNothingToPin,
   reportNoVerdict,
+  reportOnlyWithCapture,
   reportPinNeedsOneTestKey,
   reportReplaySummary,
   reportUncovered,
@@ -1732,6 +1735,9 @@ describe("what the capture and promote commands print", () => {
     expect(unknownFlags(["--", "--update", "a/a.test.tsx"])).toEqual([]);
     // Positionals are not flags — a test key is an argument, not a typo.
     expect(unknownFlags(["--pin", "a/a.test.tsx"])).toEqual([]);
+    // `--only` carries a value, and the spelling that attaches it is not a
+    // different flag.
+    expect(unknownFlags(["--only=system/home.test.tsx"])).toEqual([]);
     for (const flag of KNOWN_FLAGS) expect(unknownFlags([flag])).toEqual([]);
 
     const message = reportUnknownFlags(["--capture-chnged"]);
@@ -1739,6 +1745,31 @@ describe("what the capture and promote commands print", () => {
     // It must name what IS valid, or the reader is left guessing at a typo.
     expect(message).toContain("--capture-changed");
     expect(message).toContain("exit 0");
+  });
+
+  it("names the filter when it matched no fixture", () => {
+    const message = reportNothingMatched(["a/a.test.tsx", "b"]);
+    expect(message).toContain("`a/a.test.tsx` or `b`");
+    expect(message).toContain("failure");
+  });
+
+  it("takes a fixture whose path holds a filter value, and only then", () => {
+    const fixture = "packages/piece/test/vintages/system/home.test.tsx/" +
+      "pinned/2026-07-30T21-32-46.548Z-abc.sqlite";
+    expect(replayFilterTakes(fixture, [])).toBe(true);
+    expect(replayFilterTakes(fixture, [fixture])).toBe(true);
+    expect(replayFilterTakes(fixture, ["system/home.test.tsx"])).toBe(true);
+    expect(replayFilterTakes(fixture, ["topics/topics.test.tsx"])).toBe(false);
+    expect(replayFilterTakes(fixture, ["topics", "system"])).toBe(true);
+  });
+
+  it("says why a filter cannot be given beside a capture", () => {
+    // A capture reads the whole tree to decide what is due, and the
+    // positional it takes is a test key rather than a fixture, so the pair
+    // is an invocation that cannot mean what it says.
+    const message = reportOnlyWithCapture();
+    expect(message).toContain("--only");
+    expect(message).toContain("whole tree");
   });
 
   it("EXITS 1 on an empty tree, not just prints differently", () => {

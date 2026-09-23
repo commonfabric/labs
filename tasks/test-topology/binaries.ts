@@ -64,6 +64,9 @@ function binarySuite(
     needs: ["deno"],
     units: [...binaries],
     unavailable: [],
+    // One build is one identity, so asking for less than a unit is
+    // asking not to build it.
+    whole: [...binaries],
 
     locate(record): Location | undefined {
       if (!claimsIdentity(surfaces, record.test)) return undefined;

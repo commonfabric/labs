@@ -28,6 +28,7 @@ import {
   relativeToRepo,
   removeVintages,
   type ReplayFailure,
+  replayFilterTakes,
   stampFor,
   vintageFileName,
   vintageRecordName,
@@ -954,6 +955,19 @@ export interface ReplayAllOptions extends ReplayOptions {
    * own, and a fixture is data rather than a test of this repository.
    */
   recordResults?: boolean;
+
+  /**
+   * Replay only the fixtures whose repository-relative path holds one of
+   * these, rather than every fixture the tree carries. Absent, or empty,
+   * replays them all.
+   *
+   * A fixture's replay stands alone: it restores its own store, drives its
+   * own roots and compares against its own manifest, so leaving the others
+   * out changes nothing about what this one asserts. What it does change is
+   * what the caller may conclude afterwards, since coverage and the
+   * exemption registry are questions about the whole tree.
+   */
+  only?: readonly string[];
 }
 
 /**
@@ -1026,7 +1040,8 @@ export async function replayAll(
     failures: ReplayFailure[];
   }
 > {
-  const vintages = await collectVintages(roots.vintagesRoot);
+  const vintages = (await collectVintages(roots.vintagesRoot))
+    .filter((vintage) => replayFilterTakes(vintage.path, options.only ?? []));
   const perVintage: VintageOutcome[] = [];
   const covered = new Set<string>();
   const coveredBy = new Map<string, VintageAttribution>();

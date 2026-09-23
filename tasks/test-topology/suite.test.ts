@@ -52,7 +52,7 @@ function twoParts() {
 
 describe("reading a configuration's skip registry", () => {
   it("takes a whole-file entry out and leaves a step entry's file in", () => {
-    const { whole, unavailable } = unavailableFrom([
+    const { excluded, unavailable } = unavailableFrom([
       { file: "a.test.ts", phase: "phase-3", reason: "not landed" },
       {
         file: "b.test.ts",
@@ -61,7 +61,7 @@ describe("reading a configuration's skip registry", () => {
         reason: "that step is not landed",
       },
     ], "packages/oven");
-    expect([...whole]).toEqual(["packages/oven/a.test.ts"]);
+    expect([...excluded]).toEqual(["packages/oven/a.test.ts"]);
     expect(unavailable.map((entry) => entry.leafName)).toEqual([
       undefined,
       "bakes > slowly",
