@@ -76,7 +76,7 @@ function setup() {
 describe("ClaudeAgentSdkDriver", () => {
   describe("instance members", () => {
     describe("startSession()", () => {
-      it("excludes sessions created since the last inventory, including later pages and missing timestamps", async () => {
+      it("inventories the source's directory before launch, leaves sessions created before it or undated unpaired on every page, and pairs a later one", async () => {
         const f = setup();
         await f.driver.listSessions();
         for (let index = 0; index < 101; index++) {
