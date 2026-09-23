@@ -251,6 +251,7 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 - [hierarchical-params-spec.md](packages/ts-transformers/docs/hierarchical-params-spec.md) — hierarchical-capture implementation rationale, superseded by the behavior spec.
 - [pr3154-review-guide.md](specs/ts-transformer/pr3154-review-guide.md) — reviewer entrypoint for the shipped PR-3154 transformer architecture.
 - [chat-send-event-opened.md](chat-send-event-opened.md) — decision record for the profile and scoped group chats' Send verb break: the roster Join verb's closed-empty-event failure found again in three chat patterns wired straight to their Send buttons, why `void` is again the declaration and a different recorded stream contract, and why nothing deployed held state under the old shape, September 2026.
+- [printed-type-node-revert-break.md](printed-type-node-revert-break.md) — decision record for reverting #7976: why reading a printed type node as its type lost the `PolicyOf` binding identity that only the reused authored node carried, and why `examples/fetch-program-test.tsx` and `system/knowledge-graph.tsx` return to their earlier result contracts against the baselines #7976 recorded, September 2026.
 
 ## Investigations, journals, and working notes
 

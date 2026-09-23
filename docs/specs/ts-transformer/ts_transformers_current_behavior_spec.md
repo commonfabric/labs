@@ -849,7 +849,10 @@ claims.
 It scans `toSchema<T>()` (one type arg), `pattern<I, R>()` (the result type
 arg), and cell constructors (every type argument, since a constructed cell's
 policy is written there; a foreign constructor such as `new Map<…>()` is not
-scanned) for `WriteAuthorizedBy<T, typeof binding>` references. It runs after
+scanned) for `WriteAuthorizedBy<T, typeof binding>` references — recognized
+by the spelled name or by the declared name behind a renamed import or a
+namespace import (`cf.WriteAuthorizedBy`), as the schema generator reads them.
+It runs after
 the stages that lower expressions, so it resolves type declarations and
 bindings through the checker rather than by scanning the rewritten file. It
 resolves through type aliases and interfaces wherever they are declared (this

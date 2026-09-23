@@ -140,6 +140,17 @@ four special values that JSON cannot represent natively (`-0`, `NaN`,
 
 ### 4.4 `string`
 
+A string is encoded as **WTF-8** (<https://wtf-8.codeberg.page/>), the
+generalization of UTF-8 that can also encode lone surrogates. A well-formed
+string, one with no lone surrogates, has the same bytes in WTF-8 as in UTF-8,
+and this document speaks of a string's "UTF-8" encoding, bytes, and length in
+that sense throughout. A lone surrogate (a UTF-16 code unit in the range
+0xD800--0xDFFF with no partner to form a pair) is encoded as the three bytes
+UTF-8 would use for a code point of the same value: `"\ud800"` is `ED A0 80`.
+Under WTF-8, distinct strings always have distinct encodings. So a conforming
+implementation must not use an encoder that substitutes U+FFFD (`EF BF BD`) for
+a lone surrogate, as `TextEncoder` does.
+
 Strings use one of two encodings based on their UTF-8 byte length. The
 threshold is **64 bytes** (inclusive): strings whose UTF-8 encoding is 64 bytes
 or fewer use the **direct** form, and strings whose UTF-8 encoding exceeds 64
@@ -567,8 +578,10 @@ This is equivalent to the standard lexicographic ordering on byte sequences and
 matches the behavior of `Uint8Array` comparison or C's `memcmp` with a
 length tie-breaker.
 
-Since all string data in the hash stream uses UTF-8 encoding (Section 4.4),
-the sort order and the hash encoding use the same byte representation.
+Since all string data in the hash stream uses UTF-8 encoding (WTF-8 where a
+string has lone surrogates; Section 4.4), the sort order and the hash encoding
+use the same byte representation. That byte order is the order of the keys'
+code points, with a lone surrogate taking its own code unit's value.
 
 > **UTF-8 byte sort vs. JavaScript string comparison.** JavaScript's native
 > string comparison (`<`, `>`, `localeCompare` with no locale) compares by

@@ -2,6 +2,7 @@ import ts from "typescript";
 import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
 import { getNodeText } from "../ast/mod.ts";
 import { detectNewExpressionKind } from "../ast/call-kind.ts";
+import { isImportedFromCommonFabric } from "@commonfabric/schema-generator/common-fabric-symbols";
 import { resolveWriterBinding } from "@commonfabric/schema-generator/writer-binding";
 import { unwrapExpression } from "../utils/expression.ts";
 
@@ -141,18 +142,13 @@ function findWriteAuthorizedByReferences(
     }
 
     if (
-      ts.isTypeReferenceNode(current) &&
-      ts.isIdentifier(current.typeName) &&
-      (isWriteAuthorizedByLikeTypeName(current.typeName.text) ||
-        isWriteAuthorizedByLikeTypeName(
-          importedDeclarationName(current.typeName, context),
-        ))
+      ts.isTypeReferenceNode(current) && namesPolicyType(current, context)
     ) {
       matches.push(substituteTypeReferenceNode(current, typeParamMap));
       return;
     }
 
-    if (ts.isTypeReferenceNode(current) && ts.isIdentifier(current.typeName)) {
+    if (ts.isTypeReferenceNode(current)) {
       const declaration = getTypeDeclaration(current, context);
       if (declaration) {
         const key = declarationKey(declaration, current);
@@ -203,19 +199,28 @@ function isWriteAuthorizedByLikeTypeName(name: string | undefined): boolean {
 }
 
 /**
- * The declared name behind an import binding — `Guarded` for
- * `import { WriteAuthorizedBy as Guarded }` is `WriteAuthorizedBy`. The
- * schema generator reads the claim through the rename, so the check must.
+ * Whether `reference` names one of the policy types, by its spelled name or
+ * by the declared name behind it: `Guarded` for
+ * `import { WriteAuthorizedBy as Guarded }`, and the member a namespace
+ * import qualifies, `cf.WriteAuthorizedBy`. It classifies by name, as the
+ * schema generator does (the alias set is closed by name), so every claim
+ * the generator mints from a reference is one this pass validates.
  */
-function importedDeclarationName(
-  name: ts.Identifier,
+function namesPolicyType(
+  reference: ts.TypeReferenceNode,
   context: TransformationContext,
-): string | undefined {
-  const symbol = context.checker.getSymbolAtLocation(name);
-  if (!symbol || !(symbol.flags & ts.SymbolFlags.Alias)) return undefined;
-  return context.checker.getAliasedSymbol(symbol).declarations?.find(
-    ts.isTypeAliasDeclaration,
-  )?.name.text;
+): boolean {
+  const name = ts.isIdentifier(reference.typeName)
+    ? reference.typeName
+    : reference.typeName.right;
+  if (isWriteAuthorizedByLikeTypeName(name.text)) return true;
+  let symbol = context.checker.getSymbolAtLocation(reference.typeName);
+  if (symbol && symbol.flags & ts.SymbolFlags.Alias) {
+    symbol = context.checker.getAliasedSymbol(symbol);
+  }
+  return isWriteAuthorizedByLikeTypeName(
+    symbol?.declarations?.find(ts.isTypeAliasDeclaration)?.name.text,
+  );
 }
 
 /**
@@ -240,7 +245,10 @@ function isSupportedWriteAuthorizedByBinding(
   const { declaration } = resolved;
   if (ts.isFunctionDeclaration(declaration)) return true;
   return declaration.initializer !== undefined &&
-    isSupportedWriteAuthorizedByInitializer(declaration.initializer);
+    isSupportedWriteAuthorizedByInitializer(
+      declaration.initializer,
+      context.checker,
+    );
 }
 
 /**
@@ -297,11 +305,15 @@ function substituteTypeNode(
   if (paramMap.size === 0) {
     return node;
   }
-  if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName)) {
-    const mapped = paramMap.get(node.typeName.text);
+  if (ts.isTypeReferenceNode(node)) {
+    const mapped = ts.isIdentifier(node.typeName)
+      ? paramMap.get(node.typeName.text)
+      : undefined;
     if (mapped && !node.typeArguments?.length) {
       return mapped;
     }
+    // A qualified reference, `cf.WriteAuthorizedBy<T, Binding>`, carries
+    // parameters in its arguments like any other.
     if (node.typeArguments?.length) {
       return ts.factory.updateTypeReferenceNode(
         node,
@@ -383,15 +395,50 @@ function substituteTypeNode(
   return node;
 }
 
+/**
+ * Whether `name` is a Common Fabric module's namespace: imported through
+ * Common Fabric (`import * as cf`, or a namespace an authored module
+ * re-exports), and resolving to the module itself. A named export of the same
+ * module — `import { pattern as cf }` — comes from Common Fabric but is a
+ * value, and its members are not the library's builders.
+ */
+function isCommonFabricNamespace(
+  name: ts.Identifier,
+  checker: ts.TypeChecker,
+): boolean {
+  const symbol = checker.getSymbolAtLocation(name);
+  if (
+    !symbol || !(symbol.flags & ts.SymbolFlags.Alias) ||
+    !isImportedFromCommonFabric(symbol, checker, { declarationFiles: false })
+  ) {
+    return false;
+  }
+  const target = checker.getAliasedSymbol(symbol);
+  return (target.flags & ts.SymbolFlags.ValueModule) !== 0;
+}
+
 function isSupportedWriteAuthorizedByInitializer(
   initializer: ts.Expression,
+  checker: ts.TypeChecker,
 ): boolean {
   const expression = unwrapExpression(initializer);
-  return ts.isCallExpression(expression) &&
-    ts.isIdentifier(expression.expression) &&
+  if (!ts.isCallExpression(expression)) return false;
+  // `handler(...)`, or `cf.handler(...)` where `cf` is a Common Fabric
+  // module's namespace; a member of any other object is not a builder.
+  let callee: ts.Expression = expression.expression;
+  if (ts.isPropertyAccessExpression(callee)) {
+    const receiver = unwrapExpression(callee.expression);
+    if (
+      !ts.isIdentifier(receiver) || !isCommonFabricNamespace(receiver, checker)
+    ) {
+      return false;
+    }
+    callee = callee.name;
+  }
+  return ts.isIdentifier(callee) &&
     (
-      expression.expression.text === "handler" ||
-      expression.expression.text === "module" ||
-      expression.expression.text === "requireEventIntegrity"
+      callee.text === "handler" ||
+      callee.text === "module" ||
+      callee.text === "requireEventIntegrity"
     );
 }

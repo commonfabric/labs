@@ -753,4 +753,24 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "the Send verb's closed empty event refused every rendered click; re-declared void",
     record: "docs/history/chat-send-event-opened.md",
   },
+  {
+    // #7976 was reverted. Its printed-type-node reading narrowed this
+    // result (`$UI` from `true` to the `JSXElement` shape) and recorded the
+    // baseline below; the revert restores the contract recorded before it.
+    pattern: "examples/fetch-program-test.tsx",
+    baselines: ["20260923T184038Z-XJY1r8MIb3iWMhNG"],
+    paths: ["result.$UI"],
+    reason:
+      "#7976 reverted: the result returns to the contract recorded before it",
+    record: "docs/history/printed-type-node-revert-break.md",
+  },
+  {
+    // The same revert, same record.
+    pattern: "system/knowledge-graph.tsx",
+    baselines: ["20260923T184039Z-rq8KAA-ICBTFDbI6"],
+    paths: ["result.$UI"],
+    reason:
+      "#7976 reverted: the result returns to the contract recorded before it",
+    record: "docs/history/printed-type-node-revert-break.md",
+  },
 ];

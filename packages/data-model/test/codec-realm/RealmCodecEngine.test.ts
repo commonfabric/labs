@@ -1208,6 +1208,19 @@ describe("RealmCodecEngine", () => {
       expect(report.classes?.lookalike).toBe("Array");
     });
 
+    it("carries lone surrogates in strings, property names, and symbol keys", async () => {
+      const report = await crossRealm({
+        loneString: "a\ud800b",
+        loneKey: { "\udc00": 1 },
+        loneSym: Symbol.for("\udbff"),
+      });
+
+      expect(report.ok).toBe(true);
+      expect(report.facts?.loneString).toBe("a\ud800b");
+      expect(report.facts?.loneKeys).toEqual(["\udc00"]);
+      expect(report.facts?.loneSymKey).toBe("\udbff");
+    });
+
     it("carries a `FabricKeyPair`'s handles across as live `CryptoKey`s", async () => {
       // The whole reason this class has a realm arm and no JSON one. A
       // non-extractable key cannot produce its bytes, so no format that writes

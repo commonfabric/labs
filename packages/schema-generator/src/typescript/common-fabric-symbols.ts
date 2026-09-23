@@ -78,10 +78,16 @@ export function isCommonFabricSymbol(
  * declared in companion modules without depending on their physical paths.
  * Stops at authored type aliases: a wrapper must keep its own argument mapping
  * even when its body references a library type.
+ *
+ * With `declarationFiles: false`, only a hop naming a Common Fabric module
+ * counts. A caller asking whether a VALUE comes from the library uses it: any
+ * declaration file can declare a namespace whose members share the library's
+ * names, and only the module a namespace is imported from says whose it is.
  */
 export function isImportedFromCommonFabric(
   symbol: ts.Symbol | undefined,
   checker: ts.TypeChecker,
+  { declarationFiles = true }: { readonly declarationFiles?: boolean } = {},
 ): boolean {
   const seen = new Set<ts.Symbol>();
   let current = symbol;
@@ -90,7 +96,9 @@ export function isImportedFromCommonFabric(
   ) {
     seen.add(current);
     for (const declaration of current.declarations ?? []) {
-      if (declaration.getSourceFile().isDeclarationFile) return true;
+      if (declarationFiles && declaration.getSourceFile().isDeclarationFile) {
+        return true;
+      }
       const specifier = importModuleSpecifier(declaration);
       if (
         specifier !== undefined &&
