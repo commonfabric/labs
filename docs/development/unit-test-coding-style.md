@@ -49,8 +49,8 @@ find. Follow whichever arrangement the directory already uses.
 
 Name the file `<topic>.test.ts`, where `<topic>` is one of:
 
-- The base name of the source file under test — `value-hash.test.ts` for
-  `value-hash.ts`. This is the default.
+- The base name of the source file under test — `value-clone.test.ts` for
+  `value-clone.ts`. This is the default.
 - The name of a single class, function, or other export, when the file tests
   only that one thing — `SchemaAndHash.test.ts`. Prefer this when it applies.
 - A `lower-kebab-case` phrase describing the subject, when the tests span

@@ -1,11 +1,7 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
-import {
-  deepFreeze,
-  getFrozenObjectHashCacheHits,
-  hashStringOf,
-} from "../src/index.ts";
+import { deepFreeze, getFrozenObjectHashCacheHits, hashStringOf } from "@";
 
 describe("getFrozenObjectHashCacheHits()", () => {
   it("counts only immutable object hashes served from cache", () => {
