@@ -237,6 +237,23 @@ describe("research", () => {
       });
     }
 
+    it("names a granted handle in the inventory and lists an unnamed one bare", async () => {
+      const model = new ScriptedModelClient([() => finalResult()]);
+      await createResearchRunner({ modelClient: model })(requestFor({
+        handleTokens: ["cfh:a:registry", "cfh:a:mail", "cfh:a:result"],
+        handleNames: {
+          "cfh:a:registry": "piece-registry",
+          "cfh:a:mail": "gmail (ConnectorObserved)",
+        },
+      }));
+      const prompt =
+        model.requests[0].transcript.find((message) => message.role === "user")
+          ?.content ?? "";
+      expect(prompt).toContain("cfh:a:registry — piece-registry");
+      expect(prompt).toContain("cfh:a:mail — gmail (ConnectorObserved)");
+      expect(prompt).toContain("\ncfh:a:result\n");
+    });
+
     it("returns unresolved piece selection to the parent without proposing a registry crawl", async () => {
       const model = new ScriptedModelClient([
         () =>

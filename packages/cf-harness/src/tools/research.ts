@@ -26,6 +26,7 @@ import {
   HarnessResearchError,
   type HarnessResearchRecord,
 } from "../research/runner.ts";
+import { wellKnownGrantLabel } from "../well-known-grants.ts";
 import { describeHandleForResearch } from "./describe-handle.ts";
 import type { HarnessToolDefinition } from "./types.ts";
 
@@ -236,6 +237,11 @@ export const researchTool: HarnessToolDefinition<
       const generalTokens = (context.handleTable?.entries ?? [])
         .filter((entry) => entry.capability === undefined)
         .map((entry) => entry.token);
+      const handleNames = Object.fromEntries(
+        (context.wellKnownGrants ?? [])
+          .filter((grant) => generalTokens.includes(grant.token))
+          .map((grant) => [grant.token, wellKnownGrantLabel(grant)]),
+      );
       const reply = await context.runResearch({
         task: input.task,
         ...(context.researchGoal === undefined
@@ -251,6 +257,7 @@ export const researchTool: HarnessToolDefinition<
           ? { getPatternIndex: context.getPatternIndexClient }
           : {}),
         handleTokens: generalTokens,
+        ...(Object.keys(handleNames).length > 0 ? { handleNames } : {}),
         inputCells: context.inputCells ?? [],
         describeHandle: async (token) =>
           await describeHandleForResearch(context, { token }),

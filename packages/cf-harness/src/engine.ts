@@ -2730,6 +2730,7 @@ export class CfHarnessEngine {
         : {}),
       researchRuns: this.#runState.researchRuns ?? [],
       researchGoal: this.#runState.researchGoal,
+      wellKnownGrants: this.#runState.wellKnownGrants ?? [],
       ...(researchTaskCfcLabel !== undefined
         ? {
           researchTaskCfcLabel,

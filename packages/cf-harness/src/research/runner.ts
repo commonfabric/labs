@@ -150,6 +150,14 @@ export interface HarnessResearchRequest {
   /** General handles visible to the calling run. */
   handleTokens: readonly string[];
 
+  /**
+   * Names for those of {@link handleTokens} that are granted references,
+   * keyed by token; a token with no name is listed bare. The name is what
+   * lets research describe the handles a task needs rather than every handle
+   * the run holds to find out which is which.
+   */
+  handleNames?: Readonly<Record<string, string>>;
+
   /** Explicit attachments; only their operator names and tokens reach the model. */
   inputCells?: readonly HarnessInputCell[];
 
@@ -593,7 +601,10 @@ const userPrompt = (
     "",
     "Authoritative general handle inventory for this research call:",
     request.handleTokens.length > 0
-      ? request.handleTokens.join("\n")
+      ? request.handleTokens.map((token) => {
+        const name = request.handleNames?.[token];
+        return name === undefined ? token : `${token} — ${name}`;
+      }).join("\n")
       : "No general handles are available.",
     ...(request.inputCells === undefined ? [] : [
       "",

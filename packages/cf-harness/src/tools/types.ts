@@ -26,6 +26,7 @@ import type { HarnessDocsCorpus } from "../docs-corpus/corpus.ts";
 import type { HarnessResearchRunSummary } from "../contracts/research.ts";
 import type { HarnessPatternRef } from "../contracts/pattern-refs.ts";
 import type { HarnessInputCell } from "../contracts/input-cells.ts";
+import type { HarnessWellKnownGrant } from "../contracts/well-known-grants.ts";
 import type { HarnessResearchRunner } from "../research/runner.ts";
 import type {
   HarnessHandleReferent,
@@ -70,6 +71,14 @@ export interface HarnessToolContext {
    * addresses by the prompt loop; restricted tokens remain opaque.
    */
   handleTable?: HarnessHandleTable;
+
+  /**
+   * The references granted to the run, each already a general handle in
+   * {@link handleTable}. A grant pairs its token with a name a model may be
+   * handed, which is what lets a tool say which handle is which without
+   * describing every one.
+   */
+  wellKnownGrants?: readonly HarnessWellKnownGrant[];
 
   /**
    * The run's trusted Fabric session, lazy and cached by the engine.

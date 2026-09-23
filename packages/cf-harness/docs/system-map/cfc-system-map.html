@@ -1989,7 +1989,7 @@
         threats: ["t7"],
         close: [
           "Injection seeds <code>tables: {}</code> and treats injected files as unlabeled, so connector rows carry no labels yet. Decide how a connector's schema and row-label rules reach the handle (CT-2189 gap 2, shared loom + labs). What derives from a contract is settled; what is missing is the contract.",
-          "<code>describe_handle</code> reports an injected database's tables, its columns and their <code>ifc</code> labels, how full each table is, and the columns a per-row label rule reads — a query omitting one of those is refused rather than returned unlabeled — read off the handle value where the cell declares no schema (gap 4, ours, closed). What the model can be told is therefore bounded by what injection puts on the handle, which is gap 2 above.",
+          "<code>describe_handle</code> reports an injected database's tables, its columns and the distinct <code>ifc</code> labels they carry, how full each table is, and the columns a per-row label rule reads — a query omitting one of those is refused rather than returned unlabeled — read off the handle value where the cell declares no schema (gap 4, ours, closed). What the model can be told is therefore bounded by what injection puts on the handle, which is gap 2 above.",
         ],
       },
       connectors: {

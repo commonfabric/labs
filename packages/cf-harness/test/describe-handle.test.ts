@@ -1187,7 +1187,7 @@ describe("describe_handle", () => {
         return `/${id}`;
       };
 
-      it("discloses the tables and the columns' labels of a database that declares no schema", async () => {
+      it("discloses the tables and the distinct column labels of a database that declares no schema", async () => {
         const ref = await seedUndeclaredCell(MAIL_DB_HANDLE);
         const minted = await mintAddressHandle(
           createHarnessHandleTable("run-describe"),
@@ -1213,14 +1213,14 @@ describe("describe_handle", () => {
             },
           },
         });
-        // Ordered by column here, since the order the columns come back in is
-        // the storage layer's business rather than part of the disclosure.
+        // Ordered by rendering here, since the order the columns come back
+        // in is the storage layer's business rather than part of the
+        // disclosure.
         const labels = [...(output.database?.labels ?? [])].sort((a, b) =>
-          (a.path ?? []).join(".").localeCompare((b.path ?? []).join("."))
+          JSON.stringify(a).localeCompare(JSON.stringify(b))
         );
         expect(labels).toEqual([
           {
-            path: ["messages", "body"],
             confidentiality: [[
               "https://cfc.test/atom/email",
               "https://cfc.test/atom/screened",
@@ -1228,11 +1228,51 @@ describe("describe_handle", () => {
             integrity: [],
           },
           {
-            path: ["messages", "sender"],
             confidentiality: [["https://cfc.test/atom/email"]],
             integrity: ["https://cfc.test/atom/connector-observed"],
           },
         ]);
+      });
+
+      it("reports a label once however many columns carry it, and names no column", async () => {
+        const email = { confidentiality: ["https://cfc.test/atom/email"] };
+        const ref = await seedUndeclaredCell({
+          id: "db-shared-labels",
+          tables: {
+            messages: {
+              type: "object",
+              properties: {
+                sender: { type: "string", ifc: email },
+                recipient: { type: "string", ifc: email },
+                subject: { type: "string", ifc: email },
+                received: { type: "integer" },
+              },
+            },
+            participants: {
+              type: "object",
+              properties: {
+                address: { type: "string", ifc: email },
+              },
+            },
+          },
+        });
+        const minted = await mintAddressHandle(
+          createHarnessHandleTable("run-describe"),
+          ref,
+        );
+
+        const output = await describeHandleTool.invoke(
+          contextWith(minted.table, session),
+          { token: minted.token },
+        );
+
+        expect(output.database?.labels).toEqual([{
+          confidentiality: [["https://cfc.test/atom/email"]],
+          integrity: [],
+        }]);
+        expect(JSON.stringify(output.database?.labels)).not.toContain(
+          "sender",
+        );
       });
 
       it("reports no row of the database and no prose off its table schemas", async () => {
@@ -1260,11 +1300,10 @@ describe("describe_handle", () => {
         expect(reply).not.toContain("The Inbox");
       });
 
-      it("bounds a column name in a label the way it bounds it in the tables", async () => {
-        // A column name is disclosed through two channels: the reduced table
-        // schema, which bounds it, and a label's path, which names the column
-        // it came off. A name the reduction refused has to be refused in both,
-        // or the label path is the prose channel the reduction exists to close.
+      it("reports neither the name nor the label of a column the reduction refused", async () => {
+        // The columns walked for labels are the reduced schema's, so a column
+        // the reduction refused leaves nothing behind it: not its name, which
+        // is the channel the reduction bounds, and not its label either.
 
         const longColumn = "c".repeat(MAX_PROPERTY_NAME_LENGTH + 1);
         const ref = await seedUndeclaredCell({
@@ -1297,6 +1336,7 @@ describe("describe_handle", () => {
           longColumn,
         );
         expect(JSON.stringify(output)).not.toContain(longColumn);
+        expect(output.database?.labels).toEqual([]);
       });
 
       it("reports nothing about a database whose handle names no tables", async () => {

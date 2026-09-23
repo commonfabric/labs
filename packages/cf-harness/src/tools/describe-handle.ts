@@ -112,14 +112,16 @@ export interface DescribeHandleDatabase {
   tables: JSONSchema;
 
   /**
-   * The columns that declare a CFC label, each addressed by its table name
-   * and its column name. Atom types and nothing else, the same line
-   * {@link DescribeHandleLabel} draws for a cell's own labels — so an entry
-   * with no atoms says the column declares a label this cannot name, which is
-   * a different fact from a column that declares none and has no entry. A
-   * path names a column only where {@link tables} names it too: the bound on
-   * the property-name channel holds across both, so a column the reduction
-   * refused is absent from this list as well.
+   * The distinct CFC labels the columns of {@link tables} declare, each
+   * reported once however many columns carry it, and none naming a column.
+   * Atom types and nothing else, the same line {@link DescribeHandleLabel}
+   * draws for a cell's own labels — so an entry with no atoms says some
+   * column declares a label this cannot name, which is a different fact from
+   * an empty list, which says no column declares one. What this tells a
+   * query's author is what handling the data demands; which column carries
+   * which label is enforced on the read itself rather than disclosed here.
+   * Only columns the reduction kept are consulted, so a refused column's
+   * label goes unreported with its name.
    */
   labels: DescribeHandleLabel[];
 
@@ -257,9 +259,10 @@ export type DescribeHandleLabel = DisclosedCfcLabel;
  * database was created under, and the rows live in the database file, which
  * nothing here opens. So where no schema was declared and the value is a
  * database handle, its tables are reported as {@link DescribeHandleDatabase}
- * — reduced by the same {@link schemaShapeOnly} pass, with the columns' own
- * `ifc` annotations reported beside them as labels rather than left on the
- * schema. Without that a database reads as an opaque value, and the code an
+ * — reduced by the same {@link schemaShapeOnly} pass, with the distinct
+ * labels the columns' own `ifc` annotations declare reported beside them
+ * rather than left on the schema. Without that a database reads as an opaque
+ * value, and the code an
  * agent writes over an opaque value is code that treats it as one. The read
  * is conditional on there being no declared schema, so a referent that states
  * its own shape is never opened.
@@ -282,7 +285,7 @@ export const describeHandleToolDescriptor: HarnessToolDescriptor = {
   toolId: "describe_handle",
   title: "Describe Handle",
   description:
-    "Report the shape of a general handle's referent and the CFC labels it carries: its recorded schema, path and label atom types, never its data. A held non-cell referent returns its kind and provenance under `referent`, with `hasSchema: false`. A referent that is a SQLite database reports its tables instead of a schema, under `database`: the columns of each table with their types, the labels those columns carry, and under `fill` how many rows each table holds and how many of them are non-NULL in each column. Read `fill` before writing a query: a column whose count is 0 is NULL on every row of this database, so filtering on it returns nothing, and a table reporting `unread` was not counted rather than empty. A table reporting `rowLabelReads` carries a per-row label rule over those columns, and a query over it must select every one of them by its own name — an alias does not stand in for the column — or the read is refused and the refusal arrives on the result's `error` rather than as rows; `rowLabelReadsIncomplete` means the named columns are not the whole of what the rule needs — it reads a column this reply does not name, or it is declared in a shape that cannot be read — so such a query is refused whatever it selects. Read such a referent with `db.query` over the handle rather than as a value. A capability-restricted handle returns a named refusal. Use it to check that a reference is the kind of thing a step expects, and what handling it demands, before passing it on.",
+    "Report the shape of a general handle's referent and the CFC labels it carries: its recorded schema, path and label atom types, never its data. A held non-cell referent returns its kind and provenance under `referent`, with `hasSchema: false`. A referent that is a SQLite database reports its tables instead of a schema, under `database`: the columns of each table with their types, the distinct labels those columns carry, and under `fill` how many rows each table holds and how many of them are non-NULL in each column. Read `fill` before writing a query: a column whose count is 0 is NULL on every row of this database, so filtering on it returns nothing, and a table reporting `unread` was not counted rather than empty. A table reporting `rowLabelReads` carries a per-row label rule over those columns, and a query over it must select every one of them by its own name — an alias does not stand in for the column — or the read is refused and the refusal arrives on the result's `error` rather than as rows; `rowLabelReadsIncomplete` means the named columns are not the whole of what the rule needs — it reads a column this reply does not name, or it is declared in a shape that cannot be read — so such a query is refused whatever it selects. Read such a referent with `db.query` over the handle rather than as a value. A capability-restricted handle returns a named refusal. Use it to check that a reference is the kind of thing a step expects, and what handling it demands, before passing it on.",
   effectClass: "read",
   inputSchema: {
     type: "object",
@@ -329,7 +332,6 @@ export const describeHandleToolDescriptor: HarnessToolDescriptor = {
             items: {
               type: "object",
               properties: {
-                path: { type: "array", items: { type: "string" } },
                 confidentiality: {
                   type: "array",
                   items: { type: "array", items: { type: "string" } },
@@ -460,21 +462,22 @@ const describedDatabase = (
     type: "object",
     properties: tables as Record<string, JSONSchema>,
   });
-  // A label names the column it came off, so its path is the same
-  // property-name channel the reduction bounds — which is why the names it
-  // reports are read back off the reduced schema rather than off the tables.
-  // A column the reduction refused is a column no label may name either.
-  const labels: DescribeHandleLabel[] = [];
+  // Keyed by the label's rendering so each distinct label is reported once:
+  // a database's columns carry a handful of labels between them, and a reply
+  // restating the same atoms under every column name grows with the column
+  // count while saying nothing more. The columns walked are the reduced
+  // schema's, so a column the reduction refused contributes no label.
+  const labels = new Map<string, DescribeHandleLabel>();
   for (const [table, column] of disclosedColumns(reduced)) {
     const ifc = declaredColumns(tables, table)[column]?.ifc;
     if (columnDeclaresIfc(ifc)) {
-      labels.push({
-        path: [table, column],
-        ...cfcLabelAtomTypes(ifc as Parameters<typeof cfcLabelAtomTypes>[0]),
-      });
+      const label = cfcLabelAtomTypes(
+        ifc as Parameters<typeof cfcLabelAtomTypes>[0],
+      );
+      labels.set(JSON.stringify(label), label);
     }
   }
-  return { tables: reduced, labels };
+  return { tables: reduced, labels: [...labels.values()] };
 };
 
 /**
