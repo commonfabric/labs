@@ -6,18 +6,66 @@
 import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
+import {
+  HARNESS_RESEARCH_HANDLE_TYPE,
+  type HarnessResearchHandleValue,
+} from "../src/contracts/research.ts";
 import { createToolOutputId } from "../src/contracts/tool-result.ts";
+import { CfHarnessEngine } from "../src/engine.ts";
 import {
   assertValidHarnessHandleTable,
   createHarnessHandleTable,
   mintAddressHandle,
   mintReferentHandle,
+  referentDraft,
   resolveReferentToken,
   swapTokensForRefs,
 } from "../src/handle-table.ts";
 import { agentObservedHandlesOfTable } from "../src/result-writer.ts";
 import { describeHandleTool } from "../src/tools/describe-handle.ts";
+import type {
+  SandboxCommandRequest,
+  SandboxCommandResult,
+  SandboxRuntime,
+  SandboxRuntimeDescription,
+  SandboxShellRequest,
+} from "../src/sandbox/types.ts";
 import type { HarnessToolContext } from "../src/tools/types.ts";
+
+/** A sandbox the engine can be built over; nothing here runs in it. */
+class FakeSandboxRuntime implements SandboxRuntime {
+  describe(): SandboxRuntimeDescription {
+    return {
+      kind: "docker-runsc-cfc",
+      defaultWorkingDirectory: "/workspace",
+      cfc: { runtimeRequested: true, workspaceMountPath: "/workspace" },
+    };
+  }
+
+  resolvePath(path: string, cwd = "/workspace"): string {
+    return path.startsWith("/") ? path : `${cwd}/${path}`;
+  }
+
+  isPathWithinWorkspace(path: string): boolean {
+    return path === "/workspace" || path.startsWith("/workspace/");
+  }
+
+  isPathWithinAllowedRoots(path: string): boolean {
+    return this.isPathWithinWorkspace(path);
+  }
+
+  defaultWorkingDirectory(): string {
+    return "/workspace";
+  }
+
+  run(_request: SandboxCommandRequest): Promise<SandboxCommandResult> {
+    return Promise.resolve({ stdout: "", stderr: "", exitCode: 0 });
+  }
+
+  runShell(_request: SandboxShellRequest): Promise<SandboxCommandResult> {
+    return Promise.resolve({ stdout: "", stderr: "", exitCode: 0 });
+  }
+}
 
 const WORK = "https://cfc.test/atom/facet/work";
 
@@ -239,6 +287,97 @@ describe("referent handles", () => {
       });
       expect(JSON.stringify(output)).not.toContain("donuts");
       expect(output.labels?.[0].path).toEqual([]);
+    });
+  });
+
+  describe("referentDraft()", () => {
+    it("returns a referent's fields without its token, for either kind", async () => {
+      const document = await mintReferentHandle(
+        createHarnessHandleTable("run-drafts"),
+        ROW,
+      );
+      const research = await mintReferentHandle(document.table, {
+        ...ROW,
+        kind: "research",
+        source: "research",
+        labelSource: "research",
+      });
+      const [heldDocument, heldResearch] = research.table.referents!;
+
+      expect(referentDraft(heldDocument)).toEqual(ROW);
+      expect(referentDraft(heldResearch)).toEqual({
+        ...ROW,
+        kind: "research",
+        source: "research",
+        labelSource: "research",
+      });
+      expect(referentDraft(heldResearch)).not.toHaveProperty("token");
+    });
+  });
+
+  describe("CfHarnessEngine.mintResearchHandle()", () => {
+    const findings: HarnessResearchHandleValue = {
+      type: HARNESS_RESEARCH_HANDLE_TYPE,
+      researchRunId: "run-engine-mint:research:1",
+      kit: {
+        purpose: "answer",
+        status: "complete",
+        task: "Which reader fits?",
+        summary: "The ledger reader fits.",
+        inputs: [],
+        patterns: [],
+        rules: [],
+        sources: [],
+        missing: [],
+      },
+      confirmedPatterns: [],
+      describedHandles: [],
+      cfc: {
+        version: 1,
+        sourceLabel: { confidentiality: [WORK] },
+        outputLabel: { confidentiality: [WORK] },
+        coverage: "complete",
+        missingLabels: [],
+      },
+    };
+
+    it("mints a research referent under the given label and records it", async () => {
+      const engine = new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        runId: "run-engine-mint",
+        model: "gpt-5.4",
+      });
+
+      const token = await engine.mintResearchHandle(findings, {
+        confidentiality: [WORK],
+      });
+
+      expect(token).toMatch(/^cfh:v:/);
+      expect(resolveReferentToken(engine.handleTable!, token)).toMatchObject({
+        kind: "research",
+        source: "research",
+        labelSource: "research",
+        label: { confidentiality: [WORK] },
+      });
+    });
+
+    it("refuses a value that is not a research handle's content", async () => {
+      const engine = new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        runId: "run-engine-mint-refused",
+        model: "gpt-5.4",
+      });
+
+      await expect(
+        engine.mintResearchHandle(
+          {
+            ...findings,
+            kit: "not a kit",
+          } as unknown as HarnessResearchHandleValue,
+          {},
+        ),
+      ).rejects.toThrow("a research handle holds an admitted kit's projection");
+      expect(engine.handleTable?.referents ?? []).toEqual([]);
     });
   });
 
