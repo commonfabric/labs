@@ -235,14 +235,14 @@ and it should be re-run rather than shown.
 **How much a run has to author predicts whether it works — and discovery is not
 the variable.** Ordered by how much each demo left the run to write:
 
-| Demo                    | What the run had to write                  | Result                                                    |
-| ----------------------- | ------------------------------------------ | --------------------------------------------------------- |
-| §1 pomodoro             | nothing; one published part does the job   | proven 4/4 on `e5b9f57c6c`, 2/2 on `a77e958513`           |
-| Readwise "never opened" | nothing; one published part does the job   | 2 of 2                                                    |
-| §2a checklist and total | two published parts, minimal glue          | proven 3/3                                                |
-| §5c bills, three ids    | three published parts do the job           | 4 correct in 4                                            |
-| §3 bank table           | a published reader plus an authored table  | proven 3/3 on `a77e958513`; 2 pass 1 fail on `e5b9f57c6c` |
-| §5 bills                | published readers plus an authored matcher | 1 correct in 5                                            |
+| Demo                    | What the run had to write                      | Result                                                 |
+| ----------------------- | ---------------------------------------------- | ------------------------------------------------------ |
+| §1 pomodoro             | nothing; one published part does the job       | proven 4/4 on `e5b9f57c6c`, 2/2 on `a77e958513`        |
+| Readwise "never opened" | nothing; one published part does the job       | 2 of 2                                                 |
+| §2a checklist and total | two published parts, minimal glue              | proven 3/3                                             |
+| §5c bills, three ids    | three published parts do the job               | 4 correct in 4                                         |
+| §3 bank table           | two published parts, reader and sortable table | rows proven 3/3 on `a77e958513`; sorting observed once |
+| §5 bills                | published readers plus an authored matcher     | 1 correct in 5                                         |
 
 **The control for this is a pair of Readwise runs** from prompts identical but
 for one sentence naming the pattern's id. The run told nothing **found the same
@@ -568,7 +568,7 @@ connection name is theirs.
 **Prompt:**
 
 ```text
-Show me this month's bank transactions as a table with a count on top. Use patterns from the library where they fit. Give it a slug that is not already in use; if a slug you try is taken, choose another and retry without asking me.
+Show me this month's bank transactions as a sortable table with a count on top.
 ```
 
 Nothing is attached to the task; the grant carries the data.
@@ -584,25 +584,31 @@ pass.
 **Likely failure:** an empty table on first paint is a pending read, not an
 empty month — reopen the piece rather than re-running.
 
-**Proof status: PROVEN (3/3) on `a77e958513`; 2 pass, 1 fail on `e5b9f57c6c`.**
-Six runs of this wording in all. The piece is produced every time and the rows
-are right whenever they render; one run on `e5b9f57c6c` rendered every amount as
-`[object Object]`, which is the reactive-coercion family described in the
-preflight rather than a fault of this demo. Every passing run was diffed against
-the ledger on every field rather than judged by eye.
+**Proof status for the rows: PROVEN (3/3) on `a77e958513`; 2 pass, 1 fail on
+`e5b9f57c6c`.** Six runs in all, of a previous wording that asked for a plain
+table and named the library. They stand as evidence for the done condition,
+which is that the rows on screen match the month's transactions, and that
+condition is untouched by asking for sorting. They say nothing about sorting,
+because the text they ran did not ask for it. The piece is produced every time
+and the rows are right whenever they render; one run on `e5b9f57c6c` rendered
+every amount as `[object Object]`, which is the reactive-coercion family
+described in the preflight rather than a fault of this demo. Every passing run
+was diffed against the ledger on every field rather than judged by eye.
 
-**What makes this entry reliable is the most transferable finding here, and it
-is not a well-chosen prompt.** The prompt does not ask for sorting, which is the
-one thing the demo cannot deliver, and that alone separates three clean runs
-from a wording that fails one run in three. Adding clauses does not close the
-gap: a clause constrains what a run writes and cannot supply a behaviour that is
-not there. **When a demo half-works, ask what it is being asked for that it
-cannot deliver before asking what else to say to it.**
+**The most transferable finding here is about the prompt, and it runs against
+the intuition that produced it.** A wording trimmed until the demo passed
+reliably stopped asking for sorting, and the reliability was real: it separated
+three clean runs from a wording that failed one run in three. What it cost was
+invisible from inside the demo. Asking for a sortable table reaches a published
+part whose headers sort, so the trimmed wording was not avoiding a gap in the
+runtime — it was steering discovery away from a part that already existed. **A
+prompt tuned until a demo passes will hide whatever the demo stopped asking for,
+and a green run is not evidence that nothing is missing.**
 
-This document counts runs of **identical** text, so runs against a wording that
-asks for a _sortable_ table count toward no entry here. Two such runs delivered
-correct rows, which is evidence about the done condition rather than proof of
-it: they asked for more than this prompt does and still produced the table.
+**Proof status for sorting: one run on `edd1f71108`**, driven to a page and
+clicked through, whose column headers sort. Two earlier runs of a sortable
+wording delivered correct rows. One run is below this document's bar, so sorting
+is recorded as observed rather than proven.
 
 The run against this wording — `monthly-bank-transactions-2` — was verified
 against the store rather than by eye. All seven rows were diffed read-only
@@ -621,12 +627,12 @@ category**:
 
 Count on top reads 7. Nothing missing and nothing invented.
 
-**The headers do not sort. Whether they _look_ clickable varies by run** — from
-the same prompt, one piece styled all six `cursor: pointer` and three styled
-them `auto`. So **one piece in four invites a click that does nothing**. Check
-the piece you actually produced, and say so when it does — that viewer will get
-a hand cursor over a header that does nothing. On the other three there is
-nothing to announce.
+**A table the run writes itself does not sort, and may still look as though it
+does.** Across runs of a wording that did not ask for sorting, one piece styled
+all six headers `cursor: pointer` and three styled them `auto`, so **one piece
+in four invited a click that did nothing**. That is a property of an authored
+table rather than of the demo, and the wording on this page avoids it by
+reaching the published part instead.
 
 **The count on top may not look like a count.** Of the pieces measured, two
 rendered it as a large number and one as a labelled line reading
@@ -640,18 +646,16 @@ ways: the published sortable part has headers that _do_ sort and are equally
 invisible to the tree (CT-2411). A check leaning on accessibility output alone
 will call a working control dead and a dead one harmless.
 
-**The prompt does not ask for sorting, because sorting does not work.** A
-wording that asks for a _sortable_ table gets a table: clicking a column header
-reorders nothing, the row order is byte-identical before and after
-(`proof/bank-after.png`), and six `columnheader` nodes carry no interaction at
-all while the only interactive element on the page is the title button. A demo
-should not ask on camera for behaviour that will not appear, so it asks for what
-it reliably gets.
+**The prompt asks for sorting, and that is what reaches a part that sorts.** A
+sortable-table part exists in the index and in `packages/patterns/primitives`,
+and a wording that asks for a sortable table composes it; a wording that avoids
+the word authors a table of its own instead. So the question CT-2404 raised is
+answered in favour of discovery rather than a missing part: what the word buys
+is not a behaviour added to an authored table but a different part.
 
-The gap is recorded as CT-2404 rather than hidden. A sortable-table part already
-exists in the index and in `packages/patterns/primitives`, so this is more
-likely a question of what discovery surfaces than of a missing part — composing
-it by id against the bank reader would separate the two in a single run.
+Sorting a column replaces that header's caret with a policy placeholder
+(CT-2418). The rows are right and the order is correct; only the caret is
+affected.
 
 ## 4. Bills this month, from mail and bank together
 
