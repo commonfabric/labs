@@ -875,6 +875,11 @@ Mechanics:
   as usual. A chain entered with no argument nodes, as from a type whose print
   expands the alias, has nothing to substitute, and its payload is read from
   the declaration.
+- A canonical alias written in place, such as
+  `RequiresIntegrity<WriteAuthorizedBy<T, typeof save>, …>`, hands its payload
+  the arguments written on its reference when that reference names the alias
+  being lowered, so a writer or policy named only in syntax inside the payload
+  is lowered too.
 - Metadata values come from type-level literals: literal nodes, tuples, type
   literals, `typeof` value reads, alias-parameter substitution, and
   tuple/object **types** via the checker when nodes are gone

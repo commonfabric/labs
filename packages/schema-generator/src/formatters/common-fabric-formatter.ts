@@ -1411,7 +1411,11 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
     const aliasArgs = typeWithAlias.aliasTypeArguments ?? [];
     if (CFC_ALIAS_NAMES.has(aliasName)) {
-      return { aliasName, aliasArgs };
+      const aliasArgNodes = this.#canonicalAliasArgumentNodes(
+        aliasName,
+        context,
+      );
+      return { aliasName, aliasArgs, ...(aliasArgNodes && { aliasArgNodes }) };
     }
 
     const aliasSymbol = typeWithAlias.aliasSymbol;
@@ -1825,6 +1829,31 @@ export class CommonFabricFormatter implements TypeFormatter {
       return undefined;
     }
     return typeNode.typeArguments ? [...typeNode.typeArguments] : undefined;
+  }
+
+  /**
+   * The type arguments written on the reference being formatted, when that
+   * reference names the canonical CFC alias `aliasName` itself. A payload read
+   * from its type alone loses what only its syntax says, such as the writer a
+   * nested `WriteAuthorizedBy<T, typeof save>` names.
+   */
+  #canonicalAliasArgumentNodes(
+    aliasName: string,
+    context: GenerationContext,
+  ): readonly ts.TypeNode[] | undefined {
+    const typeNode = context.typeNode &&
+      readAuthoredTypeNode(context.typeNode, context.typeChecker);
+    if (!typeNode || !ts.isTypeReferenceNode(typeNode)) return undefined;
+    const name = ts.isIdentifier(typeNode.typeName)
+      ? typeNode.typeName
+      : typeNode.typeName.right;
+    const symbol = context.typeChecker.getSymbolAtLocation(name);
+    const referencedName = symbol
+      ? resolveAliasedSymbol(symbol, context.typeChecker).name
+      : name.text;
+    return referencedName === aliasName && typeNode.typeArguments
+      ? [...typeNode.typeArguments]
+      : undefined;
   }
 
   #mergeIfcMetadata(

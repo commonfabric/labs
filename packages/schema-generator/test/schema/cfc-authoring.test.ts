@@ -464,6 +464,85 @@ describe("Schema: CFC authoring aliases", () => {
     });
   });
 
+  describe("a writer claim inside another canonical alias", () => {
+    // Written directly, an outer canonical alias hands its payload the
+    // arguments written on its own reference, which is where the writer's
+    // `typeof` binding is.
+
+    const PRELUDE = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
+      type RequiresIntegrity<T, X extends readonly unknown[]> =
+        Cfc<T, { requiredIntegrity: X }>;
+      type AddIntegrity<T, X extends readonly unknown[]> =
+        Cfc<T, { addIntegrity: X }>;
+      type RepresentsCurrentUser<T> = Cfc<T, { addIntegrity: readonly [] }>;
+
+      declare function handler<A, B>(fn: (argument: A, state: B) => void): { readonly __handler: [A, B] };
+      const save = handler<void, { flag: boolean }>(() => {});
+    `;
+    const WRITER = {
+      __ctWriterIdentityOf: { file: "test.ts", path: ["save"] },
+    };
+    const ifcOf = async (fieldType: string) => {
+      const { type, checker } = await getTypeFromCode(
+        `${PRELUDE}\ninterface SchemaRoot { flag: ${fieldType} }`,
+        "SchemaRoot",
+      );
+      const schema = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+      return (schema.properties?.flag as { ifc?: Record<string, unknown> })
+        .ifc;
+    };
+
+    it("keeps the writer inside `RequiresIntegrity`", async () => {
+      expect(
+        await ifcOf(
+          'RequiresIntegrity<WriteAuthorizedBy<boolean, typeof save>, readonly ["admin"]>',
+        ),
+      ).toEqual({ writeAuthorizedBy: WRITER, requiredIntegrity: ["admin"] });
+    });
+
+    it("keeps the writer inside `AddIntegrity`", async () => {
+      expect(
+        await ifcOf(
+          'AddIntegrity<WriteAuthorizedBy<boolean, typeof save>, readonly ["admin"]>',
+        ),
+      ).toEqual({ writeAuthorizedBy: WRITER, addIntegrity: ["admin"] });
+    });
+
+    it("keeps the writer inside `RepresentsCurrentUser`", async () => {
+      expect(
+        (await ifcOf(
+          "RepresentsCurrentUser<WriteAuthorizedBy<boolean, typeof save>>",
+        ))?.writeAuthorizedBy,
+      ).toEqual(WRITER);
+    });
+
+    it("keeps the writer on each arm of a union written in place", async () => {
+      const { type, checker } = await getTypeFromCode(
+        `${PRELUDE}
+        interface SchemaRoot {
+          flag:
+            | RequiresIntegrity<WriteAuthorizedBy<true, typeof save>, readonly ["admin"]>
+            | WriteAuthorizedBy<false, typeof save>;
+        }`,
+        "SchemaRoot",
+      );
+      const schema = asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+      const arms = (schema.properties?.flag as { anyOf: { ifc?: unknown }[] })
+        .anyOf;
+
+      expect(arms.map((arm) =>
+        (arm.ifc as { writeAuthorizedBy?: unknown })
+          ?.writeAuthorizedBy
+      )).toEqual([WRITER, WRITER]);
+    });
+  });
+
   it("preserves imported writeAuthorizedBy binding declaration identity", async () => {
     const { type, checker } = await getTypeFromFiles(
       {
