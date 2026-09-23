@@ -276,6 +276,82 @@ describe("scope-cap-through-refs", () => {
         .toBe("user");
     });
 
+    for (const keyword of ["anyOf", "oneOf"] as const) {
+      it(`returns the entry scope inside a repeated reference's own \`${keyword}\` in either form`, () => {
+        // Both positions name `R`, but each carries its own compound beside the
+        // `$ref`; the inner one has not been expanded when it is reached.
+
+        const schema: JSONSchemaObj = {
+          $ref: "#/$defs/R",
+          [keyword]: [
+            {
+              $ref: "#/$defs/R",
+              [keyword]: [
+                { type: "string", asCell: [{ kind: "cell", scope: "user" }] },
+                { type: "null" },
+              ],
+            },
+            { type: "null" },
+          ],
+          $defs: { R: { type: "string" } },
+        };
+
+        expect(ContextualFlowControl.getAsCellFollowScopeCap(schema))
+          .toBe("user");
+        expect(
+          ContextualFlowControl.getAsCellFollowScopeCap(storedForm(schema)),
+        ).toBe("user");
+      });
+    }
+
+    it("returns `undefined` for a recursive handle carrying a keyword beside its `$ref`", () => {
+      // A `description` beside the `$ref`, as documentation on the type emits,
+      // gives the branch a merged view of its own on every visit; the compound
+      // it expands is still the definition's.
+
+      const schema: JSONSchemaObj = {
+        $ref: "#/$defs/Recursive",
+        $defs: {
+          Recursive: {
+            anyOf: [
+              { type: "null" },
+              {
+                $ref: "#/$defs/Recursive",
+                description: "a node",
+                asCell: ["cell"],
+              },
+            ],
+          },
+        },
+      };
+
+      expect(ContextualFlowControl.getAsCellFollowScopeCap(schema))
+        .toBeUndefined();
+    });
+
+    it("returns `undefined` for a cycle that passes through a position's own compound", () => {
+      // `D` reaches itself through a branch that carries a compound of its own,
+      // so the expansion alternates between the two compounds before repeating.
+
+      const schema: JSONSchemaObj = {
+        $ref: "#/$defs/D",
+        $defs: {
+          D: {
+            anyOf: [
+              {
+                $ref: "#/$defs/D",
+                anyOf: [{ $ref: "#/$defs/D" }, { type: "null" }],
+              },
+              { type: "null" },
+            ],
+          },
+        },
+      };
+
+      expect(ContextualFlowControl.getAsCellFollowScopeCap(schema))
+        .toBeUndefined();
+    });
+
     it("returns the owning document's definition for a branch that carries a `$defs` of its own", () => {
       // A `$defs` below the root is inert: `#/$defs/Handle` names the root's
       // definition wherever the reference sits.

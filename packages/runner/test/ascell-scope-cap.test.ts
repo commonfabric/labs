@@ -665,6 +665,45 @@ describe("asCell scope cap, through definitions", () => {
     expect(holder.asSchema(stored).resolveAsCell().get()).toBeUndefined();
   });
 
+  it("caps a handle inside a repeated reference's own compound in either form", () => {
+    // The inner position names the same definition as the outer one but
+    // carries a compound of its own, whose handle bounds the follow.
+    const secret = runtime.getCell(
+      space,
+      "nested-compound-secret",
+      { type: "string" },
+      tx,
+      "session",
+    );
+    secret.set("session value");
+    const holder = runtime.getCell(
+      space,
+      "nested-compound-holder",
+      undefined,
+      tx,
+    );
+    holder.set(secret as never);
+    const inline = {
+      $ref: "#/$defs/R",
+      anyOf: [
+        {
+          $ref: "#/$defs/R",
+          anyOf: [
+            { type: "string", asCell: [{ kind: "cell", scope: "user" }] },
+            { type: "null" },
+          ],
+        },
+        { type: "null" },
+      ],
+      $defs: { R: { type: "string" } },
+    } as const satisfies JSONSchema;
+    const stored = externalizeSchema(structuredClone(inline) as never);
+    expect((stored as { $ref?: string }).$ref).toMatch(/^cid:/);
+
+    expect(holder.asSchema(inline).resolveAsCell().get()).toBeUndefined();
+    expect(holder.asSchema(stored).resolveAsCell().get()).toBeUndefined();
+  });
+
   it("caps a branch's handle by the owning document's definition, not one nested in the branch", () => {
     // A `$defs` below the root is inert, so the nested `session` entry does
     // not loosen the `user` cap the root's `Handle` declares.

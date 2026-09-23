@@ -976,16 +976,17 @@ const resolveRootRefForScope = (
  * sits in the document its compound was read from, which changes only where a
  * reference resolved into another one.
  *
- * `following` holds, per document, the references whose compounds are being
- * expanded on the way down, as the resolver guards a single chain. A position's
- * own declaration is read whatever it names, and a reference already being
- * expanded is not expanded again, so a definition that reaches itself through
- * a branch ends there rather than recursing without end.
+ * `expanding` holds, per document, the compounds being expanded on the way
+ * down. A compound is what repeats when a definition reaches itself through a
+ * branch, so one already being expanded is not expanded again. A reference does
+ * not stand for its compound: keywords written beside a `$ref` replace the
+ * definition's, so two positions naming one definition can carry different
+ * compounds, and a position's own declaration is read whatever it names.
  */
 const asCellFollowScopeCap = (
   schema: JSONSchema | undefined,
   root: JSONSchema,
-  following?: Map<JSONSchema, Set<string>>,
+  expanding?: Map<JSONSchema, Set<readonly JSONSchema[]>>,
 ): SchemaScope | undefined => {
   if (!isObjectOrArray(schema)) return undefined;
   const declaring = resolveRootRefForScope(schema, root);
@@ -993,35 +994,31 @@ const asCellFollowScopeCap = (
     ContextualFlowControl.getAsCellValues(declaring.schema).at(0),
   );
   if (isSchemaScope(entryScope)) return entryScope;
-  const ref = typeof schema.$ref === "string" ? schema.$ref : undefined;
-  let followed: Set<string> | undefined;
-  if (ref !== undefined) {
-    // Allocated on the first reference: most positions carry none, and this
+  let cap: SchemaScope | undefined;
+  for (const branches of [declaring.schema.anyOf, declaring.schema.oneOf]) {
+    if (!Array.isArray(branches)) continue;
+    // Allocated on the first compound: most positions carry none, and this
     // runs for every key a cell is narrowed through.
-    following ??= new Map();
-    followed = following.get(root);
-    if (followed?.has(ref)) return undefined;
-    if (followed === undefined) {
-      followed = new Set();
-      following.set(root, followed);
+    expanding ??= new Map();
+    let inDocument = expanding.get(declaring.root);
+    if (inDocument?.has(branches)) continue;
+    if (inDocument === undefined) {
+      inDocument = new Set();
+      expanding.set(declaring.root, inDocument);
     }
-    followed.add(ref);
-  }
-  try {
-    let cap: SchemaScope | undefined;
-    for (const branches of [declaring.schema.anyOf, declaring.schema.oneOf]) {
-      if (!Array.isArray(branches)) continue;
+    inDocument.add(branches);
+    try {
       for (const branch of branches) {
         cap = narrowerScopeCap(
           cap,
-          asCellFollowScopeCap(branch as JSONSchema, declaring.root, following),
+          asCellFollowScopeCap(branch as JSONSchema, declaring.root, expanding),
         );
       }
+    } finally {
+      inDocument.delete(branches);
     }
-    return cap;
-  } finally {
-    if (ref !== undefined) followed?.delete(ref);
   }
+  return cap;
 };
 
 /**
