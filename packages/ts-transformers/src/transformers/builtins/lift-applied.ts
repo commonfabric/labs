@@ -387,7 +387,6 @@ function buildResultTypeNode(
       checker,
       factory,
       sourceFile: context.sourceFile,
-      state: context.state,
     },
     context.state.typeRegistry,
   );

@@ -137,14 +137,6 @@ present; no stage handles a missing one.
      is a plain identity lookup with **no** `getOriginalNode` fallback: the
      marker sits on the synthetic call SchemaInjection built, and that node
      reaches SchemaGeneration as the same object.
-   - `printedFrom` — for a type node printed from a type, that type. Both
-     printers record it: `typeToTypeNodeWithRegistry()`, including the
-     `unknown` it puts in place of a type the checker will not print, and the
-     `typeToTypeNode()` behind `typeToSchemaTypeNode()`. SchemaGeneration hands
-     the lookup to the schema generator as its `printedFrom` option, and a
-     printed node is read as its type and never as a node (§12). It is a plain
-     identity lookup with **no** `getOriginalNode` fallback, since a node
-     derived from a printed one says whatever its deriving changed.
 3. **Marker family** — node/symbol-keyed `WeakSet`s whose membership checks fall
    back through `getOriginalNode`, and whose mutators are coupled to the
    context's reactive-analysis cache invalidation (invalidation is a
@@ -2254,24 +2246,11 @@ Behavior:
 
 Special path:
 
-- a node printed from a type is read as that type and never as a node. The
-  transformer passes `CrossStageState.printedFrom()` to the generator as its
-  `printedFrom` option, and wherever a printed node appears (the whole type
-  argument, a member of a node the transformer built, or a union member) the
-  generator reads the caller's own type at that position when it carries
-  something, and the type the node was printed from when the caller's is
-  `any`, `unknown`, or an unbound type parameter. Schema hints attached to the
-  node still apply. A name the node writes that the emitting module cannot
-  resolve, an `import("…")` type, or the brand of an expanded `Default` never
-  reaches node analysis, and a type the checker will not print is read from
-  that type rather than from its `unknown` placeholder
-  (`test/printed-type-node-schema.test.ts`).
 - the generator uses its node-based path when the resolved type is `any` and
-  the type-argument node is synthetic (`pos=-1,end=-1`), or when a type
-  argument, synthetic or not, contains an `any` or `unknown` keyword anywhere,
-  a printed node included. The keyword cases keep the checker from recovering
-  a wider semantic type, and the `unknown` case keeps the authored unknown
-  boundary. A printed node inside such an argument is still read as its type.
+  the type-argument node is synthetic (`pos=-1,end=-1`), or when a
+  real-position type argument contains any `any` / `unknown` keyword. The
+  latter avoids letting the checker recover a wider semantic type and erase
+  the authored unknown boundary.
 - synthetic union handling preserves `undefined` members (for example
   `string | undefined` retains an explicit `undefined` branch in generated
   schema).

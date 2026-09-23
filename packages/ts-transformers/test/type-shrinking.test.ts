@@ -3,11 +3,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
-import {
-  type CapabilityParamSummary,
-  CrossStageState,
-  TransformationContext,
-} from "../src/core/mod.ts";
+import type { CapabilityParamSummary } from "../src/core/mod.ts";
 import {
   applyCapabilityDefaultsToTypeNode,
   applyShrinkAndWrap,
@@ -89,7 +85,6 @@ function hasQualifiedRef(node: ts.Node, left: string, right: string): boolean {
 }
 
 function createProgram(source: string): {
-  program: ts.Program;
   sourceFile: ts.SourceFile;
   checker: ts.TypeChecker;
 } {
@@ -121,7 +116,7 @@ function createProgram(source: string): {
   host.getNewLine = () => "\n";
 
   const program = ts.createProgram([fileName], compilerOptions, host);
-  return { program, sourceFile, checker: program.getTypeChecker() };
+  return { sourceFile, checker: program.getTypeChecker() };
 }
 
 function createProgramWithFiles(
@@ -249,42 +244,6 @@ describe("overlayContractCapabilities()", () => {
     );
 
     expect(result).toBe(alias.type);
-  });
-});
-
-describe("applyShrinkAndWrap()", () => {
-  it("records a node printed for a value read whole as printed from its type", () => {
-    // A synthetic base node sends the shrink to the value's type, and a value
-    // read whole is that type's print.
-
-    const { program, sourceFile, checker } = createProgram(`
-      type Item = { title: string; extra: any };
-    `);
-    const type = checker.getTypeAtLocation(
-      findTypeAlias(sourceFile, "Item").type,
-    );
-    const state = new CrossStageState();
-    const context = new TransformationContext({
-      program,
-      sourceFile,
-      tsContext: { factory: ts.factory } as ts.TransformationContext,
-      options: { state },
-    });
-
-    const result = applyShrinkAndWrap(
-      createParamSummary({ readPaths: [[]] }),
-      ts.factory.createTypeReferenceNode("Item"),
-      type,
-      false,
-      checker,
-      sourceFile,
-      ts.factory,
-      "full",
-      "opaque",
-      context,
-    );
-
-    expect(state.printedFrom(result)).toBe(type);
   });
 });
 

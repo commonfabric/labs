@@ -2,10 +2,7 @@ import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
-import {
-  CrossStageState,
-  type TransformationContext,
-} from "../../src/core/mod.ts";
+import type { TransformationContext } from "../../src/core/mod.ts";
 import { shouldTransformArrayMethod } from "../../src/closures/strategies/array-method-policy.ts";
 
 function createProgram(source: string): {
@@ -76,7 +73,10 @@ function testContext(
 ): TransformationContext {
   return {
     checker,
-    state: new CrossStageState(),
+    state: {
+      typeRegistry: new WeakMap<ts.Node, ts.Type>(),
+      syntheticReactiveCollectionRegistry: new WeakSet<ts.Symbol>(),
+    },
     getReactiveContext: (node: ts.Node) => ({ kind: reactiveKindFor(node) }),
   } as unknown as TransformationContext;
 }

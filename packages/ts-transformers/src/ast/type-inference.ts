@@ -1,6 +1,5 @@
 import { getCellWrapperInfo } from "@commonfabric/schema-generator/cell-brand";
 import ts from "typescript";
-import type { CrossStageState } from "../core/mod.ts";
 import { getCellKind, isBrandedCellType } from "../transformers/cell-type.ts";
 import {
   getTypeAtLocationWithFallback,
@@ -227,26 +226,19 @@ export function inferReturnType(
 }
 
 /**
- * Converts a TypeScript type to a TypeNode for schema generation, or returns
- * `undefined` when the checker will not print it. `state` records a printed
- * node as printed from `type` (`CrossStageState.printedFrom()`); it is a
- * required parameter, so a caller passes `undefined` only by saying so, where
- * it has no state to hand.
+ * Convert a TypeScript type to a TypeNode for schema generation
  */
 export function typeToTypeNode(
   type: ts.Type,
   checker: ts.TypeChecker,
   location: ts.Node,
-  state: CrossStageState | undefined,
 ): ts.TypeNode | undefined {
-  let printed: ts.TypeNode | undefined;
   try {
-    printed = checker.typeToTypeNode(type, location, TYPE_NODE_FLAGS);
+    const result = checker.typeToTypeNode(type, location, TYPE_NODE_FLAGS);
+    return result;
   } catch (_error) {
     return undefined;
   }
-  if (printed) state?.recordPrintedFrom(printed, type);
-  return printed;
 }
 
 /**
@@ -402,13 +394,13 @@ export function typeToSchemaTypeNode(
   type: ts.Type | undefined,
   checker: ts.TypeChecker,
   location: ts.Node,
-  state: CrossStageState | undefined,
 ): ts.TypeNode | undefined {
   if (!type) {
     return undefined;
   }
   // Don't unwrap Cell/Reactive types - let the schema generator handle them
-  return typeToTypeNode(type, checker, location, state);
+  const result = typeToTypeNode(type, checker, location);
+  return result;
 }
 
 /**
@@ -957,7 +949,6 @@ export function inferArrayElementType(
     factory: ts.NodeFactory;
     sourceFile: ts.SourceFile;
     typeRegistry?: WeakMap<ts.Node, ts.Type>;
-    state: CrossStageState | undefined;
   },
 ): { typeNode: ts.TypeNode; type?: ts.Type } {
   const { checker, factory, typeRegistry } = context;
@@ -1063,13 +1054,9 @@ export function inferArrayElementType(
       }
 
       // Convert Type to TypeNode
-      const typeNode = typeToTypeNode(
-        elementType,
-        checker,
-        context.sourceFile,
-        context.state,
-      ) ??
-        factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
+      const typeNode =
+        typeToTypeNode(elementType, checker, context.sourceFile) ??
+          factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
 
       return { typeNode, type: elementType };
     }
@@ -1078,12 +1065,7 @@ export function inferArrayElementType(
   // Fallback for plain Array<T>
   const elementType = extractElementFromArrayType(arrayType, checker);
   if (elementType) {
-    const typeNode = typeToTypeNode(
-      elementType,
-      checker,
-      context.sourceFile,
-      context.state,
-    ) ??
+    const typeNode = typeToTypeNode(elementType, checker, context.sourceFile) ??
       factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
 
     return { typeNode, type: elementType };

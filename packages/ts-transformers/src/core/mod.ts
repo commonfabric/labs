@@ -15,9 +15,8 @@
  *      table (mirroring the TS compiler's internal NodeLinks: one struct of
  *      optional derived facts per node, lazily populated) holding the
  *      transformer-internal, non-cache-invalidating per-node channels:
- *      `capabilitySummary`, `schemaInjected`, `patternResultAnchor` and
- *      `printedFrom`. Reached only through the record/lookup/mark/is methods
- *      on CrossStageState.
+ *      `capabilitySummary` and `schemaInjected`. Reached only through the
+ *      record/lookup/mark/is methods on CrossStageState.
  *   3. The marker family — node/symbol-keyed WeakSets whose context-level
  *      mutators are coupled to reactive-analysis cache invalidation
  *      (mapCallbackRegistry, syntheticComputeCallbackRegistry,
@@ -121,17 +120,6 @@
  *   Writers: context.markSchemaInjected() (SchemaInjection producer sites)
  *   Readers: context.isSchemaInjected() (SchemaInjection top-of-visit guard)
  *
- * nodeLinks.printedFrom (NodeTypeLinks field)
- *   Marks a type node printed from a type with that type, the `unknown` put in
- *   place of a type the checker will not print included. The node stands for
- *   the type and says nothing more, so schema generation reads the type and
- *   never the node. Plain identity lookup, no getOriginalNode fallback: a node
- *   derived from a printed one is no longer that print.
- *   Writers: state.recordPrintedFrom() (typeToTypeNodeWithRegistry and
- *            typeToTypeNode, given a state)
- *   Readers: state.printedFrom() (SchemaGeneratorTransformer, which also hands
- *            it to the schema generator as its `printedFrom` option)
- *
  * --- schema-generator boundary ---
  *
  * `typeRegistry` and `schemaHints` are the ONLY channels read by the separate
@@ -144,11 +132,6 @@
  * This mirrors the TS compiler, which keeps its NodeLinks table private and
  * exposes narrow typed accessors (getTypeAtLocation) instead of the table. The
  * bare boundary maps are our analog of that narrow published contract.
- *
- * The generator also takes a `printedFrom` callback among its options, which
- * SchemaGeneratorTransformer answers from `nodeLinks.printedFrom`. A callback
- * crosses the line the way `isDefaultLibrarySourceFile` does, without the
- * generator learning about the table behind it.
  *
  * --- Cache invalidation contract ---
  *
@@ -163,12 +146,10 @@
  * (createDataFlowAnalyzer's `analysisCache`) lives inside its closure and
  * would otherwise return stale pre-mutation verdicts after a registry write.
  *
- * schemaHints and the nodeLinks fields (capabilitySummary, schemaInjected,
- * patternResultAnchor, printedFrom) are accessed through record/lookup/mark/is
- * methods (recordSchemaHint/lookupSchemaHint, recordCapabilitySummary/
- * lookupCapabilitySummary, markSchemaInjected/isSchemaInjected,
- * recordPatternResultSchemaCall/lookupPatternResultSchemaAnchor,
- * recordPrintedFrom/printedFrom) but do not invalidate caches (no analysis
+ * schemaHints and the nodeLinks fields (capabilitySummary, schemaInjected) are
+ * accessed through record/lookup/mark/is methods (recordSchemaHint/
+ * lookupSchemaHint, recordCapabilitySummary/lookupCapabilitySummary,
+ * markSchemaInjected/isSchemaInjected) but do not invalidate caches (no analysis
  * cache depends on them). typeRegistry is still mutated via direct .set() at call
  * sites; same caveat applies. If you add a cache that depends on any of these,
  * route the mutation through a method that invalidates it (or extend
