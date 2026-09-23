@@ -491,3 +491,46 @@ permissive than expected.
   ]
 }
 ```
+
+### How a step narrows
+
+`ContextualFlowControl.schemaAtPath` narrows one path segment at a time, and
+what the cursor declares about its type decides how:
+
+- `type: "object"` narrows a segment to the property it names, else to
+  `additionalProperties`, else to `true` — an unnamed key is admitted, since an
+  absent `additionalProperties` means `true`. A schema that names properties
+  and omits `additionalProperties` reports an unnamed key as a missing
+  property, which a read drops rather than admits.
+- `type: "array"` narrows an index to its `prefixItems` entry, else to
+  `items`, else to `true`, and a segment that is not an index to `false`.
+- `type: "unknown"` narrows to `unknown`.
+- Any other declared type holds no children: the segment narrows to `false`,
+  and nothing has been turned down.
+- A type list, an `anyOf` or a `oneOf` narrows each arm and unions the
+  results; an arm that narrows to `false` drops out, and one that narrows to a
+  true schema makes the union `true`.
+- A schema declaring no `type` admits every type, and which of its keywords
+  apply — `properties` and `additionalProperties`, or `prefixItems` and
+  `items` — is settled only by a value. Without one, narrowing can say only
+  what both readings admit, so the schema is read as the union of its object
+  and array readings: `{ items: … }` at a key that is not an index admits
+  anything, and at an index admits anything as well, since the object reading
+  does. A reader that holds the value settles the type first
+  (`ContextualFlowControl.settledForContainer`), so both traversal and the
+  lazy view narrow an object's key through the object reading and an array's
+  element through `items`. A declared type, a reference and a true schema are
+  left as they stand.
+- An `enum` or `const` beside no `type` is read as the type list of its
+  members' types, and nothing more of the members is read: a string
+  enumeration is a string and holds no children, and one holding an object
+  member admits any key under its object arm, a key no member holds included.
+  Traversal does not validate the keyword either, so the two agree; an
+  exact-match reading would narrow such a key to what the members hold.
+- A true schema — `true`, `{}`, or one carrying only `asCell`, `default` and
+  the other internal keys — is the wildcard every child narrows to, markers
+  and all. A false schema, `false` or `{ not: true }`, holds no children.
+- An `allOf` is not read a child out of: a conjunction beside no `type`
+  narrows to `false`. Traversal evaluates a conjunction whole, merging the
+  keywords beside it into each part, which is where a property only a part
+  declares is reached.
