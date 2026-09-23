@@ -125,7 +125,7 @@ const record = (id: string): HarnessResearchRunSummary => ({
 
 describe("scoped research", () => {
   for (const purpose of ["orient", "answer"] as const) {
-    it(`gives ${purpose} research no authoring rules, so a published part is chosen on its contract rather than its source's style`, async () => {
+    it(`gives ${purpose} research the composition template and not the authoring rules`, async () => {
       const trial = run([(request) => {
         expect(request.transcript[0].content).not.toContain(
           PATTERN_AUTHORING_GUIDANCE,
@@ -139,10 +139,16 @@ describe("scoped research", () => {
             : { ...brief(), selectedPatternIds: [] },
         );
       }], { purpose });
-      const reply = await trial.result;
-      expect(reply.kit.example).toBeUndefined();
+      await trial.result;
     });
   }
+
+  it("completes a factual orientation without requiring code", async () => {
+    const trial = run([() => final({ ...brief(), leads: [], questions: [] })]);
+    const reply = await trial.result;
+    expect(reply.kit.status).toBe("complete");
+    expect(reply.kit.example).toBeUndefined();
+  });
 
   it("inspects indexed source during orientation and returns a usable invocation", async () => {
     await ensureCompilerStack();
