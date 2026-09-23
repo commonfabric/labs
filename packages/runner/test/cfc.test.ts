@@ -134,25 +134,25 @@ describe("ContextualFlowControl.schemaAtPath", () => {
     expect(ContextualFlowControl.schemaAtPath({ not: true }, ["extra"])).toBe(
       false,
     );
-    // An `enum` names the admitted values outright, so a child is what the
-    // members hold there: nothing under scalars, nothing at a key no member
-    // has, and the members' own values at one they do.
+    // An `enum` or `const` beside no `type` is read as the type list of its
+    // members' types, and nothing more of the members is read, since
+    // traversal does not validate the keyword: a string enumeration holds no
+    // children, and an object member admits any key, one no member holds
+    // included. That last answer holds only for as long as the values go
+    // unread; an exact-match reading would narrow `extra` to `false` and `a`
+    // to what the members hold.
     expect(
       ContextualFlowControl.schemaAtPath({ enum: ["a", "b"] }, ["extra"]),
     ).toBe(false);
     expect(
       ContextualFlowControl.schemaAtPath({ enum: [{ a: 1 }, "b"] }, ["extra"]),
+    ).toBe(true);
+    expect(
+      ContextualFlowControl.schemaAtPath({ const: [1, 2] }, ["0"]),
+    ).toBe(true);
+    expect(
+      ContextualFlowControl.schemaAtPath({ const: [1, 2] }, ["extra"]),
     ).toBe(false);
-    expect(
-      ContextualFlowControl.schemaAtPath({ enum: [{ a: 1 }, { a: 2 }, "b"] }, [
-        "a",
-      ]),
-    ).toEqual({ enum: [1, 2] });
-    expect(
-      ContextualFlowControl.schemaAtPath({ const: { a: [1, 2] } }, ["a", "1"]),
-    ).toEqual({ enum: [2] });
-    // Beside a declared shape the shape narrows the child, so a default under
-    // `properties` still reaches the value the enumeration admits whole.
     expect(
       ContextualFlowControl.schemaAtPath({
         type: "object",
@@ -164,8 +164,9 @@ describe("ContextualFlowControl.schemaAtPath", () => {
 
   it("settles a schema that omits `type` to the container a reader holds, and leaves the rest standing", () => {
     // A reader that holds an object narrows through the object reading, so a
-    // type-less schema offering one takes `type: "object"`. A declared type,
-    // a reference, a true schema and an `enum` of scalars stand as they are.
+    // type-less schema takes `type: "object"`. A declared type, a reference,
+    // an enumeration — typed by its members — and a true schema stand as
+    // they are.
     const settle = ContextualFlowControl.settledForContainer;
     expect(settle({ items: { type: "number" } }, "object")).toEqual({
       items: { type: "number" },
