@@ -138,6 +138,21 @@ export class VisitInProgress<
           // a `mapTo` is treat it just like a `mainResult`, so we do.
           return result.value;
         }
+
+        default: {
+          // deno-coverage-ignore-start
+
+          // This is a defense-in-depth protection against bugs in this file.
+          // Binding `result` as `never` also makes a result form which
+          // `#visitValue()` can return, but which isn't handled above, a
+          // compile-time error right here.
+          const unhandled: never = result;
+          const type = (unhandled as { type: string }).type;
+          throw new Error(
+            `Shouldn't happen: Got result type \`${type}\` at the top level of a visit.`,
+          );
+        }
+          // deno-coverage-ignore-stop
       }
     } finally {
       this.#inProgress = false;
@@ -151,7 +166,7 @@ export class VisitInProgress<
     value: FabricValuePlus<PlusType>,
   ): Exclude<
     VisitResult<PlusType, ResultType>,
-    RecurseForm | ReplaceForm<ResultType>
+    RecurseForm | ReplaceForm<PlusType>
   > {
     const tag = this.#tagOfValueElseNull(value);
     const result = this.#visitResolvingCyclesAndReplacement(value, tag);
