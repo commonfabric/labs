@@ -523,27 +523,29 @@ class ValueHasher {
     hasher.update(TAG_END_BYTES);
     path.pop();
   }
-}
 
-//
-// Uncached hash computation
-//
+  //
+  // Static members
+  //
 
-/** Computes the hash of a value without consulting or populating any cache. */
-function computeHash(value: unknown): FabricHash {
-  const valueHasher = new ValueHasher();
-  valueHasher.feedValue(value);
-  return valueHasher.digest();
-}
+  /**
+   * Computes the hash of a value without consulting or populating any cache.
+   */
+  static computeHash(value: unknown): FabricHash {
+    const valueHasher = new ValueHasher();
+    valueHasher.feedValue(value);
+    return valueHasher.digest();
+  }
 
-/**
- * Like `computeHash()`, except it returns a simple string hash value, encoded
- * as `base64url`, rather than a hash object.
- */
-function computeHashAsString(value: unknown): string {
-  const valueHasher = new ValueHasher();
-  valueHasher.feedValue(value);
-  return valueHasher.digestString();
+  /**
+   * Like `computeHash()`, except it returns a simple string hash value,
+   * encoded as `base64url`, rather than a hash object.
+   */
+  static computeHashAsString(value: unknown): string {
+    const valueHasher = new ValueHasher();
+    valueHasher.feedValue(value);
+    return valueHasher.digestString();
+  }
 }
 
 //
@@ -551,19 +553,19 @@ function computeHashAsString(value: unknown): string {
 //
 
 /** Pre-computed hash of `null`. */
-const NULL_HASH = computeHash(null);
+const NULL_HASH = ValueHasher.computeHash(null);
 
 /** Pre-computed hash of `undefined`. */
-const UNDEFINED_HASH = computeHash(undefined);
+const UNDEFINED_HASH = ValueHasher.computeHash(undefined);
 
 /** Pre-computed hash of `true`. */
-const TRUE_HASH = computeHash(true);
+const TRUE_HASH = ValueHasher.computeHash(true);
 
 /** Pre-computed hash of `false`. */
-const FALSE_HASH = computeHash(false);
+const FALSE_HASH = ValueHasher.computeHash(false);
 
 /** Pre-computed hash of negative zero. */
-const NEGATIVE_ZERO_HASH = computeHash(-0);
+const NEGATIVE_ZERO_HASH = ValueHasher.computeHash(-0);
 
 /**
  * LRU cache for primitive value hashes. Primitives (strings, numbers,
@@ -610,7 +612,7 @@ function cachedPrimitiveHash(
 ): FabricHash {
   const cached = primitiveHashCache.get(value);
   if (cached !== undefined) return cached;
-  const result = computeHash(value);
+  const result = ValueHasher.computeHash(value);
   primitiveHashCache.put(value, result);
   return result;
 }
@@ -679,12 +681,14 @@ function hashOfInternal(
       }
 
       if (isDeepFrozen(value)) {
-        const result = computeHash(value);
+        const result = ValueHasher.computeHash(value);
         frozenObjectHashCache.set(obj, result);
         return result;
       }
 
-      return stringOkay ? computeHashAsString(value) : computeHash(value);
+      return stringOkay
+        ? ValueHasher.computeHashAsString(value)
+        : ValueHasher.computeHash(value);
     }
 
     default: {
