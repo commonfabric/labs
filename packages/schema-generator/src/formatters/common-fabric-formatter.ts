@@ -33,6 +33,7 @@ import {
 } from "../typescript/literal-value.ts";
 import {
   readAuthoredTypeNode,
+  readMemberAnnotation,
   unwrapTypeParentheses,
 } from "../typescript/type-node.ts";
 import { resolveWriterBinding } from "../typescript/writer-binding.ts";
@@ -50,6 +51,8 @@ import { combineIfcLabels } from "../ifc-labels.ts";
 
 type WrapperKind = CellWrapperKind;
 const CFC_ALIAS_NAMES: ReadonlySet<string> = new Set(CFC_CANONICAL_ALIAS_NAMES);
+/** The property `AnyOf<X>` is as a type (`@commonfabric/api/cfc`). */
+const CFC_ANY_OF_BRAND = "__ct_cfc_any_of__";
 const SCOPE_WRAPPER_SCOPES: Readonly<Record<string, SchemaScope>> = {
   PerSpace: "space",
   PerUser: "user",
@@ -2017,6 +2020,13 @@ export class CommonFabricFormatter implements TypeFormatter {
       return typeText.slice(1, -1);
     }
 
+    // `AnyOf<X>` is `{ readonly __ct_cfc_any_of__?: X }` as a type. That brand
+    // is how the library writes the metadata into the type, so a type read
+    // without a node is recognized by it, not by an alias name an author may
+    // also use.
+    const anyOf = this.#readAnyOfBrand(type, context);
+    if (anyOf) return anyOf;
+
     if (context.typeChecker.isTupleType(type)) {
       const tupleType = type as ts.TypeReference;
       const elements = context.typeChecker.getTypeArguments(tupleType);
@@ -2050,9 +2060,12 @@ export class CommonFabricFormatter implements TypeFormatter {
             property.valueDeclaration ?? property.declarations?.[0] ??
               context.typeNode ?? ({} as ts.Node),
           );
+          // A member's annotation says what its type cannot, such as the
+          // binding in `PolicyOf<typeof rules>`, and is read wherever it
+          // denotes the member's type.
           obj[property.getName()] = this.#extractLiteralLikeValue(
             propType,
-            undefined,
+            readMemberAnnotation(property, propType, context.typeChecker),
             context,
           );
         }
@@ -2061,6 +2074,29 @@ export class CommonFabricFormatter implements TypeFormatter {
     }
 
     return undefined;
+  }
+
+  /**
+   * The value `AnyOf<X>` lowers to, `{ anyOf: X }`, for a type that is its
+   * brand, or `undefined` for any other type.
+   */
+  #readAnyOfBrand(
+    type: ts.Type,
+    context: GenerationContext,
+  ): { anyOf: unknown[] } | undefined {
+    if ((type.flags & ts.TypeFlags.Object) === 0) return undefined;
+    const properties = context.typeChecker.getPropertiesOfType(type);
+    const brand = properties.length === 1 ? properties[0]! : undefined;
+    if (!brand || brand.getName() !== CFC_ANY_OF_BRAND) return undefined;
+    // The brand is optional, so its type holds `undefined` beside `X`.
+    const alternatives = this.#extractLiteralLikeValue(
+      context.typeChecker.getNonNullableType(
+        context.typeChecker.getTypeOfSymbol(brand),
+      ),
+      undefined,
+      context,
+    );
+    return Array.isArray(alternatives) ? { anyOf: alternatives } : undefined;
   }
 
   #resolveTypeReferenceName(

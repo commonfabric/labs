@@ -115,3 +115,31 @@ export function readAuthoredTypeNode(
     current = next;
   }
 }
+
+/**
+ * Returns the annotation written on `member`'s declaration when it denotes
+ * exactly `type`, the member's type where it is read. Returns `undefined` for
+ * a member declared without one, and for an annotation that denotes something
+ * else there, such as a type parameter that an instantiation of a generic
+ * declaration has replaced.
+ *
+ * Through this, a reader that has only a type reads what the member's author
+ * wrote, and so what only syntax says: which binding a `typeof` names, for
+ * one. The checker does the same when it prints a type, putting a member's
+ * annotation into the print in place of printing its type.
+ */
+export function readMemberAnnotation(
+  member: ts.Symbol,
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): ts.TypeNode | undefined {
+  const declaration = member.valueDeclaration;
+  const annotation = declaration &&
+      (ts.isPropertySignature(declaration) ||
+        ts.isPropertyDeclaration(declaration))
+    ? declaration.type
+    : undefined;
+  return annotation && checker.getTypeFromTypeNode(annotation) === type
+    ? annotation
+    : undefined;
+}

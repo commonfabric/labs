@@ -198,4 +198,85 @@ export default pattern<Input>(({ item }) => {
       });
     });
   });
+
+  describe("a printed result type that holds CFC labels", () => {
+    const policy = {
+      type: "https://commonfabric.org/cfc/atom/Policy",
+      policyRefKind: "module",
+      moduleIdentity: "sha256:rules",
+      symbol: "rules",
+    };
+
+    /** The labels of `a` in the result of a pattern that returns its input. */
+    async function resultLabels(
+      declarations: string,
+      a: string,
+    ): Promise<unknown> {
+      const files = await transformFiles({
+        "/rules.ts": `/// <cts-enable />
+import { cfcPattern, exchangeRule, exchangeRules, THIS_POLICY, v } from "commonfabric/cfc";
+export const release = exchangeRule({
+  appliesTo: THIS_POLICY,
+  pre: { integrity: [cfcPattern.hasRole(v("user"), THIS_POLICY.subject, "reader")] },
+  post: { addAlternatives: [cfcPattern.user(v("user"))] },
+});
+export const rules = exchangeRules([release]);`,
+        "/other.ts": `export type AnyOf<T> = { label: "ordinary choice" };`,
+        "/main.tsx": `/// <cts-enable />
+import { AnyOf, Cfc, Confidential, pattern, PolicyOf } from "commonfabric";
+import * as other from "./other.ts";
+import { rules } from "./rules.ts";
+${declarations}
+export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
+      }, {
+        types: COMMONFABRIC_TYPES,
+        typeCheck: true,
+        moduleIdentities: new Map([["/rules.ts", "sha256:rules"]]),
+      });
+      const output = patternSchemas(parseModule(files["/main.tsx"]!)).output;
+      return ((output.properties as Schema).a as Schema).ifc;
+    }
+
+    it("reads the binding a payload's member names", async () => {
+      expect(
+        await resultLabels(
+          "",
+          "Cfc<string, { confidentiality: [PolicyOf<typeof rules>] }>",
+        ),
+      ).toMatchObject({ confidentiality: [policy] });
+    });
+
+    it("reads the binding a payload interface's member names", async () => {
+      expect(
+        await resultLabels(
+          "interface Meta { confidentiality: [PolicyOf<typeof rules>] }",
+          "Cfc<string, Meta>",
+        ),
+      ).toMatchObject({ confidentiality: [policy] });
+    });
+
+    it("reads a generic payload's member as its instantiation", async () => {
+      expect(
+        await resultLabels(
+          "type Meta<L> = { confidentiality: [L] };",
+          `Cfc<string, Meta<"secret">>`,
+        ),
+      ).toEqual({ confidentiality: ["secret"] });
+    });
+
+    it("reads `AnyOf` passed to a generic alias by its brand", async () => {
+      expect(
+        await resultLabels("", `Confidential<string, [AnyOf<["reader"]>]>`),
+      ).toEqual({ confidentiality: [{ anyOf: ["reader"] }] });
+    });
+
+    it("reads an authored type named `AnyOf` as its own", async () => {
+      expect(
+        await resultLabels(
+          "",
+          `Confidential<string, [other.AnyOf<["reader"]>]>`,
+        ),
+      ).toEqual({ confidentiality: [{ label: "ordinary choice" }] });
+    });
+  });
 });
