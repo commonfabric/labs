@@ -1051,7 +1051,10 @@ const invokeResearchTool = async (
       if (request.getPatternIndex === undefined) {
         throw new Error("this run has no configured pattern index");
       }
-      const patternId = stringValue(input.patternId, 500);
+      const patternId = stringValue(input.patternId, 500).replace(
+        /^cf:pattern:/,
+        "",
+      );
       if (patternId.length === 0) throw new Error("patternId is required");
       return await inspectPattern(
         state,
