@@ -55,7 +55,7 @@ a hang. Wait.
 ## 2. A checklist and a running total
 
 ```text
-Make a dinner-preparation page by composing cf:pattern:vAx2Uy1C64duK47NIl9a0fb0UtfnHrXRrxM8giA1hWM for tasks and cf:pattern:BEf5ZMjTIzX9J5HE6wec1s3zcQNqTAg-lFoD6W7pBHs for expenses. Use the published components' existing controls with writable local state. Start with tasks Buy pasta, Set the table and Chill drinks, all unchecked. Start with Pasta costing $12.50 and Drinks costing $7.50, against a $50 budget. AmountLedger's amount and budget inputs are in whole dollars: pass 12.50 and 7.50, not 1250 and 750, despite the published description mentioning cents. I need to add and check off tasks, add expenses, and see the running total and remaining budget. This page uses no connectors.
+Make a dinner-preparation page by composing CheckList for tasks and AmountLedger for expenses. Use the published components' existing controls with writable local state. Start with tasks Buy pasta, Set the table and Chill drinks, all unchecked. Start with Pasta costing $12.50 and Drinks costing $7.50, against a $50 budget. AmountLedger's amount and budget inputs are in whole dollars: pass 12.50 and 7.50, not 1250 and 750, despite the published description mentioning cents. I need to add and check off tasks, add expenses, and see the running total and remaining budget. This page uses no connectors.
 ```
 
 **What appears:** a checklist beside an expense ledger, both built from the two

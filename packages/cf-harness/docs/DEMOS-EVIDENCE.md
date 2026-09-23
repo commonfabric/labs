@@ -485,26 +485,26 @@ rendered as dollars. The wording is corrected in the tree; the published index
 entry carries the old text until it is republished, so a run can still read the
 wrong contract.
 
-## 2a. A checklist and a running total, composed by id
+## 2a. A checklist and a running total, composed from named parts
 
 The same job as §2, with the two parts named outright instead of discovered, and
 staying clear of the one control that does not work. **It needs no connectors at
 all**, which makes it the demo that cannot be broken by a grant going stale.
 
-**Preflight:** common only. No connectors. The two published parts must be
-discoverable — `vAx2Uy1C64duK47NIl9a0fb0UtfnHrXRrxM8giA1hWM` (CheckList) and
-`BEf5ZMjTIzX9J5HE6wec1s3zcQNqTAg-lFoD6W7pBHs` (AmountLedger). **Use these rather
-than the older pair**, which they supersede — and read what they do and do not
-fix, below.
+**Preflight:** common only. No connectors. The two parts the prompt names must
+be the discoverable ones — `vAx2Uy1C64duK47NIl9a0fb0UtfnHrXRrxM8giA1hWM`
+(CheckList) and `BEf5ZMjTIzX9J5HE6wec1s3zcQNqTAg-lFoD6W7pBHs` (AmountLedger),
+with the pair they supersede hidden. Those ids are here so a preflight check can
+name what it is looking for; the prompt does not carry them.
 
-**Prompt:** [DEMOS.md](DEMOS.md) carries the text verbatim. It names both ids,
+**Prompt:** [DEMOS.md](DEMOS.md) carries the text verbatim. It names both parts,
 asks for a preparation checklist beside a running total against a budget, and
 **states that amounts are in whole dollars.**
 
-That last clause is belt-and-braces on these ids rather than a requirement: the
-entry they publish describes the amounts correctly. It is kept because it costs
-a sentence and it is what the proven runs were measured against, and because a
-run reaching an older generation of the part reads a description that calls the
+That last clause is belt-and-braces rather than a requirement: the entry these
+parts publish describes the amounts correctly. It is kept because it costs a
+sentence and it is what the proven runs were measured against, and because a run
+reaching an older generation of the part reads a description that calls the
 field integer cents and renders 100× the intended figure.
 
 **Done when:** you can add a task, check one, add an expense, watch the total
@@ -515,15 +515,23 @@ move — and reload, and find it all still there.
 **Proof status: PROVEN (3/3).** Three runs of an identical request. Each added a
 task, checked one, added a $5 expense to reach $25 of a $50 budget, and **kept
 all of it across a reload.** Source inspected every time: both published parts
-imported by id, and the wrapper renders their own UI rather than reimplementing
-them.
+imported, and the wrapper renders their own UI rather than reimplementing them.
+
+Those three runs pasted the two ids. Three later runs of the same text naming
+the parts instead imported the same two, three for three. Three runs of a prompt
+that names neither and only describes the page reached the corrected ledger
+every time and the corrected checklist twice in three — the third wrote its own
+list rather than composing one, which is a discovery miss and not a wrong part.
+Source was read every time. None of those six were driven to a working page in a
+browser, so what they establish is which parts a run reaches, not the page
+behavior above.
 
 **"Clear completed" works** — one click takes exactly the checked items, keeps
 the rest, corrects the counts and hides itself, and the expenses are untouched.
 It survives a reload. That matters because it is the gesture a viewer actually
 makes after ticking things off.
 
-**These ids carry both fixes, and both are demonstrated.**
+**These parts carry both fixes, and both are demonstrated.**
 
 The **unit description is right**: the entry they publish describes
 AmountLedger's amounts as whole currency units, which is what the field holds,
@@ -1232,30 +1240,27 @@ person would say it. The question was which hints cover a real gap.
 The slug sentence is the clearest: `assign_slug`'s own error says _"Choose
 another"_, and the run does.
 
-**One hint is load-bearing.** Told to compose a checklist and a running total
-with no ids, a run imports the **superseded** generation of both parts — the one
-predating the removal fix.
+**One hint is load-bearing, and it is not the one in the dinner demo.** Told to
+compose this month's bills from mail and bank with no ids, a run finds both
+readers every time and the **bills matcher** one run in three; the other two
+author their own pairing logic rather than composing the published part. Demo 4
+names its three ids for that reason, and the gap is in discovery rather than in
+the wording.
 
-The corrected generations do carry `priorPatternId` pointing at their
-predecessors, so the chain is declared. It is not followed, and the reason is a
-rule rather than a fault: successor substitution redirects discovery **only
-along a chain whose generations share an owner**
-(`src/pattern-index/successors.ts`). These two do not. The older entries belong
-to the identity that seeded them; the corrections were published under a
-different one, so the chain crosses an ownership boundary and the rule
-deliberately declines it.
+**A correction published under a different identity does not displace what it
+corrects, and starts below it.** Successor substitution redirects discovery only
+along a chain whose generations share an owner
+(`src/pattern-index/successors.ts`). A correction whose predecessor was seeded
+by another identity declares `priorPatternId`, so the chain is stated, and the
+rule deliberately declines to follow it across the ownership boundary. Ranking
+then decides, and it favours the older entry, which is classified `proven` where
+the correction is `unproven`.
 
-Ranking then decides, and it favours the older entry, which is classified
-`proven` where the correction is `unproven`. **A correction published under a
-different identity does not displace what it corrects, and starts below it.**
-
-Two consequences worth stating plainly. Nobody can retire the old entries by
-retracting them: retraction is the owner's to perform and these are not ours.
-And the fix is not a prompt — it is index curation, or a policy for honouring a
-successor across owners.
-
-So a prompt that names those two ids is not stylistic. Until one of those lands,
-it is the only thing standing between a reader and the defect.
+Retraction does not resolve that: it is the owner's to perform, and the older
+entry is not ours. What resolves it is index curation — hiding the superseded
+entry so that ranking never sees it — or a policy for honouring a successor
+across owners. The `check-list` and `amount-ledger` pair is curated that way,
+and a prompt naming those parts reaches the corrected generation.
 
 ## The hints the prompts no longer carry
 
@@ -1277,9 +1282,16 @@ sortable part is only reached by a prompt that asks for sorting; a wording that
 avoids the word never looks for it. Avoiding it did not route around a gap — it
 hid a capability.
 
-**The ids stay** in demos 2 and 4 until the index question is settled. Without
-them a run composes the superseded generation of `check-list` and
-`amount-ledger`, which is the defect described above.
+**Demo 2 names its two parts instead of pasting their ids.** `CheckList` and
+`AmountLedger` by name reach the corrected generation of both, and so does a
+prompt that names neither and only describes the page it wants. The ids in that
+prompt were standing in for the curation: with the superseded pair hidden,
+ranking never sees it, so there is nothing left for the ids to steer past.
+
+**Demo 4 keeps its three ids**, because the bills matcher is the one part
+discovery does not reliably reach — see above. That is a hint over a real gap,
+not over the wording, and it comes out when the gap closes rather than when the
+prompt is rephrased.
 
 ### A defect the restored wording exposes
 
