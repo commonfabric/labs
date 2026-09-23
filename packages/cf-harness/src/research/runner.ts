@@ -716,6 +716,7 @@ const carryPriorResearch = async (
   state.readLimit = Number.POSITIVE_INFINITY;
   try {
     for (const source of prior.kit.sources) {
+      if (runWasAborted(request.signal)) throw abortError(request.signal);
       let reread: HarnessResearchSourceRead | undefined;
       try {
         reread = await rereadSource(request, state, source);
@@ -758,6 +759,12 @@ const rereadSource = async (
       !section.integrity.some(isOperatorProvisionedReferenceAtom)
     ) {
       throw new Error(`unknown documentation section in ${source.location}`);
+    }
+    // The selector is positional, so it is held to the path and heading the
+    // location records: a corpus that moved sections puts another one at that
+    // index, and reading it would catalog unrelated text as the replacement.
+    if (documentationLocation(request, section) !== source.location) {
+      throw new Error(`documentation section moved from ${source.location}`);
     }
     const range = checkedReadRange(section.text, source.offset, chars);
     readDocSection(request, state, section, range);
@@ -1025,6 +1032,14 @@ const docSectionMetadata = (
   chars: section.text.length,
 });
 
+/** The location a documentation read of `section` is cited under. */
+const documentationLocation = (
+  request: HarnessResearchRequest,
+  section: HarnessDocsCorpusSection,
+): string =>
+  section.path + "#" + (section.headingPath?.join(" > ") ?? section.heading) +
+  " (" + docSectionMetadata(request, section).sectionId + ")";
+
 /** Records and returns the exact section text observed through search or read. */
 const readDocSection = (
   request: HarnessResearchRequest,
@@ -1039,9 +1054,7 @@ const readDocSection = (
   addSourceLabel(state, cfcLabel);
   const read = addRead(state, {
     kind: "documentation",
-    location: section.path + "#" +
-      (section.headingPath?.join(" > ") ?? section.heading) + " (" +
-      metadata.sectionId + ")",
+    location: documentationLocation(request, section),
     offset: range.offset,
     end: range.end,
     totalChars: section.text.length,

@@ -554,11 +554,12 @@ describe("scoped research", () => {
   const handleFrom = (
     reply: { kit: HarnessResearchResult },
     describedHandles: HarnessResearchHandleValue["describedHandles"] = [],
+    confirmedPatterns: HarnessResearchHandleValue["confirmedPatterns"] = [],
   ): HarnessResearchHandleValue => ({
     type: HARNESS_RESEARCH_HANDLE_TYPE,
     researchRunId: "earlier",
     kit: reply.kit,
-    confirmedPatterns: [],
+    confirmedPatterns,
     describedHandles,
     cfc: {
       version: 1,
@@ -680,6 +681,66 @@ describe("scoped research", () => {
     expect(reply.record.sourceReads).toHaveLength(1);
     expect(reply.record.sourceReads[0].sourceId).not.toBe(priorId);
     expect(reply.record.sourceReads[0].location).toBe(priorLocation);
+  });
+
+  it("reports a prior source whose section moved as stale without reading the section now at its index", async () => {
+    const earlier = await earlierRead();
+    const priorLocation = earlier.kit.sources[0].location;
+    const moved = corpus(
+      "# Unrelated guide\nNothing about renderers here.\n\n" + TYPED_RENDERER,
+    );
+    const trial = run([
+      (request) => {
+        expect(request.transcript[1].content).toContain(
+          `under a new id: ["${priorLocation}"]`,
+        );
+        return final({ ...brief(), selectedPatternIds: [] });
+      },
+    ], {
+      purpose: "answer",
+      task: "Does this renderer require SQLite?",
+      followUpTo: "cfh:v:earlier",
+      priorResearch: handleFrom(earlier),
+      corpus: moved,
+    });
+    const reply = await trial.result;
+    expect(reply.record.sourceReads).toEqual([]);
+  });
+
+  it("selects a pattern the prior handle confirmed without inspecting it again", async () => {
+    const earlier = await earlierRead();
+    const confirmed = {
+      patternId: "carried-reader",
+      description: "Reads a typed collection.",
+      hashtags: [],
+      importHint: 'import Reader from "cf:pattern:carried-reader"',
+      ownerDid: "did:key:owner",
+      createdAt: "2026-09-01T00:00:00.000Z",
+      dependencies: [],
+      sourceIdentityVerified: true as const,
+    };
+    const trial = run([
+      () =>
+        final({
+          ...brief(),
+          summary: "Use the carried reader.",
+          selectedPatternIds: ["carried-reader"],
+        }),
+    ], {
+      purpose: "answer",
+      task: "Which reader fits?",
+      followUpTo: "cfh:v:earlier",
+      priorResearch: handleFrom(earlier, [], [confirmed]),
+      corpus: corpus(TYPED_RENDERER),
+    });
+    const reply = await trial.result;
+    expect(reply.kit.patterns.map((pattern) => pattern.patternId)).toEqual([
+      "carried-reader",
+    ]);
+    expect(reply.kit.missing).not.toContain(
+      "pattern carried-reader was not inspected successfully",
+    );
+    expect(reply.record.budgets.toolCalls).toBe(0);
   });
 
   for (const held of [true, false]) {
