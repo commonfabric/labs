@@ -151,6 +151,15 @@ describe("ContextualFlowControl.schemaAtPath", () => {
     expect(
       ContextualFlowControl.schemaAtPath({ const: { a: [1, 2] } }, ["a", "1"]),
     ).toEqual({ enum: [2] });
+    // Beside a declared shape the shape narrows the child, so a default under
+    // `properties` still reaches the value the enumeration admits whole.
+    expect(
+      ContextualFlowControl.schemaAtPath({
+        type: "object",
+        enum: [{}],
+        properties: { a: { type: "number", default: 1 } },
+      }, ["a"]),
+    ).toEqual({ type: "number", default: 1 });
   });
 
   it("settles a schema that omits `type` to the container a reader holds, and leaves the rest standing", () => {

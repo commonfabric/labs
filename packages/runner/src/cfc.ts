@@ -284,6 +284,14 @@ const schemaAtPathKey = (
 // their arguments, and what caching there is lives in module-level maps keyed
 // by schema identity.
 // The spec's confidentiality model is based on structured atoms.
+/** Whether a schema describes the children of an object or an array. */
+function declaresContainerKeywords(schema: JSONSchemaObj): boolean {
+  return schema.properties !== undefined ||
+    schema.additionalProperties !== undefined ||
+    schema.patternProperties !== undefined || schema.items !== undefined ||
+    schema.prefixItems !== undefined;
+}
+
 /**
  * The values an `enum` or `const` schema admits at `part`: what each member
  * holds there, for the members that hold anything — an object member at a
@@ -681,10 +689,15 @@ export class ContextualFlowControl {
       // reference to a `false` definition resolves — admits nothing, and
       // holds no children under either reading below.
       if (ContextualFlowControl.isFalseSchema(cursor)) return false;
-      // An `enum` or `const` names the admitted values outright, so the child
-      // at `part` is what the members hold there, and nothing where none of
-      // them holds anything.
-      const enumerated = isObjectOrArray(cursor)
+      // An `enum` or `const` that is the schema's only account of the value —
+      // no `type` and no container keyword beside it — names the admitted
+      // values outright, so the child at `part` is what the members hold
+      // there, and nothing where none of them holds anything. Beside a
+      // declared shape, the shape narrows the child as it always has: a
+      // default declared under `properties` reaches the value that way,
+      // whatever the enumeration says of the whole.
+      const enumerated = isObjectOrArray(cursor) && cursor.type === undefined &&
+          !declaresContainerKeywords(cursor)
         ? enumeratedValuesAt(cursor, part)
         : undefined;
       if (enumerated !== undefined) {
