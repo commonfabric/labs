@@ -251,7 +251,7 @@ describe("CFC clause-aware ceiling fit", () => {
       inherited.a = 1;
       inherited.b = 2;
       expect(() => cfcObservationFitsCeiling([inherited], [aliceUser]))
-        .toThrow(/Cannot compare/);
+        .toThrow(/Cannot compare value/);
     });
 
     it("a committed owner is admitted where its plaintext twin is refused", () => {
