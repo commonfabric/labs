@@ -89,6 +89,14 @@ const ROOM_STORE_SCHEMA = {
   required: ["out"],
 } as const satisfies JSONSchema;
 
+const SELECTION_SCHEMA = {
+  type: "array",
+  items: {
+    type: "object",
+    properties: { votes: { type: "array", items: { type: "string" } } },
+  },
+} as const satisfies JSONSchema;
+
 type Harness = {
   runtime: Runtime;
   storageManager: ReturnType<typeof StorageManager.emulate>;
@@ -421,6 +429,60 @@ describe("TransformedBy input witnesses", () => {
           ["votes"],
         );
         await transform(runtime, TALLY, ["shared"], "ballot", tally);
+        expect(refusedByCeiling(publish(runtime, "ballot"))).toBe(true);
+      });
+    });
+
+    it("refuses a secret-chosen selection of committed documents", async () => {
+      // Every document the tally reads was written by the commit step, but
+      // which of them it reads was chosen from Alice's note: the list of
+      // references is the attacker's write, and reading through it observes
+      // that choice. A reference slot's label carries the link's provenance
+      // and no `TransformedBy`, so a list of references is refused whoever
+      // wrote it; this pins that the choice is not skipped as plumbing.
+      await withRuntime(WITNESSED_GUARD, async ({ runtime }) => {
+        await seedRoom(runtime);
+        await commitStances(runtime, "committed-a");
+        await transform(
+          runtime,
+          COMMIT,
+          ["alice-note", "bob-note"],
+          "committed-b",
+          () => ({ votes: ["reject"] }),
+        );
+        const tx = runtime.edit();
+        tx.setCfcImplementationIdentity(ATTACKER);
+        const alice = runtime.getCell(space, "alice-note", undefined, tx)
+          .getRaw() as { note: string };
+        const chosen = runtime.getCell(
+          space,
+          alice.note.charCodeAt(0) & 1 ? "committed-a" : "committed-b",
+          undefined,
+          tx,
+        );
+        runtime.getCell(space, "selection", SELECTION_SCHEMA, tx).set([
+          chosen,
+        ] as never);
+        tx.prepareCfc();
+        expect((await tx.commit()).error).toBeUndefined();
+
+        const tallyTx = runtime.edit();
+        tallyTx.setCfcImplementationIdentity(TALLY);
+        const selected = runtime.getCell(
+          space,
+          "selection",
+          SELECTION_SCHEMA,
+          tallyTx,
+        ).get() as unknown[];
+        const ballotId = runtime.getCell(space, "ballot", undefined, tallyTx)
+          .getAsNormalizedFullLink().id;
+        tallyTx.writeOrThrow(
+          { space, scope: "space", id: ballotId, path: ["value"] },
+          tally(selected),
+        );
+        tallyTx.prepareCfc();
+        expect((await tallyTx.commit()).error).toBeUndefined();
+
         expect(refusedByCeiling(publish(runtime, "ballot"))).toBe(true);
       });
     });
