@@ -974,6 +974,42 @@ describe("Schema - Basic Types and References", () => {
       expect(handle.get()).toEqual({ id: 1, name: "one", hidden: true });
     });
 
+    it("keeps the compound on a handle where the shape sits beside a nested `anyOf` holding a bare `asCell` branch", () => {
+      // Traversal merges the keywords beside a combinator into its branches
+      // before minting, so a bare `asCell` arm under a `type` and `properties`
+      // mints a handle carrying that shape, exactly as the direct spelling
+      // does; the two spellings read the same.
+      const holder = runtime.getCell<any>(
+        space,
+        "shaped-enclosing-nested-bare",
+        {
+          type: "object",
+          properties: {
+            h: {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: { id: { type: "number" } },
+                  anyOf: [{ asCell: ["cell"] }],
+                },
+                { asCell: ["cell"] },
+                {
+                  type: "object",
+                  properties: { name: { type: "string" } },
+                  required: ["name"],
+                },
+              ],
+            },
+          },
+        } as const satisfies JSONSchema,
+        tx,
+      );
+      holder.set({ h: { id: 1, name: "one", hidden: true } });
+      const handle = holder.get().h;
+      expect(isCell(handle)).toBe(true);
+      expect(handle.get()).toEqual({ id: 1, name: "one", hidden: true });
+    });
+
     it("keeps the link's schema on a handle minted from an `allOf` of a bare `asCell` branch and a true one", () => {
       // An `allOf` whose other branches constrain nothing is its bare `asCell`
       // branch, and admits a handle over anything just as an `anyOf` does.

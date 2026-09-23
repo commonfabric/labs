@@ -129,11 +129,13 @@ nothing is a true reader, and a true reader adopts the schema of the link it
 crosses, so a handle minted from such a branch already carries the link's own
 schema. The merge cannot see which branch minted the handle it holds, so the
 handle keeps that schema rather than the union only where every branch that
-can mint one — through nested combinators and resolved references — is such a
-bare branch, an `allOf` counting where its other parts are true; the union
-says only what the reader admits. One shaped `asCell` branch anywhere in the
-compound keeps the union on the handle. Query traversal produces no cells, and
-merges by the rules above.
+can mint one — through nested combinators and resolved references, each read
+with the keywords beside its combinator merged in as traversal merges them —
+is such a bare branch, an `allOf` counting where its other parts are true; the
+union says only what the reader admits. One shaped `asCell` branch anywhere in
+the compound, a bare arm under an enclosing `type` and `properties` included,
+keeps the union on the handle. Query traversal produces no cells, and merges
+by the rules above.
 
 ### `$ref`
 

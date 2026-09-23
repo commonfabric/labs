@@ -1976,8 +1976,11 @@ function removeAsCellFromSchema(schema: JSONSchema): JSONSchema {
  * any depth, since a merge cannot see which of them minted the handle it
  * holds. An `allOf` is bare where its parts are all true, an `allOf` of true
  * parts being its bare part; a part that constrains something, a nested
- * combinator among them, is a constraint the handle must keep. A reference
- * that does not resolve is taken as shaped.
+ * combinator among them, is a constraint the handle must keep. A branch is
+ * read with the keywords beside its combinator merged in, the way traversal
+ * merges them before it mints a handle from the branch: a bare `asCell` arm
+ * under a `type` and `properties` mints a handle carrying that shape. A
+ * reference that does not resolve is taken as shaped.
  */
 function handleProvenance(
   schema: JSONSchema,
@@ -1991,9 +1994,24 @@ function handleProvenance(
   if (ContextualFlowControl.getAsCellValues(resolved).length > 0) {
     return isTrue(resolved) ? "bare" : "shaped";
   }
-  const parts = resolved.allOf ?? [];
-  const kinds = [...(resolved.anyOf ?? []), ...(resolved.oneOf ?? []), ...parts]
-    .map((branch) => handleProvenance(branch, resolved.$defs ?? defs));
+  const {
+    anyOf = [],
+    oneOf = [],
+    allOf = [],
+    $defs: branchDefs,
+    ...enclosing
+  } = resolved;
+  const withEnclosing = (branch: JSONSchema): JSONSchema =>
+    Object.keys(enclosing).length === 0
+      ? branch
+      : schemaWithProperties(enclosing as JSONSchemaObj, branch);
+  const parts = allOf.map(withEnclosing);
+  const kinds = [
+    ...anyOf.map(withEnclosing),
+    ...oneOf.map(withEnclosing),
+    ...parts,
+  ]
+    .map((branch) => handleProvenance(branch, branchDefs ?? defs));
   if (kinds.includes("shaped")) return "shaped";
   if (!kinds.includes("bare")) return "none";
   return parts.every(isTrue) ? "bare" : "shaped";
