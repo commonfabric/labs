@@ -251,6 +251,7 @@ export default pattern<ProfileGroupChatInput, ProfileGroupChatOutput>(
                 aria-label="Message"
                 timingStrategy="immediate"
                 style={{ flex: "1" }}
+                oncf-submit={send}
               />
               <cf-button onClick={send} disabled={computed(() => !hasProfile)}>
                 Send

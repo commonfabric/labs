@@ -262,6 +262,7 @@ export default pattern<ScopedGroupChatInput, ScopedGroupChatOutput>(
                       placeholder="Room name"
                       aria-label="Room name"
                       timing-strategy="immediate"
+                      oncf-submit={boundAddRoom}
                     />
                     <cf-button onClick={boundAddRoom}>
                       Add
@@ -349,6 +350,7 @@ export default pattern<ScopedGroupChatInput, ScopedGroupChatOutput>(
                   placeholder={`Message ${displayedRoomLabel}`}
                   aria-label="Message"
                   timing-strategy="immediate"
+                  oncf-submit={send}
                 />
               </cf-vstack>
               <cf-button onClick={send}>
