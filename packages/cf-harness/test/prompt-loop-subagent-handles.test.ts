@@ -1712,6 +1712,9 @@ describe("prompt-loop cross-agent address handles", () => {
     expect(childPrompt).toContain(
       "never ask the user for a nonexistent permission to release aggregates or change the sink ceiling",
     );
+    expect(childPrompt).not.toContain(
+      "The piece must include a visible summary",
+    );
   });
 
   for (const ok of [true, false]) {

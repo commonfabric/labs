@@ -209,13 +209,8 @@ export interface RunPatternToolSuccessOutput {
   rawCauseMessage?: string;
 
   /**
-   * What the outputs of the patterns this run materialized say about the
-   * reads behind them: a reported failure, a declared pending read, or a
-   * settled read with no rows. Pending counts and rows are placeholders;
-   * reread the same piece before treating them as data. Present only when
-   * there is something to say, and a disclosure rather than a refusal — the
-   * run succeeded, and this is the reason to look.
-   * `run-pattern-output-concerns.ts` carries why no text travels with one.
+   * Declared read failures, pending reads, and settled reads with no rows.
+   * Pending concerns are omitted when policy refuses the same result read.
    */
   outputConcerns?: readonly RunPatternOutputConcern[];
 }
@@ -2095,7 +2090,9 @@ export const runPatternTool: HarnessToolDefinition<
         }
       }
     }
-    const outputConcerns = observedOutputs.map((one) => one.concern);
+    const outputConcerns = observedOutputs.flatMap(({ concern }) =>
+      withheld !== undefined && concern.concern === "pending" ? [] : [concern]
+    );
     const retainedCauses = [
       withheldRefusal?.reason,
       probeThrown,

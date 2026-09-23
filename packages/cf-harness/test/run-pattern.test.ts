@@ -326,17 +326,17 @@ async function seedLabelledSecret(
 }
 
 /**
- * A pattern over an operator-shaped account: a balance and a list of
- * transactions, the spending summed from the negative amounts. The input is
- * typed as plain data, which is how a model wires a cell it was handed.
+ * An account's spending total beside declared pending and failed reads.
  */
 const SPENDING_PATTERN_SOURCE = [
   "import { computed, pattern } from 'commonfabric';",
   "interface Transaction { amount: number; }",
   "interface Account { balance: number; transactions: Transaction[]; }",
   "interface Input { account: Account; }",
-  "interface Output { totalSpending: number; }",
+  "interface Output { totalSpending: number; pending: boolean; errorMessage: string; }",
   "export default pattern<Input, Output>(({ account }) => ({",
+  "  pending: true,",
+  "  errorMessage: 'fixture read failed',",
   "  totalSpending: computed(() => account.transactions.reduce(",
   "    (sum, t) => sum + (t.amount < 0 ? -t.amount : 0),",
   "    0,",
@@ -1742,12 +1742,8 @@ describe("run-pattern", () => {
     });
 
     it("returns the result reference without consulting the ceiling when no `resultSchema` asks for values", async () => {
-      // A reference names the result without carrying it, so handing one
-      // back discloses nothing: the ceiling gates values, and a call that
-      // asks for none is not measured against it. This is the shape an
-      // agent that routes data it never reads relies on — the pattern
-      // derives from a labeled input, and the reference to what it derived
-      // comes back all the same.
+      // A reference reaches the piece without releasing its values. Without
+      // a result schema, pending still asks the caller to reread.
       const { runtime, pieces, space, dispose } = await createStrictFabric();
       try {
         const accountRef = await seedLabelledAccount(
@@ -1769,11 +1765,11 @@ describe("run-pattern", () => {
         expect(output.valueError).toBeUndefined();
         expect(output.policyRefusal).toBeUndefined();
         expect(output.releaseObservation).toBeUndefined();
-        // Nothing was measured, so the trace records no decision about a
-        // boundary this call never reached.
         expect(output.releaseDecision).toBeUndefined();
-        // The result did derive from the labeled input: the reference names
-        // exactly what the ceiling withholds as a value.
+        expect(output.outputConcerns?.map(({ concern }) => concern)).toEqual([
+          "error-branch",
+          "pending",
+        ]);
         expect((output.rawValue as { totalSpending: number }).totalSpending)
           .toBe(145);
       } finally {
@@ -1782,11 +1778,8 @@ describe("run-pattern", () => {
     });
 
     it("withholds the values the ceiling refuses and still returns the result reference", async () => {
-      // Asking for values is what consults the ceiling, and a refusal
-      // withholds exactly what was measured: the values. The reference comes
-      // back with them withheld, so the agent can still pass the result on
-      // by reference, and the refusal reaches it as data and as an
-      // instruction while the reason stays in the artifact.
+      // A ceiling refusal is final for this read, so a pending output must
+      // not ask the caller to repeat it. Observed failures remain visible.
       const { runtime, pieces, space, dispose } = await createStrictFabric();
       try {
         const accountRef = await seedLabelledAccount(
@@ -1825,8 +1818,13 @@ describe("run-pattern", () => {
           refusal: output.policyRefusal,
         });
         expect(output.releaseDecision?.refusal?.inputKeys).toEqual(["account"]);
-        expect((output.rawValue as { totalSpending: number }).totalSpending)
-          .toBe(145);
+        expect(output.rawValue).toMatchObject({
+          totalSpending: 145,
+          pending: true,
+        });
+        expect(output.outputConcerns?.map(({ concern }) => concern)).toEqual([
+          "error-branch",
+        ]);
       } finally {
         await dispose();
       }

@@ -2085,6 +2085,8 @@ output's key, the identity of the pattern that produced it — which for a
 composed one is the id its own `cf:pattern:` import addresses — and fixed text
 saying what to do about it. Absent when there is nothing to say, and one entry
 per pattern, output and kind however many times a pattern was materialized.
+Policy-refused results omit pending concerns because a refusal calls for no
+reread.
 
 Two bounds decide what a concern may be read from, and both fail closed. Only an
 output the pattern's own schema DECLARES at its top level is read: a property
@@ -2618,13 +2620,12 @@ sampled delta, subject to any refresh warning.
 For both creation and revision, unavailable inspection does not prevent applying
 the requested source. When execution or the update succeeds but its result
 cannot be inspected, the child returns the piece with `ok: true` and
-`verification: "not-checked"`. The piece includes a visible summary stating that
-limitation. The parent states it in the final text, describes only the build or
-change, and points the user to the piece. It claims no unseen rows, counts,
-matches, or other results, and requests no nonexistent permission to release
-aggregates. A release refusal does not trigger repeated verification or another
-delegation. Compile errors, refused writes, and observed query failures remain
-failures to repair or report.
+`verification: "not-checked"`. The parent's final text states the inspection
+limitation, describes only the build or change, and points to the piece. It
+claims no unseen rows, counts, matches, or other results, and requests no
+nonexistent permission to release aggregates. A release refusal does not trigger
+repeated verification or another delegation. Compile errors, refused writes, and
+observed query failures remain failures to repair or report.
 
 For styling, a supplied computed-surface observation can establish the pane
 background. Source colors alone cannot. Without that observation or a permitted

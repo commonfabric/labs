@@ -377,8 +377,8 @@ The current package provides:
   source passed on nowhere is still named — that report a failure, declare a
   pending read, or hold no rows on a settled result declaring a read. Pending
   zeros and empty lists are placeholders, not data; the root's returned snapshot
-  is checked even if a later observation has settled. A minimal unnamed reader
-  pattern takes the held result reference as an input to verify the same piece.
+  is checked even if a later observation has settled. Only a read without a
+  policy refusal carries pending concerns asking to reread the same piece.
   Concerns name the output and the pattern under the identity a `cf:pattern:`
   import addresses while the failure's own text stays in the artifact. Reporting
   is best-effort wherever it cannot read: an output reached through a `$ref` or
@@ -555,12 +555,12 @@ The current package provides:
   retried. A released, ready comparison with zero effect or an empty sample
   calls for a question. Unavailable inspection allows a requested create or
   revision to be applied: a successful receipt returns the piece with the fixed
-  `verification: "not-checked"` marker. The piece's visible summary and the
-  final text state the inspection limitation, describe only the build or change,
-  and point to the piece without claiming unseen results or asking for a
-  nonexistent release permission. Styling without a computed-surface observation
-  is explicitly reported as not checked. This is guidance, not a host proof of
-  arbitrary rule semantics.
+  `verification: "not-checked"` marker. The parent's final text states the
+  inspection limitation, describes only the build or change, and points to the
+  piece without claiming unseen results or asking for a nonexistent release
+  permission. Styling without a computed-surface observation is explicitly
+  reported as not checked. This is guidance, not a host proof of arbitrary rule
+  semantics.
 
 Run the capability probe instead of copying this list into adapters:
 

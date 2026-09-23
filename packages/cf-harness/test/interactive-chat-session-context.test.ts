@@ -201,7 +201,7 @@ describe("interactive chat session context", () => {
       "Unavailable verification alone is not a failure branch or a reason to leave a revision unapplied.",
     );
     expect(context).toContain(
-      "The piece must include a visible summary line saying its result could not be inspected.",
+      "The parent states the limitation in the final text",
     );
     expect(context).toContain(
       "It must not assert unseen rows, counts, matches, unread status, or relevance scores.",
