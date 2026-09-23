@@ -75,8 +75,9 @@ export type AssignSlugToolOutput =
  * naming a replacement under a fresh slug. A slug that already names another
  * piece or a collection is never repointed: the tool appends a counter until
  * it finds a free name, and the receipt carries the name assigned. A pending
- * read or missing UI refuses publication. These host-side checks return fixed diagnostics;
- * the values read and the address behind the token stay trusted-side.
+ * read or missing UI refuses publication. These host-side checks return fixed
+ * diagnostics; the values read and the address behind the token stay
+ * trusted-side.
  *
  * A slug rather than a free-text name because the slug is the only handle
  * the tool can set: what the piece list displays is the pattern's own `NAME`
