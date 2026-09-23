@@ -805,6 +805,7 @@ describe("Schema: CFC authoring aliases", () => {
       type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
       type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
       type AddIntegrity<T, X extends readonly unknown[]> = Cfc<T, { addIntegrity: X }>;
+      type RequiresIntegrity<T, X extends readonly unknown[]> = Cfc<T, { requiredIntegrity: X }>;
       type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
       type AnyOf<X extends readonly unknown[]> = { readonly __ct_cfc_any_of__?: X };
       type Sec<T> = Confidential<T, readonly ["a"]>;
@@ -883,6 +884,56 @@ describe("Schema: CFC authoring aliases", () => {
         }
       `);
       expect((schema.properties?.t as any).$ref).toBe("#/$defs/Secret");
+    });
+
+    describe("written inside a generic declaration", () => {
+      // The argument nodes written there name the declaration's parameters,
+      // which only the instantiation being formatted binds, so the payload's
+      // value comes from its type.
+
+      it("keeps the payload's instantiated type beside a nested label", async () => {
+        const schema = await generate(`
+          interface Box<T> {
+            flag: RequiresIntegrity<AddIntegrity<T, readonly ["member"]>, readonly ["admin"]>;
+          }
+          type SchemaRoot = Box<boolean>;
+        `);
+        expect(schema.properties?.flag).toEqual({
+          type: "boolean",
+          ifc: { addIntegrity: ["member"], requiredIntegrity: ["admin"] },
+        });
+      });
+
+      it("keeps the payload's instantiated type beside a nested write claim", async () => {
+        const schema = await generate(`
+          interface Box<T> {
+            flag: RequiresIntegrity<WriteAuthorizedBy<T, typeof toggle>, readonly ["admin"]>;
+          }
+          type SchemaRoot = Box<boolean>;
+        `);
+        expect(schema.properties?.flag).toEqual({
+          type: "boolean",
+          ifc: {
+            writeAuthorizedBy: {
+              __ctWriterIdentityOf: { file: "test.ts", path: ["toggle"] },
+            },
+            requiredIntegrity: ["admin"],
+          },
+        });
+      });
+
+      it("reads a nested label the declaration's parameter names from the instantiation", async () => {
+        const schema = await generate(`
+          interface Box<T, L extends readonly unknown[]> {
+            flag: RequiresIntegrity<AddIntegrity<T, L>, readonly ["admin"]>;
+          }
+          type SchemaRoot = Box<boolean, readonly ["member"]>;
+        `);
+        expect(schema.properties?.flag).toEqual({
+          type: "boolean",
+          ifc: { addIntegrity: ["member"], requiredIntegrity: ["admin"] },
+        });
+      });
     });
   });
 });
