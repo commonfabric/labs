@@ -324,8 +324,8 @@ registered, and refs to it stay unresolved.
 
 ### 5.3.3 Cycle Detection
 
-Graph traversal must handle cycles. Two cycle detection mechanisms are used,
-both derived from `traverse.ts`:
+Graph traversal must handle cycles. Three cycle detection mechanisms are used,
+all derived from `traverse.ts`:
 
 #### CycleTracker
 
@@ -380,6 +380,18 @@ type PointerCycleTracker = CompoundCycleTracker<
   any // The traversal result for this node
 >;
 ```
+
+#### Branches returning to their own position
+
+A combinator branch evaluates the same value at the same address as the schema
+it belongs to, so neither tracker sees it come back. A union whose handle
+branch names the union itself (`type Recursive = Cell<Recursive> | null`)
+returns to its own traversal without descending. The traverser keeps the memo
+keys of the traversals in progress at the current position, and a branch that
+reaches one of them matches nothing: the least result, and the one the schema
+unrolled until it stops returning to itself selects. A result computed on that
+assumption on behalf of an enclosing traversal is returned but not memoized,
+since it holds only until that traversal completes.
 
 ### 5.3.4 Schema Narrowing
 

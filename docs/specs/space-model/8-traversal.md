@@ -279,6 +279,24 @@ Traversal uses cycle trackers to avoid infinite recursion across:
 
 For `CompoundCycleTracker`, disposal removes empty per-key entries.
 
+A combinator branch (`anyOf`, `oneOf`, `allOf`) evaluates the same value at the
+same address as the schema it belongs to, so no tracker keyed on values sees it
+come back. A union whose handle branch names the union itself, as
+`type Recursive = Cell<Recursive> | null` generates, returns to its own
+traversal that way. A branch that reaches a traversal still in progress at its
+own position, under the same schema, matches nothing: that is the least result,
+and the one the schema unrolled until it stops returning to itself gives. A
+result computed on that assumption on behalf of an enclosing traversal holds
+only until that traversal completes, so it is not memoized.
+
+The schema-only walks that evaluate a union branch by branch without a value —
+the type pruning behind `schemaAcceptsType()` and `isOpaquePosition()`, and the
+`asCell` follow cap (`ContextualFlowControl.getAsCellFollowScopeCap()`) — come
+back to such a union through its reference in the same way. Each walks a branch
+list once along its path: walking it again decides nothing new, so it adds no
+match to an `anyOf` or `oneOf`, no constraint to an `allOf`, and no narrower
+follow cap.
+
 ---
 
 ## Known Non-Standard JSON Schema Behavior
@@ -309,6 +327,7 @@ Behavior in this spec is verified by:
 - `packages/runner/test/handle-declared-by-definition.test.ts`
 - `packages/runner/test/query.test.ts`
 - `packages/runner/test/schema-view.test.ts`
+- `packages/runner/test/recursive-handle-union.test.ts`
 
 These include regression tests for:
 
@@ -319,6 +338,8 @@ These include regression tests for:
 - defaults via resolved `$ref`
 - a handle declared by the definition a position names by `$ref`
 - cycle-tracker cleanup
+- a union whose branch returns to its own position, in traversal and in the
+  schema-only walks
 
 ---
 

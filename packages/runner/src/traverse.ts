@@ -3812,6 +3812,10 @@ const TRAVERSE_FAILURES = {
     "UNEXPECTED_DOC_VALUE",
     "Unexpected type for doc value",
   ),
+  branchCycle: createTraverseFailure(
+    "BRANCH_CYCLE",
+    "Branch returns to a traversal of its own position",
+  ),
 } as const;
 
 function fail<T>(
@@ -3935,6 +3939,28 @@ export class SchemaObjectTraverser<V extends FabricValue>
     string,
     TraverseResult<FabricValue>
   >();
+
+  /**
+   * The memo keys of the traversals in progress, each mapped to the depth its
+   * traversal runs at.
+   */
+  #inProgress = new Map<string, number>();
+
+  /**
+   * Depth of the traversal that began the position being evaluated. Every
+   * traversal below it, down to the current one, is a combinator branch
+   * evaluating that position's value at that position's address under another
+   * of its schemas; `traverseWithSchema()` begins a new position.
+   */
+  #positionDepth = 0;
+
+  /**
+   * The shallowest depth whose in-progress traversal a branch at or below the
+   * current one came back to and took as no match, or `Infinity`. A result
+   * computed on that assumption holds only until the traversal at that depth
+   * completes, so it is returned but not memoized.
+   */
+  #provisionalDepth = Infinity;
 
   schemaMemoHits = 0;
 
@@ -4177,6 +4203,29 @@ export class SchemaObjectTraverser<V extends FabricValue>
     schema: JSONSchema,
     link?: NormalizedFullLink,
   ): TraverseResult<FabricValue> {
+    const outerPositionDepth = this.#positionDepth;
+    this.#positionDepth = this.#currentDepth + 1;
+    try {
+      return this.#traverseBranch(doc, schema, link);
+    } finally {
+      this.#positionDepth = outerPositionDepth;
+    }
+  }
+
+  /**
+   * Like `traverseWithSchema()`, except that `doc` is the position its caller
+   * is evaluating, taken under another of the caller's schemas, as a
+   * combinator branch takes it. A branch that comes back to a traversal of the
+   * same position still in progress has read nothing that traversal has not,
+   * and returns no match. That is the least result: in an `anyOf` it leaves
+   * the in-progress traversal to match through its other branches, as the
+   * schema unrolled until it stops returning to itself does.
+   */
+  #traverseBranch(
+    doc: IMemorySpaceValueAttestation,
+    schema: JSONSchema,
+    link?: NormalizedFullLink,
+  ): TraverseResult<FabricValue> {
     // TODO(@ubik2): Need to break this up -- it's too long
     this.traverseWithSchemaCalls++;
     this.#currentDepth++;
@@ -4214,9 +4263,42 @@ export class SchemaObjectTraverser<V extends FabricValue>
         this.schemaMemoHits++;
         return cached;
       }
-      const result = this.#traverseWithSchemaInner(doc, schema, link);
-      memo.set(memoKey, result);
-      return result;
+      // A key in progress at an outer position has been reached again through
+      // a descent or a link, where the cycle tracker handles the re-entry;
+      // only a key in progress at this position is a branch coming back to
+      // itself.
+      const inProgressDepth = this.#inProgress.get(memoKey);
+      if (
+        inProgressDepth !== undefined &&
+        inProgressDepth >= this.#positionDepth
+      ) {
+        this.#provisionalDepth = Math.min(
+          this.#provisionalDepth,
+          inProgressDepth,
+        );
+        return fail(TRAVERSE_FAILURES.branchCycle);
+      }
+      const depth = this.#currentDepth;
+      const outerProvisionalDepth = this.#provisionalDepth;
+      this.#provisionalDepth = Infinity;
+      this.#inProgress.set(memoKey, depth);
+      try {
+        const result = this.#traverseWithSchemaInner(doc, schema, link);
+        // A cycle back to this traversal settles here; one back to a
+        // traversal above it leaves this result provisional.
+        if (this.#provisionalDepth >= depth) memo.set(memoKey, result);
+        return result;
+      } finally {
+        if (inProgressDepth === undefined) {
+          this.#inProgress.delete(memoKey);
+        } else {
+          this.#inProgress.set(memoKey, inProgressDepth);
+        }
+        this.#provisionalDepth = Math.min(
+          outerProvisionalDepth,
+          this.#provisionalDepth < depth ? this.#provisionalDepth : Infinity,
+        );
+      }
     } finally {
       this.#currentDepth--;
     }
@@ -4277,7 +4359,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
               this.anyOfFastRejects++;
               continue;
             }
-            const { ok: val, error } = this.traverseWithSchema(
+            const { ok: val, error } = this.#traverseBranch(
               doc,
               mergedSchema,
               link,
@@ -4367,7 +4449,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
             continue;
           }
           // TODO(@ubik2): do i need to merge the link schema?
-          const { ok: val, error } = this.traverseWithSchema(
+          const { ok: val, error } = this.#traverseBranch(
             doc,
             branch.merged,
             link,
@@ -4415,7 +4497,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
           }
           const mergedSchema = mergeSchemaOption(restSchema, optionSchema);
           // TODO(@ubik2): do i need to merge the link schema?
-          const { ok: val, error } = this.traverseWithSchema(
+          const { ok: val, error } = this.#traverseBranch(
             doc,
             mergedSchema,
             link,
@@ -4464,7 +4546,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
           }
           const mergedSchema = mergeSchemaOption(restSchema, optionSchema);
           // TODO(@ubik2): do i need to merge the link schema?
-          const { ok: val, error } = this.traverseWithSchema(
+          const { ok: val, error } = this.#traverseBranch(
             doc,
             mergedSchema,
             link,
@@ -6056,10 +6138,18 @@ function appendPartsToPath(path: ValuePath, parts: string[]): ValuePath {
  * write path can share it): whether a schema can match a value of the given
  * type name, with the same $ref resolution and allOf/anyOf/oneOf handling the
  * read-side validation uses.
+ *
+ * `walking` holds the branch lists being walked further up. A schema that
+ * reaches itself again through a `$ref` — a union whose handle branch names
+ * the union — presents one of them again, since resolution hands back a
+ * definition's own list rather than a copy. Walking it again decides nothing
+ * new, so it adds no constraint to an `allOf` and no match to an `anyOf` or
+ * `oneOf`.
  */
 function schemaTypeValidity(
   schema: JSONSchema,
   valueType: JSONSchemaTypes,
+  walking?: Set<readonly JSONSchema[]>,
 ): TypeValidity {
   let resolved: JSONSchema | undefined = schema;
   if (isObjectOrArray(schema) && "$ref" in schema) {
@@ -6114,45 +6204,61 @@ function schemaTypeValidity(
   }
   // Limited allOf handling
   let allOfValidity: TypeValidity.True | TypeValidity.Unknown | undefined;
-  if (schemaObj.allOf) {
-    // unknown & T => T
-    let match: TypeValidity.True | TypeValidity.Unknown | undefined;
-    for (const option of schemaObj.allOf) {
-      const valid = schemaTypeValidity(
-        cfcSchemaWithInheritedDefs(option, schemaObj.$defs),
-        valueType,
-      );
-      // ignore undefined result (unknown type), but if any option returns
-      // false, the whole thing is false
-      if (valid === TypeValidity.False) {
-        return TypeValidity.False;
-      } else if (valid === TypeValidity.True) {
-        match = TypeValidity.True;
-      } else if (valid === TypeValidity.Unknown && match === undefined) {
-        match = TypeValidity.Unknown;
+  if (schemaObj.allOf && !walking?.has(schemaObj.allOf)) {
+    walking ??= new Set();
+    walking.add(schemaObj.allOf);
+    try {
+      // unknown & T => T
+      let match: TypeValidity.True | TypeValidity.Unknown | undefined;
+      for (const option of schemaObj.allOf) {
+        const valid = schemaTypeValidity(
+          cfcSchemaWithInheritedDefs(option, schemaObj.$defs),
+          valueType,
+          walking,
+        );
+        // ignore undefined result (unknown type), but if any option returns
+        // false, the whole thing is false
+        if (valid === TypeValidity.False) {
+          return TypeValidity.False;
+        } else if (valid === TypeValidity.True) {
+          match = TypeValidity.True;
+        } else if (valid === TypeValidity.Unknown && match === undefined) {
+          match = TypeValidity.Unknown;
+        }
       }
+      allOfValidity = match ?? TypeValidity.True;
+    } finally {
+      walking.delete(schemaObj.allOf);
     }
-    allOfValidity = match ?? TypeValidity.True;
   }
   // Limited anyOf handling
   let anyOfValidity: TypeValidity.True | TypeValidity.Unknown | undefined;
   if (schemaObj.anyOf) {
     // unknown | T => unknown
     let match: TypeValidity.True | TypeValidity.Unknown | undefined;
-    for (const option of schemaObj.anyOf) {
-      if (ContextualFlowControl.isTrueSchema(option)) {
-        // unknown | any => any
-        match = TypeValidity.True;
-        break;
-      }
-      const valid = schemaTypeValidity(
-        cfcSchemaWithInheritedDefs(option, schemaObj.$defs),
-        valueType,
-      );
-      if (valid === TypeValidity.False) {
-        continue;
-      } else if (match !== TypeValidity.Unknown) {
-        match = valid;
+    if (!walking?.has(schemaObj.anyOf)) {
+      walking ??= new Set();
+      walking.add(schemaObj.anyOf);
+      try {
+        for (const option of schemaObj.anyOf) {
+          if (ContextualFlowControl.isTrueSchema(option)) {
+            // unknown | any => any
+            match = TypeValidity.True;
+            break;
+          }
+          const valid = schemaTypeValidity(
+            cfcSchemaWithInheritedDefs(option, schemaObj.$defs),
+            valueType,
+            walking,
+          );
+          if (valid === TypeValidity.False) {
+            continue;
+          } else if (match !== TypeValidity.Unknown) {
+            match = valid;
+          }
+        }
+      } finally {
+        walking.delete(schemaObj.anyOf);
       }
     }
     if (match === undefined) {
@@ -6166,22 +6272,31 @@ function schemaTypeValidity(
   let oneOfValidity: TypeValidity.True | TypeValidity.Unknown | undefined;
   if (schemaObj.oneOf) {
     let match: TypeValidity.True | TypeValidity.Unknown | undefined;
-    for (const option of schemaObj.oneOf) {
-      if (ContextualFlowControl.isTrueSchema(option)) {
-        // unknown | any => any
-        match = TypeValidity.True;
-        break;
-      }
-      const valid = schemaTypeValidity(
-        cfcSchemaWithInheritedDefs(option, schemaObj.$defs),
-        valueType,
-      );
-      if (valid === TypeValidity.False) {
-        continue;
-      } else if (match !== TypeValidity.Unknown) {
-        // this may be more than one, but we don't know that the rest of
-        // the validation will pass, so don't reject.
-        match = valid;
+    if (!walking?.has(schemaObj.oneOf)) {
+      walking ??= new Set();
+      walking.add(schemaObj.oneOf);
+      try {
+        for (const option of schemaObj.oneOf) {
+          if (ContextualFlowControl.isTrueSchema(option)) {
+            // unknown | any => any
+            match = TypeValidity.True;
+            break;
+          }
+          const valid = schemaTypeValidity(
+            cfcSchemaWithInheritedDefs(option, schemaObj.$defs),
+            valueType,
+            walking,
+          );
+          if (valid === TypeValidity.False) {
+            continue;
+          } else if (match !== TypeValidity.Unknown) {
+            // this may be more than one, but we don't know that the rest of
+            // the validation will pass, so don't reject.
+            match = valid;
+          }
+        }
+      } finally {
+        walking.delete(schemaObj.oneOf);
       }
     }
     if (match === undefined) {
