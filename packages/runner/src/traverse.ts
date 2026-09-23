@@ -1372,6 +1372,29 @@ export type TraversalContext = {
   ) => void;
 
   /**
+   * How many missing link targets this traversal has reported. A site that
+   * stands a substitute in for a rejected subtree compares it around the
+   * rejection to learn whether the subtree crossed one. A memo hit reports
+   * nothing, so a subtree counts on its first visit only.
+   */
+  missingLinkTargets: number;
+
+  /**
+   * The documents those reports named, keyed by `missingTargetKey`. A site
+   * that fills an absent value with a default asks whether the value's
+   * document is one of them.
+   */
+  missingLinkTargetDocs: Set<string>;
+
+  /**
+   * Set once a substitute — an array item's `null` or `undefined`, a default
+   * — stood in for what a missing link target hides. Nothing about that value
+   * is known, so a reader that may not publish a stand-in for the unknown
+   * refuses the traversal on seeing this, however the traversal ended.
+   */
+  substituteCoveredMissingTarget: boolean;
+
+  /**
    * Schema-document tracker keys this traversal has already attempted to
    * load, so one traversal reads each referenced document at most once. A
    * failed attempt is not retried within the traversal; the next traversal
@@ -1412,6 +1435,9 @@ export function createTraversalContext(
     scopeKeyIdentity,
     traverseCells,
     onMissingLinkTarget,
+    missingLinkTargets: 0,
+    missingLinkTargetDocs: new Set<string>(),
+    substituteCoveredMissingTarget: false,
     schemaDocsLoaded,
     schemaDocsAvailable,
   };
@@ -2327,6 +2353,20 @@ const schemaScopeForSelector = (selector?: SchemaPathSelector) =>
 const schemaFollowScopeCap = (schema: unknown): SchemaScope | undefined =>
   ContextualFlowControl.getSchemaScopeCap(schema as JSONSchema | undefined);
 
+/** The key `TraversalContext.missingLinkTargetDocs` holds a document under. */
+function missingTargetKey(doc: { space: MemorySpace; id: string }): string {
+  return `${doc.space}/${doc.id}`;
+}
+
+/** Records a missing link target on the context ahead of reporting it. */
+function noteMissingLinkTarget(
+  context: TraversalContext,
+  doc: { space: MemorySpace; id: string },
+): void {
+  context.missingLinkTargets++;
+  context.missingLinkTargetDocs.add(missingTargetKey(doc));
+}
+
 /**
  * Report a linked document that is absent from the local replica so the
  * runtime can kick its asynchronous load. The read still resolves to
@@ -2339,6 +2379,7 @@ function reportMissingLinkTarget(
   sourceSpace: MemorySpace,
   source?: { id: string; scope?: CellScope },
 ): void {
+  noteMissingLinkTarget(context, link);
   context.onMissingLinkTarget?.(
     {
       space: link.space,
@@ -2766,6 +2807,7 @@ function loadSchemaDocClosure(
         // for (the followPointer pattern): a permission or transport error
         // is not a doc to fetch, and reporting it would kick spurious loads.
         if (result.error.name === "NotFoundError") {
+          noteMissingLinkTarget(context, address);
           context.onMissingLinkTarget?.(
             {
               space: address.space,
@@ -3914,6 +3956,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
         doc.value === undefined && resolved.default !== undefined &&
         (resolved.anyOf || resolved.oneOf || resolved.allOf)
       ) {
+        this.#noteDefaultOnAbsentValue(doc);
         return { ok: this.#applyDefault(doc, resolved) };
       }
       // There are a lot of valid logical schema flags, and we only handle
@@ -4215,6 +4258,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
       // If we have a default, annotate it and return it
       // Otherwise, return undefined
       const defaultValue = this.#applyDefault(doc, resolved);
+      if (defaultValue !== undefined) this.#noteDefaultOnAbsentValue(doc);
       return (defaultValue !== undefined)
         ? { ok: defaultValue }
         : this.#isValidType(schemaObj, "undefined")
@@ -4742,6 +4786,7 @@ export class SchemaObjectTraverser<V extends FabricValue>
         path: curDoc.address.path,
         schema: itemSchema,
       };
+      const missesBefore = this.context.missingLinkTargets;
       if (preparedPlainLinks === undefined) {
         this.tx.read(curDoc.address, READ_NON_RECURSIVE_FOR_SCHEDULING);
       }
@@ -4944,6 +4989,11 @@ export class SchemaObjectTraverser<V extends FabricValue>
           const fallbackType = arrayItemFallbackType(curSelector.schema!);
           if (fallbackType !== undefined) {
             arrayObj[index] = fallbackType === "null" ? null : undefined;
+            // The substitute answers for an item known to be invalid, not
+            // for one whose rejection crossed a link target the replica lacks.
+            if (this.context.missingLinkTargets > missesBefore) {
+              this.context.substituteCoveredMissingTarget = true;
+            }
           } else {
             // This array is invalid; one or more items do not match the
             // schema — the ENTIRE array reads as invalid for this caller.
@@ -4993,6 +5043,9 @@ export class SchemaObjectTraverser<V extends FabricValue>
   ): Record<string, FabricValue> | undefined {
     this.traverseObjectCalls++;
     const filteredObj: Record<string, FabricValue> = {};
+    // Properties rejected by a traversal that crossed a link target the
+    // replica lacks: a default filled in below would stand in for the unknown.
+    const rejectedOverMissingTarget = new Set<string>();
     const directProperties = plainObjectProperties(schema);
     for (const [propKey, propValue] of Object.entries(doc.value!)) {
       // We'll use marker schemas to detect some places where we want special
@@ -5050,11 +5103,14 @@ export class SchemaObjectTraverser<V extends FabricValue>
           this.tx.read(propDoc.address, READ_NON_RECURSIVE_FOR_SCHEDULING);
           return this.traverseWithSchema(propDoc, propSchema);
         };
+        const missesBefore = this.context.missingLinkTargets;
         const { ok: val, error } = SchemaObjectTraverser.hasAsCell(propSchema)
           ? this.tx.runWithAmbientReadMeta(excludeReadFromConflict, descend)
           : descend();
         if (error === undefined) {
           filteredObj[propKey] = val;
+        } else if (this.context.missingLinkTargets > missesBefore) {
+          rejectedOverMissingTarget.add(propKey);
         }
       }
     }
@@ -5072,6 +5128,9 @@ export class SchemaObjectTraverser<V extends FabricValue>
         }
         const propSchema = getPropertyDefaultSchema(schema, propKey);
         if (propSchema === undefined) continue;
+        if (rejectedOverMissingTarget.has(propKey)) {
+          this.context.substituteCoveredMissingTarget = true;
+        }
         const propAddress = {
           ...doc.address,
           path: appendToPath(doc.address.path, propKey),
@@ -5312,6 +5371,17 @@ export class SchemaObjectTraverser<V extends FabricValue>
       return this.objectCreator.applyDefault(link, schema.default);
     }
     return undefined;
+  }
+
+  /**
+   * A default about to fill an absent value covers a missing link target when
+   * the value's document is one this traversal reported: the value is not
+   * absent, only unserved.
+   */
+  #noteDefaultOnAbsentValue(doc: IMemorySpaceValueAttestation): void {
+    if (this.context.missingLinkTargetDocs.has(missingTargetKey(doc.address))) {
+      this.context.substituteCoveredMissingTarget = true;
+    }
   }
 
   #getDebugValue(doc: IMemorySpaceValueAttestation) {

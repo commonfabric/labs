@@ -866,6 +866,42 @@ describe("Schema - Basic Types and References", () => {
       expect(handle.get()).toBeUndefined();
     });
 
+    it("keeps the compound on a handle where a shaped `asCell` branch sits beside a bare one", () => {
+      // A merge cannot see which branch minted the handle it holds. With a
+      // shaped `asCell` branch in the union, the handle may carry that branch's
+      // shape alone, so it keeps the compound and a read through it projects
+      // every branch — not the first branch's `id` by itself.
+      const holder = runtime.getCell<any>(
+        space,
+        "shaped-beside-bare",
+        {
+          type: "object",
+          properties: {
+            h: {
+              anyOf: [
+                {
+                  type: "object",
+                  properties: { id: { type: "number" } },
+                  asCell: ["cell"],
+                },
+                { asCell: ["cell"] },
+                {
+                  type: "object",
+                  properties: { name: { type: "string" } },
+                  required: ["name"],
+                },
+              ],
+            },
+          },
+        } as const satisfies JSONSchema,
+        tx,
+      );
+      holder.set({ h: { id: 1, name: "one", hidden: true } });
+      const handle = holder.get().h;
+      expect(isCell(handle)).toBe(true);
+      expect(handle.get()).toEqual({ id: 1, name: "one", hidden: true });
+    });
+
     it("keeps the link's schema on a handle minted from an `allOf` of a bare `asCell` branch and a true one", () => {
       // An `allOf` whose other branches constrain nothing is its bare `asCell`
       // branch, and admits a handle over anything just as an `anyOf` does.

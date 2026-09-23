@@ -9,7 +9,8 @@ A **view** does that work per path instead. It is a proxy over a
 `(link, schema)` pair that resolves each property as the reader asks for it,
 narrowing the schema by that step. What nobody reads is never built, never
 link-resolved and never registered, with one exception described below: a
-combinator is evaluated whole at the position where it is accessed.
+combinator the value's type does not settle is evaluated whole at the position
+where it is accessed.
 
 What that buys is pinned where it is largest.
 `packages/patterns/integration/topics-lazy-lookup-reruns.test.ts` holds the
@@ -69,13 +70,18 @@ reads what it reads under `Row[]`. A union the type does not settle — a branch
 declaring no `type`, two branches accepting the value's type, none doing so,
 or an `allOf`, which is not a choice — is evaluated whole as above.
 
-A combinator evaluated whole can dead-end at a linked document the replica
-cannot serve. Nothing in it is then known to be invalid, so the read refuses as
-unresolved input — the same `UnresolvedInputError` a view raises when its own
-link chain dead-ends — and neither a property default nor an array substitute
-answers for it. Any unserved hop inside the subtree counts, including one the
-failure did not turn on; the refusal errs toward waiting, and the reader runs
-again when the document arrives.
+A combinator evaluated whole can cross a hop to a linked document the replica
+cannot serve. Where the traversal fails, nothing in it is known to be invalid,
+so the read refuses as unresolved input — the same `UnresolvedInputError` a
+view raises when its own link chain dead-ends. Any unserved hop inside the
+subtree counts, including one the failure did not turn on; the refusal errs
+toward waiting, and the reader runs again when the document arrives. Where the
+traversal succeeds, what decides is whether a substitute stood in for what the
+hop hides: an array item's `null` or `undefined`, or a default, covering a
+subtree that crossed the hop, refuses the same way, since the value it replaces
+is unserved rather than known. A position that admits the `undefined` the hop
+reads as stands, as it does for an eager read, with the document's read
+registered.
 
 A mismatch the reader does touch surfaces at the **nearest enclosing property**,
 which is where an eager read decides the same question:
@@ -151,9 +157,9 @@ wrong. These rules hold that agreement:
   re-enters per property instead of walking through, so the entry point does
   that combining. Without it, a property the reader asked for that the link's
   own schema does not name reads as one the schema does not select.
-- **Combinators use eager branch evaluation at the accessed position.** Outer
-  keywords, `$defs`, handle selection, and merging of successful results are
-  decided by the traverser. `oneOf` requires exactly one match; `allOf` requires
+- **A combinator the value's type does not settle uses eager branch
+  evaluation at the accessed position.** Outer keywords, `$defs`, handle
+  selection, and merging of successful results are decided by the traverser. `oneOf` requires exactly one match; `allOf` requires
   every branch to match. A failed branch cannot contribute properties to an
   `anyOf` result. The union classified this way, and the schema the traverser
   is handed, are the reader's: a link that carries a schema of its own puts

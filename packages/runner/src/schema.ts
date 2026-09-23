@@ -1445,29 +1445,40 @@ export function validateAndTransform(
   // again when the doc arrives.
   let unservedHop: NormalizedFullLink | undefined;
   const kickAbsentTargetLoads = !usesLocalReads(tx);
+  const context = createDefaultTraversalContext(
+    runIdentity ?? runtime.scopeKeyIdentity,
+    options?.traverseCells ?? false,
+    undefined,
+    (missing, sourceSpace) => {
+      unservedHop ??= missing;
+      // Absent link targets get an async load kicked (cross-space always;
+      // same-space only when the replica has never seen the doc); the
+      // tracked read re-runs the reader on arrival. A served per-instance
+      // run's absent target loads AS that run's instance (stage A — the
+      // runner's explicit-instance read).
+      if (kickAbsentTargetLoads) {
+        runtime.ensureLinkedDocLoaded(missing, sourceSpace, runIdentity);
+      }
+    },
+  );
   const traverser = new SchemaObjectTraverser<any>(
     tx!,
     selector,
-    createDefaultTraversalContext(
-      runIdentity ?? runtime.scopeKeyIdentity,
-      options?.traverseCells ?? false,
-      undefined,
-      (missing, sourceSpace) => {
-        unservedHop ??= missing;
-        // Absent link targets get an async load kicked (cross-space always;
-        // same-space only when the replica has never seen the doc); the
-        // tracked read re-runs the reader on arrival. A served per-instance
-        // run's absent target loads AS that run's instance (stage A — the
-        // runner's explicit-instance read).
-        if (kickAbsentTargetLoads) {
-          runtime.ensureLinkedDocLoaded(missing, sourceSpace, runIdentity);
-        }
-      },
-    ),
+    context,
     objectCreator,
   );
   const { ok: val, error } = traverser.traverse(doc, link);
-  if (error !== undefined && options?.mismatchThrows === true) {
+  // A traversal a view asked for may cross such a hop and still succeed. Where
+  // a branch admits the `undefined` the hop reads as, the success stands, as an
+  // eager read's does, and the registered read runs the reader again when the
+  // doc arrives. Where a substitute stood in for what the hop hides — an array
+  // item's `null`, a default — nothing about that value is known, and a view
+  // may not publish the stand-in: the hop refuses as unresolved input, and the
+  // property boundary above decides what that refusal means where it lands.
+  if (
+    options?.mismatchThrows === true &&
+    (error !== undefined || context.substituteCoveredMissingTarget)
+  ) {
     tx.readValueOrThrow(resolvedValueLink);
     const refusal = unservedHop === undefined
       ? new SchemaMismatchError(
@@ -1944,23 +1955,28 @@ function removeAsCellFromSchema(schema: JSONSchema): JSONSchema {
 }
 
 /**
- * Whether a compound admits a handle over any value at all, so that the
- * schema a handle adopted from its link is the one the reader allowed. An
- * `anyOf` does where any branch declares `asCell` and constrains nothing
- * else — a true schema once its marker is removed. An `allOf` does where
- * such a branch is joined only by branches that are true themselves, since
- * an `allOf` of true branches is that bare branch; a branch that constrains
- * something is a constraint the handle must keep, and the compound stays. A
- * `oneOf` never reaches a merge with two matches.
+ * Whether every handle a compound can mint adopted the schema of the link it
+ * was minted over, so that keeping a matched handle's schema is keeping what
+ * the reader allowed. A merge cannot see which branch minted the handle it
+ * holds, so this holds only where it would be true of any of them: every
+ * branch declaring `asCell` is bare — a true schema once its marker is
+ * removed, a reader that admits a handle over any value at all. One shaped
+ * `asCell` branch beside a bare one may have minted the handle with its own
+ * shape, and the compound must stay so the other branches' projection
+ * survives. An `allOf` qualifies where its other branches are true as well,
+ * since an `allOf` of true branches is its bare branch; a branch that
+ * constrains something is a constraint the handle must keep. A `oneOf` never
+ * reaches a merge with two matches.
  */
 function compoundHasBareAsCellBranch(schema: JSONSchemaObj): boolean {
-  const isBareAsCell = (branch: JSONSchema): boolean =>
+  const declaresAsCell = (branch: JSONSchema): boolean =>
     isObjectOrArray(branch) &&
-    ContextualFlowControl.getAsCellValues(branch).length > 0 &&
-    ContextualFlowControl.isTrueSchema(removeAsCellFromSchema(branch));
+    ContextualFlowControl.getAsCellValues(branch).length > 0;
   const isTrue = (branch: JSONSchema): boolean =>
     ContextualFlowControl.isTrueSchema(removeAsCellFromSchema(branch));
-  if ((schema.anyOf ?? []).some(isBareAsCell)) return true;
+  const branches = schema.anyOf ?? [];
+  const handles = branches.filter(declaresAsCell);
+  if (handles.length > 0 && handles.every(isTrue)) return true;
   const parts = schema.allOf ?? [];
-  return parts.some(isBareAsCell) && parts.every(isTrue);
+  return parts.some(declaresAsCell) && parts.every(isTrue);
 }

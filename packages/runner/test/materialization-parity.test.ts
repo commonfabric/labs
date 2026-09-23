@@ -462,6 +462,136 @@ describe("materialization-parity", () => {
     }
   });
 
+  describe("a union evaluated whole that succeeds by substituting for an unserved item", () => {
+    // Two array branches accept the value, so the union is evaluated whole. The
+    // item is a link to a document the replica cannot serve; the traverser
+    // substitutes `null` for it and reports the array as matched. That success
+    // publishes nothing about the item, so the hop refuses as unresolved input,
+    // and the property boundary decides what that means: an optional property
+    // with no default is omitted, a required one refuses.
+
+    const nullableNumbers = {
+      type: "array",
+      items: { type: ["number", "null"] },
+    } as const;
+    const union = {
+      anyOf: [
+        nullableNumbers,
+        { ...nullableNumbers, description: "a second branch that matches" },
+      ],
+    } as JSONSchema;
+
+    const seededMissingItem = async (cause: string) => {
+      const write = runtime.edit();
+      const missing = runtime.getCell(
+        space,
+        `${cause}-missing`,
+        undefined,
+        write,
+      );
+      runtime.getCell(space, cause, undefined, write).setRaw({
+        box: [missing.getAsLink()],
+      });
+      await write.commit();
+    };
+
+    it("omits an optional property and retains no refusal", async () => {
+      await seededMissingItem("substitute-optional");
+      const tx = runtime.edit();
+      tx.markLazyMaterialize(true);
+      try {
+        const value = runtime.getCell<{ box?: unknown }>(
+          space,
+          "substitute-optional",
+          { type: "object", properties: { box: union } },
+          tx,
+        ).get();
+        expect(value.box).toBeUndefined();
+        expect("box" in value).toBe(false);
+        expect(tx.takeSchemaRefusal()).toBeUndefined();
+      } finally {
+        await tx.commit();
+      }
+    });
+
+    it("refuses a required property, and records the refusal", async () => {
+      await seededMissingItem("substitute-required");
+      const tx = runtime.edit();
+      tx.markLazyMaterialize(true);
+      try {
+        const value = runtime.getCell<{ box: unknown }>(
+          space,
+          "substitute-required",
+          { type: "object", properties: { box: union }, required: ["box"] },
+          tx,
+        ).get();
+        expect(() => value.box).toThrow(UnresolvedInputError);
+        expect(tx.takeSchemaRefusal()).toBeInstanceOf(UnresolvedInputError);
+      } finally {
+        await tx.commit();
+      }
+    });
+  });
+
+  describe("a union evaluated whole that admits an unserved hop as `undefined`", () => {
+    it("reads `undefined` with no refusal, and the document's read registered", async () => {
+      // Two object branches: the union is evaluated whole, and the link below
+      // it dead-ends at a document the replica cannot serve. The position
+      // admits `undefined`, so nothing stands in for the unknown: the read
+      // stands as an eager read does, and the registered read runs the reader
+      // again when the document arrives.
+      const write = runtime.edit();
+      const missing = runtime.getCell(
+        space,
+        "admitted-missing",
+        undefined,
+        write,
+      );
+      runtime.getCell(space, "admitted-union", undefined, write).setRaw({
+        p: { n: missing.getAsLink() },
+      });
+      await write.commit();
+      const branch = (extra: Record<string, JSONSchema>): JSONSchema => ({
+        type: "object",
+        properties: { n: { type: ["number", "undefined"] }, ...extra },
+      });
+      const schema: JSONSchema = {
+        type: "object",
+        properties: {
+          p: {
+            anyOf: [
+              branch({ a: { type: "string" } }),
+              branch({ b: { type: "string" } }),
+            ],
+          },
+        },
+        required: ["p"],
+      };
+      for (const lazy of [false, true]) {
+        const tx = runtime.edit();
+        if (lazy) tx.markLazyMaterialize(true);
+        try {
+          const value = runtime.getCell<{ p: { n?: number } }>(
+            space,
+            "admitted-union",
+            schema,
+            tx,
+          ).get();
+          expect(value.p.n).toBeUndefined();
+          expect(tx.takeSchemaRefusal()).toBeUndefined();
+          const reads = [...(getTransactionReadActivities(tx) ?? [])];
+          expect(
+            reads.some((activity) =>
+              activity.id === missing.getAsNormalizedFullLink().id
+            ),
+          ).toBe(true);
+        } finally {
+          await tx.commit();
+        }
+      }
+    });
+  });
+
   describe("an unavailable link under an optional property that declares no default", () => {
     // The two cases above pin the dead-end where something would otherwise be
     // published in its place — a default, a substitute. An optional property
