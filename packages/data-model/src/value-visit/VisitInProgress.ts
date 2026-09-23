@@ -324,16 +324,15 @@ export class VisitInProgress<
             return elemResult;
           }
 
-          case "mapTo":
-            {
-              throw new Error(
-                "TODO(danfuzz): Handle recursion-iteration mapping.",
-              );
-            }
+          case "mapTo": {
+            throw new Error(
+              "TODO(danfuzz): Handle recursion-iteration mapping.",
+            );
+          }
 
-            undefined: {
-              break;
-            }
+          case undefined: {
+            break;
+          }
         }
 
         // TODO(danfuzz): When we have a non-`mainResult` visit-result type,
