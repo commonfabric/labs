@@ -190,6 +190,7 @@ function elementTypeText(name: string): string {
     checker,
     factory: ts.factory,
     sourceFile,
+    state: undefined,
   });
   return result.type ? checker.typeToString(result.type) : "<none>";
 }

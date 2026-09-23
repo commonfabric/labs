@@ -240,7 +240,7 @@ Deno.test("typeToTypeNode: an invalid location argument is caught and yields und
   const { sourceFile, checker } = createProgram(SOURCE);
   const type = typeOf(sourceFile, checker, "cellObject");
   const detachedLocation = ts.factory.createIdentifier("detached");
-  const node = typeToTypeNode(type, checker, detachedLocation);
+  const node = typeToTypeNode(type, checker, detachedLocation, undefined);
   // Either a node or undefined is acceptable behavior; the branch under test is
   // that no exception escapes. Assert the call completes and returns a TypeNode
   // or undefined.
@@ -305,6 +305,7 @@ function elementTypeText(name: string): string {
     checker,
     factory: ts.factory,
     sourceFile,
+    state: undefined,
   });
   return result.type ? checker.typeToString(result.type) : "<none>";
 }

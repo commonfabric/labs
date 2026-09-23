@@ -4,7 +4,7 @@ import {
   readAuthoredTypeNodeOnce,
   unwrapTypeParentheses,
 } from "@commonfabric/schema-generator/type-node";
-import type { TransformationContext } from "../core/mod.ts";
+import type { CrossStageState, TransformationContext } from "../core/mod.ts";
 import type { CaptureTreeNode } from "../utils/capture-tree.ts";
 import { createPropertyName } from "../utils/identifiers.ts";
 import { getCallArgumentPosition } from "./call-arguments.ts";
@@ -381,6 +381,10 @@ export interface TypeLiteralRegistrationContext {
 /**
  * Converts a Type to a TypeNode, optionally registering it in the type registry.
  * Provides a central place for type-to-typenode conversion with consistent flags.
+ * `context.state` records the node as printed from `type`
+ * (`CrossStageState.printedFrom()`), the `unknown` put in place of a type the
+ * checker will not print included. The key is required, so a caller passes
+ * `undefined` only by saying so, where it has no state to hand.
  */
 export function typeToTypeNodeWithRegistry(
   type: ts.Type,
@@ -388,13 +392,16 @@ export function typeToTypeNodeWithRegistry(
     checker: ts.TypeChecker;
     factory: ts.NodeFactory;
     sourceFile: ts.SourceFile;
+    state: CrossStageState | undefined;
   },
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
   flags = DEFAULT_TYPE_NODE_FLAGS,
 ): ts.TypeNode {
-  const rawNode =
-    context.checker.typeToTypeNode(type, context.sourceFile, flags) ??
-      context.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
+  const rawNode = context.checker.typeToTypeNode(
+    type,
+    context.sourceFile,
+    flags,
+  ) ?? context.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
 
   // Rewrite commonfabric type references to the always-resolvable
   // `__cfHelpers.X` qualified form. The printer's natural output references
@@ -419,6 +426,7 @@ export function typeToTypeNodeWithRegistry(
   if (typeRegistry) {
     typeRegistry.set(node, type);
   }
+  context.state?.recordPrintedFrom(node, type);
 
   return node;
 }
@@ -460,6 +468,7 @@ export function expressionToTypeNode(
       declaration,
       context.checker,
       context.state.typeRegistry,
+      context.state,
     )
     : undefined;
   if (preserved) {
@@ -648,6 +657,7 @@ export function getPreservedTypeForBindingElement(
   declaration: ts.BindingElement,
   checker: ts.TypeChecker,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  state?: CrossStageState,
 ): PreservedBindingType | undefined {
   const declared = getDeclaredTypeNodeForBindingElement(declaration, checker);
   const preserved = declared && getPreservedBindingTypeNode(declared, checker);
@@ -696,6 +706,7 @@ export function getPreservedTypeForBindingElement(
       declaration,
       checker,
       typeRegistry,
+      state,
     )
     : undefined;
   if (substituted) {
@@ -708,7 +719,12 @@ export function getPreservedTypeForBindingElement(
   // would emit a value type without `T`.
   const typeNode = typeToTypeNodeWithRegistry(
     instantiated.type,
-    { checker, factory: ts.factory, sourceFile: declaration.getSourceFile() },
+    {
+      checker,
+      factory: ts.factory,
+      sourceFile: declaration.getSourceFile(),
+      state,
+    },
     typeRegistry,
   );
   return {
@@ -769,6 +785,7 @@ function substituteTypeParameters(
   declaration: ts.BindingElement,
   checker: ts.TypeChecker,
   typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState | undefined,
 ): ts.TypeNode | undefined {
   const replacements = new Map<ts.Type, ts.TypeNode>();
   for (const parameter of parameters) {
@@ -776,7 +793,12 @@ function substituteTypeParameters(
     if (!argument) return undefined;
     const replacement = typeToTypeNodeWithRegistry(
       argument,
-      { checker, factory: ts.factory, sourceFile: declaration.getSourceFile() },
+      {
+        checker,
+        factory: ts.factory,
+        sourceFile: declaration.getSourceFile(),
+        state,
+      },
       typeRegistry,
       DEFAULT_TYPE_NODE_FLAGS | ts.NodeBuilderFlags.InTypeAlias,
     );
