@@ -32,7 +32,10 @@ export interface SelectedRoom {
   room?: Room;
 }
 
-export type SendMessageEvent = Record<PropertyKey, never>;
+// The Send button delivers the serialized DOM click (`type`, `provenance`,
+// target scalars), which a closed event schema refuses before the handler runs.
+// The handler reads nothing from its event, so it declares none.
+export type SendMessageEvent = void;
 
 export interface AddRoomEvent {
   name?: string;

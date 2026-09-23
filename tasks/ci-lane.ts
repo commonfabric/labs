@@ -70,6 +70,7 @@ import {
   type CrowdingSuite,
   fullLaneCount,
   ownLoad,
+  type Plan,
   plan,
   type Selection,
   type SelectionReason,
@@ -275,7 +276,7 @@ export function parseLaneArgs(
  * the same reasons.
  */
 export function manifestMoment(
-  options: LaneOptions,
+  options: Pick<LaneOptions, "at" | "root">,
 ): { at: string; note?: string } {
   if (options.at !== undefined) return { at: options.at };
   // Git writes the committer's own offset, and manifest names carry UTC,
@@ -1237,6 +1238,26 @@ export interface LaneDeps {
   spool?: () => string | undefined;
 }
 
+/**
+ * The manifest the lanes testing this checkout's commit resolve, as the
+ * store gave it, or why there is none. `say` is where a note about the
+ * moment it was resolved at goes.
+ *
+ * Anything that reads a manifest for a checkout resolves it here. One
+ * that resolved it some other way could be describing a different
+ * manifest from the one those lanes read, and nothing it printed would
+ * say so.
+ */
+export async function resolveManifest(
+  options: Pick<LaneOptions, "at" | "root">,
+  deps: Pick<LaneDeps, "manifest">,
+  say: (note: string) => void,
+): Promise<ManifestFetch> {
+  const moment = manifestMoment(options);
+  if (moment.note !== undefined) say(moment.note);
+  return await deps.manifest({ at: moment.at });
+}
+
 /** What reading this tree against its manifest came to. */
 interface Reading {
   seen: Census;
@@ -1256,12 +1277,14 @@ interface Reading {
 async function read(
   options: LaneOptions,
   suites: readonly Suite[],
-  deps: LaneDeps,
+  deps: Pick<LaneDeps, "manifest">,
   say: (line: string) => void,
 ): Promise<Reading> {
-  const moment = manifestMoment(options);
-  if (moment.note !== undefined) say(`ci-lane: ${moment.note}`);
-  const manifest = await deps.manifest({ at: moment.at });
+  const manifest = await resolveManifest(
+    options,
+    deps,
+    (note) => say(`ci-lane: ${note}`),
+  );
   // Every lane of a run packs its share of one plan, and the plan is only
   // one plan if every lane read the same manifest. A manifest never
   // changes once created, so lanes asking about one moment get one answer
@@ -1304,7 +1327,7 @@ function packing(
   options: LaneOptions,
   suites: readonly Suite[],
   seen: Census,
-): ReturnType<typeof plan> {
+): Plan {
   return plan({
     manifest: seen.manifest,
     mandatory: seen.mandatory,
@@ -1313,6 +1336,32 @@ function packing(
     lanes: options.of,
     ...(options.full ? { policy: "everything" as const } : {}),
   });
+}
+
+/** What every lane of a run works out before taking its own share. */
+export interface LanePlan extends Reading {
+  /** What the tree holds, packed into the run's lanes. */
+  laid: Plan;
+}
+
+/**
+ * The plan every lane of a run computes over this tree: the manifest
+ * this commit belongs to, the tree read against it, and what the tree
+ * holds packed into `options.of` lanes. `say` is where a note about
+ * resolving the manifest goes.
+ *
+ * A lane runs its own share of this. Anything that describes what a lane
+ * would do computes it here rather than packing the tree again, so the
+ * description and the lanes cannot disagree about what would run.
+ */
+export async function lanePlan(
+  options: LaneOptions,
+  suites: readonly Suite[],
+  deps: Pick<LaneDeps, "manifest">,
+  say: (line: string) => void,
+): Promise<LanePlan> {
+  const reading = await read(options, suites, deps, say);
+  return { ...reading, laid: packing(options, suites, reading.seen) };
 }
 
 /**
@@ -1397,6 +1446,15 @@ async function fullLanesNeeded(
   });
 }
 
+/**
+ * The directory the continuous-integration job keeps its own temporary
+ * files in, where the lane is running inside one.
+ */
+function runnerTemp(): string | undefined {
+  const at = Deno.env.get("RUNNER_TEMP");
+  return at === undefined || at.length === 0 ? undefined : at;
+}
+
 /** Runs one lane, and says whether everything in it passed. */
 export async function runLane(
   options: LaneOptions,
@@ -1406,8 +1464,12 @@ export async function runLane(
   // no child of it inherits the token except through the capability.
   const githubToken = takeGithubToken();
   const suites = await (deps.topology ?? loadTopology)(options.root);
-  const { seen, fetched } = await read(options, suites, deps, console.log);
-  const laid = packing(options, suites, seen);
+  const { seen, fetched, laid } = await lanePlan(
+    options,
+    suites,
+    deps,
+    console.log,
+  );
   const mine = laid.lanes.find((lane) => lane.lane === options.lane);
   if (mine === undefined) {
     // A lane outside the run it belongs to. Taking an empty share
@@ -1457,7 +1519,25 @@ export async function runLane(
       ? "warm"
       : "cold"
     : undefined;
-  const workDir = await Deno.makeTempDir({ prefix: "ci-lane-" });
+  const temp = runnerTemp();
+  const workDir = await Deno.makeTempDir({
+    prefix: "ci-lane-",
+    // Under the job's own temporary directory where there is one, which
+    // is where a workflow step can upload what a failing lane left
+    // behind.
+    ...(temp === undefined ? {} : { dir: temp }),
+  });
+  // A lane that passed leaves nothing behind. A lane that failed in a job
+  // keeps what its capabilities wrote, because a server's log is what
+  // says why a suite could not reach it, and a workflow step can upload
+  // the directory from the job's temporary directory. Anywhere else
+  // nothing would collect it, and one directory would accumulate per
+  // failed run.
+  const leaveWorkDir = async (passed: boolean) => {
+    if (passed || temp === undefined) {
+      await Deno.remove(workDir, { recursive: true }).catch(() => {});
+    }
+  };
   const spool = (deps.spool ?? recordsDir)();
   // The directory belongs to the lane from the moment it exists, and a
   // capability that refuses to open is one of the ways the lane ends.
@@ -1470,7 +1550,7 @@ export async function runLane(
       ...(githubToken === undefined ? {} : { githubToken }),
     });
   } catch (error) {
-    await Deno.remove(workDir, { recursive: true }).catch(() => {});
+    await leaveWorkDir(false);
     throw error;
   }
   if (spool !== undefined) {
@@ -1557,9 +1637,7 @@ export async function runLane(
     // and the logs are large.
     if (!ok) await describeCapabilityLogs(opened.logs);
     await opened.close();
-    // The lane owns this directory and nothing outside the lane reads
-    // it, so it goes whether the batches passed, failed, or never ran.
-    await Deno.remove(workDir, { recursive: true }).catch(() => {});
+    await leaveWorkDir(ok);
   }
   describeConflicts(conflicts);
   // After the capabilities are closed, because a conversion is the lane's

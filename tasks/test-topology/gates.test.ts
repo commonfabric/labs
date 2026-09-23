@@ -460,11 +460,8 @@ describe("the repository's gate suites", () => {
   });
 
   it("asks a pattern gate for everything without a filter", async () => {
-    // A run given every pattern is the task's own unfiltered run, which
-    // is what a gate with a whole-tree question of its own needs: the
-    // compatibility gate asks whether a retired pattern still has a
-    // baseline and whether an accepted break has gone orphaned, and a
-    // filtered run asks neither.
+    // A run given every unit is the task's own unfiltered run, so what a
+    // person types and what a lane given everything runs are one command.
     for (const id of ["cfcheck", "pattern-compat"]) {
       const suite = byId(id);
       const [invocation] = await suite.command(
@@ -519,6 +516,22 @@ describe("the repository's gate suites", () => {
       const hit = units.filter((file) => matchesPatternFilter(file, unit));
       return hit.length !== 1 || hit[0] !== unit;
     });
+    expect(widened).toEqual([]);
+  });
+
+  it("hands each compatibility unit an `--only` selecting that unit alone", async () => {
+    // The same reasoning as the type check's, over the paths the
+    // compatibility gate's units stand for, which are not all files: a
+    // pattern whose file is gone is a unit too.
+    const suite = byId("pattern-compat");
+    const terms = await Promise.all(suite.units.map(async (unit) => {
+      const [invocation] = await suite.command([{ unit, skip: [] }], context);
+      const command = invocation!.command;
+      return command[command.indexOf("--only") + 1]!;
+    }));
+    const widened = terms.filter((term) =>
+      terms.filter((item) => matchesPatternFilter(item, term)).length !== 1
+    );
     expect(widened).toEqual([]);
   });
 

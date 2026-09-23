@@ -346,6 +346,12 @@ export const EXCLUDED_FROM_COVERAGE_GATE: ReadonlyMap<string, string> = new Map(
       "Its tests want the service's own environment and its initialized " +
       "database.",
     ],
+    [
+      "packages/integration",
+      "The coverage metric counts none of its lines, since it leaves out " +
+      "every path with an `integration` directory in it, so a set over it " +
+      "would measure nothing.",
+    ],
   ],
 );
 

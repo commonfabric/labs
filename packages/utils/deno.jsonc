@@ -45,6 +45,7 @@
     "./two-level-weak-cache": "./src/two-level-weak-cache.ts",
     "./types": "./src/types.ts",
     "./utf8": "./src/utf8.ts",
+    "./wtf8": "./src/wtf8.ts",
     "./zod-utils": "./src/zod-utils.ts"
   }
 }
