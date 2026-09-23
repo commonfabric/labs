@@ -524,6 +524,49 @@ describe("sqlite builtins (Phase 0 wiring)", () => {
     }
   }
 
+  it("issues a new query when `reactOn` goes from a hole to an element holding `undefined`", async () => {
+    const tick = runtime.getCell<unknown[]>(
+      space,
+      "sqlite-hole-tick",
+      undefined,
+      tx,
+    );
+    tick.setRawUntyped(new Array(1));
+    const pattern = cf.pattern<{ tick: unknown[] }>(({ tick }) => {
+      const db = cf.sqliteDatabase({
+        tables: {
+          notes: cf.table({ id: "integer primary key", body: "text" }),
+        },
+      });
+      return cf.sqliteQuery({
+        db,
+        sql: "SELECT body FROM notes",
+        reactOn: tick,
+      });
+    });
+    const result = runtime.run(
+      tx,
+      pattern,
+      { tick },
+      runtime.getCell(space, "sqlite-hole-result", pattern.resultSchema, tx),
+    );
+    expect((await tx.commit()).error).toBeUndefined();
+    const cancel = result.key("pending").sink(() => {});
+    try {
+      await runtime.settled();
+      const first = result.key("requestHash").get();
+      expect(typeof first).toBe("string");
+
+      const next = runtime.edit();
+      tick.withTx(next).setRawUntyped([undefined]);
+      expect((await next.commit()).error).toBeUndefined();
+      await runtime.settled();
+      expect(result.key("requestHash").get()).not.toBe(first);
+    } finally {
+      cancel();
+    }
+  });
+
   it("a superseded query's successful flush does not overwrite the newer request", async () => {
     const { q, secondHash } = await runStaleFlush("resolve", "sqlite-stale-ok");
     // Only the newer query settled its own result; the stale flush was skipped.
