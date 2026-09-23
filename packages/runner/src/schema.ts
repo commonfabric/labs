@@ -1538,6 +1538,19 @@ class TransformObjectCreator
           // wouldn't have a cell. We will use the asCell used for creating
           // this cell, but change the rest of the schema to be the logical
           // combination schema.
+          // A handle minted from a branch that is `asCell` and nothing more
+          // carries the schema of the link it was minted over: that branch is
+          // a true reader, and a true reader adopts the link's schema when it
+          // crosses it (`combineSchemaForLink`). The combined compound below
+          // would replace that with a union saying only what the reader
+          // admits, and the link's shape — the one answer reader precedence
+          // gave — would be lost. The handle keeps it.
+          if (
+            isNontrivialSchema(cellMatch.schema) &&
+            compoundHasBareAsCellBranch(schema)
+          ) {
+            return cellMatch as any;
+          }
           const asCellValues = ContextualFlowControl.getAsCellValues(
             cellMatch.schema,
           );
@@ -1864,4 +1877,22 @@ function removeAsCellFromSchema(schema: JSONSchema): JSONSchema {
     return restSchema;
   }
   return schema;
+}
+
+/**
+ * Whether a compound schema holds a branch that declares `asCell` and
+ * constrains nothing else — a true schema once its marker is removed, so a
+ * reader that admits a handle over any value at all.
+ */
+function compoundHasBareAsCellBranch(schema: JSONSchemaObj): boolean {
+  const branches = [
+    ...(schema.anyOf ?? []),
+    ...(schema.oneOf ?? []),
+    ...(schema.allOf ?? []),
+  ];
+  return branches.some((branch) =>
+    isObjectOrArray(branch) &&
+    ContextualFlowControl.getAsCellValues(branch).length > 0 &&
+    ContextualFlowControl.isTrueSchema(removeAsCellFromSchema(branch))
+  );
 }
