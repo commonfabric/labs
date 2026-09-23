@@ -90,10 +90,40 @@ Deno.test("CfHarnessEngine closes the sandbox on every terminal transition", asy
       runId: "run-1",
       workspaceHostPath: "/host/project",
       sandboxRuntime: runtime,
+      ownsSandboxRuntime: true,
     });
     await end(engine);
     assertEquals(runtime.closes, 1);
   }
+});
+
+Deno.test("CfHarnessEngine leaves a shared, injected sandbox open when it ends", async () => {
+  // A child handed its parent's runtime must not close it under the parent
+  // (review, verified live: the parent's next session call threw).
+  const runtime = closingRuntime(() => Promise.resolve());
+  const engine = new CfHarnessEngine({
+    runId: "run-1.subagent.1",
+    workspaceHostPath: "/host/project",
+    sandboxRuntime: runtime,
+  });
+  await engine.completeRun("assistant_completed");
+  assertEquals(runtime.closes, 0);
+});
+
+Deno.test("CfHarnessEngine closes the runsc runtime it built itself", async () => {
+  const engine = new CfHarnessEngine({
+    runId: "run-1",
+    workspaceHostPath: "/host/project",
+    sandboxRuntimeKind: "runsc",
+    sandboxRootfs: "/images/kitchensink",
+    processRunner: new RecordingRunner(),
+  });
+  await engine.completeRun("assistant_completed");
+  await assertRejects(
+    () => engine.sandbox.run({ argv: ["true"] }),
+    Error,
+    "sandbox runtime is closed",
+  );
 });
 
 Deno.test("CfHarnessEngine still ends the run when the sandbox refuses to close", async () => {
@@ -102,6 +132,7 @@ Deno.test("CfHarnessEngine still ends the run when the sandbox refuses to close"
     runId: "run-1",
     workspaceHostPath: "/host/project",
     sandboxRuntime: runtime,
+    ownsSandboxRuntime: true,
   });
   const state = await engine.completeRun("assistant_completed");
   assertEquals(state.status, "completed");

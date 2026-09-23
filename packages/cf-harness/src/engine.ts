@@ -418,6 +418,13 @@ export interface CreateHarnessEngineOptions
   cfcResultDir?: string;
   cfcInvocationContextDir?: string;
   sandboxRuntime?: SandboxRuntime;
+  /**
+   * Whether an injected `sandboxRuntime` is this engine's to close when the
+   * run ends. Off by default: an injected runtime is usually shared (a child
+   * handed its parent's), and closing it under the other holder ends their
+   * sessions too. A runtime the engine builds itself is always its own.
+   */
+  ownsSandboxRuntime?: boolean;
   artifactStore?: HarnessArtifactStore;
   processRunner?: ProcessRunner;
 
@@ -673,6 +680,7 @@ export class CfHarnessEngine {
   /** The runsc configuration this engine built, when it built one. */
   readonly #ownedNativeConfig?: RunscSandboxConfig;
   #sandboxClosed = false;
+  readonly #ownsSandbox: boolean;
   readonly #resumedRun: boolean;
   #runModelBound: boolean;
   #cfcTransportChecked = false;
@@ -941,6 +949,8 @@ export class CfHarnessEngine {
       })
       : undefined;
     this.#ownedNativeConfig = runscConfig;
+    this.#ownsSandbox = options.sandboxRuntime === undefined ||
+      options.ownsSandboxRuntime === true;
     this.sandbox = options.sandboxRuntime ??
       (runscConfig !== undefined
         ? new RunscSandboxRuntime(runscConfig, options.processRunner)
@@ -1500,7 +1510,7 @@ export class CfHarnessEngine {
    * nothing to do, and a second call is harmless.
    */
   async #closeSandbox(): Promise<void> {
-    if (this.#sandboxClosed) {
+    if (this.#sandboxClosed || !this.#ownsSandbox) {
       return;
     }
     this.#sandboxClosed = true;

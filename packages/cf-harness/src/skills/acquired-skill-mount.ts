@@ -112,11 +112,26 @@ export const childSandboxOptions = (
   sandboxRunscNetworkMode?: RunscNetworkMode;
   additionalMounts?: readonly DockerRunscAdditionalMountConfig[];
 } => {
-  if (acquired !== undefined && parent.ownedRunscSandboxConfig !== undefined) {
-    // The direct runtime: the child names the same runsc configuration in the
-    // engine's own option vocabulary, plus the one mount, and the engine
-    // builds it a runtime of its own with its own run id.
+  if (parent.ownedRunscSandboxConfig !== undefined) {
+    // The direct runtime: EVERY child gets a runtime of its own, built by the
+    // engine from the same configuration in its own option vocabulary (plus
+    // the skill mount when there is one). Sharing the parent's runtime would
+    // share its named sessions and let the child's terminal transition close
+    // the parent's sandbox — both seen live under review.
     const runsc = parent.ownedRunscSandboxConfig;
+    const mounts = acquired === undefined ||
+        acquiredSkillMountBacks(runsc.additionalMounts, acquired)
+      ? runsc.additionalMounts
+      : [
+        ...runsc.additionalMounts,
+        {
+          kind: "host-bind" as const,
+          name: ACQUIRED_SKILL_MOUNT_NAME,
+          hostPath: acquired.hostRoot,
+          sandboxPath: acquired.sandboxRoot,
+          readOnly: true,
+        },
+      ];
     return {
       sandboxRuntimeKind: "runsc",
       sandboxRootfs: runsc.rootfs,
@@ -125,19 +140,7 @@ export const childSandboxOptions = (
         : {}),
       sandboxRunscBinary: runsc.runscBinary,
       sandboxRunscNetworkMode: runsc.networkMode,
-      additionalMounts:
-        acquiredSkillMountBacks(runsc.additionalMounts, acquired)
-          ? runsc.additionalMounts
-          : [
-            ...runsc.additionalMounts,
-            {
-              kind: "host-bind",
-              name: ACQUIRED_SKILL_MOUNT_NAME,
-              hostPath: acquired.hostRoot,
-              sandboxPath: acquired.sandboxRoot,
-              readOnly: true,
-            },
-          ],
+      additionalMounts: mounts,
     };
   }
   if (acquired === undefined || parent.ownedSandboxConfig === undefined) {

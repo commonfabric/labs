@@ -182,7 +182,8 @@ Deno.test("RunscSandboxRuntime runs a call as one container with the CFC transpo
   assertEquals(sub[sub.indexOf("--cfc-invocation-context-fd") + 1], "3");
   assertEquals(sub[sub.indexOf("--cfc-result-fd") + 1], "4");
   const cid = sub[sub.length - 1];
-  assertMatch(cid, /^c-run-abc-[0-9a-f]{8}$/);
+  // run tag (12 chars of the run id + a per-runtime nonce), then the call.
+  assertMatch(cid, /^c-run-abc-[0-9a-f]{8}-[0-9a-f]{8}$/);
 
   // The result on fd 4 became the call's CFC result, keyed by the container id.
   assert(result.cfcResult !== undefined);
@@ -299,7 +300,7 @@ Deno.test("RunscSandboxRuntime keeps one container per session and execs into it
   assert(spawn.args.includes("run"));
   assert(!spawn.args.includes("--detach"));
   const cid = spawn.args[spawn.args.length - 1];
-  assertEquals(cid, "s-run-abc-build");
+  assertMatch(cid, /^s-run-abc-[0-9a-f]{8}-build$/);
   assertEquals(runtime.sessionContainerIds(), [cid]);
 
   // Both calls were execs into that container, with cwd honoured.
@@ -334,7 +335,9 @@ Deno.test("RunscSandboxRuntime gives different sessions and different runs diffe
   await b.run({ argv: ["/bin/true"], session: "x" });
   const ids = runner.spawns.map((s) => s.args[s.args.length - 1]);
   assertEquals(new Set(ids).size, 3);
-  assertEquals(ids, ["s-run-a-x", "s-run-a-y", "s-run-b-x"]);
+  assertMatch(ids[0], /^s-run-a-[0-9a-f]{8}-x$/);
+  assertMatch(ids[1], /^s-run-a-[0-9a-f]{8}-y$/);
+  assertMatch(ids[2], /^s-run-b-[0-9a-f]{8}-x$/);
   await a.close();
   await b.close();
 });
@@ -556,7 +559,8 @@ Deno.test("RunscSandboxRuntime gives up on a session whose container never repor
     Error,
     "did not start within 60ms",
   );
-  assertEquals(runner.killed, ["s-run-abc-slow:SIGKILL"]);
+  assertEquals(runner.killed.length, 1);
+  assertMatch(runner.killed[0], /^s-run-abc-[0-9a-f]{8}-slow:SIGKILL$/);
   await runtime.close();
 });
 
@@ -581,8 +585,13 @@ Deno.test("RunscSandboxRuntime needs a runner that can spawn for sessions, and r
     runner,
   );
   await open.close();
-  const r = await open.run({ argv: ["/bin/true"] });
-  assertEquals(r.exitCode, 0);
+  // Closed means closed for fresh calls too: an engine that ended its run
+  // must not be able to start more work through a runtime it released.
+  await assertRejects(
+    () => open.run({ argv: ["/bin/true"] }),
+    Error,
+    "sandbox runtime is closed",
+  );
 });
 
 class ThrowingRunscRunner extends FakeRunscRunner {
@@ -654,4 +663,83 @@ Deno.test("a resolved runsc configuration is frozen, mounts included", () => {
   assertThrows(() => {
     (cfg as unknown as { rootfs: string }).rootfs = "/elsewhere";
   }, TypeError);
+});
+
+Deno.test("the scratch directory defaults outside every sandbox mount and refuses to sit inside one", () => {
+  // The result and context files live in scratch; a sandbox that can reach
+  // them can forge its own CFC result (review, verified live).
+  const cfg = resolveRunscSandboxConfig({
+    workspaceHostPath: "/tmp/workspace",
+    rootfs: "/images/kitchensink",
+    runId: "run-abc",
+    platform: "linux",
+    additionalMounts: [{
+      kind: "host-bind",
+      name: "cabinet",
+      hostPath: "/tmp/cabinet",
+      sandboxPath: "/file-cabinet",
+      readOnly: false,
+    }],
+  });
+  for (const root of ["/tmp/workspace", "/tmp/cabinet"]) {
+    assert(
+      cfg.scratchDir !== root && !cfg.scratchDir.startsWith(root + "/"),
+      `scratch ${cfg.scratchDir} inside ${root}`,
+    );
+  }
+  assertThrows(
+    () => config({ scratchDir: "/tmp/workspace/.cf-harness-runsc" }),
+    Error,
+    "inside",
+  );
+  assertThrows(
+    () =>
+      config({
+        scratchDir: "/tmp/cabinet/scratch",
+        additionalMounts: [{
+          kind: "host-bind",
+          name: "cabinet",
+          hostPath: "/tmp/cabinet",
+          sandboxPath: "/file-cabinet",
+          readOnly: true,
+        }],
+      }),
+    Error,
+    "inside",
+  );
+});
+
+Deno.test("two runs with a shared id prefix never share a session container", async () => {
+  const a = new FakeRunscRunner();
+  const b = new FakeRunscRunner();
+  const first = new RunscSandboxRuntime(
+    config({ runId: "same-prefix-AAAA-first", scratchDir: scratch() }),
+    a,
+  );
+  const second = new RunscSandboxRuntime(
+    config({ runId: "same-prefix-BBBB-second", scratchDir: scratch() }),
+    b,
+  );
+  await first.run({ argv: ["true"], session: "same" });
+  await second.run({ argv: ["true"], session: "same" });
+  const idOf = (r: FakeRunscRunner) => {
+    const spawn = r.spawns[0];
+    return spawn.args[spawn.args.length - 1];
+  };
+  assert(
+    idOf(a) !== idOf(b),
+    `both runs resolved session "same" to ${idOf(a)}`,
+  );
+  await first.close();
+  await second.close();
+});
+
+Deno.test("a closed runtime refuses fresh calls as well as sessions", async () => {
+  const runtime = new RunscSandboxRuntime(config(), new FakeRunscRunner());
+  await runtime.close();
+  await assertRejects(
+    () => runtime.run({ argv: ["true"] }),
+    Error,
+    "sandbox runtime is closed",
+  );
 });

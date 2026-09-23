@@ -329,12 +329,17 @@ describe("childSandboxOptions() on the runsc runtime", () => {
     ]);
   });
 
-  it("shares the parent's runsc runtime when there is nothing to mount", () => {
+  it("gives every runsc child a runtime of its own, mount or no mount", () => {
+    // A shared runtime would share the parent's named sessions and let the
+    // child's terminal transition close the parent's sandbox (review,
+    // verified live). Each run owns its sessions and its lifecycle.
     const options = childSandboxOptions(
       { sandbox, ownedRunscSandboxConfig: parentRunsc },
       undefined,
     );
-    expect(options.sandboxRuntime).toBe(sandbox);
-    expect(options.sandboxRuntimeKind).toBeUndefined();
+    expect(options.sandboxRuntime).toBeUndefined();
+    expect(options.sandboxRuntimeKind).toBe("runsc");
+    expect(options.sandboxRootfs).toBe("/images/kitchensink");
+    expect(options.additionalMounts).toBe(parentRunsc.additionalMounts);
   });
 });

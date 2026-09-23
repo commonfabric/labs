@@ -229,16 +229,45 @@ export const resolveRunscSandboxConfig = (
       }
     }
   }
+  const runId = options.runId ?? crypto.randomUUID();
+  const workspaceHostPath = requireAbsoluteHostPath(
+    "workspace host path",
+    options.workspaceHostPath,
+  );
+  // Scratch holds the bundle, the invocation context and the CFC result
+  // for every call. It is host-private, OUTSIDE every sandbox mount: a
+  // sandbox that could reach the result file could rewrite it before the
+  // harness reads it and forge a public taint over its own output (review,
+  // verified live). The default is the user's temp dir; an explicit scratch
+  // is refused when it lies inside a mount.
+  const scratchDir = requireAbsoluteHostPath(
+    "scratch directory",
+    options.scratchDir ?? joinHostPath(
+      (Deno.env.get("TMPDIR") ?? "/tmp").replace(/\/+$/, "") || "/",
+      "cf-harness-runsc",
+      sanitizeIdPart(runId),
+    ),
+  );
+  for (
+    const root of [
+      workspaceHostPath,
+      ...additionalMounts.map((m) => m.hostPath),
+    ]
+  ) {
+    const normalized = root.replace(/\/+$/, "");
+    if (scratchDir === normalized || scratchDir.startsWith(normalized + "/")) {
+      throw new Error(
+        `sandbox scratch directory ${scratchDir} lies inside the mount ${root}: the CFC result and context files there would be writable from the sandbox`,
+      );
+    }
+  }
   // Frozen, mounts included: the engine checks containment against this
   // set and the runtime rereads it at every launch, and a caller holding
   // `ownedRunscSandboxConfig` must not be able to make those two differ.
   return Object.freeze({
     runscBinary: options.runscBinary ?? DEFAULT_RUNSC_BINARY,
     rootfs: requireAbsoluteHostPath("sandbox rootfs", rootfs),
-    workspaceHostPath: requireAbsoluteHostPath(
-      "workspace host path",
-      options.workspaceHostPath,
-    ),
+    workspaceHostPath,
     workspaceMountPath,
     shellPath: options.shellPath ?? DEFAULT_RUNSC_SHELL,
     networkMode: options.networkMode ?? "none",
@@ -254,9 +283,8 @@ export const resolveRunscSandboxConfig = (
         ),
       }
       : {}),
-    scratchDir: options.scratchDir ??
-      joinHostPath(options.workspaceHostPath, ".cf-harness-runsc"),
-    runId: options.runId ?? crypto.randomUUID(),
+    scratchDir,
+    runId,
     ...(options.containerUser !== undefined
       ? { containerUser: options.containerUser }
       : {}),
@@ -330,11 +358,21 @@ export class RunscSandboxRuntime implements SandboxRuntime {
   readonly config: RunscSandboxConfig;
   readonly #runner: ProcessRunner;
   readonly #sessions = new Map<string, SessionState>();
+  /**
+   * What names this runtime's containers: a readable slice of the run id
+   * plus a nonce minted here, so two runs whose ids share a prefix — or
+   * two runtimes for one run — never resolve a session name to the same
+   * container (review, verified live with a shared 12-character prefix).
+   */
+  readonly #runTag: string;
   #closed = false;
 
   constructor(config: RunscSandboxConfig, runner?: ProcessRunner) {
     this.config = config;
     this.#runner = runner ?? new DenoProcessRunner();
+    this.#runTag = `${sanitizeIdPart(config.runId).slice(0, 12)}-${
+      crypto.randomUUID().slice(0, 8)
+    }`;
   }
 
   describe(): SandboxRuntimeDescription {
@@ -521,7 +559,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
 
   async #writeBundle(id: string, specText: string): Promise<string> {
     const dir = joinHostPath(this.config.scratchDir, "bundles", id);
-    await Deno.mkdir(dir, { recursive: true });
+    await Deno.mkdir(dir, { recursive: true, mode: 0o700 });
     await Deno.writeTextFile(joinHostPath(dir, "config.json"), specText);
     return dir;
   }
@@ -536,9 +574,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
   async #runOnce(
     request: SandboxCommandRequest,
   ): Promise<SandboxCommandResult> {
-    const callId = `c-${sanitizeIdPart(this.config.runId).slice(0, 12)}-${
-      crypto.randomUUID().slice(0, 8)
-    }`;
+    const callId = `c-${this.#runTag}-${crypto.randomUUID().slice(0, 8)}`;
     const bundleDir = await this.#writeBundle(callId, this.#spec(request));
     const contextPath = joinHostPath(bundleDir, "cfc-invocation-context.json");
     const resultPath = joinHostPath(bundleDir, "cfc-result.json");
@@ -627,7 +663,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         `invalid sandbox session name: ${JSON.stringify(session)}`,
       );
     }
-    return `s-${sanitizeIdPart(this.config.runId).slice(0, 12)}-${session}`;
+    return `s-${this.#runTag}-${session}`;
   }
 
   /**
@@ -722,6 +758,9 @@ export class RunscSandboxRuntime implements SandboxRuntime {
   }
 
   run(request: SandboxCommandRequest): Promise<SandboxCommandResult> {
+    if (this.#closed) {
+      return Promise.reject(new Error("sandbox runtime is closed"));
+    }
     if (request.session !== undefined) {
       try {
         assertRunscSessionAllowedForMode(
@@ -782,5 +821,13 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         );
       }
     }
+    // The scratch tree is this run's; take it down when nothing is left in
+    // it (non-recursive on purpose: anything still there is evidence).
+    for (const sub of ["bundles", "state"]) {
+      await Deno.remove(joinHostPath(this.config.scratchDir, sub)).catch(() =>
+        undefined
+      );
+    }
+    await Deno.remove(this.config.scratchDir).catch(() => undefined);
   }
 }
