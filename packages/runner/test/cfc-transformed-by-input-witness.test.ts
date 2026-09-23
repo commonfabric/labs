@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
+import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 
 import {
@@ -158,7 +159,7 @@ const seedSecret = async (
 const seedPublic = async (
   runtime: Runtime,
   cause: string,
-  value: unknown,
+  value: FabricValue,
 ): Promise<void> => {
   const tx = runtime.edit();
   const id = runtime.getCell(space, cause, undefined, tx)
@@ -177,7 +178,7 @@ const transform = async (
   identity: ImplementationIdentity | readonly ImplementationIdentity[],
   inputs: readonly string[],
   output: string,
-  compute: (values: unknown[]) => unknown,
+  compute: (values: unknown[]) => FabricValue,
   path: readonly string[] = [],
 ): Promise<void> => {
   const identities = Array.isArray(identity) ? identity : [identity];
@@ -190,7 +191,7 @@ const transform = async (
     .getAsNormalizedFullLink().id;
   tx.writeOrThrow(
     { space, scope: "space", id, path: ["value", ...path] },
-    compute(values) as never,
+    compute(values),
   );
   // A second identity writing in the same transaction leaves the whole
   // transaction unattributed (`CfcTxState.writeIdentity`).
