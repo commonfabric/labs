@@ -140,6 +140,17 @@ export const CFC_COMPILED_BY_ATOM_PREFIX = "cf-compiled-by:" as const;
 export const CFC_COMPILED_BY_ATOM = "cf-compiled-by:cf-compiler" as const;
 
 /**
+ * An external account identifier Loom observed after its connector
+ * authenticated as the profile owner. Loom's verifier writes these assertions
+ * into the owner's home space, and People merges on them, so a self-asserted
+ * one would merge two people on the asserter's word. A system atom (see
+ * {@link CFC_SYSTEM_STRING_ATOMS}); stored assertions carry this exact
+ * literal, so it keeps its spelling.
+ */
+export const CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM =
+  "loom-verified-external-identity" as const;
+
+/**
  * System integrity atoms: string-shaped atoms that name a fact only a trusted
  * system writer may assert. Like the compiler attestation above, prepare's
  * `gateRuntimeMintedIntegrity` strips them from any write not authored by a
@@ -152,14 +163,9 @@ export const CFC_COMPILED_BY_ATOM = "cf-compiled-by:cf-compiler" as const;
  * verifier key is the hardening that follows once host writes stop being
  * trusted by default.
  */
-export const CFC_SYSTEM_STRING_ATOMS: readonly string[] = [
-  // An external account identifier Loom observed after its connector
-  // authenticated as the profile owner. Loom's verifier writes these
-  // assertions into the owner's home space, and People merges on them, so a
-  // self-asserted one would merge two people on the asserter's word. Stored
-  // assertions carry this exact literal, so it keeps its spelling.
-  "loom-verified-external-identity",
-];
+export const CFC_SYSTEM_STRING_ATOMS = [
+  CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM,
+] as const satisfies readonly string[];
 
 export const CFC_CONCEPT_KIND = {
   PromptInfluence: "https://commonfabric.org/cfc/concepts/prompt-influence",

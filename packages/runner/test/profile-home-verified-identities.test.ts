@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import { CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -22,7 +23,7 @@ const PROGRAM: RuntimeProgram = {
     contents: Deno.readTextFileSync(sysDir + "profile-home.tsx"),
   }],
 };
-const INTEGRITY = "loom-verified-external-identity";
+const INTEGRITY = CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM;
 
 const assertionSchema = (addIntegrity: boolean): JSONSchema => ({
   type: "object",
