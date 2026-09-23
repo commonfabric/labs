@@ -1324,7 +1324,8 @@ export class CommonFabricFormatter implements TypeFormatter {
     // reference's own arguments are its nodes, the payload's as much as the
     // labels' (`#buildIfcMetadataForAlias` reads them the same way). Read from
     // its type alone, a generic alias in the payload has no argument to bind,
-    // and a label nested in it no `typeof` binding or `AnyOf` to recognize.
+    // and a `typeof` binding nested in it is lost unless a member's annotation
+    // still names it.
     const baseSchema = unsubstituted
       ? true
       : baseTypeNode
