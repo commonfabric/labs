@@ -2025,21 +2025,25 @@ export class CommonFabricFormatter implements TypeFormatter {
     if (ts.isTypeLiteralNode(typeNode)) {
       const obj: Record<string, unknown> = {};
       for (const member of typeNode.members) {
-        if (ts.isPropertySignature(member) && member.name && member.type) {
-          const propName = getPropertyNameText(member.name);
-          if (!propName) continue;
-          const property = type && checker.getPropertyOfType(type, propName);
-          obj[propName] = this.#extractLiteralLikeValue(
-            property &&
-              memberValueType(
-                property,
-                checker.getTypeOfSymbol(property),
-                checker,
-              ),
-            member.type,
-            context,
-          );
-        }
+        // An object read without one of its members would be read short, so
+        // a member this reader cannot name from its syntax, such as a
+        // computed key, or one that is not a property with a written type,
+        // such as an accessor, leaves the whole object to its type. The type
+        // path reads each member at its annotation, as this reader would.
+        if (!ts.isPropertySignature(member) || !member.type) return UNREAD;
+        const propName = getPropertyNameText(member.name);
+        if (propName === undefined) return UNREAD;
+        const property = type && checker.getPropertyOfType(type, propName);
+        obj[propName] = this.#extractLiteralLikeValue(
+          property &&
+            memberValueType(
+              property,
+              checker.getTypeOfSymbol(property),
+              checker,
+            ),
+          member.type,
+          context,
+        );
       }
       return obj;
     }

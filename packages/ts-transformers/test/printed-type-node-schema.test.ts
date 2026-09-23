@@ -332,6 +332,61 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
       expect(input).toEqual({ confidentiality: [{ anyOf: [] }] });
     });
 
+    describe("an object label with a member the syntax reader cannot name", () => {
+      const user = {
+        type: "https://commonfabric.org/cfc/atom/User",
+        subject: "did:key:alice",
+      };
+      for (
+        const [spelling, declarations, a, expected] of [
+          [
+            "a computed key",
+            `const key = "subject" as const;
+interface Meta { confidentiality: [{ type: "https://commonfabric.org/cfc/atom/User"; [key]: "did:key:alice" }] }`,
+            "Cfc<string, Meta>",
+            user,
+          ],
+          [
+            "an accessor",
+            `interface Meta { confidentiality: [{ type: "https://commonfabric.org/cfc/atom/User"; get subject(): "did:key:alice" }] }`,
+            "Cfc<string, Meta>",
+            user,
+          ],
+          [
+            "an empty name",
+            `interface Meta { confidentiality: [{ type: "t"; "": "empty" }] }`,
+            "Cfc<string, Meta>",
+            { type: "t", "": "empty" },
+          ],
+          [
+            "a computed key written in place",
+            `const key = "subject" as const;`,
+            `Cfc<string, { confidentiality: [{ type: "https://commonfabric.org/cfc/atom/User"; [key]: "did:key:alice" }] }>`,
+            user,
+          ],
+        ] as const
+      ) {
+        it(`keeps every member beside ${spelling}`, async () => {
+          const labelled = { confidentiality: [expected] };
+          expect(await labels(declarations, a)).toEqual({
+            input: labelled,
+            output: labelled,
+          });
+        });
+      }
+    });
+
+    it("reads the binding under a computed key", async () => {
+      // The syntax reader leaves a computed key to the type, whose member is
+      // read at its annotation, binding and all.
+      const { input, output } = await labels(
+        `const k = "confidentiality" as const;`,
+        "Cfc<string, { [k]: [PolicyOf<typeof rules>] }>",
+      );
+      expect(input).toMatchObject({ confidentiality: [policy] });
+      expect(output).toMatchObject({ confidentiality: [policy] });
+    });
+
     describe("an annotation whose syntax the label reader does not evaluate", () => {
       for (
         const [spelling, declarations, expected] of [
