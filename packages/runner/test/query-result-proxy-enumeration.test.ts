@@ -10,7 +10,10 @@ import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
-import { createQueryResultProxy } from "../src/query-result-proxy.ts";
+import {
+  createQueryResultProxy,
+  ViewDriftError,
+} from "../src/query-result-proxy.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 
@@ -188,7 +191,11 @@ describe("query result proxy enumeration", () => {
     expect(keys).toContain("2");
   });
 
-  it("array proxy retains its length key after the stored shape changes", () => {
+  it("array proxy refuses to enumerate after the stored shape changes kind", () => {
+    // A view is bound to the kind it was built over. Enumerating an array
+    // view once the document holds a record refuses (`ViewDriftError`)
+    // rather than reporting an array's `length` alongside a record's keys; a
+    // fresh read is a view over the record.
     const cell = runtime.getCell<unknown>(
       space,
       "test-array-shape-change",
@@ -206,8 +213,15 @@ describe("query result proxy enumeration", () => {
 
     cell.set({ changed: true });
 
-    expect(Reflect.ownKeys(proxy)).toContain("length");
-    expect(Object.keys(proxy)).toContain("changed");
+    expect(() => Reflect.ownKeys(proxy)).toThrow(ViewDriftError);
+    expect(() => Object.keys(proxy)).toThrow(ViewDriftError);
+    const fresh = createQueryResultProxy<{ changed: boolean }>(
+      runtime,
+      tx,
+      cell.getAsNormalizedFullLink(),
+      0,
+    );
+    expect(Object.keys(fresh)).toEqual(["changed"]);
   });
 
   it("empty object returns empty keys", () => {

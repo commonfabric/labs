@@ -291,6 +291,31 @@ describe("test-selection", () => {
       expect(text).not.toContain("unschedulable");
     });
 
+    it("says how far the mandatory set alone puts a lane past its budget", () => {
+      // A unit no manifest has seen is mandatory, and is charged what its
+      // suite's measured units cost. Ten of them at 150 seconds each are
+      // more than the lanes together can hold; one is not.
+      const tree = (added: number) =>
+        suiteHolding([
+          "packages/memory/test/memory.test.ts",
+          ...Array.from(
+            { length: added },
+            (_, n) => `packages/memory/test/new-${n}.test.ts`,
+          ),
+        ]);
+      const manifest = sampleManifest({
+        entries: [sampleEntry({ k: "unit", s: "memory", n: "measured" }, {
+          cost: 150,
+          unit: "packages/memory/test/memory.test.ts",
+        })],
+      });
+      expect(planLines(manifest, [tree(10)], undefined).join("\n")).toMatch(
+        /the mandatory set alone puts a lane \d+\.\ds past its budget/,
+      );
+      expect(planLines(manifest, [tree(1)], undefined).join("\n")).not
+        .toContain("the mandatory set alone");
+    });
+
     it("names an identity no lane can hold", () => {
       const manifest = sampleManifest({
         entries: [sampleEntry({ k: "unit", s: "memory", n: "huge" }, {

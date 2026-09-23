@@ -901,9 +901,10 @@ from. The dashboard's coverage debt tile
 (`packages/dashboard/coverage-debt-history.ts`) reads the
 `coverage-debt: workspace uncovered lines` record out of one `main` run a day,
 shows the newest of those figures, and charts the run of them. It skips a run
-whose compile cache states say it was cold, for the reason the ratchet does. So
-the metric name, the `durationSeconds` key and the `compileCacheStates` tag have
-a reader outside the gate, and a change to any of them is a change to the tile.
+any of whose compile cache states is cold, for the reason the ratchet does;
+"Compile cache state and cold runs" below says what records those states. So the
+metric name, the `durationSeconds` key and the `compileCacheStates` tag have a
+reader outside the gate, and a change to any of them is a change to the tile.
 
 A later PR run reads its ratchet baseline from the `perf-metrics` artifact of the
 `main` run for the base-branch commit it merged, or of the nearest ancestor of
@@ -1005,6 +1006,23 @@ cold causes (cache eviction, cache-service outages), and a run whose cache-state
 artifacts and fingerprint comparison both failed publishes no stamp at all. A
 run with no recorded state is treated as not-cold and may still be used as a
 baseline.
+
+A CI lane records the state of the compile byte cache it restores
+(`COMPILE_CACHE_FILE` in `tasks/ci-capabilities.ts`) itself. A lane whose
+batches open that cache checks whether the file exists before its first batch
+runs, because the first pattern a batch compiles writes the file whatever the
+cache held. It writes `cold` or `warm` to `compile-cache-state.txt` at the top
+of the directory its coverage artifact holds. A file that exists reads as warm,
+which is sound only while the workflow keys the lanes' cache, and every restore
+key for it, on the compiler fingerprint, as it keys the jobs' caches: a file
+restored from a run of another compiler holds no bytes this one can use, and
+would read as warm all the same. `tasks/coverage-report.ts` reads
+every such record and publishes the run's state under the `compile-cache` key of
+`compileCacheStates`: cold when any record says `cold` or says something it
+does not recognize, warm when every record says `warm`, and absent when no lane
+opened the cache. The dashboard's repository-wide trend leaves a cold run out,
+so a fingerprint change does not show as a drop in debt that the next warm run
+takes back.
 
 ## Which `main` run the ratchet compares against
 

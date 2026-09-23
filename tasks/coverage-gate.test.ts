@@ -521,7 +521,7 @@ describe("coverage-gate", () => {
       expect(report.unknownAcceptances).toEqual([]);
     });
 
-    it("reports rather than fails when no lane wrote the report", async () => {
+    it("fails when no lane wrote the report of a forced set", async () => {
       const { root } = await workspace("packages/bakery", 10, 6);
       const { suites, changed } = bakery();
       const report = await runGate(gateInput({
@@ -529,7 +529,22 @@ describe("coverage-gate", () => {
         gate: coverageGateFor(suites, changed),
         members: ["packages/bakery"],
       }));
-      expect(report.ok).toBe(true);
+      expect(report.ok).toBe(false);
+      expect(report.verdicts[0]?.outcome).toBe("no-report");
+      expect(formatGateReport(report).join("\n"))
+        .toContain("no lane reported coverage for");
+    });
+
+    it("fails a forced set with no report in a run with a failing test", async () => {
+      const { root } = await workspace("packages/bakery", 10, 6);
+      const { suites, changed } = bakery();
+      const report = await runGate(gateInput({
+        root,
+        gate: coverageGateFor(suites, changed),
+        members: ["packages/bakery"],
+        testsFailed: true,
+      }));
+      expect(report.ok).toBe(false);
       expect(report.verdicts[0]?.outcome).toBe("no-report");
     });
 

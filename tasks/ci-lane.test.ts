@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { exists } from "@std/fs";
 import { describe, it } from "@std/testing/bdd";
 import { fromFileUrl } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
@@ -11,6 +12,7 @@ import {
 import {
   CAPABILITY_LOG_TAIL_LINES,
   type CapabilityId,
+  COMPILE_CACHE_FILE,
 } from "./ci-capabilities.ts";
 import {
   capabilitiesBySuite,
@@ -24,6 +26,7 @@ import {
   batchesOf,
   batchRepeats,
   changedFiles,
+  COMPILE_CACHE_STATE_FILE,
   convertCoverage,
   COVERAGE_FAILURE_MARKER,
   COVERAGE_PROFILE_DIR,
@@ -36,6 +39,7 @@ import {
   describePlan,
   describeWithheld,
   fullLanes,
+  type LaneDeps,
   main,
   manifestMoment,
   markMeasuredFailures,
@@ -67,6 +71,7 @@ import {
 import {
   FULL_LANE_BOUND_SECONDS,
   FULL_LANE_BUDGET_SECONDS,
+  FULL_LANES_MAX,
   LANE_BUDGET_SECONDS,
   UNMEASURED_COST_SECONDS,
 } from "./test-selection/policy.ts";
@@ -442,8 +447,143 @@ describe("the order a runner is handed its work in", () => {
     }));
     const suiteIds = (chosen: readonly Selection[]) =>
       batchesOf(bakery, seen.manifest, chosen).map((batch) => batch.suite.id);
-    expect(suiteIds(selections)).toEqual(["repo-gates", "workspace-unit"]);
+    expect(suiteIds(selections).toSorted()).toEqual([
+      "repo-gates",
+      "workspace-unit",
+    ]);
     expect(suiteIds([...selections].reverse())).toEqual(suiteIds(selections));
+  });
+});
+
+describe("the order a lane runs its batches in", () => {
+  // A lane that runs out of time is killed with its later batches unrun
+  // and unmeasured, so the order decides which suites the cost model can
+  // learn. Each case turns on one ordering key, and its second assertion
+  // shows that key is what decides it.
+
+  /**
+   * What each of one suite's identities costs, what the suite is
+   * corrected by, and how many times each identity repeats.
+   */
+  interface Share {
+    costs?: readonly number[];
+    correction?: number;
+    repeats?: number;
+  }
+
+  /**
+   * The suites a lane would run, in the order it would run them, of
+   * `alpha` and `zebra` (one identity costing a second each unless
+   * `shares` says otherwise), with the `fitted` ones measured, and the selections
+   * listed in reverse where `reversed` says.
+   */
+  function order(
+    fitted: readonly string[],
+    shares: Readonly<Record<string, Share>> = {},
+    reversed = false,
+  ): string[] {
+    const made = manifestOf(
+      ["zebra", "alpha"].flatMap((id) =>
+        (shares[id]?.costs ?? [1]).map((cost, n) => ({
+          test: { k: "unit", s: id, n: `test ${n}` },
+          suite: id,
+          unit: `${id}.ts`,
+          cost,
+        }))
+      ),
+    );
+    for (const id of fitted) {
+      made.calibration.suites[id] = {
+        overhead: 5,
+        correction: shares[id]?.correction ?? 1,
+        unitOverhead: 0,
+      };
+    }
+    const topology = ["zebra", "alpha"].map((id) =>
+      suite({
+        id,
+        units: [`${id}.ts`],
+        locate: () => ({ level: "unit" as const, unit: `${id}.ts` }),
+      })
+    );
+    const selections = made.entries.map((entry) => ({
+      entry,
+      reason: "value" as const,
+      repeats: shares[entry.suite]?.repeats ?? 1,
+    }));
+    return batchesOf(
+      topology,
+      made,
+      reversed ? selections.toReversed() : selections,
+    ).map((batch) => batch.suite.id);
+  }
+
+  it("runs a suite nothing has measured before one something has", () => {
+    // The measured suite is the larger, so only this key puts it second.
+    expect(order(["alpha"], { alpha: { costs: [90] } }))
+      .toEqual(["zebra", "alpha"]);
+    expect(order(["alpha", "zebra"], { alpha: { costs: [90] } }))
+      .toEqual(["alpha", "zebra"]);
+  });
+
+  it("runs the largest share of the lane first within a group", () => {
+    expect(order([], { zebra: { costs: [90] } })).toEqual(["zebra", "alpha"]);
+    expect(order([], { alpha: { costs: [90] } })).toEqual(["alpha", "zebra"]);
+  });
+
+  it("counts every selected identity of a suite in its share", () => {
+    // Two thirty-second tests of `zebra` are more of the lane than one
+    // fifty-second test of `alpha`.
+    expect(order([], {
+      alpha: { costs: [50] },
+      zebra: { costs: [30, 30] },
+    })).toEqual(["zebra", "alpha"]);
+    expect(order([], {
+      alpha: { costs: [50] },
+      zebra: { costs: [30] },
+    })).toEqual(["alpha", "zebra"]);
+  });
+
+  it("counts a suite's correction in its share", () => {
+    // Thirty seconds of `zebra` measured, running at twice that, is more
+    // of the lane than fifty seconds of `alpha`.
+    expect(order(["alpha", "zebra"], {
+      alpha: { costs: [50] },
+      zebra: { costs: [30], correction: 2 },
+    })).toEqual(["zebra", "alpha"]);
+    expect(order(["alpha", "zebra"], {
+      alpha: { costs: [50] },
+      zebra: { costs: [30] },
+    })).toEqual(["alpha", "zebra"]);
+  });
+
+  it("counts a selection's repeats in its share", () => {
+    // Thirty seconds run three times is more of the lane than sixty run
+    // once.
+    expect(order([], {
+      alpha: { costs: [60] },
+      zebra: { costs: [30], repeats: 3 },
+    })).toEqual(["zebra", "alpha"]);
+    expect(order([], {
+      alpha: { costs: [60] },
+      zebra: { costs: [30] },
+    })).toEqual(["alpha", "zebra"]);
+  });
+
+  it("orders suites whose shares differ by rounding alone the same way whatever order the plan listed", () => {
+    // Added up in the order listed, a tenth, a fifth and three tenths come
+    // to exactly six tenths one way round and a rounding step more the
+    // other, which is a tie with `alpha` one way and not the other.
+    const shares = {
+      alpha: { costs: [0.6] },
+      zebra: { costs: [0.1, 0.2, 0.3] },
+    };
+    expect(order([], shares)).toEqual(order([], shares, true));
+  });
+
+  it("settles a tie by the suite's identifier whatever order the plan listed", () => {
+    expect(order([])).toEqual(["alpha", "zebra"]);
+    expect(order([], {}, true)).toEqual(["alpha", "zebra"]);
   });
 });
 
@@ -631,7 +771,8 @@ describe("how many lanes the full run asks for", () => {
     const deps = awkward();
     const lanes = await fullLanes(options, {
       topology: deps.topology,
-      manifest: () => Promise.resolve({ absent: "the store is gone" }),
+      manifest: () =>
+        Promise.resolve({ absent: "the store holds no manifest" }),
     });
     const seen = census(deps.suites, undefined, new Set());
     const laid = plan({
@@ -696,10 +837,36 @@ describe("how many lanes the full run asks for", () => {
     );
     const lanes = await fullLanes(options, {
       topology: () => Promise.resolve(suites),
-      manifest: () => Promise.resolve({ absent: "the store is gone" }),
+      manifest: () =>
+        Promise.resolve({ absent: "the store holds no manifest" }),
     });
     expect(lanes).toBeGreaterThan(suites.length);
     expect(lanes).toBe(Math.ceil((perLane + 40) * 2 / perLane));
+  });
+
+  it("takes no more lanes than FULL_LANES_MAX however many it needs", async () => {
+    // A lane per suite is the floor with nothing measured, and a tree with
+    // more suites than the cap would otherwise ask for a runner apiece.
+    const suites = Array.from(
+      { length: FULL_LANES_MAX + 10 },
+      (_, i) => suite({ id: `suite-${i}`, units: [`s${i}/one.test.ts`] }),
+    );
+    const error = console.error;
+    const said: string[] = [];
+    console.error = (line: string) => said.push(line);
+    let lanes: number;
+    try {
+      lanes = await fullLanes(options, {
+        topology: () => Promise.resolve(suites),
+        manifest: () => Promise.resolve({ absent: "the store is gone" }),
+      });
+    } finally {
+      console.error = error;
+    }
+    expect(lanes).toBe(FULL_LANES_MAX);
+    expect(said.join("\n")).toContain(
+      `needs ${FULL_LANES_MAX + 10} lanes and takes ${FULL_LANES_MAX}`,
+    );
   });
 
   it("charges a stand-in what the census charged it, not the dial", async () => {
@@ -757,7 +924,8 @@ describe("how many lanes the full run asks for", () => {
     try {
       lanes = await fullLanes(options, {
         topology: () => Promise.resolve(suites),
-        manifest: () => Promise.resolve({ absent: "the store is gone" }),
+        manifest: () =>
+          Promise.resolve({ absent: "the store holds no manifest" }),
       });
     } finally {
       console.error = error;
@@ -1274,7 +1442,7 @@ describe("running a lane's work", () => {
         lane,
         [],
         [],
-        { absent: "the store is unreachable" },
+        { absent: "the store holds no manifest" },
         [],
         [],
         { manifest: manifestOf([]), selections: [], projectedSeconds: 0 },
@@ -1283,7 +1451,7 @@ describe("running a lane's work", () => {
     } finally {
       console.log = log;
     }
-    expect(lines.join("\n")).toContain("the store is unreachable");
+    expect(lines.join("\n")).toContain("the store holds no manifest");
   });
 
   it("names what the manifest withheld, and what came back", () => {
@@ -1536,17 +1704,55 @@ describe("planning a lane the manifest chose", () => {
     try {
       await runLane(
         { lane: 1, of: 5, full: false, dryRun: true, laneCount: false, root },
-        { manifest: () => Promise.resolve({ absent: "the store is gone" }) },
+        {
+          manifest: () =>
+            Promise.resolve({ absent: "the store holds no manifest" }),
+        },
       );
     } finally {
       console.log = log;
     }
     // A lane with no manifest runs the mandatory set plus a
     // deterministic slice rather than failing, so pull requests keep
-    // flowing while the store is unreachable.
+    // flowing while the store holds nothing to read. Every lane of a run
+    // gets that answer from the store alike, so they pack alike.
     const printed = lines.join("\n");
-    expect(printed).toContain("the store is gone");
+    expect(printed).toContain("the store holds no manifest");
     expect(printed).toContain("workspace-unit");
+  });
+
+  /** A store no listing or read could reach. */
+  const unreachable: LaneDeps = {
+    manifest: () =>
+      Promise.resolve({
+        absent: "listing failed: connection reset",
+        unreachable: true,
+      }),
+  };
+
+  it("refuses to pack when the store could not be read", async () => {
+    // A store one lane could not reach is one the lane beside it may have
+    // read, and a lane packing without the manifest its siblings packed
+    // from lays out a different plan: a test each plan puts in the
+    // other's lanes runs in neither.
+    const refused = runLane(
+      { lane: 1, of: 5, full: false, dryRun: true, laneCount: false, root },
+      unreachable,
+    );
+    await expect(refused).rejects.toThrow(
+      "the manifest store could not be read",
+    );
+    await expect(refused).rejects.toThrow("connection reset");
+  });
+
+  it("refuses to count a full run's lanes when the store could not be read", async () => {
+    // The full run's count is planned from the same reading, so it
+    // refuses too rather than counting lanes for a plan no lane follows.
+    const refused = main(["--full", "--lane-count"], root, unreachable);
+    await expect(refused).rejects.toThrow(
+      "the manifest store could not be read",
+    );
+    await expect(refused).rejects.toThrow("connection reset");
   });
 });
 
@@ -1866,6 +2072,62 @@ describe("the lane's own housekeeping", () => {
     expect(spooled).not.toContain("ci-lane setup");
     await Deno.remove(temp, { recursive: true });
     await Deno.remove(spool, { recursive: true });
+  });
+
+  /** Runs the only lane of a full run over `suites` in `root`, quietly. */
+  async function onlyLane(root: string, suites: Suite[]): Promise<boolean> {
+    const log = console.log;
+    console.log = () => {};
+    try {
+      return await runLane(
+        { lane: 1, of: 1, full: true, dryRun: false, laneCount: false, root },
+        {
+          topology: () => Promise.resolve(suites),
+          manifest: ({ at }) =>
+            Promise.resolve({ absent: `no manifest at ${at}: held out here` }),
+          spool: () => undefined,
+        },
+      );
+    } finally {
+      console.log = log;
+    }
+  }
+
+  it("records whether it found the compile byte cache restored", async () => {
+    // The record goes where the coverage artifact carries it, and is
+    // read before the lane's first batch could write the file itself.
+    const root = await Deno.makeTempDir({ prefix: "lane-cache-" });
+    const compiling = [suite({
+      id: "pattern-unit",
+      needs: ["compile-cache"],
+      units: ["packages/patterns/counter.test.tsx"],
+      command: (_units, context) =>
+        Deno.writeTextFile(`${context.root}/${COMPILE_CACHE_FILE}`, "{}")
+          .then(() => []),
+    })];
+    const record = `${root}/coverage/lcov/${COMPILE_CACHE_STATE_FILE}`;
+    try {
+      await onlyLane(root, compiling);
+      expect(await Deno.readTextFile(record)).toBe("cold\n");
+      await onlyLane(root, compiling);
+      expect(await Deno.readTextFile(record)).toBe("warm\n");
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("records no cache state where it opened no compile byte cache", async () => {
+    const root = await Deno.makeTempDir({ prefix: "lane-cache-" });
+    try {
+      await onlyLane(root, [suite({
+        id: "workspace-unit",
+        units: ["packages/bakery/glaze.test.ts"],
+      })]);
+      expect(await exists(`${root}/coverage/lcov/${COMPILE_CACHE_STATE_FILE}`))
+        .toBe(false);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
   });
 });
 

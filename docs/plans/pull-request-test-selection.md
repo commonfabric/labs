@@ -1246,14 +1246,22 @@ not available. `toolshed-baked` is the server for the default arm.
 a compile-time define baked into that same shell whichever way it goes.
 Both have a different provider: restore the binary from the Actions cache
 if the key hits, and build it in place if it does not. The lane workflow
-carries one fixed `actions/cache` step covering `.ci-cache`, keyed on a
-hash of the sources the binaries are built from. Everything a lane wants
-to keep between runs sits under that one directory — the built binaries,
-and the pattern compile byte cache — because one step covering one
-directory is what keeps the workflow independent of what the lane turns
-out to need. That step is in the workflow rather than in the runner
-because the cache service is only reachable through the action, and it is
-written once and never touched again.
+carries one fixed `actions/cache` step covering `.ci-cache`, under an exact
+key with no restore prefix. A capability that finds a binary there uses it
+without asking what it was built from, so the key has to change whenever
+anything a binary is built from does. `tasks/binary-cache-key.ts` computes
+it as a digest of the git object id of every tracked file under
+`BINARY_SOURCES` in `tasks/build-binaries.ts`. The tests in
+`tasks/build-binaries.test.ts` hold the list to every path the build reads
+and to every local module the binaries' import graphs reach. A change to the shell's service worker, to
+the Deno release that `mise.toml` pins, or to a JSON file an import reaches
+therefore moves the key like a change to any other source. Everything a
+lane wants to keep between runs sits under that one directory — the built
+binaries, and the pattern compile byte cache — because one step covering
+one directory is what keeps the workflow independent of what the lane turns
+out to need. That step is in the workflow rather than in the runner because
+the cache service is only reachable through the action, and it is written
+once and never touched again.
 
 That split is the argument for having capabilities at all. Three ways of
 providing "a Toolshed server" coexist, suites say which one they need, and
@@ -2866,8 +2874,8 @@ What the runner does, in order:
    before the lane reads, plans, opens or runs anything, and a suite that
    declared `github-api` is given the token back through that capability.
 2. Resolve the manifest from the commit's date and fetch it. No manifest
-   at or before that date, or a fetch failure, takes the fallback (see
-   [Failure modes](#failure-modes)).
+   at or before that date takes the fallback, and a store the lane could
+   not read fails the lane (see [Failure modes](#failure-modes)).
 3. Enumerate every suite against the working tree, and read the manifest
    against that enumeration. The tree decides which tests exist and the
    manifest decides what each is worth and costs, so an entry naming a
@@ -2886,10 +2894,11 @@ What the runner does, in order:
    and which manifest the plan came from.
 7. Set up the union of the capabilities the batches need, recording each
    one's duration.
-8. Run each batch execution with fresh spool and JUnit output paths,
-   recording what the batch spent and what its own tests took, and
-   continuing past a failure so that one failure does not hide later
-   batches or repeats.
+8. Run each batch execution, in the order [the next
+   section](#the-order-a-lane-runs-its-batches-in) gives, with fresh spool
+   and JUnit output paths, recording what the batch spent and what its
+   own tests took, and continuing past a failure so that one failure does
+   not hide later batches or repeats.
 9. Immediately after each execution, gather its direct records and
    described JUnit outputs into the lane spool through the shared gather
    function. Validate record surfaces and apply the suite's optional
@@ -2902,6 +2911,28 @@ What the runner does, in order:
     asked to run is never left out of it. [An excluded test still runs on
     `main`](#an-excluded-test-still-runs-on-main) says which failures
     those are and how the runner tells them apart.
+
+### The order a lane runs its batches in
+
+What a lane costs beyond its tests is fitted from the lane's own
+measurements, and [The cost model](#the-cost-model) says how. What that
+section leaves to here is the order a lane takes its batches in, which
+decides which suites the model can ever learn. A lane killed part way
+through is killed with its later batches unrun, so they record nothing,
+and a suite the model cannot price is one that makes lanes over-run.
+
+Two keys answer that. A suite nothing has measured goes ahead of one
+something has, because it is the one worth measuring. Within each group
+the largest share of the lane goes first, because a lane that is going to
+be cut short should have spent its time on the batch most worth knowing
+about and dropped the cheap ones. A share is what the packer charged the
+lane for the suite's tests, `ownLoad` summed over the suite's selections,
+so a suite running slower than it was measured at, or running its tests
+several times, is as large here as it was when the lane was filled.
+
+Both keys are a function of the plan, and the suite identifier settles a
+tie, so every attempt at a lane runs its batches in the same order
+whatever order the plan listed its selections in.
 
 ## The full run on `main`
 
@@ -2973,6 +3004,16 @@ most where a stand-in costs more than the bare unmeasured figure. A
 suite whose measured units have all been renamed away carries what the
 units it lost cost onto every stand-in, and a count that assumed the bare
 figure would be out by that whole multiple.
+
+Whichever way the count is reached, it is capped at `FULL_LANES_MAX`,
+thirty lanes, which is half the sixty runners the organization has at
+once. Each lane is a runner, and an uncapped count grows with the corpus,
+so one push's full run could otherwise take the runners the pull requests
+behind it are waiting for. A run needing more lanes than the cap takes
+the cap and says so. Every test still runs. A test whose repeated runs
+fit in no lane runs fewer times, down to once, and a test that fits
+nowhere even once goes into the lane it leaves shortest, so the lanes
+run past their budget rather than leaving tests out.
 
 What comes out is a bound rather than a plan: the lanes still pack
 themselves, and one of them may hold several suites.
@@ -3057,13 +3098,13 @@ something or into skipping something.
 
 Two rules keep the joined result honest. A coverage failure says in the
 summary that it is a coverage failure, so it is never mistaken for a test
-failure. And when any lane failed, every set is reported rather than
-gated, because coverage measured through a failing run says nothing about
-whether the change was tested. Every set rather than the sets the failure
-was in: `Status` is already failing for the lane, so a second failure over
-a measurement taken through it buys nothing, and attributing a lane's
-failure to a set would be a second way of asking which tests belong to
-which set.
+failure. And when any lane failed, every set a lane reported is reported
+rather than gated, because coverage measured through a failing run says
+nothing about whether the change was tested. Every such set rather than
+the sets the failure was in: `Status` is already failing for the lane, so
+a second failure over a measurement taken through it buys nothing, and
+attributing a lane's failure to a set would be a second way of asking
+which tests belong to which set.
 
 ### What moves to `main`, and what happens to coverage
 
@@ -3672,9 +3713,10 @@ is pinned to the commit's date. And if none of that settles it,
 
 | What goes wrong | What happens |
 | --- | --- |
-| The store is unreachable from a lane | The lane reads its share from the tree instead. Nothing has records, so the whole corpus is mandatory and the lanes divide it between them, printing that they are running everything. Pull requests keep flowing, and slower. |
+| The store holds no manifest at or before the commit | The lane reads its share from the tree instead. Nothing has records, so the whole corpus is mandatory and the lanes divide it between them, printing that they are running everything. Pull requests keep flowing, and slower. |
+| The store is unreachable from a lane | The lane fails, saying so. An answer from the store is the same for every lane, but a failure to reach it can happen to one lane and not to the next. A lane that packed without the manifest its siblings packed from would lay out a plan they are not following, and a test each plan put in the other's lanes would run in neither. The full run's lane count is planned from the same reading, so it fails the same way. Re-running the job reads the store again, and a store that stays unreachable stops every pull request's lanes until it is reachable again. |
 | The publisher has not run for a day | Lanes use the last manifest. Selection quality decays slowly; nothing fails. |
-| The manifest is malformed or a newer schema | Rejected whole, treated as absent, same path as unreachable. |
+| The manifest is malformed or a newer schema | Rejected whole and treated as absent, the same path as a store holding none. |
 | A selected item no longer exists in the tree | Dropped with a line in the summary. A renamed test is simultaneously an unknown item, so it runs anyway. |
 | A new test surface nobody registered | `check-test-topology` fails on the next `main` run and names the unclaimed identities. |
 | A gate wired into a workflow job and into no suite | The workflow half of the drift guard fails on the pull request that adds the step, before the gate has ever run. |
@@ -3687,9 +3729,9 @@ is pinned to the commit's date. And if none of that settles it,
 | A measured set has no baseline, or none from an ancestor of the merge base | `Status` reports the comparison and does not fail. The next full `main` run supplies one. |
 | A measured member gains a test needing a browser or a server | It goes in the member's `browser-test` half, which no measured set holds, so the Deno-only half keeps its gate. A member with no such half yet names one. |
 | A measured set grows expensive | Reported in the publisher's summary and by `deno task test-selection coverage`. Nothing is excluded automatically; somebody splits the member's tests or adds a line to the exclusion list. |
-| A test in a measured set fails | Every set is reported rather than gated. Coverage measured through a failing run says nothing about whether the change was tested, and the failure is the thing to fix. |
+| A test in a measured set fails | Every set a lane reported is reported rather than gated. Coverage measured through a failing run says nothing about whether the change was tested, and the failure is the thing to fix. |
 | A change reaches more than two measured sets | The gate does not run at all, and `Status` says so. The full run on `main` still measures every set, and a rise it finds is reported back to the pull request. |
-| A lane dies without uploading its coverage | `Status` is already failing for the dead lane. It says the coverage total is incomplete rather than gating on a partial one. |
+| No lane's report for a forced set reaches the gate: a lane dies before uploading, or an upload or the download carries nothing | That set fails the gate, whether or not any lane failed, because the change was made to measure those sets and a rise in them cannot be ruled out. A set the cap left unforced is reported rather than failed. |
 | Two measured sets over one member disagree | Nothing joins them. Each carries its own baseline and its own verdict, and an `ACCEPT_COVERAGE_DEBT` marker naming the member accepts a rise in either. |
 | A lane exceeds five minutes repeatedly | The correction factors rise on the next publisher run and less is packed. If it persists, the publisher's summary shows the miss and somebody looks. |
 | Two attempts of one run straddle a UTC midnight | The later attempt's relay writes the earlier attempt's records a second time, under the later day, and the publisher folds both. Not observed in the store so far; see [What the store is missing](#what-the-store-is-missing). |
@@ -3959,10 +4001,9 @@ selection have data. That window is one `main` run and one manual
 dispatch, not days.
 
 Pull requests in that window are already handled. A lane that finds no
-manifest takes the same path as a lane that cannot reach the store:
-nothing has records, so every unit the tree holds is an identity with none
-and the whole corpus is mandatory. The lanes divide it between them and
-print that they are running everything. Feedback costs the time selection
+manifest takes the fallback: nothing has records, so every unit the tree
+holds is an identity with none and the whole corpus is mandatory. The
+lanes divide it between them and print that they are running everything. Feedback costs the time selection
 would have saved for one afternoon, and it misses nothing.
 
 The calibration numbers converge over the days after that, from the lanes'
@@ -4288,9 +4329,10 @@ exercised on the branch on its own.
       request's description. It works out which sets the gate covers by
       running the same function the lanes run, cap included, rather than
       trusting a lane's report. A coverage failure names itself as one, a
-      run with a failing test is reported rather than gated, and a change
-      over the cap forces no set, with a line saying so, and still
-      scores any set some run measured anyway.
+      run with a failing test reports rather than gates every set a lane
+      reported, a forced set no lane reported fails, and a change over
+      the cap forces no set, with a line saying so, and still scores any
+      set some run measured anyway.
 - [ ] The gate's workflow half, which only the lanes can carry. Each
       `pr-tests` lane uploads what is under its coverage directory as an
       artifact, `Status` downloads all five into one directory, and

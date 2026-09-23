@@ -55,6 +55,18 @@ export const FULL_LANE_BOUND_SECONDS = 600;
 export const FULL_LANE_BUDGET_SECONDS = FULL_LANE_BOUND_SECONDS -
   LANE_PROLOGUE_SECONDS - LANE_SAFETY_SECONDS;
 
+/**
+ * The most lanes the full run is split into. Half the sixty runners GitHub
+ * gives the organization at once, so that one push's full run leaves room
+ * for the lanes of whatever runs beside it; `tasks/ci-workflow.test.ts`
+ * holds the first wave of a run to the same half. A run needing more takes
+ * no more lanes, and a lane may run past its budget instead: the full
+ * run's packer places every test, running a repeated one fewer times where
+ * its runs fit in no lane, and putting one that fits nowhere even once in
+ * the lane it leaves shortest.
+ */
+export const FULL_LANES_MAX = 30;
+
 /** The label that runs everything on a pull request. */
 export const FULL_RUN_LABEL = "ci: full";
 
@@ -433,6 +445,16 @@ export const DIALS: readonly Dial[] = [
       "prologue and safety margin a pull request's lane pays, since a lane " +
       "of either run is the same job doing the same setup on the same " +
       "runner.",
+  },
+  {
+    name: "FULL_LANES_MAX",
+    value: FULL_LANES_MAX,
+    unit: "lanes",
+    setBy: "chosen",
+    why: "Up when the organization's runner limit rises; down when a push's " +
+      "full run crowds out the pull requests behind it. A full run needing " +
+      "more lanes than this takes this many, and a lane may then run past " +
+      "its budget.",
   },
   {
     name: "FULL_RUN_LABEL",

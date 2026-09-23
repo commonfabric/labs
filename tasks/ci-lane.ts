@@ -30,6 +30,7 @@
  *   deno run -A tasks/ci-lane.ts --lane 1 --of 5 --dry-run
  */
 
+import { exists } from "@std/fs";
 import * as path from "@std/path";
 import {
   FragmentWriter,
@@ -43,10 +44,12 @@ import {
 } from "@commonfabric/test-support/shuffle";
 import {
   type CapabilityId,
+  COMPILE_CACHE_FILE,
   logTail,
   openCapabilities,
   takeGithubToken,
 } from "./ci-capabilities.ts";
+import type { CompileCacheState } from "./ci-check-lib.ts";
 import {
   capabilitiesBySuite,
   loadTopology,
@@ -85,7 +88,7 @@ import type {
   UnschedulableEntry,
   WithheldReason,
 } from "./test-selection/manifest.ts";
-import { LANES } from "./test-selection/policy.ts";
+import { FULL_LANES_MAX, LANES } from "./test-selection/policy.ts";
 import { say } from "./step-summary.ts";
 import { writeLcovReport } from "./write-coverage-lcov.ts";
 import {
@@ -357,7 +360,7 @@ export function unitsForRun(batch: Batch, run: number): UnitRequest[] {
  */
 export function batchesOf(
   suites: readonly Suite[],
-  manifest: Manifest | undefined,
+  manifest: Manifest,
   selections: readonly Selection[],
 ): Batch[] {
   const bySuite = new Map<string, Suite>(
@@ -367,7 +370,7 @@ export function batchesOf(
     suites.map((suite) => [suite, new Set(suite.whole)]),
   );
   const inUnit = new Map<string, string[]>();
-  for (const entry of manifest?.entries ?? []) {
+  for (const entry of manifest.entries) {
     const key = `${entry.suite}\t${entry.unit}`;
     inUnit.set(key, [...inUnit.get(key) ?? [], entry.test.n]);
   }
@@ -429,9 +432,42 @@ export function batchesOf(
       (a.unit < b.unit ? -1 : a.unit > b.unit ? 1 : 0)
     );
   }
-  return [...batches.values()].sort((a, b) =>
-    a.suite.id < b.suite.id ? -1 : a.suite.id > b.suite.id ? 1 : 0
-  );
+  // What a lane costs beyond its tests is fitted from what its batches
+  // were seen to take, and a lane that runs out of time is killed with
+  // its later batches unrun and unmeasured. So the order a lane takes
+  // its batches in decides which suites the cost model can ever learn,
+  // and a suite the model cannot price is one that makes lanes run out
+  // of time. Two keys answer that, in this order.
+  //
+  // A suite nothing has measured goes ahead of one something has,
+  // because it is the one worth measuring. And within each group the
+  // largest share of the lane goes first, because a lane that runs out
+  // of time should have spent it on the batch most worth knowing about
+  // and dropped the cheap ones. A share is read through `ownLoad`, which
+  // is what the packer charged the lane for the suite's tests, so a suite
+  // whose tests run slower than they were measured at, or run several
+  // times, is as large here as it was when the lane was filled.
+  //
+  // Both keys are a function of the plan, and the identifier settles a
+  // tie, so every attempt at a lane runs its batches in the same order
+  // whatever order the plan listed its selections in. A share is added
+  // up smallest load first, so that it comes to one number however its
+  // loads were listed, since floating-point addition rounds differently
+  // in a different order.
+  const keyed = [...batches.values()].map((batch) => ({
+    batch,
+    id: batch.suite.id,
+    measured: manifest.calibration.suites[batch.suite.id] === undefined ? 0 : 1,
+    seconds: selections
+      .filter(({ entry }) => entry.suite === batch.suite.id)
+      .map(({ entry, repeats }) => ownLoad(manifest, entry, repeats))
+      .toSorted((a, b) => a - b)
+      .reduce((sum, load) => sum + load, 0),
+  }));
+  return keyed.sort((a, b) =>
+    a.measured - b.measured || b.seconds - a.seconds ||
+    (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+  ).map(({ batch }) => batch);
 }
 
 /** What running one invocation came to. */
@@ -553,6 +589,18 @@ export function batchCoverage(
 export const COVERAGE_FAILURE_MARKER = "measured-through-a-failure.txt";
 
 /**
+ * The record a lane that opened the pattern compile byte cache leaves of
+ * whether it found one restored: `cold` or `warm`, the whole of the file.
+ *
+ * A cold cache compiles every pattern from scratch, which runs compile
+ * branches a warm run never reaches, so it moves the repository-wide
+ * figure that the pattern suites contribute to. The record goes beside the
+ * lane's reports, in the directory its coverage artifact holds, so that
+ * whatever reads the figure can tell a cold run's from a warm one's.
+ */
+export const COMPILE_CACHE_STATE_FILE = "compile-cache-state.txt";
+
+/**
  * Marks each measured set whose units a lane saw fail, beside the report
  * it wrote for that set.
  */
@@ -580,6 +628,23 @@ export async function markMeasuredFailures(
     marked.push(measuredSetName(ref));
   }
   return marked.sort();
+}
+
+/**
+ * Writes the record of whether the compile byte cache was restored, at the
+ * top of the directory the lane's coverage artifact carries.
+ */
+export async function writeCompileCacheState(
+  options: LaneOptions,
+  state: CompileCacheState,
+): Promise<void> {
+  const at = path.join(
+    coverageRoot(options),
+    path.dirname(COVERAGE_REPORT_DIR),
+    COMPILE_CACHE_STATE_FILE,
+  );
+  await Deno.mkdir(path.dirname(at), { recursive: true });
+  await Deno.writeTextFile(at, `${state}\n`);
 }
 
 /**
@@ -1197,6 +1262,20 @@ async function read(
   const moment = manifestMoment(options);
   if (moment.note !== undefined) say(`ci-lane: ${moment.note}`);
   const manifest = await deps.manifest({ at: moment.at });
+  // Every lane of a run packs its share of one plan, and the plan is only
+  // one plan if every lane read the same manifest. A manifest never
+  // changes once created, so lanes asking about one moment get one answer
+  // from the store, but a store one lane could not reach may be one the
+  // next lane read. Packing without a manifest then would lay out a plan
+  // its siblings are not following, and a test the two plans put in each
+  // other's lanes would run in neither while the run reports a pass.
+  if (manifest.unreachable) {
+    throw new Error(
+      `ci-lane: the manifest store could not be read (${manifest.absent}), ` +
+        "and a lane that packed without it might not follow the plan the " +
+        "other lanes of this run packed from",
+    );
+  }
   // A full run reads the manifest for what things cost and nothing else,
   // and a run with no diff has touched nothing.
   const changed = options.full
@@ -1237,7 +1316,8 @@ function packing(
 }
 
 /**
- * How many lanes the full run on `main` needs.
+ * How many lanes the full run on `main` takes: as many as it needs, up to
+ * `FULL_LANES_MAX`.
  *
  * This is the whole of what the job ahead of the full run decides, and an
  * integer is the whole of what it emits. The lanes then read the same
@@ -1250,6 +1330,21 @@ function packing(
  * there.
  */
 export async function fullLanes(
+  options: LaneOptions,
+  deps: LaneDeps,
+): Promise<number> {
+  const needed = await fullLanesNeeded(options, deps);
+  if (needed <= FULL_LANES_MAX) return needed;
+  console.error(
+    `ci-lane: the full run needs ${needed} lanes and takes ` +
+      `${FULL_LANES_MAX}, the most FULL_LANES_MAX allows, so a lane may run ` +
+      `past its budget`,
+  );
+  return FULL_LANES_MAX;
+}
+
+/** How many lanes the full run would take with no cap on them. */
+async function fullLanesNeeded(
   options: LaneOptions,
   deps: LaneDeps,
 ): Promise<number> {
@@ -1355,6 +1450,13 @@ export async function runLane(
   describeWithheld(laid.withheld, seen.mandatory);
   if (options.dryRun) return true;
 
+  // Asked before any batch runs, because the first pattern a batch
+  // compiles writes the file whatever the cache held.
+  const compileCacheState = needs.has("compile-cache")
+    ? await exists(path.join(options.root, COMPILE_CACHE_FILE))
+      ? "warm"
+      : "cold"
+    : undefined;
   const workDir = await Deno.makeTempDir({ prefix: "ci-lane-" });
   const spool = (deps.spool ?? recordsDir)();
   // The directory belongs to the lane from the moment it exists, and a
@@ -1468,6 +1570,9 @@ export async function runLane(
   const converted = await convertCoverage(options);
   if (!converted.ok) ok = false;
   const marked = await markMeasuredFailures(options, suites, failedUnits);
+  if (compileCacheState !== undefined) {
+    await writeCompileCacheState(options, compileCacheState);
+  }
   describeCoverage(seen.coverage, converted.reports, marked);
   return ok;
 }

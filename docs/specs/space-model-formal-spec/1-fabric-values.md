@@ -3666,6 +3666,7 @@ four categories by high nibble:
 |:------------------|:-------|:--------|:--------------------------------|
 | `TAG_END`         | `0x00` | 0       | end-of-sequence sentinel         |
 | `TAG_HOLE`        | `0x01` | 1       | sparse array holes (run-length) |
+| `TAG_CYCLE`       | `0x02` | 2       | cycle reference to a container on the path |
 
 **Compound tags (`0x1N`)** — containers whose children are tagged values:
 
@@ -3820,6 +3821,12 @@ export function hashOf(value: unknown): FabricHash {
   //                        where `codec` is `codecOf(v)` -- the class's
   //                        `[CODEC]` (Section 2.4), the same source of
   //                        truth the codec layer uses.
+  // - cycle:               an array, object, or `FabricInstance` that is
+  //                        already on the path from the root (by identity)
+  //                        is hashed as hash(TAG_CYCLE, leb128(distance)),
+  //                        where `distance` counts up the path from this
+  //                        position: 1 for the enclosing container. See
+  //                        the byte-level spec, Section 4.19.
   //
   // The JS object wrappers and temporal types are hashed as follows:
   //
@@ -3944,8 +3951,15 @@ Otherwise, an iterative comparison visits each distinct object pair once and
 skips identical descendants. Sharing is not itself content: one shared child can
 equal multiple independent copies. Cycles compare the contents reached through
 corresponding edges; a mismatch reachable after a back edge still makes the
-values unequal. Equality therefore supports cyclic values even when the hash
-encoding does not.
+values unequal. Equality therefore supports cyclic values.
+
+For a cyclic value, though, this comparison and the content hash can disagree,
+because the hash also distinguishes where a cycle closes
+(`2-hash-byte-format.md` Section 4.19): `a = {x: a}` and `b = {x: {x: b}}`
+compare equal by the walk above, and hash differently. Since available hashes
+settle a comparison, the result for such a pair also depends on whether both
+of its hashes are cached. That is an exception to the governing principle, and
+to the statement below that caching a hash does not change an equality result.
 
 **String representation.** Equality and the hash encoding both treat a string
 as its exact sequence of UTF-16 code units, lone surrogates included. The hash
