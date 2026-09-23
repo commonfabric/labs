@@ -102,14 +102,6 @@ export function computeInputHashFromValue<T extends Record<string, any>>(
   return hashStringOf(stripUndefinedProps(inputsOnly));
 }
 
-export function computeInputHash<T extends Record<string, any>>(
-  tx: IExtendedStorageTransaction,
-  inputsCell: Cell<T>,
-): string {
-  const inputs = inputsCell.getAsQueryResult([], tx) ?? {};
-  return computeInputHashFromValue(inputs);
-}
-
 /**
  * Attempts to claim the mutex for a request. Only claims if no other request
  * is active, or if the standing claim was made longer than `timeout` ago and is
