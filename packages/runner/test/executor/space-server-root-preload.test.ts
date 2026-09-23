@@ -7,6 +7,7 @@ import {
   setServerExecutionConfig,
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import { getLogger } from "@commonfabric/utils/logger";
 
 import { SpaceServer } from "../../src/executor/space-server.ts";
 import { emptyServingLoopStats } from "../../src/executor/stats.ts";
@@ -77,7 +78,10 @@ describe("SpaceServer", () => {
    * A client runtime is held open for the case's whole length, because a space
    * with no live client session parks itself idle.
    */
-  async function openFixture(scope: "space" | "user" = "space") {
+  async function openFixture(
+    scope: "space" | "user" = "space",
+    onPass?: () => void,
+  ) {
     const engine = await server.engineForSpace(space);
     const commit = Engine.applyCommit(engine, {
       space,
@@ -148,8 +152,10 @@ describe("SpaceServer", () => {
     const facade = new Proxy(server, {
       get(target, key, receiver) {
         if (key === "demandedInstancesForSpace") {
-          return () =>
-            rootIds.map((id) => ({ id, scope, scopeKey, root: true }));
+          return () => {
+            onPass?.();
+            return rootIds.map((id) => ({ id, scope, scopeKey, root: true }));
+          };
         }
         const value = Reflect.get(target, key, receiver);
         return typeof value === "function" ? value.bind(target) : value;
@@ -205,6 +211,33 @@ describe("SpaceServer", () => {
         expect(fixture.stats.demand.structureRootsPreloaded).toBe(
           rootIds.length,
         );
+      });
+
+      it("issues one watch add for the roots a pass pulls, not one per root", async () => {
+        // The count the pull exists to cut, read where the storage layer
+        // records it — the same `watchRefresh/watchAddSync` counter the
+        // measurement rounds were read from — rather than at the `syncCell`
+        // seam above it, where calls that overlap could still each cost a round
+        // trip if something between the seam and the refresh queue stopped
+        // them coalescing. The logger is process-wide, so the case reads a
+        // difference, taken from the moment the first pass reads its demand.
+
+        const timing = getLogger("storage.v2");
+        const adds = () =>
+          timing.getTimeStats("watchRefresh", "watchAddSync")?.count ?? 0;
+        let atFirstPass: number | undefined;
+        const fixture = await openFixture("space", () => {
+          atFirstPass ??= adds();
+        });
+
+        expect(await settle(fixture.serving.activate())).toBe(true);
+        await awaitEach(
+          cycles,
+          () => fixture.stats.structureLoadTerminal === rootIds.length,
+        );
+
+        expect(atFirstPass).toBeDefined();
+        expect(adds() - atFirstPass!).toBe(1);
       });
 
       it("pulls a scoped root's space instance alongside the instance the demand names", async () => {

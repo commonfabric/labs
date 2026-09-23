@@ -286,8 +286,11 @@ export type ServingLoopStats = {
      * the space instance a scoped demand falls back to — so issuing them in
      * one pull is what lets the replica's refresh queue coalesce them into a
      * single `session.watch.add` instead of one per address inside the wave's
-     * settle. Counted per DOCUMENT per pass, so a scoped root contributes two
-     * and a root whose load stays owed across passes counts again in each. */
+     * settle. Counted per address REQUESTED per pass, so a scoped root
+     * contributes two and a root whose load stays owed across passes counts
+     * again in each. Most requested addresses are ones the replica already
+     * watches, which `pull()` answers from its tracker without a round trip,
+     * so this runs well above the number of adds the pull saves. */
     structureRootsPreloaded: number;
 
     pushGrowthWakes: number;

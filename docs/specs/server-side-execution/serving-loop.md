@@ -1682,12 +1682,14 @@ time — which INCLUDES the awaited structure-load segments
 (`ensurePieceRunning`) for first-demand/pending root keys, NOT only the
 O(rows) reconcile (the reconcile does no per-row engine read and runs on
 registry deltas; the label is wall time, review MINOR-3);
-`structureRootsPreloaded` counts the root documents the pass pulls TOGETHER
-before those segments run. Each is one a segment syncs as its first step, so
-issuing them in one pull is what lets the replica's refresh queue coalesce
-them into a single `session.watch.add` rather than one per root inside the
-settle; counted per document per pass, so a root whose load stays owed across
-passes counts once for each. The pull is also where the pass opens the
+`structureRootsPreloaded` counts the root-document addresses the pass requests
+TOGETHER before those segments run — the instance a demand names, and the
+space instance a scoped demand falls back to. Each is one a segment may sync,
+so issuing them in one pull is what lets the replica's refresh queue coalesce
+them into a single `session.watch.add` rather than one per address inside the
+settle. It is counted per address requested per pass, and most requested
+addresses are already watched and cost no round trip, so it runs well above
+the adds the pull saves. The pull is also where the pass opens the
 changed-document collection its terminal arm invalidates against, because a
 root's reading is taken over the span from that pull to the root's own
 segment;

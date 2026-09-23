@@ -107,6 +107,12 @@ registers each root's watch, and a registered watch is what lets a traversal
 read instead of fetch, so a root's reading is taken over the span from the pull
 to its own turn and the terminal arm's invalidation has to test that span.
 
+A third change is not measured here. It also pulls a scoped root's
+space-instance fallback, and it came after every round. It changes the pull
+only for demanded roots at a scope other than `space`, and the rounds do not
+record how many of this workload's roots were scoped, so the figures below are
+the two commits above and nothing later.
+
 | round | arm | `watchAddSync` count | `demandPassMs` | terminal | deferred |
 | --- | --- | --- | --- | --- | --- |
 | 1 | base | 966 | 10 206 | 659 | 1 |

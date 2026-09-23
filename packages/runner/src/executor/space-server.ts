@@ -5008,10 +5008,18 @@ export class SpaceServer implements TransactionSealDestination {
    * replica's refresh queue coalesces them into one add, and the traversals
    * that follow find their documents already held.
    *
-   * What this changes is when the pass waits, not what it reads: every
-   * address here is one a load would have synced anyway, through the same
-   * session and under the same identity, and a root whose sync fails is left
-   * to its own traversal to report.
+   * What this changes is when the pass waits, not how it decides: the
+   * addresses are the ones a load syncs, through the same session and under
+   * the same identity, and a root whose sync fails is left to its own
+   * traversal to report. One address is taken more often than a load takes
+   * it. A load syncs a scoped root's space instance only when the scoped read
+   * finds no pattern pointer and starts nothing, which the pull cannot know
+   * in advance, so it takes that instance for every scoped root, and a scoped
+   * root whose own instance resolves gains one watch its load would not have
+   * added. That shape is uncommon — piece structure lives on the space
+   * instance, so a scoped instance normally reads meta-less and falls back —
+   * and not taking the fallback would leave it a sequential round trip for
+   * every scoped root that does fall back.
    *
    * The skips restate the pass's own — a terminal park, an id class that
    * never owns a piece, and a known root whose load is no longer owed —
