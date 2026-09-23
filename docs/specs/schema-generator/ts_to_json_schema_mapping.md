@@ -907,10 +907,12 @@ Mechanics:
   expands the alias, binds each parameter to its argument's type instead, by
   declaration: a bare reference to the parameter, as a payload, a label, a
   label's element, or an argument of a nested alias, reads as that type. Any
-  other node holding one (`T[]`) is not rebuilt around the type, so it is a
-  guess, reported and read as accepting anything. A `typeof` binding cannot be
-  read from a type, so a `writeAuthorizedBy` claim reached this way is not
-  emitted.
+  other node holding one (`T[]`) is not rebuilt around the type: it keeps the
+  rest of its structure and metadata, the parameter's positions read as
+  accepting anything, and it is reported as not fully read. A `typeof` binding
+  supplied only as a type argument cannot be read from a type, so a
+  `writeAuthorizedBy` claim whose binding arrives that way is not emitted; one
+  written in the alias declaration itself is read from the declaration.
 - Metadata values come from type-level literals: literal nodes, tuples, type
   literals, `typeof` value reads, alias-parameter substitution, and
   tuple/object **types** via the checker when nodes are gone

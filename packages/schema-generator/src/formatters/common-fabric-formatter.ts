@@ -1361,8 +1361,9 @@ export class CommonFabricFormatter implements TypeFormatter {
         context.typeChecker,
         resolved.substituted,
       );
+    if (unsubstituted) context.uninterpretedTypeNodes?.push(baseTypeNode);
     const baseSchema = unsubstituted
-      ? this.#guessPayload(baseTypeNode, context)
+      ? true
       : baseTypeNode === undefined
       ? this.#schemaGenerator.formatChildType(baseType, context, undefined)
       : reachedByName
@@ -1370,17 +1371,12 @@ export class CommonFabricFormatter implements TypeFormatter {
       // payload stays a reference to its definition.
       ? this.#schemaGenerator.formatChildType(baseType, context, baseTypeNode)
       : this.#formatCfcAliasTypeNode(baseTypeNode, context, parameterTypes) ??
-        // Any other node holding a parameter that has only a type, such as
-        // `T[]`, is not rebuilt around that type, so it is a guess as well.
-        (holdsTypeParameter(baseTypeNode, context.typeChecker, [
-            ...parameterTypes.keys(),
-          ])
-          ? this.#guessPayload(baseTypeNode, context)
-          : this.#schemaGenerator.formatChildType(
-            baseType,
-            context,
-            baseTypeNode,
-          ));
+        this.#formatDeclaredPayload(
+          baseType,
+          baseTypeNode,
+          context,
+          parameterTypes,
+        );
 
     const ifc = this.#buildIfcMetadataForAlias(
       resolved.aliasName,
@@ -1397,15 +1393,30 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   /**
-   * Helper for {@link #formatResolvedCfcAlias}, which reports a payload it
-   * cannot read and describes it as accepting any value.
+   * Helper for {@link #formatResolvedCfcAlias}, which formats a payload node
+   * that is not itself a CFC alias. A node holding a parameter that has only a
+   * type, such as `T[]`, is not rebuilt around that type: it keeps the rest of
+   * its structure and metadata, the parameter's positions read as accepting
+   * any value, and it is reported as not fully read.
    */
-  #guessPayload(
-    typeNode: ts.TypeNode,
+  #formatDeclaredPayload(
+    baseType: ts.Type,
+    baseTypeNode: ts.TypeNode,
     context: GenerationContext,
+    parameterTypes: ParameterTypes,
   ): MutableJSONSchema {
-    context.uninterpretedTypeNodes?.push(typeNode);
-    return true;
+    if (
+      holdsTypeParameter(baseTypeNode, context.typeChecker, [
+        ...parameterTypes.keys(),
+      ])
+    ) {
+      context.uninterpretedTypeNodes?.push(baseTypeNode);
+    }
+    return this.#schemaGenerator.formatChildType(
+      baseType,
+      context,
+      baseTypeNode,
+    );
   }
 
   #formatCfcAliasTypeNode(
@@ -2143,11 +2154,9 @@ export class CommonFabricFormatter implements TypeFormatter {
     if (context.typeChecker.isTupleType(type)) {
       const tupleType = type as ts.TypeReference;
       const elements = context.typeChecker.getTypeArguments(tupleType);
-      if (elements.length > 0) {
-        return elements.map((element) =>
-          this.#extractLiteralLikeValue(element, undefined, context)
-        );
-      }
+      return elements.map((element) =>
+        this.#extractLiteralLikeValue(element, undefined, context)
+      );
     }
 
     const objectFlags =
@@ -2156,11 +2165,9 @@ export class CommonFabricFormatter implements TypeFormatter {
     if ((objectFlags & ts.ObjectFlags.Tuple) !== 0) {
       const tupleType = type as ts.TypeReference;
       const elements = context.typeChecker.getTypeArguments(tupleType);
-      if (elements.length > 0) {
-        return elements.map((element) =>
-          this.#extractLiteralLikeValue(element, undefined, context)
-        );
-      }
+      return elements.map((element) =>
+        this.#extractLiteralLikeValue(element, undefined, context)
+      );
     }
 
     if ((type.flags & ts.TypeFlags.Object) !== 0) {

@@ -1032,16 +1032,49 @@ describe("Schema: CFC authoring aliases", () => {
       expect(schema.ifc).toEqual({ confidentiality: ["x"] });
     });
 
-    it("reports a payload holding a parameter it cannot read, and accepts any value there", async () => {
+    it("reports a payload holding a parameter it cannot read, and keeps its structure", async () => {
       const { schema, diagnostics } = await generate(`
         type Many<T> = Confidential<T[], readonly ["a"]>;
         interface Holder { value: Many<string> }
       `);
-      expect(schema).toEqual({ ifc: { confidentiality: ["a"] } });
+      expect(schema).toEqual({
+        type: "array",
+        items: {},
+        ifc: { confidentiality: ["a"] },
+      });
       expect(diagnostics.map((diagnostic) => diagnostic.type)).toEqual([
         "schema-type:unread",
       ]);
       expect(diagnostics[0]!.message).toContain("`T[]`");
+    });
+
+    it("keeps the labels beside a parameter it cannot read", async () => {
+      const { schema } = await generate(`
+        type Outer<T> = Confidential<{
+          data: T;
+          secret: Confidential<string, readonly ["secret"]>;
+        }, readonly ["outer"]>;
+        interface Holder { value: Outer<number> }
+      `);
+      expect(schema.properties?.secret).toEqual({
+        type: "string",
+        ifc: { confidentiality: ["secret"] },
+      });
+      expect(schema.ifc).toEqual({ confidentiality: ["outer"] });
+    });
+
+    it("lowers an empty label passed as an argument, or as a default", async () => {
+      const passed = await generate(`
+        type Labeled<L extends readonly unknown[]> = Confidential<string, L>;
+        interface Holder { value: Labeled<readonly []> }
+      `);
+      const defaulted = await generate(`
+        type Labeled<L extends readonly unknown[] = readonly []> =
+          Confidential<string, L>;
+        interface Holder { value: Labeled }
+      `);
+      expect(passed.schema.ifc).toEqual({ confidentiality: [] });
+      expect(defaulted.schema.ifc).toEqual({ confidentiality: [] });
     });
   });
 });
