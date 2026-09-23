@@ -530,31 +530,27 @@ function createViewProxy<T>(
   };
   // The kind check for a branch that makes no read of its own -- a property
   // get that builds a child view, a prototype member reflected from the
-  // container. The transaction's snapshot memo vouches for the kind at no
-  // cost: it is dropped on any write, so evidence in it that THIS view was
-  // derived or verified at the current snapshot means the document cannot
-  // have changed since. The evidence is compared by identity: the entry
-  // `remember()` made when this view was derived here, or the marker the
-  // last verification left, each holding this very proxy. An entry another
-  // read made at the same location vouches for nothing -- a fresh view
-  // built over the rewritten document must not validate the stale one -- and
-  // the marker is its own key, never the view entry, so a verification here
-  // cannot hand this view to a later read of the requested link: this view
-  // checks the document its link resolved to when it was built, which says
-  // nothing about where that link resolves now. Otherwise one shape read
-  // checks the kind and leaves the marker, so the rest of this snapshot is
-  // vouched for. The memo tests pin that a repeat read in one transaction
-  // issues no further storage reads, and this is what keeps the check inside
-  // that.
-  const kindKey = viewKey === "" ? "" : `${viewKey}:kind`;
+  // container. It costs no read within a snapshot. A transaction replaces
+  // its snapshot memo on every write, so the memo's identity is a stamp of
+  // the snapshot a read sees: while the memo the transaction hands back is
+  // the one this view last verified against, no write has landed since, and
+  // the document cannot have changed kind. The read this view was built from
+  // is its first verification. The evidence is this view's own, held here
+  // rather than entered in the memo, so a fresh view built over the
+  // rewritten document vouches for nothing about the stale one, and a check
+  // of the document this view's link resolved to when it was built is never
+  // left where a later read of the requested link would find it. A pinned
+  // view reads at its own instant, whose memo outlives writes, which is the
+  // same answer. A handle with no transaction of its own meets a fresh memo
+  // on each access and reads each time, as it must across commits. The memo
+  // tests pin that a repeat read in one transaction issues no further
+  // storage reads, and this is what keeps the check inside that.
+  let verifiedAt: Map<string, unknown> | undefined = viewTx.getSnapshotMemo?.();
   const verifyKind = (): void => {
-    const memo = viewKey === "" ? undefined : readTx().getSnapshotMemo?.();
-    if (memo !== undefined) {
-      const derived = memo.get(viewKey) as { view?: unknown } | undefined;
-      if (derived?.view === proxy || memo.get(kindKey) === proxy) return;
-    }
+    const memo = readTx().getSnapshotMemo?.();
+    if (memo !== undefined && memo === verifiedAt) return;
     currentValue();
-    memo?.set(kindKey, proxy);
+    verifiedAt = memo;
   };
 
   // Index by the CALLER's transaction, not by the one reads resolve through.
