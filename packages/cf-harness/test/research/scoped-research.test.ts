@@ -11,7 +11,12 @@ import {
   PATTERN_AUTHORING_GUIDANCE,
   PATTERN_COMPOSITION_GUIDANCE,
 } from "../../src/pattern-authoring.ts";
-import type { HarnessResearchRunSummary } from "../../src/contracts/research.ts";
+import {
+  HARNESS_RESEARCH_HANDLE_TYPE,
+  type HarnessResearchHandleValue,
+  type HarnessResearchResult,
+  type HarnessResearchRunSummary,
+} from "../../src/contracts/research.ts";
 import { RESEARCH_KIT_SCHEMA } from "../../src/contracts/research-schema.ts";
 import { splitMarkdownSections } from "../../src/docs-corpus/sections.ts";
 import type {
@@ -25,7 +30,6 @@ import {
 } from "../../src/research/admission.ts";
 import {
   researchPurposeOf,
-  researchStartingContext,
   selectResearchContext,
 } from "../../src/research/context.ts";
 import { projectHarnessResearchKitForModel } from "../../src/research/model-projection.ts";
@@ -543,29 +547,39 @@ describe("scoped research", () => {
     ]);
   });
 
-  it("answers one question using only reopened evidence from the selected prior result", async () => {
-    const older = record("older");
-    older.kit.summary = "Unrelated private recipe";
-    const selected = record("selected");
-    const trial = run([
+  /**
+   * A research handle's content built from an earlier reply, so its sources
+   * carry the digests the earlier read produced.
+   */
+  const handleFrom = (
+    reply: { kit: HarnessResearchResult },
+    describedHandles: HarnessResearchHandleValue["describedHandles"] = [],
+  ): HarnessResearchHandleValue => ({
+    type: HARNESS_RESEARCH_HANDLE_TYPE,
+    researchRunId: "earlier",
+    kit: reply.kit,
+    confirmedPatterns: [],
+    describedHandles,
+    cfc: {
+      version: 1,
+      sourceLabel: {},
+      outputLabel: {},
+      coverage: "complete",
+      missingLabels: [],
+    },
+  });
+  const TYPED_RENDERER =
+    "# Typed renderer\nThis renderer accepts a typed collection.";
+  const earlierRead = () =>
+    run([
       (request) => {
-        expect(request.transcript[0].content).not.toContain(
-          "Orient to the user's goal: distinguish what is given",
-        );
-        expect(request.transcript[1].content).toContain(
-          '"researchRunId":"selected"',
-        );
-        expect(request.transcript[1].content).not.toContain(
-          "Unrelated private recipe",
-        );
-        expect(request.transcript[1].content).not.toContain('"example"');
+        void request;
         return calls(["open_doc_section", { sectionId: "section-0" }]);
       },
       (request) =>
         final({
           ...brief(),
-          summary:
-            "Use the existing typed collection; SQLite is specific to a candidate.",
+          summary: "Read once.",
           selectedPatternIds: [],
           rules: [{
             rule: "This renderer accepts a typed collection.",
@@ -574,21 +588,148 @@ describe("scoped research", () => {
         }),
     ], {
       purpose: "answer",
+      task: "What does the renderer take?",
+      corpus: corpus(TYPED_RENDERER),
+    }).result;
+
+  it("cites a prior handle's source without reopening it when its bytes are unchanged", async () => {
+    const earlier = await earlierRead();
+    const priorId = earlier.kit.sources[0].sourceId;
+    const trial = run([
+      (request) => {
+        expect(request.transcript[1].content).toContain(
+          "Prior research carried in by handle",
+        );
+        expect(request.transcript[1].content).toContain(
+          `citable by these sourceIds: ["${priorId}"]`,
+        );
+        expect(request.transcript[1].content).not.toContain(
+          "reopen every source",
+        );
+        return final({
+          ...brief(),
+          summary: "The renderer takes a typed collection; SQLite is optional.",
+          selectedPatternIds: [],
+          rules: [{
+            rule: "This renderer accepts a typed collection.",
+            sourceIds: [priorId],
+          }],
+        });
+      },
+    ], {
+      purpose: "answer",
       task: "Does this renderer require SQLite?",
-      followUpTo: "selected",
-      priorResearchRuns: [older, selected],
+      followUpTo: "cfh:v:earlier",
+      priorResearch: handleFrom(earlier),
+      corpus: corpus(TYPED_RENDERER),
+    });
+    const reply = await trial.result;
+    expect(reply.kit.status).toBe("complete");
+    expect(reply.kit.sources.map((source) => source.sourceId)).toEqual([
+      priorId,
+    ]);
+    expect(reply.record.followUpTo).toBe("cfh:v:earlier");
+    expect(reply.record.budgets.toolCalls).toBe(0);
+  });
+
+  it("reports a prior source whose bytes changed as stale, reopens it under a new id, and refuses the old one", async () => {
+    const earlier = await earlierRead();
+    const priorId = earlier.kit.sources[0].sourceId;
+    const priorLocation = earlier.kit.sources[0].location;
+    const trial = run([
+      (request) => {
+        expect(request.transcript[1].content).toContain(
+          `changed since they were read, or could not be read, and their old ids are not citable — the current read, where one succeeded, is in the catalog under a new id: ["${priorLocation}"]`,
+        );
+        expect(request.transcript[1].content).toContain(
+          "citable by these sourceIds: []",
+        );
+        return final({
+          ...brief(),
+          selectedPatternIds: [],
+          rules: [{
+            rule: "This renderer accepts a typed collection.",
+            sourceIds: [priorId],
+          }],
+        });
+      },
+      (request) => {
+        expect(request.tools).toEqual([]);
+        return final({
+          ...brief(),
+          selectedPatternIds: [],
+          rules: [{
+            rule: "This renderer accepts a typed collection.",
+            sourceIds: [priorId],
+          }],
+        });
+      },
+    ], {
+      purpose: "answer",
+      task: "Does this renderer require SQLite?",
+      followUpTo: "cfh:v:earlier",
+      priorResearch: handleFrom(earlier),
       corpus: corpus(
-        "# Typed renderer\nThis renderer accepts a typed collection.",
+        "# Typed renderer\nThis renderer now accepts a typed map as well.",
       ),
     });
     const reply = await trial.result;
-    expect(reply.kit.purpose).toBe("answer");
-    expect(reply.kit.status).toBe("complete");
-    expect(reply.kit.sources).toHaveLength(1);
-    expect(reply.record.followUpTo).toBe("selected");
-    expect(reply.kit).not.toHaveProperty("example");
-    expect(reply.kit).not.toHaveProperty("recommendation");
+    expect(reply.kit.status).toBe("incomplete");
+    expect(reply.kit.rules).toEqual([]);
+    expect(reply.kit.missing).toContain(`source ${priorId} was not read`);
+    expect(reply.record.sourceReads).toHaveLength(1);
+    expect(reply.record.sourceReads[0].sourceId).not.toBe(priorId);
+    expect(reply.record.sourceReads[0].location).toBe(priorLocation);
   });
+
+  for (const held of [true, false]) {
+    it(
+      `${
+        held ? "binds" : "refuses to bind"
+      } a handle a prior kit described when this run ${
+        held ? "still holds" : "no longer holds"
+      } it`,
+      async () => {
+        const earlier = await earlierRead();
+        const token = "cfh:a:mail22";
+        const trial = run([
+          (request) => {
+            expect(request.transcript[1].content).toContain(
+              held
+                ? `already described for this call: ["${token}"]`
+                : `which cannot be bound: ["${token}"]`,
+            );
+            return final({
+              ...brief(),
+              selectedPatternIds: [],
+              inputs: [{ name: "mail", token, purpose: "Read the mailbox" }],
+            });
+          },
+        ], {
+          purpose: "answer",
+          task: "Which input carries the mail?",
+          followUpTo: "cfh:v:earlier",
+          priorResearch: handleFrom(earlier, [{
+            token,
+            description: { outputId: "described-mail", token, known: true },
+          }]),
+          handleTokens: held ? [token] : [],
+          corpus: corpus(TYPED_RENDERER),
+        });
+        const reply = await trial.result;
+        if (held) {
+          expect(reply.kit.inputs.map((input) => input.token)).toEqual([token]);
+          expect(reply.record.describedHandles.map((entry) => entry.token))
+            .toEqual([token]);
+        } else {
+          expect(reply.kit.inputs).toEqual([]);
+          expect(reply.kit.missing).toContain(
+            `handle ${token} was not described`,
+          );
+        }
+      },
+    );
+  }
 
   it("keeps fresh citation admission when an answer copies an unread prior id", async () => {
     const trial = run([
@@ -734,7 +875,7 @@ describe("scoped research", () => {
     await expect(trial.result).rejects.toBeInstanceOf(HarnessResearchError);
   });
 
-  it("interprets saved focused answers and selects bounded findings without copying old examples", () => {
+  it("interprets saved focused answers and selects bounded findings", () => {
     const old = record("old");
     const recipe = record("implementation");
     if (old.kit.purpose !== undefined) {
@@ -779,13 +920,5 @@ describe("scoped research", () => {
     expect(researchPurposeOf(old.kit)).toBe("answer");
     expect(selectResearchContext(runs).map((entry) => entry.researchRunId))
       .toEqual(["orient", "answer1", "answer2"]);
-    expect(researchStartingContext(recipe)).not.toHaveProperty("example");
-    expect(researchStartingContext(recipe)).not.toHaveProperty("inputs");
-    expect(researchStartingContext(recipe).patterns).toEqual([{
-      patternId: "known-component",
-      importHint: 'import Component from "cf:pattern:known-component"',
-      argumentType: "{ count: number }",
-      resultType: "{ total: number }",
-    }]);
   });
 });

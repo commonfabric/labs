@@ -131,18 +131,20 @@ The current package provides:
   transcript remain in the tool artifact; the caller receives the derived kit
   plus explicit incomplete-kit guidance. Partial evidence survives malformed
   output, provider failure, budget exhaustion, and cancellation, with private
-  usage and failure counts included in the parent record. Context selection
-  retains the latest orientation and two answers. Private follow-ups receive
-  selected findings and source locations without copying prior examples or
-  bindings. Interactive sessions persist that context, the original user goal,
-  and full CFC influence with completed history. Follow-ups retain that goal
-  alongside the current request; old bindings remain historical. An admitted kit
-  is minted as a research handle; a child receives findings only through a
-  research handle its brief names, with the entries that kit binds, and its
-  inherited CFC context retains the full parent influence either way. Local
-  authored-source artifacts record the research ids that shaped them.
-  `query_docs` is accepted only as a legacy CLI or persisted-policy alias and is
-  normalized without rewriting old transcript or run-state evidence;
+  usage and failure counts included in the parent record. A private follow-up
+  names one research handle and receives its findings without the recipe; the
+  handle's still-held bindings count as described and its sources as cited where
+  they read back with the same digest, a changed source being reported stale and
+  reopened under a new id. Interactive sessions persist that context, the
+  original user goal, and full CFC influence with completed history. Follow-ups
+  retain that goal alongside the current request; old bindings remain
+  historical. An admitted kit is minted as a research handle; a child receives
+  findings only through a research handle its brief names, with the entries that
+  kit binds, and its inherited CFC context retains the full parent influence
+  either way. Local authored-source artifacts record the research ids that
+  shaped them. `query_docs` is accepted only as a legacy CLI or persisted-policy
+  alias and is normalized without rewriting old transcript or run-state
+  evidence;
 - shared parent and opening-research guidance that distinguishes given inputs,
   discovery within the granted scope, and unavailable actions before asking or
   giving up. Private research identifies applicable space-search patterns for
