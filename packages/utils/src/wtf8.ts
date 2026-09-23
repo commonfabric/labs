@@ -1,6 +1,11 @@
 /** Shared UTF-8 encoder, for strings that are well-formed. */
 const utf8Encoder = new TextEncoder();
 
+/** Helper for {@link encodeWtf8}: Is the given code unit a low surrogate? */
+function isLowSurrogate(unit: number): boolean {
+  return (unit >= 0xdc00) && (unit <= 0xdfff);
+}
+
 /**
  * Encodes a string as WTF-8 (<https://wtf-8.codeberg.page/>). For a
  * well-formed string, which is to say one with no lone surrogates, the result
@@ -23,28 +28,34 @@ export function encodeWtf8(value: string): Uint8Array<ArrayBuffer> {
   // Basic Multilingual Plane takes four, but it is two code units long.
   const bytes = new Uint8Array(value.length * 3);
   let at = 0;
+  let runStart = 0;
 
   for (let i = 0; i < value.length; i++) {
-    // `codePointAt()` combines a surrogate pair, and returns a lone surrogate
-    // as itself.
-    const codePoint = value.codePointAt(i)!;
-    if (codePoint < 0x80) {
-      bytes[at++] = codePoint;
-    } else if (codePoint < 0x800) {
-      bytes[at++] = 0xc0 | (codePoint >> 6);
-      bytes[at++] = 0x80 | (codePoint & 0x3f);
-    } else if (codePoint < 0x10000) {
-      bytes[at++] = 0xe0 | (codePoint >> 12);
-      bytes[at++] = 0x80 | ((codePoint >> 6) & 0x3f);
-      bytes[at++] = 0x80 | (codePoint & 0x3f);
-    } else {
-      bytes[at++] = 0xf0 | (codePoint >> 18);
-      bytes[at++] = 0x80 | ((codePoint >> 12) & 0x3f);
-      bytes[at++] = 0x80 | ((codePoint >> 6) & 0x3f);
-      bytes[at++] = 0x80 | (codePoint & 0x3f);
-      i++; // The pair's second code unit.
+    const unit = value.charCodeAt(i);
+
+    if ((unit < 0xd800) || (unit > 0xdfff)) {
+      continue;
+    } else if ((unit <= 0xdbff) && isLowSurrogate(value.charCodeAt(i + 1))) {
+      i++; // A pair, which `TextEncoder` encodes along with the run.
+      continue;
     }
+
+    // A lone surrogate. The run before it is well-formed, so `TextEncoder`
+    // encodes it as it would on its own. The surrogate takes the three-byte
+    // form of a code point of the same value, which starts `0xED` for every
+    // surrogate.
+    at += utf8Encoder.encodeInto(
+      value.slice(runStart, i),
+      bytes.subarray(at),
+    ).written;
+    bytes[at++] = 0xed;
+    bytes[at++] = 0x80 | ((unit >> 6) & 0x3f);
+    bytes[at++] = 0x80 | (unit & 0x3f);
+    runStart = i + 1;
   }
 
-  return bytes.slice(0, at);
+  at += utf8Encoder.encodeInto(value.slice(runStart), bytes.subarray(at))
+    .written;
+
+  return (at === bytes.length) ? bytes : bytes.slice(0, at);
 }

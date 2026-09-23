@@ -97,6 +97,11 @@ describe("encodeWtf8()", () => {
       const bytes = encodeWtf8("a\ud800");
       expect(bytes.length).toBe(4);
       expect(bytes.buffer.byteLength).toBe(4);
+
+      // Every code unit takes three bytes, which fills the working buffer.
+      const full = encodeWtf8("\udc00\ud800");
+      expect(full.length).toBe(6);
+      expect(full.buffer.byteLength).toBe(6);
     });
 
     it("returns bytes that differ from those of the replacement character", () => {
