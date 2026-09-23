@@ -42,6 +42,9 @@ Deno.test("CFC exchange-rule authoring helpers produce inert declaration data", 
   assertEquals(Object.keys(THIS_POLICY), ["thisPolicy"]);
   assertEquals({ ...THIS_POLICY }, { thisPolicy: true });
   assertEquals(THIS_POLICY.subject, { thisPolicyField: "subject" });
+  assertEquals(THIS_POLICY.moduleIdentity, {
+    thisPolicyField: "moduleIdentity",
+  });
   assertStrictEquals(rules[0], rule);
   assertNotStrictEquals(rules, [rule]);
 });
@@ -56,6 +59,7 @@ Deno.test("CFC exchange-rule declarations are deeply frozen", () => {
 
   assertEquals(Object.isFrozen(THIS_POLICY), true);
   assertEquals(Object.isFrozen(THIS_POLICY.subject), true);
+  assertEquals(Object.isFrozen(THIS_POLICY.moduleIdentity), true);
   assertEquals(Object.isFrozen(rule), true);
   assertEquals(Object.isFrozen(rule.guard), true);
   assertEquals(Object.isFrozen(rule.guard?.policyState), true);

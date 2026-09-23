@@ -10,6 +10,14 @@ This demo is the canonical copyable form for a module-authored direct policy:
 `THIS_POLICY.subject`. `cfcAtom` constructs concrete runtime atoms; the two
 surfaces are intentionally separate.
 
+`blessed-computation.tsx` releases the output of one function defined in the
+policy's own module. The runtime mints a `TransformedBy` atom naming the
+function's module and export symbol onto every value that function writes, and
+the rule matches it with `moduleIdentity: THIS_POLICY.moduleIdentity`, which
+binds to the defining module's identity at evaluation time. Another function of
+the same module, a handler copying a raw input, or a different version of the
+module does not satisfy the rule.
+
 The compiler binds `PolicyOf` to the defining module export and a canonical
 manifest digest. At label creation the runtime binds the concrete owning space
 as the policy subject and requires that exact manifest to be installed in the
@@ -33,4 +41,5 @@ Run:
 ```sh
 deno task cf check packages/patterns/cfc-exchange-rules/direct-release.tsx --show-transformed --no-run
 deno task cf test packages/patterns/cfc-exchange-rules/direct-release.test.tsx
+deno task cf test packages/patterns/cfc-exchange-rules/blessed-computation.test.tsx
 ```
