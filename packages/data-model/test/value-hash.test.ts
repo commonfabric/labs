@@ -305,6 +305,35 @@ describe("value-hash", () => {
         expect(hashBytesOf(value)).toEqual(expected);
       });
 
+      it("sorts object keys by the byte order of their WTF-8 encodings", () => {
+        // `"\ud800x"` encodes as `ED A0 80 78` and the pair `"\ud800\udc00"`
+        // as `F0 90 80 80`, so the lone surrogate's key comes first even though
+        // the two share their first code unit.
+        const value = { "\ud800\udc00": 1, "\ud800x": 2 };
+        const one = [0x23, 0x3f, 0xf0, 0, 0, 0, 0, 0, 0];
+        const two = [0x23, 0x40, 0, 0, 0, 0, 0, 0, 0];
+        expect(hashBytesOf(value)).toEqual(
+          sha256([
+            0x11,
+            0x24,
+            0x04,
+            0xed,
+            0xa0,
+            0x80,
+            0x78,
+            ...two,
+            0x24,
+            0x04,
+            0xf0,
+            0x90,
+            0x80,
+            0x80,
+            ...one,
+            0x00,
+          ]),
+        );
+      });
+
       it("takes the TAG_STRING_HASH path over the WTF-8 bytes of a long string", () => {
         const value = `${"x".repeat(64)}\udc00`;
         const valueHash = sha256([

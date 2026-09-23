@@ -3880,9 +3880,11 @@ export function hashOf(value: unknown): FabricHash {
 ```
 
 > **String encoding for hashing.** Strings are hashed as WTF-8 byte sequences
-> (UTF-8, extended to encode lone surrogates as themselves), prefixed by their
-> byte length (unsigned LEB128). See the byte-level spec
-> (`2-hash-byte-format.md`, Section 4.4) for the precise encoding.
+> (UTF-8, extended to encode lone surrogates as themselves). A string of up to
+> 64 such bytes is fed as those bytes, prefixed by their length (unsigned
+> LEB128); a longer one is fed as the SHA-256 digest of its bytes, with no
+> length prefix. See the byte-level spec (`2-hash-byte-format.md`, Section
+> 4.4) for the precise encoding.
 
 > **Map/Set ordering in hashing.** Hashing preserves insertion order for
 > `FabricMap` entries and `FabricSet` elements, matching the serialized form.
