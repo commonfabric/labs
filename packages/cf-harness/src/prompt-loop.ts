@@ -4011,7 +4011,7 @@ export class CfHarnessPromptLoop {
         let turnFailure: { error: unknown } | undefined;
         const invocations: Promise<InvokedToolCallMessages>[] = [];
         for (const [index, toolCall] of toolCalls.entries()) {
-          if (turn.signal.aborted) break;
+          if (turnFailure !== undefined || turn.signal.aborted) break;
           const invocation = this.#invokeToolCall(
             toolCall,
             model,
@@ -4030,18 +4030,16 @@ export class CfHarnessPromptLoop {
             turn.abort(error);
           });
           if (!delegationHoldsNothingAfterIt(toolCall)) await settled;
-          if (turnFailure !== undefined) break;
         }
-        const settledToolCalls = await Promise.allSettled(invocations);
+        await Promise.allSettled(invocations);
         options.signal?.removeEventListener("abort", abortTurn);
         this.#subagentRunsAtTurnStart = undefined;
         toolActivity.push(...turnActivities.flat());
         options.signal?.throwIfAborted();
         if (turnFailure !== undefined) throw turnFailure.error;
-        const invokedToolCalls = settledToolCalls.map((settled) => {
-          if (settled.status === "rejected") throw settled.reason;
-          return settled.value;
-        });
+        // Every invocation has settled, and none rejected: a rejection is
+        // the turn's failure and was thrown above.
+        const invokedToolCalls = await Promise.all(invocations);
         for (const invokedToolCall of invokedToolCalls) {
           const toolMessage = invokedToolCall.toolMessage;
           const outcome = invokedToolCall.taskOutcome;
