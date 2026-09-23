@@ -185,6 +185,36 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/admin-registry-default-honored-break.md",
   },
   {
+    // The `true` arm of `everyoneIsAdmin` gains its writer. The arm is written
+    // in place as a member of the `ChatEveryoneAdminFlag` union
+    // (`RequiresIntegrity<AddIntegrity<TrustedActionWrite<true, typeof
+    // commitTrustedAdminToggle, …>, …>, …>`), where the lowering formatted the
+    // nested payload without the arguments written on the reference and
+    // dropped its `typeof` binding, so no baseline carries the
+    // `writeAuthorizedBy` the declaration names. A write of `true` from any
+    // other writer that the recorded contract admitted is refused under the
+    // new one; that refusal is the point.
+    pattern: "cfc-group-chat-demo/main.tsx",
+    baselines: ["20260918T041802Z-YAJU948xc_bQwY0H"],
+    paths: ["argument.adminRegistry", "result.adminRegistry"],
+    reason:
+      "the `true` arm of `everyoneIsAdmin` carries the writer restriction its declaration names, which the recorded contract dropped",
+    record: "docs/history/everyone-admin-writer-claim-break.md",
+  },
+  {
+    // The same break against the later baseline, where the proof blames the
+    // flag itself rather than the registry holding it.
+    pattern: "cfc-group-chat-demo/main.tsx",
+    baselines: ["20260922T020444Z-IRoEgfpuUdf-xwvE"],
+    paths: [
+      "argument.adminRegistry.everyoneIsAdmin",
+      "result.adminRegistry.everyoneIsAdmin",
+    ],
+    reason:
+      "the `true` arm of `everyoneIsAdmin` carries the writer restriction its declaration names, which the recorded contract dropped",
+    record: "docs/history/everyone-admin-writer-claim-break.md",
+  },
+  {
     // The Join verb's event opens: `Record<PropertyKey, never>` compiled to
     // a closed empty object the runner's closed-world gate now enforces, so
     // the rendered button's serialized DOM event was refused and the roster
