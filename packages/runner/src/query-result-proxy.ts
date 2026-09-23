@@ -90,14 +90,14 @@ const getProxyCache = (
  * the proxy target is a stub of that kind, `Array.isArray` on the view answers
  * for it, and the traps' array-specific paths are keyed on it.
  */
-type ViewKind = "array" | "record" | "instance";
+type ViewKind = "array" | "plainObject" | "FabricInstance";
 
 /** The kind of container `value` is, or `undefined` for anything else. */
 function viewKindOf(value: unknown): ViewKind | undefined {
   if (Array.isArray(value)) return "array";
-  if (value instanceof FabricInstance) return "instance";
+  if (value instanceof FabricInstance) return "FabricInstance";
   if (isObjectOrArray(value) && !(value instanceof FabricPrimitive)) {
-    return "record";
+    return "plainObject";
   }
   return undefined;
 }
@@ -105,14 +105,14 @@ function viewKindOf(value: unknown): ViewKind | undefined {
 /** Names a kind for a message. */
 const KIND_NAMES: Record<ViewKind, string> = {
   array: "an array",
-  record: "a plain object",
-  instance: "a `FabricInstance`",
+  plainObject: "a plain object",
+  FabricInstance: "a `FabricInstance`",
 };
 
 /** Names a value for a message: "an array", "a `FabricError`", "nothing". */
 function describeValue(value: unknown): string {
   const kind = viewKindOf(value);
-  if (kind === "instance" || value instanceof FabricPrimitive) {
+  if (kind === "FabricInstance" || value instanceof FabricPrimitive) {
     return `a \`${(value as object).constructor.name}\``;
   }
   if (kind !== undefined) return KIND_NAMES[kind];
@@ -531,17 +531,30 @@ function createViewProxy<T>(
   // The kind check for a branch that makes no read of its own -- a property
   // get that builds a child view, a prototype member reflected from the
   // container. The transaction's snapshot memo vouches for the kind at no
-  // cost: it is dropped on any write, so while this view's entry is still in
-  // the memo the document cannot have changed since the view was derived at
-  // this snapshot. Otherwise one shape read checks the kind and re-enters the
-  // view, so the rest of this snapshot is vouched for. The memo tests pin
-  // that a repeat read in one transaction issues no further storage reads,
-  // and this is what keeps the check inside that.
+  // cost: it is dropped on any write, so evidence in it that THIS view was
+  // derived or verified at the current snapshot means the document cannot
+  // have changed since. The evidence is compared by identity: the entry
+  // `remember()` made when this view was derived here, or the marker the
+  // last verification left, each holding this very proxy. An entry another
+  // read made at the same location vouches for nothing -- a fresh view
+  // built over the rewritten document must not validate the stale one -- and
+  // the marker is its own key, never the view entry, so a verification here
+  // cannot hand this view to a later read of the requested link: this view
+  // checks the document its link resolved to when it was built, which says
+  // nothing about where that link resolves now. Otherwise one shape read
+  // checks the kind and leaves the marker, so the rest of this snapshot is
+  // vouched for. The memo tests pin that a repeat read in one transaction
+  // issues no further storage reads, and this is what keeps the check inside
+  // that.
+  const kindKey = viewKey === "" ? "" : `${viewKey}:kind`;
   const verifyKind = (): void => {
     const memo = viewKey === "" ? undefined : readTx().getSnapshotMemo?.();
-    if (memo?.has(viewKey)) return;
+    if (memo !== undefined) {
+      const derived = memo.get(viewKey) as { view?: unknown } | undefined;
+      if (derived?.view === proxy || memo.get(kindKey) === proxy) return;
+    }
     currentValue();
-    memo?.set(viewKey, { view: proxy });
+    memo?.set(kindKey, proxy);
   };
 
   // Index by the CALLER's transaction, not by the one reads resolve through.
@@ -577,6 +590,7 @@ function createViewProxy<T>(
         // `undefined` for it, which is what a live one returns for a value
         // with no `then`; every other property still refuses.
         if (prop === "then" && pinned && !isReadable(viewTx)) return undefined;
+
         // The back-pointer to the cell is not an answer from the document, and
         // reads nothing: it comes ahead of the kind check, so a view whose
         // transaction has finished still names its cell.
@@ -673,6 +687,10 @@ function createViewProxy<T>(
             // else. Mirrors `materialize()` in the schema view.
             ? (...args: any[]) => {
               const copy = atEpoch(() => {
+                // A saved method can be called after a rewrite, so the kind
+                // is checked again here, ahead of the `length` read that
+                // would otherwise meet a record and fail unclassifiably.
+                verifyKind();
                 // This will also mark each element read in the log. Almost all
                 // methods implicitly read all elements. TODO: Deal with
                 // exceptions like at().

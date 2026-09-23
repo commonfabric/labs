@@ -29,12 +29,12 @@ import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 const signer = await Identity.fromPassphrase("query-result-proxy view drift");
 const space = signer.did();
 
-type Kind = "array" | "record" | "instance";
+type Kind = "array" | "plainObject" | "FabricInstance";
 
 const KINDS: Record<Kind, { make: () => unknown; named: string }> = {
   array: { make: () => [1, 2, 3], named: "an array" },
-  record: { make: () => ({ a: 1, b: 2 }), named: "a plain object" },
-  instance: {
+  plainObject: { make: () => ({ a: 1, b: 2 }), named: "a plain object" },
+  FabricInstance: {
     make: () => Object.assign(new Error("boom"), { code: 7 }),
     named: "a `FabricError`",
   },
@@ -97,7 +97,9 @@ describe("query-result-proxy view drift", () => {
             expect(thrown, what).toBeInstanceOf(ViewDriftError);
             const message = (thrown as Error).message;
             expect(message, what).toContain(
-              from === "instance" ? "a `FabricInstance`" : KINDS[from].named,
+              from === "FabricInstance"
+                ? "a `FabricInstance`"
+                : KINDS[from].named,
             );
             expect(message, what).toContain(`now holds ${KINDS[to].named}`);
           }
@@ -118,8 +120,10 @@ describe("query-result-proxy view drift", () => {
           expect(fresh).not.toBe(stale);
           expect(Array.isArray(fresh)).toBe(to === "array");
           if (to === "array") expect([...fresh]).toEqual([1, 2, 3]);
-          if (to === "record") expect({ ...fresh }).toEqual({ a: 1, b: 2 });
-          if (to === "instance") expect(fresh.message).toBe("boom");
+          if (to === "plainObject") {
+            expect({ ...fresh }).toEqual({ a: 1, b: 2 });
+          }
+          if (to === "FabricInstance") expect(fresh.message).toBe("boom");
           // The stale view goes on refusing.
           expect(() => Object.keys(stale as object)).toThrow(ViewDriftError);
         });
@@ -184,6 +188,86 @@ describe("query-result-proxy view drift", () => {
     seed.set([1]);
     expect(view.a).toBe(1);
     expect(Object.keys(view)).toEqual(["a"]);
+  });
+
+  it("does not let a fresh view vouch for the stale one", () => {
+    // The fresh read after a rewrite derives a view at the same location.
+    // That is evidence about the fresh view, not the stale one, whose every
+    // access still refuses -- a property, a symbol probe, `length`.
+    const cell = runtime.getCell<unknown>(space, "fresh-vouch", undefined, tx);
+    cell.set([1, 2, 3]);
+    const stale = cell.get() as number[] & { a?: unknown };
+    cell.set({ a: 1 });
+    expect((cell.get() as { a: number }).a).toBe(1);
+
+    expect(() => stale.length).toThrow(ViewDriftError);
+    expect(() => stale.a).toThrow(ViewDriftError);
+    expect(() => stale[0]).toThrow(ViewDriftError);
+    expect(() => Symbol.iterator in stale).toThrow(ViewDriftError);
+    expect(() => stale.toString()).toThrow(ViewDriftError);
+
+    const record = runtime.getCell<unknown>(
+      space,
+      "fresh-vouch-2",
+      undefined,
+      tx,
+    );
+    record.set({ a: 1 });
+    const staleRecord = record.get() as { a?: unknown };
+    record.set("scalar");
+    expect(record.get()).toBe("scalar");
+    expect(() => staleRecord.a).toThrow(ViewDriftError);
+  });
+
+  it("does not hand a stale view to a fresh read after a link is retargeted", () => {
+    // A view checks the document its link resolved to when it was built.
+    // Retarget the link and the old view still describes the old document,
+    // as it did before; what must not happen is the check leaving that view
+    // where a fresh read of the link would find it.
+    const first = runtime.getCell<{ value: string }>(
+      space,
+      "retarget-a",
+      undefined,
+      tx,
+    );
+    first.set({ value: "first" });
+    const second = runtime.getCell<{ value: string }>(
+      space,
+      "retarget-b",
+      undefined,
+      tx,
+    );
+    second.set({ value: "second" });
+    const holder = runtime.getCell<{ target: unknown }>(
+      space,
+      "retarget-holder",
+      undefined,
+      tx,
+    );
+    holder.set({ target: first });
+    const oldView = holder.key("target").get() as { value: string };
+    expect(oldView.value).toBe("first");
+
+    holder.set({ target: second });
+    expect(oldView.value).toBe("first");
+    expect((holder.key("target").get() as { value: string }).value).toBe(
+      "second",
+    );
+    expect((holder.get() as { target: { value: string } }).target.value).toBe(
+      "second",
+    );
+  });
+
+  it("refuses from a saved array method called after the rewrite", () => {
+    const cell = runtime.getCell<unknown>(space, "saved-method", undefined, tx);
+    cell.set([1, 2, 3]);
+    const view = cell.get() as number[];
+    const map = view.map;
+    expect(map((v) => v)).toEqual([1, 2, 3]);
+
+    cell.set({ a: 1 });
+
+    expect(() => map((v) => v)).toThrow(ViewDriftError);
   });
 
   it("refuses from an iterator held across the rewrite", () => {
