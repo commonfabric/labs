@@ -868,4 +868,19 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "the drafts removed, with the trusted streams taking the text a `cf-submit-input` click carries",
     record: "docs/history/cfc-chat-demo-submit-input-break.md",
   },
+  {
+    // Each `Panel` kind gains an optional `addedBy` DID. The proof does not
+    // apply the open-object evolution allowance inside a union branch, so a
+    // stored panel whose `addedBy` held a non-string, which no writer ever
+    // stored, reads as a refused alternative.
+    pattern: "loom/main.tsx",
+    baselines: [
+      "20260920T232507Z-_ewvPy8qDJYL47km",
+      "20260922T052256Z--2Q9ESzxSenSTer9",
+    ],
+    paths: ["argument.panels[]"],
+    reason:
+      "a Loom panel's new optional addedBy reads as a narrowed union branch under baselines that never had the property",
+    record: "docs/history/loom-panel-added-by-break.md",
+  },
 ];

@@ -64,9 +64,28 @@ export default pattern(() => {
   );
   const absentMoveSource = action(() => loom.movePanel.send({ panel: absent }));
   const invalidUrl = action(() => loom.addPanel.send({ panel: invalid }));
+  const piece = new Writable({ title: "Target" });
+  const notADid = new Writable<Panel>({
+    kind: "url",
+    url: "https://example.com/c",
+    addedBy: "alice",
+  });
+  const unattributedAdd = action(() => loom.addPanel.send({ panel: notADid }));
+  const unattributedPiece = action(() =>
+    loom.addPiece.send({ piece, addedBy: "did:key:has space" })
+  );
+  const unattributedDuplicate = action(() =>
+    loom.duplicatePanel.send({ panel: first, addedBy: "did:key:a/b" })
+  );
+  const overlongDuplicate = action(() =>
+    loom.duplicatePanel.send({
+      panel: first,
+      addedBy: `did:key:z${"6".repeat(200)}`,
+    })
+  );
   return {
     allowRuntimeErrors: true,
-    expectRuntimeErrors: 8,
+    expectRuntimeErrors: 12,
     allowConsoleErrors: true,
     // The refused direct roster write is reported as a CFC policy warning.
     allowConsoleWarnings: true,
@@ -91,6 +110,10 @@ export default pattern(() => {
       { action: absentMove },
       { action: absentMoveSource },
       { action: invalidUrl },
+      { action: unattributedAdd },
+      { action: unattributedPiece },
+      { action: unattributedDuplicate },
+      { action: overlongDuplicate },
       { assertion: assert(() => loom.panels.length === 2) },
       { assertion: assert(() => loom.panels[0].equals(first)) },
       { assertion: assert(() => loom.presentation.stagedPanels.length === 1) },

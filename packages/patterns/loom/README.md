@@ -29,15 +29,26 @@ A published document stores `{source, notes}`. `source` is the allowlisted
 key. `notes` is collaborative text and remains intact when source data changes;
 the root renders it as a shared text field.
 
+Any panel may carry `addedBy`, the DID of the person who added it. A panel
+without one is attributed to the Loom's owner. The field is a claim, not a
+proof: handlers cannot see who invoked them, so any writer of the panels can
+name any DID. Each participant's publishing daemon writes its own principal
+there, and consumers outside the root read it; the root stores it and refuses
+one that is not a DID (`did:`, a lowercase method, and an identifier without
+whitespace or `/`, at most 195 characters in all).
+
 `pieceRegistry` derives from piece panels in order, including duplicates.
-`addPiece({piece})` idempotently adds a registration occurrence. `addPanel`
+`addPiece({piece, addedBy?})` idempotently adds a registration occurrence; for a
+piece already registered it changes nothing, `addedBy` included. `addPanel`
 deduplicates by occurrence identity. `movePanel` and `duplicatePanel` accept an
 optional `before` occurrence; an absent source or anchor refuses. Duplicating
-copies the occurrence fields and retains its target link. The runtime invocation
-identifies the new occurrence, including when that delivery is retried.
-`removePanel` removes only one occurrence and its presentation references.
-`removePiece` unregisters every occurrence of the specified complete piece link.
-Neither operation deletes the target.
+copies the occurrence's complete target link and its title. It takes `addedBy`
+from its own event, never from the source: a copy is added by whoever duplicates
+it, and one made without `addedBy` is attributed to the owner. The runtime
+invocation identifies the new occurrence, including when that delivery is
+retried. `removePanel` removes only one occurrence and its presentation
+references. `removePiece` unregisters every occurrence of the specified complete
+piece link. Neither operation deletes the target.
 
 `setPresentation({stagedPanels, focusedPanel?})` replaces staging and focus in
 one transaction. Staged occurrences must belong to the current collection and be

@@ -12,6 +12,7 @@ import type {
   LoomInput,
   LoomOutput,
   Panel,
+  PanelDuplication,
   PanelPosition,
   Presentation,
   ViewerState,
@@ -50,11 +51,29 @@ function externalUrl(raw: string): string | undefined {
   }
 }
 
-/** Validate a URL before admitting its occurrence to the shared composition. */
+/**
+ * Whether `value` is a DID a panel may name as its adder: `did:`, a lowercase
+ * method, and an identifier with no whitespace or `/`, at most 195 characters
+ * in all, so that the adder's `peer:<did>` actor fits the service's
+ * 200-character bound.
+ */
+function isAdderDid(value: string): boolean {
+  return value.length <= 195 && /^did:[a-z0-9]+:[^\s/]+$/.test(value);
+}
+
+/** Refuse an `addedBy` that is present but is not a DID. */
+function validateAdder(addedBy: string | undefined): void {
+  if (addedBy !== undefined && !isAdderDid(addedBy)) {
+    throw new Error("A panel's addedBy must be a DID");
+  }
+}
+
+/** Validate a panel before admitting its occurrence to the shared composition. */
 function validatePanel(panel: Panel): void {
   if (panel.kind === "url" && externalUrl(panel.url) === undefined) {
     throw new Error("A URL panel requires an HTTP(S) URL without credentials");
   }
+  validateAdder(panel.addedBy);
 }
 
 /** Compare piece membership by complete link identity, including scope and space. */
@@ -68,12 +87,20 @@ function containsPiece(
   });
 }
 
-const addPiece = handler<{ piece: Writable<unknown> }, State>(
-  ({ piece }, { panels }) => {
+const addPiece = handler<
+  { piece: Writable<unknown>; addedBy?: string },
+  State
+>(
+  ({ piece, addedBy }, { panels }) => {
+    validateAdder(addedBy);
     const list = panels.get();
     if (containsPiece(list, piece)) return;
     const panel = new Writable<Panel>();
-    panel.set({ kind: "piece", piece });
+    panel.set({
+      kind: "piece",
+      piece,
+      ...(addedBy === undefined ? {} : { addedBy }),
+    });
     panels.set([...list, panel]);
   },
 );
@@ -148,25 +175,31 @@ const movePanel = handler<PanelPosition, State>(
   },
 );
 
-const duplicatePanel = handler<PanelPosition, State>(
-  ({ panel, before }, { panels }) => {
+const duplicatePanel = handler<PanelDuplication, State>(
+  ({ panel, before, addedBy }, { panels }) => {
     const list = panels.get();
     if (!list.some((existing) => existing.equals(panel))) {
       throw new Error("The panel is no longer in this Loom");
     }
     const index = insertionIndex(list, before);
     const source = panel.get();
-    validatePanel(source);
+    // A copy is added by whoever duplicates it: `addedBy` comes from the
+    // event, never from the source.
+    const fields = {
+      ...(source.titleOverride === undefined
+        ? {}
+        : { titleOverride: source.titleOverride }),
+      ...(addedBy === undefined ? {} : { addedBy }),
+    };
+    const copy: Panel = source.kind === "piece"
+      ? { kind: "piece", piece: source.piece, ...fields }
+      : source.kind === "document"
+      ? { kind: "document", content: source.content, ...fields }
+      : { kind: "url", url: source.url, ...fields };
+    validatePanel(copy);
     // The handler invocation supplies the cause, so replay addresses this same occurrence.
     const occurrence = new Writable<Panel>();
-    const title = source.titleOverride === undefined
-      ? {}
-      : { titleOverride: source.titleOverride };
-    if (source.kind === "piece") {
-      occurrence.set({ kind: "piece", piece: source.piece, ...title });
-    } else if (source.kind === "document") {
-      occurrence.set({ kind: "document", content: source.content, ...title });
-    } else occurrence.set({ kind: "url", url: source.url, ...title });
+    occurrence.set(copy);
     const next = [...list];
     next.splice(index, 0, occurrence);
     panels.set(next);

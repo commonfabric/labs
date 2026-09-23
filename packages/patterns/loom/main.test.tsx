@@ -105,6 +105,27 @@ export default pattern(() => {
   const moveLastFromUI = action(() => clickFirstPanel(loom[UI], "Move last"));
   const moveFirstFromUI = action(() => clickFirstPanel(loom[UI], "Move first"));
   const removeFromUI = action(() => clickFirstPanel(loom[UI], "Remove"));
+  const alice = "did:key:z6MkAliceAddsPanelsToTheSharedLoom";
+  const bob = "did:key:z6MkBobDuplicatesAPanelInTheSharedLoom";
+  const attributed = Loom({});
+  const attributedPiece = new Writable({ title: "Attributed target" });
+  const attributedUrl = new Writable<Panel>({
+    kind: "url",
+    url: "https://example.com/attributed",
+    addedBy: alice,
+  });
+  const addAttributedUrl = action(() =>
+    attributed.addPanel.send({ panel: attributedUrl })
+  );
+  const addAttributedPiece = action(() =>
+    attributed.addPiece.send({ piece: attributedPiece, addedBy: alice })
+  );
+  const duplicateUnattributed = action(() =>
+    attributed.duplicatePanel.send({ panel: attributedUrl })
+  );
+  const duplicateAsBob = action(() =>
+    attributed.duplicatePanel.send({ panel: attributedUrl, addedBy: bob })
+  );
   return {
     [TESTS]: [
       { assertion: assert(() => loom.panels.length === 0) },
@@ -284,6 +305,34 @@ export default pattern(() => {
       { assertion: assert(() => !loom.panels[0].equals(documentPanel)) },
       { action: removeFromUI },
       { assertion: assert(() => loom.panels.length === 4) },
+      // Every occurrence above was added without `addedBy`, and none gained one.
+      {
+        assertion: assert(() =>
+          loom.panels.every((panel) => panel.get().addedBy === undefined)
+        ),
+      },
+      { action: addAttributedUrl },
+      { action: addAttributedPiece },
+      {
+        assertion: assert(() =>
+          attributed.panels.length === 2 &&
+          attributed.panels[0].get().addedBy === alice &&
+          attributed.panels[1].get().kind === "piece" &&
+          attributed.panels[1].get().addedBy === alice
+        ),
+      },
+      // A duplicate is added by whoever duplicates; it never inherits the source's adder.
+      { action: duplicateUnattributed },
+      { action: duplicateAsBob },
+      {
+        assertion: assert(() =>
+          attributed.panels.length === 4 &&
+          attributed.panels[2].get().addedBy === undefined &&
+          attributed.panels[3].get().addedBy === bob &&
+          attributed.panels[3].get().kind === "url" &&
+          attributedUrl.get().addedBy === alice
+        ),
+      },
     ],
   };
 });
