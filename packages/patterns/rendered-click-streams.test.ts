@@ -54,16 +54,31 @@ async function compiledSchema(path: string): Promise<Record<string, any>> {
   return JSON.parse(stdout.slice(stdout.indexOf("{")));
 }
 
-function resolved(schema: Record<string, any>, node: Record<string, any>) {
-  const ref = typeof node.$ref === "string" ? node.$ref : undefined;
-  if (!ref) return node;
-  // A `$ref` that resolves to nothing must fail here, not pass below: an
-  // unresolved reference would read as "no `additionalProperties`" and turn
-  // this guard off silently.
-  const key = ref.replace(/^#\/\$defs\//, "");
-  const target = schema.$defs?.[key];
-  expect(target, `${ref} does not resolve in $defs`).toBeInstanceOf(Object);
-  return { ...target, ...node, $ref: undefined };
+/**
+ * The schema at the end of the local `$ref` chain `node` starts, following
+ * `#/$defs/` references in `schema` until a node carries no `$ref` or a
+ * reference repeats — the chain the runner's `localRefTarget()` follows.
+ */
+function refChainTarget(
+  schema: Record<string, any>,
+  node: Record<string, any>,
+): Record<string, any> {
+  const seen = new Set<string>();
+  let current = node;
+  while (typeof current.$ref === "string" && !seen.has(current.$ref)) {
+    const ref: string = current.$ref;
+    seen.add(ref);
+    // A `$ref` that resolves to nothing must fail here, not pass below: an
+    // unresolved reference would read as "no `additionalProperties`" and turn
+    // this guard off silently.
+    expect(ref, `${ref} is not a local \`$defs\` reference`).toMatch(
+      /^#\/\$defs\//,
+    );
+    const target = schema.$defs?.[ref.slice("#/$defs/".length)];
+    expect(target, `${ref} does not resolve in $defs`).toBeInstanceOf(Object);
+    current = target;
+  }
+  return current;
 }
 
 describe("rendered-click-streams", () => {
@@ -72,7 +87,9 @@ describe("rendered-click-streams", () => {
   // undeclared field against an event schema declaring `additionalProperties:
   // false` — the schema `Record<PropertyKey, never>` compiles to. Each case
   // reads the compiled contract the way the pattern-update gate does, and
-  // applies the runner's closure test to the stream's event schema.
+  // applies the runner's closure test to the stream's event schema: closed
+  // when the schema itself, or the end of the `$ref` chain it starts, declares
+  // `additionalProperties: false`.
 
   for (const { path, stream } of CLICK_STREAMS) {
     describe(path, () => {
@@ -80,8 +97,9 @@ describe("rendered-click-streams", () => {
         const pattern = await compiledSchema(path);
         const streamSchema = pattern.resultSchema.properties[stream];
         expect(streamSchema.asCell).toContain("stream");
-        const event = resolved(pattern.resultSchema, streamSchema);
-        expect(event.additionalProperties).not.toBe(false);
+        expect(streamSchema.additionalProperties).not.toBe(false);
+        const target = refChainTarget(pattern.resultSchema, streamSchema);
+        expect(target.additionalProperties).not.toBe(false);
       });
     });
   }
