@@ -21,7 +21,14 @@ import { expect } from "@std/expect";
 import { createHasher } from "@commonfabric/content-hash";
 import { toUnpaddedBase64url } from "@commonfabric/utils/base64url";
 
-import { FabricValue, hashOf, hashStringOf, taggedHashStringOf } from "@";
+import {
+  deepFreeze,
+  FabricValue,
+  hashOf,
+  hashStringOf,
+  taggedHashStringOf,
+} from "@";
+import { UnknownValue } from "@/codec-common";
 import { FabricError } from "@/fabric-instances";
 import {
   FabricBytes,
@@ -815,6 +822,143 @@ describe("value-hash", () => {
         );
       });
     });
+    describe("Cycles", () => {
+      /** The direct-form bytes of a short ASCII string. */
+      function stringBytes(value: string): number[] {
+        return [0x24, value.length, ...new TextEncoder().encode(value)];
+      }
+
+      it("encodes an object that holds itself as `TAG_CYCLE` + distance 1", () => {
+        const self: Record<string, FabricValue> = {};
+        self.self = self;
+
+        expect(hashBytesOf(self)).toEqual(
+          sha256([0x11, ...stringBytes("self"), 0x02, 0x01, 0x00]),
+        );
+      });
+
+      it("encodes an array that holds itself as `TAG_CYCLE` + distance 1", () => {
+        const self: FabricValue[] = [];
+        self.push(self);
+
+        expect(hashBytesOf(self)).toEqual(sha256([0x10, 0x02, 0x01, 0x00]));
+      });
+
+      it("encodes the distance up the path to the container the cycle returns to", () => {
+        const a: Record<string, FabricValue> = {};
+        const b: Record<string, FabricValue> = { a };
+        a.b = b;
+
+        expect(hashBytesOf(a)).toEqual(
+          sha256([
+            0x11,
+            ...stringBytes("b"),
+            0x11,
+            ...stringBytes("a"),
+            0x02,
+            0x02,
+            0x00,
+            0x00,
+          ]),
+        );
+      });
+
+      it("encodes a cycle through a `FabricInstance`, counting the instance and its state", () => {
+        const state: Record<string, FabricValue> = {};
+        const instance = new UnknownValue("Node@1", state);
+        state.self = instance;
+
+        expect(hashBytesOf(instance)).toEqual(
+          sha256([
+            0x12,
+            ...stringBytes("Node@1"),
+            0x11,
+            ...stringBytes("self"),
+            0x02,
+            0x02,
+            0x00,
+          ]),
+        );
+      });
+
+      it("encodes a cyclic value the same way wherever it sits", () => {
+        const self: Record<string, FabricValue> = {};
+        self.self = self;
+
+        expect(hashBytesOf([self])).toEqual(
+          sha256([
+            0x10,
+            0x11,
+            ...stringBytes("self"),
+            0x02,
+            0x01,
+            0x00,
+            0x00,
+          ]),
+        );
+      });
+
+      it("encodes a distance past the height at which the path is indexed", () => {
+        // 100 nested objects, the innermost holding the outermost.
+        const root: Record<string, FabricValue> = {};
+        let inner = root;
+        for (let i = 1; i < 100; i++) {
+          const next: Record<string, FabricValue> = {};
+          inner.n = next;
+          inner = next;
+        }
+        inner.root = root;
+
+        const nest = Array.from(
+          { length: 99 },
+          () => [0x11, ...stringBytes("n")],
+        ).flat();
+        expect(hashBytesOf(root)).toEqual(
+          sha256([
+            ...nest,
+            0x11,
+            ...stringBytes("root"),
+            0x02,
+            100, // LEB128(100) = [0x64]
+            0x00,
+            ...new Array(99).fill(0x00),
+          ]),
+        );
+      });
+
+      it("expands a shared container that is not on the path, as it does in an acyclic value", () => {
+        const shared = { v: 1 };
+
+        expect(hashBytesOf({ a: shared, b: shared })).toEqual(
+          hashBytesOf({ a: { v: 1 }, b: { v: 1 } }),
+        );
+        expect(hashBytesOf([shared, [shared]])).toEqual(
+          hashBytesOf([{ v: 1 }, [{ v: 1 }]]),
+        );
+      });
+
+      it("hashes differently where a cycle closes at a different container", () => {
+        const one: Record<string, FabricValue> = {};
+        one.x = one;
+        const two: Record<string, FabricValue> = {};
+        two.x = { x: two };
+
+        expect(hex(hashBytesOf(one))).not.toBe(hex(hashBytesOf(two)));
+        expect(hex(hashBytesOf({ x: one }))).not.toBe(hex(hashBytesOf(one)));
+      });
+
+      it("caches the hash of a deep-frozen cyclic value", () => {
+        const self: Record<string, FabricValue> = {};
+        self.self = self;
+        const expected = hashOf(self);
+        deepFreeze(self);
+
+        const first = hashOf(self);
+        expect(first.bytes).toEqual(expected.bytes);
+        expect(hashOf(self)).toBe(first);
+      });
+    });
+
     describe("Consistency and distinctness", () => {
       it("produces the same hash for the same value every time", () => {
         expect(hashBytesOf(42)).toEqual(hashBytesOf(42));

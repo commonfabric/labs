@@ -15,6 +15,7 @@ import {
 import { encodeULEB128 } from "@commonfabric/leb128";
 import { bigintToMinimalTwosComplement } from "@commonfabric/utils/bigint";
 import { LRUCache } from "@commonfabric/utils/cache";
+import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
 import { backtickQuote } from "@commonfabric/utils/markdown";
 import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
@@ -39,6 +40,7 @@ import {
 // Meta (0x0N)
 const TAG_END = 0x00;
 const TAG_HOLE = 0x01;
+const TAG_CYCLE = 0x02;
 
 // Compound (0x1N)
 const TAG_ARRAY = 0x10;
@@ -70,6 +72,7 @@ const TAG_STRING_HASH = 0xf0;
 
 const TAG_END_BYTES = new Uint8Array([TAG_END]);
 const TAG_HOLE_BYTES = new Uint8Array([TAG_HOLE]);
+const TAG_CYCLE_BYTES = new Uint8Array([TAG_CYCLE]);
 const TAG_ARRAY_BYTES = new Uint8Array([TAG_ARRAY]);
 const TAG_OBJECT_BYTES = new Uint8Array([TAG_OBJECT]);
 const TAG_INSTANCE_BYTES = new Uint8Array([TAG_INSTANCE]);
@@ -215,10 +218,36 @@ function feedLength(hasher: IncrementalHasher, value: number): void {
 }
 
 /**
- * Feeds a single `FabricValue` into the hasher, using the type-tagged byte
- * format from the byte-level spec.
+ * Feeds a cycle reference into the hasher if the given container is on `path`,
+ * which holds the containers enclosing the position being fed, outermost
+ * first. Returns whether it did.
  */
-function feedValue(hasher: IncrementalHasher, value: unknown): void {
+function feedCycleIfOnPath(
+  hasher: IncrementalHasher,
+  path: IndexTrackingStack<object>,
+  value: object,
+): boolean {
+  const at = path.lastIndexOf(value);
+
+  if (at < 0) {
+    return false;
+  }
+
+  hasher.update(TAG_CYCLE_BYTES);
+  feedLength(hasher, path.depth - at);
+  return true;
+}
+
+/**
+ * Feeds a single `FabricValue` into the hasher, using the type-tagged byte
+ * format from the byte-level spec. `path` holds the containers enclosing the
+ * position being fed, outermost first.
+ */
+function feedValue(
+  hasher: IncrementalHasher,
+  value: unknown,
+  path: IndexTrackingStack<object>,
+): void {
   switch (typeof value) {
     case "boolean":
       hasher.update(value ? TAG_BOOLEAN_TRUE_BYTES : TAG_BOOLEAN_FALSE_BYTES);
@@ -260,7 +289,7 @@ function feedValue(hasher: IncrementalHasher, value: unknown): void {
       if (value === null) {
         hasher.update(TAG_NULL_BYTES);
       } else {
-        feedObjectValue(hasher, value);
+        feedObjectValue(hasher, value, path);
       }
       break;
 
@@ -280,6 +309,7 @@ function feedValue(hasher: IncrementalHasher, value: unknown): void {
 function feedObjectValue(
   hasher: IncrementalHasher,
   value: object,
+  path: IndexTrackingStack<object>,
 ): void {
   const tag = tagOfConvertibleJsValueElseNull(value);
 
@@ -317,11 +347,11 @@ function feedObjectValue(
     }
 
     case VALUE_TAGS.Array:
-      feedArray(hasher, value as unknown[]);
+      feedArray(hasher, value as unknown[], path);
       return;
 
     case VALUE_TAGS.Object:
-      feedPlainObject(hasher, value as Record<string, unknown>);
+      feedPlainObject(hasher, value as Record<string, unknown>, path);
       return;
 
     case VALUE_TAGS.FabricBytes: {
@@ -333,12 +363,17 @@ function feedObjectValue(
     }
 
     case VALUE_TAGS.FabricInstance: {
+      if (feedCycleIfOnPath(hasher, path, value)) {
+        return;
+      }
       const fabInst = value as BaseFabricInstance;
       hasher.update(TAG_INSTANCE_BYTES);
       const codec = codecOf(fabInst);
       hasher.update(getStringRep(codec.tagForValue(fabInst)));
       const state = codec.encode(fabInst, NULL_LIVE_ENVIRONMENT);
-      feedValue(hasher, state);
+      path.push(fabInst);
+      feedValue(hasher, state, path);
+      path.pop();
       return;
     }
 
@@ -353,27 +388,27 @@ function feedObjectValue(
         );
       }
       hasher.update(TAG_KEY_PAIR_BYTES);
-      feedValue(hasher, fab.algorithm);
-      feedValue(hasher, fab.publicKeyBytes);
-      feedValue(hasher, fab.privateKeyBytes);
+      feedValue(hasher, fab.algorithm, path);
+      feedValue(hasher, fab.publicKeyBytes, path);
+      feedValue(hasher, fab.privateKeyBytes, path);
       return;
     }
 
     case VALUE_TAGS.FabricRegExp: {
       const fab = value as FabricRegExp;
       hasher.update(TAG_REGEXP_BYTES);
-      feedValue(hasher, fab.source);
-      feedValue(hasher, fab.flags);
-      feedValue(hasher, fab.flavor);
+      feedValue(hasher, fab.source, path);
+      feedValue(hasher, fab.flags, path);
+      feedValue(hasher, fab.flavor, path);
       return;
     }
 
     case VALUE_TAGS.FabricUnavailable: {
       const fab = value as FabricUnavailable;
       hasher.update(TAG_UNAVAILABLE_BYTES);
-      feedValue(hasher, fab.reason);
-      feedValue(hasher, fab.errorKind);
-      feedValue(hasher, fab.rawErrorMessage);
+      feedValue(hasher, fab.reason, path);
+      feedValue(hasher, fab.errorKind, path);
+      feedValue(hasher, fab.rawErrorMessage, path);
       return;
     }
 
@@ -383,7 +418,7 @@ function feedObjectValue(
       // Native instances that have a well-defined `FabricValue` conversion.
       // Convert on-the-fly and hash the converted value.
       const converted = shallowFabricFromConvertibleJsValue(value, false);
-      feedValue(hasher, converted);
+      feedValue(hasher, converted, path);
       return;
     }
 
@@ -399,8 +434,19 @@ function feedObjectValue(
   }
 }
 
-/** Feed an array value with sparse hole handling, terminated by `TAG_END`. */
-function feedArray(hasher: IncrementalHasher, value: unknown[]): void {
+/**
+ * Feed an array value with sparse hole handling, terminated by `TAG_END`, or a
+ * cycle reference if the array is on `path`.
+ */
+function feedArray(
+  hasher: IncrementalHasher,
+  value: unknown[],
+  path: IndexTrackingStack<object>,
+): void {
+  if (feedCycleIfOnPath(hasher, path, value)) {
+    return;
+  }
+  path.push(value);
   hasher.update(TAG_ARRAY_BYTES);
   let i = 0;
   while (i < value.length) {
@@ -414,21 +460,28 @@ function feedArray(hasher: IncrementalHasher, value: unknown[]): void {
       hasher.update(TAG_HOLE_BYTES);
       feedLength(hasher, runLen);
     } else {
-      feedValue(hasher, value[i]);
+      feedValue(hasher, value[i], path);
       i++;
     }
   }
   hasher.update(TAG_END_BYTES);
+  path.pop();
 }
 
 /**
  * Feed a plain object value, keys sorted by UTF-8 byte order, terminated
- * by `TAG_END`.
+ * by `TAG_END`, or a cycle reference if the object is on `path`.
  */
 function feedPlainObject(
   hasher: IncrementalHasher,
   value: Record<string, unknown>,
+  path: IndexTrackingStack<object>,
 ): void {
+  if (feedCycleIfOnPath(hasher, path, value)) {
+    return;
+  }
+  path.push(value);
+
   // Note: Even though we could conceivably define the key sort order to be
   // something easier to calculate in JS, (a) ultimately we want this
   // implementation to be but one of several that aren't all written in JS, (b)
@@ -442,9 +495,10 @@ function feedPlainObject(
     // Keys are encoded in the same format as strings, and values are hashed
     // recursively.
     hasher.update(getStringRep(key));
-    feedValue(hasher, value[key]);
+    feedValue(hasher, value[key], path);
   }
   hasher.update(TAG_END_BYTES);
+  path.pop();
 }
 
 //
@@ -454,7 +508,7 @@ function feedPlainObject(
 /** Computes the hash of a value without consulting or populating any cache. */
 function computeHash(value: unknown): FabricHash {
   const hasher = createHasher();
-  feedValue(hasher, value);
+  feedValue(hasher, value, new IndexTrackingStack());
   return new FabricHash(hasher.digest(), "fid1", true);
 }
 
@@ -464,7 +518,7 @@ function computeHash(value: unknown): FabricHash {
  */
 function computeHashAsString(value: unknown): string {
   const hasher = createHasher();
-  feedValue(hasher, value);
+  feedValue(hasher, value, new IndexTrackingStack());
   return hasher.digest("base64url");
 }
 
