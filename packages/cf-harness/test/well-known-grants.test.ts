@@ -319,7 +319,7 @@ describe("well-known-grants", () => {
           ref: MAIL_REF,
           source: { connection: "gmail work!", piece: MAIL_GRANT.source.piece },
         })
-      ).toThrow();
+      ).toThrow("connector connection must match");
     });
   });
 
