@@ -284,10 +284,6 @@ const schemaAtPathKey = (
   return key;
 };
 
-// The cfc rules. Every member is static: the derivations are pure functions of
-// their arguments, and what caching there is lives in module-level maps keyed
-// by schema identity.
-// The spec's confidentiality model is based on structured atoms.
 /**
  * The JSON types of the values an `enum` or `const` schema names, each once,
  * in the order the members declare them; `undefined` where the schema names
@@ -322,6 +318,10 @@ function enumeratedTypes(
   return types;
 }
 
+// The cfc rules. Every member is static: the derivations are pure functions of
+// their arguments, and what caching there is lives in module-level maps keyed
+// by schema identity.
+// The spec's confidentiality model is based on structured atoms.
 export class ContextualFlowControl {
   static uniqueAtoms(atoms: Iterable<unknown>): IFCAtom[] {
     return uniqueCfcAtoms(atoms);
