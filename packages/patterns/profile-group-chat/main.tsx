@@ -61,7 +61,10 @@ const DEFAULT_MESSAGES: ChatMessage[] = [];
 type MessagesCell = Writable<ChatMessage[]>;
 type DraftCell = Writable<string>;
 
-export type SendEvent = Record<PropertyKey, never>;
+// The Send button delivers the serialized DOM click (`type`, `provenance`,
+// target scalars), which a closed event schema refuses before the handler runs.
+// The handler reads nothing from its event, so it declares none.
+export type SendEvent = void;
 
 // Append a message. `profile` is the sender's live profile cell (the identity
 // rendered first-class via cf-profile-badge); it round-trips through `push` as a

@@ -715,4 +715,42 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "both defeated.",
     record: "docs/history/pattern-result-ifc-contract-break.md",
   },
+  {
+    // The Send verb's event opens, the same break the roster Join verbs took
+    // above: `Record<PropertyKey, never>` compiled to a closed empty object,
+    // which the runner's closed-world gate enforces, so the Send button's
+    // serialized DOM event was refused and no message could be sent. `void`
+    // is a different recorded contract for the stream; nothing held state
+    // under the old one.
+    pattern: "profile-group-chat/main.tsx",
+    baselines: ["20260729T022742Z-VIR19UFKyKrauX_B"],
+    paths: ["result.sendMessage"],
+    reason:
+      "the Send verb's closed empty event refused every rendered click; re-declared void",
+    record: "docs/history/chat-send-event-opened.md",
+  },
+  {
+    // The same break in the scoped chat, same record.
+    pattern: "scoped-group-chat/main-plain-inputs.tsx",
+    baselines: [
+      "20260729T022742Z-Z-pkp9K1p6P_byR_",
+      "20260909T184756Z-M530BSuyTtIuZ_9J",
+    ],
+    paths: ["result.sendMessage"],
+    reason:
+      "the Send verb's closed empty event refused every rendered click; re-declared void",
+    record: "docs/history/chat-send-event-opened.md",
+  },
+  {
+    // The same break in the scoped chat's writable-input variant, same record.
+    pattern: "scoped-group-chat/main-with-writable-inputs.tsx",
+    baselines: [
+      "20260729T022742Z-_XyScfA2QEj14JnS",
+      "20260909T184756Z-NMt89YDsQnt_urES",
+    ],
+    paths: ["result.sendMessage"],
+    reason:
+      "the Send verb's closed empty event refused every rendered click; re-declared void",
+    record: "docs/history/chat-send-event-opened.md",
+  },
 ];
