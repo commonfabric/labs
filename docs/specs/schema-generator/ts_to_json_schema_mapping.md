@@ -875,7 +875,7 @@ Mechanics:
   preserving any binding fixed inside the wrapper.
 - A canonical alias reached by its own name reads its payload, like its
   labels, from the reference's own argument nodes. A payload that is itself a
-  CFC alias therefore lowers as it would written on its own: a generic alias
+  CFC alias therefore lowers as it would if written on its own: a generic alias
   keeps its argument (`Integrity<Sec<string>, I>` is a string), a nested
   `WriteAuthorizedBy` keeps its `typeof` binding, and a nested label keeps its
   `AnyOf` clauses. A named type in the payload stays a `$ref` to its

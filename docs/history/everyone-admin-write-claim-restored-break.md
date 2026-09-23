@@ -35,14 +35,16 @@ export type ChatEveryoneAdminFlag =
 
 Both branches say that only `commitTrustedAdminToggle` may write the value.
 The recorded contracts carried that `writeAuthorizedBy` claim on the `false`
-branch only. The schema generator formats a union member from its type, with
-no syntax node, and a canonical CFC alias reached that way formatted its
-payload with no node either. `RequiresIntegrity` and `AddIntegrity` lowered
-their literal labels from the type, but the `TrustedActionWrite` in their
-payload could not read its `typeof commitTrustedAdminToggle` binding from a
-type, so the claim was dropped, while its UI contract survived. `ChatAdminList`
-and `SharedRoomList` have the same nesting and kept their claims, because they
-are reached through their own alias names, whose declarations supply the nodes.
+branch only. The schema generator formats this union member from its type. Its
+reference node remains in the generation context, but a canonical CFC alias
+reached through the type carries no argument nodes in its resolved-alias
+record. The formatter therefore passed no node to the alias's payload.
+`RequiresIntegrity` and `AddIntegrity` lowered their literal labels from the
+type, but the `TrustedActionWrite` in their payload could not read its
+`typeof commitTrustedAdminToggle` binding from a type, so the claim was dropped,
+while its UI contract survived. `ChatAdminList` and `SharedRoomList` have the
+same nesting and kept their claims, because they are reached through their own
+alias names, whose declarations supply the nodes.
 
 Reading the payload from the reference's own argument nodes, as the labels
 already were, puts the claim on the `true` branch. The compatibility proof
@@ -58,7 +60,8 @@ whole against the older one, whose registry it does not descend.
 The only compatible alternative is to keep emitting the flag without the claim,
 which leaves the demo's most permissive setting writable by any writer despite
 its declaration, and leaves the generator dropping a nested `WriteAuthorizedBy`
-wherever a union member or a payload reaches it without a node.
+whenever a canonical wrapper reached through its type fails to pass its
+reference's payload argument onward.
 `commitTrustedAdminToggle` is the only writer of the admin registry in the
 pattern, so no write the pattern makes is refused. The pattern is a demo, and
 its author agreed to the break.
