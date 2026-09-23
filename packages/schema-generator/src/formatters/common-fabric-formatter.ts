@@ -1402,6 +1402,32 @@ export class CommonFabricFormatter implements TypeFormatter {
     typeWithAlias: TypeWithInternals,
     context: GenerationContext,
   ): ResolvedCfcAlias | undefined {
+    // The checker can erase a local alias and report an inner alias's type.
+    // Its parameters belong to that inner declaration, while `.typeNode`
+    // still carries the outer reference's arguments. Start a user alias's
+    // substitution from its authored declaration so those pairs agree.
+    const reference = context.typeNode &&
+      readAuthoredTypeNode(context.typeNode, context.typeChecker);
+    if (reference && ts.isTypeReferenceNode(reference)) {
+      const declaration = this.#getTypeAliasDeclarationForSymbol(
+        context.typeChecker.getSymbolAtLocation(reference.typeName),
+        context,
+      );
+      if (declaration && !CFC_ALIAS_NAMES.has(declaration.name.text)) {
+        const nodes = reference.typeArguments ?? [];
+        const resolved = this.#resolveCfcAliasFromDeclaration(
+          declaration,
+          nodes.map((node) =>
+            this.#resolveTypeNodeToType(node, context, new Map())
+          ),
+          nodes,
+          context,
+          new Set([declaration.name.text]),
+        );
+        if (resolved) return resolved;
+      }
+    }
+
     const aliasName = typeWithAlias.aliasSymbol?.name;
     if (!aliasName) {
       return undefined;

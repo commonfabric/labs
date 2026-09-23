@@ -861,7 +861,11 @@ Mechanics:
   (§7), so name collisions remain an untested foot-gun.
 - User alias chains are followed with type-parameter node substitution until a
   canonical name is reached (`resolveCfcAliasFromDeclaration` /
-  `substituteTypeNode`); unresolvable expansions fall back to
+  `substituteTypeNode`). Substitution starts at the authored reference's
+  declaration, including a function-local generic alias whose resolved type
+  reports an inner alias: the outer reference's arguments belong to the outer
+  declaration's parameters. Fixed writer bindings and default value arguments
+  are read from that declaration. Unresolvable expansions fall back to
   ordinary generation (tested). A subtree holding a substituted parameter is
   built afresh, with no original node, so the payload is read from the node
   and its arguments, never back through the checker as the declaration's

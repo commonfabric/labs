@@ -10,6 +10,37 @@ import {
 } from "../utils.ts";
 
 describe("Schema: CFC authoring aliases", () => {
+  it("pairs local alias arguments with their declared parameters", async () => {
+    const { checker, sourceFile } = await createTestProgram(`
+      type WriteAuthorizedBy<T, Writer> = T & { readonly __writer?: Writer };
+      const save = () => {};
+      function createName() {
+        type Protected<T> = WriteAuthorizedBy<T, typeof save>;
+        const name: Protected<string> = "";
+        return name;
+      }
+    `);
+    const scope = sourceFile.statements.find(ts.isFunctionDeclaration)!;
+    const declaration = scope.body!.statements.find(ts.isVariableStatement)!
+      .declarationList.declarations[0]!;
+    const node = declaration.type!;
+    const schema = new SchemaGenerator().generateSchema(
+      checker.getTypeFromTypeNode(node),
+      checker,
+      node,
+      { writerIdentityForSourceFile: (file) => ({ file }) },
+    );
+
+    expect(schema).toEqual({
+      type: "string",
+      ifc: {
+        writeAuthorizedBy: {
+          __ctWriterIdentityOf: { file: sourceFile.fileName, path: ["save"] },
+        },
+      },
+    });
+  });
+
   it("lowers AnyOf as one explicit confidentiality clause", async () => {
     const code = `
       type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
