@@ -199,10 +199,15 @@ const coverageFile =
 
 class WorkerClient {
   #worker: Worker;
+  #ready = false;
   #nextId = 1;
   #pending = new Map<
     number,
-    { resolve: (value: FabricValue) => void; reject: (error: Error) => void }
+    {
+      request: WorkerRequest;
+      resolve: (value: FabricValue) => void;
+      reject: (error: Error) => void;
+    }
   >();
   readonly label: string;
 
@@ -213,6 +218,13 @@ class WorkerClient {
       { type: "module", name: `multi-runtime:${label}` },
     );
     this.#worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+      if ("ready" in event.data) {
+        this.#ready = true;
+        for (const pending of this.#pending.values()) {
+          this.#worker.postMessage(pending.request);
+        }
+        return;
+      }
       const pending = this.#pending.get(event.data.id);
       if (!pending) return;
       this.#pending.delete(event.data.id);
@@ -265,6 +277,7 @@ class WorkerClient {
         );
       }, RPC_TIMEOUT_MS);
       this.#pending.set(id, {
+        request,
         resolve: (value) => {
           clearTimeout(timer);
           resolve(value);
@@ -274,7 +287,7 @@ class WorkerClient {
           reject(error);
         },
       });
-      this.#worker.postMessage(request);
+      if (this.#ready) this.#worker.postMessage(request);
     });
   }
 

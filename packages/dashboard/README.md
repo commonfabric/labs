@@ -36,7 +36,9 @@ charts and generated CI Gantt images use the active theme as well.
 dashboard/
   types.ts      the interface: Tile, TileView, Status, Ctx, Route
   config.ts     port, repo, tunable status thresholds
-  palette.ts    THE ONE PLACE status colors, washes and dot shapes are chosen
+  palette.ts    THE ONE PLACE status colors and washes are chosen
+  status-dot.ts THE ONE PLACE the status dot's shapes are chosen
+  detail-list.ts  the row list a tile's body is built from
   theme.ts      light/dark surface colors, theme switch markup and browser behavior
   lib.ts        shared helpers (github, memo, escapeHtml, sparkline, strip, …)
   ctx.ts        shared, memoized data sources handed to every tile (ctx.runs)
@@ -46,6 +48,8 @@ dashboard/
   version.ts    the browser/server compatibility version a page reloads on
   dashboard-message.ts  shared message storage and fade timing
   render.ts     renderTile(label, view) + the page shell/CSS
+  detail-page.ts  the frame, navigation and type a drill-down page starts from
+  ci-jobs-page.ts the page behind the ci tile, and its table sorting
   server.ts     generic runtime: scheduler, SSE, route mounting, page assembly
   registry.ts   THE ONE REGISTRATION POINT — the array of tiles
   tiles/*.ts     one tile per file
@@ -80,13 +84,15 @@ fully visible for two hours. It then fades linearly for four hours, after which
 the server replaces it with the empty string. A new edit starts the timing
 again.
 
-GitHub CI tiles declare the workflow snapshots they read in `runSources`. The
-scheduler fetches each workflow independently. When a workflow fetch completes,
-the scheduler collects every due tile that reads it from the same stored
-snapshot and publishes those tile updates together. Each workflow can trigger a
-tile once per collection interval. A tile with several workflows can update
-once for each workflow as they arrive. This keeps a repository's build, trust,
-duration, and recent-run views in agreement when their intervals coincide.
+The trust, duration and recent-run tiles declare the workflow snapshots they
+read in `runSources`. The scheduler fetches each workflow independently. When a
+workflow fetch completes, the scheduler collects every due tile that reads it
+from the same stored snapshot and publishes those tile updates together. Each
+workflow can trigger a tile once per collection interval. A tile with several
+workflows can update once for each workflow as they arrive. This keeps a
+repository's trust, duration, and recent-run views in agreement when their
+intervals coincide. The ci tile reads no snapshot: it takes its own inventory
+of every repository's workflows on its own interval.
 
 A workflow snapshot is read a page at a time, and the pages have to describe
 one moment. A page after the first asks GitHub for the runs created at or
@@ -243,9 +249,11 @@ Every pair of statuses is measured in `palette.test.ts`, which simulates the
 two common forms of red/green color blindness and fails if any pair comes
 within reach of reading as one color.
 
-The second is the shape of the header dot: a circle for good, a triangle for
+The second is the shape of the status dot: a circle for good, a triangle for
 warn, a diamond for bad, and a hollow ring for unknown. A shape survives any
-kind of color vision, and any distance at which the dot is still visible at all.
+kind of color vision, and any distance at which the dot is still visible at
+all. Every surface that draws a dot draws these shapes, a tile's header and the
+rows of a drill-down page alike, rather than coloring a circle of its own.
 
 The third is weight. A tile's background wash and its border both get stronger
 as its status gets more serious, so a good tile is the quietest thing on the
@@ -278,8 +286,9 @@ a drill-down row, the favicon — comes from there. A shade that follows from
 another is worked out there too rather than written down beside it, so a change
 to a color carries without a second edit. Sparkline strokes fade from a
 transparent version of their own series color over the shared chart axis. The
-shape a dot takes is geometry rather than color, and lives with the rest of the
-tile's CSS.
+shape a dot takes is geometry rather than color, so it lives in `status-dot.ts`
+instead, which is the one place it is chosen and which every page drawing a dot
+takes its rules from.
 
 Think about how a tile makes someone feel before you think about what it
 measures. Prefer an honest gray "unknown" over a false green — a tile that
@@ -338,8 +347,11 @@ to the next; a view supplies everything under it.
 
 | tile | source | needs |
 |---|---|---|
-| labs ci, labs ci trust, labs ci duration | GitHub Actions (`deno.yml` on main in `commonfabric/labs`), via the REST API | `GH_TOKEN` (or `GITHUB_TOKEN`) |
-| loom ci, loom ci trust, loom ci duration | the same three tiles for `commonfabric/loom` (`test-fast.yml` on main) | `GH_TOKEN` (read access to loom); optional `DASHBOARD_LOOM_REPO` |
+| ci | every job the organization runs outside pull requests, in every repository the token can see that is not archived: for each active workflow, the newest completed run on that repository's own default branch. The headline is `passing` when every one of them passes, the repository's name when a single job is failing, as in `loom failing`, and a count when more than one is, as in `3 failing`. The header carries how many jobs the headline speaks for and how many repositories they came from. The body lists every failing job with its conclusion and how long ago it ran; while the tile is not red it also lists the labs and loom main builds, so the two builds the team watches stay visible, and a red tile lists only its failing jobs. A failure older than `CI_FAILURE_FRESH_HOURS` is orange rather than red: it is still failing and still counted, and it is no longer the thing that just broke. A failure made before the workflow's file last changed does not count at all, since that is what a job someone stopped rather than fixed looks like. A repository whose workflow listing cannot be read is listed too, and turns the tile orange rather than being passed over. The rows carry no links of their own, because the tile itself opens the page below | `GH_TOKEN` (or `GITHUB_TOKEN`) with Actions read across the organization |
+| CI jobs → `/ci` | every job the ci tile read, at full width: the repository and workflow, what started the deciding run (`push`, `schedule`, `workflow_dispatch`, and the rest, as GitHub names them), what that run concluded, how long it took, when it started, and how long ago that was. Every column sorts, once up and once down, on the value behind the cell rather than on what the cell says, so durations and times order as the measurements they are; the page opens worst first and a column of equal values keeps that order beneath it. Workflows with no verdict are listed under the table rather than through it, each with why: no completed run on the default branch, which is what a workflow only a pull request triggers looks like; recent runs that all judged nothing; or a workflow changed since it failed. So are repositories whose workflow listing could not be read. It renders the tile's own last collection rather than asking GitHub again, so opening it costs no requests and shows exactly what the tile shows | none |
+| labs ci trust, labs ci duration | GitHub Actions (`deno.yml` on main in `commonfabric/labs`), via the REST API | `GH_TOKEN` (or `GITHUB_TOKEN`) |
+| loom ci trust, loom ci duration | the same two tiles for `commonfabric/loom` (`test-fast.yml` on main) | `GH_TOKEN` (read access to loom); optional `DASHBOARD_LOOM_REPO` |
+| your metric here | a place in the grid for a metric nobody has chosen yet. It reads nothing, so it carries no figure, and it is green because there is nothing wrong with an empty slot | none |
 | recent main runs | Labs and Loom main-run snapshots, refreshed independently and merged chronologically whenever either arrives; each row is tagged with its repo | `GH_TOKEN` |
 | commit CI Gantt → `/ci-gantt` | job and step timing for every successful main workflow run attached to one commit, linked from run durations in recent main runs | `GH_TOKEN` |
 | CI duration history → `/bench?view=ci` | labs and loom job, shard-group, and end-to-end workflow duration trends. The duration tiles open their matching repository view | `GH_TOKEN` |
@@ -370,10 +382,13 @@ host is unreachable together.
 GitHub concludes a workflow run as `cancelled` for several reasons, among them a
 newer push replacing the run while it is still queued, a job running past its
 `timeout-minutes`, and someone stopping the run while it runs. Of those, only
-the first says nothing about the commit, and the ci and ci trust tiles recognize
-it by an empty job listing: an attempt cancelled before it started a job is
-passed over, and a cancelled attempt that ran jobs counts as a failure, as every
-conclusion other than success does. The job count misjudges two cases, both
+the first says nothing about the commit, and the ci trust tiles recognize it by
+an empty job listing: an attempt cancelled before it started a job is passed
+over, and a cancelled attempt that ran jobs counts as a failure, as every
+conclusion other than success does. The ci tile reads a cancelled run that way
+only when no newer run of its workflow replaced it; a concurrency group that
+cancels in progress replaces a run after its jobs have started as well, which
+the job count would take for a failure. The ci tile's section below says how. The job count misjudges two cases, both
 toward a failure: a run cancelled after its jobs were created but before a
 runner picked any of them up, and a partial rerun (**Re-run failed jobs**)
 replaced while queued, whose listing carries the jobs it reused. The run listing
@@ -381,14 +396,79 @@ does not carry a job count, so each tile requests the count of every cancelled
 attempt it reaches, once, and holds it while the run stays in the tile's window.
 No other conclusion takes that request.
 
-The **labs ci** and **loom ci** headlines use the most recent completed workflow
-attempt that was not cancelled before it started a job. An attempt cancelled
-before it started one neither sets the headline nor ends the streak beneath it,
-so a queued run a newer push replaced leaves the previous result showing, while
-a timed-out run shows **cancelled** in red. While GitHub reruns a workflow, the
-prior attempt's conclusion remains visible and the tile marks the activity as
-**build rerunning**. A new workflow run still appears as **next build
-running**.
+The **ci** tile reads each workflow's five newest runs on the default branch,
+of any status, and decides the job from the newest completed one carrying a
+verdict. A run still going carries none. A run concluded `success` passes; a run
+concluded `failure`, `timed_out`, or `startup_failure` fails. A `cancelled` run
+judges nothing when a newer run of the same workflow was created while it was
+still going: a concurrency group that cancels in progress stops the older run
+when the newer one starts, whether or not the older one had started its jobs,
+and on gvisor's release workflow, which takes over half an hour, that read as a
+failure for as long as the newer run took. Any other cancelled run is read
+through the same job count the ci trust tiles use, so a run replaced while it
+was still queued passes no judgment while one killed by its own
+`timeout-minutes`, or stopped by a person, counts as a failure. The remaining
+conclusions — `skipped`, `neutral`, `stale`, `action_required` — pass no
+judgment either, so the run before them decides the job instead.
+
+A job with no such run among the runs the tile reads is one the
+tile cannot speak for, so it is left out of both the headline and the job count
+in the header. A workflow that only ever runs on pull requests has no run on the
+default branch at all, and is one of these.
+
+Filtering to the repository's own default branch is what leaves pull request
+work out, since a pull request's runs carry its own head branch. A fork's pull
+request can put a branch named `main` in front of a repository whose default
+branch is `main`, so the tile drops `pull_request` and `pull_request_target`
+runs by their event as well.
+
+The set of repositories and the workflows in them is read once an hour and the
+results behind it every five minutes, because the inventory changes far more
+slowly than a job's result does. Reading it costs one request for the
+organization's repository listing, one per repository for its workflows, and one
+per active workflow for that workflow's newest completed runs.
+
+The tile keeps that collection, and the **CI jobs** page renders it rather than
+collecting again, so the page costs no requests however often it is opened and
+never disagrees with the tile above it. It is as old as the tile is, which its
+heading says.
+
+A failure is red for `CI_FAILURE_FRESH_HOURS` and orange after that. Both are
+failures, both are named and counted as failing, and both are listed; the color
+is about how much of a person's attention the failure has a claim on. A job
+that has been red for a week is not what just broke, and leaving it red leaves
+nothing for what did. A red tile shows only what is failing, so the labs and
+loom main builds stay in an orange tile's body beside an old failure, which is
+where a reader can see that the build itself is fine.
+
+A failure counts only while the job, as it is configured now, would still
+produce it. A job that failed for a good reason is sometimes stopped rather than
+fixed: its schedule taken out, its trigger narrowed so that it no longer runs on
+the default branch, or its job given an `if:` that is never true there. In the
+first two cases nothing runs to replace its last result. In the third the
+workflow goes on running, and each run concludes `skipped`, which judges nothing
+and so passes over to the failure behind it. Without a rule for it, the tile
+would report that failure for as long as the workflow file exists. So when a
+job's deciding run failed, the tile asks for the newest commit on the default
+branch that touched the workflow's file. If that commit
+landed after the failing run, the failure was made by a definition that no
+longer exists, and the job has no verdict: it leaves the headline and the count,
+and the page lists it among the workflows with no verdict, as "changed since it
+failed", linked at the failure. Once five runs that judged nothing have pushed the
+failure out of the runs the tile reads, the page says "recent runs judged
+nothing" instead. A job that still runs gets a verdict again from its next run, so this hides a still-broken job only until that run finishes,
+which for one triggered by a push is the run the edit itself starts. A read of
+the file's history that fails leaves the failure standing. The check costs one
+request per failing job per collection, and none for a job that passes.
+
+Two cheaper signals do not work. GitHub gives each workflow an `updated_at`, but
+it does not follow edits to the file: on 2026-09-22 labs' `benchmarks.yml` read
+`2026-03-12` though its file last changed on 2026-09-17. And a newer run
+concluded `skipped` does not mean a job was switched off. In labs every one of
+the hundred newest default-branch runs to conclude that way came from
+`pull-request-comments.yml`, a workflow that runs after others and skips on most
+of them, so ending a job's verdict at a skipped run would drop a conditional
+job's real failure the next time it skipped.
 
 The **labs ci trust** and **loom ci trust** percentages pass over each attempt
 that was cancelled before it started a job. A run is first-try green when
@@ -515,15 +595,18 @@ if you lose it you have to regenerate.
 
 ### `GH_TOKEN` (or `GITHUB_TOKEN`)
 
-Powers **labs ci**, **labs ci trust**, **labs ci duration**, the **loom**
+Powers **ci**, **labs ci trust**, **labs ci duration**, the **loom**
 counterparts, **recent main runs**, **coverage debt**, **github spend**, and
 **github users**. It also powers the optional publisher-activity indicators on
 **flaky tests** and **test selection**; their public measurements need no token.
 Needs
 repo **Actions: read** on both `commonfabric/labs` and `commonfabric/loom`;
 the github-ci-spend tile additionally needs org **Administration: read** on
-`commonfabric`. The **github users** tile needs org **Members: read**. One
-fine-grained token can carry all of these permissions:
+`commonfabric`. The **github users** tile needs org **Members: read**. The
+**ci** tile covers every repository the token can see, so a token selecting only
+some repositories leaves the rest out of that tile without saying so: give it
+**All repositories** for the tile to cover the organization. One fine-grained
+token can carry all of these permissions:
 
 The account that owns the token must be a member of the organization. GitHub's
 member endpoint returns both concealed and public members to an authenticated
@@ -533,8 +616,10 @@ organization member; other callers see only public memberships.
    access tokens** → **Fine-grained tokens** → **Generate new token**.
 2. Set **Resource owner** to the **commonfabric** organization (not your
    personal account) — org ownership is what unlocks the billing permission.
-3. **Repository access** → **Only select repositories** → `commonfabric/labs`
-   and `commonfabric/loom`.
+3. **Repository access** → **All repositories**, which is what lets the **ci**
+   tile see the whole organization. **Only select repositories** with
+   `commonfabric/labs` and `commonfabric/loom` covers every other GitHub tile,
+   and narrows **ci** to those two.
 4. **Repository permissions**: set **Actions** and **Contents** to **Read-only**.
 5. **Organization permissions**: set **Members** to **Read-only** for GitHub
    users. Set **Administration** to **Read-only** for github spend. Only an org

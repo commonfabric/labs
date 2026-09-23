@@ -43,8 +43,8 @@ deno task test --filter "test name"
 The flag is passed to the `deno test` that the package's own task invokes, so
 the preload, the permissions, and the file globs that package's tests need are
 all still applied. The same holds for the packages that run their tests through
-a script of their own, `packages/cli` and `packages/piece` among them. Each of
-those scripts passes on the arguments it receives.
+a script, `packages/cli` and `packages/piece` among them. Each of those scripts
+passes on the arguments it receives.
 
 `deno task` appends the extra arguments to the end of the task's command line.
 A package's `test` task runs `tasks/run-member-tests.ts`, which is handed the
@@ -62,10 +62,9 @@ The package's `test` task in its `deno.jsonc` names what it runs, and
 prints each command line as it runs it, which shows where the flag was
 appended.
 
-A handful of packages run a test runner of their own — `packages/cli`,
-`packages/dashboard` and `packages/identity` among them — and appended
-arguments reach whatever that runner does with them, which its own source
-says.
+A handful of packages run a test runner of their own — `packages/dashboard`
+and `packages/identity` among them — and appended arguments reach whatever that
+runner does with them, which its own source says.
 
 A test's name is also its identity in the run-record store, so a renamed test
 must be listed in `tasks/test-identity-aliases/` to keep its recorded

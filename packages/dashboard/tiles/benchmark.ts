@@ -989,8 +989,9 @@ const RUNNING_BADGE =
 // produced no readable data. Its headline reads `failed (was <trend>)` when a
 // cached trend is available, and `failed` otherwise. The line below dates the
 // outage instead of counting the benchmarks measured. `offline` names a fetch
-// failure. The tile then keeps its last-known trends gray, or shows a gray dash
-// when no history is cached.
+// failure and takes that line the same way, so an unreadable collection costs
+// the count rather than adding a line to it. The tile then keeps its
+// last-known trends gray, or shows a gray dash when no history is cached.
 function benchmarkIndexView(
   runs: Run[],
   now: number,
@@ -1088,9 +1089,11 @@ function benchmarkIndexView(
   const windowLabel = headline.windowCount < headline.points.length
     ? ` · last ${humanSpan(spanMs(headline.windowPoints))}`
     : "";
-  // A failed tile has no count line. Its sub line lands in the same place and in
-  // the same style, and names the failure there.
-  const countLine = failed
+  // One line sits under the headline. A tile with something to say about why it
+  // cannot measure says that there, in place of the count, rather than beside
+  // it: a second line would grow the tile past the ones it shares a row with.
+  const sub = offline ?? (failed ? failSub : undefined);
+  const countLine = sub !== undefined
     ? ""
     : `<div style="font-size:13px;color:var(--text-muted);margin:5px 0 0">${count} benchmark${
       count === 1 ? "" : "s"
@@ -1118,7 +1121,7 @@ function benchmarkIndexView(
     valueLabel: status === "bad"
       ? `failed (was ${headline.trend.label})`
       : undefined,
-    sub: offline ?? (failed ? failSub : undefined),
+    sub,
     extra: `${countLine}${chart}`,
     duration: chartSpan,
     aside,

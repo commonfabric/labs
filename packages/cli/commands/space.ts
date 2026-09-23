@@ -247,8 +247,8 @@ export const space = new Command()
   // `--from`/`--to` are required in substance but NOT declared `required`:
   // cliffy appends required options to the usage line, which would break the
   // repo invariant that a command's usage ends with its positional arguments
-  // (see main-command.test.ts). Validating here also gives a more actionable
-  // message than cliffy's generic one.
+  // (see main-command.serial.test.ts). Validating here also gives a more
+  // actionable message than cliffy's generic one.
   .option(
     "--from <source:string>",
     "Snapshot to clone: a .sqlite path, or an https URL to download.",

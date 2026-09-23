@@ -1137,8 +1137,8 @@ changes under its own tree. At present those members are
 others have no measured set, because
 [the coverage gate excludes them](#the-coverage-gate). No diff names a
 directory, so those units reach a lane only on the score of their tests.
-At present those are `packages/cli`, `packages/identity`,
-`packages/patterns`, and the three browser halves.
+At present those are `packages/identity`, `packages/patterns`, and the
+three browser halves.
 
 A workspace member stops running whole when the task holding its tests
 becomes one the topology can point at files. That task is its
@@ -1147,6 +1147,19 @@ point a single `deno test` at files, and also a dependency list that
 resolves to one, or the shard wrapper around one. It cannot point a task
 that joins commands with a shell operator such as `&&`, a task that
 names its own import map, or a test runner of the package's own.
+
+The shard wrapper, `tasks/run-sharded-test-files.ts`, is also how a
+member whose files need different flags stays splittable. Its `--serial`
+option names files that cannot run beside another test file in one
+process, and those run in a `deno test` without `--parallel`, one file
+at a time. Its `--all-access` option names files that need every
+permission, and those run under `--allow-all`. The wrapper runs each
+group as a `deno test` of its own and merges their JUnit reports into
+the one path it was handed. A lane groups the files it selects the same
+way, with a report for each group. The topology refuses a `--serial` or
+`--all-access` pattern that names no test file, and so does the wrapper,
+which also refuses such an `--ignore`. `packages/cli` is the member that
+uses both options.
 
 ## A case that fails only when its siblings do not run
 

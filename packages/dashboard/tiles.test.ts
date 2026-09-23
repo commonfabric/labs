@@ -13,7 +13,6 @@ import {
 import { TILE_LAYOUT_FIXTURES } from "./tile-layout-fixtures.ts";
 import { runSource, type Ctx, type Run } from "./types.ts";
 import { CI_WORKFLOW, LOOM_CI_WORKFLOW, LOOM_REPO, REPO } from "./config.ts";
-import { labsCi, loomCi } from "./tiles/main-build.ts";
 import { labsCiTrust, loomCiTrust } from "./tiles/ci-trust.ts";
 import { labsCiDuration, loomCiDuration } from "./tiles/ci-duration.ts";
 import { commitGanttHref, recentRuns } from "./tiles/recent-runs.ts";
@@ -96,26 +95,6 @@ function cellColors(extra: string | undefined): string[] {
     .map((match) => match[1])
     .reverse();
 }
-
-Deno.test("labs ci:passing tip -> good", async () => {
-  const v = await labsCi.collect(ctx([run({ conclusion: "success" })]));
-  assertEquals(v.status, "good");
-  assertEquals(v.value, "passing");
-});
-
-Deno.test("labs ci:failing tip -> bad (shows the raw conclusion)", async () => {
-  const v = await labsCi.collect(ctx([run({ conclusion: "failure" })]));
-  assertEquals(v.status, "bad");
-  assertEquals(v.value, "failure");
-});
-
-Deno.test("labs ci:no completed runs -> unknown", async () => {
-  const v = await labsCi.collect(
-    ctx([run({ status: "in_progress", conclusion: null })]),
-  );
-  assertEquals(v.status, "unknown");
-  assertEquals(v.value, "—");
-});
 
 Deno.test("labs ci trust: only first-attempt success counts as green", async () => {
   // Two of four completed runs passed first try. A success on retry remains in
@@ -360,6 +339,27 @@ Deno.test("labs ci trust: an earlier attempt GitHub does not return fails the co
       );
     },
   );
+});
+
+Deno.test("labs ci trust: an earlier attempt that is not the one asked for fails the collection", async () => {
+  const retried = run({ conclusion: "success", run_attempt: 2 });
+  const answers: Run[] = [
+    // Still going, so it carries no verdict to read.
+    { ...attemptOf(retried, 1, "failure"), status: "in_progress", conclusion: null },
+    // Another run's attempt.
+    { ...attemptOf(retried, 1, "failure"), id: retried.id + 1 },
+    // Another attempt of the same run.
+    attemptOf(retried, 2, "failure"),
+  ];
+  for (const answer of answers) {
+    await withGithubAttempt(answer, async () => {
+      await assertRejects(
+        () => labsCiTrust.collect(ctx([retried])),
+        Error,
+        "did not include a completed conclusion",
+      );
+    });
+  }
 });
 
 Deno.test("labs ci trust: a job count GitHub does not return fails the collection", async (t) => {
@@ -702,26 +702,13 @@ Deno.test("runSource creates workflow snapshot metadata", () => {
 Deno.test("CI tiles declare the workflow snapshots that drive them", () => {
   const labsSource = [{ repo: REPO, workflow: CI_WORKFLOW }];
   const loomSource = [{ repo: LOOM_REPO, workflow: LOOM_CI_WORKFLOW }];
-  for (const tile of [labsCi, labsCiTrust, labsCiDuration]) {
+  for (const tile of [labsCiTrust, labsCiDuration]) {
     assertEquals(tile.runSources, labsSource);
   }
-  for (const tile of [loomCi, loomCiTrust, loomCiDuration]) {
+  for (const tile of [loomCiTrust, loomCiDuration]) {
     assertEquals(tile.runSources, loomSource);
   }
   assertEquals(recentRuns.runSources, [...labsSource, ...loomSource]);
-});
-
-Deno.test("labs ci: an in-flight build renders at the bottom (extra), not the header (aside)", async () => {
-  const runs = [
-    run({ status: "in_progress", conclusion: null, display_title: "wip" }),
-    run({ conclusion: "success" }),
-  ];
-  const v = await labsCi.collect(ctx(runs));
-  assertStringIncludes(v.extra ?? "", "next build running");
-  assert(
-    !(v.aside ?? "").includes("next build running"),
-    "the badge is no longer in the header aside",
-  );
 });
 
 Deno.test("recent runs: labs and loom runs interleave chronologically, each tagged", async () => {

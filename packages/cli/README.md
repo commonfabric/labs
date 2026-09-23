@@ -2360,12 +2360,12 @@ provider is keyed to is the other question, and
 
 The remaining table entries hand the shell a constant `files` or `dirs`
 directive, which a fabric cannot change: those are asserted one by one, kind and
-glob, in `test/completion-providers.test.ts`. The set that has to be asserted is
-derived there rather than remembered — every slot the tree declares is probed
-with no fabric configured, and one that hands the shell a directive no case pins
-fails the test. A case pins one command where the provider says it answers per
-command, and every command at once where it does not — the same distinction the
-slot gate draws, and a provider held to it by a test of its own.
+glob, in `test/completion-providers.serial.test.ts`. The set that has to be
+asserted is derived there rather than remembered — every slot the tree declares
+is probed with no fabric configured, and one that hands the shell a directive no
+case pins fails the test. A case pins one command where the provider says it
+answers per command, and every command at once where it does not — the same
+distinction the slot gate draws, and a provider held to it by a test of its own.
 
 That split is not tidiness: a provider that reaches a fabric and comes back with
 the wrong set is invisible to a unit test and invisible at the prompt, because

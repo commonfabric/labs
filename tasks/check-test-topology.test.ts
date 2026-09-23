@@ -391,6 +391,42 @@ describe("what the tree half looks at", () => {
     expect(findings[0]!.message).toContain("no longer holds it");
   });
 
+  it("accepts everything under a listed directory, and nothing beside it", () => {
+    const findings = checkTree(
+      [],
+      [
+        "oven/fixtures/a.test.tsx",
+        "oven/fixtures/deep/b.test.tsx",
+        "oven/c.test.ts",
+      ],
+      { fixtures: [{ path: "oven/fixtures/", reason: "a test drives them" }] },
+    );
+    expect(findings.map((finding) => finding.message)).toEqual([
+      "oven/c.test.ts is claimed by no suite",
+    ]);
+  });
+
+  it("holds a listed directory to still holding something", () => {
+    const findings = checkTree([], ["oven/c.test.ts"], {
+      fixtures: [{ path: "oven/fixtures/", reason: "a test drives them" }],
+    });
+    expect(findings.map((finding) => finding.message)).toContain(
+      "oven/fixtures/ is listed as a fixture and the tree no longer holds it",
+    );
+  });
+
+  it("holds a listed directory to holding nothing a suite claims", () => {
+    const claimed = suite({
+      id: "workspace-unit",
+      units: ["oven/fixtures/a.test.ts"],
+    });
+    const findings = checkTree([claimed], ["oven/fixtures/a.test.ts"], {
+      fixtures: [{ path: "oven/fixtures/", reason: "a test drives them" }],
+    });
+    expect(findings.map((finding) => finding.fails)).toEqual([true]);
+    expect(findings[0]!.message).toContain("still listed as a fixture");
+  });
+
   it("holds a listed fixture to still being unclaimed", () => {
     const claimed = suite({ id: "workspace-unit", units: ["a.test.ts"] });
     const findings = checkTree([claimed], ["a.test.ts"], {

@@ -4121,7 +4121,9 @@ describe("keyBenchmarks", () => {
       expect(selected.status).toBe("unknown");
       expect(selected.value).toBe("▲100%");
       expect(selected.sub).toBeTruthy();
-      expect(selected.extra).toContain(">2 benchmarks</div>");
+      // The reason takes the line the count would have had, rather than
+      // standing above it and growing the tile past the row it sits in.
+      expect(selected.extra).not.toContain("benchmarks</div>");
     });
   });
 
@@ -4220,6 +4222,31 @@ describe("keyBenchmarks", () => {
       expect(selected.aside).toContain("running");
       expect(selected.extra).toContain("<svg");
       expect(selected.extra).not.toContain("2 benchmarks");
+    });
+  });
+
+  it("gives an unreadable collection the count's line rather than a second one", async () => {
+    // The tile keeps each run's results by id, so a range another test reads
+    // would carry this test's measurements into it.
+    const api = await history(936_000, () =>
+      report([
+        bench(navigation, "topic board", "journey", timings(1e9)),
+        bench(scale, "topic board scale", "100", timings(1e9)),
+      ]));
+    await withApi(api, async () => {
+      const measured = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
+      expect(measured.sub).toBeUndefined();
+      expect(measured.extra).toContain(">2 benchmarks</div>");
+    });
+
+    // Every tile in a row is as tall as the tallest, so a reason standing
+    // above the count rather than in its place grows the whole row.
+    await withApi({ throws: new Error("network offline") }, async () => {
+      const offline = await benchmark.collect(ctx({ GH_TOKEN: "t" }));
+      expect(offline.status).toBe("unknown");
+      expect(offline.sub).toBe("source unreachable");
+      expect(offline.extra).not.toContain("benchmarks</div>");
+      expect(offline.extra).toContain("<svg");
     });
   });
 });

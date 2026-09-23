@@ -13,11 +13,11 @@ const context: Ctx = {
 describe("registry", () => {
   it("registers tiles in dashboard display order", () => {
     expect(TILES.map((tile) => tile.label)).toEqual([
-      "labs ci",
+      "ci",
       "labs ci trust",
       "labs ci duration",
       "all benchmarks",
-      "loom ci",
+      "your metric here",
       "loom ci trust",
       "loom ci duration",
       "key benchmarks",
@@ -50,6 +50,16 @@ describe("registry", () => {
         href,
       });
     }
+  });
+
+  it("keeps a green slot open for a metric nobody has chosen yet", async () => {
+    const empty = TILES.find((tile) => tile.label === "your metric here");
+
+    expect(await empty?.collect(context)).toEqual({
+      status: "good",
+      value: "—",
+      sub: "do you have data to show?",
+    });
   });
 
   it("reports cubic spend as a named metric with no value", async () => {
