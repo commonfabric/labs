@@ -2353,15 +2353,21 @@ const schemaScopeForSelector = (selector?: SchemaPathSelector) =>
 const schemaFollowScopeCap = (schema: unknown): SchemaScope | undefined =>
   ContextualFlowControl.getSchemaScopeCap(schema as JSONSchema | undefined);
 
-/** The key `TraversalContext.missingLinkTargetDocs` holds a document under. */
-function missingTargetKey(doc: { space: MemorySpace; id: string }): string {
-  return `${doc.space}/${doc.id}`;
+/**
+ * The key `TraversalContext.missingLinkTargetDocs` holds a document under: its
+ * space, its scope and its id, since one id names a different document in
+ * each scope.
+ */
+function missingTargetKey(
+  doc: { space: MemorySpace; id: string; scope?: CellScope },
+): string {
+  return `${doc.space}/${doc.scope ?? "space"}/${doc.id}`;
 }
 
 /** Records a missing link target on the context ahead of reporting it. */
 function noteMissingLinkTarget(
   context: TraversalContext,
-  doc: { space: MemorySpace; id: string },
+  doc: { space: MemorySpace; id: string; scope?: CellScope },
 ): void {
   context.missingLinkTargets++;
   context.missingLinkTargetDocs.add(missingTargetKey(doc));

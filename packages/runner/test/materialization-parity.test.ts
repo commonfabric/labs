@@ -592,6 +592,72 @@ describe("materialization-parity", () => {
     });
   });
 
+  describe("a default filling an absent value beside a missing document of the same id in another scope", () => {
+    it("applies the default with no refusal, since the id names a different document in each scope", async () => {
+      // The same cause names a document in each scope. The user-scoped one is
+      // never written, so the link to it dead-ends; the space-scoped one is
+      // written without `q`, so the link to its `q` reads an absent value
+      // that a default fills. The default covers nothing unserved: the
+      // missing document is the other scope's.
+      const write = runtime.edit();
+      const missingUser = runtime.getCell(
+        space,
+        "same-id-two-scopes",
+        undefined,
+        write,
+        "user",
+      );
+      const served = runtime.getCell(
+        space,
+        "same-id-two-scopes",
+        undefined,
+        write,
+      );
+      served.setRaw({ present: 1 });
+      runtime.getCell(space, "scoped-holder", undefined, write).setRaw({
+        p: { a: missingUser.getAsLink(), b: served.key("q").getAsLink() },
+      });
+      await write.commit();
+      const branch = (extra: Record<string, JSONSchema>): JSONSchema => ({
+        type: "object",
+        properties: {
+          a: { type: ["number", "undefined"] },
+          b: { type: "number", default: 3 },
+          ...extra,
+        },
+      });
+      const schema: JSONSchema = {
+        type: "object",
+        properties: {
+          p: {
+            anyOf: [
+              branch({ x: { type: "string" } }),
+              branch({ y: { type: "string" } }),
+            ],
+          },
+        },
+        required: ["p"],
+      };
+      for (const lazy of [false, true]) {
+        const tx = runtime.edit();
+        if (lazy) tx.markLazyMaterialize(true);
+        try {
+          const value = runtime.getCell<{ p: { a?: number; b: number } }>(
+            space,
+            "scoped-holder",
+            schema,
+            tx,
+          ).get();
+          expect(value.p.a).toBeUndefined();
+          expect(value.p.b).toBe(3);
+          expect(tx.takeSchemaRefusal()).toBeUndefined();
+        } finally {
+          await tx.commit();
+        }
+      }
+    });
+  });
+
   describe("an unavailable link under an optional property that declares no default", () => {
     // The two cases above pin the dead-end where something would otherwise be
     // published in its place — a default, a substitute. An optional property
