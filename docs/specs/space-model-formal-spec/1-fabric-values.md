@@ -3872,8 +3872,9 @@ export function hashOf(value: unknown): FabricHash {
 }
 ```
 
-> **String encoding for hashing.** Strings are hashed as UTF-8 byte sequences,
-> prefixed by their byte length (unsigned LEB128). See the byte-level spec
+> **String encoding for hashing.** Strings are hashed as WTF-8 byte sequences
+> (UTF-8, extended to encode lone surrogates as themselves), prefixed by their
+> byte length (unsigned LEB128). See the byte-level spec
 > (`2-hash-byte-format.md`, Section 4.4) for the precise encoding.
 
 > **Map/Set ordering in hashing.** Hashing preserves insertion order for
@@ -3946,14 +3947,14 @@ corresponding edges; a mismatch reachable after a back edge still makes the
 values unequal. Equality therefore supports cyclic values even when the hash
 encoding does not.
 
-**UTF-8 representation.** Container equality preserves the hash encoding's
-replacement of lone UTF-16 surrogates with U+FFFD in strings, symbol registry
-keys, property names, and codec tags. Object keys retain the canonical sort
-order before replacement, including multiple keys that encode identically. For
-example, `{s: "\ud800"}` and `{s: "\ufffd"}` have equal content hashes and
-compare equally. The primitive arguments `"\ud800"` and `"\ufffd"` remain
-distinct under `Object.is()`. Freezing or caching a container's hash does not
-change its equality result.
+**String representation.** Equality and the hash encoding both treat a string
+as its exact sequence of UTF-16 code units, lone surrogates included. The hash
+encodes strings as WTF-8 (`2-hash-byte-format.md` Section 4.4), under which
+distinct strings have distinct bytes, so equality compares strings with
+`Object.is()` wherever they appear: as values at any depth, as symbol registry
+keys, and as property names. For example, `"\ud800"` and `"\ufffd"` are
+unequal and hash distinctly, as are `{s: "\ud800"}` and `{s: "\ufffd"}`.
+Freezing or caching a container's hash does not change its equality result.
 
 ---
 

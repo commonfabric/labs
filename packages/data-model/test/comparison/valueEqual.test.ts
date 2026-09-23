@@ -152,34 +152,30 @@ describe("valueEqual()", () => {
   });
 
   describe("canonical hash agreement", () => {
-    it("preserves UTF-8 replacement and key order before and after caching", () => {
+    it("distinguishes lone surrogates from the replacement character, at any depth and in every cache state", () => {
+      const long = "x".repeat(64);
       const pairs: [FabricValue, FabricValue, boolean][] = [
-        [{ s: "\ud800" }, { s: "\ufffd" }, true],
-        [{ s: Symbol.for("\ud800") }, { s: Symbol.for("\ufffd") }, true],
-        [{ "\ud800": 1 }, { "\ufffd": 1 }, true],
-        [{ "\ud800": 1, "\ue000": 2 }, { "\ufffd": 1, "\ue000": 2 }, false],
-        [
-          Object.fromEntries([["\ud800", 1], ["\ud801", 2]]),
-          Object.fromEntries([["\ud802", 1], ["\ud803", 2]]),
-          true,
-        ],
-        [
-          Object.fromEntries([["\ud800", 1], ["\ud801", 2]]),
-          Object.fromEntries([["\ud802", 2], ["\ud803", 1]]),
-          false,
-        ],
+        ["\ud800", "\ufffd", false],
+        ["a\udc00b", "a\ufffdb", false],
+        [`${long}\ud800`, `${long}\ufffd`, false],
+        ["\ud800", "\ud800", true],
+        [Symbol.for("\ud800"), Symbol.for("\ufffd"), false],
+        [{ s: "\ud800" }, { s: "\ufffd" }, false],
+        [{ s: "\ud800" }, { s: "\ud800" }, true],
+        [[`${long}\ud800`], [`${long}\ufffd`], false],
+        [{ s: Symbol.for("\ud800") }, { s: Symbol.for("\ufffd") }, false],
+        [{ "\ud800": 1 }, { "\ufffd": 1 }, false],
+        [{ "\ud800": 1 }, { "\ud800": 1 }, true],
+        [{ "\ud800": 1, "\ue000": 2 }, { "\ue000": 2, "\ud800": 1 }, true],
       ];
       for (const [left, right, equal] of pairs) {
         expect(valueEqual(left, right)).toBe(equal);
+        expect(valueEqual(right, left)).toBe(equal);
         expect(hashStringOf(left) === hashStringOf(right)).toBe(equal);
         hashStringOf(deepFreeze(left));
         hashStringOf(deepFreeze(right));
         expect(valueEqual(left, right)).toBe(equal);
       }
-      expect(valueEqual("\ud800", "\ufffd")).toBe(false);
-      expect(valueEqual(Symbol.for("\ud800"), Symbol.for("\ufffd"))).toBe(
-        false,
-      );
     });
 
     it("agrees on primitive, container, and codec content in every cache state", () => {
@@ -196,7 +192,11 @@ describe("valueEqual()", () => {
         -Infinity,
         1n,
         "1",
+        "\ud800",
+        "\ufffd",
         Symbol.for("valueEqual"),
+        Symbol.for("\ud800"),
+        Symbol.for("\ufffd"),
         {},
         { value: undefined },
         { a: 1, b: 2 },

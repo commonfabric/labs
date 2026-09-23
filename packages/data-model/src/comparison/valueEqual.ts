@@ -1,5 +1,4 @@
 import { isObjectOrArray, isPlainObject } from "@commonfabric/utils/types";
-import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
 
 import { codecOf } from "@/codec-common";
 import { NULL_LIVE_ENVIRONMENT } from "@/codec-interface/NullLiveEnvironment.ts";
@@ -25,10 +24,12 @@ import { cachedHashStringOf, hashStringOf } from "@/value-hash.ts";
  * and cycles compare by the contents reached through their corresponding
  * edges. A mismatch reachable after a back edge still makes the values unequal.
  *
- * Primitive arguments use `Object.is()`. Containers preserve canonical hash
- * semantics, including UTF-8 replacement of lone surrogates in nested strings,
- * symbol registry keys, and property names. Primitive special values use
- * canonical hashes; instances expose their contents through their codecs.
+ * Primitives compare with `Object.is()`, at the top level and nested alike,
+ * which draws the same distinctions content hashing does: `-0` and `0` differ,
+ * `NaN` equals itself, and strings (property names and symbol registry keys
+ * included) are equal only when they have the same UTF-16 code units,
+ * including any lone surrogates. Primitive special values use canonical
+ * hashes; instances expose their contents through their codecs.
  * Non-Fabric classes are unsupported, and non-index properties on arrays are
  * ignored, as they are by content hashing.
  */
@@ -53,20 +54,6 @@ export function valueEqual(a: FabricValue, b: FabricValue): boolean {
       left === null || right === null ||
       typeof left !== "object" || typeof right !== "object"
     ) {
-      // Container hashes encode strings as UTF-8, replacing lone surrogates.
-      // Preserve that equivalence for nested strings and symbol registry keys.
-      if (
-        typeof left === "string" && typeof right === "string" &&
-        left.toWellFormed() === right.toWellFormed()
-      ) continue;
-      if (typeof left === "symbol" && typeof right === "symbol") {
-        const leftKey = Symbol.keyFor(left);
-        const rightKey = Symbol.keyFor(right);
-        if (
-          leftKey !== undefined && rightKey !== undefined &&
-          leftKey.toWellFormed() === rightKey.toWellFormed()
-        ) continue;
-      }
       return false;
     }
 
@@ -110,35 +97,14 @@ export function valueEqual(a: FabricValue, b: FabricValue): boolean {
         const rightObject = right as FabricPlainObject;
         const keys = Object.keys(leftObject);
         if (keys.length !== Object.keys(rightObject).length) return false;
-        if (
-          keys.every((key) =>
-            Object.prototype.propertyIsEnumerable.call(rightObject, key)
-          )
-        ) {
-          for (const key of keys) {
-            const leftItem = leftObject[key];
-            const rightItem = rightObject[key];
-            if (!Object.is(leftItem, rightItem)) {
-              pending.push([leftItem, rightItem]);
-            }
+        for (const key of keys) {
+          if (!Object.prototype.propertyIsEnumerable.call(rightObject, key)) {
+            return false;
           }
-        } else {
-          // Different JS keys can encode to the same UTF-8 bytes. Match their
-          // positions in the canonical hash stream, including repeated names
-          // after replacement; sorting normalized keys changes that stream.
-          const leftKeys = utf8SortedKeysOf(leftObject);
-          const rightKeys = utf8SortedKeysOf(rightObject);
-          for (let index = 0; index < leftKeys.length; index++) {
-            const leftKey = leftKeys[index]!;
-            const rightKey = rightKeys[index]!;
-            if (leftKey.toWellFormed() !== rightKey.toWellFormed()) {
-              return false;
-            }
-            const leftItem = leftObject[leftKey];
-            const rightItem = rightObject[rightKey];
-            if (!Object.is(leftItem, rightItem)) {
-              pending.push([leftItem, rightItem]);
-            }
+          const leftItem = leftObject[key];
+          const rightItem = rightObject[key];
+          if (!Object.is(leftItem, rightItem)) {
+            pending.push([leftItem, rightItem]);
           }
         }
         break;
@@ -147,10 +113,7 @@ export function valueEqual(a: FabricValue, b: FabricValue): boolean {
         if (left instanceof FabricInstance && right instanceof FabricInstance) {
           const leftCodec = codecOf(left);
           const rightCodec = codecOf(right);
-          if (
-            leftCodec.tagForValue(left).toWellFormed() !==
-              rightCodec.tagForValue(right).toWellFormed()
-          ) {
+          if (leftCodec.tagForValue(left) !== rightCodec.tagForValue(right)) {
             return false;
           }
           pending.push([

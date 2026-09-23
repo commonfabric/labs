@@ -274,6 +274,20 @@ describe("value-hash", () => {
         expect(hashBytesOf(emoji)).toEqual(expected);
       });
 
+      it("encodes a lone surrogate as its three WTF-8 bytes", () => {
+        // A lone surrogate takes the three-byte form UTF-8 would give a code
+        // point of the same value. LEB128(3) = [0x03]
+        expect(hashBytesOf("\ud800")).toEqual(
+          sha256([0x24, 0x03, 0xed, 0xa0, 0x80]),
+        );
+        expect(hashBytesOf("\udfff")).toEqual(
+          sha256([0x24, 0x03, 0xed, 0xbf, 0xbf]),
+        );
+        expect(hex(hashBytesOf("\ud800"))).not.toBe(
+          hex(hashBytesOf("\ufffd")),
+        );
+      });
+
       it("takes the TAG_STRING_HASH path for a long string", () => {
         // utf8Length(100) > MAX_DIRECT_STRING_LENGTH(64), so the value is fed
         // as [TAG_STRING_HASH][sha256(utf8)] -- a fixed-length compaction in
@@ -282,6 +296,20 @@ describe("value-hash", () => {
         const valueHash = sha256(new TextEncoder().encode(value));
         const expected = sha256([0xf0, ...valueHash]);
         expect(hashBytesOf(value)).toEqual(expected);
+      });
+
+      it("takes the TAG_STRING_HASH path over the WTF-8 bytes of a long string", () => {
+        const value = `${"x".repeat(64)}\udc00`;
+        const valueHash = sha256([
+          ...new TextEncoder().encode("x".repeat(64)),
+          0xed,
+          0xb0,
+          0x80,
+        ]);
+        expect(hashBytesOf(value)).toEqual(sha256([0xf0, ...valueHash]));
+        expect(hex(hashBytesOf(value))).not.toBe(
+          hex(hashBytesOf(value.toWellFormed())),
+        );
       });
 
       it("is deterministic and value-distinct on the long-string path", () => {
