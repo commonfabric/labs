@@ -253,5 +253,20 @@ describe("referent handles", () => {
         { kind: "document", token, value: ROW.value, label: ROW.label },
       ]);
     });
+
+    it("leaves a research referent out, so no findings document is minted from it", async () => {
+      const { table, token } = await mintReferentHandle(
+        createHarnessHandleTable("run-referents"),
+        {
+          ...ROW,
+          kind: "research",
+          source: "research",
+          labelSource: "research",
+        },
+      );
+
+      expect(agentObservedHandlesOfTable(table)).toEqual([]);
+      expect(token).toMatch(/^cfh:v:/);
+    });
   });
 });

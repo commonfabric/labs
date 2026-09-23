@@ -100,9 +100,11 @@ export type AgentObservedHandle =
 
 /**
  * Everything a run's handle table says the run observed: each general
- * address handle as a cell, and each held referent as a document carrying
- * the content and label it was admitted under. A handle held for one purpose
- * only — a `skill-context` one — is not an observation.
+ * address handle as a cell, and each held document referent carrying the
+ * content and label it was admitted under. A handle held for one purpose
+ * only — a `skill-context` one — is not an observation, and neither is a
+ * research referent: it is a projection of the run's own work, held so a
+ * reader can consult it, and no document is minted from it.
  */
 export const agentObservedHandlesOfTable = (
   table: HarnessHandleTable,
@@ -110,12 +112,16 @@ export const agentObservedHandlesOfTable = (
   ...table.entries.filter((entry) => entry.capability === undefined).map((
     entry,
   ): AgentObservedHandle => ({ kind: "cell", token: entry.token })),
-  ...(table.referents ?? []).map((referent): AgentObservedHandle => ({
-    kind: "document",
-    token: referent.token,
-    value: referent.value,
-    label: referent.label,
-  })),
+  ...(table.referents ?? []).flatMap((referent): AgentObservedHandle[] =>
+    referent.kind === "document"
+      ? [{
+        kind: "document",
+        token: referent.token,
+        value: referent.value,
+        label: referent.label,
+      }]
+      : []
+  ),
 ];
 
 export interface WriteAgentResultOptions {
