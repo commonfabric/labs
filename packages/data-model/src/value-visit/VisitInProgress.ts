@@ -7,7 +7,6 @@ import type {
   FabricContainerValuePlus,
   FabricInstancePlus,
   FabricPlainObjectPlus,
-  FabricValue,
   FabricValuePlus,
 } from "@/interface.ts";
 import {
@@ -21,7 +20,7 @@ import {
 import { debugStr } from "@/value-debug";
 
 import {
-  type MainVisitResult,
+  type BaselineVisitorMethodResult,
   type RecurseForm,
   type ReplaceForm,
   type ValueVisitor,
@@ -43,13 +42,24 @@ type RecurseOfForm<PlusType> = {
 };
 
 /**
+ * Possible results from the top `#visitValue()` method, and some of the
+ * methods that effectively feed into it.
+ */
+type MainVisitResult<ResultType> = BaselineVisitorMethodResult<
+  ResultType
+>;
+
+/**
  * State of a visit currently in progress, along with most of the visit
  * execution machinery.
  *
  * This class is _intentionally_ omitted from the barrel `export` file for the
  * submodule.
  */
-export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
+export class VisitInProgress<
+  PlusType = never,
+  ResultType = FabricValuePlus<PlusType>,
+> {
   /** Concrete visitor implementation. */
   #visitor: ValueVisitor<PlusType, ResultType>;
 
@@ -83,7 +93,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   map(
     value: FabricValuePlus<PlusType>,
-  ): MainVisitResult<ResultType> {
+  ): ResultType {
     return this.#topVisit(value, true);
   }
 
@@ -92,7 +102,7 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   visit(
     value: FabricValuePlus<PlusType>,
-  ): MainVisitResult<ResultType> {
+  ): ResultType {
     return this.#topVisit(value, false);
   }
 
@@ -107,8 +117,8 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   #topVisit(
     value: FabricValuePlus<PlusType>,
-    doMap: boolean
-  ): MainVisitResult<ResultType> {
+    doMap: boolean,
+  ): ResultType {
     this.#assertNoConcurrentUse();
 
     this.#inProgress = true;
@@ -116,18 +126,17 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
     try {
       const result = this.#visitValue(value);
       switch (result?.type) {
-        case "mainResult":
         case undefined: {
-          return result;
+          // `ResultType` might or might not include `undefined`, so we have to
+          // check.
+          return this.#assertResultType(undefined);
         }
 
+        case "mainResult":
         case "mapTo": {
-          // A `mapTo` made it to the outer layer of the visit. Convert it into
-          // a `mainResult` if we're actually mapping. Otherwise, it's the same
-          // as `undefined`.
-          return doMap
-            ? { type: "mainResult", value: result.value }
-            : undefined;
+          // At the top level (where we are), the most sensible thing to do with
+          // a `mapTo` is treat it just like a `mainResult`, so we do.
+          return result.value;
         }
       }
     } finally {
@@ -140,7 +149,10 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
    */
   #visitValue(
     value: FabricValuePlus<PlusType>,
-  ): Exclude<VisitResult<PlusType, ResultType>, RecurseForm> {
+  ): Exclude<
+    VisitResult<PlusType, ResultType>,
+    RecurseForm | ReplaceForm<ResultType>
+  > {
     const tag = this.#tagOfValueElseNull(value);
     const result = this.#visitResolvingCyclesAndReplacement(value, tag);
 
@@ -297,13 +309,16 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
             return elemResult;
           }
 
-          case "mapTo": {
-            throw new Error("TODO(danfuzz): Handle recursion-iteration mapping.");
-          }
+          case "mapTo":
+            {
+              throw new Error(
+                "TODO(danfuzz): Handle recursion-iteration mapping.",
+              );
+            }
 
-          undefined: {
-            break;
-          }
+            undefined: {
+              break;
+            }
         }
 
         // TODO(danfuzz): When we have a non-`mainResult` visit-result type,
@@ -476,6 +491,22 @@ export class VisitInProgress<PlusType = never, ResultType = FabricValue> {
         "Shouldn't happen: Cannot use `VisitInProgress` for multiple concurrent top-level visits.",
       );
     }
+  }
+
+  /**
+   * Asserts that the given value is a member of the visitor's `ResultType`,
+   * returning it or `throw`ing if the assertion doesn't hold.
+   */
+  #assertResultType(
+    value: FabricValuePlus<PlusType> | FabricValuePlus<ResultType>,
+  ): ResultType {
+    if (this.#visitor.isResultType(value)) {
+      return value;
+    }
+
+    throw new Error(
+      debugStr`Not a \`ResultType\` value: $quote${value}`,
+    );
   }
 
   /**

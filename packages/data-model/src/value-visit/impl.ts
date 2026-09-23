@@ -4,7 +4,7 @@
 
 import type { FabricValuePlus } from "@/interface.ts";
 
-import type { MainVisitResult, ValueVisitor } from "./interface.ts";
+import type { ValueVisitor } from "./interface.ts";
 import { VisitInProgress } from "./VisitInProgress.ts";
 
 /**
@@ -15,7 +15,7 @@ import { VisitInProgress } from "./VisitInProgress.ts";
 export function mapValue<PlusType, ResultType>(
   value: NoInfer<FabricValuePlus<PlusType>>,
   visitor: ValueVisitor<PlusType, ResultType>,
-): MainVisitResult<ResultType> {
+): ResultType {
   const inProgress = new VisitInProgress<PlusType, ResultType>(visitor);
   return inProgress.map(value);
 }
@@ -28,7 +28,7 @@ export function makeMapValueFunction<PlusType, ResultType>(
   visitor: ValueVisitor<PlusType, ResultType>,
 ): (
   value: FabricValuePlus<PlusType>,
-) => MainVisitResult<ResultType> {
+) => ResultType {
   return (value: FabricValuePlus<PlusType>) => mapValue(value, visitor);
 }
 
@@ -49,7 +49,7 @@ export function makeMapValueFunction<PlusType, ResultType>(
 export function visitValue<PlusType, ResultType>(
   value: NoInfer<FabricValuePlus<PlusType>>,
   visitor: ValueVisitor<PlusType, ResultType>,
-): MainVisitResult<ResultType> {
+): ResultType {
   const inProgress = new VisitInProgress<PlusType, ResultType>(visitor);
   return inProgress.visit(value);
 }
@@ -62,6 +62,6 @@ export function makeVisitValueFunction<PlusType, ResultType>(
   visitor: ValueVisitor<PlusType, ResultType>,
 ): (
   value: FabricValuePlus<PlusType>,
-) => MainVisitResult<ResultType> {
+) => ResultType {
   return (value: FabricValuePlus<PlusType>) => visitValue(value, visitor);
 }

@@ -12,7 +12,10 @@
  * can be withdrawn through the same handler. What this shares with the topic
  * workbench lives in `../workbench/`. One start at a time per workstream:
  * while a start for the picked workstream is unconfirmed, Start is disabled
- * with the reason, and the words a start sent clear from the composer.
+ * with the reason, and the words a start sent clear from the composer. With
+ * `startSurface` set to `desktop`, a start opens Claude Code on this Mac with
+ * the kickoff ready to send instead of running its first turn here; the
+ * session the app makes carries the start's id as `startedAs`.
  */
 
 import {
@@ -51,6 +54,7 @@ import {
   dropStart,
   indexNoteOf,
   isEmptyText,
+  pairingsOf,
   recentRowsOf,
   recordAttachment,
   recordStart,
@@ -58,15 +62,18 @@ import {
   sessionDotColor,
   type SessionIndexView,
   sessionKey,
+  type SessionPairing,
   type SessionRow,
   sessionRowsOf,
   type SessionStart,
   type ShownHarness,
+  startedAsOf,
   startingOf,
 } from "../workbench/sessions.ts";
 import {
   checkoutOptionsOf,
   configuredSourcesOf,
+  desktopSourcesOf,
   mintSessionId,
   pendingStartOf,
   sourceOptionsOf,
@@ -181,6 +188,11 @@ export interface PersonWorkbenchInput {
   starts?: Writable<SessionStart[] | Default<[]>>;
   /** The permission mode a started session's first turn runs under. */
   startMode?: string | Default<"">;
+  /** Where a started session runs: `headless` (the default) runs the first
+   * turn on this Mac through the connector; `desktop` opens Claude Code on
+   * this Mac with the kickoff ready to send, takes no mode, and the session
+   * the app makes joins once the person sends it and the connector sees it. */
+  startSurface?: string | Default<"">;
   /** Harnesses listed in the picker that no configured source backs. */
   harnessesShown?: ShownHarness[] | Default<[]>;
 }
@@ -417,12 +429,26 @@ const detachRow = handler<void, {
   starts: Writable<SessionStart[] | Default<[]>>;
   sourceId: string;
   nativeSessionId: string;
-}>((_, { attached, starts, sourceId, nativeSessionId }) => {
-  // A confirmed start is attached through its own record; detaching drops
-  // whichever record the session has.
-  dropAttachment(attached, sourceId, nativeSessionId);
-  dropStart(starts, sourceId, nativeSessionId);
-});
+  /** The id the start that made the session named, or "". */
+  startedAs: string;
+  /** The pairings the complete index carries: a row the index has dropped
+   * shows from its record, naming no start, and the start's id comes from
+   * here instead. */
+  pairings: SessionPairing[];
+}>(
+  (_, { attached, starts, sourceId, nativeSessionId, startedAs, pairings }) => {
+    // A confirmed start is attached through its own record; detaching drops
+    // whichever record the session has, under the session's own id or the
+    // id its desktop start named.
+    dropAttachment(attached, sourceId, nativeSessionId);
+    dropStart(
+      starts,
+      sourceId,
+      nativeSessionId,
+      startedAs || startedAsOf(pairings, sourceId, nativeSessionId),
+    );
+  },
+);
 
 /**
  * Sends the connector a `start` command for the picked workstream and records
@@ -445,6 +471,11 @@ export const startWorkstreamSession = handler<void, {
   ownerDid: string;
   card: WorkstreamCard | undefined;
   startMode: string;
+  /** Where the session runs: "desktop" opens Claude Code on this Mac and
+   * sends no mode; anything else runs the first turn here. */
+  startSurface: string;
+  /** The sources that can open a session in Claude Code on this Mac. */
+  desktopSources: string[];
   /** The title of a start for the picked workstream the index has not
    * confirmed, or "": one start at a time per workstream, so a second click
    * while the first is on its way sends nothing. */
@@ -468,6 +499,8 @@ export const startWorkstreamSession = handler<void, {
     kickoff: state.kickoff,
     hasSubject: state.card !== undefined,
     pending: state.pending,
+    surface: state.startSurface.trim(),
+    desktopCapable: state.desktopSources,
   });
   if (blocked || state.card === undefined) return;
   const sourceId = startSourceOf(
@@ -477,6 +510,7 @@ export const startWorkstreamSession = handler<void, {
   );
   const nativeSessionId = mintSessionId();
   const title = state.card.name;
+  const desktop = state.startSurface.trim() === "desktop";
   const command = startCommandValue({
     ownerDid: state.ownerDid,
     idPrefix: "person-workbench",
@@ -485,7 +519,8 @@ export const startWorkstreamSession = handler<void, {
     text: state.kickoff,
     cwd: state.spawnRoot.get().trim(),
     title,
-    mode: state.startMode.trim(),
+    mode: desktop ? undefined : state.startMode.trim(),
+    surface: desktop ? "desktop" : undefined,
   });
   state.commands.push(command.value);
   // Recorded, not attached: nothing here knows whether a queue took the
@@ -523,6 +558,7 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
       commands,
       starts,
       startMode,
+      startSurface,
       harnessesShown,
     },
   ) => {
@@ -566,6 +602,9 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
     const configuredSources = configuredSourcesOf({ index: sessions });
     const indexNote = indexNoteOf({ index: sessions });
     const mode = startMode ?? "";
+    const surface = startSurface ?? "";
+    const desktopSources = desktopSourcesOf({ index: sessions });
+    const pairings = pairingsOf({ index: sessions });
     const checkoutOptions = checkoutOptionsOf({ index: sessions });
     const ownerDid = sessions?.ownerDid ?? "";
     const personName = computed(() => personRef?.name ?? (person ?? "").trim());
@@ -584,7 +623,7 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
     const indexNoteEmpty = isEmptyText({ text: indexNote });
     const hasIndexNote = computed(() => !indexNoteEmpty);
     const startModeNote = computed(() =>
-      mode.trim()
+      mode.trim() && surface.trim() !== "desktop"
         ? ` The first turn runs under the "${mode.trim()}" permission mode; the kickoff below is exactly what it receives.`
         : ""
     );
@@ -597,8 +636,20 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
       kickoff,
       hasSubject,
       pending: pendingStart,
+      surface,
+      desktopCapable: desktopSources,
     });
     const canStart = isEmptyText({ text: startBlocker });
+    const startNote = computed(() =>
+      surface.trim() === "desktop"
+        ? "Opens Claude Code on this Mac with the kickoff ready to send; the start shows below as starting until you send it there and the connector sees the session, then joins the workstream."
+        : "Runs the first turn on this Mac through the connector; the start shows below as starting until the connector publishes the session, then joins the workstream."
+    );
+    const startingCaption = computed(() =>
+      surface.trim() === "desktop"
+        ? "sent to Claude Code on this Mac; joins the workstream once you send it there and the connector sees the session"
+        : "sent to the connector; joins the workstream when the session appears in the index"
+    );
 
     // The one handler the queue accepts writes from, bound here for Start
     // and once per starting row for Withdraw.
@@ -614,6 +665,8 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
       ownerDid,
       card,
       startMode: mode,
+      startSurface: surface,
+      desktopSources,
       pending: pendingStart,
     });
 
@@ -623,7 +676,7 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
       const source = (sourceId ?? "").trim();
       const native = (nativeSessionId ?? "").trim();
       dropAttachment(attached, source, native);
-      dropStart(starts, source, native);
+      dropStart(starts, source, native, startedAsOf(pairings, source, native));
     });
 
     return {
@@ -754,6 +807,8 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
                                 starts,
                                 sourceId: row.sourceId,
                                 nativeSessionId: row.nativeSessionId,
+                                startedAs: row.startedAs,
+                                pairings,
                               })}
                             >
                               Detach
@@ -804,6 +859,8 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
                                   starts,
                                   sourceId: row.sourceId,
                                   nativeSessionId: row.nativeSessionId,
+                                  startedAs: row.startedAs,
+                                  pairings,
                                 })}
                               >
                                 Detach
@@ -867,9 +924,7 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
                           tone="muted"
                           data-start-note=""
                         >
-                          {canStart
-                            ? "Runs the first turn on this Mac through the connector; the start shows below as starting until the connector publishes the session, then joins the workstream."
-                            : startBlocker}
+                          {canStart ? startNote : startBlocker}
                           {startModeNote}
                         </cf-text>
                       </cf-hstack>
@@ -901,7 +956,7 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
                                     tone="muted"
                                     truncate
                                   >
-                                    {`${start.sourceId} · sent to the connector; joins the workstream when the session appears in the index`}
+                                    {`${start.sourceId} · ${startingCaption}`}
                                   </cf-text>
                                 </cf-vstack>
                                 <cf-button
@@ -920,6 +975,8 @@ export default pattern<PersonWorkbenchInput, PersonWorkbenchOutput>(
                                     ownerDid,
                                     card,
                                     startMode: mode,
+                                    startSurface: surface,
+                                    desktopSources,
                                     pending: pendingStart,
                                     withdraw: start.commandId,
                                   })}

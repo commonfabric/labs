@@ -289,9 +289,11 @@ Mac. Then, in Weaver's settings under Services:
 
 ## 7. Demo tasks
 
-[Running the cf-harness demos](DEMOS.md) carries a proof status for each task
-below, and for the two that can be run from the pill today, the preflight to
-check first and the slug sentence that makes a prompt repeatable across takes.
+[Running the cf-harness demos](DEMOS.md) carries the four demos proven end to
+end, in the order to run them, with the preflight to check first and the slug
+sentence that makes a prompt repeatable across takes.
+[DEMOS-EVIDENCE.md](DEMOS-EVIDENCE.md) carries a proof status for each task
+below, including the ones kept off that page.
 
 Three tasks, typed into the pill as written, exercise the arrangement end to
 end. Each names what has to be true before it is typed and what a passing run

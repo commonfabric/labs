@@ -86,6 +86,20 @@ export const configuredSourcesOf = lift((
   )
 );
 
+/** The ids of the sources whose driver can open a started session in the
+ * Claude Code desktop app on this Mac (`capabilities.surfaces` names
+ * `desktop`), for the start's own check. Read where the row is live. */
+export const desktopSourcesOf = lift((
+  { index }: { index?: StartableSourcesView },
+): string[] =>
+  (index?.sources ?? []).flatMap((source) =>
+    source?.id && source.capabilities?.startSession === true &&
+      (source.capabilities.surfaces ?? []).includes("desktop")
+      ? [source.id]
+      : []
+  )
+);
+
 //
 // The start
 //
@@ -115,14 +129,28 @@ export interface StartPreconditions {
    * "" when there is none: one start at a time per subject, so a second
    * click while the first is on its way starts nothing. */
   pending?: string;
+  /** Where the start runs: "desktop" opens Claude Code on this Mac, which
+   * only a source in `desktopCapable` can do; anything else runs the first
+   * turn through the connector. */
+  surface?: string;
+  desktopCapable?: readonly string[];
 }
 
 /** Why Start would send nothing, or "" when it would send. The one
  * predicate behind the disabled control, its caption, and the handler's own
  * refusal, so the three cannot drift apart. */
 export const startBlockerReason = (
-  { ownerDid, picked, options, startable, kickoff, hasSubject, pending }:
-    StartPreconditions,
+  {
+    ownerDid,
+    picked,
+    options,
+    startable,
+    kickoff,
+    hasSubject,
+    pending,
+    surface,
+    desktopCapable,
+  }: StartPreconditions,
 ): string => {
   if (hasSubject === false) return "No workstream to start from.";
   if (!ownerDid) {
@@ -134,6 +162,12 @@ export const startBlockerReason = (
   if (!startSourceOf(picked, options, startable)) {
     const sourceId = (picked || options[0]?.value || "").trim();
     return `${sourceId} is not a harness this Mac runs; pick one that is.`;
+  }
+  if (surface?.trim() === "desktop") {
+    const sourceId = startSourceOf(picked, options, startable);
+    if (!(desktopCapable ?? []).includes(sourceId)) {
+      return `${sourceId} cannot open a session in Claude Code on this Mac; pick a harness that can, or start headlessly.`;
+    }
   }
   if (!kickoff.trim()) return "Write a prompt to start from.";
   if (pending?.trim()) {
@@ -182,7 +216,17 @@ export const mintSessionId = (): string =>
  * normalized all the same, as the debug view's does, so the two spellings
  * of this envelope agree. */
 export const startCommandValue = (
-  { ownerDid, idPrefix, sourceId, nativeSessionId, text, cwd, title, mode }: {
+  {
+    ownerDid,
+    idPrefix,
+    sourceId,
+    nativeSessionId,
+    text,
+    cwd,
+    title,
+    mode,
+    surface,
+  }: {
     ownerDid: string;
     idPrefix: string;
     sourceId: string;
@@ -191,6 +235,9 @@ export const startCommandValue = (
     cwd: string;
     title: string;
     mode?: string;
+    /** "desktop" opens Claude Code on this Mac with the prompt ready to
+     * send instead of running the first turn through the connector. */
+    surface?: string;
   },
 ): { id: string; value: CommandValue } => {
   const createdAt = new Date().toISOString();
@@ -210,6 +257,7 @@ export const startCommandValue = (
         ...(cwd ? { cwd } : {}),
         ...(title ? { title } : {}),
         ...(mode ? { mode } : {}),
+        ...(surface ? { surface } : {}),
       },
     }),
   };

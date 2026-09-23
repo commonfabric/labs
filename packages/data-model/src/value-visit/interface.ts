@@ -9,7 +9,6 @@ import type {
   FabricContainerValuePlus,
   FabricInstancePlus,
   FabricPlainObjectPlus,
-  FabricValue,
   FabricValuePlus,
 } from "@/interface.ts";
 
@@ -123,7 +122,7 @@ export const DO_RECURSE_VALUES: RecurseForm = Object.freeze(
  * that the originally-visited value is the mapped result of the visit of the
  * value.
  */
-export type BaselineVisitorMethodResult<ResultType = FabricValue> =
+export type BaselineVisitorMethodResult<ResultType> =
   | MainResultForm<ResultType>
   | undefined;
 
@@ -133,25 +132,17 @@ export type BaselineVisitorMethodResult<ResultType = FabricValue> =
  *
  * See the included result types for details on what they mean.
  */
-export type VisitResult<PlusType = never, ResultType = FabricValue> =
+export type VisitResult<PlusType, ResultType> =
   | BaselineVisitorMethodResult<ResultType>
   | MapToForm<ResultType>
   | RecurseForm
   | ReplaceForm<PlusType>;
 
 /**
- * Possible results from the `visitValue()` function and other similar
- * functions.
- */
-export type MainVisitResult<ResultType = FabricValue> =
-  BaselineVisitorMethodResult<ResultType>;
-
-/**
  * Possible results from `visited*()` calls (container iteration post-visit
  * methods).
  */
-export type VisitedResult<ResultType = FabricValue> =
-  BaselineVisitorMethodResult<ResultType>;
+export type VisitedResult<ResultType> = BaselineVisitorMethodResult<ResultType>;
 
 //
 // Visitor interface
@@ -182,6 +173,9 @@ export interface ValueVisitor<
    * defined by the visitor. This is called at the start of a structural-map
    * operation, to determine whether or not the visitor engine ever needs to use
    * `isResultType()`.
+   *
+   * **Note:** This method is nascent: There are no structural-map methods in
+   * this module, yet.
    */
   isDomainAssignableToResultType(): boolean;
 

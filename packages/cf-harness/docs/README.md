@@ -22,9 +22,13 @@ migration notes live under `docs/history/` at the repository root.
   against the pattern index is measured so two runs can be compared: the task
   wording rule the finding rests on, what a batch records, and what its counts
   do and do not establish.
-- [DEMOS.md](DEMOS.md) — every demo this package is shown with: the preflight an
-  agent can check against a person's own console, the prompt verbatim, what a
-  passing run looks like, and how many times each has been run end to end.
+- [DEMOS.md](DEMOS.md) — the four proven demos in the order to run them, with
+  the prompt verbatim, what appears, when to stop, and the one thing that can go
+  wrong with each. Read this to run them.
+- [DEMOS-EVIDENCE.md](DEMOS-EVIDENCE.md) — the evidence behind those four: how
+  often each worked and on which build, the demos deliberately kept off the run
+  page and why, and the findings that came out of running them repeatedly. Read
+  this to decide whether to trust a result.
 - [WEAVER.md](WEAVER.md) — the operator procedure for driving the console from
   Weaver's command pill: loom, the console on loom's fabric, and Weaver
   configured, so a harness-built piece lands in the person's own space.
