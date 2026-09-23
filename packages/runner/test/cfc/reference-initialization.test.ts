@@ -374,17 +374,22 @@ describe("reference-initialization", () => {
   });
 
   describe("a list operation over owner-protected entries", () => {
+    // Each entry is added through the handler its policy names, whose state
+    // holds the protected list, so each entry's document carries the policy
+    // that handler's commit stores. The list sits inside an interface because
+    // the entry's writer binding names the handler that writes it.
     const operations = {
       map: {
-        expression: "entries.map((entry) => entry.body)",
+        expression: 'board.key("entries").map((entry) => entry.body)',
         expected: ["a", "b"],
       },
       filter: {
-        expression: 'entries.filter((entry) => entry.body !== "b")',
+        expression:
+          'board.key("entries").filter((entry) => entry.body !== "b")',
         expected: [{ body: "a" }],
       },
       flatMap: {
-        expression: "entries.flatMap((entry) => [entry.body])",
+        expression: 'board.key("entries").flatMap((entry) => [entry.body])',
         expected: ["a", "b"],
       },
     };
@@ -400,30 +405,37 @@ describe("reference-initialization", () => {
             contents: `/// <cts-enable />
               import { handler, pattern, Writable, WriteAuthorizedBy } from "commonfabric";
               interface Message { body: string }
-              const send = handler<{ body?: string }, { entries: Writable<Message[]> }>(
-                (event, state) => { state.entries.push({ body: event.body ?? "" }); },
-              );
               type Entry = WriteAuthorizedBy<Message, typeof send>;
-              export default pattern<{ entries: Writable<Entry[]> }>(({ entries }) => ({
+              interface Board { entries: Entry[] }
+              const send = handler<{ body?: string }, { board: Writable<Board> }>(
+                (event, { board }) => {
+                  board.key("entries").push({ body: event.body ?? "" });
+                },
+              );
+              export default pattern<{ board: Writable<Board> }>(({ board }) => ({
                 value: ${expression},
-                send: send({ entries }),
+                send: send({ board }),
               }));
             `,
           }],
         });
         const tx = runtime.edit();
-        const entries = runtime.getCell(space, "entries", undefined, tx);
-        entries.set([entryCell(tx, "row-a", "a"), entryCell(tx, "row-b", "b")]);
-        const output = runtime.getCell<{ value: unknown }>(
+        const board = runtime.getCell(space, "board", undefined, tx);
+        board.set({ entries: [] });
+        const output = runtime.getCell<{ value: unknown; send: unknown }>(
           space,
           "output",
           compiled.resultSchema,
           tx,
         );
-        const result = runtime.run(tx, compiled, { entries }, output);
+        const result = runtime.run(tx, compiled, { board }, output);
         runtime.prepareTxForCommit(tx);
         expect((await tx.commit()).error).toBeUndefined();
         const cancel = result.sink(() => {});
+        await runtime.idle();
+        result.key("send").send({ body: "a" });
+        await runtime.idle();
+        result.key("send").send({ body: "b" });
         await runtime.idle();
 
         expect(await result.key("value").pull()).toEqual(expected);
