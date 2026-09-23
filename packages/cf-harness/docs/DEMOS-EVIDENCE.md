@@ -1228,13 +1228,12 @@ Each demo was then run a second time **with every hint stripped** — no slug
 sentence, no pattern ids, no unit sentence, and with "sortable" restored where a
 person would say it. The question was which hints cover a real gap.
 
-**Four hints cover nothing, because the harness already does the work.**
+**Three hints cover nothing, because the harness already does the work.**
 
 | Hint                                         | What happens without it                                                                                      |
 | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------ |
 | the slug-retry sentence                      | a taken slug is retried unprompted — observed three times, including two collisions recovered inside one run |
 | "use a pattern from the library if one fits" | the same indexed pattern is found anyway                                                                     |
-| naming the three bills parts by id           | all three are found from ordinary prose                                                                      |
 | leaving "sortable" out                       | asking for a sortable table reaches a published sortable part that the hinted wording never looks for        |
 
 The slug sentence is the clearest: `assign_slug`'s own error says _"Choose
