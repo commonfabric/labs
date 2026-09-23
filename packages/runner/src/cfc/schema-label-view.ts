@@ -96,66 +96,44 @@ export const cfcSchemaEntries = (
   const recordOnly = resolved.properties === undefined ||
     (isObjectOrArray(resolved.properties) &&
       Object.keys(resolved.properties).length === 0);
+  const walk = (
+    child: JSONSchema,
+    childPath: readonly string[],
+    childConditional = conditional,
+  ) =>
+    cfcSchemaEntries(
+      child,
+      childPath,
+      entries,
+      childRoot,
+      nextActive,
+      childConditional,
+    );
   forEachSubschema(resolved, (child, keyword, key, index) => {
     switch (keyword) {
       case "properties":
-        cfcSchemaEntries(
-          child,
-          [...path, key!],
-          entries,
-          childRoot,
-          nextActive,
-          conditional,
-        );
+        walk(child, [...path, key!]);
         break;
       case "anyOf":
       case "oneOf":
-        cfcSchemaEntries(child, path, entries, childRoot, nextActive, true);
+        walk(child, path, true);
         break;
       case "allOf":
-        cfcSchemaEntries(
-          child,
-          path,
-          entries,
-          childRoot,
-          nextActive,
-          conditional,
-        );
+        walk(child, path);
         break;
       case "items":
         // The wildcard covers tuple positions and the rest schema when
         // `.prefixItems` is present.
-        cfcSchemaEntries(
-          child,
-          [...path, "*"],
-          entries,
-          childRoot,
-          nextActive,
-          conditional,
-        );
+        walk(child, [...path, "*"]);
         break;
       case "prefixItems":
-        cfcSchemaEntries(
-          child,
-          [...path, String(index!)],
-          entries,
-          childRoot,
-          nextActive,
-          conditional,
-        );
+        walk(child, [...path, String(index!)]);
         break;
       case "additionalProperties":
         // A wildcard cannot express "all properties except the named ones".
         // It is exact only when the schema declares no named properties.
         if (recordOnly) {
-          cfcSchemaEntries(
-            child,
-            [...path, "*"],
-            entries,
-            childRoot,
-            nextActive,
-            conditional,
-          );
+          walk(child, [...path, "*"]);
         }
         break;
       case "not":
@@ -163,14 +141,7 @@ export const cfcSchemaEntries = (
         break;
       default:
         // Unknown structural keywords contribute at the current position.
-        cfcSchemaEntries(
-          child,
-          path,
-          entries,
-          childRoot,
-          nextActive,
-          conditional,
-        );
+        walk(child, path);
         break;
     }
   });
