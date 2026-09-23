@@ -115,12 +115,14 @@ this against a space holding real data.
    the number lives in the Topic's own input, and a Topic that declares no such
    input has nowhere to put one.
 
-3. **`backfillNames`, as many times as it takes.** It numbers every Topic the
+3. **`backfillNames` once, then the audit.** It numbers every Topic the
    namespace does not hold, in filing order, and asks every Topic reporting no
    number to store the one the namespace holds for it. Over Topics that all
    report their numbers it writes no key and sends no event — which, while
-   numbers are hidden, is no Topic at all. "What a re-run writes" below says
-   what each run costs instead.
+   numbers are hidden, is no Topic at all. While they are hidden its report
+   cannot say which asking landed, so follow the one run with the per-Topic
+   audit in "Telling when it is done", and repair only the Topics that audit
+   finds missing. "What a re-run writes" below says what a run costs.
 
 ### The command
 
@@ -134,21 +136,35 @@ deno task cf piece call --cell "$TOPICS_BOARD" --invocation '<id>' backfillNames
 this replaced cost one `cf piece link` per Topic.
 
 Step 2 is still one source update per Topic. Drive it as a plan rather than a
-loop of `setsrc` calls:
-`cf piece survey --piece "$TOPICS_BOARD" --path topics
---retarget "topics=<topic.tsx>"`
-with the same `--root`, `--test` flags and
-`--dangerously-allow-incompatible-schema`, then
-`cf piece retarget --plan <plan>
---group-size 25 --apply`, then
-`cf piece survey --diff <plan>` as the verdict
-(`docs/common/workflows/bulk-operations.md`). A run that stops partway is
-resumed by running it again, since a Topic already on the target reads as landed
-and is not rewritten. On a board the size of the Estuary one this is the
-bulk-CLI shape `docs/history/topics-board-migration-2026-08-28.md` found
-unreliable from a laptop over the network, so prefer somewhere that record
-vindicates, and treat a stopped run as a reason to resume rather than start
-over.
+loop of `setsrc` calls (`docs/common/workflows/bulk-operations.md`), with one
+`--test` for every authored test file beside the Topic source:
+
+```bash
+PLAN="$(mktemp -d)/topics-plan.jsonl"
+deno task cf piece survey --piece "$TOPICS_BOARD" --path topics \
+  --retarget "topics=packages/patterns/topics/topic.tsx" --root . \
+  --test packages/patterns/topics/topics.test.tsx \
+  --dangerously-allow-incompatible-schema --out "$PLAN"
+# dry: every row classified against its own reference pair, nothing written
+deno task cf piece retarget --plan "$PLAN"
+deno task cf piece retarget --plan "$PLAN" --group-size 25 --apply
+# the verdict: a second survey held against the plan
+deno task cf piece survey --piece "$TOPICS_BOARD" --path topics --diff "$PLAN"
+```
+
+The `--test` line above stands for the whole set; name every one. A run that
+stops partway is resumed by running the apply again, since a Topic already on
+the target reads as landed and is not rewritten. On a board the size of the
+Estuary one this is the bulk-CLI shape
+`docs/history/topics-board-migration-2026-08-28.md` found unreliable from a
+laptop over the network, so treat a stopped run as a reason to resume rather
+than start over.
+
+A Topic filed through the board after step 1 runs the Topic code the board's own
+program carries, under a different identity from the standalone build the plan
+targets, and stores its number from creation. Its row needs no operation: before
+the apply, read one such Topic's `shortName --input` to confirm, and delete the
+`op` from those rows so the plan leaves them where they are.
 
 The report is three lists of numbers in filing order:
 
@@ -158,9 +174,11 @@ The report is three lists of numbers in filing order:
 - `pending` — the Topics this run asked. None of them is confirmed, because a
   send's effect is invisible to the transaction that makes it.
 
-An empty `pending` is the finished state, and a non-empty one is a reason to run
-the step again rather than a failure: the run after it reports whichever asking
-landed under `named` and asks for the rest.
+Once numbers are shown, an empty `pending` is the finished state, and a
+non-empty one is a reason to run the step again rather than a failure: the run
+after it reports whichever asking landed under `named` and asks for the rest.
+While they are hidden, `pending` never empties, so it is no reason to run again;
+the audit in "Telling when it is done" is.
 
 **While numbers are hidden, only `assigned` means anything.** The step reads a
 Topic's published `shortName` to tell a stored number from none, and
@@ -191,12 +209,16 @@ for the reason `references/reading.md` gives — before sending:
 ```bash
 deno task cf cell get --cell "$TOPICS_BOARD" names/<n> --input --select @
 # -> { "$link": "/of:fid1:..." }   compare its createdAt with the Topic's
-deno task cf piece call --cell "$TOPIC" recordName '{"name":"<n>"}'
-# -> { "name": "<n>", "wrote": true }
+deno task cf piece call --cell "$TOPIC" --invocation '<unique-repair-id>' \
+  recordName '{"name":"<n>"}'
+deno task cf cell get --cell "$TOPIC" shortName --input
+# -> "<n>"
 ```
 
 `recordName` stores whatever number it is handed, so resolving the entry first
-is what keeps the number the namespace's.
+is what keeps the number the namespace's. The call is a mutation like any other:
+it takes an invocation id under `CF_INVOCATION_SESSION`, and its envelope is not
+the evidence — the read of `shortName` after it is (`references/mutating.md`).
 
 Every run also logs `Event dropped: speculative origin failed` once per Topic.
 That counts the step's sends, not the Topics that missed: in the same rehearsal
@@ -238,12 +260,12 @@ asks every Topic again. Per case:
   written again on every run until that Topic's source moves. This is why step 2
   comes before step 3.
 
-So: re-run when something is outstanding, not as a matter of course. Each run
-costs one board transaction and one write per Topic; a handling for each Topic
-whose source declares the verb, and none for one that does not; and one logged
-failure per Topic in a state the verb refuses. After step 2 that is a handling
-for every Topic, which is the shape to plan for. None of it corrupts anything,
-and none of it is free.
+So: re-run when the audit finds something outstanding, not as a matter of
+course. Each run costs one board transaction and one write per Topic; a handling
+for each Topic whose source declares the verb, and none for one that does not;
+and one logged failure per Topic in a state the verb refuses. After step 2 that
+is a handling for every Topic, which is the shape to plan for. None of it
+corrupts anything, and none of it is free.
 
 Until the switch is on, read three things instead of `pending`:
 
