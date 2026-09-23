@@ -142,6 +142,11 @@ import {
   readObservationShapes,
 } from "./observation-classes.ts";
 import {
+  meetInputWitnesses,
+  mintTransformedBy,
+  retainedInputWitnesses,
+} from "./input-witness.ts";
+import {
   atomsOutsideCeiling,
   type CfcFloorTrustContext,
   cfcIntegritySatisfiesFloor,
@@ -570,19 +575,54 @@ const effectiveReadLabel = (
   index?: ConsumedLabelIndex,
 ): IFCLabel | undefined => {
   if (metadata === undefined) return undefined;
+  return labelForConsumedEntries(
+    consumedEntriesForRead(metadata, path, read, index),
+    path,
+    read.nonRecursive,
+  );
+};
+
+/**
+ * The label-map entries a read at `path` consumes: `effectiveReadLabel`'s
+ * candidate set, before it is resolved into one label.
+ */
+const consumedEntriesForRead = (
+  metadata: CfcMetadata,
+  path: readonly string[],
+  read: {
+    nonRecursive: boolean | undefined;
+    consumes: ReadClassSelection;
+    excludeEntry?: (entry: LabelMapEntry) => boolean;
+  },
+  index?: ConsumedLabelIndex,
+): readonly LabelMapEntry[] => {
   const candidates = index === undefined
     ? metadata.labelMap.entries
     : index.overlapping(path, read.nonRecursive !== true).map(({ entry }) =>
       entry
     );
-  const entries = read.consumes === "all" && read.excludeEntry === undefined
+  return read.consumes === "all" && read.excludeEntry === undefined
     ? candidates
     : candidates.filter((entry) =>
       readConsumesEntry(read.consumes, entry) &&
       read.excludeEntry?.(entry) !== true
     );
+};
+
+/**
+ * One label for everything a read at `path` consumed: the resolution at the
+ * read's own path, joined, for a recursive read, with every entry below it.
+ * The join is a union on both axes, so its integrity is evidence found
+ * SOMEWHERE in the value read; `observationInputWitnesses` is the form that
+ * holds of all of it.
+ */
+const labelForConsumedEntries = (
+  entries: readonly LabelMapEntry[],
+  path: readonly string[],
+  nonRecursive: boolean | undefined,
+): IFCLabel | undefined => {
   const base = labelForEntriesAtPath(entries, path);
-  if (read.nonRecursive === true) return base;
+  if (nonRecursive === true) return base;
   const parts: (IFCLabel | undefined)[] = [base];
   for (const entry of entries) {
     if (entry.path.length <= path.length) continue;
@@ -590,6 +630,81 @@ const effectiveReadLabel = (
     parts.push(entry.label);
   }
   return parts.length === 1 ? base : joinLabels(parts);
+};
+
+/**
+ * Whether `entry` resolves at `location` when the input witnesses of a read
+ * are computed. An entry's `*` segment stands for every concrete child, so it
+ * applies at any location beneath it; a location's `*` stands for the children
+ * that carry no entry of their own, so a concrete sibling's entry does not
+ * apply there. `isPrefix` matches `*` on either side, which would let one
+ * witnessed child vouch for an unwitnessed one.
+ */
+const entryResolvesAtLocation = (
+  entryPath: readonly string[],
+  location: readonly string[],
+): boolean =>
+  entryPath.length <= location.length &&
+  entryPath.every((segment, index) =>
+    segment === "*" || segment === location[index]
+  );
+
+/**
+ * The input witnesses one read carries: the retained atoms that hold at EVERY
+ * confidential location of the value it read, or `undefined` when no location
+ * of it is confidential (a public input bears on no release).
+ *
+ * A location is the read's own path and, for a recursive read, the path of
+ * each consumed entry below it; any other position resolves exactly as its
+ * nearest enclosing location does. Each location's integrity is its own
+ * resolution (per-component longest prefix, joined across components), which
+ * is a claim about the value there. That is what makes the witness a claim
+ * about the whole read: a value written by other code beside a witnessed one
+ * is its own location, and its resolution lacks the witness. The union
+ * `labelForConsumedEntries` takes would carry the neighbor's witness to it.
+ *
+ * Integrity a runtime-minted `*` template contributes is not counted. A
+ * template labels membership and slots rather than a written value, and it
+ * still takes its place in replace-down, so the ancestor it shadows does not
+ * show through either. Both omissions under-claim, which is the safe
+ * direction for evidence.
+ */
+const observationInputWitnesses = (
+  entries: readonly LabelMapEntry[],
+  path: readonly string[],
+  nonRecursive: boolean | undefined,
+): CfcAtom[] | undefined => {
+  const locations = new Map<string, readonly string[]>([
+    [pathKey(path), path],
+  ]);
+  if (nonRecursive !== true) {
+    for (const entry of entries) {
+      if (entry.path.length <= path.length) continue;
+      if (!isPrefix(path, entry.path)) continue;
+      locations.set(pathKey(entry.path), entry.path);
+    }
+  }
+  const evidence = entries.map((entry) =>
+    isRuntimeMintedTemplate(entry)
+      ? {
+        ...entry,
+        label: { confidentiality: entry.label.confidentiality },
+      }
+      : entry
+  );
+  let witnesses: CfcAtom[] | undefined;
+  for (const location of locations.values()) {
+    const label = labelForEntriesAtPath(
+      evidence.filter((entry) => entryResolvesAtLocation(entry.path, location)),
+      location,
+    );
+    if ((label?.confidentiality?.length ?? 0) === 0) continue;
+    const held = retainedInputWitnesses(label?.integrity);
+    witnesses = witnesses === undefined
+      ? held
+      : meetInputWitnesses(witnesses, held);
+  }
+  return witnesses;
 };
 
 // Read-like shape (space/id/scope/path + a recursive read profile) for the
@@ -2830,6 +2945,21 @@ const deriveFlowJoinImpl = (
   // so the meet is usually empty until inputs are universally certified —
   // staged conformance per SC-9, never over-claiming.)
   let hereditaryMeet: CfcAtom[] | undefined;
+  // The implementation identity the join is attributed to (see the
+  // `TransformedBy` mint below), and the input witnesses retained for it:
+  // the meet, over every confidential observation, of what that observation
+  // carried at all of its confidential locations (`input-witness.ts`).
+  // `undefined` until a confidential observation arrives, and never computed
+  // when there is no identity to attribute the join to.
+  const writeIdentity = tx.getCfcState().writeIdentity;
+  const identity = writeIdentity.multiple ? undefined : writeIdentity.identity;
+  let inputWitnesses: CfcAtom[] | undefined;
+  const noteInputWitnesses = (held: readonly CfcAtom[] | undefined): void => {
+    if (held === undefined) return;
+    inputWitnesses = inputWitnesses === undefined
+      ? [...held]
+      : meetInputWitnesses(inputWitnesses, held);
+  };
   const labeledSpaces = options?.collectLabeledSpaces === true
     ? new Set<MemorySpace>()
     : undefined;
@@ -2838,6 +2968,7 @@ const deriveFlowJoinImpl = (
     metadata: CfcMetadata | undefined;
     indexes: Map<ReadObservationShape, ConsumedLabelIndex>;
     labels: Map<string, IFCLabel | undefined>;
+    witnesses: Map<string, CfcAtom[] | undefined>;
   }>();
   // §8.12.8 readback exclusion: see `ownRestampContainerPaths`.
   const ownRestamps = ownRestampContainerPaths(tx);
@@ -2861,6 +2992,7 @@ const deriveFlowJoinImpl = (
           metadata: storedMetadataFor(tx, space, id, scope, type),
           indexes: new Map(),
           labels: new Map(),
+          witnesses: new Map(),
         };
         metadataByDoc.set(key, document);
       }
@@ -2913,29 +3045,51 @@ const deriveFlowJoinImpl = (
       ]);
       let label = document.labels.get(labelKey);
       if (!document.labels.has(labelKey)) {
-        label = effectiveReadLabel(
-          document.metadata,
+        const entries = document.metadata === undefined
+          ? undefined
+          : consumedEntriesForRead(
+            document.metadata,
+            logicalPath,
+            {
+              nonRecursive: observation.nonRecursive,
+              consumes: observation.shape,
+              ...(excludesTemplates
+                ? {
+                  excludeEntry: (entry: LabelMapEntry) =>
+                    ((observation.coveredByTrace || observation.machinery) &&
+                      isRuntimeMintedTemplate({
+                        origin: entry.origin,
+                        path: canonicalizeLogicalPath(entry.path),
+                      })) ||
+                    (ownedContainers !== undefined &&
+                      isReplacedMembershipEntry(entry, ownedContainers)),
+                }
+                : {}),
+            },
+            index,
+          );
+        label = entries === undefined ? undefined : labelForConsumedEntries(
+          entries,
           logicalPath,
-          {
-            nonRecursive: observation.nonRecursive,
-            consumes: observation.shape,
-            ...(excludesTemplates
-              ? {
-                excludeEntry: (entry: LabelMapEntry) =>
-                  ((observation.coveredByTrace || observation.machinery) &&
-                    isRuntimeMintedTemplate({
-                      origin: entry.origin,
-                      path: canonicalizeLogicalPath(entry.path),
-                    })) ||
-                  (ownedContainers !== undefined &&
-                    isReplacedMembershipEntry(entry, ownedContainers)),
-              }
-              : {}),
-          },
-          index,
+          observation.nonRecursive,
         );
         document.labels.set(labelKey, label);
+        document.witnesses.set(
+          labelKey,
+          entries === undefined || identity === undefined
+            ? undefined
+            : observationInputWitnesses(
+              entries,
+              logicalPath,
+              observation.nonRecursive,
+            ),
+        );
       }
+      // Every observation counts toward the input witnesses, `followRef`
+      // included: which reference sits at a slot is information the
+      // transformation consumed, and a pointer the endorsed writer did not
+      // write must not pass as its input.
+      noteInputWitnesses(document.witnesses.get(labelKey));
       // Any observation with label CONTENT marks its space as a label
       // contributor. Deliberately over-approximate for integrity (an
       // observation whose hereditary atoms all meet away still marks its
@@ -2986,6 +3140,8 @@ const deriveFlowJoinImpl = (
     if (observation.confidentiality.length === 0) continue;
     labeledSpaces?.add(observation.target.space);
     atoms.push(...observation.confidentiality);
+    // A confidential observation that carries no evidence at all.
+    noteInputWitnesses([]);
   }
   for (
     const observation of tx.getCfcState().externalContentObservations ?? []
@@ -2998,6 +3154,9 @@ const deriveFlowJoinImpl = (
       for (const space of observation.labeledSpaces) labeledSpaces.add(space);
     }
     atoms.push(...(observation.flow.confidentiality ?? []));
+    if ((observation.flow.confidentiality?.length ?? 0) > 0) {
+      noteInputWitnesses(retainedInputWitnesses(observation.flow.integrity));
+    }
     const hereditary = (observation.flow.integrity ?? []).filter((atom) =>
       atomPropagationClass(atom) === "hereditary"
     );
@@ -3009,23 +3168,21 @@ const deriveFlowJoinImpl = (
   }
   const confidentiality = uniqueCfcAtoms(atoms);
   const integrity: CfcAtom[] = [...(hereditaryMeet ?? [])];
-  // Derivation provenance (§8.9.3 TransformedBy, staged: identity binding
-  // only — no per-input refs/witnesses yet). The flow join is one per-tx
-  // label stamped on every written doc, so the identity must hold for the
-  // whole tx: minted only when every non-privileged write was authored
-  // under the same defined identity, captured at write time (see
-  // `CfcTxState.writeIdentity`) — not whichever identity is current at
-  // prepare, which a later run in the same tx may have changed and which
-  // an unattributed write must not borrow. Ambiguity omits the atom
-  // (fail-safe under-claim). Minted only alongside an entry that exists
-  // anyway; runtime-minted (schema-forgery gated).
-  const writeIdentity = tx.getCfcState().writeIdentity;
-  const identity = writeIdentity.multiple ? undefined : writeIdentity.identity;
+  // Derivation provenance (§8.9.3 TransformedBy): the identity that wrote,
+  // and the input witnesses retained beside it (`input-witness.ts`). The
+  // flow join is one per-tx label stamped on every written doc, so the
+  // identity must hold for the whole tx: minted only when every
+  // non-privileged write was authored under the same defined identity,
+  // captured at write time (see `CfcTxState.writeIdentity`) — not whichever
+  // identity is current at prepare, which a later run in the same tx may
+  // have changed and which an unattributed write must not borrow. Ambiguity
+  // omits the atoms (fail-safe under-claim). Minted only alongside an entry
+  // that exists anyway; runtime-minted (schema-forgery gated).
   if (
     identity !== undefined &&
     (confidentiality.length > 0 || integrity.length > 0)
   ) {
-    integrity.push({ type: CFC_ATOM_TYPE.TransformedBy, identity });
+    integrity.push(...mintTransformedBy(identity, inputWitnesses));
   }
   return {
     confidentiality,
