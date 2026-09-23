@@ -111,6 +111,7 @@ import { writeResultSchemaMeta } from "../result-schema-meta.ts";
 import {
   getCellOrThrow,
   isCellResultForDereferencing,
+  snapshotQueryResult,
 } from "../query-result-proxy.ts";
 import { Runtime, spaceCellSchema } from "../runtime.ts";
 import { type Action, ignoreReadForScheduling } from "../scheduler.ts";
@@ -2229,6 +2230,11 @@ function effectiveObservationCeiling(
   sink: string,
   patternBound: readonly CfcConfClause[] | undefined,
 ): readonly CfcConfClause[] | undefined {
+  // The pattern's bound arrives as a view of the builtin's input. The bound
+  // this returns is carried into request snapshots and read by post-commit
+  // tool reads, after the transaction that read the input has finished, so it
+  // is detached here, once.
+  const ownBound = snapshotQueryResult(patternBound);
   const ceilings = runtime.cfcSinkMaxConfidentiality;
   // Object.hasOwn guard: the sink name is a runner-controlled literal today, but
   // a name colliding with an Object.prototype member must resolve to "no
@@ -2236,7 +2242,7 @@ function effectiveObservationCeiling(
   const deploymentCeiling = Object.hasOwn(ceilings, sink)
     ? ceilings[sink]
     : undefined;
-  return meetCfcObservationCeilings(patternBound, deploymentCeiling);
+  return meetCfcObservationCeilings(ownBound, deploymentCeiling);
 }
 
 function toolAllowsObservedConfidentiality(

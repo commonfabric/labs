@@ -186,7 +186,7 @@ describe("PatternManager program persistence", () => {
       type: "application/json",
       path: [],
     }, {
-      value: sourceCell.get(),
+      value: sourceCell.getRawUntyped(),
       cfc: {
         version: 1,
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
