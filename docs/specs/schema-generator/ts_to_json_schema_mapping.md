@@ -79,11 +79,19 @@ no child node is supplied to avoid mismatched type/node pairs.
 The consumer adds a second trigger of its own: `SchemaGeneratorTransformer`
 routes to `generateSchemaFromSyntheticTypeNode` when (a) the type arg is
 synthetic (`pos === -1 && end === -1`) and resolved to `any`, or (b) the
-real-position type arg *contains* an `any`/`unknown` keyword anywhere
+type arg, synthetic or not, *contains* an `any`/`unknown` keyword anywhere
 (`containsAnyOrUnknownTypeNode`), "so the checker does not recover a wider
-semantic type"
-(`ts-transformers/src/transformers/schema-generator.ts`). Both
+semantic type" (`ts-transformers/src/transformers/schema-generator.ts`). Both
 triggers are documented in the ts-transformers behavior spec §12.
+
+**Printed nodes.** A caller passes `printedFrom` in `SchemaGenerationOptions`:
+for a node it printed from a type, that type. The generator never reads such a
+node as a node. At the root, in `formatChildType`, and on entry to the
+node-based analyzer, a printed node gives way to the caller's own type at that
+position when that type carries something, and to the type the node was
+printed from when the caller's is `any`, `unknown`, or an unbound type
+parameter. The schema hints attached to the node still apply, through the
+context's `hintsNode`.
 
 **The node-based analyzer** (`analyzeTypeNodeStructure`,
 `src/schema-generator.ts`) handles: `TypeLiteral` nodes (properties
