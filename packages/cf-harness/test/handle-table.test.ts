@@ -15,6 +15,7 @@ import {
   type HandleTokenHasher,
   mergeHarnessHandleTables,
   mintAddressHandle,
+  mintReferentHandle,
   resolveHandleRef,
   resolveHandleToken,
   swapLinksForTokens,
@@ -90,6 +91,46 @@ describe("handle-table", () => {
 
       expect(merged.entries).toHaveLength(1);
       expect(merged.entries[0].schema).toEqual({ type: "number" });
+    });
+
+    it("keeps an enrichment the incoming table's older copy lacks", async () => {
+      const base = (await mintAddressHandle(
+        createHarnessHandleTable("run-1"),
+        `of:fid1:${HASH_A}`,
+      )).table;
+      const enriched = await mintAddressHandle(base, `of:fid1:${HASH_A}`, {
+        schema: { type: "number" },
+      });
+      const other = await mintAddressHandle(base, `of:fid1:${HASH_B}`);
+
+      const merged = mergeHarnessHandleTables(enriched.table, other.table);
+
+      expect(merged.entries).toHaveLength(2);
+      expect(
+        merged.entries.find((entry) => entry.token === enriched.token)?.schema,
+      ).toEqual({ type: "number" });
+    });
+
+    it("refuses one token minted for two different referents", async () => {
+      const constant: HandleTokenHasher = () =>
+        Promise.resolve(new Uint8Array(32));
+      const base = createHarnessHandleTable("run-1");
+      const first = await mintReferentHandle(base, {
+        source: "loom:rows",
+        value: "first row",
+        label: { confidentiality: [] },
+        labelSource: "row",
+      }, { hasher: constant });
+      const second = await mintReferentHandle(base, {
+        source: "loom:rows",
+        value: "second row",
+        label: { confidentiality: [] },
+        labelSource: "row",
+      }, { hasher: constant });
+
+      expect(first.token).toBe(second.token);
+      expect(() => mergeHarnessHandleTables(first.table, second.table))
+        .toThrow("two different referents");
     });
 
     it("refuses tables salted by different runs", () => {

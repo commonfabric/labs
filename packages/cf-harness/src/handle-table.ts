@@ -355,13 +355,17 @@ export const mintReferentHandle = async (
 /**
  * Folds the entries and referents of `incoming` into `current`, answering a
  * table that holds everything either held. Both were minted from one run's
- * table, so an entry present in both names the same address under the same
- * token; where the two differ, `incoming` stands, since a mint only ever adds
- * to an entry it found. Two writers that each extended the table they read
- * therefore both keep their additions, whichever recorded second.
+ * table, and a mint only ever fills a field an entry left undefined, so an
+ * address present in both is merged field by field: each optional field is
+ * taken from whichever side defines it, and from `current` where both do. A
+ * writer's table carries a copy of every entry it read, so neither side's
+ * copy of an entry can simply stand; two writers that each extended the
+ * table they read both keep their additions, whichever recorded second.
  *
  * @throws Error when the tables carry different salts, since their tokens
- * were then derived from different runs and cannot share a table.
+ * were then derived from different runs and cannot share a table; or when
+ * one token names two different referents, which two writers minting from
+ * one base cannot see of each other.
  */
 export const mergeHarnessHandleTables = (
   current: HarnessHandleTable,
@@ -377,13 +381,40 @@ export const mergeHarnessHandleTables = (
     const index = entries.findIndex((held) =>
       held.addressKey === entry.addressKey
     );
-    if (index === -1) entries.push(entry);
-    else entries[index] = entry;
+    if (index === -1) {
+      entries.push(entry);
+      continue;
+    }
+    const held = entries[index];
+    const schemaSide = held.schema !== undefined ? held : entry;
+    const capability = held.capability ?? entry.capability;
+    const acquisition = held.acquisition ?? entry.acquisition;
+    entries[index] = {
+      token: held.token,
+      kind: held.kind,
+      ref: held.ref,
+      addressKey: held.addressKey,
+      ...(capability !== undefined ? { capability } : {}),
+      ...(schemaSide.schema !== undefined ? { schema: schemaSide.schema } : {}),
+      ...(schemaSide.schemaSource !== undefined
+        ? { schemaSource: schemaSide.schemaSource }
+        : {}),
+      ...(acquisition !== undefined ? { acquisition } : {}),
+    };
   }
   const referents = [...(current.referents ?? [])];
   for (const referent of incoming.referents ?? []) {
-    if (!referents.some((held) => held.token === referent.token)) {
+    const held = referents.find((candidate) =>
+      candidate.token === referent.token
+    );
+    if (held === undefined) {
       referents.push(referent);
+    } else if (
+      referentIdentityKey(held) !== referentIdentityKey(referent)
+    ) {
+      throw new Error(
+        `handle token ${referent.token} was minted for two different referents`,
+      );
     }
   }
   return {

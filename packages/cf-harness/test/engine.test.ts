@@ -180,6 +180,29 @@ Deno.test("CfHarnessEngine keeps the handles of two mints recorded at once", asy
   );
 });
 
+Deno.test("CfHarnessEngine refuses to record a table where two addresses drew one token", async () => {
+  const constant = () => Promise.resolve(new Uint8Array(32));
+  const engine = new CfHarnessEngine({
+    sandboxRuntime: new FakeSandboxRuntime(),
+    runId: "run-token-collision",
+  });
+  const base = createHarnessHandleTable("run-token-collision");
+  const first = await mintAddressHandle(base, `of:fid1:${"A".repeat(43)}`, {
+    hasher: constant,
+  });
+  const second = await mintAddressHandle(base, `of:fid1:${"B".repeat(43)}`, {
+    hasher: constant,
+  });
+  await engine.recordHandleTable(first.table);
+
+  await assertRejects(
+    () => engine.recordHandleTable(second.table),
+    Error,
+    "duplicate token",
+  );
+  assertEquals(engine.handleTable?.entries.length, 1);
+});
+
 Deno.test("CfHarnessEngine builds a default docker-runsc sandbox when given a workspace path", () => {
   const engine = new CfHarnessEngine({
     workspaceHostPath: "/host/project",

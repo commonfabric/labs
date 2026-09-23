@@ -4011,6 +4011,7 @@ export class CfHarnessPromptLoop {
         let turnFailure: { error: unknown } | undefined;
         const invocations: Promise<InvokedToolCallMessages>[] = [];
         for (const [index, toolCall] of toolCalls.entries()) {
+          if (turn.signal.aborted) break;
           const invocation = this.#invokeToolCall(
             toolCall,
             model,
@@ -4035,6 +4036,7 @@ export class CfHarnessPromptLoop {
         options.signal?.removeEventListener("abort", abortTurn);
         this.#subagentRunsAtTurnStart = undefined;
         toolActivity.push(...turnActivities.flat());
+        options.signal?.throwIfAborted();
         if (turnFailure !== undefined) throw turnFailure.error;
         const invokedToolCalls = settledToolCalls.map((settled) => {
           if (settled.status === "rejected") throw settled.reason;

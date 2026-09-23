@@ -646,6 +646,9 @@ export class CfHarnessEngine {
    */
   #lastCfcInvocationSequence = 0;
 
+  /** The last run-state write asked for, which the next one waits behind. */
+  #runStatePersistence: Promise<unknown> = Promise.resolve();
+
   readonly #now: () => string;
   readonly #fabricSessionFactory?: HarnessFabricSessionFactory;
   readonly #openProbeRuntime?: HarnessToolContext["openProbeRuntime"];
@@ -1603,7 +1606,10 @@ export class CfHarnessEngine {
    * the table before either recorded; folding each result in, rather than
    * replacing the table with it, keeps both their additions.
    *
-   * @throws Error when `table` is not a well-formed version-1 handle table.
+   * @throws Error when `table`, or the table it folds into, is not a
+   * well-formed version-1 handle table — which is how two overlapping mints
+   * that drew the same token for different addresses surface — or when the
+   * two tables cannot merge.
    */
   async recordHandleTable(table: HarnessHandleTable): Promise<void> {
     assertValidHarnessHandleTable(table);
@@ -1611,6 +1617,7 @@ export class CfHarnessEngine {
     const merged = current === undefined
       ? table
       : mergeHarnessHandleTables(current, table);
+    assertValidHarnessHandleTable(merged);
     this.#runState = patchHarnessRunState(
       this.#runState,
       { handleTable: structuredClone(merged) },
@@ -1710,7 +1717,15 @@ export class CfHarnessEngine {
   }
 
   async persistRunState(): Promise<string | undefined> {
-    return await this.artifactStore?.persistRunState(this.#runState);
+    // Writes go out in the order they were asked for, each carrying the run
+    // state as it stands when its turn comes. Two overlapping delegations
+    // persist the same run, and a write that finished first would otherwise
+    // be renamed over by an older snapshot finishing second.
+    const write = this.#runStatePersistence.then(() =>
+      this.artifactStore?.persistRunState(this.#runState)
+    );
+    this.#runStatePersistence = write.catch(() => {});
+    return await write;
   }
 
   /**
