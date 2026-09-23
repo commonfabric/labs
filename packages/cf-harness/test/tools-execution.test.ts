@@ -3590,12 +3590,16 @@ Deno.test("bash tool refuses a session on a runtime without sessions, recoverabl
   const context = createContext(sandbox);
   const output = await bashTool.invoke(context, {
     command: "echo hi",
+    cwd: "repo",
     session: "build",
   });
   assertEquals(output.exitCode, BASH_SESSION_UNAVAILABLE_EXIT_CODE);
   assertStringIncludes(String(output.stderr), "session");
-  // Nothing ran: the model is told rather than silently given a fresh sandbox.
+  // Nothing ran: the model is told rather than silently given a fresh sandbox,
+  // and the working directory is the one it had, not the one it asked for.
   assertEquals(sandbox.calls, []);
+  assertEquals(output.cwd, "/workspace");
+  assertEquals(context.currentDir, "/workspace");
 });
 
 Deno.test("bash tool turns the runtime's session refusal into a recoverable result", async () => {

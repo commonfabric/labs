@@ -229,7 +229,10 @@ export const resolveRunscSandboxConfig = (
       }
     }
   }
-  return {
+  // Frozen, mounts included: the engine checks containment against this
+  // set and the runtime rereads it at every launch, and a caller holding
+  // `ownedRunscSandboxConfig` must not be able to make those two differ.
+  return Object.freeze({
     runscBinary: options.runscBinary ?? DEFAULT_RUNSC_BINARY,
     rootfs: requireAbsoluteHostPath("sandbox rootfs", rootfs),
     workspaceHostPath: requireAbsoluteHostPath(
@@ -239,8 +242,10 @@ export const resolveRunscSandboxConfig = (
     workspaceMountPath,
     shellPath: options.shellPath ?? DEFAULT_RUNSC_SHELL,
     networkMode: options.networkMode ?? "none",
-    additionalMounts,
-    extraRunscArgs: options.extraRunscArgs ?? [],
+    additionalMounts: Object.freeze(
+      additionalMounts.map((mount) => Object.freeze(mount)),
+    ),
+    extraRunscArgs: Object.freeze([...(options.extraRunscArgs ?? [])]),
     ...(options.cfcPolicyPath !== undefined
       ? {
         cfcPolicyPath: requireAbsoluteHostPath(
@@ -256,7 +261,7 @@ export const resolveRunscSandboxConfig = (
       ? { containerUser: options.containerUser }
       : {}),
     sessionStartTimeoutMs: options.sessionStartTimeoutMs ?? 30_000,
-  };
+  });
 };
 
 /**

@@ -185,13 +185,15 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
       // Said rather than silently dropped: a runtime without sessions would
       // run the command in a fresh sandbox and the model would go on relying
       // on state that is not there.
+      // Nothing ran, so the working directory is unchanged — the same
+      // shape as the cwd-outside-sandbox refusal above.
       return {
         outputId,
         stdout: "",
         stderr:
           "this sandbox runtime has no sessions; rerun the command without `session`",
         exitCode: BASH_SESSION_UNAVAILABLE_EXIT_CODE,
-        cwd: commandCwd,
+        cwd: context.currentDir,
       };
     }
     let result: Awaited<ReturnType<typeof context.sandbox.runShell>>;
@@ -225,7 +227,7 @@ export const bashTool: HarnessToolDefinition<BashToolInput, BashToolOutput> = {
           stdout: "",
           stderr: `${error.message}; rerun the command without \`session\``,
           exitCode: BASH_SESSION_UNAVAILABLE_EXIT_CODE,
-          cwd: commandCwd,
+          cwd: context.currentDir,
         };
       }
       // Anything else from runShell — docker spawn/infra, CFC transport — is not

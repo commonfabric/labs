@@ -587,7 +587,11 @@ Deno.test("RunscSandboxRuntime needs a runner that can spawn for sessions, and r
 
 class ThrowingRunscRunner extends FakeRunscRunner {
   override run(request: ProcessRunRequest): Promise<ProcessRunResult> {
-    const sub = request.command === "/bin/sh" ? request.args[5 + 1] : undefined;
+    const sub = request.command === "/bin/sh"
+      ? request.args.slice(5).find((a) =>
+        ["run", "exec", "state", "delete", "kill"].includes(a)
+      )
+      : undefined;
     if (request.command === "/bin/sh") {
       this.requests.push(request);
       return Promise.reject(new Error(`runsc ${sub ?? "run"} exploded`));
@@ -640,4 +644,14 @@ Deno.test("an enforcing mode requires the runsc runtime to run with a CFC policy
   assertRunscCfcPolicyForMode("enforce-explicit", {
     cfcPolicyPath: "/policy.json",
   });
+});
+
+Deno.test("a resolved runsc configuration is frozen, mounts included", () => {
+  const cfg = config();
+  assertThrows(() => {
+    (cfg.additionalMounts as unknown as unknown[]).push({});
+  }, TypeError);
+  assertThrows(() => {
+    (cfg as unknown as { rootfs: string }).rootfs = "/elsewhere";
+  }, TypeError);
 });

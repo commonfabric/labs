@@ -298,6 +298,37 @@ describe("childSandboxOptions() on the runsc runtime", () => {
     expect(skillMount?.hostPath).toBe(acquiredAt(COMMIT_SHA).hostRoot);
   });
 
+  it("adds no second mount where the parent's runsc configuration already backs the skill", () => {
+    const acquired = acquiredAt(COMMIT_SHA);
+    const alreadyMounted = resolveRunscSandboxConfig({
+      workspaceHostPath: "/tmp/workspace",
+      rootfs: "/images/kitchensink",
+      scratchDir: "/tmp/scratch",
+      runId: "run-1",
+      platform: "linux",
+      additionalMounts: [
+        ...parentRunsc.additionalMounts,
+        {
+          kind: "host-bind",
+          name: "acquired-skill",
+          hostPath: acquired.hostRoot,
+          sandboxPath: "/acquired-skill",
+          readOnly: true,
+        },
+      ],
+    });
+    const options = childSandboxOptions(
+      { sandbox, ownedRunscSandboxConfig: alreadyMounted },
+      acquired,
+    );
+    expect(options.sandboxRuntimeKind).toBe("runsc");
+    expect(options.additionalMounts).toBe(alreadyMounted.additionalMounts);
+    expect(options.additionalMounts?.map((m) => m.sandboxPath)).toEqual([
+      "/file-cabinet",
+      "/acquired-skill",
+    ]);
+  });
+
   it("shares the parent's runsc runtime when there is nothing to mount", () => {
     const options = childSandboxOptions(
       { sandbox, ownedRunscSandboxConfig: parentRunsc },
