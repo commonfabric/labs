@@ -1277,7 +1277,7 @@ export class SchemaGenerator {
             context.definitions[keyForDef] = payload as MutableJSONSchema;
           }
           context.inProgressNames.delete(keyForDef);
-          context.definitionStack.delete(stackKey);
+          if (tracksCycle) context.definitionStack.delete(stackKey);
           if (!isRootType) {
             context.emittedRefs.add(keyForDef);
             return scopeOnReference === undefined
@@ -1287,14 +1287,14 @@ export class SchemaGenerator {
           // For root, keep inline; buildFinalSchema may promote if we choose
         }
         // Pop after formatting
-        context.definitionStack.delete(stackKey);
+        if (tracksCycle) context.definitionStack.delete(stackKey);
         return result;
       }
     }
 
     // If no formatter supports this type, this is an error - we should have
     // complete coverage
-    context.definitionStack.delete(stackKey);
+    if (tracksCycle) context.definitionStack.delete(stackKey);
 
     const typeName = context.typeChecker.typeToString(type);
     const typeFlags = type.flags;

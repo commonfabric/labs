@@ -98,8 +98,8 @@ form as the type path), intersections (reduced as the checker reduces the
 types, then merged as `IntersectionFormatter` merges them; the rules are
 below), unions (`true` member short-circuits, `false` members filtered,
 singletons unwrapped), literal nodes, `TypeReference` nodes (wrapper
-detection first; then, for a node the transformer registered a type for, that
-type, since a name printed from a type is the one its declaring module gives
+detection first; then, for a node the transformer registered a type other
+than `any` for, that type, since a name printed from a type is the one its declaring module gives
 it and the emitting module need not import it; then the default library's
 generic aliases — `Readonly`,
 `Partial`, `Required`, `Pick`, `Omit`, `NonNullable`, `Array`,
