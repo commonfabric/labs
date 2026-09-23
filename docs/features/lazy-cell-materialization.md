@@ -170,10 +170,12 @@ wrong. These rules hold that agreement:
 - **A handle branch the value selects is minted as a handle.** An optional
   handle — `Cell<T> | undefined` — generates as a union whose one branch
   declares `asCell`, and the entry point's dispatch sees the marker only at the
-  top of a schema. Once the value selects that branch, the view hands the
-  selected schema back to the entry point, whose dispatch mints the handle,
-  unwraps the consumed marker off the handle's own schema, and applies the
-  follow-scope cap. A reader gets the same `Cell` either way.
+  top of a schema. Where the value's type selects that branch, the view hands
+  the selected schema back to the entry point, whose dispatch mints the
+  handle, unwraps the consumed marker off the handle's own schema, and applies
+  the follow-scope cap. Where the type settles nothing, the traverser
+  evaluates the union whole and keeps the cell among its matches. A reader
+  gets the same `Cell` either way.
 - **Object property defaults follow filtering.** A missing or rejected
   declared property takes its non-null default, including when it is required.
   A property default of `null` does not fill an absent or rejected property.

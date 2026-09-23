@@ -1970,12 +1970,12 @@ function removeAsCellFromSchema(schema: JSONSchema): JSONSchema {
  * What the handles a schema can mint carry: `"none"` where it mints none,
  * `"bare"` where every one adopted the schema of the link it was minted over,
  * `"shaped"` where one may carry a shape of its own. A branch declaring
- * `asCell` is bare where it is a true schema once its marker is removed — a
- * reader that admits a handle over any value at all. A choice, `anyOf` or
- * `oneOf`, is what its minting branches are, at any depth, since a merge
- * cannot see which of them minted the handle it holds. An `allOf` is bare
- * where its parts are all true once their markers are removed, an `allOf` of
- * true parts being its bare part; a part that constrains something, a nested
+ * `asCell` is bare where it is a true schema — the marker is an internal key
+ * a true schema may carry — so a reader that admits a handle over any value
+ * at all. A choice, `anyOf` or `oneOf`, is what its minting branches are, at
+ * any depth, since a merge cannot see which of them minted the handle it
+ * holds. An `allOf` is bare where its parts are all true, an `allOf` of true
+ * parts being its bare part; a part that constrains something, a nested
  * combinator among them, is a constraint the handle must keep. A reference
  * that does not resolve is taken as shaped.
  */
@@ -1987,7 +1987,7 @@ function handleProvenance(
   if (resolved === false) return "shaped";
   if (!isObjectOrArray(resolved)) return "none";
   const isTrue = (part: JSONSchema): boolean =>
-    ContextualFlowControl.isTrueSchema(removeAsCellFromSchema(part));
+    ContextualFlowControl.isTrueSchema(part);
   if (ContextualFlowControl.getAsCellValues(resolved).length > 0) {
     return isTrue(resolved) ? "bare" : "shaped";
   }

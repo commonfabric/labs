@@ -161,8 +161,11 @@ schema permits an omitted property or a fallback.
 
 **Combinators resolve at the point of access.** `anyOf`, `oneOf`, and `allOf`
 use eager traversal for the selected subtree, preserving whole-branch validation
-and merging only successful results. Shallow candidate matching does not decide
-branch validity. Nothing else is evaluated whole: a property default and a
+and merging only successful results. One case stays lazy: a union the value's
+type alone settles — one branch accepting the value's type and every other
+refusing it — is built as a view over that branch, since nothing below the
+value can change which branch applies. Shallow candidate matching decides
+nothing else. Nothing else is evaluated whole: a property default and a
 nullable array-item substitute answer for what the view rejects at the
 container, and what fails deeper refuses where it is touched. The feature
 contract lists those as
@@ -374,7 +377,9 @@ the materialization differs.
       reshaping methods refuse — a view is a read.
 - [x] `toCell` on every view.
 - [x] `anyOf`, `oneOf`, and `allOf` evaluated through eager traversal at the
-      point of access, preserving whole-branch validation and result merging.
+      point of access, preserving whole-branch validation and result merging;
+      a union the value's type settles narrows to its one branch and stays
+      lazy.
 - [x] `SchemaMismatchError`, carrying link and reason.
 - [x] Root guard: type, `required` presence. A mismatch at the root is
       `undefined`, matching an eager read; below it, a refusal.

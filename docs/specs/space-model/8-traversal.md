@@ -124,12 +124,16 @@ include a `Cell` returns that cell rather than a merged object, since merging
 would produce a plain object and lose the cell. It re-points the cell at the
 whole compound schema with the branches' own `asCell` markers removed, so the
 union survives on the cell's schema and governs what a read through it
-returns — with one exception. A branch that declares `asCell` and nothing else
-is a true reader, and a true reader adopts the schema of the link it crosses;
-a handle minted from such a branch therefore already carries the link's own
-schema, and it keeps that rather than the union, which says only what the
-reader admits. Query traversal produces no cells, and merges by the rules
-above.
+returns — with one exception. A branch that declares `asCell` and constrains
+nothing is a true reader, and a true reader adopts the schema of the link it
+crosses, so a handle minted from such a branch already carries the link's own
+schema. The merge cannot see which branch minted the handle it holds, so the
+handle keeps that schema rather than the union only where every branch that
+can mint one — through nested combinators and resolved references — is such a
+bare branch, an `allOf` counting where its other parts are true; the union
+says only what the reader admits. One shaped `asCell` branch anywhere in the
+compound keeps the union on the handle. Query traversal produces no cells, and
+merges by the rules above.
 
 ### `$ref`
 
