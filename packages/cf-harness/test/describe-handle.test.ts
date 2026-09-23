@@ -49,6 +49,7 @@ import type { HarnessHandleTable } from "../src/contracts/handle-table.ts";
 import {
   HARNESS_RESEARCH_HANDLE_TYPE,
   type HarnessResearchHandleValue,
+  type HarnessResearchPatternRecord,
 } from "../src/contracts/research.ts";
 import { createToolOutputId } from "../src/contracts/tool-result.ts";
 import type { HarnessToolContext } from "../src/tools/types.ts";
@@ -264,6 +265,23 @@ const contextWith = (
 
 describe("describe_handle", () => {
   describe("a research referent", () => {
+    const LEDGER_READER: HarnessResearchPatternRecord = {
+      patternId: "ledger-reader",
+      description: "Reads a ledger.",
+      hashtags: [],
+      importHint: 'import Ledger from "cf:pattern:ledger-reader";',
+      ownerDid: "did:key:owner",
+      createdAt: "2026-09-01T00:00:00.000Z",
+      dependencies: [],
+      argumentSchema: { type: "object", properties: { db: {} } },
+      resultSchema: {
+        type: "object",
+        properties: { rows: { type: "array" } },
+      },
+    };
+
+    // The kit selects the same record the host confirmed, raw schemas and
+    // all, which is how the research tool retains it.
     const findings = (
       describedTokens: readonly string[],
     ): HarnessResearchHandleValue => ({
@@ -275,25 +293,12 @@ describe("describe_handle", () => {
         task: "Which reader fits?",
         summary: "The ledger reader fits.",
         inputs: [],
-        patterns: [],
+        patterns: [LEDGER_READER],
         rules: [],
         sources: [],
         missing: [],
       },
-      confirmedPatterns: [{
-        patternId: "ledger-reader",
-        description: "Reads a ledger.",
-        hashtags: [],
-        importHint: 'import Ledger from "cf:pattern:ledger-reader";',
-        ownerDid: "did:key:owner",
-        createdAt: "2026-09-01T00:00:00.000Z",
-        dependencies: [],
-        argumentSchema: { type: "object", properties: { db: {} } },
-        resultSchema: {
-          type: "object",
-          properties: { rows: { type: "array" } },
-        },
-      }],
+      confirmedPatterns: [LEDGER_READER],
       describedHandles: describedTokens.map((token) => ({
         token,
         description: { outputId: `described-${token}`, token, known: true },
@@ -341,6 +346,14 @@ describe("describe_handle", () => {
         "argumentSchema",
       );
       expect(output.research?.patterns[0]).not.toHaveProperty("resultSchema");
+      expect(output.research?.kit.patterns).toHaveLength(1);
+      expect(output.research?.kit.patterns[0]).not.toHaveProperty(
+        "argumentSchema",
+      );
+      expect(output.research?.kit.patterns[0]).not.toHaveProperty(
+        "resultSchema",
+      );
+      expect(JSON.stringify(output)).not.toContain('"argumentSchema"');
       expect(output.research?.describedHandles).toEqual([
         {
           token: held.token,

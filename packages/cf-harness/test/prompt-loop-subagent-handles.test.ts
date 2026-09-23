@@ -978,22 +978,23 @@ describe("prompt-loop cross-agent address handles", () => {
             runId,
           });
           const requestBodies: unknown[] = [];
+          const engine = new CfHarnessEngine({
+            artifactStore,
+            sandboxRuntime: new FakeSandboxRuntime(),
+            runId,
+            model: "gpt-5.4",
+            inheritedResearchRuns: hasResearch ? [researchRun] : [],
+            inheritedCfcModelContext: {
+              type: "cf-harness.cfc-model-context",
+              version: 1,
+              updatedAt: "2026-09-15T00:00:00.000Z",
+              label: { confidentiality: [secret] },
+              observations: [],
+            },
+          });
           const loop = new CfHarnessPromptLoop({
             apiKey: "test-key",
-            engine: new CfHarnessEngine({
-              artifactStore,
-              sandboxRuntime: new FakeSandboxRuntime(),
-              runId,
-              model: "gpt-5.4",
-              inheritedResearchRuns: hasResearch ? [researchRun] : [],
-              inheritedCfcModelContext: {
-                type: "cf-harness.cfc-model-context",
-                version: 1,
-                updatedAt: "2026-09-15T00:00:00.000Z",
-                label: { confidentiality: [secret] },
-                observations: [],
-              },
-            }),
+            engine,
             fetchFn: scriptedFetch([
               delegateCallTurn("call-delegate", {
                 goal: "Implement the researched recipe.",
@@ -1018,6 +1019,9 @@ describe("prompt-loop cross-agent address handles", () => {
           // Research reaches a child only as a handle its brief names; a
           // retained kit the delegation did not name transfers nothing.
           expect(childState.researchRuns).toBeUndefined();
+          expect(engine.getRunState().researchRuns).toEqual(
+            hasResearch ? [researchRun] : [],
+          );
           expect(JSON.stringify(requestBodies[1])).not.toContain(
             "did:key:zChildKit",
           );

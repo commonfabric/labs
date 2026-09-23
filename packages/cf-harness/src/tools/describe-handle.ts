@@ -259,12 +259,16 @@ export type DescribeHandleLabel = DisclosedCfcLabel;
 /**
  * Describes the SHAPE of a handle's referent: property names, types, nesting,
  * and required-ness — and, for a database, how full each of its tables is. No
- * datum is ever reported, so a reply here says what a reference is and how much
- * of it there is, never what it holds. This is what lets an agent write code
- * over a reference it was handed
+ * datum of the referent is reported, so a reply here says what a reference is
+ * and how much of it there is, never what it holds. This is what lets an agent
+ * write code over a reference it was handed
  * — you cannot compute over data whose shape you do not know — and what lets
  * an orchestrator verify a chain of transformations without reading the data
- * flowing through it.
+ * flowing through it. The one referent whose content this tool does return
+ * is a research handle: what it holds is the run's own findings, projected as
+ * the research tool projected them and labelled as that reply was, and a
+ * reader gets them under {@link DescribeHandleToolOutput.research} together
+ * with which of the bindings they name it holds.
  *
  * Posture, stated plainly. The policy on disclosing shape is permissive and
  * fixed: any run that holds the token gets an answer, and there is no setting
@@ -331,7 +335,7 @@ export const describeHandleToolDescriptor: HarnessToolDescriptor = {
   toolId: "describe_handle",
   title: "Describe Handle",
   description:
-    "Report the shape of a general handle's referent and the CFC labels it carries: its recorded schema, path and label atom types, never its data. A held non-cell referent returns its kind and provenance under `referent`, with `hasSchema: false`. A referent that is a SQLite database reports its tables instead of a schema, under `database`: the columns of each table with their types, the distinct labels those columns carry, and under `fill` how many rows each table holds and how many of them are non-NULL in each column. Read `fill` before writing a query: a column whose count is 0 is NULL on every row of this database, so filtering on it returns nothing, and a table reporting `unread` was not counted rather than empty. A table reporting `rowLabelReads` carries a per-row label rule over those columns, and a query over it must select every one of them by its own name — an alias does not stand in for the column — or the read is refused and the refusal arrives on the result's `error` rather than as rows; `rowLabelReadsIncomplete` means the named columns are not the whole of what the rule needs — it reads a column this reply does not name, or it is declared in a shape that cannot be read — so such a query is refused whatever it selects. Read such a referent with `db.query` over the handle rather than as a value. A research handle — the cfh:v: token a research call returned — returns what that research found under `research`: its kit, the patterns it confirmed, and the handles it described, each marked `unavailable` when this run does not hold its token; read it before researching the same question again. A capability-restricted handle returns a named refusal. Use it to check that a reference is the kind of thing a step expects, and what handling it demands, before passing it on.",
+    "Report the shape of a general handle's referent and the CFC labels it carries: its recorded schema, path and label atom types, never its data — a research handle, whose content is the run's own findings, is the one referent whose content it returns. A held non-cell referent returns its kind and provenance under `referent`, with `hasSchema: false`. A referent that is a SQLite database reports its tables instead of a schema, under `database`: the columns of each table with their types, the distinct labels those columns carry, and under `fill` how many rows each table holds and how many of them are non-NULL in each column. Read `fill` before writing a query: a column whose count is 0 is NULL on every row of this database, so filtering on it returns nothing, and a table reporting `unread` was not counted rather than empty. A table reporting `rowLabelReads` carries a per-row label rule over those columns, and a query over it must select every one of them by its own name — an alias does not stand in for the column — or the read is refused and the refusal arrives on the result's `error` rather than as rows; `rowLabelReadsIncomplete` means the named columns are not the whole of what the rule needs — it reads a column this reply does not name, or it is declared in a shape that cannot be read — so such a query is refused whatever it selects. Read such a referent with `db.query` over the handle rather than as a value. A research handle — the cfh:v: token a research call returned — returns what that research found under `research`: its kit, the patterns it confirmed, and the handles it described, each marked `unavailable` when this run does not hold its token; read it before researching the same question again. A capability-restricted handle returns a named refusal. Use it to check that a reference is the kind of thing a step expects, and what handling it demands, before passing it on.",
   effectClass: "read",
   inputSchema: {
     type: "object",
