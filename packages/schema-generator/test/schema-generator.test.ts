@@ -2853,6 +2853,51 @@ type CalculatorRequest = {
         expect(schema).toBe(true);
       });
 
+      describe("an alias whose body is one of its parameters", () => {
+        // `type Reactive<T> = T` denotes its argument, so the reference is
+        // read as that argument rather than left unread as a generic.
+
+        const IDENTITY = "export type Reactive<T> = T;";
+
+        it("reads the reference as its argument", async () => {
+          const schema = await generate(
+            { "/main.ts": IDENTITY },
+            generic(
+              "Reactive",
+              objectOf({ name: keyword(ts.SyntaxKind.StringKeyword) }),
+            ),
+          );
+
+          expect(schema).toEqual({
+            type: "object",
+            properties: { name: { type: "string" } },
+            required: ["name"],
+          });
+        });
+
+        it("reads the argument at the parameter's position", async () => {
+          const schema = await generate(
+            { "/main.ts": "export type Second<A, B> = (B);" },
+            generic(
+              "Second",
+              keyword(ts.SyntaxKind.StringKeyword),
+              keyword(ts.SyntaxKind.NumberKeyword),
+            ),
+          );
+
+          expect(schema).toEqual({ type: "number" });
+        });
+
+        it("returns `true` for a reference that leaves the argument out", async () => {
+          const schema = await generate(
+            { "/main.ts": IDENTITY },
+            reference("Reactive"),
+          );
+
+          expect(schema).toBe(true);
+        });
+      });
+
       it("returns `true` for a reference with no arguments", async () => {
         const schema = await generate({ "/main.ts": BOX }, reference("Box"));
 

@@ -103,10 +103,14 @@ detection first; then the default library's generic aliases — `Readonly`,
 `ReadonlyArray`, `Record` — applied structurally to their arguments when the
 name binds through the node or, for an unbindable synthetic reference,
 resolves lexically (`checker.resolveName`) to a library declaration, so an
-authored or imported shadow of the name keeps the general path; then the
-general path, which resolves the name the same way — bound through the node,
-else lexically from the module's scope, an import followed to what it
-imports — and formats the declared type, so a name the module declares,
+authored or imported shadow of the name keeps the general path; then an
+alias whose whole body is one of its own type parameters
+(`type Reactive<T> = T`), read as the argument the reference supplies for that
+parameter, since the reference denotes exactly that argument — except a scope
+wrapper, whose scope `CommonFabricFormatter` reads from the reference's name;
+then the general path, which resolves the name the same way — bound through
+the node, else lexically from the module's scope, an import followed to what
+it imports — and formats the declared type, so a name the module declares,
 exported or not, or imports is read. A generic declared outside the default
 library is left unread: its declared type leaves the parameters unbound, and no
 reading of an unbound parameter stands in for the argument a reference supplies
