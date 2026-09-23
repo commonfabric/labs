@@ -128,9 +128,12 @@
  *   never the node. Plain identity lookup, no getOriginalNode fallback: a node
  *   derived from a printed one is no longer that print.
  *   Writers: state.recordPrintedFrom() (typeToTypeNodeWithRegistry and
- *            typeToTypeNode, given a state)
+ *            typeToTypeNode, given a state; cloneTypeNodeDeepForEmission,
+ *            which records a print's clone as printed from the same type)
  *   Readers: state.printedFrom() (SchemaGeneratorTransformer, which also hands
- *            it to the schema generator as its `printedFrom` option)
+ *            it to the schema generator as its `printedFrom` option;
+ *            cloneTypeNodeDeepForEmission, which carries the mark onto a
+ *            print's clone)
  *
  * --- schema-generator boundary ---
  *

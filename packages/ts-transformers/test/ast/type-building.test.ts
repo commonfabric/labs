@@ -1,4 +1,9 @@
-import { assert, assertEquals, assertStrictEquals } from "@std/assert";
+import {
+  assert,
+  assertEquals,
+  assertNotStrictEquals,
+  assertStrictEquals,
+} from "@std/assert";
 import ts from "typescript";
 
 import { parseModule } from "../transformed-ast.ts";
@@ -89,6 +94,8 @@ Deno.test("cloneTypeNodeDeepForEmission records the clone of a print as printed 
     state,
   );
 
+  // The clone is a new node, so the record on it was carried there.
+  assertNotStrictEquals(cloned.elementType, printed);
   assertStrictEquals(state.printedFrom(cloned.elementType), printedType);
 });
 

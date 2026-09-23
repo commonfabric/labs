@@ -207,11 +207,14 @@ export default pattern<Input>(({ item }) => {
       symbol: "rules",
     };
 
-    /** The labels of `a` in the result of a pattern that returns its input. */
-    async function resultLabels(
+    /**
+     * The labels of `a` in the argument and the result of a pattern that
+     * returns its input.
+     */
+    async function labels(
       declarations: string,
       a: string,
-    ): Promise<unknown> {
+    ): Promise<{ input: unknown; output: unknown }> {
       const files = await transformFiles({
         "/rules.ts": `/// <cts-enable />
 import { cfcPattern, exchangeRule, exchangeRules, THIS_POLICY, v } from "commonfabric/cfc";
@@ -233,8 +236,21 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
         typeCheck: true,
         moduleIdentities: new Map([["/rules.ts", "sha256:rules"]]),
       });
-      const output = patternSchemas(parseModule(files["/main.tsx"]!)).output;
-      return ((output.properties as Schema).a as Schema).ifc;
+      const { input, output } = patternSchemas(
+        parseModule(files["/main.tsx"]!),
+      );
+      const labelsOf = (schema: Schema) =>
+        ((schema.properties as Schema | undefined)?.a as Schema | undefined)
+          ?.ifc;
+      return { input: labelsOf(input), output: labelsOf(output) };
+    }
+
+    /** The labels of `a` in the result of a pattern that returns its input. */
+    async function resultLabels(
+      declarations: string,
+      a: string,
+    ): Promise<unknown> {
+      return (await labels(declarations, a)).output;
     }
 
     it("reads the binding a payload's member names", async () => {
@@ -277,6 +293,86 @@ export default pattern<{ a: ${a} }>(({ a }) => ({ a }));`,
           `Confidential<string, [other.AnyOf<["reader"]>]>`,
         ),
       ).toEqual({ confidentiality: [{ label: "ordinary choice" }] });
+    });
+
+    it("reads an optional member's annotation", async () => {
+      const expected = { confidentiality: ["reader"] };
+      expect(
+        await labels("", `Cfc<string, { confidentiality?: ["reader"] }>`),
+      ).toEqual({ input: expected, output: expected });
+    });
+
+    it("reads an optional member of a generic declaration from its type", async () => {
+      const expected = { confidentiality: ["reader"] };
+      expect(
+        await labels(
+          "interface Meta<X> { confidentiality?: X }",
+          `Cfc<string, Meta<["reader"]>>`,
+        ),
+      ).toEqual({ input: expected, output: expected });
+    });
+
+    it("reads the binding an optional member names", async () => {
+      const { input, output } = await labels(
+        "",
+        "Cfc<string, { confidentiality?: [PolicyOf<typeof rules>] }>",
+      );
+      expect(input).toMatchObject({ confidentiality: [policy] });
+      expect(output).toMatchObject({ confidentiality: [policy] });
+    });
+
+    it("reads `AnyOf` with no alternatives from its type", async () => {
+      // A generic interface's member is read from its instantiated type, the
+      // brand's payload here an empty tuple. (A result holding an empty tuple
+      // is not printed, so the argument's labels are the ones read.)
+      const { input } = await labels(
+        "interface Meta<X extends readonly unknown[]> { confidentiality: [AnyOf<X>] }",
+        "Cfc<string, Meta<readonly []>>",
+      );
+      expect(input).toEqual({ confidentiality: [{ anyOf: [] }] });
+    });
+
+    describe("an annotation whose syntax the label reader does not evaluate", () => {
+      for (
+        const [spelling, declarations, expected] of [
+          [
+            "a conditional alias",
+            `type Labels<T> = T extends string ? ["reader"] : ["admin"];
+interface Meta { confidentiality: Labels<string> }`,
+            ["reader"],
+          ],
+          [
+            "a mapped alias",
+            `type Labels<T> = { [K in keyof T]: T[K] };
+interface Meta { confidentiality: Labels<["reader"]> }`,
+            ["reader"],
+          ],
+          [
+            "a named tuple member",
+            `interface Meta { confidentiality: [reader: "reader"] }`,
+            ["reader"],
+          ],
+          [
+            "a tuple spread",
+            `interface Meta { confidentiality: [...["reader", "admin"]] }`,
+            ["reader", "admin"],
+          ],
+          [
+            "an alias's default argument",
+            `type Labels<T = "reader"> = [T];
+interface Meta { confidentiality: Labels }`,
+            ["reader"],
+          ],
+        ] as const
+      ) {
+        it(`reads ${spelling} from the type it denotes`, async () => {
+          const labelled = { confidentiality: expected };
+          expect(await labels(declarations, "Cfc<string, Meta>")).toEqual({
+            input: labelled,
+            output: labelled,
+          });
+        });
+      }
     });
   });
 });

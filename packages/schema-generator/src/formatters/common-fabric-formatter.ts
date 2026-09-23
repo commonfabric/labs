@@ -53,6 +53,30 @@ type WrapperKind = CellWrapperKind;
 const CFC_ALIAS_NAMES: ReadonlySet<string> = new Set(CFC_CANONICAL_ALIAS_NAMES);
 /** The property `AnyOf<X>` is as a type (`@commonfabric/api/cfc`). */
 const CFC_ANY_OF_BRAND = "__ct_cfc_any_of__";
+/**
+ * What the literal reader returns for syntax it does not evaluate, so that the
+ * type paired with that syntax is read in its place. `undefined` is a value it
+ * reads (`undefined` written as a type), so it cannot stand for this.
+ */
+const UNREAD: unique symbol = Symbol("unread syntax");
+
+/**
+ * The type of the value `member` holds, given `type`, its type: `type` less
+ * the `undefined` that an optional member's `?` adds.
+ */
+function memberValueType(
+  member: ts.Symbol,
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): ts.Type {
+  if ((member.flags & ts.SymbolFlags.Optional) === 0 || !type.isUnion()) {
+    return type;
+  }
+  // `getNonNullableType` also removes a `null`, which `?` does not add.
+  return type.types.some((part) => (part.flags & ts.TypeFlags.Null) !== 0)
+    ? type
+    : checker.getNonNullableType(type);
+}
 const SCOPE_WRAPPER_SCOPES: Readonly<Record<string, SchemaScope>> = {
   PerSpace: "space",
   PerUser: "user",
@@ -1859,122 +1883,179 @@ export class CommonFabricFormatter implements TypeFormatter {
     return undefined;
   }
 
+  /**
+   * The value a label's type spells, read from `typeNode` where it is given
+   * and from `type` otherwise. Syntax says what a type cannot, such as which
+   * binding a `typeof` names, so it is read first, paired with the type it
+   * denotes. Where it is syntax this reader does not evaluate, such as a
+   * conditional or mapped alias, the paired type decides the value.
+   */
   #extractLiteralLikeValue(
     type: ts.Type | undefined,
     typeNode: ts.TypeNode | undefined,
     context: GenerationContext,
   ): unknown {
-    if (!typeNode && !type) {
-      return undefined;
-    }
-
     if (typeNode) {
-      if (ts.isParenthesizedTypeNode(typeNode)) {
-        return this.#extractLiteralLikeValue(type, typeNode.type, context);
+      const fromSyntax = this.#readLiteralSyntax(type, typeNode, context);
+      if (fromSyntax !== UNREAD) return fromSyntax;
+    }
+    return type ? this.#readLiteralType(type, context) : undefined;
+  }
+
+  /**
+   * Helper for {@link #extractLiteralLikeValue}: the value `typeNode` spells,
+   * or `UNREAD` for syntax it does not evaluate. Each node it descends into is
+   * read paired with the part of `type` that node denotes, where `type` is
+   * given.
+   */
+  #readLiteralSyntax(
+    type: ts.Type | undefined,
+    typeNode: ts.TypeNode,
+    context: GenerationContext,
+  ): unknown {
+    const checker = context.typeChecker;
+    if (ts.isParenthesizedTypeNode(typeNode)) {
+      return this.#extractLiteralLikeValue(type, typeNode.type, context);
+    }
+    if (
+      ts.isTypeOperatorNode(typeNode) &&
+      typeNode.operator === ts.SyntaxKind.ReadonlyKeyword
+    ) {
+      return this.#extractLiteralLikeValue(type, typeNode.type, context);
+    }
+    if (ts.isTypeQueryNode(typeNode)) {
+      const symbol = checker.getSymbolAtLocation(typeNode.exprName);
+      const extracted = symbol && extractLiteralValueOfSymbol(symbol, checker);
+      return extracted ? extracted.value : UNREAD;
+    }
+    if (ts.isLiteralTypeNode(typeNode)) {
+      const literal = typeNode.literal;
+      if (ts.isStringLiteral(literal)) return literal.text;
+      if (ts.isNumericLiteral(literal)) return Number(literal.text);
+      if (literal.kind === ts.SyntaxKind.TrueKeyword) return true;
+      if (literal.kind === ts.SyntaxKind.FalseKeyword) return false;
+      if (literal.kind === ts.SyntaxKind.NullKeyword) return null;
+      return UNREAD;
+    }
+    if (ts.isTupleTypeNode(typeNode)) {
+      // A spread, optional, or rest element leaves no element-for-element
+      // reading of the tuple, which its type then decides.
+      if (
+        typeNode.elements.some((element) =>
+          ts.isRestTypeNode(element) || ts.isOptionalTypeNode(element) ||
+          (ts.isNamedTupleMember(element) &&
+            (element.dotDotDotToken || element.questionToken))
+        )
+      ) {
+        return UNREAD;
       }
-      if (ts.isTypeOperatorNode(typeNode)) {
-        return this.#extractLiteralLikeValue(type, typeNode.type, context);
-      }
-      if (ts.isTypeQueryNode(typeNode)) {
-        return this.#extractValueFromTypeQuery(typeNode, context);
-      }
-      if (ts.isLiteralTypeNode(typeNode)) {
-        const literal = typeNode.literal;
-        if (ts.isStringLiteral(literal)) return literal.text;
-        if (ts.isNumericLiteral(literal)) return Number(literal.text);
-        if (literal.kind === ts.SyntaxKind.TrueKeyword) return true;
-        if (literal.kind === ts.SyntaxKind.FalseKeyword) return false;
-        if (literal.kind === ts.SyntaxKind.NullKeyword) return null;
-      }
-      if (ts.isTupleTypeNode(typeNode)) {
-        return typeNode.elements.map((element) =>
-          this.#extractLiteralLikeValue(undefined, element, context)
-        );
-      }
-      if (ts.isTypeReferenceNode(typeNode)) {
-        const referencedName = this.#resolveTypeReferenceName(
-          typeNode.typeName,
+      const elementTypes = type && checker.isTupleType(type)
+        ? checker.getTypeArguments(type as ts.TypeReference)
+        : undefined;
+      const paired = elementTypes?.length === typeNode.elements.length
+        ? elementTypes
+        : undefined;
+      return typeNode.elements.map((element, index) =>
+        this.#extractLiteralLikeValue(
+          paired?.[index],
+          ts.isNamedTupleMember(element) ? element.type : element,
+          context,
+        )
+      );
+    }
+    if (ts.isTypeReferenceNode(typeNode)) {
+      const referencedName = this.#resolveTypeReferenceName(
+        typeNode.typeName,
+        context,
+      );
+      if (referencedName === "AnyOf") {
+        const alternatives = this.#extractLiteralLikeValue(
+          type && this.#anyOfBrandPayload(type, context),
+          typeNode.typeArguments?.[0],
           context,
         );
-        if (referencedName === "AnyOf") {
-          const alternativesNode = typeNode.typeArguments?.[0];
-          const alternatives = this.#extractLiteralLikeValue(
-            undefined,
-            alternativesNode,
-            context,
-          );
-          return Array.isArray(alternatives)
-            ? { anyOf: alternatives }
-            : undefined;
-        }
-        if (referencedName === "PolicyOf") {
-          const bindingNode = typeNode.typeArguments?.[0];
-          if (
-            bindingNode && ts.isTypeQueryNode(bindingNode) &&
-            ts.isIdentifier(bindingNode.exprName)
-          ) {
-            return {
-              type: CFC_ATOM_TYPE.Policy,
-              policyRefKind: "module",
-              __ctPolicyIdentityOf: this.#writeAuthorizedByIdentityForBinding(
-                context,
-                bindingNode.exprName,
-                false,
-              ),
-              subject: { __ctOwningSpace: true },
-            };
-          }
-          return undefined;
-        }
-        const aliasDeclaration = this.#getTypeAliasDeclarationForSymbol(
-          context.typeChecker.getSymbolAtLocation(typeNode.typeName),
-          context,
-        );
-        if (aliasDeclaration) {
-          const paramMap = new Map<string, ts.TypeNode>();
-          for (
-            let i = 0;
-            i < (aliasDeclaration.typeParameters?.length ?? 0);
-            i++
-          ) {
-            const paramName = aliasDeclaration.typeParameters?.[i]?.name.text;
-            const actualArgNode = typeNode.typeArguments?.[i];
-            if (paramName && actualArgNode) {
-              paramMap.set(paramName, actualArgNode);
-            }
-          }
-          return this.#extractLiteralLikeValue(
-            undefined,
-            substituteTypeNode(aliasDeclaration.type, paramMap),
-            context,
-          );
-        }
+        return Array.isArray(alternatives) ? { anyOf: alternatives } : UNREAD;
       }
-      if (ts.isTypeLiteralNode(typeNode)) {
-        const obj: Record<string, unknown> = {};
-        for (const member of typeNode.members) {
-          if (ts.isPropertySignature(member) && member.name && member.type) {
-            const propName = getPropertyNameText(member.name);
-            if (!propName) continue;
-            obj[propName] = this.#extractLiteralLikeValue(
-              undefined,
-              member.type,
+      if (referencedName === "PolicyOf") {
+        const bindingNode = typeNode.typeArguments?.[0];
+        if (
+          bindingNode && ts.isTypeQueryNode(bindingNode) &&
+          ts.isIdentifier(bindingNode.exprName)
+        ) {
+          return {
+            type: CFC_ATOM_TYPE.Policy,
+            policyRefKind: "module",
+            __ctPolicyIdentityOf: this.#writeAuthorizedByIdentityForBinding(
               context,
-            );
+              bindingNode.exprName,
+              false,
+            ),
+            subject: { __ctOwningSpace: true },
+          };
+        }
+        return undefined;
+      }
+      const aliasDeclaration = this.#getTypeAliasDeclarationForSymbol(
+        checker.getSymbolAtLocation(typeNode.typeName),
+        context,
+      );
+      if (aliasDeclaration) {
+        const paramMap = new Map<string, ts.TypeNode>();
+        for (
+          let i = 0;
+          i < (aliasDeclaration.typeParameters?.length ?? 0);
+          i++
+        ) {
+          const paramName = aliasDeclaration.typeParameters?.[i]?.name.text;
+          const actualArgNode = typeNode.typeArguments?.[i];
+          if (paramName && actualArgNode) {
+            paramMap.set(paramName, actualArgNode);
           }
         }
-        return obj;
+        // The alias's body, with the reference's arguments in place of its
+        // parameters, denotes what the reference does.
+        return this.#extractLiteralLikeValue(
+          type,
+          substituteTypeNode(aliasDeclaration.type, paramMap),
+          context,
+        );
       }
-      if (typeNode.kind === ts.SyntaxKind.TrueKeyword) return true;
-      if (typeNode.kind === ts.SyntaxKind.FalseKeyword) return false;
-      if (typeNode.kind === ts.SyntaxKind.NullKeyword) return null;
-      if (typeNode.kind === ts.SyntaxKind.UndefinedKeyword) return undefined;
+      return UNREAD;
     }
-
-    if (!type) {
-      return undefined;
+    if (ts.isTypeLiteralNode(typeNode)) {
+      const obj: Record<string, unknown> = {};
+      for (const member of typeNode.members) {
+        if (ts.isPropertySignature(member) && member.name && member.type) {
+          const propName = getPropertyNameText(member.name);
+          if (!propName) continue;
+          const property = type && checker.getPropertyOfType(type, propName);
+          obj[propName] = this.#extractLiteralLikeValue(
+            property &&
+              memberValueType(
+                property,
+                checker.getTypeOfSymbol(property),
+                checker,
+              ),
+            member.type,
+            context,
+          );
+        }
+      }
+      return obj;
     }
+    if (typeNode.kind === ts.SyntaxKind.TrueKeyword) return true;
+    if (typeNode.kind === ts.SyntaxKind.FalseKeyword) return false;
+    if (typeNode.kind === ts.SyntaxKind.NullKeyword) return null;
+    if (typeNode.kind === ts.SyntaxKind.UndefinedKeyword) return undefined;
+    return UNREAD;
+  }
 
+  /**
+   * Helper for {@link #extractLiteralLikeValue}: the value `type` spells, for
+   * a label with no syntax to read, or syntax this reader does not evaluate.
+   */
+  #readLiteralType(type: ts.Type, context: GenerationContext): unknown {
+    const checker = context.typeChecker;
     if (type.flags & ts.TypeFlags.StringLiteral) {
       return (type as ts.StringLiteralType).value;
     }
@@ -1991,7 +2072,7 @@ export class CommonFabricFormatter implements TypeFormatter {
       return undefined;
     }
 
-    const typeText = context.typeChecker.typeToString(type);
+    const typeText = checker.typeToString(type);
     if (
       typeText.length >= 2 &&
       ((typeText.startsWith('"') && typeText.endsWith('"')) ||
@@ -2004,50 +2085,52 @@ export class CommonFabricFormatter implements TypeFormatter {
     // is how the library writes the metadata into the type, so a type read
     // without a node is recognized by it, not by an alias name an author may
     // also use.
-    const anyOf = this.#readAnyOfBrand(type, context);
-    if (anyOf) return anyOf;
-
-    if (context.typeChecker.isTupleType(type)) {
-      const tupleType = type as ts.TypeReference;
-      const elements = context.typeChecker.getTypeArguments(tupleType);
-      if (elements.length > 0) {
-        return elements.map((element) =>
-          this.#extractLiteralLikeValue(element, undefined, context)
-        );
-      }
+    const anyOfPayload = this.#anyOfBrandPayload(type, context);
+    if (anyOfPayload) {
+      const alternatives = this.#extractLiteralLikeValue(
+        anyOfPayload,
+        undefined,
+        context,
+      );
+      return Array.isArray(alternatives) ? { anyOf: alternatives } : undefined;
     }
 
     const objectFlags =
       (type as { objectFlags?: ts.ObjectFlags }).objectFlags ??
         0;
-    if ((objectFlags & ts.ObjectFlags.Tuple) !== 0) {
-      const tupleType = type as ts.TypeReference;
-      const elements = context.typeChecker.getTypeArguments(tupleType);
-      if (elements.length > 0) {
-        return elements.map((element) =>
-          this.#extractLiteralLikeValue(element, undefined, context)
-        );
-      }
+    if (
+      checker.isTupleType(type) || (objectFlags & ts.ObjectFlags.Tuple) !== 0
+    ) {
+      return checker.getTypeArguments(type as ts.TypeReference).map((
+        element,
+      ) => this.#extractLiteralLikeValue(element, undefined, context));
     }
 
     if ((type.flags & ts.TypeFlags.Object) !== 0) {
-      const properties = context.typeChecker.getPropertiesOfType(type);
+      const properties = checker.getPropertiesOfType(type);
       if (properties.length > 0) {
         const obj: Record<string, unknown> = {};
         for (const property of properties) {
-          const propType = context.typeChecker.getTypeOfSymbolAtLocation(
+          const propType = checker.getTypeOfSymbolAtLocation(
             property,
             property.valueDeclaration ?? property.declarations?.[0] ??
               context.typeNode ?? ({} as ts.Node),
           );
           // A member's annotation says what its type cannot, such as the
           // binding in `PolicyOf<typeof rules>`, and is read wherever it
-          // denotes the member's type.
-          obj[property.getName()] = this.#extractLiteralLikeValue(
-            propType,
-            readMemberAnnotation(property, propType, context.typeChecker),
-            context,
-          );
+          // denotes the member's type, paired with that type.
+          const annotation = readMemberAnnotation(property, propType, checker);
+          obj[property.getName()] = annotation
+            ? this.#extractLiteralLikeValue(
+              checker.getTypeFromTypeNode(annotation),
+              annotation,
+              context,
+            )
+            : this.#extractLiteralLikeValue(
+              memberValueType(property, propType, checker),
+              undefined,
+              context,
+            );
         }
         return obj;
       }
@@ -2057,26 +2140,22 @@ export class CommonFabricFormatter implements TypeFormatter {
   }
 
   /**
-   * The value `AnyOf<X>` lowers to, `{ anyOf: X }`, for a type that is its
-   * brand, or `undefined` for any other type.
+   * `X`, for a type that is the brand `AnyOf<X>` is, `{ readonly
+   * __ct_cfc_any_of__?: X }`, and `undefined` for any other type.
    */
-  #readAnyOfBrand(
+  #anyOfBrandPayload(
     type: ts.Type,
     context: GenerationContext,
-  ): { anyOf: unknown[] } | undefined {
+  ): ts.Type | undefined {
     if ((type.flags & ts.TypeFlags.Object) === 0) return undefined;
     const properties = context.typeChecker.getPropertiesOfType(type);
     const brand = properties.length === 1 ? properties[0]! : undefined;
     if (!brand || brand.getName() !== CFC_ANY_OF_BRAND) return undefined;
-    // The brand is optional, so its type holds `undefined` beside `X`.
-    const alternatives = this.#extractLiteralLikeValue(
-      context.typeChecker.getNonNullableType(
-        context.typeChecker.getTypeOfSymbol(brand),
-      ),
-      undefined,
-      context,
+    return memberValueType(
+      brand,
+      context.typeChecker.getTypeOfSymbol(brand),
+      context.typeChecker,
     );
-    return Array.isArray(alternatives) ? { anyOf: alternatives } : undefined;
   }
 
   #resolveTypeReferenceName(
