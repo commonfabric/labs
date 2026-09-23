@@ -102,7 +102,7 @@ result is a `FabricHash`: hash bytes plus an algorithm tag, stringified as
 (`packages/data-model/src/fabric-primitives/FabricHash.ts`). The hash is
 opaque: nothing about the preimage — including `type: "internal"` or the
 partial cause — is recoverable from the id. `hashOf` mints the `fid1` tag at
-a single chokepoint (`packages/data-model/src/value-hash.ts`). The URI layer
+a single chokepoint (`packages/data-model/src/value-hash/ValueHasher.ts`). The URI layer
 (`packages/runner/src/uri-utils.ts`, `toURI`/`fromURI`) prefixes an entity
 scheme onto the tagged hash — historically always `of:`.
 

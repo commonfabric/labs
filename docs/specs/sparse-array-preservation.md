@@ -113,7 +113,7 @@ because their sparse support was part of the original design:
   `FabricValue` crosses by identity, holes and all.
 - **`packages/data-model/src/codec-json/JsonCodecEngine.ts`** — Encodes a run of
   holes as a single hole-tagged count; decoding rebuilds them as true holes.
-- **`packages/data-model/src/value-hash.ts`** — Feeds holes to the hash
+- **`packages/data-model/src/value-hash/ValueHasher.ts`** — Feeds holes to the hash
   directly, coalescing each run into one hole entry.
 
 ### Value validation (`packages/data-model/src/types/validation.ts`)
@@ -208,7 +208,7 @@ changes reactively:
   value returning after its entry was released is set up again on the same
   result cell, whose id is deterministic, so it recovers what it persisted.
 
-### Hashing boundary (`packages/data-model/src/value-hash.ts`)
+### Hashing boundary (`packages/data-model/src/value-hash/ValueHasher.ts`)
 
 Holes are hashed as themselves. `ValueHasher`'s `#feedArray()` walks the array
 by index and, on reaching an absent one, coalesces the whole run of consecutive

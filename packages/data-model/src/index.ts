@@ -48,6 +48,6 @@ export {
   hashOf,
   hashStringOf,
   taggedHashStringOf,
-} from "./value-hash.ts";
+} from "@/value-hash";
 
 export * from "@/types";

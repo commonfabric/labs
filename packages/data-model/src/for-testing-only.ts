@@ -44,7 +44,7 @@ import {
   FabricRegExp,
   FabricUnavailable,
 } from "@/fabric-primitives";
-import { float64BytesOf } from "./value-hash.ts";
+import { float64BytesOf } from "./value-hash/float64BytesOf.ts";
 
 /** At least two makers of one kind of value. */
 type Makers<Value> = readonly [() => Value, () => Value, ...(() => Value)[]];
@@ -222,8 +222,9 @@ export const FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY: {
 });
 
 /**
- * `float64BytesOf()` from `value-hash.ts`, which returns the eight bytes that
- * represent a number in a hash. The result is good until the next call.
+ * `float64BytesOf()` from `value-hash/float64BytesOf.ts`, which returns the
+ * eight bytes that represent a number in a hash. The result is good until the
+ * next call.
  *
  * It is here because a test of `hashOf()` cannot reach the function's `NaN`
  * arm dependably. That arm makes a difference for a `NaN` whose bits are not
