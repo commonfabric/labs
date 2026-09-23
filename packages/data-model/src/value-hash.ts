@@ -701,6 +701,6 @@ export function hashStringOf(value: unknown): string {
  * Like `hashOf()`, except always returns a plain string of the hash, encoded as
  * base64url, with the `<type>:` prefix.
  */
-export function taggedHashStringOf(value: unknown): string {
+export function taggedHashStringOf(value: FabricValue): string {
   return hashOfInternal(value, false).toString();
 }
