@@ -793,4 +793,147 @@ describe("Schema: CFC authoring aliases", () => {
       integrity: ["inner"],
     });
   });
+
+  describe("a canonical alias written as another's payload", () => {
+    // A canonical alias reached by its own name reads its payload from the
+    // reference's own argument node. Read from its type alone, the payload
+    // below loses a generic alias's argument, a label's `AnyOf` clause, and a
+    // `WriteAuthorizedBy` binding.
+
+    const ALIASES = `
+      type Cfc<T, Meta> = T & { readonly __ct_cfc__?: Meta };
+      type Confidential<T, X extends readonly unknown[]> = Cfc<T, { confidentiality: X }>;
+      type Integrity<T, X extends readonly unknown[]> = Cfc<T, { integrity: X }>;
+      type AddIntegrity<T, X extends readonly unknown[]> = Cfc<T, { addIntegrity: X }>;
+      type RequiresIntegrity<T, X extends readonly unknown[]> = Cfc<T, { requiredIntegrity: X }>;
+      type WriteAuthorizedBy<T, Binding> = Cfc<T, { writeAuthorizedBy: Binding }>;
+      type AnyOf<X extends readonly unknown[]> = { readonly __ct_cfc_any_of__?: X };
+      type Sec<T> = Confidential<T, readonly ["a"]>;
+      declare function handler<A, B>(fn: (argument: A, state: B) => void): { readonly __handler: [A, B] };
+      export const toggle = handler<void, {}>(() => {});
+    `;
+
+    const generate = async (code: string) => {
+      const { type, checker } = await getTypeFromCode(
+        ALIASES + code,
+        "SchemaRoot",
+      );
+      return asObjectSchema(
+        new SchemaGenerator().generateSchema(type, checker),
+      );
+    };
+
+    it("keeps the type of a generic alias in the payload", async () => {
+      const schema = await generate(`
+        interface SchemaRoot { t: Integrity<Sec<string>, readonly ["i"]> }
+      `);
+      expect(schema.properties?.t).toEqual({
+        type: "string",
+        ifc: { confidentiality: ["a"], integrity: ["i"] },
+      });
+    });
+
+    it("keeps the type of a generic alias in the payload of an array's items", async () => {
+      const schema = await generate(`
+        interface SchemaRoot { t: Integrity<Sec<string>, readonly ["i"]>[] }
+      `);
+      expect((schema.properties?.t as any).items).toEqual({
+        type: "string",
+        ifc: { confidentiality: ["a"], integrity: ["i"] },
+      });
+    });
+
+    it("lowers an `AnyOf` clause of a label in the payload", async () => {
+      const schema = await generate(`
+        interface SchemaRoot {
+          t: Integrity<
+            Confidential<string, readonly [AnyOf<readonly ["x", "y"]>]>,
+            readonly ["i"]
+          >;
+        }
+      `);
+      expect((schema.properties?.t as any).ifc).toEqual({
+        confidentiality: [{ anyOf: ["x", "y"] }],
+        integrity: ["i"],
+      });
+    });
+
+    it("keeps the write claim of a \`WriteAuthorizedBy\` in the payload, a union member's included", async () => {
+      const schema = await generate(`
+        type Flag =
+          | AddIntegrity<WriteAuthorizedBy<true, typeof toggle>, readonly ["k"]>
+          | WriteAuthorizedBy<false, typeof toggle>;
+        interface SchemaRoot {
+          t: AddIntegrity<WriteAuthorizedBy<string, typeof toggle>, readonly ["k"]>;
+          flag: Flag;
+        }
+      `);
+      const claimPath = (position: unknown) =>
+        (position as any)?.ifc?.writeAuthorizedBy?.__ctWriterIdentityOf?.path;
+      const flag = schema.$defs?.Flag as any;
+      expect(claimPath(schema.properties?.t)).toEqual(["toggle"]);
+      expect(flag.anyOf.map(claimPath)).toEqual([["toggle"], ["toggle"]]);
+    });
+
+    it("keeps a named type in the payload a reference to its definition", async () => {
+      const schema = await generate(`
+        type Secret = Confidential<{ v: string }, readonly ["a"]>;
+        interface SchemaRoot {
+          t: Integrity<Secret, readonly ["i"]>;
+          s: Secret;
+        }
+      `);
+      expect((schema.properties?.t as any).$ref).toBe("#/$defs/Secret");
+    });
+
+    describe("written inside a generic declaration", () => {
+      // The argument nodes written there name the declaration's parameters,
+      // which only the instantiation being formatted binds, so the payload's
+      // value comes from its type.
+
+      it("keeps the payload's instantiated type beside a nested label", async () => {
+        const schema = await generate(`
+          interface Box<T> {
+            flag: RequiresIntegrity<AddIntegrity<T, readonly ["member"]>, readonly ["admin"]>;
+          }
+          type SchemaRoot = Box<boolean>;
+        `);
+        expect(schema.properties?.flag).toEqual({
+          type: "boolean",
+          ifc: { addIntegrity: ["member"], requiredIntegrity: ["admin"] },
+        });
+      });
+
+      it("keeps the payload's instantiated type beside a nested write claim", async () => {
+        const schema = await generate(`
+          interface Box<T> {
+            flag: RequiresIntegrity<WriteAuthorizedBy<T, typeof toggle>, readonly ["admin"]>;
+          }
+          type SchemaRoot = Box<boolean>;
+        `);
+        expect(schema.properties?.flag).toEqual({
+          type: "boolean",
+          ifc: {
+            writeAuthorizedBy: {
+              __ctWriterIdentityOf: { file: "test.ts", path: ["toggle"] },
+            },
+            requiredIntegrity: ["admin"],
+          },
+        });
+      });
+
+      it("reads a nested label the declaration's parameter names from the instantiation", async () => {
+        const schema = await generate(`
+          interface Box<T, L extends readonly unknown[]> {
+            flag: RequiresIntegrity<AddIntegrity<T, L>, readonly ["admin"]>;
+          }
+          type SchemaRoot = Box<boolean, readonly ["member"]>;
+        `);
+        expect(schema.properties?.flag).toEqual({
+          type: "boolean",
+          ifc: { addIntegrity: ["member"], requiredIntegrity: ["admin"] },
+        });
+      });
+    });
+  });
 });
