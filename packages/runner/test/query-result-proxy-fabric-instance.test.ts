@@ -18,7 +18,14 @@
 
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { FabricError } from "@commonfabric/data-model/fabric-instances";
+import {
+  resetModernCellRepConfig,
+  setModernCellRepConfig,
+} from "@commonfabric/data-model/cell-rep";
+import {
+  FabricError,
+  FabricLink,
+} from "@commonfabric/data-model/fabric-instances";
 import { Identity } from "@commonfabric/identity";
 import {
   createQueryResultProxy,
@@ -202,6 +209,42 @@ describe("query-result proxy: a FabricInstance's members reach the instance", ()
 
     expect(() => getExtra("code")).toThrow("Transaction is complete");
     expect(() => clone(false)).toThrow("Transaction is complete");
+  });
+
+  it("follows a rewrite to an instance of another class", () => {
+    // The kind check keeps a view to the kind it was built over, and an
+    // instance of another class is the same kind. So membership is decided
+    // against the instance the document holds now, when a name is read and
+    // again when a saved method is called: a name the new class lacks is not
+    // a member, a saved method of the old class refuses at the call, naming
+    // the class it met, and a saved generic member still runs against the
+    // view. A \`FabricLink\` is stored as a plain instance only under the
+    // legacy cell representation, so this pins that representation.
+    setModernCellRepConfig(false);
+    try {
+      const cell = runtime.getCell<unknown>(
+        space,
+        "classChange",
+        undefined,
+        tx,
+      );
+      cell.set(Object.assign(new Error("before"), { code: 1 }));
+      const view = cell.get() as Record<string, unknown>;
+      const getExtra = view.getExtra as (key: string) => unknown;
+      const valueOf = view.valueOf as () => unknown;
+      expect(getExtra("code")).toBe(1);
+
+      cell.set(new FabricLink({ id: "of:fid1:class-change-target" }) as never);
+
+      expect(view.constructor).toBe(FabricLink);
+      expect(typeof view.getExtra).not.toBe("function");
+      expect(() => getExtra("code")).toThrow(
+        "`getExtra` is not a method of the `FabricLink`",
+      );
+      expect(valueOf()).toBe(view);
+    } finally {
+      resetModernCellRepConfig();
+    }
   });
 
   it("refuses a member once the document no longer holds an instance", () => {
