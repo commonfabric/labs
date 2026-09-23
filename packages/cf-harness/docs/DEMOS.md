@@ -1,8 +1,11 @@
 # Running the cf-harness demos
 
-Four demos, in the order to run them. Each was run to a working page on labs
-`a77e958513` — three times for demos 2, 3 and 4, twice for demo 1 — with the
-page checked in a browser every time.
+Four demos, in the order to run them. Each was run to a working page and checked
+in a browser, on labs `a77e958513` and again on `edd1f71108` — with one
+exception. Demo 2's prompt names its two parts where the browser-checked runs
+pasted their ids; three runs of the wording below reach the same two parts, read
+from the source each submitted, but none of the three was clicked through. Treat
+that demo's page behavior as carried over rather than re-checked.
 
 Everything else — the counts, the findings behind them, the demos that are not
 on this page and why — is in [DEMOS-EVIDENCE.md](DEMOS-EVIDENCE.md). Read this
@@ -24,11 +27,11 @@ page to run them; read that one to understand them.
    Demo 4 needs a finance grant and an email grant.
 
 **Why note the sha rather than match it.** These counts were measured on
-`a77e958513`, and `loom update` may land you on something newer. That is the
-intended way to run these, and the newer build is not claimed to be proven. So a
-demo that misbehaves on a build these were not measured on is a new observation
-rather than a contradiction of the count — and the sha in your run notes is the
-only thing that lets anyone tell those two apart afterwards.
+`a77e958513` and `edd1f71108`, and `loom update` may land you on something
+newer. That is the intended way to run these, and the newer build is not claimed
+to be proven. So a demo that misbehaves on a build these were not measured on is
+a new observation rather than a contradiction of the count — and the sha in your
+run notes is the only thing that lets anyone tell those two apart afterwards.
 
 Slugs are never reused, and a run picks another name by itself when the one it
 tries is taken. Nothing in these prompts needs to tell it to.
