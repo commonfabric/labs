@@ -521,15 +521,6 @@ export function getFrozenObjectHashCacheHits(): number {
 }
 
 /**
- * Returns an already computed immutable hash without reading the value.
- *
- * @internal Used by equality to reuse hashes without expanding a value graph.
- */
-export function cachedHashStringOf(value: object): string | undefined {
-  return frozenObjectHashCache.get(value)?.hashString;
-}
-
-/**
  * Looks up the given primitive in the LRU cache, computing and storing on
  * miss. Caller must filter out values that don't behave under `Map`'s
  * SameValueZero keying (notably `-0`, which collides with `+0`).
