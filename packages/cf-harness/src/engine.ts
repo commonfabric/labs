@@ -136,6 +136,7 @@ import {
 import {
   cacheHarnessFabricSessionFactory,
   createHarnessFabricSessionFactory,
+  type HarnessFabricSession,
   type HarnessFabricSessionFactory,
 } from "./fabric-session.ts";
 import {
@@ -415,6 +416,9 @@ export interface CreateHarnessEngineOptions
    * of the parent tool surface.
    */
   fabricSessionFactory?: HarnessFabricSessionFactory;
+
+  /** Receives the lazy session so its host can own the runtime's lifetime. */
+  onFabricSessionCreated?: (session: HarnessFabricSession) => void;
 
   /**
    * The posture record of the run whose fabric session `fabricSessionFactory`
@@ -818,9 +822,14 @@ export class CfHarnessEngine {
       (this.config.fabricSession !== undefined
         ? createHarnessFabricSessionFactory(this.config.fabricSession)
         : undefined);
+    const onFabricSessionCreated = options.onFabricSessionCreated;
     this.#fabricSessionFactory = fabricSessionFactory === undefined
       ? undefined
-      : cacheHarnessFabricSessionFactory(fabricSessionFactory);
+      : cacheHarnessFabricSessionFactory(async () => {
+        const session = await fabricSessionFactory();
+        onFabricSessionCreated?.(session);
+        return session;
+      });
     // The index client loads the fabric identity from disk to sign with, so
     // it is built lazily and cached for the run on the same terms.
     const patternIndexClientFactory = options.patternIndexClientFactory ??

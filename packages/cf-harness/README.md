@@ -2331,6 +2331,12 @@ identity paths resolve against the host process's working directory. All three
 values form one binding, and partial or invalid configuration fails before the
 service starts. Without that binding the service has no Fabric session.
 
+The interactive service owns the Fabric runtimes created for its chat sessions.
+Completed turns keep their runtimes until the session closes. Closing an active
+session aborts its turn and releases its runtimes after the turn unwinds;
+`waitForIdle()` includes that cleanup. Persisted pieces can reopen in a later
+session. Library callers supplying an existing engine retain ownership of it.
+
 These entrypoints share the batch CLI's CFC session options:
 `--fabric-cfc-enforcement-mode`, `--fabric-cfc-flow-labels`,
 `--fabric-cfc-posture`, and `--max-confidentiality`, including their validation
