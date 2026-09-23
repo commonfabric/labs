@@ -97,7 +97,7 @@ function canonical(v: FabricValue): string {
   return v === undefined ? "undefined" : hashStringOf(v);
 }
 
-function storedValueKind(value: unknown): StoredValueKind {
+function storedValueKind(value: FabricValue): StoredValueKind {
   if (value === null) return "null";
   if (decodedLinkOf(value) !== null) return "link";
   if (isStream(value)) return "stream";

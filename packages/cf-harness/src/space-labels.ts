@@ -13,6 +13,7 @@
  * space cannot be read is still a run to record.
  */
 
+import type { FabricValue } from "@commonfabric/data-model";
 import {
   discoverSpaceDbs,
   linksWithPaths,
@@ -403,7 +404,7 @@ const LINK_GRAPH: LinkGraphBounds = {
  * paths it missed are not knowledge this reader has.
  */
 const linkedCellsOf = (
-  document: Record<string, unknown> | undefined,
+  document: Record<string, FabricValue> | undefined,
   space: string | undefined,
   bounds: LinkWalkBounds,
 ): {
@@ -468,8 +469,8 @@ interface GraphStep {
  * rather than to the hop bound.
  */
 const walkLinkedLabels = (
-  read: (id: string) => Record<string, unknown> | undefined,
-  root: { id: string; document: Record<string, unknown> | undefined },
+  read: (id: string) => Record<string, FabricValue> | undefined,
+  root: { id: string; document: Record<string, FabricValue> | undefined },
   space: string | undefined,
   bounds: LinkWalkBounds,
   graph: LinkGraphBounds,
