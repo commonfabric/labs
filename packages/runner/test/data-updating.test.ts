@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
+import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 
@@ -25,6 +26,8 @@ import {
   parseLink,
 } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
+import { decomposeSchema } from "../src/schema-decompose.ts";
+import { registerSchemaDocument } from "../src/schema-registry.ts";
 import { type IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { toURI } from "../src/uri-utils.ts";
 
@@ -2845,6 +2848,32 @@ describe("writeAuthorizationCoversPath", () => {
       additionalProperties: { type: "array", ifc: { writeAuthorizedBy } },
     } as const satisfies JSONSchema;
     expect(writeAuthorizationCoversPath(schema, [], ["any", "0"])).toBe(true);
+  });
+
+  it("covers a claim whose schema document arrives after a first ask", () => {
+    const decomposed = decomposeSchema({
+      type: "object",
+      properties: { lateItems: { $ref: "#/$defs/LateProtected" } },
+      $defs: {
+        LateProtected: {
+          type: "array",
+          items: { type: "object" },
+          ifc: { writeAuthorizedBy },
+        },
+      },
+    });
+    const schema = internSchema({ $ref: decomposed.rootRef });
+
+    // The first ask resolves nothing, so it must not be remembered.
+    expect(writeAuthorizationCoversPath(schema, [], ["lateItems", "0"])).toBe(
+      false,
+    );
+    for (const [hash, document] of decomposed.documents) {
+      registerSchemaDocument(hash, document);
+    }
+    expect(writeAuthorizationCoversPath(schema, [], ["lateItems", "0"])).toBe(
+      true,
+    );
   });
 
   it("ignores claims that are not write authorizations", () => {

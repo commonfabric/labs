@@ -82,6 +82,10 @@ import {
   markReadAsAttemptedWrite,
 } from "./scheduler.ts";
 import { schemaHasIfc } from "./schema-ifc.ts";
+import {
+  externalResolutionMissCount,
+  onSchemaRegistryClear,
+} from "./schema-registry.ts";
 import { resolveSchema, resolveSchemaForValue } from "./schema.ts";
 import { isCellScope, scopeRank } from "./scope.ts";
 import { flattenBuilderArtifacts } from "./storage-preflight.ts";
@@ -226,11 +230,17 @@ export const schemaIfcOverlapsPath = (
 
 // The unconditional write-authorization paths of each schema, keyed by schema
 // object. Only deep-frozen schemas are cached, since a mutable one could be
-// edited after its paths were taken.
-const writeAuthorizationPathsCache = new WeakMap<
+// edited after its paths were taken, and only paths computed without a `cid:`
+// resolution miss, since a claim behind a document that has not arrived is
+// missing from them. The paths embed resolved content, so a registry clear
+// swaps the cache.
+let writeAuthorizationPathsCache = new WeakMap<
   object,
   readonly (readonly string[])[]
 >();
+onSchemaRegistryClear(() => {
+  writeAuthorizationPathsCache = new WeakMap();
+});
 
 /**
  * Reports whether a `writeAuthorizedBy` claim in `schema`, rooted at
@@ -249,6 +259,7 @@ export const writeAuthorizationCoversPath = (
   if (!isObjectOrArray(schema)) return false;
   let paths = writeAuthorizationPathsCache.get(schema);
   if (paths === undefined) {
+    const missesBefore = externalResolutionMissCount();
     paths = cfcSchemaEntries(schema)
       .filter((entry) =>
         entry.conditional !== true &&
@@ -256,7 +267,11 @@ export const writeAuthorizationCoversPath = (
         entry.schema.ifc.writeAuthorizedBy !== undefined
       )
       .map((entry) => entry.path);
-    if (isDeepFrozen(schema)) writeAuthorizationPathsCache.set(schema, paths);
+    if (
+      isDeepFrozen(schema) && externalResolutionMissCount() === missesBefore
+    ) {
+      writeAuthorizationPathsCache.set(schema, paths);
+    }
   }
   return paths.some((path) =>
     pathPrefixMatches([...basePath, ...path], targetPath)
