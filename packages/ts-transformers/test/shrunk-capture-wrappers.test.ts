@@ -154,6 +154,78 @@ export default pattern<Input>(({ c }) => ({
   });
 
   describe("a capture whose authored type keeps a default", () => {
+    it("keeps an optional value's default at the top of its schema", async () => {
+      // The runtime reads a missing property's default from the top of the
+      // property's schema, not from inside one of its alternatives.
+      const capture = await captureOf(`
+interface Author { kind: string; name: string; avatar: string; }
+interface Topic {
+  title: string;
+  createdBy?: Author | Default<{ kind: "person"; name: ""; avatar: "" }>;
+}
+export default pattern<{ topic: Topic }>(({ topic }) => ({
+  who: computed(() => topic.createdBy?.name ?? ""),
+}));`);
+
+      expect(capture.topic).toEqual({
+        type: "object",
+        properties: {
+          createdBy: {
+            anyOf: [{ type: "undefined" }, {
+              type: "object",
+              properties: { name: { type: "string" } },
+              required: ["name"],
+            }],
+            default: { kind: "person", name: "", avatar: "" },
+          },
+        },
+      });
+    });
+
+    it("keeps a nullable value's default at the top of its schema", async () => {
+      const capture = await captureOf(`
+interface Topic { createdBy: Person | null | Default<{ name: ""; age: 0 }>; }
+export default pattern<{ topic: Topic }>(({ topic }) => ({
+  who: computed(() => topic.createdBy?.name ?? ""),
+}));`);
+
+      expect(capture.topic).toEqual({
+        type: "object",
+        properties: {
+          createdBy: {
+            anyOf: [{
+              type: "object",
+              properties: { name: { type: "string" } },
+              required: ["name"],
+            }, { type: "null" }],
+            default: { name: "", age: 0 },
+          },
+        },
+        required: ["createdBy"],
+      });
+    });
+
+    it("keeps an optional array's default at the top of its schema", async () => {
+      const capture = await captureOf(`
+interface Topic { tags?: string[] | Default<["a"]>; }
+export default pattern<{ topic: Topic }>(({ topic }) => ({
+  count: computed(() => topic.tags?.length ?? 0),
+}));`);
+
+      expect(capture.topic).toEqual({
+        type: "object",
+        properties: {
+          tags: {
+            anyOf: [
+              { type: "array", items: { type: "unknown" } },
+              { type: "undefined" },
+            ],
+            default: ["a"],
+          },
+        },
+      });
+    });
+
     it("keeps the capability of a cell captured beside it", async () => {
       const capture = await captureOf(`
 interface Input {

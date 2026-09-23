@@ -10,7 +10,10 @@ import {
   resolveConsoleConfig,
 } from "../../console/server.ts";
 import { ConsoleHealth, type ConsoleHealthRow } from "../../console/health.ts";
-import { harnessSessionChatPolicy } from "../../src/session-assembly.ts";
+import {
+  harnessSessionChatPolicy,
+  harnessSessionEngineOptions,
+} from "../../src/session-assembly.ts";
 import type { CfHarnessEngine } from "../../src/engine.ts";
 import type { ConsoleSessionListing } from "../../console/sessions.ts";
 import type { HarnessFetch } from "../../src/contracts/http-fetch.ts";
@@ -903,6 +906,84 @@ describe("console/server", () => {
           Number.isFinite(Date.parse(row.checkedAt!))
         ),
       ).toBe(true);
+    });
+
+    it("sends every turn the reasoning effort the environment names, and reports where it came from", async () => {
+      const configured = await resolveConsoleConfig(
+        [
+          "--fabric-identity",
+          "key.pkcs8",
+          "--fabric-space",
+          "console-test",
+          "--session-db",
+          "none",
+        ],
+        { CF_HARNESS_REASONING_EFFORT: "low" },
+        "/console",
+      );
+      expect(harnessSessionEngineOptions(configured).reasoningEffort).toBe(
+        "low",
+      );
+      expect(
+        consoleHealthRows(configured).find((row) =>
+          row.id === "config.reasoning-effort"
+        ),
+      ).toMatchObject({
+        label: "Reasoning Effort",
+        value: "low",
+        detail: "CF_HARNESS_REASONING_EFFORT",
+      });
+    });
+
+    it("leaves the reasoning effort to the provider when nothing names one", async () => {
+      const configured = await resolveConsoleConfig(
+        [
+          "--fabric-identity",
+          "key.pkcs8",
+          "--fabric-space",
+          "console-test",
+          "--session-db",
+          "none",
+        ],
+        {},
+        "/console",
+      );
+      expect(harnessSessionEngineOptions(configured)).not.toHaveProperty(
+        "reasoningEffort",
+      );
+      expect(
+        consoleHealthRows(configured).find((row) =>
+          row.id === "config.reasoning-effort"
+        ),
+      ).toMatchObject({
+        value: "provider default",
+        detail: "provider default",
+      });
+    });
+
+    it("takes the reasoning effort the flag names over the environment's", async () => {
+      const configured = await resolveConsoleConfig(
+        [
+          "--fabric-identity",
+          "key.pkcs8",
+          "--fabric-space",
+          "console-test",
+          "--session-db",
+          "none",
+          "--reasoning-effort",
+          "high",
+        ],
+        { CF_HARNESS_REASONING_EFFORT: "low" },
+        "/console",
+      );
+      expect(harnessSessionEngineOptions(configured).reasoningEffort).toBe(
+        "high",
+      );
+      expect(
+        consoleHealthRows(configured).find((row) =>
+          row.id === "config.reasoning-effort"
+        ),
+      ).toMatchObject({ value: "high", detail: "--reasoning-effort" });
     });
 
     it("keeps missing inventory, automatic store discovery and unobserved credentials unknown", async () => {

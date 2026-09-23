@@ -3193,6 +3193,475 @@ Deno.test("CfHarnessPromptLoop preserves custom abort reasons for local gateway 
   assert(caught === reason, "custom abort reason must be rethrown unchanged");
 });
 
+Deno.test("CfHarnessPromptLoop runs two delegations of one model turn together and joins their results in call order", async () => {
+  // Each child's first model request is held until the other child's has
+  // arrived, so the parent turn can only finish if both children are in
+  // flight at once; against a loop that ran them one after the other the
+  // first child would wait on a second that never starts, and the test
+  // fails on the pending promise. The child serving the second call answers
+  // first, so the transcript order below is the order the model wrote the
+  // calls, not the order the children finished.
+  const childRequests: string[] = [];
+  const bothChildRequestsSeen = Promise.withResolvers<void>();
+  const childAnswers = new Map<string, PromiseWithResolvers<void>>();
+  let parentTurns = 0;
+  const modelClient: HarnessModelClient = {
+    providerId: "test-provider",
+    async complete(request) {
+      const childRunId = request.runId;
+      if (childRunId === "run-two-children") {
+        parentTurns += 1;
+        if (parentTurns === 1) {
+          return {
+            assistant: {
+              role: "assistant",
+              content: "",
+              toolCalls: ["call-first", "call-second"].map((id) => ({
+                id,
+                type: "function" as const,
+                function: {
+                  name: "delegate_task",
+                  arguments: JSON.stringify({
+                    goal: `Inspect for ${id}.`,
+                    context: "Return only findings.",
+                  }),
+                },
+              })),
+            },
+          };
+        }
+        return { assistant: { role: "assistant", content: "Both returned." } };
+      }
+      const servesCall =
+        request.transcript.some((message) =>
+            message.role === "user" && message.content.includes("call-second")
+          )
+          ? "call-second"
+          : "call-first";
+      childRequests.push(childRunId);
+      if (childRequests.length === 2) bothChildRequestsSeen.resolve();
+      await bothChildRequestsSeen.promise;
+      const answer = Promise.withResolvers<void>();
+      childAnswers.set(servesCall, answer);
+      if (childAnswers.size === 2) {
+        childAnswers.get("call-second")?.resolve();
+      }
+      await answer.promise;
+      childAnswers.get("call-first")?.resolve();
+      return {
+        assistant: { role: "assistant", content: `${childRunId} done.` },
+      };
+    },
+  };
+  const loop = new CfHarnessPromptLoop({
+    modelClient,
+    allowedToolIds: ["delegate_task"],
+    allowedSubagentProfiles: ["default"],
+    engine: new CfHarnessEngine({
+      sandboxRuntime: new FakeSandboxRuntime(),
+      runId: "run-two-children",
+      model: "test-model",
+    }),
+  });
+
+  const result = await loop.runPrompt({
+    prompt: "Delegate two inspections.",
+    promptSlotBinding: directPromptSlotBinding,
+  });
+
+  assertEquals(result.finalAssistantText, "Both returned.");
+  assertEquals(childRequests.toSorted(), [
+    "run-two-children.subagent.1",
+    "run-two-children.subagent.2",
+  ]);
+  const toolMessages = result.transcript.filter((message) =>
+    message.role === "tool"
+  );
+  assertEquals(
+    toolMessages.map((message) => message.toolCallId),
+    ["call-first", "call-second"],
+  );
+  // A child is numbered when its delegation is admitted, which for two
+  // started together is not necessarily the order the model wrote them; what
+  // the record fixes is which child answered which call.
+  const childSummaries = toolMessages.map((message) =>
+    (JSON.parse(message.content) as {
+      subagent: { childRunId: string; status: string; summary: string };
+    }).subagent
+  );
+  assertEquals(
+    childSummaries.map((subagent) => subagent.childRunId).toSorted(),
+    ["run-two-children.subagent.1", "run-two-children.subagent.2"],
+  );
+  assertEquals(
+    childSummaries.map((subagent) => [subagent.status, subagent.summary]),
+    childSummaries.map((subagent) => [
+      "completed",
+      `${subagent.childRunId} done.`,
+    ]),
+  );
+  const pairs = (entries: readonly (readonly string[])[]) =>
+    entries.map((entry) => entry.join(" -> ")).toSorted();
+  assertEquals(
+    pairs(
+      (result.runState.subagentRuns ?? []).map((run) => [
+        run.parentToolCallId,
+        run.childRunId,
+      ]),
+    ),
+    pairs(
+      toolMessages.map((message, index) => [
+        message.toolCallId,
+        childSummaries[index].childRunId,
+      ]),
+    ),
+  );
+  // Decisions are logged as they are made, so their order is the order the
+  // calls finished; the activity sequence is what ties each to its call.
+  assertEquals(
+    (result.runState.policyDecisions ?? [])
+      .map((decision) =>
+        [
+          decision.toolCallId,
+          decision.toolActivitySequence,
+        ] as const
+      )
+      .toSorted((a, b) => a[1] - b[1]),
+    [["call-first", 1], ["call-second", 2]],
+  );
+});
+
+Deno.test("CfHarnessPromptLoop runs the calls around a delegation in order and does not hold the ones after it", async () => {
+  // The turn is a shell call, a delegation, and a second shell call. The
+  // child's only model request is held until the second shell call has
+  // reached the sandbox, so the turn finishes only if that call ran while
+  // the child was still out. The first call ends in a directory of its own,
+  // and the second must start there: two shell calls started together would
+  // both start from the directory the turn began in.
+  const sandbox = new FakeSandboxRuntime([
+    {
+      stdout: "before__CF_HARNESS_CWD__run-around-child:bash:1__/workspace/sub",
+      stderr: "",
+      exitCode: 0,
+    },
+    { stdout: "after", stderr: "", exitCode: 0 },
+  ]);
+  const secondShellSeen = Promise.withResolvers<void>();
+  const runShell = sandbox.runShell.bind(sandbox);
+  sandbox.runShell = (request) => {
+    if (request.command.includes("printf after")) secondShellSeen.resolve();
+    return runShell(request);
+  };
+  let parentTurns = 0;
+  const modelClient: HarnessModelClient = {
+    providerId: "test-provider",
+    async complete(request) {
+      if (request.runId === "run-around-child") {
+        parentTurns += 1;
+        if (parentTurns === 1) {
+          return {
+            assistant: {
+              role: "assistant",
+              content: "",
+              toolCalls: [
+                {
+                  id: "call-before",
+                  type: "function" as const,
+                  function: {
+                    name: "bash",
+                    arguments: JSON.stringify({ command: "printf before" }),
+                  },
+                },
+                {
+                  id: "call-child",
+                  type: "function" as const,
+                  function: {
+                    name: "delegate_task",
+                    arguments: JSON.stringify({
+                      goal: "Inspect while the shell works.",
+                      context: "Return only findings.",
+                    }),
+                  },
+                },
+                {
+                  id: "call-after",
+                  type: "function" as const,
+                  function: {
+                    name: "bash",
+                    arguments: JSON.stringify({ command: "printf after" }),
+                  },
+                },
+              ],
+            },
+          };
+        }
+        return { assistant: { role: "assistant", content: "All three ran." } };
+      }
+      await secondShellSeen.promise;
+      return { assistant: { role: "assistant", content: "Child done." } };
+    },
+  };
+  const loop = new CfHarnessPromptLoop({
+    modelClient,
+    allowedToolIds: ["bash", "delegate_task"],
+    allowedSubagentProfiles: ["default"],
+    engine: new CfHarnessEngine({
+      sandboxRuntime: sandbox,
+      runId: "run-around-child",
+      model: "test-model",
+      cfcEnforcementMode: "observe",
+    }),
+  });
+
+  const result = await loop.runPrompt({
+    prompt: "Run the shell around a child.",
+    promptSlotBinding: directPromptSlotBinding,
+  });
+
+  assertEquals(result.finalAssistantText, "All three ran.");
+  assertEquals(
+    sandbox.shellRequests
+      .filter((request) => !request.command.includes(CAPABILITY_PROBE_SENTINEL))
+      .map((request) => request.cwd),
+    ["/workspace", "/workspace/sub"],
+  );
+  assertEquals(
+    result.transcript
+      .filter((message) => message.role === "tool")
+      .map((message) => message.toolCallId),
+    ["call-before", "call-child", "call-after"],
+  );
+  assertEquals(
+    (result.runState.subagentRuns ?? []).map((run) => run.status),
+    ["completed"],
+  );
+});
+
+Deno.test("CfHarnessPromptLoop aborts a delegation still out when a later call of its turn fails", async () => {
+  // The child's model request settles only when its signal aborts. The shell
+  // call written after the delegation fails run-fatally once that request is
+  // out, so the turn can end only if the failure reaches the child; and the
+  // run ends on the shell's error, not as canceled.
+  const childRequestOut = Promise.withResolvers<void>();
+  const sandbox = new FakeSandboxRuntime();
+  const runShell = sandbox.runShell.bind(sandbox);
+  sandbox.runShell = async (request) => {
+    if (!request.command.includes("printf boom")) return runShell(request);
+    await childRequestOut.promise;
+    throw new Error("sandbox went away");
+  };
+  let childSawAbort = false;
+  const engine = new CfHarnessEngine({
+    sandboxRuntime: sandbox,
+    runId: "run-sibling-failure",
+    model: "test-model",
+  });
+  const modelClient: HarnessModelClient = {
+    providerId: "test-provider",
+    complete(request) {
+      if (request.runId === "run-sibling-failure") {
+        return Promise.resolve({
+          assistant: {
+            role: "assistant",
+            content: "",
+            toolCalls: [
+              {
+                id: "call-child",
+                type: "function" as const,
+                function: {
+                  name: "delegate_task",
+                  arguments: JSON.stringify({ goal: "Wait for the shell." }),
+                },
+              },
+              {
+                id: "call-boom",
+                type: "function" as const,
+                function: {
+                  name: "bash",
+                  arguments: JSON.stringify({ command: "printf boom" }),
+                },
+              },
+            ],
+          },
+        });
+      }
+      return new Promise((_resolve, reject) => {
+        request.signal?.addEventListener("abort", () => {
+          childSawAbort = true;
+          reject(request.signal?.reason);
+        }, { once: true });
+        childRequestOut.resolve();
+      });
+    },
+  };
+  const loop = new CfHarnessPromptLoop({
+    modelClient,
+    allowedToolIds: ["bash", "delegate_task"],
+    allowedSubagentProfiles: ["default"],
+    engine,
+  });
+
+  await assertRejects(
+    () =>
+      loop.runPrompt({
+        prompt: "Delegate, then run a shell command.",
+        promptSlotBinding: directPromptSlotBinding,
+      }),
+    Error,
+    "sandbox went away",
+  );
+  assertEquals(childSawAbort, true);
+  assertEquals(engine.getRunState().status, "failed");
+});
+
+Deno.test("CfHarnessPromptLoop holds the calls after a browser delegation until its child returns", async () => {
+  // Browser children share one page, so a browser delegation is the one
+  // delegation that holds the calls after it. The child's request records
+  // whether the shell call written after it has reached the sandbox yet.
+  const sandbox = new FakeSandboxRuntime([
+    { stdout: "after", stderr: "", exitCode: 0 },
+  ]);
+  const shellCommands = () =>
+    sandbox.shellRequests
+      .map((request) => request.command)
+      .filter((command) => !command.includes(CAPABILITY_PROBE_SENTINEL));
+  let shellSeenAtChildRequest: boolean | undefined;
+  let parentTurns = 0;
+  const modelClient: HarnessModelClient = {
+    providerId: "test-provider",
+    complete(request) {
+      if (request.runId === "run-browser-holds") {
+        parentTurns += 1;
+        if (parentTurns === 1) {
+          return Promise.resolve({
+            assistant: {
+              role: "assistant",
+              content: "",
+              toolCalls: [
+                {
+                  id: "call-browser",
+                  type: "function" as const,
+                  function: {
+                    name: "delegate_task",
+                    arguments: JSON.stringify({
+                      goal: "Look at the page.",
+                      profile: "browser",
+                    }),
+                  },
+                },
+                {
+                  id: "call-after",
+                  type: "function" as const,
+                  function: {
+                    name: "bash",
+                    arguments: JSON.stringify({ command: "printf after" }),
+                  },
+                },
+              ],
+            },
+          });
+        }
+        return Promise.resolve({
+          assistant: { role: "assistant", content: "Both ran." },
+        });
+      }
+      shellSeenAtChildRequest ??= shellCommands().some((command) =>
+        command.includes("printf after")
+      );
+      return Promise.resolve({
+        assistant: { role: "assistant", content: "Page seen." },
+      });
+    },
+  };
+  const loop = new CfHarnessPromptLoop({
+    modelClient,
+    allowedToolIds: ["bash", "delegate_task"],
+    allowedSubagentProfiles: ["browser"],
+    engine: new CfHarnessEngine({
+      sandboxRuntime: sandbox,
+      runId: "run-browser-holds",
+      model: "test-model",
+      cfcEnforcementMode: "observe",
+    }),
+  });
+
+  const result = await loop.runPrompt({
+    prompt: "Look at the page, then run a shell command.",
+    promptSlotBinding: directPromptSlotBinding,
+  });
+
+  assertEquals(result.finalAssistantText, "Both ran.");
+  assertEquals(shellSeenAtChildRequest, false);
+  assertEquals(shellCommands().some((c) => c.includes("printf after")), true);
+});
+
+Deno.test("CfHarnessPromptLoop starts no further call of a turn once a running call is aborted by the owner", async () => {
+  // The first shell call aborts the owner as it runs, so that call rejects
+  // and ends the turn. The second call of the turn must not start: it
+  // records no policy decision and reaches no sandbox.
+  const controller = new AbortController();
+  const sandbox = new FakeSandboxRuntime([
+    { stdout: "first", stderr: "", exitCode: 0 },
+    { stdout: "second", stderr: "", exitCode: 0 },
+  ]);
+  const runShell = sandbox.runShell.bind(sandbox);
+  sandbox.runShell = (request) => {
+    if (request.command.includes("printf first")) {
+      controller.abort(new Error("owner stopped the run"));
+    }
+    return runShell(request);
+  };
+  const engine = new CfHarnessEngine({
+    sandboxRuntime: sandbox,
+    runId: "run-owner-abort-between-calls",
+    model: "test-model",
+    cfcEnforcementMode: "observe",
+  });
+  const modelClient: HarnessModelClient = {
+    providerId: "test-provider",
+    complete: () =>
+      Promise.resolve({
+        assistant: {
+          role: "assistant",
+          content: "",
+          toolCalls: ["first", "second"].map((word) => ({
+            id: `call-${word}`,
+            type: "function" as const,
+            function: {
+              name: "bash",
+              arguments: JSON.stringify({ command: `printf ${word}` }),
+            },
+          })),
+        },
+      }),
+  };
+  const loop = new CfHarnessPromptLoop({
+    modelClient,
+    allowedToolIds: ["bash"],
+    engine,
+  });
+
+  await assertRejects(() =>
+    loop.runPrompt({
+      prompt: "Run two shell commands.",
+      promptSlotBinding: directPromptSlotBinding,
+      signal: controller.signal,
+    })
+  );
+  assertEquals(
+    (engine.getRunState().policyDecisions ?? []).map((decision) =>
+      decision.toolCallId
+    ),
+    ["call-first"],
+  );
+  assertEquals(
+    sandbox.shellRequests.some((request) =>
+      request.command.includes("printf second")
+    ),
+    false,
+  );
+});
+
 Deno.test("CfHarnessPromptLoop forwards abort signals to delegate_task child loops", async () => {
   const controller = new AbortController();
   const seenSignals: Array<RequestInit["signal"]> = [];
@@ -3261,8 +3730,70 @@ Deno.test("CfHarnessPromptLoop forwards abort signals to delegate_task child loo
   assertEquals(result.finalAssistantText, "Parent done.");
   assertEquals(seenSignals.length, 3);
   assertEquals(seenSignals[0], controller.signal);
-  assertEquals(seenSignals[1], controller.signal);
   assertEquals(seenSignals[2], controller.signal);
+  // The child is handed the turn's signal, which the owner's abort reaches
+  // and which a sibling call's failure can abort as well; that the owner's
+  // abort reaches it is the next test.
+  assert(seenSignals[1] instanceof AbortSignal);
+});
+
+Deno.test("CfHarnessPromptLoop aborts a delegate_task child's model request when the owner aborts", async () => {
+  const controller = new AbortController();
+  let childSignalAbortedByOwner: boolean | undefined;
+  let requests = 0;
+  const loop = new CfHarnessPromptLoop({
+    apiKey: "test-key",
+    engine: new CfHarnessEngine({
+      sandboxRuntime: new FakeSandboxRuntime(),
+      runId: "run-loop-delegate-owner-abort",
+      model: "gpt-5.4",
+    }),
+    fetchFn: (_input, init) => {
+      requests += 1;
+      if (requests === 2) {
+        controller.abort(new Error("owner stopped the run"));
+        childSignalAbortedByOwner = init?.signal?.aborted;
+      }
+      const payload = requests === 1
+        ? {
+          choices: [{
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [{
+                id: "call-delegate",
+                type: "function",
+                function: {
+                  name: "delegate_task",
+                  arguments: JSON.stringify({ goal: "Inspect the workspace." }),
+                },
+              }],
+            },
+          }],
+        }
+        : {
+          choices: [{
+            index: 0,
+            message: { role: "assistant", content: "Child done." },
+          }],
+        };
+      return Promise.resolve(
+        new Response(JSON.stringify(responsesBodyFromChatFixture(payload)), {
+          status: 200,
+        }),
+      );
+    },
+  });
+
+  await assertRejects(() =>
+    loop.runPrompt({
+      promptSlotBinding: directPromptSlotBinding,
+      prompt: "Delegate a task.",
+      signal: controller.signal,
+    })
+  );
+  assertEquals(childSignalAbortedByOwner, true);
 });
 
 Deno.test("CfHarnessPromptLoop strips trusted-only CFC input labels from model tool args", async () => {

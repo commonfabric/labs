@@ -204,321 +204,348 @@ export function float64BytesOf(value: number): Uint8Array {
 }
 
 /**
- * Updates an incremental hasher with a length value, using the standard
- * in-hash encoding for same.
+ * Computes the hash of one value. An instance holds the hasher the value's
+ * bytes go into and the path of containers enclosing the position being fed,
+ * so it serves exactly one hash: it is made, fed a value, and asked for a
+ * digest.
  */
-function feedLength(hasher: IncrementalHasher, value: number): void {
-  const valueBuf = (value <= MAX_CACHED_SMALL_LENGTH)
-    ? smallLengthCache[value]!
-    : encodeULEB128(value);
+class ValueHasher {
+  /** Hasher which receives the value's bytes. */
+  readonly #hasher: IncrementalHasher = createHasher();
 
-  hasher.update(valueBuf);
-}
+  /**
+   * The containers enclosing the position being fed, outermost first. A
+   * container found here is a cycle, and is fed as a reference to its position.
+   */
+  readonly #path = new IndexTrackingStack<object>();
 
-/**
- * Feeds a cycle reference into the hasher if the given container is on `path`,
- * which holds the containers enclosing the position being fed, outermost
- * first. Returns whether it did.
- */
-function feedCycleIfOnPath(
-  hasher: IncrementalHasher,
-  path: IndexTrackingStack<object>,
-  value: object,
-): boolean {
-  const at = path.lastIndexOf(value);
+  //
+  // Instance members
+  //
 
-  if (at < 0) {
-    return false;
+  /** Returns the digest of everything fed so far, as a `FabricHash`. */
+  digest(): FabricHash {
+    return new FabricHash(this.#hasher.digest(), "fid1", true);
   }
 
-  hasher.update(TAG_CYCLE_BYTES);
-  feedLength(hasher, path.depth - at);
-  return true;
-}
-
-/**
- * Feeds a single `FabricValue` into the hasher, using the type-tagged byte
- * format from the byte-level spec. `path` holds the containers enclosing the
- * position being fed, outermost first.
- */
-function feedValue(
-  hasher: IncrementalHasher,
-  value: unknown,
-  path: IndexTrackingStack<object>,
-): void {
-  switch (typeof value) {
-    case "boolean":
-      hasher.update(value ? TAG_BOOLEAN_TRUE_BYTES : TAG_BOOLEAN_FALSE_BYTES);
-      break;
-
-    case "number":
-      hasher.update(TAG_NUMBER_BYTES);
-      hasher.update(float64BytesOf(value));
-      break;
-
-    case "string": {
-      hasher.update(getStringRep(value));
-      break;
-    }
-
-    case "bigint": {
-      hasher.update(TAG_BIGINT_BYTES);
-      const bytes = bigintToMinimalTwosComplement(value);
-      feedLength(hasher, bytes.length);
-      hasher.update(bytes);
-      break;
-    }
-
-    case "symbol": {
-      const key = Symbol.keyFor(value);
-      if (key === undefined) {
-        throw new Error("Cannot hash unique (uninterned) symbol");
-      }
-      hasher.update(TAG_SYMBOL_BYTES);
-      hasher.update(getStringRep(key));
-      break;
-    }
-
-    case "undefined":
-      hasher.update(TAG_UNDEFINED_BYTES);
-      break;
-
-    case "object":
-      if (value === null) {
-        hasher.update(TAG_NULL_BYTES);
-      } else {
-        feedObjectValue(hasher, value, path);
-      }
-      break;
-
-    default:
-      throw new Error(
-        `\`hashOf()\`: unsupported type \`${typeof value}\``,
-      );
+  /**
+   * Returns the digest of everything fed so far, as a string encoded as
+   * `base64url`.
+   */
+  digestString(): string {
+    return this.#hasher.digest("base64url");
   }
-}
 
-/**
- * Feed an object-typed value (`FabricPrimitive`, `FabricInstance`, `Array`,
- * or plain object) into the hasher. Dispatches via
- * `tagOfConvertibleJsValueElseNull()` / `VALUE_TAGS` for recognized types. The
- * `null` case is handled by the caller (`feedValue()`).
- */
-function feedObjectValue(
-  hasher: IncrementalHasher,
-  value: object,
-  path: IndexTrackingStack<object>,
-): void {
-  const tag = tagOfConvertibleJsValueElseNull(value);
+  /**
+   * Feeds a single `FabricValue` into the hasher, using the type-tagged byte
+   * format from the byte-level spec.
+   */
+  feedValue(value: unknown): void {
+    const hasher = this.#hasher;
 
-  switch (tag) {
-    case VALUE_TAGS.FabricEpochNsec: {
-      hasher.update(TAG_EPOCH_NSEC_BYTES);
-      const bytes = bigintToMinimalTwosComplement(
-        (value as { value: bigint }).value,
-      );
-      feedLength(hasher, bytes.length);
-      hasher.update(bytes);
-      return;
-    }
+    switch (typeof value) {
+      case "boolean":
+        hasher.update(value ? TAG_BOOLEAN_TRUE_BYTES : TAG_BOOLEAN_FALSE_BYTES);
+        break;
 
-    case VALUE_TAGS.FabricEpochDay: {
-      hasher.update(TAG_EPOCH_DAY_BYTES);
-      const bytes = bigintToMinimalTwosComplement(
-        (value as { value: bigint }).value,
-      );
-      feedLength(hasher, bytes.length);
-      hasher.update(bytes);
-      return;
-    }
+      case "number":
+        hasher.update(TAG_NUMBER_BYTES);
+        hasher.update(float64BytesOf(value));
+        break;
 
-    case VALUE_TAGS.FabricHash: {
-      const cid = value as FabricHash;
-      hasher.update(TAG_HASH_BYTES);
-      hasher.update(getStringRep(cid.tag));
-      // TODO(@danfuzz): Look into avoiding making a copy of bytes here.
-      // This could be a performance issue.
-      const cidBytes = cid.bytes;
-      feedLength(hasher, cidBytes.length);
-      hasher.update(cidBytes);
-      return;
-    }
-
-    case VALUE_TAGS.Array:
-      feedArray(hasher, value as unknown[], path);
-      return;
-
-    case VALUE_TAGS.Object:
-      feedPlainObject(hasher, value as Record<string, unknown>, path);
-      return;
-
-    case VALUE_TAGS.FabricBytes: {
-      hasher.update(TAG_BYTES_BYTES);
-      const fab = value as FabricBytes;
-      feedLength(hasher, fab.length);
-      hasher.update(fab.slice());
-      return;
-    }
-
-    case VALUE_TAGS.FabricInstance: {
-      if (feedCycleIfOnPath(hasher, path, value)) {
-        return;
+      case "string": {
+        hasher.update(getStringRep(value));
+        break;
       }
-      const fabInst = value as BaseFabricInstance;
-      hasher.update(TAG_INSTANCE_BYTES);
-      const codec = codecOf(fabInst);
-      hasher.update(getStringRep(codec.tagForValue(fabInst)));
-      const state = codec.encode(fabInst, NULL_LIVE_ENVIRONMENT);
-      path.push(fabInst);
-      feedValue(hasher, state, path);
-      path.pop();
-      return;
-    }
 
-    case VALUE_TAGS.FabricKeyPair: {
-      const fab = value as FabricKeyPair;
-      if (!fab.hasMaterial) {
-        // A pair holding handles has no content to hash: its material is
-        // unreachable, and the algorithm alone is shared by every key that
-        // uses it.
+      case "bigint": {
+        hasher.update(TAG_BIGINT_BYTES);
+        const bytes = bigintToMinimalTwosComplement(value);
+        this.#feedLength(bytes.length);
+        hasher.update(bytes);
+        break;
+      }
+
+      case "symbol": {
+        const key = Symbol.keyFor(value);
+        if (key === undefined) {
+          throw new Error("Cannot hash unique (uninterned) symbol");
+        }
+        hasher.update(TAG_SYMBOL_BYTES);
+        hasher.update(getStringRep(key));
+        break;
+      }
+
+      case "undefined":
+        hasher.update(TAG_UNDEFINED_BYTES);
+        break;
+
+      case "object":
+        if (value === null) {
+          hasher.update(TAG_NULL_BYTES);
+        } else {
+          this.#feedObjectValue(value);
+        }
+        break;
+
+      default:
         throw new Error(
-          "`hashOf()`: cannot hash a key pair that holds handles.",
+          `\`hashOf()\`: unsupported type \`${typeof value}\``,
         );
-      }
-      hasher.update(TAG_KEY_PAIR_BYTES);
-      feedValue(hasher, fab.algorithm, path);
-      feedValue(hasher, fab.publicKeyBytes, path);
-      feedValue(hasher, fab.privateKeyBytes, path);
-      return;
-    }
-
-    case VALUE_TAGS.FabricRegExp: {
-      const fab = value as FabricRegExp;
-      hasher.update(TAG_REGEXP_BYTES);
-      feedValue(hasher, fab.source, path);
-      feedValue(hasher, fab.flags, path);
-      feedValue(hasher, fab.flavor, path);
-      return;
-    }
-
-    case VALUE_TAGS.FabricUnavailable: {
-      const fab = value as FabricUnavailable;
-      hasher.update(TAG_UNAVAILABLE_BYTES);
-      feedValue(hasher, fab.reason, path);
-      feedValue(hasher, fab.errorKind, path);
-      feedValue(hasher, fab.rawErrorMessage, path);
-      return;
-    }
-
-    case VALUE_TAGS.JsDate:
-    case VALUE_TAGS.JsRegExp:
-    case VALUE_TAGS.JsUint8Array: {
-      // Native instances that have a well-defined `FabricValue` conversion.
-      // Convert on-the-fly and hash the converted value.
-      const converted = shallowFabricFromConvertibleJsValue(value, false);
-      feedValue(hasher, converted, path);
-      return;
-    }
-
-    default: {
-      // Nothing else is handled. As of this writing, specifically missing are
-      // `Map`, `Set`, and `Error`.
-      throw new Error(
-        `\`hashOf()\`: unsupported object type ${
-          backtickQuote(value?.constructor?.name ?? typeof value)
-        }`,
-      );
     }
   }
-}
 
-/**
- * Feed an array value with sparse hole handling, terminated by `TAG_END`, or a
- * cycle reference if the array is on `path`.
- */
-function feedArray(
-  hasher: IncrementalHasher,
-  value: unknown[],
-  path: IndexTrackingStack<object>,
-): void {
-  if (feedCycleIfOnPath(hasher, path, value)) {
-    return;
-  }
-  path.push(value);
-  hasher.update(TAG_ARRAY_BYTES);
-  let i = 0;
-  while (i < value.length) {
-    if (!(i in value)) {
-      // Start of a hole run -- coalesce consecutive holes.
-      let runLen = 0;
-      while (i < value.length && !(i in value)) {
-        runLen++;
+  /**
+   * Feed an array value with sparse hole handling, terminated by `TAG_END`, or
+   * a cycle reference if the array is on the path.
+   */
+  #feedArray(value: unknown[]): void {
+    if (this.#feedCycleIfOnPath(value)) {
+      return;
+    }
+
+    const hasher = this.#hasher;
+    const path = this.#path;
+
+    path.push(value);
+    hasher.update(TAG_ARRAY_BYTES);
+    let i = 0;
+    while (i < value.length) {
+      if (!(i in value)) {
+        // Start of a hole run -- coalesce consecutive holes.
+        let runLen = 0;
+        while (i < value.length && !(i in value)) {
+          runLen++;
+          i++;
+        }
+        hasher.update(TAG_HOLE_BYTES);
+        this.#feedLength(runLen);
+      } else {
+        this.feedValue(value[i]);
         i++;
       }
-      hasher.update(TAG_HOLE_BYTES);
-      feedLength(hasher, runLen);
-    } else {
-      feedValue(hasher, value[i], path);
-      i++;
+    }
+    hasher.update(TAG_END_BYTES);
+    path.pop();
+  }
+
+  /**
+   * Feeds a cycle reference into the hasher if the given container is on the
+   * path. Returns whether it did.
+   */
+  #feedCycleIfOnPath(value: object): boolean {
+    const path = this.#path;
+    const at = path.lastIndexOf(value);
+
+    if (at < 0) {
+      return false;
+    }
+
+    this.#hasher.update(TAG_CYCLE_BYTES);
+    this.#feedLength(path.depth - at);
+    return true;
+  }
+
+  /**
+   * Feeds a length value into the hasher, using the standard in-hash encoding
+   * for same.
+   */
+  #feedLength(value: number): void {
+    const valueBuf = (value <= MAX_CACHED_SMALL_LENGTH)
+      ? smallLengthCache[value]!
+      : encodeULEB128(value);
+
+    this.#hasher.update(valueBuf);
+  }
+
+  /**
+   * Feed an object-typed value (`FabricPrimitive`, `FabricInstance`, `Array`,
+   * or plain object) into the hasher. Dispatches via
+   * `tagOfConvertibleJsValueElseNull()` / `VALUE_TAGS` for recognized types.
+   * The `null` case is handled by the caller (`feedValue()`).
+   */
+  #feedObjectValue(value: object): void {
+    const hasher = this.#hasher;
+    const tag = tagOfConvertibleJsValueElseNull(value);
+
+    switch (tag) {
+      case VALUE_TAGS.FabricEpochNsec: {
+        hasher.update(TAG_EPOCH_NSEC_BYTES);
+        const bytes = bigintToMinimalTwosComplement(
+          (value as { value: bigint }).value,
+        );
+        this.#feedLength(bytes.length);
+        hasher.update(bytes);
+        return;
+      }
+
+      case VALUE_TAGS.FabricEpochDay: {
+        hasher.update(TAG_EPOCH_DAY_BYTES);
+        const bytes = bigintToMinimalTwosComplement(
+          (value as { value: bigint }).value,
+        );
+        this.#feedLength(bytes.length);
+        hasher.update(bytes);
+        return;
+      }
+
+      case VALUE_TAGS.FabricHash: {
+        const cid = value as FabricHash;
+        hasher.update(TAG_HASH_BYTES);
+        hasher.update(getStringRep(cid.tag));
+        // TODO(@danfuzz): Look into avoiding making a copy of bytes here.
+        // This could be a performance issue.
+        const cidBytes = cid.bytes;
+        this.#feedLength(cidBytes.length);
+        hasher.update(cidBytes);
+        return;
+      }
+
+      case VALUE_TAGS.Array:
+        this.#feedArray(value as unknown[]);
+        return;
+
+      case VALUE_TAGS.Object:
+        this.#feedPlainObject(value as Record<string, unknown>);
+        return;
+
+      case VALUE_TAGS.FabricBytes: {
+        hasher.update(TAG_BYTES_BYTES);
+        const fab = value as FabricBytes;
+        this.#feedLength(fab.length);
+        hasher.update(fab.slice());
+        return;
+      }
+
+      case VALUE_TAGS.FabricInstance: {
+        if (this.#feedCycleIfOnPath(value)) {
+          return;
+        }
+        const fabInst = value as BaseFabricInstance;
+        hasher.update(TAG_INSTANCE_BYTES);
+        const codec = codecOf(fabInst);
+        hasher.update(getStringRep(codec.tagForValue(fabInst)));
+        const state = codec.encode(fabInst, NULL_LIVE_ENVIRONMENT);
+        this.#path.push(fabInst);
+        this.feedValue(state);
+        this.#path.pop();
+        return;
+      }
+
+      case VALUE_TAGS.FabricKeyPair: {
+        const fab = value as FabricKeyPair;
+        if (!fab.hasMaterial) {
+          // A pair holding handles has no content to hash: its material is
+          // unreachable, and the algorithm alone is shared by every key that
+          // uses it.
+          throw new Error(
+            "`hashOf()`: cannot hash a key pair that holds handles.",
+          );
+        }
+        hasher.update(TAG_KEY_PAIR_BYTES);
+        this.feedValue(fab.algorithm);
+        this.feedValue(fab.publicKeyBytes);
+        this.feedValue(fab.privateKeyBytes);
+        return;
+      }
+
+      case VALUE_TAGS.FabricRegExp: {
+        const fab = value as FabricRegExp;
+        hasher.update(TAG_REGEXP_BYTES);
+        this.feedValue(fab.source);
+        this.feedValue(fab.flags);
+        this.feedValue(fab.flavor);
+        return;
+      }
+
+      case VALUE_TAGS.FabricUnavailable: {
+        const fab = value as FabricUnavailable;
+        hasher.update(TAG_UNAVAILABLE_BYTES);
+        this.feedValue(fab.reason);
+        this.feedValue(fab.errorKind);
+        this.feedValue(fab.rawErrorMessage);
+        return;
+      }
+
+      case VALUE_TAGS.JsDate:
+      case VALUE_TAGS.JsRegExp:
+      case VALUE_TAGS.JsUint8Array: {
+        // Native instances that have a well-defined `FabricValue` conversion.
+        // Convert on-the-fly and hash the converted value.
+        const converted = shallowFabricFromConvertibleJsValue(value, false);
+        this.feedValue(converted);
+        return;
+      }
+
+      default: {
+        // Nothing else is handled. As of this writing, specifically missing are
+        // `Map`, `Set`, and `Error`.
+        throw new Error(
+          `\`hashOf()\`: unsupported object type ${
+            backtickQuote(value?.constructor?.name ?? typeof value)
+          }`,
+        );
+      }
     }
   }
-  hasher.update(TAG_END_BYTES);
-  path.pop();
-}
 
-/**
- * Feed a plain object value, keys sorted by the byte order of their WTF-8
- * encoding, terminated by `TAG_END`, or a cycle reference if the object is on
- * `path`.
- */
-function feedPlainObject(
-  hasher: IncrementalHasher,
-  value: Record<string, unknown>,
-  path: IndexTrackingStack<object>,
-): void {
-  if (feedCycleIfOnPath(hasher, path, value)) {
-    return;
+  /**
+   * Feed a plain object value, keys sorted by the byte order of their WTF-8
+   * encoding, terminated by `TAG_END`, or a cycle reference if the object is on
+   * the path.
+   */
+  #feedPlainObject(value: Record<string, unknown>): void {
+    if (this.#feedCycleIfOnPath(value)) {
+      return;
+    }
+
+    const hasher = this.#hasher;
+    const path = this.#path;
+
+    path.push(value);
+
+    // Note: Even though we could conceivably define the key sort order to be
+    // something easier to calculate in JS, (a) ultimately we want this
+    // implementation to be but one of several that aren't all written in JS,
+    // (b) those other languages don't necessarily have the same encoding bias
+    // as JS, and (c) we want to make the specification for hashing
+    // straightforward anyway (and are willing to pay a performance cost
+    // because of it).
+    const keys = utf8SortedKeysOf(value);
+
+    hasher.update(TAG_OBJECT_BYTES);
+    for (const key of keys) {
+      // Keys are encoded in the same format as strings, and values are hashed
+      // recursively.
+      hasher.update(getStringRep(key));
+      this.feedValue(value[key]);
+    }
+    hasher.update(TAG_END_BYTES);
+    path.pop();
   }
-  path.push(value);
 
-  // Note: Even though we could conceivably define the key sort order to be
-  // something easier to calculate in JS, (a) ultimately we want this
-  // implementation to be but one of several that aren't all written in JS, (b)
-  // those other languages don't necessarily have the same encoding bias as JS,
-  // and (c) we want to make the specification for hashing straightforward
-  // anyway (and are willing to pay a performance cost because of it).
-  const keys = utf8SortedKeysOf(value);
+  //
+  // Static members
+  //
 
-  hasher.update(TAG_OBJECT_BYTES);
-  for (const key of keys) {
-    // Keys are encoded in the same format as strings, and values are hashed
-    // recursively.
-    hasher.update(getStringRep(key));
-    feedValue(hasher, value[key], path);
+  /**
+   * Computes the hash of a value without consulting or populating any cache.
+   */
+  static computeHash(value: unknown): FabricHash {
+    const valueHasher = new ValueHasher();
+    valueHasher.feedValue(value);
+    return valueHasher.digest();
   }
-  hasher.update(TAG_END_BYTES);
-  path.pop();
-}
 
-//
-// Uncached hash computation
-//
-
-/** Computes the hash of a value without consulting or populating any cache. */
-function computeHash(value: unknown): FabricHash {
-  const hasher = createHasher();
-  feedValue(hasher, value, new IndexTrackingStack());
-  return new FabricHash(hasher.digest(), "fid1", true);
-}
-
-/**
- * Like `computeHash()`, except it returns a simple string hash value, encoded
- * as `base64url`, rather than a hash object.
- */
-function computeHashAsString(value: unknown): string {
-  const hasher = createHasher();
-  feedValue(hasher, value, new IndexTrackingStack());
-  return hasher.digest("base64url");
+  /**
+   * Like `computeHash()`, except it returns a simple string hash value,
+   * encoded as `base64url`, rather than a hash object.
+   */
+  static computeHashAsString(value: unknown): string {
+    const valueHasher = new ValueHasher();
+    valueHasher.feedValue(value);
+    return valueHasher.digestString();
+  }
 }
 
 //
@@ -526,19 +553,19 @@ function computeHashAsString(value: unknown): string {
 //
 
 /** Pre-computed hash of `null`. */
-const NULL_HASH = computeHash(null);
+const NULL_HASH = ValueHasher.computeHash(null);
 
 /** Pre-computed hash of `undefined`. */
-const UNDEFINED_HASH = computeHash(undefined);
+const UNDEFINED_HASH = ValueHasher.computeHash(undefined);
 
 /** Pre-computed hash of `true`. */
-const TRUE_HASH = computeHash(true);
+const TRUE_HASH = ValueHasher.computeHash(true);
 
 /** Pre-computed hash of `false`. */
-const FALSE_HASH = computeHash(false);
+const FALSE_HASH = ValueHasher.computeHash(false);
 
 /** Pre-computed hash of negative zero. */
-const NEGATIVE_ZERO_HASH = computeHash(-0);
+const NEGATIVE_ZERO_HASH = ValueHasher.computeHash(-0);
 
 /**
  * LRU cache for primitive value hashes. Primitives (strings, numbers,
@@ -585,7 +612,7 @@ function cachedPrimitiveHash(
 ): FabricHash {
   const cached = primitiveHashCache.get(value);
   if (cached !== undefined) return cached;
-  const result = computeHash(value);
+  const result = ValueHasher.computeHash(value);
   primitiveHashCache.put(value, result);
   return result;
 }
@@ -654,12 +681,14 @@ function hashOfInternal(
       }
 
       if (isDeepFrozen(value)) {
-        const result = computeHash(value);
+        const result = ValueHasher.computeHash(value);
         frozenObjectHashCache.set(obj, result);
         return result;
       }
 
-      return stringOkay ? computeHashAsString(value) : computeHash(value);
+      return stringOkay
+        ? ValueHasher.computeHashAsString(value)
+        : ValueHasher.computeHash(value);
     }
 
     default: {

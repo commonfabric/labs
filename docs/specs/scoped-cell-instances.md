@@ -337,6 +337,12 @@ link scope that reads are allowed to follow. If the schema declares
 `scope: "user"`, then space and user links may be followed, but session links
 are treated as unavailable.
 
+A cap governs every link a read follows on its way to a value, not only the
+first one it meets. A link's own stored schema describes its target and
+replaces the schema the read carries, so a chain of such links would otherwise
+lift the declaration one hop after it was made. The cap the read arrived with
+travels with it, and a declaration met along the way can only narrow it.
+
 `scope: "any"` disables that follow restriction for reads. The returned value's
 effective scope is the narrowest scope actually encountered while following
 links.

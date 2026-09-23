@@ -129,6 +129,165 @@ class FakeProcessRunner implements ProcessRunner {
   }
 }
 
+Deno.test("CfHarnessEngine numbers CFC invocation contexts prepared at once apart", async () => {
+  const sandbox = new FakeSandboxRuntime([
+    { stdout: "", stderr: "", exitCode: 0 },
+    { stdout: "", stderr: "", exitCode: 0 },
+  ]);
+  const engine = new CfHarnessEngine({
+    sandboxRuntime: sandbox,
+    runId: "run-contexts-at-once",
+  });
+
+  await Promise.all([
+    engine.invokeBuiltinTool("bash", { command: "printf one" }),
+    engine.invokeBuiltinTool("bash", { command: "printf two" }),
+  ]);
+
+  assertEquals(
+    engine.getRunState().cfcInvocationContexts?.map((context) =>
+      context.sequence
+    ).toSorted(),
+    [1, 2],
+  );
+});
+
+Deno.test("CfHarnessEngine numbers a resumed run's next CFC invocation context past the highest recorded", async () => {
+  const first = new CfHarnessEngine({
+    sandboxRuntime: new FakeSandboxRuntime([
+      { stdout: "", stderr: "", exitCode: 0 },
+      { stdout: "", stderr: "", exitCode: 0 },
+    ]),
+    runId: "run-context-gap",
+  });
+  await first.invokeBuiltinTool("bash", { command: "printf one" });
+  await first.invokeBuiltinTool("bash", { command: "printf two" });
+  // A number reserved for a context that was never recorded leaves a gap:
+  // the run resumes holding only the context numbered 2.
+  const recorded = first.getRunState();
+  const resumed = new CfHarnessEngine({
+    sandboxRuntime: new FakeSandboxRuntime([
+      { stdout: "", stderr: "", exitCode: 0 },
+    ]),
+    runId: "run-context-gap",
+    runState: {
+      ...recorded,
+      cfcInvocationContexts: recorded.cfcInvocationContexts?.slice(1),
+    },
+  });
+
+  await resumed.invokeBuiltinTool("bash", { command: "printf three" });
+
+  assertEquals(
+    resumed.getRunState().cfcInvocationContexts?.map((context) =>
+      context.sequence
+    ),
+    [2, 3],
+  );
+});
+
+Deno.test("CfHarnessEngine keeps the handles of two mints recorded at once", async () => {
+  const engine = new CfHarnessEngine({
+    sandboxRuntime: new FakeSandboxRuntime(),
+    runId: "run-mints-at-once",
+  });
+
+  const tokens = await Promise.all([
+    engine.mintReferentHandle({
+      source: "loom:rows",
+      value: "first row",
+      label: { confidentiality: ["https://cfc.test/atom/facet/work"] },
+      labelSource: "row",
+    }),
+    engine.mintReferentHandle({
+      source: "loom:rows",
+      value: "second row",
+      label: { confidentiality: ["https://cfc.test/atom/facet/work"] },
+      labelSource: "row",
+    }),
+  ]);
+
+  assertEquals(
+    engine.handleTable?.referents?.map((referent) => referent.token)
+      .toSorted(),
+    tokens.toSorted(),
+  );
+});
+
+Deno.test("CfHarnessEngine refuses to record a table where two addresses drew one token", async () => {
+  const constant = () => Promise.resolve(new Uint8Array(32));
+  const engine = new CfHarnessEngine({
+    sandboxRuntime: new FakeSandboxRuntime(),
+    runId: "run-token-collision",
+  });
+  const base = createHarnessHandleTable("run-token-collision");
+  const first = await mintAddressHandle(base, `of:fid1:${"A".repeat(43)}`, {
+    hasher: constant,
+  });
+  const second = await mintAddressHandle(base, `of:fid1:${"B".repeat(43)}`, {
+    hasher: constant,
+  });
+  await engine.recordHandleTable(first.table);
+
+  await assertRejects(
+    () => engine.recordHandleTable(second.table),
+    Error,
+    "two different addresses",
+  );
+  assertEquals(engine.handleTable?.entries.length, 1);
+});
+
+Deno.test("CfHarnessEngine lands the newest run state last when two writes overlap", async () => {
+  // The first write is held until the second has been asked for, so the
+  // store would finish the second first; the state it is left holding must
+  // still be the newer one.
+  const completed: HarnessRunState[] = [];
+  let hold: PromiseWithResolvers<void> | undefined;
+  const runRoot = "/tmp/cf-harness-artifacts/run-write-order";
+  const artifactStore: HarnessArtifactStore = {
+    artifactRoot: "/tmp/cf-harness-artifacts",
+    runRoot,
+    async persistRunState(state) {
+      const snapshot = structuredClone(state);
+      const held = hold;
+      hold = undefined;
+      await held?.promise;
+      completed.push(snapshot);
+      return `${runRoot}/run-state.json`;
+    },
+    persistTranscript: () => Promise.resolve(`${runRoot}/transcript.json`),
+    persistCapabilitySnapshot: () =>
+      Promise.resolve(`${runRoot}/capabilities.json`),
+    persistCfcPolicySnapshot: () =>
+      Promise.resolve(`${runRoot}/policy-snapshot.json`),
+    persistPolicyTrace: () => Promise.resolve(`${runRoot}/policy-trace.json`),
+    persistRunReport: () => Promise.resolve(`${runRoot}/run-report.json`),
+    persistToolOutput: () => Promise.resolve(`${runRoot}/tool-output.json`),
+  };
+  const engine = new CfHarnessEngine({
+    artifactStore,
+    sandboxRuntime: new FakeSandboxRuntime(),
+    runId: "run-write-order",
+  });
+
+  const released = Promise.withResolvers<void>();
+  hold = released;
+  const first = engine.persistRunState();
+  const second = engine.recordPolicyEvent({
+    severity: "warning",
+    mode: "observe",
+    toolId: "bash",
+    detail: "the newer state",
+  });
+  released.resolve();
+  await Promise.all([first, second]);
+
+  assertEquals(
+    completed.at(-1)?.policyEvents.map((event) => event.detail),
+    ["the newer state"],
+  );
+});
+
 Deno.test("CfHarnessEngine builds a default docker-runsc sandbox when given a workspace path", () => {
   const engine = new CfHarnessEngine({
     workspaceHostPath: "/host/project",

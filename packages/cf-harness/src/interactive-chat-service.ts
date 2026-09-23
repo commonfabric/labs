@@ -4,11 +4,13 @@ import {
 } from "./contracts/transcript-omissions.ts";
 import { selectResearchContext } from "./research/context.ts";
 import { loomAuthoringForTurn } from "./loom-authoring.ts";
+import { ensureSESLockdown, type Runtime } from "@commonfabric/runner";
 import {
   isObjectNotArray,
   type ReadonlyRecord,
 } from "@commonfabric/utils/types";
 import { CfHarnessEngine } from "./engine.ts";
+import type { HarnessFabricSession } from "./fabric-session.ts";
 import {
   CfHarnessPromptLoop,
   type CreateHarnessPromptLoopOptions,
@@ -98,6 +100,7 @@ export type HarnessInteractiveChatEventDeliveryErrorHandler = (
 ) => void;
 
 export interface CreateHarnessInteractiveChatServiceOptions {
+  /** An injected engine remains caller-owned, including its Fabric runtime. */
   basePromptLoopOptions?: CreateHarnessPromptLoopOptions;
 
   /**
@@ -162,6 +165,7 @@ interface HarnessInteractiveChatSessionRecord {
   activeTurnToken?: object;
   activeTask?: Promise<void>;
   activeAbortController?: AbortController;
+  fabricRuntimes: Set<Runtime>;
   canceledTurnIds: Set<string>;
   turns: Map<string, HarnessChatTurnRecord>;
 }
@@ -725,6 +729,14 @@ export class HarnessInteractiveChatService {
 
   constructor(options: CreateHarnessInteractiveChatServiceOptions = {}) {
     this.#basePromptLoopOptions = options.basePromptLoopOptions ?? {};
+    if (
+      this.#basePromptLoopOptions.fabricSession !== undefined ||
+      this.#basePromptLoopOptions.fabricSessionFactory !== undefined
+    ) {
+      // SES retains its initialization stack. Initialize before a turn's
+      // engine can appear there and retain the runtime it later constructs.
+      ensureSESLockdown();
+    }
     const injectedRunSource = this.#basePromptLoopOptions.engine !== undefined
       ? "engine"
       : this.#basePromptLoopOptions.runState !== undefined
@@ -841,6 +853,7 @@ export class HarnessInteractiveChatService {
           ? {}
           : { assignedPieces: snapshot.assignedPieces }),
         canceledTurnIds: new Set(),
+        fabricRuntimes: new Set(),
         turns: new Map(
           (turnsBySession.get(snapshot.session.sessionId) ?? []).map((
             turn,
@@ -1221,6 +1234,7 @@ export class HarnessInteractiveChatService {
       status: session,
       transcript: [],
       canceledTurnIds: new Set(),
+      fabricRuntimes: new Set(),
       turns: new Map(),
     });
     try {
@@ -1492,14 +1506,32 @@ export class HarnessInteractiveChatService {
         reason,
       });
     }
-    await this.#emit(sessionId, undefined, {
-      kind: "session_closed",
-      reason,
-    });
+    try {
+      await this.#emit(sessionId, undefined, {
+        kind: "session_closed",
+        reason,
+      });
+    } finally {
+      // Closing is durable even if event delivery fails. An active turn may
+      // still be using its runtime; its finally block releases it on unwind.
+      if (
+        record.status.status === "closed" && record.activeTask === undefined
+      ) {
+        await this.#disposeFabricRuntimes(record);
+      }
+    }
     return createHarnessChatOkResponse(
       requestId,
       this.#sessions.get(sessionId)!.status,
     );
+  }
+
+  async #disposeFabricRuntimes(
+    record: HarnessInteractiveChatSessionRecord,
+  ): Promise<void> {
+    const runtimes = [...record.fabricRuntimes];
+    record.fabricRuntimes.clear();
+    await Promise.all(runtimes.map((runtime) => runtime.dispose()));
   }
 
   async #runTurn(
@@ -1551,6 +1583,15 @@ export class HarnessInteractiveChatService {
           ),
           taskText: params.input.text,
           researchGoal,
+          ...(this.#basePromptLoopOptions.fabricSession !== undefined ||
+              this.#basePromptLoopOptions.fabricSessionFactory !== undefined
+            ? {
+              onFabricSessionCreated: (fabric: HarnessFabricSession) => {
+                record.fabricRuntimes.add(fabric.pieces.runtime);
+                this.#basePromptLoopOptions.onFabricSessionCreated?.(fabric);
+              },
+            }
+            : {}),
           ...(record.researchContext === undefined ? {} : {
             inheritedResearchRuns: record.researchContext.runs.map((run) => ({
               ...run,
@@ -1738,6 +1779,10 @@ export class HarnessInteractiveChatService {
         turnId,
         error: chatTurnError(error),
       }, completedCheckpoint);
+    } finally {
+      if (record.status.status === "closed") {
+        await this.#disposeFabricRuntimes(record);
+      }
     }
   }
 

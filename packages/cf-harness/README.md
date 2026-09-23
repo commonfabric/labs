@@ -203,7 +203,7 @@ What works today:
   opt-in ChatGPT/Codex subscription transports
 - interactive chat NDJSON stdio transport with opt-in SQLite session, turn, and
   event persistence
-- single-child subagent delegation with fresh child prompt context, explicit
+- subagent delegation with fresh child prompt context, explicit
   default/browser/web_fetch/web_search/pattern-author child profiles, retained
   child run references, and a sanitized summary/state return channel, plus a
   bounded private research loop that is not a delegable profile
@@ -288,7 +288,10 @@ What is not done yet:
 - first-class browser operation policy on top of the provisional browser
   subagent profile
 - dynamic/model-driven Agent Skills activation
-- parallel child orchestration
+- parallel child orchestration beyond one model turn: a turn's delegations run
+  together, apart from a `browser` delegation, which holds the calls after it,
+  while its other calls run in order; nothing schedules, budgets, or cancels
+  across turns
 - app UI event provenance
 - streaming model responses
 - richer mid-turn resumability
@@ -1527,10 +1530,9 @@ not existing compositions or the index's stored event history.
 ### Researching Common Fabric
 
 `research` takes a `task`, a `purpose`, and an optional `followUpTo` naming a
-research handle this run holds or a research run it retains. A successful result
-names the handle minted for its findings under `researchHandle`. Both purposes
-have the same tools and limits; the question determines how much research is
-useful:
+research handle this run holds. A successful result names the handle minted for
+its findings under `researchHandle`. Both purposes have the same tools and
+limits; the question determines how much research is useful:
 
 | Purpose            | Result                                                                                                                                    | Model turns / tool calls / read characters |
 | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------ |
@@ -1583,13 +1585,17 @@ agent follows the not-checked verification rule and never asks for a nonexistent
 permission to release it.
 
 The parent uses findings that settle a decision directly. It requests `answer`
-for a specific remaining uncertainty, with `followUpTo` selecting the relevant
-prior result. Code is optional in either purpose and may demonstrate a small
-idiom or a composable piece without expanding into a complete application. The
-private follow-up receives selected findings and reopenable source locations,
-with old examples and handle bindings omitted. Citations still require exact
-reads in the current call; a prior citation is a lead to reopen, not fresh
-proof. Attached pattern references are also leads until inspected.
+for a specific remaining uncertainty, with `followUpTo` naming the research
+handle to build on. Code is optional in either purpose and may demonstrate a
+small idiom or a composable piece without expanding into a complete application.
+The private follow-up receives that handle's findings with its recipe omitted,
+and the host carries its evidence forward on proof: a binding it described
+counts as described where this run still holds the token, and is reported as
+unavailable otherwise; each of its sources is read again through the path that
+first read it, and counts as cited by its old id only where the bytes still
+match the digest — a source that changed is reported stale, its old id refused,
+and the fresh read left in the catalog under a new id. Attached pattern
+references are leads until inspected.
 
 Opening research has a durable `openingResearch` checkpoint in `run-state.json`.
 The driver records pending intent before invocation, then records whether a kit
@@ -2330,6 +2336,12 @@ from `CF_HARNESS_FABRIC_API_URL`, `CF_HARNESS_FABRIC_IDENTITY`, and
 identity paths resolve against the host process's working directory. All three
 values form one binding, and partial or invalid configuration fails before the
 service starts. Without that binding the service has no Fabric session.
+
+The interactive service owns the Fabric runtimes created for its chat sessions.
+Completed turns keep their runtimes until the session closes. Closing an active
+session aborts its turn and releases its runtimes after the turn unwinds;
+`waitForIdle()` includes that cleanup. Persisted pieces can reopen in a later
+session. Library callers supplying an existing engine retain ownership of it.
 
 These entrypoints share the batch CLI's CFC session options:
 `--fabric-cfc-enforcement-mode`, `--fabric-cfc-flow-labels`,
