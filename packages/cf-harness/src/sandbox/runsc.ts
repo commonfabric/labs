@@ -323,6 +323,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         image: this.config.rootfs,
         workspaceMountPath: this.config.workspaceMountPath,
         mounts: this.#mountDescriptions(),
+        networkMode: this.config.networkMode,
         invocationContextTransport: "fd",
         invocationContextTransportReadiness: "intrinsic",
       },

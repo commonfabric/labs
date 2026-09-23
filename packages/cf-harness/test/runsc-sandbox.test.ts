@@ -463,6 +463,8 @@ Deno.test("RunscSandboxRuntime describes itself with its mounts and session supp
   assertEquals(d.defaultWorkingDirectory, "/workspace");
   assertEquals(d.cfc?.runtimeRequested, true);
   assertEquals(d.cfc?.invocationContextTransport, "fd");
+  // The audit record names the network mode, as the Docker record does.
+  assertEquals(d.cfc?.networkMode, "none");
   const mounts = d.cfc?.mounts ?? [];
   assertEquals(mounts.map((m) => m.sandboxPath), [
     "/workspace",

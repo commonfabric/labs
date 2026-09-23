@@ -197,7 +197,7 @@ export interface SandboxRuntimeDescription {
     image?: string;
     workspaceMountPath?: string;
     mounts?: readonly SandboxRuntimeMountDescription[];
-    networkMode?: DockerNetworkMode;
+    networkMode?: DockerNetworkMode | "sandbox";
     extraDockerArgsCount?: number;
     invocationContextTransport?: string;
     invocationContextTransportReadiness?: string;
