@@ -347,8 +347,8 @@ to the next; a view supplies everything under it.
 
 | tile | source | needs |
 |---|---|---|
-| ci | every job the organization runs outside pull requests, in every repository the token can see that is not archived: for each active workflow, the newest completed run on that repository's own default branch. The headline is `passing` when every one of them passes, the repository's name when a single job is failing, as in `loom failing`, and a count when more than one is, as in `3 failing`. The header carries how many jobs the headline speaks for and how many repositories they came from. The body lists every failing job with its conclusion and how long ago it ran; while the tile is not red it also lists the labs and loom main builds, so the two builds the team watches stay visible, and a red tile lists only its failing jobs. A failure older than `CI_FAILURE_FRESH_HOURS` is orange rather than red: it is still failing and still counted, and it is no longer the thing that just broke. A failure made before the workflow's file last changed does not count at all, since that is what a job someone stopped rather than fixed looks like. A repository whose workflow listing cannot be read is listed too, and turns the tile orange rather than being passed over. The rows carry no links of their own, because the tile itself opens the page below | `GH_TOKEN` (or `GITHUB_TOKEN`) with Actions read across the organization |
-| CI jobs → `/ci` | every job the ci tile read, at full width: the repository and workflow, what started the deciding run (`push`, `schedule`, `workflow_dispatch`, and the rest, as GitHub names them), what that run concluded, how long it took, when it started, and how long ago that was. Every column sorts, once up and once down, on the value behind the cell rather than on what the cell says, so durations and times order as the measurements they are; the page opens worst first and a column of equal values keeps that order beneath it. Workflows with no verdict are listed under the table rather than through it, each with why: no completed run on the default branch, which is what a workflow only a pull request triggers looks like; recent runs that all judged nothing; or a workflow changed since it failed. So are repositories whose workflow listing could not be read. It renders the tile's own last collection rather than asking GitHub again, so opening it costs no requests and shows exactly what the tile shows | none |
+| ci | every job the organization runs outside pull requests, in every repository the token can see that is not archived: for each active workflow, the newest run on that repository's own default branch that passed or failed, however many runs that judged nothing came after it. The headline is `passing` when every one of them passes, the repository's name when a single job is failing, as in `loom failing`, and a count when more than one is, as in `3 failing`. The header carries how many jobs the headline speaks for and how many repositories they came from. The body lists every failing job with its conclusion and how long ago it ran; while the tile is not red it also lists the labs and loom main builds, so the two builds the team watches stay visible, and a red tile lists only its failing jobs. A failure older than `CI_FAILURE_FRESH_HOURS` is orange rather than red: it is still failing and still counted, and it is no longer the thing that just broke. A failure made before the workflow's file last changed does not count at all, since that is what a job someone stopped rather than fixed looks like. A repository whose workflow listing cannot be read is listed too, and turns the tile orange rather than being passed over. The rows carry no links of their own, because the tile itself opens the page below | `GH_TOKEN` (or `GITHUB_TOKEN`) with Actions read across the organization |
+| CI jobs → `/ci` | every job the ci tile read, at full width: the repository and workflow, what started the deciding run (`push`, `schedule`, `workflow_dispatch`, and the rest, as GitHub names them), what that run concluded, how long it took, when it started, and how long ago that was. Every column sorts, once up and once down, on the value behind the cell rather than on what the cell says, so durations and times order as the measurements they are; the page opens worst first and a column of equal values keeps that order beneath it. Workflows with no verdict are listed under the table rather than through it, each with why: no completed run on the default branch, which is what a workflow only a pull request triggers looks like; runs that all judged nothing; or a workflow changed since it failed. So are repositories whose workflow listing could not be read. It renders the tile's own last collection rather than asking GitHub again, so opening it costs no requests and shows exactly what the tile shows | none |
 | labs ci trust, labs ci duration | GitHub Actions (`deno.yml` on main in `commonfabric/labs`), via the REST API | `GH_TOKEN` (or `GITHUB_TOKEN`) |
 | loom ci trust, loom ci duration | the same two tiles for `commonfabric/loom` (`test-fast.yml` on main) | `GH_TOKEN` (read access to loom); optional `DASHBOARD_LOOM_REPO` |
 | your metric here | a place in the grid for a metric nobody has chosen yet. It reads nothing, so it carries no figure, and it is green because there is nothing wrong with an empty slot | none |
@@ -396,9 +396,10 @@ does not carry a job count, so each tile requests the count of every cancelled
 attempt it reaches, once, and holds it while the run stays in the tile's window.
 No other conclusion takes that request.
 
-The **ci** tile reads each workflow's five newest runs on the default branch,
-of any status, and decides the job from the newest completed one carrying a
-verdict. A run still going carries none. A run concluded `success` passes; a run
+The **ci** tile reads each workflow's runs on the default branch, of any
+status, newest first, and decides the job from the newest completed one
+carrying a verdict, however many runs after it carry none. A run still going
+carries none. A run concluded `success` passes; a run
 concluded `failure`, `timed_out`, or `startup_failure` fails. A `cancelled` run
 judges nothing when a newer run of the same workflow was created while it was
 still going: a concurrency group that cancels in progress stops the older run
@@ -409,9 +410,25 @@ through the same job count the ci trust tiles use, so a run replaced while it
 was still queued passes no judgment while one killed by its own
 `timeout-minutes`, or stopped by a person, counts as a failure. The remaining
 conclusions — `skipped`, `neutral`, `stale`, `action_required` — pass no
-judgment either, so the run before them decides the job instead.
+judgment either, so the run before them decides the job instead. A pass
+therefore stays a pass until a run gives the job another verdict: a job gated
+off with an `if:` that is never true on the default branch goes on reading
+green behind every skipped run, and so does a job whose runs are all still
+going.
 
-A job with no such run among the runs the tile reads is one the
+The runs are read a page of twenty at a time, until a page reaches a run that
+concluded `success` or failed outright. The tile keeps, for each workflow, how
+far down it has already settled the verdict, so the next collection stops as
+soon as it reaches those runs. A run started again keeps its place among the
+runs, so the tile checks whether the run that decided the job has been run again
+since, asking GitHub for it when the pages read did not reach it. One that has
+been run again sends the pages on as though nothing had been settled. A verdict far back therefore costs its pages
+once, when the tile first reads the workflow, and after that one page and one
+run on each collection. GitHub lists at most a thousand runs of a workflow
+filtered by branch, so that first read is at most fifty pages, and a workflow
+with no verdict in them has none.
+
+A job with no run carrying a verdict is one the
 tile cannot speak for, so it is left out of both the headline and the job count
 in the header. A workflow that only ever runs on pull requests has no run on the
 default branch at all, and is one of these.
@@ -425,8 +442,8 @@ runs by their event as well.
 The set of repositories and the workflows in them is read once an hour and the
 results behind it every five minutes, because the inventory changes far more
 slowly than a job's result does. Reading it costs one request for the
-organization's repository listing, one per repository for its workflows, and one
-per active workflow for that workflow's newest completed runs.
+organization's repository listing, one per repository for its workflows, and
+usually one per active workflow for that workflow's newest runs.
 
 The tile keeps that collection, and the **CI jobs** page renders it rather than
 collecting again, so the page costs no requests however often it is opened and
@@ -454,11 +471,12 @@ branch that touched the workflow's file. If that commit
 landed after the failing run, the failure was made by a definition that no
 longer exists, and the job has no verdict: it leaves the headline and the count,
 and the page lists it among the workflows with no verdict, as "changed since it
-failed", linked at the failure. Once five runs that judged nothing have pushed the
-failure out of the runs the tile reads, the page says "recent runs judged
-nothing" instead. A job that still runs gets a verdict again from its next run, so this hides a still-broken job only until that run finishes,
+failed", linked at the failure. A job that still runs gets a verdict again from its next run, so this hides a still-broken job only until that run finishes,
 which for one triggered by a push is the run the edit itself starts. A read of
-the file's history that fails leaves the failure standing. The check costs one
+the file's history that fails leaves the failure standing. Only a failure is
+cleared this way. A job whose deciding run passed stays green whatever has
+changed in its file since, because stopping a passing job leaves nothing wrong
+to report. The check costs one
 request per failing job per collection, and none for a job that passes.
 
 Two cheaper signals do not work. GitHub gives each workflow an `updated_at`, but

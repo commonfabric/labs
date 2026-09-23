@@ -849,7 +849,10 @@ claims.
 It scans `toSchema<T>()` (one type arg), `pattern<I, R>()` (the result type
 arg), and cell constructors (every type argument, since a constructed cell's
 policy is written there; a foreign constructor such as `new Map<…>()` is not
-scanned) for `WriteAuthorizedBy<T, typeof binding>` references. It runs after
+scanned) for `WriteAuthorizedBy<T, typeof binding>` references — recognized
+by the spelled name or by the declared name behind a renamed import or a
+namespace import (`cf.WriteAuthorizedBy`), as the schema generator reads them.
+It runs after
 the stages that lower expressions, so it resolves type declarations and
 bindings through the checker rather than by scanning the rewritten file. It
 resolves through type aliases and interfaces wherever they are declared (this
@@ -2192,7 +2195,16 @@ file's `typeof`, such as a brand key, names no writer. The schema generator
 reads the type arguments of the reference that carries a policy through
 parentheses and plain aliases (`readAuthoredTypeNode`), so a pattern-local
 `type Name = Owned<string, typeof setName>` names the writer that the same
-syntax written in place names. The binding itself stays a direct `typeof`
+syntax written in place names. Pattern-local generic policy aliases also retain
+their writer bindings: each reference's arguments and defaults are substituted
+from its authored declaration, even when TypeScript reports the resolved type
+under an inner alias's name. A generic alias may name its policy through a
+namespace import (`cf.WriteAuthorizedBy<T, typeof setName>`) at module scope or
+inside the pattern, including through alias chains and nested policy wrappers.
+An outer alias and an imported alias may share a name: the chain is followed
+by declaration identity, so `type Owned<T> = ns.Owned<T, typeof save>` retains
+the imported policy and writer.
+The binding itself stays a direct `typeof`
 (§6.8): `type Binding = typeof setName` is refused, on a constructor's type
 arguments as on a declared field. `protected-cell-policy.test.ts` pins the
 generated schemas and the refusals.
@@ -2287,7 +2299,12 @@ Special path:
   aliases lower to `ifc.*` metadata through the schema generator;
   `AnyOf<...>` becomes an IFC `anyOf` atom, and `PolicyOf<typeof policy>`
   becomes a policy-reference marker that `SchemaGeneratorTransformer`
-  resolves to module identity, symbol, and digest. `WriteAuthorizedBy`
+  resolves to module identity, symbol, and digest. Qualified references to
+  these metadata types follow Common Fabric import and re-export provenance,
+  including the `commonfabric/cfc` companion module, renamed exports, and
+  namespace re-exports. Authored types sharing their names retain their own
+  declarations. `test/qualified-cfc-metadata.test.ts` pins both input and output
+  schemas against the shipped library types. `WriteAuthorizedBy`
   rehydrates as `ifc.writeAuthorizedBy.__ctWriterIdentityOf = { file, path }`
   (plus a mint-time `moduleIdentity` stamp when the compiler was given
   `moduleIdentities` — see §17.3 file normalization),

@@ -5346,7 +5346,7 @@ const applyCommitTransaction = (
   // conservative the other way: a reference in an operand that does not
   // survive to the final document (a remove-by-value operand, an
   // add-then-remove within one commit) is still validated.
-  let cidSetsInCommit: Map<string, unknown> | null = null;
+  let cidSetsInCommit: Map<string, EntityDocument> | null = null;
   // Content-identical re-sets apply as no-ops: the comparison below already
   // proves nothing changes, and writing a fresh revision anyway would
   // advance the head and fan the unchanged document out to every watcher —
@@ -5570,6 +5570,15 @@ const applyCommitTransaction = (
         `memory v2 commit cannot write content-addressed document ${operation.id} at ${operation.scope} scope`,
       );
     }
+    // A set's value must be a document object, as applying the set also
+    // checks. It is checked here first because the identity check below reads
+    // its `value` member, which on a non-document can be anything: a
+    // `FabricRegExp`'s, for one, is a JS `RegExp`.
+    if (!isEntityDocument(operation.value)) {
+      throw new ProtocolError(
+        `memory v2 commit sets content-addressed document ${operation.id} to something other than a document`,
+      );
+    }
     // A `cid:` set must be the content its id names: the general content
     // hash of its value, which is the identity of a code document's
     // string, of any other content, and of a schema document alike (a
@@ -5581,7 +5590,7 @@ const applyCommitTransaction = (
     // never link-scanned, since keywords such as `default` may carry
     // link-shaped DATA; other content is scanned like an ordinary
     // document.
-    const installedInner = (operation.value as { value?: unknown })?.value;
+    const installedInner = operation.value.value;
     const installedHash = operation.id.slice("cid:".length);
     const installsSchemaShape = isSubschema(installedInner);
     const installsVerifiedContent =
@@ -5599,16 +5608,9 @@ const applyCommitTransaction = (
     if (installsVerifiedContent) {
       collectSchemaMetaRefs(operation.id, operation.value);
     }
-    // `has()`, not a `get() !== undefined` check: a malformed set can carry
-    // an omitted value, and treating it as absent would let a later set of
-    // the same id skip the conflict comparison.
-    if (cidSetsInCommit?.has(operation.id)) {
-      if (
-        !valueEqual(
-          cidSetsInCommit.get(operation.id) as FabricValue,
-          operation.value as FabricValue,
-        )
-      ) {
+    const earlierSet = cidSetsInCommit?.get(operation.id);
+    if (earlierSet !== undefined) {
+      if (!valueEqual(earlierSet, operation.value)) {
         throw new ProtocolError(
           `memory v2 commit carries conflicting sets of content-addressed document ${operation.id}`,
         );
@@ -5628,7 +5630,7 @@ const applyCommitTransaction = (
       sessionId,
     });
     if (stored !== null) {
-      if (!valueEqual(stored as FabricValue, operation.value as FabricValue)) {
+      if (!valueEqual(stored, operation.value)) {
         throw new ProtocolError(
           `memory v2 commit cannot change content-addressed document ${operation.id}`,
         );
@@ -5662,9 +5664,7 @@ const applyCommitTransaction = (
       roots: requiredSchemaRefs,
       load: (hash) => {
         const id = `cid:${hash}`;
-        const installed = cidSetsInCommit?.has(id)
-          ? (cidSetsInCommit.get(id) as { value?: unknown })?.value
-          : undefined;
+        const installed = cidSetsInCommit?.get(id)?.value;
         if (installed !== undefined) {
           included.add(hash);
           // The set already verified its content against its id; what a
@@ -5727,9 +5727,7 @@ const applyCommitTransaction = (
     const id = `cid:${hash}`;
     // A set in this commit reached here with its content verified against
     // its id, so what remains to check of it is the shape.
-    const installed = cidSetsInCommit?.has(id)
-      ? (cidSetsInCommit.get(id) as { value?: unknown })?.value
-      : undefined;
+    const installed = cidSetsInCommit?.get(id)?.value;
     const state = installed === undefined
       ? readState(engine, { id, branch })
       : undefined;

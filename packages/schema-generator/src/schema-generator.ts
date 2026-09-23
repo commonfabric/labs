@@ -38,6 +38,7 @@ import { unionFoldedFrom } from "./schema-origins.ts";
 import { reportUnreadTypes } from "./unread-type-diagnostics.ts";
 import { dedupeByValueEqual } from "./value-equality.ts";
 import { assertScopeDeclarationsAreReachable } from "./scope-placement.ts";
+import { stateReferencedIfcLabels } from "./ifc-labels.ts";
 
 /**
  * The default library's generic aliases the node-based analyzer applies
@@ -1048,6 +1049,7 @@ export class SchemaGenerator {
 
     if (unread.length > 0) reportUnreadTypes(context, unread);
 
+    stateReferencedIfcLabels(result);
     assertScopeDeclarationsAreReachable(result);
     return result;
   }
@@ -1772,6 +1774,9 @@ export class SchemaGenerator {
       );
       if (applied !== undefined) return applied;
 
+      const argument = this.#identityAliasArgument(typeNode, checker, context);
+      if (argument) return this.#analyzeChildNode(argument, checker, context);
+
       const resolved = this.#resolveTypeReferenceFromScope(
         typeNode,
         checker,
@@ -1842,6 +1847,45 @@ export class SchemaGenerator {
     const type = context.typeRegistry?.get(node) ??
       checker.getTypeFromTypeNode(node);
     return this.formatChildType(type, context, node);
+  }
+
+  /**
+   * The argument `reference` supplies to an alias whose whole body is one of
+   * its own type parameters, such as `type Reactive<T> = T`: the reference
+   * denotes exactly that argument. `undefined` for any other reference, for
+   * one that leaves the argument out, and for a scope wrapper, whose scope
+   * `CommonFabricFormatter` reads from the reference's name.
+   */
+  #identityAliasArgument(
+    reference: ts.TypeReferenceNode,
+    checker: ts.TypeChecker,
+    context: GenerationContext,
+  ): ts.TypeNode | undefined {
+    if (
+      !ts.isIdentifier(reference.typeName) ||
+      resolveScopeWrapperNode(reference)
+    ) {
+      return undefined;
+    }
+    const declaration = this.#resolveTypeName(
+      reference,
+      reference.typeName,
+      checker,
+      context,
+    )?.declarations?.find(ts.isTypeAliasDeclaration);
+    const body = declaration && unwrapTypeParentheses(declaration.type);
+    if (
+      !body || !ts.isTypeReferenceNode(body) || body.typeArguments ||
+      !ts.isIdentifier(body.typeName)
+    ) {
+      return undefined;
+    }
+    const name = body.typeName.text;
+    const index =
+      declaration.typeParameters?.findIndex((parameter) =>
+        parameter.name.text === name
+      ) ?? -1;
+    return index >= 0 ? reference.typeArguments?.[index] : undefined;
   }
 
   /**

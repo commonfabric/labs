@@ -34,7 +34,7 @@ Required only if you're running the toolshed.
 | `LOG_LEVEL` | `info` | One of `fatal`, `error`, `warn`, `info`, `debug`, `trace`, `silent`. |
 | `DISABLE_LOG_REQ_RES` | `false` | Suppress per-request log lines. |
 | `CACHE_DIR` | `./cache` | Local disk cache root. |
-| `API_URL` | `http://localhost:8000` | Self-referential URL used for internal server-to-server requests. |
+| `API_URL` | `http://localhost:8000` | Self-referential URL used for internal server-to-server requests, and the audience authority every first-party proof on the signed invitation and inbox routes is checked against. Set it to the public origin clients dial, or those routes refuse every correctly signed request; the server prints it at startup as its configured first-party authority. |
 | `SHELL_URL` | _(unset)_ | When set, toolshed proxies non-API paths to this upstream — used by local dev to route to the Shell dev server on `:5173`. |
 
 ---

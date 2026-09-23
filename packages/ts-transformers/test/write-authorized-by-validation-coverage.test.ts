@@ -386,3 +386,150 @@ Deno.test(
     assert(diagnostics[0]!.message.includes("only supports handler()"));
   },
 );
+
+// A namespace-qualified policy is the policy the schema generator reads, so
+// its claim is validated like one written by name, and a writer built through
+// the namespace is supported like one built by name.
+for (
+  const [spelling, declarations, reference] of [
+    ["written in place", "", "cf.WriteAuthorizedBy<string, typeof BINDING>"],
+    [
+      "through a plain alias",
+      "type Guarded = cf.WriteAuthorizedBy<string, typeof BINDING>;",
+      "Guarded",
+    ],
+    [
+      "through a generic alias's binding parameter",
+      "type Guarded<B> = cf.WriteAuthorizedBy<string, B>;",
+      "Guarded<typeof BINDING>",
+    ],
+  ] as const
+) {
+  for (
+    const [binding, refused] of [["arbitrary", true], ["saver", false]] as const
+  ) {
+    Deno.test(
+      `a namespace-qualified policy ${spelling} ${
+        refused ? "refuses" : "accepts"
+      } ${binding}`,
+      async () => {
+        const source = `/// <cts-enable />
+          import * as cf from "commonfabric";
+
+          const saver = cf.handler<void, {}>((_e, _s) => {});
+          const arbitrary = 123;
+          ${declarations.replaceAll("BINDING", binding)}
+
+          const schema = cf.toSchema<${
+          reference.replaceAll("BINDING", binding)
+        }>();
+
+          export { schema };
+        `;
+        const diagnostics = await cfcDiagnostics(source);
+        assertEquals(diagnostics.length, refused ? 1 : 0);
+        if (refused) {
+          assert(diagnostics[0]!.message.includes("only supports handler()"));
+        }
+      },
+    );
+  }
+}
+
+Deno.test(
+  "a builder-named member of an object that is not a Common Fabric namespace is not a writer",
+  async () => {
+    const source = `/// <cts-enable />
+      import { toSchema, WriteAuthorizedBy } from "commonfabric";
+
+      const unrelated = { handler: (_fn: unknown) => () => {} };
+      const saver = unrelated.handler((_e: unknown, _s: unknown) => {});
+
+      const schema = toSchema<
+        WriteAuthorizedBy<{ title: string }, typeof saver>
+      >();
+
+      export { schema };
+    `;
+    const diagnostics = await cfcDiagnostics(source);
+    assertEquals(diagnostics.length, 1);
+    assert(diagnostics[0]!.message.includes("only supports handler()"));
+  },
+);
+
+// A builder named on a namespace from anywhere but Common Fabric is not one:
+// a local object, another module, or a declaration file that re-exports a
+// namespace under the library's names.
+for (
+  const [label, imports, files] of [
+    [
+      "a namespace import of another module",
+      `import * as other from "./other.ts";`,
+      { "/other.ts": "export const handler = (fn: () => void) => fn;" },
+    ],
+    [
+      "a named Common Fabric import, which is a value and not the namespace",
+      `import { pattern as other } from "commonfabric";`,
+      {},
+    ],
+    [
+      "a namespace a declaration file re-exports",
+      `import { other } from "./other.d.ts";`,
+      {
+        "/other.d.ts":
+          `import * as impl from "./impl.ts";\nexport { impl as other };`,
+        "/impl.ts": "export const handler = (fn: () => void) => fn;",
+      },
+    ],
+  ] as const
+) {
+  Deno.test(`a builder called through ${label} is not a writer`, async () => {
+    const { diagnostics } = await validateFiles({
+      "/main.tsx": `/// <cts-enable />
+        import { toSchema, WriteAuthorizedBy } from "commonfabric";
+        ${imports}
+
+        const saver = (other as any).handler(() => {});
+
+        const schema = toSchema<
+          WriteAuthorizedBy<{ title: string }, typeof saver>
+        >();
+
+        export { schema };
+      `,
+      ...files,
+    }, { types: COMMONFABRIC_TYPES });
+    const cfc = diagnostics.filter((diagnostic) =>
+      diagnostic.type === "cfc-write-authorized-by"
+    );
+    assertEquals(cfc.length, 1);
+    assert(cfc[0]!.message.includes("only supports handler()"));
+  });
+}
+
+Deno.test(
+  "a builder called through a namespace an authored module re-exports from Common Fabric is a writer",
+  async () => {
+    const { diagnostics } = await validateFiles({
+      "/main.tsx": `/// <cts-enable />
+        import { toSchema, WriteAuthorizedBy } from "commonfabric";
+        import { cf } from "./barrel.ts";
+
+        const saver = cf.handler<void, {}>((_e, _s) => {});
+
+        const schema = toSchema<
+          WriteAuthorizedBy<{ title: string }, typeof saver>
+        >();
+
+        export { schema };
+      `,
+      "/barrel.ts": `export * as cf from "commonfabric";`,
+    }, { types: COMMONFABRIC_TYPES });
+    assertEquals(
+      diagnostics.filter((diagnostic) =>
+        diagnostic.type === "cfc-write-authorized-by"
+      ),
+      [],
+    );
+  },
+);

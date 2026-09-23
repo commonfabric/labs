@@ -18,6 +18,7 @@ import { LRUCache } from "@commonfabric/utils/cache";
 import { IndexTrackingStack } from "@commonfabric/utils/index-tracking-stack";
 import { backtickQuote } from "@commonfabric/utils/markdown";
 import { utf8SortedKeysOf } from "@commonfabric/utils/utf8";
+import { encodeWtf8 } from "@commonfabric/utils/wtf8";
 
 import { isDeepFrozen } from "./deep-freeze.ts";
 import type { FabricValue } from "@/interface.ts";
@@ -105,9 +106,6 @@ const MAX_DIRECT_STRING_LENGTH = 64;
 /** Maximum value (inclusive) of the small-length-number cache. */
 const MAX_CACHED_SMALL_LENGTH = 500;
 
-/** Shared TextEncoder for UTF-8 string encoding. */
-const encoder = new TextEncoder();
-
 /** Reusable 8-byte buffer for float64 encoding. */
 const f64Buf = new ArrayBuffer(8);
 
@@ -159,20 +157,20 @@ function getStringRep(value: string) {
   const cached = stringRepCache.get(value);
   if (cached !== undefined) return cached;
 
-  const utf8Buf = encoder.encode(value);
-  const utf8Length = utf8Buf.length;
+  const wtf8Buf = encodeWtf8(value);
+  const wtf8Length = wtf8Buf.length;
 
   let result;
 
-  if (utf8Length <= MAX_DIRECT_STRING_LENGTH) {
-    // Contents are: tag + utf8Length + utf8.
-    const totalLength = 2 + utf8Length;
+  if (wtf8Length <= MAX_DIRECT_STRING_LENGTH) {
+    // Contents are: tag + wtf8Length + wtf8.
+    const totalLength = 2 + wtf8Length;
     result = new Uint8Array(totalLength);
     result[0] = TAG_STRING;
-    result[1] = utf8Length; // Always fits in a byte!
-    result.set(utf8Buf, 2); // After the tag and length.
+    result[1] = wtf8Length; // Always fits in a byte!
+    result.set(wtf8Buf, 2); // After the tag and length.
   } else {
-    const hashBuf = sha256(utf8Buf);
+    const hashBuf = sha256(wtf8Buf);
 
     // Contents are: tag + hash.
     const totalLength = 1 + hashBuf.length;
@@ -469,8 +467,9 @@ function feedArray(
 }
 
 /**
- * Feed a plain object value, keys sorted by UTF-8 byte order, terminated
- * by `TAG_END`, or a cycle reference if the object is on `path`.
+ * Feed a plain object value, keys sorted by the byte order of their WTF-8
+ * encoding, terminated by `TAG_END`, or a cycle reference if the object is on
+ * `path`.
  */
 function feedPlainObject(
   hasher: IncrementalHasher,
@@ -574,15 +573,6 @@ let frozenObjectHashCacheHits = 0;
 /** Counts `hashOf` and `hashStringOf` calls served by the frozen-object cache. */
 export function getFrozenObjectHashCacheHits(): number {
   return frozenObjectHashCacheHits;
-}
-
-/**
- * Returns an already computed immutable hash without reading the value.
- *
- * @internal Used by equality to reuse hashes without expanding a value graph.
- */
-export function cachedHashStringOf(value: object): string | undefined {
-  return frozenObjectHashCache.get(value)?.hashString;
 }
 
 /**
@@ -701,6 +691,6 @@ export function hashStringOf(value: unknown): string {
  * Like `hashOf()`, except always returns a plain string of the hash, encoded as
  * base64url, with the `<type>:` prefix.
  */
-export function taggedHashStringOf(value: unknown): string {
+export function taggedHashStringOf(value: FabricValue): string {
   return hashOfInternal(value, false).toString();
 }

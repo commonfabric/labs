@@ -103,20 +103,25 @@ detection first; then the default library's generic aliases — `Readonly`,
 `ReadonlyArray`, `Record` — applied structurally to their arguments when the
 name binds through the node or, for an unbindable synthetic reference,
 resolves lexically (`checker.resolveName`) to a library declaration, so an
-authored or imported shadow of the name keeps the general path; then the
-general path, which resolves the name the same way — bound through the node,
-else lexically from the module's scope, an import followed to what it
-imports — and formats the declared type, so a name the module declares,
-exported or not, or imports is read. A generic declared outside the default
-library is left unread: its declared type leaves the parameters unbound, and no
-reading of an unbound parameter stands in for the argument a reference supplies
-— the constraint drops the members an argument adds, the default is free to
-contradict one, and an operator over the parameter (`keyof T`, `T["name"]`) has
-no schema at all. The exceptions are the references `CommonFabricFormatter`
-lowers from their own arguments: a scope wrapper, whose payload it reads from
-the reference's argument, and an alias that is not itself a CFC alias and whose
-whole body references one, directly or through further such aliases, named with
-an argument for every parameter that has no default, which it substitutes down
+authored or imported shadow of the name keeps the general path; then an
+alias whose whole body is one of its own type parameters
+(`type Reactive<T> = T`), read as the argument the reference supplies for that
+parameter, since the reference denotes exactly that argument — except a scope
+wrapper, whose scope `CommonFabricFormatter` reads from the reference's name;
+then the general path, which resolves the name the same way — bound through
+the node, else lexically from the module's scope, an import followed to what
+it imports — and formats the declared type, so a name the module declares,
+exported or not, or imports is read. On the general path, a generic
+declared outside the default library is left unread: its declared type leaves
+the parameters unbound, and no reading of an unbound parameter stands in for
+the argument a reference supplies — the constraint drops the members an
+argument adds, the default is free to contradict one, and an operator over the
+parameter (`keyof T`, `T["name"]`) has no schema at all. The exceptions are the
+references `CommonFabricFormatter` lowers from their own arguments: a scope
+wrapper, whose payload it reads from the reference's argument, and an alias
+that is not itself a CFC alias and whose whole body references one, directly
+or through further such aliases, named with an argument for every parameter
+that has no default, which it substitutes down
 the chain — plus a `Date`-by-name special case), keyword types, and a final
 resolve-else-`true` fallback.
 
@@ -860,9 +865,35 @@ Mechanics:
   imports of `AnyOf` / `PolicyOf` work. A local declaration using a canonical
   name also lowers; unlike `Default`, there is no declaring-package guard
   (§7), so name collisions remain an untested foot-gun.
+- Qualified metadata references to `AnyOf` and `PolicyOf` receive their special
+  lowering only when the resolved symbol comes from Common Fabric. Provenance
+  follows import and re-export hops, including `commonfabric/cfc`, renamed
+  exports, and namespace re-exports, so companion declarations need no special
+  file path. An unrelated namespace member with the same name is read from its
+  own declaration as ordinary metadata.
+  An authored wrapper around a library alias is also read from its declaration,
+  preserving any binding fixed inside the wrapper.
+- A canonical alias reached by its own name reads its payload, like its
+  labels, from the reference's own argument nodes. A payload that is itself a
+  CFC alias therefore lowers as it would if written on its own: a generic alias
+  keeps its argument (`Integrity<Sec<string>, I>` is a string), a nested
+  `WriteAuthorizedBy` keeps its `typeof` binding, and a nested label keeps its
+  `AnyOf` clauses. A named type in the payload stays a `$ref` to its
+  definition.
 - User alias chains are followed with type-parameter node substitution until a
   canonical name is reached (`resolveCfcAliasFromDeclaration` /
-  `substituteTypeNode`); unresolvable expansions fall back to
+  `substituteTypeNode`). Substitution starts at the authored reference's
+  declaration, including a function-local generic alias whose resolved type
+  reports an inner alias: the outer reference's arguments belong to the outer
+  declaration's parameters. Fixed writer bindings and default value arguments
+  are read from that declaration. References qualified through a namespace
+  import are followed by resolving their full type name, including within a
+  nested policy payload. Cycle detection tracks resolved declarations, so
+  aliases with the same name in different modules remain distinct. Qualified
+  metadata aliases such as `cf.CurrentPrincipal` resolve through the same
+  import. Type arguments are
+  converted to checker types only when the chain reaches a canonical policy
+  alias. Unresolvable expansions fall back to
   ordinary generation (tested). A subtree holding a substituted parameter is
   built afresh, with no original node, so the payload is read from the node
   and its arguments, never back through the checker as the declaration's
@@ -883,9 +914,21 @@ Mechanics:
   `{ anyOf: X }` and `PolicyOf<typeof rules>` as a policy atom containing
   `__ctPolicyIdentityOf: { file, path }`. Projection paths encode as JSON
   Pointers with `~0`/`~1` escaping (`encodeJsonPointerPath`).
-- `ifc` merges shallowly into the base schema's existing `ifc`
-  (`mergeIfcMetadata`); boolean schemas become `{ ifc }` /
-  `{ not: true, ifc }`.
+- `ifc` combines with the base schema's existing `ifc` one key at a time
+  (`combineIfcLabels`, `src/ifc-labels.ts`); boolean schemas become
+  `{ ifc }` / `{ not: true, ifc }`. Nested wrappers
+  (`Confidential<Confidential<T, A>, B>`) label one value twice.
+  `confidentiality` lists join, inner first, each atom kept once by value
+  equality. Every other key is kept from whichever wrapper declares it, and two
+  wrappers declaring it differently is a generation error: those keys have no
+  agreed combination, and keeping either one would drop the other silently.
+- A wrapper around a named type whose definition carries `ifc` writes its label
+  beside the `$ref`, and the runtime's resolver lets a keyword beside a `$ref`
+  replace the definition's, `ifc` as a whole. So after formatting,
+  `stateReferencedIfcLabels` rewrites the `ifc` beside each local `$ref` as
+  the labels of every definition along its root-reference chain, farthest
+  first, combined with its own by the same rule. A definition keeps its own
+  `ifc`, which is all a reference without one resolves to.
 - `WriteAuthorizedBy` writer identity resolves through import aliases to the
   declaring file. A transformer caller supplies
   `writerIdentityForSourceFile`, which maps that compile name to its authored
@@ -922,7 +965,8 @@ Mechanics:
   `ts-transformers/src/transformers/ui-helper-lowering.ts`.
 
 In-package coverage: `test/schema/cfc-authoring.test.ts` (13 tests), including
-renamed `AnyOf` / `PolicyOf` imports. Transformer-side policy compilation and
+renamed `AnyOf` / `PolicyOf` imports, and `test/ifc-labels.test.ts` for how
+labels combine. Transformer-side policy compilation and
 diagnostics are pinned by `packages/ts-transformers/test/cfc-authoring.test.ts`.
 
 The collection/opaque helpers `LengthPreservedFrom`, `FilteredFrom`,
@@ -1042,6 +1086,7 @@ Everything that throws, with source (test-pinned unless noted):
 | `DeepDefault` unknown key | `DeepDefault key "…" does not exist on the target object type.` | `union-formatter.ts` |
 | Nested scope wrappers | `Nested scope wrappers require a cell boundary between scopes.` | `common-fabric-formatter.ts` |
 | Scope wrapper as a union member | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
+| An `ifc` key other than `confidentiality` declared differently by nested wrappers, or by a `$ref` and its definition | ``One value declares `ifc.<key>` twice, as … and as ….`` | `ifc-labels.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |
 | Wrapper/scope/CFC alias without type argument | `<Kind><T> requires type argument` | `common-fabric-formatter.ts` (untested) |

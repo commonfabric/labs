@@ -124,16 +124,27 @@ const record = (id: string): HarnessResearchRunSummary => ({
 });
 
 describe("scoped research", () => {
-  it("gives research the author's compiler guidance without requiring code for factual orientation", async () => {
-    const trial = run([(request) => {
-      expect(request.transcript[0].content).toContain(
-        PATTERN_AUTHORING_GUIDANCE,
-      );
-      expect(request.transcript[0].content).toContain(
-        PATTERN_COMPOSITION_GUIDANCE,
-      );
-      return final({ ...brief(), leads: [], questions: [] });
-    }]);
+  for (const purpose of ["orient", "answer"] as const) {
+    it(`gives ${purpose} research the composition template and not the authoring rules`, async () => {
+      const trial = run([(request) => {
+        expect(request.transcript[0].content).not.toContain(
+          PATTERN_AUTHORING_GUIDANCE,
+        );
+        expect(request.transcript[0].content).toContain(
+          PATTERN_COMPOSITION_GUIDANCE,
+        );
+        return final(
+          purpose === "orient"
+            ? { ...brief(), leads: [], questions: [] }
+            : { ...brief(), selectedPatternIds: [] },
+        );
+      }], { purpose });
+      await trial.result;
+    });
+  }
+
+  it("completes a factual orientation without requiring code", async () => {
+    const trial = run([() => final({ ...brief(), leads: [], questions: [] })]);
     const reply = await trial.result;
     expect(reply.kit.status).toBe("complete");
     expect(reply.kit.example).toBeUndefined();

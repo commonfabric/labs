@@ -291,6 +291,16 @@ export function createQueryResultProxy<T>(
 }
 
 /**
+ * Whether `member`, found under `prop` on a `FabricInstance`, is the generic
+ * one the instance inherits unchanged from `Object.prototype`. A class that
+ * overrides one of those names supplies a different function, and is not.
+ */
+function isGenericObjectMember(prop: string, member: unknown): boolean {
+  return Object.hasOwn(Object.prototype, prop) &&
+    Reflect.get(Object.prototype, prop) === member;
+}
+
+/**
  * The shared proxy body.
  *
  * Reads go through `readTx()`: the transaction fixed at creation when
@@ -553,6 +563,41 @@ function createViewProxy<T>(
     verifiedAt = memo;
   };
 
+  // A method of a `FabricInstance` view, as the caller holds it. A method is
+  // read off the view once and may be called any time after -- detached, or
+  // rebound to the view -- so nothing is captured at the read. Each call
+  // resolves the instance the document holds then, through the transaction
+  // and inside this view's instant, with the kind check every trap makes: a
+  // rewrite since the read is followed, a document that no longer holds an
+  // instance refuses (`ViewDriftError`), and so does a pinned view whose
+  // transaction has finished. The method found under the name on that
+  // instance then runs with the instance as `this`, since it reads private
+  // fields a proxy does not declare. It runs outside the instant, as a saved
+  // array method's callback does: the instant belongs to reading the
+  // document, and the instance is already materialized, so running it reads
+  // nothing more. A generic member the instance inherits unchanged from
+  // `Object.prototype` runs against this view instead, as a plain object's
+  // does: run against the instance, `valueOf()` would hand the stored value
+  // out from behind its view, and a generic mutator such as
+  // `__defineGetter__` meets the view's own refusal. What the method returns
+  // is what the instance returns, as for an accessor, and what refuses an
+  // instance's own mutator is that a stored instance is deep-frozen.
+  const instanceMethod = (prop: string) => (...args: unknown[]): unknown => {
+    const instance = atEpoch(() => currentValue(true)) as FabricInstance;
+    const method = Reflect.get(instance, prop, instance);
+    if (typeof method !== "function") {
+      throw new TypeError(
+        `\`${prop}\` is not a method of the \`${instance.constructor.name}\` ` +
+          "this view's document now holds.",
+      );
+    }
+    return Reflect.apply(
+      method,
+      isGenericObjectMember(prop, method) ? proxy : instance,
+      args,
+    );
+  };
+
   // Index by the CALLER's transaction, not by the one reads resolve through.
   // A standing handle is created without a transaction and resolves a fresh one
   // per access, so indexing by the resolved transaction gives every read its own
@@ -736,24 +781,63 @@ function createViewProxy<T>(
         }
 
         // Prototype properties are JavaScript behavior, not persisted child
-        // values. Reflect them from the current container instead of issuing a
+        // values. Reflect them from the container instead of issuing a
         // storage read for an inherited path such as `constructor` or
         // `toString`. Storage traversal deliberately considers own properties
         // only; keeping the same boundary here also avoids recording spurious
-        // reactive dependencies for prototype members. The kind was verified
-        // above, so the value the view was built over has the prototype the
-        // document's value has.
+        // reactive dependencies for prototype members. For a plain object or
+        // an array the kind was verified above, so the value the view was
+        // built over has the prototype the document's value has, and the
+        // receiver is immaterial: every prototype member of one is a data
+        // property, or a generic method that runs against this view.
         //
-        // The receiver is the container, not this proxy: a prototype accessor
-        // has to run against the object that actually holds the state. Every
-        // `FabricInstance` keeps its state in private fields behind accessors,
-        // and a private field is unreachable from a proxy that does not declare
-        // it. (The receiver is immaterial for a data property, which is what
-        // every prototype member of a plain object or array is, so this costs
-        // those nothing.) A `FabricInstance` leafs through storage traversal
-        // whole, so the read of the container already covers what an accessor
-        // returns.
-        if (!Object.hasOwn(value, prop) && prop in value) {
+        // A `FabricInstance` is the exception, because its prototype members
+        // ARE its data. It keeps its state in private fields behind accessors
+        // and methods, and a proxy that does not declare those fields cannot
+        // stand in for the instance, so each member is read against the
+        // instance itself: the one the document holds now, read through the
+        // transaction as the symbol-keyed members above are. This view is
+        // cached for its transaction and a member is used after the trap
+        // returns, so the instance the view was built over goes stale on a
+        // rewrite, and a pinned view whose transaction has finished has to
+        // refuse. The kind check guarantees the document still holds an
+        // instance, not that it is one of the same class, so whether the name
+        // is a member is decided against the current instance too. An
+        // instance has no own properties by contract (`BaseFabricInstance`
+        // seals it), so any name it answers is a member. The read is a data
+        // read, and is recorded as one.
+        //
+        // A method is handed out as `instanceMethod()` above, which resolves
+        // the instance again when it is called. `constructor` comes back as
+        // found: it names the class, and a wrapped copy is a different
+        // function.
+        //
+        // That leaves a view saying one thing through `constructor` and
+        // another through its prototype, which is `Object.prototype`, so
+        // `instanceof` says plain object. It is inert today, because nothing
+        // in `data-model` trusts `constructor`: the codec registry resolves
+        // an object's class from its prototype, as `constructorOfObject()`
+        // does, so a view is encoded, hashed and compared as a plain object;
+        // and `codecOf()`, the one direct reader of `value.constructor`, is
+        // reached only behind `instanceof FabricInstance`, which a view
+        // fails. Code that dispatched on `value.constructor` directly would
+        // hand the view to the class's static members, which read private
+        // fields a proxy does not declare.
+        //
+        // TODO(danfuzz): provisional. Settle this with whether a view should
+        // pass `instanceof` at all (the marker above the proxy construction):
+        // either a view claims its class throughout, and every boundary into
+        // `data-model` unwraps it first, or it claims none, and `constructor`
+        // here reports `Object` to match the prototype.
+        if (boundKind === "FabricInstance") {
+          const current = currentValue(true) as FabricInstance;
+          if (prop in current) {
+            const member = Reflect.get(current, prop, current);
+            return typeof member !== "function" || prop === "constructor"
+              ? member
+              : instanceMethod(prop);
+          }
+        } else if (!Object.hasOwn(value, prop) && prop in value) {
           return Reflect.get(value, prop);
         }
 

@@ -1,11 +1,13 @@
 # Running the cf-harness demos
 
 Four demos, in the order to run them. Each was run to a working page and checked
-in a browser, on labs `a77e958513` and again on `edd1f71108` — with one
-exception. Demo 2's prompt names its two parts where the browser-checked runs
-pasted their ids; three runs of the wording below reach the same two parts, read
-from the source each submitted, but none of the three was clicked through. Treat
-that demo's page behavior as carried over rather than re-checked.
+in a browser, on labs `a77e958513` and again on `edd1f71108` — with two
+exceptions, whose wording has changed since. Demo 2's prompt names its two parts
+where the browser-checked runs pasted their ids; three runs of the wording below
+reach the same two parts, read from the source each submitted, but none of the
+three was clicked through. Demo 4's prompt no longer lists the fields to pair
+on; the wording below has not yet been run. Treat those two demos' page behavior
+as carried over rather than re-checked.
 
 Everything else — the counts, the findings behind them, the demos that are not
 on this page and why — is in [DEMOS-EVIDENCE.md](DEMOS-EVIDENCE.md). Read this
@@ -100,7 +102,7 @@ The count may render as a phrase rather than a number — "7 Transactions in
 ## 4. Bills this month, from mail and bank together
 
 ```text
-Compose these three library patterns into one page: cf:pattern:-xx1hxtvAbY7AL6FeYuQWuEzbC0nOpUOHgXseIac2_w (this month's email headers from my Gmail), cf:pattern:v6_KSFHs9AmTg9PKwMmPdZyEHxZ9Oykhno4HBOfUo5s (this month's transactions from my bank) and cf:pattern:d_z9mtdCBUwBpG0A6nBwOy5_2fxqySuk2zNxeIdXAYA (pairs email bills with the bank payments that settled them). Show the bills I need to deal with: pair an email bill with the bank payment that settled it using plain text rules on subject, sender and merchant name only; list unpaid email bills and unmatched bank payments separately. Do not send my mail or my transactions to an AI model.
+Compose these three library patterns into one page: cf:pattern:-xx1hxtvAbY7AL6FeYuQWuEzbC0nOpUOHgXseIac2_w (this month's email headers from my Gmail), cf:pattern:v6_KSFHs9AmTg9PKwMmPdZyEHxZ9Oykhno4HBOfUo5s (this month's transactions from my bank) and cf:pattern:d_z9mtdCBUwBpG0A6nBwOy5_2fxqySuk2zNxeIdXAYA (pairs email bills with the bank payments that settled them). Show the bills I need to deal with: pair an email bill with the bank payment that settled it; list unpaid email bills and unmatched bank payments separately. Do not send my mail or my transactions to an AI model.
 ```
 
 **What appears:** paid bills paired with the payments that settled them, with
