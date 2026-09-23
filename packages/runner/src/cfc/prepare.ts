@@ -8510,9 +8510,15 @@ export function* prepareBoundaryCommitSteps(
     // document do not rewrite it at each other (SC-11).
     const migrates = existing !== undefined && existing.version === 1 &&
       metadata.version === 2;
+    // A preserved runtime output does not carry the migration: its waiver
+    // holds only while nothing about the envelope changes, and a version-1
+    // envelope spells the same labels as its version-2 rewrite. Refusing
+    // here instead would refuse every re-run of the initializer, since a
+    // refused commit never migrates the envelope; the document migrates on
+    // its next authorized write.
     if (
       existing !== undefined &&
-      !migrates &&
+      (!migrates || deferredWriterRefusal !== undefined) &&
       deepEqual(
         canonicalizeCfcMetadata(existing),
         canonicalizeCfcMetadata(metadata),
