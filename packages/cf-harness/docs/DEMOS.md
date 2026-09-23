@@ -7,8 +7,8 @@ where the browser-checked runs pasted their ids; three runs of the wording below
 reach the same two parts, read from the source each submitted, but none of the
 three was clicked through. Demo 4's prompt names none of its parts; six runs of
 the wording below composed all three published parts, read the same way, and
-none was clicked through. Treat those two demos' page behavior as carried over
-rather than re-checked.
+none was clicked through. Treat those two demos' pages as unverified until
+someone clicks through them.
 
 Everything else — the counts, the findings behind them, the demos that are not
 on this page and why — is in [DEMOS-EVIDENCE.md](DEMOS-EVIDENCE.md). Read this

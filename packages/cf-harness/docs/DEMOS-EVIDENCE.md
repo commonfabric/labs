@@ -1139,13 +1139,15 @@ Show me the bills I need to deal with this month, using both my email and my ban
 
 **Done when:** every pairing on the page is one a person would make.
 
-**Typical wall time:** three to seven minutes.
+**Typical wall time:** three to seven minutes. The six runs took 183 to 395
+seconds, with two sessions sharing the console throughout.
 
 **Proof status: composes all three published parts, 6 of 6** — three runs on
 `b70de3a53a` and three on the same build with #7947, the source each submitted
 read every time: the mail reader, the bank reader and the matcher, each imported
-by id. None was clicked through, so the page behavior is §5c's, carried over
-because the parts are the same. On `edd1f71108` the same text reached the
+by id. None was clicked through, so the page this wording produces is
+unverified: the same three parts do not make the same page, and §5c's own runs
+built two different pages from them. On `edd1f71108` the same text reached the
 matcher one run in three.
 
 ## 6. A skill's script, run in the sandbox, folded into a piece
@@ -1226,7 +1228,9 @@ there.
 ## Every demo re-run on `edd1f71108`
 
 The four demos on [DEMOS.md](DEMOS.md) were run again on labs `edd1f71108`,
-which `loom-stable-2026-09-22-7` vendors, from the page's own prompt text.
+which `loom-stable-2026-09-22-7` vendors, from the prompt text the page carried
+then. Demo 4's prompt has changed since; §5d holds the evidence for its current
+wording.
 
 | Demo                          | Result on `edd1f71108`   |
 | ----------------------------- | ------------------------ |
