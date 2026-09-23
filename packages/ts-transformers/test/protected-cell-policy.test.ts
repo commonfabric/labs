@@ -434,4 +434,61 @@ export default pattern<{ name: string }, { name: Guarded<string, Binding> }>(({ 
       message: expect.stringContaining("direct typeof binding"),
     }]);
   });
+
+  // An alias body in parentheses names the policy it holds. `deno fmt`
+  // removes such parentheses in this repository, but pattern source the
+  // runtime compiles need not have been formatted, and the schema generator
+  // once read the body raw: the field lost its policy AND its type, emitted
+  // as an open object with no diagnostic.
+  for (
+    const [spelling, aliases] of [
+      [
+        "a parenthesized alias body",
+        "type ProtectedName = (Owned<string, typeof setName>);",
+      ],
+      [
+        "a parenthesized generic alias body",
+        "type OwnedBySetName<T> = (Owned<T, typeof setName>);\ntype ProtectedName = OwnedBySetName<string>;",
+      ],
+      [
+        "parenthesized bodies on an alias of an alias",
+        "type Inner = (Owned<string, typeof setName>);\ntype ProtectedName = (Inner);",
+      ],
+    ] as const
+  ) {
+    for (
+      const [position, body] of [
+        [
+          "a constructed cell",
+          `export default pattern<{ initialName: string }>(({ initialName }) => {
+  const name = new Writable<ProtectedName>(initialName ?? "").for("name");
+  return { name, setName: setName({ name }) };
+});`,
+        ],
+        [
+          "a declared field",
+          `export default pattern<{ name: string }, { name: ProtectedName }>(({ name }) => ({ name }));`,
+        ],
+      ] as const
+    ) {
+      it(`keeps the policy of ${position} through ${spelling}`, async () => {
+        const diagnostics: TransformationDiagnostic[] = [];
+        const root = parseModule(
+          await transformSource(
+            `${prelude}// deno-fmt-ignore\n${aliases}\n${body}`,
+            {
+              types: COMMONFABRIC_TYPES,
+              typeCheck: true,
+              pipelineDiagnostics: diagnostics,
+            },
+          ),
+        );
+        expect(diagnostics.filter(isError)).toEqual([]);
+        const output = patternSchemas(root).output;
+        // deno-lint-ignore no-explicit-any
+        const name = resolved((output as any).properties.name, output);
+        expect(name).toMatchObject({ type: "string", ifc: policy });
+      });
+    }
+  }
 });
