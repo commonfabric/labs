@@ -211,22 +211,24 @@ interface Input { c: Rec; }`,
   });
 
   describe("a capture of a scoped cell", () => {
-    it("keeps the readonly narrowing and unread elements of a cell read for its length", async () => {
+    it("keeps a scoped cell read for its length whole, with its scope", async () => {
+      // Only the scope wrapper names the scope, which a capability wrapper
+      // around a shrunk value would drop.
       const capture = await captureOf(`
 interface Input { c: PerUser<Writable<Box<number>[]>>; }
 export default pattern<Input>(({ c }) => ({
   count: computed(() => c.get().length),
 }));`);
-      const { items, asCell } = capture.c as {
-        items: unknown;
-        asCell: (string | { kind: string })[];
-      };
 
-      expect(items).toEqual({ type: "unknown" });
-      expect(
-        asCell.map((entry) => typeof entry === "string" ? entry : entry.kind),
-      )
-        .toEqual(["readonly"]);
+      expect(capture.c).toEqual({
+        type: "array",
+        items: {
+          type: "object",
+          properties: { value: { type: "number" }, extra: { type: "string" } },
+          required: ["value", "extra"],
+        },
+        asCell: [{ kind: "cell", scope: "user" }],
+      });
     });
   });
 
@@ -314,10 +316,7 @@ export default pattern<Input>(({ note, content }) => ({
 }));`);
 
       expect(capture.content).toEqual({
-        anyOf: [
-          { anyOf: [{ type: "string" }, { type: "undefined" }] },
-          { type: "undefined" },
-        ],
+        type: ["string", "undefined"],
         asCell: ["readonly"],
       });
       expect(capture.note).toEqual({

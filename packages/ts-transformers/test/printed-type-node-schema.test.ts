@@ -2,11 +2,13 @@ import { expect } from "@std/expect";
 import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
+import { CrossStageState } from "../src/core/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import {
   callSchemas,
   callsNamed,
   collect,
+  emittedSchemas,
   literalToValue,
   parseModule,
   patternSchemas,
@@ -821,6 +823,180 @@ interface Meta { confidentiality: Labels }`,
           });
         });
       }
+    });
+  });
+
+  describe("a pass reading inside a print", () => {
+    // A pass that narrows, shrinks, or marks identity inside a print reads the
+    // print's unfolding, each part printed afresh from its type, and leaves no
+    // piece of the print for schema generation to read as a node.
+
+    it("reads a member naming a type the module does not import by its type", async () => {
+      const output = await transformSource(
+        `import { computed, generateObject, pattern, UI } from "commonfabric";
+interface Item { content: string; }
+interface Sentiment { label: string; }
+export default pattern<{ items: Item[] }>(({ items }) => {
+  const analyses = items.map((item) => ({
+    content: item.content,
+    analysis: generateObject<Sentiment>({ prompt: item.content }),
+  }));
+  return {
+    [UI]: (
+      <div>
+        {analyses.map((entry, i) => (
+          <div key={i}>
+            {computed(() => {
+              const pending = entry.analysis.pending;
+              const label = entry.analysis.result?.label;
+              return pending ? "…" : label;
+            })}
+          </div>
+        ))}
+      </div>
+    ),
+  };
+});`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      // The element schema of the callback mapping `analyses`.
+      const element = emittedSchemas(parseModule(output))
+        .map((schema) =>
+          (schema.properties as Schema | undefined)?.element as
+            | Schema
+            | undefined
+        )
+        .find((element) =>
+          (element?.properties as Schema | undefined)?.analysis
+        );
+
+      expect(element).toMatchObject({
+        properties: {
+          analysis: {
+            type: "object",
+            properties: {
+              pending: { type: "boolean" },
+              result: {
+                anyOf: [{ type: "undefined" }, { $ref: "#/$defs/Sentiment" }],
+              },
+            },
+          },
+        },
+      });
+    });
+
+    it("narrows a cell inside a printed literal and reads its other members by type", async () => {
+      const output = await transformSource(
+        `import { type Cell, computed, pattern, UI } from "commonfabric";
+type ProfileCell = Cell<{ name?: string }>;
+export default pattern<{ profiles: ProfileCell[] }>(({ profiles }) => {
+  const participants = computed<{ name: string; profile: ProfileCell }[]>(() =>
+    profiles.map((profile) => ({ name: "someone", profile }))
+  );
+  return {
+    [UI]: <div>{participants.map((p) => <cf-profile-badge $profile={p.profile} />)}</div>,
+  };
+});`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const element = emittedSchemas(parseModule(output))
+        .map((schema) =>
+          (schema.properties as Schema | undefined)?.element as
+            | Schema
+            | undefined
+        )
+        .find((element) => element !== undefined);
+
+      expect(element).toEqual({
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          profile: {
+            type: "object",
+            properties: { name: { type: "string" } },
+            asCell: ["readonly"],
+          },
+        },
+        required: ["name", "profile"],
+      });
+    });
+
+    it("keeps a scoped cell whole where its capture is narrowed", async () => {
+      // Only the scope wrapper names the scope, which a narrowed wrapper around
+      // the cell's value would drop.
+      const output = await transformSource(
+        `import { computed, pattern, UI, Writable } from "commonfabric";
+export default pattern<Record<string, never>>(() => {
+  const confirming = Writable.perSession.of<boolean>(false);
+  const isConfirming = computed(() => confirming.get());
+  return { [UI]: <div>{isConfirming ? "yes" : "no"}</div> };
+});`,
+        { types: COMMONFABRIC_TYPES, typeCheck: true },
+      );
+      const root = parseModule(output);
+      const [lift] = callsNamed(root, "lift");
+      const captures = lift!.typeArguments![0]! as ts.TypeLiteralNode;
+      const confirming = captures.members.find(ts.isPropertySignature)!;
+
+      expect(confirming.type!.getText(root)).toBe(
+        "__cfHelpers.PerSession<__cfHelpers.Cell<boolean>>",
+      );
+      expect((callSchemas(root, "lift")[0]!.properties as Schema).confirming)
+        .toEqual({
+          type: "boolean",
+          asCell: [{ kind: "cell", scope: "session" }],
+        });
+    });
+
+    it("reads elements compared only by identity inside a printed value as comparable", async () => {
+      // Reading `title` as well leaves nothing to shrink, so the node the
+      // identity pass builds is the one schema generation reads.
+      const [capture] = await liftSchemas(
+        `import { computed, equals, pattern, Writable } from "commonfabric";
+interface Note { title: string; body: string; }
+export default pattern<{
+  doc: Writable<{ notes?: Note[]; title: string }>;
+  self: Note;
+}>(({ doc, self }) => ({
+  found: computed(() =>
+    doc.get().title +
+    String((doc.get().notes ?? []).some((n) => equals(n, self)))
+  ),
+}));`,
+      );
+
+      expect((capture as Schema).properties).toMatchObject({
+        doc: {
+          properties: {
+            notes: {
+              type: "array",
+              items: { type: "unknown", asCell: ["comparable"] },
+            },
+            title: { type: "string" },
+          },
+        },
+      });
+    });
+
+    it("refuses a type argument that holds a piece of a print", async () => {
+      // A state saying each `string` keyword was built below a print stands in
+      // for a pass that took a print apart.
+      const root = ts.factory.createKeywordTypeNode(
+        ts.SyntaxKind.UnknownKeyword,
+      );
+      class PieceState extends CrossStageState {
+        override printedWithin(node: ts.Node): ts.TypeNode | undefined {
+          return node.kind === ts.SyntaxKind.StringKeyword
+            ? root
+            : super.printedWithin(node);
+        }
+      }
+
+      await expect(transformSource(
+        `import { toSchema } from "commonfabric";
+export const schema = toSchema<{ name: string }>();`,
+        { types: COMMONFABRIC_TYPES, state: new PieceState() },
+      )).rejects.toThrow("reached schema generation outside that node");
     });
   });
 });

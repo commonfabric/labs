@@ -1,6 +1,7 @@
 import ts from "typescript";
 import type {
   CapabilityParamSummary,
+  CrossStageState,
   FunctionCapabilitySummary,
   TransformationContext,
 } from "../../core/mod.ts";
@@ -287,6 +288,7 @@ function rewriteCaptureReferences(
   factory: ts.NodeFactory,
   checker: ts.TypeChecker | undefined,
   typeRegistry: WeakMap<ts.Node, ts.Type> | undefined,
+  state: CrossStageState,
 ): ts.ConciseBody {
   // Build a map: identifier name -> unwrapped type
   // We need to register all capture references (not just renamed ones) with unwrapped types
@@ -327,6 +329,10 @@ function rewriteCaptureReferences(
   }
 
   const visitor = (node: ts.Node, parent?: ts.Node): ts.Node => {
+    // A printed node names no capture: it stands for its type, and is not
+    // taken apart.
+    if (state.printedFrom(node)) return node;
+
     // Handle shorthand property assignments specially
     // { multiplier } needs to become { multiplier: multiplier_1 } if multiplier is renamed
     if (ts.isShorthandPropertyAssignment(node)) {
@@ -478,6 +484,7 @@ export function transformLiftAppliedCall(
     factory,
     checker,
     state.typeRegistry,
+    state,
   );
 
   // Initialize PatternBuilder

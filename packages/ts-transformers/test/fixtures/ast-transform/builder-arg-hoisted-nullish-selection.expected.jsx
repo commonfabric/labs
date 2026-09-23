@@ -31,9 +31,9 @@ const join = handler({
         },
         profile: {
             anyOf: [{
-                    $ref: "#/$defs/Profile"
-                }, {
                     type: "undefined"
+                }, {
+                    $ref: "#/$defs/Profile"
                 }],
             asCell: ["readonly"]
         }
@@ -68,9 +68,9 @@ const __cfLift_1 = __cfHelpers.lift<{
     properties: {
         profile: {
             anyOf: [{
-                    $ref: "#/$defs/Profile"
-                }, {
                     type: "undefined"
+                }, {
+                    $ref: "#/$defs/Profile"
                 }],
             asCell: ["readonly"]
         },

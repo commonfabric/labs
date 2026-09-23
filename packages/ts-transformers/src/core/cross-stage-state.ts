@@ -57,6 +57,13 @@ export interface NodeTypeLinks {
    * rather than the node.
    */
   printedFrom?: ts.Type;
+
+  /**
+   * For a node the printer built below the root of a print, that root. A node
+   * built from one of these holds a piece of a print, which schema generation,
+   * reading a print by its type, would read as a node.
+   */
+  printedWithin?: ts.TypeNode;
 }
 
 /**
@@ -281,6 +288,43 @@ export class CrossStageState {
 
   recordPrintedFrom(node: ts.TypeNode, type: ts.Type): void {
     this.#linksFor(node).printedFrom = type;
+    // A node the printer reused from the source is authored syntax, read
+    // where it was written, so only what the printer built is marked.
+    const mark = (child: ts.Node): void => {
+      if ((child.flags & ts.NodeFlags.Synthesized) === 0) return;
+      this.#linksFor(child).printedWithin = node;
+      ts.forEachChild(child, mark);
+    };
+    ts.forEachChild(node, mark);
+  }
+
+  /**
+   * Returns the root of the print `node` was built below, or `undefined` for
+   * a node the printer did not build below one. Plain identity lookup with NO
+   * getOriginalNode fallback, as for `printedFrom()`.
+   */
+  printedWithin(node: ts.Node): ts.TypeNode | undefined {
+    return this.nodeLinks.get(node)?.printedWithin;
+  }
+
+  /**
+   * Returns a type node the printer built below the root of a print that
+   * `typeNode` holds outside that root, or `undefined` when it holds none. A
+   * print is read as a whole, so what is below a root `typeNode` holds is not
+   * searched.
+   */
+  printPieceIn(typeNode: ts.TypeNode): ts.TypeNode | undefined {
+    let piece: ts.TypeNode | undefined;
+    const visit = (node: ts.Node): void => {
+      if (piece || this.printedFrom(node)) return;
+      if (ts.isTypeNode(node) && this.printedWithin(node)) {
+        piece = node;
+        return;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(typeNode);
+    return piece;
   }
 
   /**

@@ -141,7 +141,7 @@ describe("captured cell value fields", () => {
         type: "object",
         properties: {
           cell: {
-            anyOf: [...alternatives, { type: "undefined" }],
+            anyOf: [{ type: "undefined" }, ...alternatives],
             scope: "user",
             asCell: ["readonly"],
           },
@@ -180,7 +180,7 @@ describe("captured cell value fields", () => {
       },
     );
     expect(cells).toEqual([{
-      anyOf: [{ $ref: "#/$defs/Data" }, { type: "undefined" }],
+      anyOf: [{ type: "undefined" }, { $ref: "#/$defs/Data" }],
       scope: "user",
       asCell: ["readonly"],
     }]);
@@ -222,10 +222,10 @@ describe("captured cell value fields", () => {
                     properties: { count: { type: "number" } },
                     required: ["count"],
                   }),
-                  { type: "undefined" },
-                  ...(declaration.includes(" | null")
-                    ? [{ type: "null" }]
-                    : []),
+                  // The nullish members of a union of primitives merge.
+                  declaration.includes(" | null")
+                    ? { type: ["null", "undefined"] }
+                    : { type: "undefined" },
                 ]),
               }),
             }),

@@ -265,11 +265,7 @@ const __cfLift_7 = __cfHelpers.lift<{
     type: "object",
     properties: {
         label: {
-            anyOf: [{
-                    type: "string"
-                }, {
-                    type: "undefined"
-                }],
+            type: ["string", "undefined"],
             asCell: ["readonly"]
         }
     }

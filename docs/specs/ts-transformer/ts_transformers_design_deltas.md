@@ -33,6 +33,17 @@ array-typed inputs and mapped-array results remains separate work: the public
 `Reactive<T>` alias is still `T`. See the
 [aggregate contracts](../../features/collection-aggregates.md).
 
+### Narrowing a scoped cell inside a print
+
+Inside a type node printed from a type, a cell under a scope alias
+(`PerUser<Writable<T>>`, and likewise `PerSession`, `PerSpace`, and `PerAny`)
+keeps its scope and is not narrowed to the capability its readers use. Only the
+alias names the scope, and a narrowed wrapper built around the cell's value
+would drop it. Narrowing such a cell as well needs schema generation to read a
+scope wrapper around a narrowed cell. The
+[current-behavior spec](./ts_transformers_current_behavior_spec.md), §10.7,
+states the rule.
+
 ## Implementation Snapshot (March 17, 2026)
 
 - Landed:
